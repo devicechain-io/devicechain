@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -42,10 +43,21 @@ func (api *Api) CreateCustomerType(ctx context.Context, request *CustomerTypeCre
 	return created, nil
 }
 
-// Update an existing customer type.
+// Update an existing customer type, applying only the fields the caller actually
+// sent. The entity is looked up by the `token` ARGUMENT — the request payload no
+// longer carries one, which closes two defects at once: an update can no longer
+// move a customer type's token, and the mandatory `token` argument is no longer dead.
+// It used to be ignored entirely in favour of request.Token, so a caller naming one
+// type in the argument and another in the payload silently updated the second and
+// got a 200 back for it.
+//
+// Each assignment folds the field's three states onto the stored value: absent
+// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
+// argument is what makes an omitted field a no-op, so these must stay assignments
+// FROM the loaded record rather than from the request alone.
 func (api *Api) UpdateCustomerType(ctx context.Context, token string,
-	request *CustomerTypeCreateRequest) (*CustomerType, error) {
-	matches, err := api.CustomerTypesByToken(ctx, []string{request.Token})
+	request *CustomerTypeUpdateRequest) (*CustomerType, error) {
+	matches, err := api.CustomerTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -54,15 +66,14 @@ func (api *Api) UpdateCustomerType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Token = request.Token
-	found.Name = rdb.NullStrOf(request.Name)
-	found.Description = rdb.NullStrOf(request.Description)
-	found.ImageUrl = rdb.NullStrOf(request.ImageUrl)
-	found.Icon = rdb.NullStrOf(request.Icon)
-	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
-	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
-	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
+	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
+	found.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(found.ImageUrl)))
+	found.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(found.Icon)))
+	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
+	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
+	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
@@ -140,9 +151,12 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 	return created, nil
 }
 
-// Update an existing customer.
-func (api *Api) UpdateCustomer(ctx context.Context, token string, request *CustomerCreateRequest) (*Customer, error) {
-	matches, err := api.CustomersByToken(ctx, []string{request.Token})
+// Update an existing customer, applying only the fields the caller actually sent.
+// Looked up by the `token` ARGUMENT; the payload no longer carries a token, so the
+// argument is no longer dead and a token move is unrepresentable rather than merely
+// refused.
+func (api *Api) UpdateCustomer(ctx context.Context, token string, request *CustomerUpdateRequest) (*Customer, error) {
+	matches, err := api.CustomersByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -150,28 +164,39 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// The type hop resolves BEFORE anything is written, so an unknown customer type
+	// refuses the WHOLE update rather than applying the fields it liked first. The
+	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
+	// the comparison this replaces dereferenced it unconditionally.
+	currentTypeToken := ""
+	if updated.CustomerType != nil {
+		currentTypeToken = updated.CustomerType.Token
+	}
+	retypeTo, retype, err := resolveRequiredTypeRef(request.CustomerTypeToken, currentTypeToken, "customerTypeToken")
+	if err != nil {
+		return nil, err
+	}
+	if retype {
+		types, err := api.CustomerTypesByToken(ctx, []string{retypeTo})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
+		updated.CustomerType = types[0]
+		updated.CustomerTypeId = types[0].ID // keep the FK in lockstep with the association
+	}
+
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-
-	// Update customer type if changed.
-	if request.CustomerTypeToken != updated.CustomerType.Token {
-		ctmatches, err := api.CustomerTypesByToken(ctx, []string{request.CustomerTypeToken})
-		if err != nil {
-			return nil, err
-		}
-		if len(ctmatches) == 0 {
-			return nil, gorm.ErrRecordNotFound
-		}
-		updated.CustomerType = ctmatches[0]
-	}
 
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {

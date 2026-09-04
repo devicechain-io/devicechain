@@ -48,6 +48,19 @@ func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileC
 // owned by the future catalog fork-adopt flow, never the editor.
 func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	request *DeviceProfileCreateRequest) (*DeviceProfile, error) {
+	// 🔴 THIS IS THE ONE UPDATE ON THE PLATFORM WHERE A PAYLOAD TOKEN DIFFERING FROM
+	// THE ARGUMENT IS MEANT, so it is deliberately NOT reconciled by
+	// errPayloadTokenDisagrees the way every other surviving *CreateRequest update is.
+	// A profile rename is a real, guarded capability (allowed while unused, refused
+	// once published or adopted — see below). What IS refused here is an EMPTY payload
+	// token, which under the shared create input is indistinguishable from "I have
+	// nothing to say about identity" and used to be written straight through: the
+	// profile ended up with a blank token, addressable by nothing.
+	if request.Token == "" {
+		return nil, fmt.Errorf("cannot update device profile %q through a request with an "+
+			"empty token: a profile rename is expressed by naming the new token, and a blank "+
+			"one would leave the profile unaddressable", token)
+	}
 	matches, err := api.DeviceProfilesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err

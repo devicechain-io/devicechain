@@ -120,7 +120,7 @@ func TestUpdateDevice_RetypeEmitsNewProfileAndMembershipTime(t *testing.T) {
 	}
 	cap.events = nil
 
-	if _, err := api.UpdateDevice(ctx, "d1", &DeviceCreateRequest{Token: "d1", DeviceTypeToken: "t-b"}); err != nil {
+	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{DeviceTypeToken: dcgraphql.OptionalStringOf("t-b")}); err != nil {
 		t.Fatalf("retype: %v", err)
 	}
 	if assert.Len(t, cap.events, 1, "a re-type emits exactly one roster fact") {
@@ -143,7 +143,7 @@ func TestUpdateDevice_MetadataOnlyDoesNotEmit(t *testing.T) {
 	}
 	cap.events = nil
 
-	_, err := api.UpdateDevice(ctx, "d1", &DeviceCreateRequest{Token: "d1", DeviceTypeToken: "sensor", Name: strp("renamed")})
+	_, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{DeviceTypeToken: dcgraphql.OptionalStringOf("sensor"), Name: dcgraphql.OptionalStringOf("renamed")})
 	assert.NoError(t, err)
 	assert.Empty(t, cap.events, "a metadata-only update must not re-roster")
 }

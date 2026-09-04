@@ -107,19 +107,18 @@ var tampers = []tamper{
 		Arg:      "token",
 	},
 	{
-		// updateAssetType takes the CREATE request type, and the platform's
-		// updates are still full-replace — so a request carrying only the token
-		// and a new name also clears the description, the branding fields and
-		// the metadata. That makes the damage larger than the one field named
-		// here, which is fine: the control needs the object to DIFFER, and a
-		// bigger difference is not a weaker one. `name` is named because it is
-		// the field this deliberately rewrites; the rest is the platform's
-		// update semantics showing through, and worth seeing in the output.
+		// updateAssetType takes a dedicated AssetTypeUpdateRequest and is a
+		// PARTIAL update, so this rewrites the name and nothing else. It used to
+		// take the create input, where the same request also cleared the
+		// description, the branding fields and the metadata — a bigger difference
+		// than the drill needed, tolerated because the control only requires the
+		// object to DIFFER. A one-field difference is the cleaner control: what
+		// the receipt reports changed is now exactly what this asked to change.
 		Mode:     tamperModify,
 		Entity:   "asset-type",
 		Mutation: "updateAssetType",
 		Arg:      "token",
-		Input:    "AssetTypeCreateRequest!",
+		Input:    "AssetTypeUpdateRequest!",
 		Field:    "name",
 		Value:    "TAMPERED BY THE UPGRADE RIG",
 	},
@@ -145,10 +144,14 @@ func tamperModes() string {
 // doc renders the mutation. A delete is addressed by token alone; a modify
 // carries the request as a second variable.
 //
-// The request is built from the token plus the one field, and the token is in it
-// because every create request on this table declares `token: String!` — an
-// update that reuses the create input has to supply it or be rejected for a
-// reason that has nothing to do with the control.
+// 🔴 WHETHER THE REQUEST CARRIES A TOKEN DEPENDS ON WHICH UPDATE CONTRACT THE
+// MUTATION IS ON, and getting it wrong fails the drill for a reason that has
+// nothing to do with the drill. A create request on this table declares
+// `token: String!`, so an update reusing one has to supply it. A dedicated
+// *UpdateRequest declares NO token — the mutation's own argument names the row —
+// and sending one is rejected outright by the unknown-input-field guard. It is read
+// off the input type name rather than kept as a second flag beside it, so a
+// mutation converted to a partial update carries its own answer.
 func (t tamper) doc() string {
 	if t.Input == "" {
 		return "mutation($token:String!){" + t.Mutation + "(" + t.Arg + ":$token)}"
@@ -161,10 +164,17 @@ func (t tamper) vars(token string) map[string]any {
 	if t.Input == "" {
 		return map[string]any{"token": token}
 	}
-	return map[string]any{
-		"token": token,
-		"req":   map[string]any{"token": token, t.Field: t.Value},
+	req := map[string]any{t.Field: t.Value}
+	if !t.partialInput() {
+		req["token"] = token
 	}
+	return map[string]any{"token": token, "req": req}
+}
+
+// partialInput reports whether the request type is a dedicated update input, which
+// declares no token.
+func (t tamper) partialInput() bool {
+	return strings.HasSuffix(strings.TrimSuffix(t.Input, "!"), "UpdateRequest")
 }
 
 func runTamper(ctx context.Context, argv []string) error {

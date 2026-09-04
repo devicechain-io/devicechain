@@ -162,6 +162,32 @@ type DeviceBulkCreateRequest struct {
 	Metadata           *string
 }
 
+// DeviceUpdateRequest is the PARTIAL-update counterpart of DeviceCreateRequest.
+// Omitted leaves the stored value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 TOKEN IS DELIBERATELY ABSENT, and here that closes a defect with a second
+// symptom. The old path located the row by `request.Token` and ignored the
+// mutation's own `token` argument entirely, so a caller who sent a `token` argument
+// naming one device and a `request.token` naming another silently updated the
+// SECOND and got a 200 for it — the mandatory argument was dead. It also meant a
+// device rename was unreachable through this method, which is why the roster
+// fan-out below could assume a stable device-token key. Both remain true of the new
+// shape, but now by construction: the argument is the only identity channel, and a
+// token move is unrepresentable rather than accidentally unreachable.
+type DeviceUpdateRequest struct {
+	ExternalId  dcgraphql.OptionalString
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// DeviceTypeToken re-types the device. Omitted keeps the current type. An
+	// explicit NULL IS REFUSED — device_type_id is NOT NULL, and a device with no
+	// type resolves no capability at all. An unknown token is refused, totally.
+	//
+	// A re-type may move the device onto a different DeviceProfile, so this is the
+	// field the post-commit roster fan-out watches.
+	DeviceTypeToken dcgraphql.OptionalString
+	Metadata        dcgraphql.OptionalString
+}
+
 // Represents a device.
 type Device struct {
 	gorm.Model

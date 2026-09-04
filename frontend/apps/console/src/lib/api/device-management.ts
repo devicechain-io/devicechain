@@ -10,6 +10,7 @@ import type {
   DeviceTypeCreateRequest,
   DeviceTypeUpdateRequest,
   DeviceCreateRequest,
+  DeviceUpdateRequest,
   DeviceBulkCreateRequest,
   EntityGroupsQuery,
   EntityGroupCreateRequest,
@@ -73,6 +74,7 @@ export type {
   DeviceTypeCreateRequest,
   DeviceTypeUpdateRequest,
   DeviceCreateRequest,
+  DeviceUpdateRequest,
   DeviceBulkCreateRequest,
   EntityGroupCreateRequest,
   DeviceProfileCreateRequest,
@@ -203,7 +205,7 @@ export async function createDevices(request: DeviceBulkCreateRequest): Promise<{
 }
 
 const UPDATE_DEVICE = graphql(`
-  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {
+  mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
     updateDevice(token: $token, request: $request) {
       id
       token
@@ -225,35 +227,22 @@ const UPDATE_DEVICE = graphql(`
   }
 `);
 
-// 🔴 `Required<…>` is not decoration: it makes the OMISSION a compile error. The
-// update is a full replace, so the defect this guards against is a caller that
-// simply does not mention a field — which the plain request type, where every
-// field is optional, compiles happily. See areaPreserved for the whole argument.
+// updateDevice is a PARTIAL update: pass only the fields being changed. An omitted
+// field is left alone, an explicit null clears it.
+//
+// 🔴 Callers must NOT carry forward the fields they do not edit. The `devicePreserved`
+// projection that used to sit here was the right fix for a full replace and is the
+// WRONG one now: a form that re-sends fields it never showed is writing them back
+// from a snapshot it read minutes ago, so two operators on two tabs each silently
+// overwrite the other. Absence is the carry-forward.
 export async function updateDevice(
   token: string,
-  request: Required<DeviceCreateRequest>,
+  request: DeviceUpdateRequest,
 ): Promise<Device> {
   const data = await gql('device-management', UPDATE_DEVICE, { token, request });
   return data.updateDevice;
 }
 
-// 🔴 A device update is a FULL REPLACE, so a field the request omits is DELETED.
-// externalId is the one that hurts most here: it is the handle an external system
-// correlates this device by, no console form edits it, and renaming a device used
-// to erase it — the device kept working and simply stopped being findable from
-// wherever it came from. The `Required<…>` return type is the gate; see areaPreserved.
-//
-// deviceTypeToken is not preserved: the form always supplies it, and the request
-// type refuses to compile without it.
-export function devicePreserved(d: Device): Required<Omit<DeviceCreateRequest, 'deviceTypeToken'>> {
-  return {
-    token: d.token,
-    name: d.name ?? null,
-    description: d.description ?? null,
-    externalId: d.externalId ?? null,
-    metadata: d.metadata ?? null,
-  };
-}
 
 const DELETE_DEVICE = graphql(`
   mutation DeleteDevice($token: String!) {

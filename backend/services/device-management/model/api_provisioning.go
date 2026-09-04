@@ -111,6 +111,9 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 // Update an existing provisioning profile.
 func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 	request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error) {
+	if err := errPayloadTokenDisagrees("provisioning profile", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -138,7 +141,6 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

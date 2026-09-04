@@ -10,7 +10,6 @@ import {
   deleteAsset,
   createAsset,
   updateAsset,
-  assetPreserved,
   listAssetTypes,
   type Asset,
 } from '@/lib/api/assets';
@@ -57,11 +56,11 @@ export const assetResource: RegistryResource<Asset> = {
         })
       }
       update={(token, req) =>
-        // RegistryInstanceForm calls update only when editing, so a is set.
-        // Start from everything the asset already is (assetPreserved) — the update is a
-        // full replace, so anything left out is deleted rather than left alone.
+        // A partial update: this form edits the name, the description and the type,
+        // so it sends exactly those. externalId and metadata are untouched because
+        // they are not mentioned — where the full-replace shape needed them re-sent
+        // from a stale snapshot to survive at all.
         updateAsset(token, {
-          ...assetPreserved(a!),
           name: req.name,
           description: req.description,
           assetTypeToken: req.typeToken,

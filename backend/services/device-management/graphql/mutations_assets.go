@@ -33,16 +33,21 @@ func (r *SchemaResolver) CreateAssetType(ctx context.Context, args struct {
 }
 
 // Update an existing asset type.
+// The request is a PARTIAL update: a field the caller omitted is left alone, an
+// explicit null clears it, a value sets it. It is declared non-null in the schema
+// and is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field
+// for a required argument, and an update naming no fields at all is a caller error
+// rather than a no-op to absorb silently.
 func (r *SchemaResolver) UpdateAssetType(ctx context.Context, args struct {
 	Token   string
-	Request *model.AssetTypeCreateRequest
+	Request model.AssetTypeUpdateRequest
 }) (*AssetTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateAssetType(ctx, args.Token, args.Request)
+	updated, err := api.UpdateAssetType(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}
@@ -78,16 +83,21 @@ func (r *SchemaResolver) CreateAsset(ctx context.Context, args struct {
 }
 
 // Update an existing asset.
+// The request is a PARTIAL update: a field the caller omitted is left alone, an
+// explicit null clears it, a value sets it. It is declared non-null in the schema
+// and is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field
+// for a required argument, and an update naming no fields at all is a caller error
+// rather than a no-op to absorb silently.
 func (r *SchemaResolver) UpdateAsset(ctx context.Context, args struct {
 	Token   string
-	Request *model.AssetCreateRequest
+	Request model.AssetUpdateRequest
 }) (*AssetResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateAsset(ctx, args.Token, args.Request)
+	updated, err := api.UpdateAsset(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

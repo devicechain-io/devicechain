@@ -115,7 +115,10 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 // members, so a mismatch fails closed.
 func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	request *EntityGroupCreateRequest) (*EntityGroup, error) {
-	matches, err := api.EntityGroupsByToken(ctx, []string{request.Token})
+	if err := errPayloadTokenDisagrees("entity group", token, request.Token); err != nil {
+		return nil, err
+	}
+	matches, err := api.EntityGroupsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +151,6 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 		updated.Selector = sql.NullString{String: sel.Source(), Valid: true}
 		updated.SelectorSchema = selector.SchemaVersion
 	}
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	updated.ImageUrl = rdb.NullStrOf(request.ImageUrl)

@@ -95,6 +95,9 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 // Update an existing command definition.
 func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	request *CommandDefinitionCreateRequest) (*CommandDefinition, error) {
+	if err := errPayloadTokenDisagrees("command definition", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.CommandDefinitionsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -133,7 +136,6 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 
 	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

@@ -136,6 +136,9 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 // Update an existing detection rule.
 func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
+	if err := errPayloadTokenDisagrees("detection rule", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.DetectionRulesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -158,7 +161,6 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

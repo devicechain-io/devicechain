@@ -111,16 +111,21 @@ func (r *SchemaResolver) CreateDevices(ctx context.Context, args struct {
 }
 
 // Update an existing device.
+// The request is a PARTIAL update: a field the caller omitted is left alone, an
+// explicit null clears it, a value sets it. It is declared non-null in the schema
+// and is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field
+// for a required argument, and an update naming no fields at all is a caller error
+// rather than a no-op to absorb silently.
 func (r *SchemaResolver) UpdateDevice(ctx context.Context, args struct {
 	Token   string
-	Request *model.DeviceCreateRequest
+	Request model.DeviceUpdateRequest
 }) (*DeviceResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateDevice(ctx, args.Token, args.Request)
+	updated, err := api.UpdateDevice(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -610,9 +610,14 @@ func (api *Api) emitDeviceRosterForType(ctx context.Context, deviceTypeId uint) 
 	}
 }
 
-// Update an existing device.
-func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceCreateRequest) (*Device, error) {
-	matches, err := api.DevicesByToken(ctx, []string{request.Token})
+// Update an existing device, applying only the fields the caller actually sent.
+//
+// The device is located by the `token` ARGUMENT. It used to be located by
+// request.Token with the argument ignored outright, so a caller who named one
+// device in the argument and another in the payload silently updated the second and
+// got a 200 for it. The payload no longer carries a token at all.
+func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceUpdateRequest) (*Device, error) {
+	matches, err := api.DevicesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -620,31 +625,40 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
-	updated.ExternalId = rdb.NullStrOf(request.ExternalId)
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// The type hop resolves BEFORE anything is written, so an unknown device type
+	// refuses the WHOLE update rather than applying the fields it liked first. The
+	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
+	// the comparison this replaces dereferenced it unconditionally.
+	currentTypeToken := ""
+	if updated.DeviceType != nil {
+		currentTypeToken = updated.DeviceType.Token
+	}
+	retypeTo, retyped, err := resolveRequiredTypeRef(request.DeviceTypeToken, currentTypeToken, "deviceTypeToken")
+	if err != nil {
+		return nil, err
+	}
+	if retyped {
+		types, err := api.DeviceTypesByToken(ctx, []string{retypeTo})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
+		updated.DeviceType = types[0]
+		updated.DeviceTypeId = types[0].ID // keep the FK in lockstep for the post-commit roster resolve
+	}
+
+	updated.ExternalId = rdb.NullStrOf(request.ExternalId.ApplyTo(dcgraphql.NullStr(updated.ExternalId)))
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-
-	// Update device type if changed.
-	retyped := request.DeviceTypeToken != updated.DeviceType.Token
-	if retyped {
-		matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
-		if err != nil {
-			return nil, err
-		}
-		if len(matches) == 0 {
-			return nil, gorm.ErrRecordNotFound
-		}
-		updated.DeviceType = matches[0]
-		updated.DeviceTypeId = matches[0].ID // keep the FK in lockstep for the post-commit roster resolve
-	}
 
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {
@@ -658,10 +672,18 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceC
 	// creation time would instantly fire absence under a long-standing rule. (A re-type between
 	// two types that adopt the SAME profile also emits and refreshes the window; that is a
 	// benign fresh grace, never a false fire, and not worth a second profile resolve to suppress.)
-	// Best-effort,
-	// exactly like the create path. (Device token rename is unreachable through this method —
-	// it locates by request.Token, ignoring the token argument — so the roster's device-token
-	// key is stable here; a future rename path would need its own re-roster/removal.)
+	// Best-effort, exactly like the create path.
+	//
+	// `retyped` now means "the caller named a DIFFERENT type", where it used to mean
+	// "the caller named a type that differs from the stored one" — a full replace had
+	// to send the token on every update, so an unchanged token was the common case and
+	// the comparison did the filtering. Under partial semantics an untouched type is
+	// simply absent, and resolveRequiredTypeRef still filters a re-send of the same
+	// token, so the emission set is unchanged.
+	//
+	// A device token rename remains unreachable through this method — the update input
+	// carries no token — so the roster's device-token key is stable here; a future
+	// rename path would need its own re-roster/removal.
 	if retyped {
 		api.emitDeviceRosterForDevice(ctx, updated, time.Now().UTC())
 	}

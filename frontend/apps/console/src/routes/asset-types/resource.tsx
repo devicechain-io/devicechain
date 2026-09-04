@@ -9,7 +9,6 @@ import {
   getAssetType,
   createAssetType,
   updateAssetType,
-  assetTypePreserved,
   deleteAssetType,
   type AssetType,
 } from '@/lib/api/assets';
@@ -41,12 +40,10 @@ export const assetTypeResource: RegistryResource<AssetType> = {
       entityType="asset-type"
       create={(req) => createAssetType(req)}
       update={(token, req) =>
-        // RegistryTypeForm calls update only when editing, so at is set. The
-        // appearance fields were already carried by hand here; assetTypePreserved
-        // adds the imageUrl and metadata that were not, and makes the next field
-        // added to the schema a compile error rather than a silent deletion.
+        // A partial update: this form edits name and description, so it sends name
+        // and description. The appearance fields, the imageUrl and the metadata are
+        // untouched because they are not mentioned.
         updateAssetType(token, {
-          ...assetTypePreserved(at!),
           name: req.name,
           description: req.description,
         })
@@ -58,10 +55,8 @@ export const assetTypeResource: RegistryResource<AssetType> = {
   renderDetailExtra: (at, reload) => (
     <TypeAppearanceForm
       entity={at}
-      // The appearance tab edits icon + colors; everything else — name,
-      // description, imageUrl, metadata — has to be carried, or saving a colour
-      // deletes it.
-      update={(req) => updateAssetType(at.token, { ...assetTypePreserved(at), ...req })}
+      // The appearance form edits icon and colors, and sends only those.
+      update={(req) => updateAssetType(at.token, req)}
       onSaved={reload}
     />
   ),

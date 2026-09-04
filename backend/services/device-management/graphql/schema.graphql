@@ -848,6 +848,27 @@ input DeviceCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to a device: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row. It used to be the payload token that named the
+# row, with the argument ignored, so a request whose two tokens disagreed silently
+# updated the device in the payload and returned it as though it were the one asked
+# for.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input DeviceUpdateRequest {
+    externalId: String
+    name: String
+    description: String
+    # Re-types the device. Omit to keep the current type. NULL IS REFUSED: a device
+    # with no type resolves no capability at all. An unknown token is refused, and
+    # the refusal is total.
+    deviceTypeToken: String
+    metadata: String
+}
+
 # Templated bulk device creation. The server renders `count` devices (indices
 # startIndex .. startIndex+count-1) from the templates and creates them in one
 # transaction. Templates understand `{n}` / `{n:0Wd}` (the 1-based index,
@@ -1202,6 +1223,26 @@ input AssetTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to an asset type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AssetTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
 # Criteria used when searching for asset types.
 input AssetTypeSearchCriteria {
     pageNumber: Int!
@@ -1233,6 +1274,23 @@ input AssetCreateRequest {
     name: String
     description: String
     assetTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to an asset: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see AssetTypeUpdateRequest.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AssetUpdateRequest {
+    name: String
+    description: String
+    # Re-points the asset at a different asset type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every asset
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    assetTypeToken: String
     metadata: String
 }
 
@@ -1279,6 +1337,26 @@ input CustomerTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to a customer type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input CustomerTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
 # Criteria used when searching for customer types.
 input CustomerTypeSearchCriteria {
     pageNumber: Int!
@@ -1310,6 +1388,23 @@ input CustomerCreateRequest {
     name: String
     description: String
     customerTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to a customer: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see CustomerTypeUpdateRequest.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input CustomerUpdateRequest {
+    name: String
+    description: String
+    # Re-points the customer at a different customer type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every customer
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    customerTypeToken: String
     metadata: String
 }
 
@@ -1356,6 +1451,26 @@ input AreaTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to an area type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AreaTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
 # Criteria used when searching for area types.
 input AreaTypeSearchCriteria {
     pageNumber: Int!
@@ -1387,6 +1502,23 @@ input AreaCreateRequest {
     name: String
     description: String
     areaTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to an area: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see AreaTypeUpdateRequest.
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AreaUpdateRequest {
+    name: String
+    description: String
+    # Re-points the area at a different area type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every area
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    areaTypeToken: String
     metadata: String
 }
 
@@ -1850,7 +1982,7 @@ type Mutation {
     # external-id templates and creates them all-or-nothing.
     createDevices(request: DeviceBulkCreateRequest!): [Device!]!
     # Update an existing device.
-    updateDevice(token: String!, request: DeviceCreateRequest): Device!
+    updateDevice(token: String!, request: DeviceUpdateRequest!): Device!
     # Delete a device, cascade-removing its credentials and relationship edges.
     deleteDevice(token: String!): Boolean!
     # Create a new entity group (ADR-061). A static group's members are managed over
@@ -1916,39 +2048,39 @@ type Mutation {
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
     # Update an existing asset type.
-    updateAssetType(token: String!, request: AssetTypeCreateRequest): AssetType!
+    updateAssetType(token: String!, request: AssetTypeUpdateRequest!): AssetType!
     # Delete an asset type. Refused while any asset references it.
     deleteAssetType(token: String!): Boolean!
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
-    updateAsset(token: String!, request: AssetCreateRequest): Asset!
+    updateAsset(token: String!, request: AssetUpdateRequest!): Asset!
     # Delete an asset and its relationship edges.
     deleteAsset(token: String!): Boolean!
 
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
     # Update an existing customer type.
-    updateCustomerType(token: String!, request: CustomerTypeCreateRequest): CustomerType!
+    updateCustomerType(token: String!, request: CustomerTypeUpdateRequest!): CustomerType!
     # Delete a customer type. Refused while any customer references it.
     deleteCustomerType(token: String!): Boolean!
     # Create a new customer.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
-    updateCustomer(token: String!, request: CustomerCreateRequest): Customer!
+    updateCustomer(token: String!, request: CustomerUpdateRequest!): Customer!
     # Delete a customer and its relationship edges.
     deleteCustomer(token: String!): Boolean!
 
     # Create a new area type.
     createAreaType(request: AreaTypeCreateRequest): AreaType!
     # Update an existing area type.
-    updateAreaType(token: String!, request: AreaTypeCreateRequest): AreaType!
+    updateAreaType(token: String!, request: AreaTypeUpdateRequest!): AreaType!
     # Delete an area type. Refused while any area references it.
     deleteAreaType(token: String!): Boolean!
     # Create a new area.
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
-    updateArea(token: String!, request: AreaCreateRequest): Area!
+    updateArea(token: String!, request: AreaUpdateRequest!): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
 }
