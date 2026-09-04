@@ -154,10 +154,15 @@ hardcoded — but **new** copy must be written i18n-aware from now on.
 - **Keep copy in the render, in whole sentences**, not pre-built in a helper — so the
   extraction sweep can find it and so a translator sees a full sentence.
 - **Locale precedence** (ADR-066): explicit user choice → tenant default → browser → `en`.
-  The switcher persists the user
-  choice; the tenant-default rung is a documented seam (`applyTenantDefaultLocale`) not yet
-  wired. Prefer CSS logical properties (`ms-*`/`me-*`, `start`/`end`) over `left`/`right`
-  where it's free, so a future RTL locale is cheaper — RTL is out of GA scope.
+  All four rungs are live. The switcher persists the user choice (`dc.locale`, and it is
+  the only writer of that key — the detector runs with `caches: []` so the key's presence
+  means "chosen"); `applyTenantDefaultLocale` applies the tenant rung and is called from
+  `TenantProvider` and nowhere else. **Rung 2 beats rung 3 by overwriting a language the
+  detector has already resolved**, which is why it is a function rather than an entry in
+  `detection.order` — anything that makes it skip when a language is in effect demotes it
+  below the browser while every rung-1 test stays green. Prefer CSS logical properties
+  (`ms-*`/`me-*`, `start`/`end`) over `left`/`right` where it's free, so a future RTL
+  locale is cheaper — RTL is out of GA scope.
 
 ## Gotchas
 

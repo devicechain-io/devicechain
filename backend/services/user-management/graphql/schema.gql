@@ -52,6 +52,20 @@ type Tenant {
     # null field means "this tenant inherits" (vs `basemap`, which fills it from the
     # operator default). The editor reads this to show set-vs-inherited.
     basemapOverride: TenantBasemap!
+    # The tenant's EFFECTIVE default language: its own override folded over the
+    # operator's `locale.default`. A BCP-47 tag ("en", "es", "pt-BR"), or null when
+    # neither tier sets one. Requires no authority beyond being a member, like
+    # `branding`.
+    #
+    # 🔴 This is a DEFAULT, not the language in effect. The console resolves four
+    # rungs — an explicit user choice, then this, then the browser's advertised
+    # languages, then English — so this only answers for a member who has not chosen,
+    # and only when the console ships that catalog.
+    locale: String
+    # The tenant's RAW locale override — the stored column with no cascade, so null
+    # means "this tenant inherits" (vs `locale`, which fills it from the operator
+    # default). The editor reads this to show set-vs-inherited.
+    localeOverride: String
 }
 
 # The tile source a tenant's maps draw on, and the view they open at when there is
@@ -284,6 +298,15 @@ type Mutation {
     # replace: a null field clears that override. Returns the tenant with its freshly
     # resolved basemap so the editing client can write it straight into cache.
     setTenantBasemap(input: TenantBasemapInput!): Tenant!
+    # Set the caller's OWN tenant default language, or clear it with null to
+    # re-inherit the operator's `locale.default`. Self-scoped to the tenant in the
+    # access token; requires locale:write — NOT branding:write, because this one value
+    # re-languages the console for every member who has not chosen otherwise, and that
+    # plausibly belongs to different people than the brand does. Takes a BCP-47 tag
+    # ("en", "es", "pt-BR"); a tag whose catalog this console build does not ship is
+    # stored but has no effect until it does. Returns the tenant with its freshly
+    # resolved locale so the editing client can write it straight into cache.
+    setTenantLocale(locale: String): Tenant!
 }
 
 schema {

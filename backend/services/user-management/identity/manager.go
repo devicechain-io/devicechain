@@ -443,6 +443,28 @@ func (m *Manager) SetTenantBasemap(ctx context.Context, token string, b basemap.
 	return m.iam.TenantByToken(ctx, token)
 }
 
+// SetTenantLocale writes the caller's own tenant default locale (ADR-066
+// sub-workstream d), keyed by the tenant token from the caller's access token — so it
+// is inherently self-scoped, exactly like SetTenantBranding and SetTenantBasemap
+// above. A nil locale CLEARS the column, re-inheriting the operator's
+// `locale.default`.
+//
+// One column rather than a block, so "full replace" and "partial update" are the same
+// operation here and the trap SetTenantBasemap documents cannot arise. What DOES carry
+// over is the reason nil is spelled as nil: the caller normalizes first, so a client
+// that means "clear this" by sending "" arrives here as nil rather than as a stored
+// blank that would win the cascade and mask the operator's default.
+func (m *Manager) SetTenantLocale(ctx context.Context, token string, l *string) (*iam.Tenant, error) {
+	t, err := m.iam.TenantByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.iam.UpdateTenantFields(ctx, t, map[string]any{"locale": l}); err != nil {
+		return nil, err
+	}
+	return m.iam.TenantByToken(ctx, token)
+}
+
 // TenantByToken loads a tenant by its token (the tenant-unscoped control-plane
 // table). Exposed for the branding-logo HTTP handlers (ADR-058), which need the
 // caller's own tenant row to read/replace its object-store logo reference.

@@ -6,10 +6,12 @@
 // Importing this module for its side effect (see main.tsx) initializes the shared
 // i18next instance; components consume it through react-i18next's useTranslation.
 //
-// Slice scope (ADR-066 sub-workstream a): English only, two namespaces, one
-// converted reference screen (Login). The one-time string-externalization sweep
-// (b), the Spanish catalog (c), and the tenant-default locale (d) are separate
-// workstreams; the seams for each are marked below.
+// The framework wiring landed as ADR-066 sub-workstream (a) — English only, two
+// namespaces, one converted reference screen (Login) — and the string-externalization
+// sweep (b), the Spanish catalog (c) and the tenant-default locale (d) followed as
+// their own workstreams. All four are in. What is still marked below is the seam each
+// one left: NAMESPACES for lazy per-namespace loading, and applyTenantDefaultLocale
+// for the tenant rung, which TenantProvider now calls.
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
@@ -30,6 +32,7 @@ import enConnectors from './locales/en/connectors.json';
 import enCommandBatches from './locales/en/commandBatches.json';
 import enBranding from './locales/en/branding.json';
 import enBasemap from './locales/en/basemap.json';
+import enLocale from './locales/en/locale.json';
 import enBrowse from './locales/en/browse.json';
 import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
@@ -56,6 +59,7 @@ import esConnectors from './locales/es/connectors.json';
 import esCommandBatches from './locales/es/commandBatches.json';
 import esBranding from './locales/es/branding.json';
 import esBasemap from './locales/es/basemap.json';
+import esLocale from './locales/es/locale.json';
 import esBrowse from './locales/es/browse.json';
 import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
@@ -127,6 +131,10 @@ export const NAMESPACES = [
   'commandBatches',
   'branding',
   'basemap',
+  // The tenant's own DEFAULT-language editor (rung 2 of the precedence below), not
+  // the machinery in this file. Named for the screen it backs, like every other
+  // namespace here.
+  'locale',
   'browse',
   'facets',
   'audit',
@@ -163,6 +171,7 @@ const resources = {
     commandBatches: enCommandBatches,
     branding: enBranding,
     basemap: enBasemap,
+    locale: enLocale,
     browse: enBrowse,
     facets: enFacets,
     audit: enAudit,
@@ -190,6 +199,7 @@ const resources = {
     commandBatches: esCommandBatches,
     branding: esBranding,
     basemap: esBasemap,
+    locale: esLocale,
     browse: esBrowse,
     facets: esFacets,
     audit: esAudit,
@@ -260,13 +270,23 @@ export function setUserLocale(code: string): void {
 }
 
 /**
- * The seam for ADR-066 sub-workstream (d): a tenant-default locale delivered on
- * the ADR-038 white-label cascade. The tenant provider will call this once it
- * knows the tenant's default locale; wiring that call is (d), but the precedence
- * contract lives here so (a) fixes it and a later slice cannot get it subtly
- * wrong. It is a NO-OP when the user has already made an explicit choice (rung 1
- * beats rung 2) and ignores a locale we do not ship — so a tenant default only
- * ever fills in for a user who has not chosen, and only with a shipped locale.
+ * Precedence rung 2 (ADR-066 sub-workstream d): the tenant's default locale,
+ * delivered on the ADR-038 white-label cascade.
+ *
+ * TenantProvider calls this once, from a single effect keyed on the tenant's
+ * EFFECTIVE locale — it is the only caller, and it must stay the only one. It is a
+ * NO-OP when the user has already made an explicit choice (rung 1 beats rung 2) and
+ * ignores a locale that resolves to no shipped catalog, so a tenant default only ever
+ * fills in for a user who has not chosen, and only with a locale that can render.
+ *
+ * 🔴 IT BEATS RUNG 3 BY OVERWRITING IT, which is why this is a function rather than
+ * an entry in `detection.order` above. Detection has already run and resolved the
+ * browser's language by the time a tenant is known, so applying a tenant default
+ * means calling changeLanguage on a language that is already in effect. Anything
+ * added here that skips when a language is resolved (an `if (i18n.resolvedLanguage)
+ * return`, an "only run once" flag) silently demotes rung 2 below rung 3 while
+ * leaving every rung-1 test green — see the browser-rung tests in config.test.ts,
+ * which exist for that mutation specifically.
  */
 export function applyTenantDefaultLocale(locale: string | null | undefined): void {
   if (!locale) return;
@@ -276,9 +296,60 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
   // NOT block an effective tenant default; treating any string as "chosen" would
   // let an ineffective rung-1 suppress an effective rung-2.
   const chosen = localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (chosen && SUPPORTED_LOCALES.some((l) => l.code === chosen)) return;
-  if (!SUPPORTED_LOCALES.some((l) => l.code === locale)) return; // never select an unshipped catalog
+  if (chosen && isShippedLocale(chosen)) return;
+  if (!isShippedLocale(locale)) return; // never select a locale that would render raw keys
   void i18n.changeLanguage(locale);
+}
+
+/**
+ * Whether a language tag resolves to a catalog this build actually ships.
+ *
+ * 🔴 IT ASKS i18next RATHER THAN RE-DERIVING THE ANSWER, and that is the whole point.
+ * The question "would this tag render one of our catalogs?" has exactly one correct
+ * answer — the one `changeLanguage` is about to act on — and any second implementation
+ * of it is a source of disagreement rather than a convenience. The first version here
+ * was hand-rolled (`code === tag || code.toLowerCase() === base`) and disagreed on
+ * case: it called `ES` resolvable, handed it to `changeLanguage`, and i18next resolved
+ * `en`, because `lowerCaseLng` is off and i18next only case-normalizes the REGION half
+ * of a hyphenated tag. The seam was selecting a language that renders raw keys by its
+ * own definition.
+ *
+ * `isSupportedCode` applies `nonExplicitSupportedLngs` itself, so the regional fold
+ * this function used to hand-roll comes for free and stays correct if that option ever
+ * changes. Measured, not assumed — `es-MX`, `es-419` and `es-Latn-MX` are supported and
+ * render Spanish; `ES`, `pt-BR`, `fr-CA` and `zh-Hans-CN` are not and render English.
+ *
+ * The full tag is still what gets passed to changeLanguage, never a folded base: i18next
+ * does the folding, so the day an `es-MX` catalog ships it is picked up with no change
+ * here.
+ *
+ * Exported because the operator's `locale.default` editor asks the same question about
+ * the same tag, and asked it with its own second copy of the old hand-rolled fold.
+ */
+export function isShippedLocale(tag: string): boolean {
+  // services.languageUtils exists once init() has run, and init is synchronous here
+  // (catalogs are bundled, no async backend). Guarded anyway, and fail-CLOSED: an
+  // unanswerable question must not select a language.
+  const utils = i18n.services?.languageUtils;
+  return utils ? utils.isSupportedCode(tag) : false;
+}
+
+/**
+ * Hand the language back to the rungs that do not need a tenant: an explicit user
+ * choice, then the browser, then English.
+ *
+ * TenantProvider calls this when it unmounts — leaving the tenant shell for the login
+ * screen or the instance-scoped /admin console — so a tenant default does not outlive
+ * the tenant it belongs to.
+ *
+ * 🔴 The no-argument `changeLanguage()` RE-RUNS DETECTION rather than picking a
+ * constant, which is what makes this a revert rather than a second opinion: it lands on
+ * whatever rungs 1, 3 and 4 say, with no knowledge of them here. Measured on all three
+ * arms — a stored user choice wins, otherwise a shipped browser language wins,
+ * otherwise English.
+ */
+export function resetToDetectedLocale(): void {
+  void i18n.changeLanguage();
 }
 
 export default i18n;

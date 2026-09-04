@@ -1,0 +1,14 @@
+{
+  "title": "Idioma",
+  "description": "El idioma en el que se abre la consola de este inquilino para los miembros que no han elegido uno.",
+  "loading": "Cargando la configuración de idioma…",
+  "noPermissionPrefix": "Necesitas la autoridad",
+  "noPermissionSuffix": "para cambiar el idioma predeterminado de este inquilino.",
+  "defaultLanguage": "Idioma predeterminado",
+  "defaultLanguageHelp": "Elige Heredar para seguir el valor predeterminado que haya definido tu operador para toda la instancia.",
+  "inheritOption": "Heredar",
+  "inheriting": "Heredando el valor predeterminado de la instancia: {{locale}}",
+  "precedenceNote": "Esto es un valor predeterminado, no un ajuste que se imponga a las personas. Quien haya elegido un idioma en el selector lo conserva. Quien no lo haya hecho verá este idioma; y si aquí eliges Heredar y tu operador tampoco ha definido uno, verá el idioma que pida su navegador entre los que ofrecemos, o inglés.",
+  "save": "Guardar idioma",
+  "savedToast": "Idioma predeterminado guardado."
+}

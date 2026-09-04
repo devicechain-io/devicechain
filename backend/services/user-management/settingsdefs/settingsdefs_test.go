@@ -27,7 +27,7 @@ func def(t *testing.T, key string) settings.Definition {
 // path, so it gets its own test.
 func TestRegistryBuildsAndEveryShippedDefaultPassesItsOwnValidator(t *testing.T) {
 	r := Registry()
-	require.Len(t, r.All(), 3)
+	require.Len(t, r.All(), 4)
 	for _, d := range r.All() {
 		assert.NoErrorf(t, d.Validate(d.Default), "the shipped default for %s is refused by its own validator", d.Key)
 	}
@@ -165,4 +165,67 @@ func TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive(t *testing.T)
 	v := `{"tileURL":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"© E"}`
 	assert.NoError(t, def(t, KeyBasemapDefault).Validate(json.RawMessage(v)),
 		"case variation binds to the right field, so it is accepted rather than silently ignored")
+}
+
+// ---- locale.default ---------------------------------------------------------
+
+func TestValidateLocaleDefault(t *testing.T) {
+	d := def(t, KeyLocaleDefault)
+
+	valid := map[string]string{
+		// 🔴 null is the SHIPPED default and a legal operator choice: "no instance
+		// default — the browser decides". Refusing it is what made the browser rung
+		// unreachable on every unconfigured instance.
+		"null, meaning the browser decides":  `null`,
+		"a bare language":                    `"en"`,
+		"another bare language":              `"es"`,
+		"a region-qualified tag":             `"pt-BR"`,
+		"a script- and region-qualified tag": `"zh-Hans-CN"`,
+		"a numeric region":                   `"es-419"`,
+	}
+	for name, v := range valid {
+		assert.NoErrorf(t, d.Validate(json.RawMessage(v)), "%s must be accepted: %s", name, v)
+	}
+
+	invalid := map[string]string{
+		"an object rather than a tag":   `{"locale":"en"}`,
+		"an array":                      `["en"]`,
+		"a number":                      `5`,
+		"a bare token that is not JSON": `en`,
+		"prose":                         `"English please"`,
+		"the POSIX spelling":            `"en_US"`,
+		// 🔴 A blank is NOT a second spelling of null. It is a tag that is missing, and
+		// admitting it would give the settings page two states that look and resolve
+		// the same while only one was chosen.
+		"an empty string": `""`,
+		"whitespace only": `"   "`,
+		// 🔴 Non-canonical is refused rather than silently normalized, so the bytes
+		// stored are the bytes validated. A Definition carries a Validator and no
+		// normalizer, so accepting these meant storing them verbatim — and the admin
+		// editor then came up DIRTY on load, comparing its canonical draft against the
+		// raw stored bytes.
+		"untrimmed":                `"  es "`,
+		"wrong case on a language": `"ES"`,
+		"wrong case on a region":   `"es-mx"`,
+	}
+	for name, v := range invalid {
+		assert.Errorf(t, d.Validate(json.RawMessage(v)), "%s must be refused: %s", name, v)
+	}
+}
+
+// The canonical-form refusal has to SAY the canonical form, or it is a refusal an
+// operator cannot act on.
+func TestTheCanonicalFormRefusalNamesTheFormToSend(t *testing.T) {
+	err := def(t, KeyLocaleDefault).Validate(json.RawMessage(`"es-mx"`))
+	assert.ErrorContains(t, err, `"es-MX"`)
+}
+
+// 🔴 THE SHIPPED DEFAULT IS ABSENT, AND THAT IS THE ASSERTION. It was `"en"`, which
+// made settings.Get hand every unconfigured instance a real tenant locale — the console
+// applied it and the browser rung below it never ran. This pins the value rather than
+// just "it validates": a default that drifted back to any concrete tag would restore
+// that regression, and every other test in this file would still pass.
+func TestShippedLocaleDefaultIsAbsentSoTheBrowserDecides(t *testing.T) {
+	assert.Equal(t, `null`, DefaultLocaleJSON)
+	assert.JSONEq(t, DefaultLocaleJSON, string(def(t, KeyLocaleDefault).Default))
 }

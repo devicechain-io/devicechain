@@ -17,7 +17,10 @@ import type { SettingSection } from './registry';
 import { tokenMasksSection } from './TokenMasksEditor';
 import { basemapDefaultSection } from './BasemapDefaultEditor';
 import { brandingDefaultSection } from './BrandingDefaultEditor';
+import { localeDefaultSection } from './LocaleDefaultEditor';
 
 export const SECTIONS: Record<string, SettingSection> = Object.fromEntries(
-  [tokenMasksSection, basemapDefaultSection, brandingDefaultSection].map((s) => [s.key, s]),
+  [tokenMasksSection, basemapDefaultSection, brandingDefaultSection, localeDefaultSection].map(
+    (s) => [s.key, s],
+  ),
 );
