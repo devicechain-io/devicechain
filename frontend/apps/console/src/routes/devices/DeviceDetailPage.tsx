@@ -38,6 +38,7 @@ import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
+import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
 
 export default function DeviceDetailPage() {
@@ -120,6 +121,9 @@ export default function DeviceDetailPage() {
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
           <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>
+          {/* The device's share of the facet-value authoring surface the other three
+              member families get through the registry kit's detailTabs. */}
+          <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
@@ -141,6 +145,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="assignment">
           <SectionPanel>
             <DeviceAssignmentPanel deviceToken={device.token} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="facets">
+          <SectionPanel>
+            <EntityAttributesPanel entityType="device" entityToken={device.token} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="connectivity">

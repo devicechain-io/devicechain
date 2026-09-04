@@ -259,6 +259,24 @@ export type DeviceTypeUpdateRequest = {
   profileToken?: string | null | undefined;
 };
 
+export type EntityAttributeSearchCriteria = {
+  attrKeys?: Array<string> | null | undefined;
+  entity?: string | null | undefined;
+  entityType?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  scope?: string | null | undefined;
+};
+
+export type EntityAttributeSetRequest = {
+  attrKey: string;
+  entity: string;
+  entityType: string;
+  scope: string;
+  value?: string | null | undefined;
+  valueType: string;
+};
+
 export type EntityGroupCreateRequest = {
   backgroundColor?: string | null | undefined;
   borderColor?: string | null | undefined;
@@ -955,6 +973,30 @@ export type DeleteDetectionRuleMutationVariables = Exact<{
 
 
 export type DeleteDetectionRuleMutation = { deleteDetectionRule: boolean };
+
+export type EntityAttributesQueryVariables = Exact<{
+  criteria: EntityAttributeSearchCriteria;
+}>;
+
+
+export type EntityAttributesQuery = { entityAttributes: { results: Array<{ id: string, entityType: string, scope: string, attrKey: string, valueType: string, value: string | null, lastUpdated: string | null }>, pagination: { totalRecords: number | null } } };
+
+export type SetEntityAttributeMutationVariables = Exact<{
+  request: EntityAttributeSetRequest;
+}>;
+
+
+export type SetEntityAttributeMutation = { setEntityAttribute: { id: string, scope: string, attrKey: string, valueType: string, value: string | null } };
+
+export type DeleteEntityAttributeMutationVariables = Exact<{
+  entityType: string;
+  entity: string;
+  scope: string;
+  attrKey: string;
+}>;
+
+
+export type DeleteEntityAttributeMutation = { deleteEntityAttribute: boolean };
 
 export type FacetKeysQueryVariables = Exact<{
   criteria: FacetKeySearchCriteria;
@@ -2399,6 +2441,45 @@ export const DeleteDetectionRuleDocument = new TypedDocumentString(`
   deleteDetectionRule(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDetectionRuleMutation, DeleteDetectionRuleMutationVariables>;
+export const EntityAttributesDocument = new TypedDocumentString(`
+    query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {
+  entityAttributes(criteria: $criteria) {
+    results {
+      id
+      entityType
+      scope
+      attrKey
+      valueType
+      value
+      lastUpdated
+    }
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EntityAttributesQuery, EntityAttributesQueryVariables>;
+export const SetEntityAttributeDocument = new TypedDocumentString(`
+    mutation SetEntityAttribute($request: EntityAttributeSetRequest!) {
+  setEntityAttribute(request: $request) {
+    id
+    scope
+    attrKey
+    valueType
+    value
+  }
+}
+    `) as unknown as TypedDocumentString<SetEntityAttributeMutation, SetEntityAttributeMutationVariables>;
+export const DeleteEntityAttributeDocument = new TypedDocumentString(`
+    mutation DeleteEntityAttribute($entityType: String!, $entity: String!, $scope: String!, $attrKey: String!) {
+  deleteEntityAttribute(
+    entityType: $entityType
+    entity: $entity
+    scope: $scope
+    attrKey: $attrKey
+  )
+}
+    `) as unknown as TypedDocumentString<DeleteEntityAttributeMutation, DeleteEntityAttributeMutationVariables>;
 export const FacetKeysDocument = new TypedDocumentString(`
     query FacetKeys($criteria: FacetKeySearchCriteria!) {
   facetKeys(criteria: $criteria) {

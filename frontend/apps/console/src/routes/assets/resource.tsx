@@ -3,6 +3,7 @@
 
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
+import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import {
   listAssets,
   getAsset,
@@ -69,4 +70,17 @@ export const assetResource: RegistryResource<Asset> = {
       onDone={onDone}
     />
   ),
+  // Facet values live on the entity as EntityAttribute rows, and until this tab
+  // existed nothing we ship could write one — the Browse axis for this family was
+  // declarable and permanently unmatchable. The panel is shared with the other three
+  // member families; only the entity type differs.
+  detailTabs: [
+    {
+      value: 'facets',
+      label: 'facets:panelTab',
+      render: (a) => (
+        <EntityAttributesPanel entityType="asset" entityToken={a.token} />
+      ),
+    },
+  ],
 };
