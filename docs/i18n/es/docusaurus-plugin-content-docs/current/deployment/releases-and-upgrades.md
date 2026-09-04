@@ -103,22 +103,28 @@ la requiere el perfil `default`, se genera una sola vez con `openssl rand -base6
 pasa sin cambios en cada instalación y actualización. Consulte
 [Desplegando con Helm](./kubernetes-operator.md#desplegando-con-helm) para saber por qué.
 
+Sustituya `<version>` por una etiqueta realmente publicada —la
+[página de versiones](https://github.com/devicechain-io/devicechain/releases) las lista, y un
+valor no publicado falla al descargar la imagen, no en el momento de la instalación—.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
   --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
-  --set image.tag=v1.2.0
+  --set image.tag=<version>
 ```
 
 El chart de Helm en sí también se publica como un artefacto OCI, por lo que puede instalarlo sin una
-copia local del repositorio:
+copia local del repositorio. El chart se versiona por separado de las imágenes y no lleva la
+`v` inicial; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la
+última, y `--version` rechaza cualquier valor que nunca se haya publicado:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 \
+  --version <chart-version> \
   --set instance.id=devicechain \
   --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
-  --set image.tag=v1.2.0
+  --set image.tag=<version>
 ```
 
 El chart también está publicado en
@@ -142,12 +148,12 @@ helm get values dc -n default -o yaml > dc-values.yaml
 helm upgrade dc deploy/helm/devicechain \
   -n default \
   -f dc-values.yaml \
-  --set image.tag=v1.3.0
+  --set image.tag=<new-version>
 
 rm dc-values.yaml
 
 # 2. El operador. No forma parte del chart, así que `helm upgrade` no puede moverlo.
-dcctl upgrade local devicechain --version v1.3.0
+dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::warning Ambos pasos, siempre: el segundo no es opcional

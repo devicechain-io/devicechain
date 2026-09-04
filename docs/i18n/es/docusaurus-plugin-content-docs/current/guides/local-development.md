@@ -33,8 +33,9 @@ docker run -d --name dc-timescaledb \
 
 NATS necesita JetStream y —si quieres conectar un dispositivo por MQTT— la pasarela MQTT
 integrada del broker. **No existe una opción de línea de comandos para MQTT**: es un bloque
-de configuración, y requiere tanto JetStream como un nombre de servidor explícito. Así que
-escribe un pequeño archivo de configuración en lugar de pasar banderas:
+de configuración, y requiere JetStream (un broker en clúster debe fijar además
+`server_name`). Así que escribe un pequeño archivo de configuración en lugar de pasar
+banderas:
 
 ```bash
 cat > nats.conf <<'EOF'
@@ -59,7 +60,7 @@ repositorio no es en sí un módulo de Go, por lo que un patrón `./...` anclado
 con nada —
 
 ```
-pattern ./...: directory prefix . does not contain modules listed in go.work
+pattern ./...: directory prefix . does not contain modules listed in go.work or their selected dependencies
 ```
 
 — y ni `go build ./...` ni `go build ./backend/...` funcionan desde la raíz del árbol.
@@ -79,18 +80,26 @@ listarlos a mano:
 ```bash
 rc=0
 for m in $(go list -m -f '{{.Dir}}'); do
-  ( cd "$m" && go build ./... && go vet ./... && go test ./... -count=1 ) \
-    || { echo "FAILED: $m"; rc=1; }
+  ( cd "$m" || exit 1
+    fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    go build ./... && go vet ./... && go test ./... -count=1
+  ) || { echo "FAILED: $m"; rc=1; }
 done
 echo "sweep exit status: $rc"
 ```
 
-Dos detalles de ese bucle son esenciales. `-count=1` no es una precaución redundante: unas
-pocas pruebas leen archivos **fuera** de su propio módulo, algo que la caché de pruebas de Go
-no rastrea, así que un PASS en caché puede sobrevivir a un cambio que debería hacerlas
-fallar. Y registrar `rc` importa porque `… || echo "FAILED: $m"` por sí solo dejaría el
-estado de salida del bucle en el del último `echo`: todos los módulos podrían fallar y el
-recorrido seguiría pareciendo correcto.
+Tres detalles de ese bucle son esenciales, y cada uno es una comprobación que de otro modo
+pasaría sin mirar nada:
+
+- **La salida de `gofmt -l` se captura, no solo se ejecuta.** Termina con estado 0 *incluso
+  cuando nombra archivos*, así que hay que comprobar su **salida** —`[ -z "$fmt" ]`—.
+  Invocarlo por su estado de salida lo convertiría en una barrera que nunca puede fallar.
+- **`-count=1` no es una precaución redundante.** Unas pocas pruebas leen archivos **fuera**
+  de su propio módulo, algo que la caché de pruebas de Go no rastrea, así que un PASS en
+  caché puede sobrevivir a un cambio que debería hacerlas fallar.
+- **`rc` se registra, no solo se imprime.** `… || echo "FAILED: $m"` por sí solo dejaría el
+  estado de salida del bucle en el del último `echo`: todos los módulos podrían fallar y el
+  recorrido seguiría pareciendo correcto.
 
 ## 3. Ejecutar un servicio
 

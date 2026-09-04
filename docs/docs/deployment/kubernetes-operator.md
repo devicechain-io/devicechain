@@ -45,13 +45,15 @@ helm install dc deploy/helm/devicechain --set profile=telemetry
 ```
 
 To install a published release, pin the image tag to a version — released images are public
-on `ghcr.io/devicechain-io`, so nothing has to be built locally:
+on `ghcr.io/devicechain-io`, so nothing has to be built locally. Substitute a real released
+tag for `<version>`; the
+[releases page](https://github.com/devicechain-io/devicechain/releases) lists them.
 
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
   --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
-  --set image.tag=v1.2.0
+  --set image.tag=<version>
 ```
 
 See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and the

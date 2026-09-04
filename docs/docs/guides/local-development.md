@@ -33,8 +33,8 @@ docker run -d --name dc-timescaledb \
 
 NATS needs JetStream, and — if you want to connect a device over MQTT — the broker's
 built-in MQTT gateway. There is **no command-line switch for MQTT**: it is a configuration
-block, and it requires both JetStream and an explicit server name. So write a small config
-file rather than passing flags:
+block, and it requires JetStream (a clustered broker must also set `server_name`). So write
+a small config file rather than passing flags:
 
 ```bash
 cat > nats.conf <<'EOF'
@@ -58,7 +58,7 @@ and the services. Builds are **module-scoped**: the repository root is not itsel
 module, so a `./...` pattern anchored there matches nothing —
 
 ```
-pattern ./...: directory prefix . does not contain modules listed in go.work
+pattern ./...: directory prefix . does not contain modules listed in go.work or their selected dependencies
 ```
 
 — and neither `go build ./...` nor `go build ./backend/...` works from the top of the tree.
@@ -78,17 +78,26 @@ them by hand:
 ```bash
 rc=0
 for m in $(go list -m -f '{{.Dir}}'); do
-  ( cd "$m" && go build ./... && go vet ./... && go test ./... -count=1 ) \
-    || { echo "FAILED: $m"; rc=1; }
+  ( cd "$m" || exit 1
+    fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    go build ./... && go vet ./... && go test ./... -count=1
+  ) || { echo "FAILED: $m"; rc=1; }
 done
 echo "sweep exit status: $rc"
 ```
 
-Two details in that loop are load-bearing. `-count=1` is not belt-and-braces: a few tests
-read files **outside** their own module, which Go's test cache does not track, so a cached
-PASS can survive a change that ought to fail it. And recording `rc` matters because
-`… || echo "FAILED: $m"` alone would leave the loop's exit status that of the last `echo` —
-every module could fail and the sweep would still look green.
+Three details in that loop are load-bearing, and each is a check that would otherwise pass
+without looking at anything:
+
+- **`gofmt -l` is captured, not just run.** It exits 0 *even when it names files*, so its
+  **output** is what has to be tested — `[ -z "$fmt" ]`. Calling it for its exit status
+  would make it a gate that can never fail.
+- **`-count=1` is not belt-and-braces.** A few tests read files **outside** their own
+  module, which Go's test cache does not track, so a cached PASS can survive a change that
+  ought to fail it.
+- **`rc` is recorded rather than just printed.** `… || echo "FAILED: $m"` alone would leave
+  the loop's exit status that of the last `echo` — every module could fail and the sweep
+  would still look green.
 
 ## 3. Run a service
 
