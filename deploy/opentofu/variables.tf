@@ -124,12 +124,12 @@ variable "nats_jetstream_storage" {
     on control-plane streams that never hold more than a few MiB.
 
     The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB, 8 control-plane streams at 128 MiB, and the capture stream at
-    256 MiB reserve 8448Mi (8.25Gi). The MQTT gateway's own streams — which
+    streams at 1 GiB, 10 control-plane streams at 128 MiB, and the capture stream at
+    256 MiB reserve 8704Mi (8.5Gi). The MQTT gateway's own streams — which
     nats-server creates UNBOUNDED, and which the platform bounds at startup so they
     cannot eat the rest — add 384Mi. The KV buckets are bounded on the same principle
     (see kv.All): 4 State buckets at 128Mi + 6 Cache buckets at 64Mi reserve a
-    further 896Mi. Total reserved: exactly 9.5Gi.
+    further 896Mi. Total reserved: 9.75Gi.
 
     Why 16Gi and not 12Gi, which also "fits": at 12Gi the ceiling is 10Gi, leaving
     512Mi unreserved — which is EXACTLY the headroom floor the budget test asserts,

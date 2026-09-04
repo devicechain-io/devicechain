@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,6 +52,18 @@ type NotificationProcessor struct {
 	Reader       messaging.MessageReader
 	Notifier     Notifier
 
+	// dead records an alarm that reached nobody (ADR-024). Nil when no dead-letter
+	// writer is configured, in which case the notification is dropped as it was before.
+	dead *deadletter.Sink
+	// area names this service on the letters it writes. Carried rather than read off
+	// Microservice at write time, because a dead letter is written on the failure path —
+	// the one place a nil dereference turns a recoverable failure into a crash.
+	area string
+	// deadLettered and deadLetterLost are counted apart: the second is the only outcome
+	// on this path where an alarm nobody was paged about leaves no record at all.
+	deadLettered   prometheus.Counter
+	deadLetterLost prometheus.Counter
+
 	// RED metrics for the per-message dispatch path (E13).
 	metrics *core.ProcessorMetrics
 
@@ -69,12 +84,22 @@ type NotificationProcessor struct {
 // NewNotificationProcessor creates a notification processor over the given reader
 // and notifier.
 func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageReader,
-	callbacks core.LifecycleCallbacks, notifier Notifier) *NotificationProcessor {
+	callbacks core.LifecycleCallbacks, notifier Notifier, dead deadletter.Writer) *NotificationProcessor {
 	np := &NotificationProcessor{
 		Microservice: ms,
 		Reader:       reader,
 		Notifier:     notifier,
 		metrics:      ms.NewProcessorMetrics("notify"),
+		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
+			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
+				"operator can see which pages were never sent (ADR-024).", nil),
+		deadLetterLost: ms.NewCounter("notifications_dead_letter_lost_total",
+			"Alarms that reached nobody AND could not be dead-lettered — the write failed on a "+
+				"delivery that will not repeat. An alarm in this state is invisible everywhere.", nil),
+	}
+	np.area = ms.FunctionalArea
+	if dead != nil {
+		np.dead = deadletter.NewSink(dead, func(error) { np.deadLetterLost.Inc() })
 	}
 	npname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "notify-proc")
 	np.lifecycle = core.NewLifecycleManager(npname, np, callbacks)
@@ -195,16 +220,17 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// can never double-send a channel that already succeeded); that error is transient, so
 	// leave it unacked for AckWait-paced redelivery until the finite MaxDeliver cap.
 	//
-	// TODO(notifications N.D): the give-up branch DROPS the notification after MaxDeliver —
-	// there is no dead-letter path, and ResultFailed's "dead-letter" label (core/metrics.go)
-	// is aspirational for this consumer. The PolicyNotifier's in-line retry (attempts × timeout)
-	// is the primary reliability window; redelivery now rides AckWait (~5 min across MaxDeliver,
-	// ADR-030), so what remains is a real dead-letter sink to survive an outage longer than that.
-	// See the contract in notifier.go.
+	// The give-up branch DEAD-LETTERS (ADR-024), which is what makes ResultFailed's
+	// "dead-letter" label in core/metrics.go true for this consumer rather than
+	// aspirational. The PolicyNotifier's in-line retry (attempts × timeout) is still the
+	// primary reliability window and redelivery rides AckWait (~5 min across MaxDeliver,
+	// ADR-030); the sink is what survives an outage longer than that. See notifier.go.
 	if err := np.Notifier.Notify(msgctx, event); err != nil {
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg(fmt.Sprintf("Notification permanently DROPPED after %d failed attempts (no dead-letter path yet)", msg.NumDelivered))
+			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
+				Msgf("Dead-lettering notification after %d failed attempts; nobody was paged", msg.NumDelivered)
+			np.deadLetter(msgctx, msg, event.AlarmToken, err)
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -247,4 +273,49 @@ func (np *NotificationProcessor) Terminate(ctx context.Context) error {
 // ExecuteTerminate runs termination logic.
 func (np *NotificationProcessor) ExecuteTerminate(context.Context) error {
 	return nil
+}
+
+// deadLetter records an alarm that reached nobody.
+//
+// 🔴 IT RUNS ONLY AT THE REDELIVERY CAP, so JetStream will not redeliver whatever this
+// consumer does — leaving the message unacked would strand it rather than buy another
+// attempt. The write therefore gets its own bounded in-process retries (core/deadletter),
+// and one that still fails is counted as a LOSS instead of logged as a retry.
+//
+// The alarm token is the reference an operator searches by; the delivery error is the
+// detail. Both are recorded, and what a reader is allowed to SEE of the detail is the read
+// surface's decision, not this one's.
+func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.Message,
+	alarm string, cause error) {
+	if np.dead == nil {
+		return
+	}
+	detail := ""
+	if cause != nil {
+		detail = cause.Error()
+	}
+	err := np.dead.Write(ctx, deadletter.Envelope{
+		Kind:   deadletter.KindNotification,
+		Reason: deadletter.ReasonExhausted,
+		Source: np.area,
+		Summary: "an alarm could not be delivered to any configured channel after every " +
+			"delivery attempt, so nobody was paged about it",
+		Detail:      detail,
+		Attempts:    msg.NumDelivered,
+		Subject:     msg.Subject,
+		Sequence:    msg.StreamSeq,
+		Correlation: msg.CorrelationID(),
+		Reference:   alarm,
+		OccurredAt:  time.Now().UTC(),
+		Payload:     msg.Value,
+	})
+	if err != nil {
+		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
+		log.Error().Err(err).Str("alarm", alarm).
+			Msg("LOST notification: the alarm reached nobody and could not be dead-lettered.")
+		return
+	}
+	if np.deadLettered != nil {
+		np.deadLettered.Inc()
+	}
 }

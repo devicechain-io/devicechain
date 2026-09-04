@@ -128,10 +128,19 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	AlarmEventsReader = aevents
 
+	// The ADR-024 arm. An alarm that reaches nobody used to end as a log line; it is now
+	// recorded where an operator can see which pages were never sent. Built here so a
+	// deployment that cannot create the stream fails at startup, beside every other stream
+	// this service needs, rather than at the first failure — the one moment it has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+
 	// The policy-driven channel dispatcher (N.C, built in afterMicroserviceInitialized so
 	// the escalation scheduler can share it) drives the consumer behind the Notifier seam.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Notifier)
+		core.NewNoOpLifecycleCallbacks(), Notifier, deadWriter)
 	return NotificationProcessor.Initialize(context.Background())
 }
 

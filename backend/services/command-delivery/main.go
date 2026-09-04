@@ -96,11 +96,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// offboarded customer's hardware, which nothing else on this path would prevent: the
 	// sweep loads QUEUED commands cross-tenant under a system context, and a command
 	// enqueued before the delete is still queued after it.
+	// The ADR-024 arm. A device's answer that could not be recorded used to end as a log
+	// line, leaving its command looking unanswered with nothing to say the device had in
+	// fact replied. Built here so a deployment that cannot create the stream fails at
+	// startup, beside every other stream this service needs, rather than at the first
+	// failure — the one moment the arm has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
-		presenceReader(infra))
+		presenceReader(infra), deadWriter)
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

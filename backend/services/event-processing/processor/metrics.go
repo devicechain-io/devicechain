@@ -194,6 +194,8 @@ type reactMetrics struct {
 	permanentlyRejected *prometheus.CounterVec
 	orphan              prometheus.Counter
 	poisonDropped       prometheus.Counter
+	deadLettered        prometheus.Counter
+	deadLetterLost      prometheus.Counter
 }
 
 // newReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
@@ -209,7 +211,9 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
-		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
+		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness.", nil),
+		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024).", nil),
+		deadLetterLost:      ms.NewCounter("react_events_dead_letter_lost_total", "Derived events that could be neither dispatched NOR dead-lettered — the write to the dead-letter stream failed on a delivery that will not repeat. This is the one outcome on this path where work is silently gone, and it is the reason the counter exists separately from the one above.", nil),
 	}
 }
 
@@ -261,6 +265,24 @@ func (m *reactMetrics) recordPoisonDropped() {
 		return
 	}
 	m.poisonDropped.Inc()
+}
+
+// recordDeadLettered records one derived event written to the dead-letter stream.
+func (m *reactMetrics) recordDeadLettered() {
+	if m == nil {
+		return
+	}
+	m.deadLettered.Inc()
+}
+
+// recordDeadLetterLost records one derived event that could be neither dispatched nor
+// dead-lettered. It is counted apart from the one above because it is the only outcome on
+// this path where the work is gone with no record of it anywhere.
+func (m *reactMetrics) recordDeadLetterLost() {
+	if m == nil {
+		return
+	}
+	m.deadLetterLost.Inc()
 }
 
 // setRulesActive publishes the loaded rule count (called once at startup wiring).

@@ -12,8 +12,11 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
+	"time"
 )
 
 // RaiseAlarmConsumer is the discrete NATS consumer for REACT alarm-edge requests (ADR-051 slice 5c /
@@ -48,6 +51,15 @@ type RaiseAlarmConsumer struct {
 
 	metrics *core.ProcessorMetrics
 
+	// dead records a raise-alarm edge that could not be applied (ADR-024). Nil when no
+	// dead-letter writer is configured, in which case the edge is dropped as before.
+	dead *deadletter.Sink
+	// area names this service on the letters it writes, read once at construction so the
+	// failure path never dereferences anything.
+	area           string
+	deadLettered   prometheus.Counter
+	deadLetterLost prometheus.Counter
+
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
@@ -57,12 +69,24 @@ type RaiseAlarmConsumer struct {
 
 // NewRaiseAlarmConsumer creates the raise-alarm consumer over its dedicated reader.
 func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
-	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi) *RaiseAlarmConsumer {
+	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
+	dead deadletter.Writer) *RaiseAlarmConsumer {
 	rc := &RaiseAlarmConsumer{
 		Microservice: ms,
 		Reader:       reader,
 		Api:          api,
 		metrics:      ms.NewProcessorMetrics("raise-alarm"),
+		area:         ms.FunctionalArea,
+		deadLettered: ms.NewCounter("raise_alarm_dead_lettered_total",
+			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
+				"them failed, so an alarm that should have been raised or cleared is visible "+
+				"rather than only logged (ADR-024).", nil),
+		deadLetterLost: ms.NewCounter("raise_alarm_dead_letter_lost_total",
+			"Raise-alarm edges that could be neither applied NOR dead-lettered — the write "+
+				"failed on a delivery that will not repeat, so the edge is gone.", nil),
+	}
+	if dead != nil {
+		rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })
 	}
 	name := fmt.Sprintf("%s-%s", ms.FunctionalArea, "raise-alarm-proc")
 	rc.lifecycle = core.NewLifecycleManager(name, rc, callbacks)
@@ -208,7 +232,8 @@ func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(strin
 		// strands the alarm until its next cycle. It is a loud error precisely because it should never
 		// happen — the integrator's in-process CAS retry keeps a conflict from consuming attempts.
 		log.Error().Err(err).Str("what", what).Int("attempts", msg.NumDelivered).
-			Msg("Raise-alarm edge failed past redelivery cap; dropping (edge-triggered: it will not re-emit until the condition next changes)")
+			Msg("Raise-alarm edge failed past redelivery cap; dead-lettering (edge-triggered: it will not re-emit until the condition next changes)")
+		rc.deadLetter(msg, what, err)
 		msg.Ack()
 		done(core.ResultFailed)
 		return
@@ -242,4 +267,50 @@ func (rc *RaiseAlarmConsumer) Terminate(ctx context.Context) error {
 // ExecuteTerminate is a no-op; the reader is owned by the NATS manager.
 func (rc *RaiseAlarmConsumer) ExecuteTerminate(context.Context) error {
 	return nil
+}
+
+// deadLetter records a raise-alarm edge that could not be applied.
+//
+// 🔑 THIS CONSUMER IS THE DOWNSTREAM OF REACT'S raiseAlarm ACTION, which is why it needed
+// an arm as much as REACT did. REACT dead-lettering a detection it could not dispatch
+// covers one hop; an edge that REACT dispatched successfully could still die here, and the
+// loss is the same one this function's caller describes — a dropped raise does not re-emit
+// until the condition falls and re-breaches, a dropped resolve strands the alarm.
+//
+// The tenant comes from the message's own subject rather than from any ambient context:
+// this consumer processes every tenant's edges on one loop, so there is no ambient tenant
+// to inherit, and the writer is fail-closed on a context without one.
+func (rc *RaiseAlarmConsumer) deadLetter(msg messaging.Message, what string, cause error) {
+	if rc.dead == nil {
+		return
+	}
+	ctx, _, ok := messaging.TenantContextFromSubject(rc.procCtx, msg.Subject)
+	if !ok {
+		// Unattributable: not this tenant's to file. The caller drops it, as it always did.
+		return
+	}
+	detail := ""
+	if cause != nil {
+		detail = cause.Error()
+	}
+	if err := rc.dead.Write(ctx, deadletter.Envelope{
+		Kind:   deadletter.KindDetectionAction,
+		Reason: deadletter.ReasonExhausted,
+		Source: rc.area,
+		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
+			"that should have been raised or cleared was not",
+		Detail:      detail,
+		Attempts:    msg.NumDelivered,
+		Subject:     msg.Subject,
+		Sequence:    msg.StreamSeq,
+		Correlation: msg.CorrelationID(),
+		Reference:   what,
+		OccurredAt:  time.Now().UTC(),
+		Payload:     msg.Value,
+	}); err != nil {
+		log.Error().Err(err).Str("what", what).
+			Msg("LOST raise-alarm edge: it could be neither applied nor dead-lettered.")
+		return
+	}
+	rc.deadLettered.Inc()
 }

@@ -191,7 +191,12 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on %s after %d attempts", detail, msg.NumDelivered))
 			msg.Ack()
-			done(core.ResultFailed)
+			// 🔑 "dropped", NOT "failed". This projection has no dead-letter path and wants
+			// none: it is rebuildable from the event history, so a state change nobody could
+			// apply is discarded rather than kept for inspection. Reporting it as "failed"
+			// would put it in the same bucket as the consumers that DO record what they gave
+			// up on, and an operator counting dead letters would be counting this too.
+			done(core.ResultDropped)
 		} else {
 			// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
 			// an immediate nak would burn MaxDeliver in ~1.4ms inside an outage.

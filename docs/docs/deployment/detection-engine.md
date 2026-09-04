@@ -80,17 +80,24 @@ The telemetry path is at-least-once end to end, so plan for a repeat rather than
 When a downstream system is unavailable, the message is left unacknowledged and retried on a timer
 rather than hammered. After five delivery attempts, roughly four minutes apart in total:
 
-- an **outbound connector** request is **dead-lettered**, so it can be inspected or replayed;
-- a **detection** is **dropped with a loud error** — there is no dead-letter queue on that path. A
-  dropped *raise* will not re-appear until the condition clears and breaches again; a dropped
-  *resolve* leaves an alarm active that should have cleared.
+- an **outbound connector** request is **dead-lettered**, so it can be inspected;
+- a **detection** whose actions could not be dispatched is **dead-lettered too**, with a loud error.
+
+:::caution Dead-lettered is recorded, not retried
+Nothing re-runs a dead letter. The record exists so a failure is visible and diagnosable
+rather than silent — the consequences of the failure itself stand either way. A *raise*
+that was not dispatched will not re-appear until the condition clears and breaches again,
+and a *resolve* that was not dispatched leaves an alarm active that should have cleared.
+Treat a dead letter as something to investigate, not something that will drain on its own.
+:::
 
 The `ReactPoisonDropping` alert exists for exactly that case and should be treated as urgent.
 
 :::caution An action that fails takes its later siblings with it
 A rule's actions run in the order they are listed, and a failing action stops the rest. On each
 retry the actions *before* it run again, and the actions *after* it have still never run — so if the
-event is eventually dropped, those later actions are lost without ever having been attempted.
+event is eventually given up on, those later actions never happened at all. The dead letter records
+that the detection fired and its actions did not; it does not carry them out.
 
 **Order a rule's actions so the important one comes first.** If a rule both raises an alarm and calls
 a webhook, putting the alarm first means a flaky endpoint cannot cost you the alarm.
@@ -339,7 +346,8 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
-| `ReactPoisonDropping` | Actions are being dropped after exhausting their retries — alarms or commands are being lost. Treat as urgent. |
+| `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
+| `DeadLetterWriteLost` | Something was given up on **and** could not be recorded. This is the only case here that leaves no evidence at all; look at the broker. |
 | `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 

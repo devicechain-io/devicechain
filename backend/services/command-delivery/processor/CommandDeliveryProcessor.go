@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -160,6 +161,18 @@ type CommandDeliveryProcessor struct {
 	// someone for, and neither is visible anywhere else.
 	ResponsesRefused prometheus.Counter
 
+	// dead records a device response that could not be recorded against its command
+	// (ADR-024). Nil when no dead-letter writer is configured, in which case the response
+	// is dropped as it was before.
+	dead *deadletter.Sink
+	// area names this service on the letters it writes, read once at construction so the
+	// failure path never dereferences anything.
+	area string
+	// ResponsesDeadLettered and ResponsesDeadLetterLost are counted apart: the second is
+	// the only outcome here where a device's answer disappears with no record of it.
+	ResponsesDeadLettered   prometheus.Counter
+	ResponsesDeadLetterLost prometheus.Counter
+
 	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
 	// set. Per-pod and reset on restart, which merely restarts the walk — it is a
 	// position in a scan, not state anything depends on.
@@ -185,7 +198,7 @@ type CommandDeliveryProcessor struct {
 func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.MessageReader,
 	commands messaging.MessageWriter, callbacks core.LifecycleCallbacks,
 	api model.CommandDeliveryApi, tenantDeleted func(string) bool,
-	presenceReader presence.Reader) *CommandDeliveryProcessor {
+	presenceReader presence.Reader, dead deadletter.Writer) *CommandDeliveryProcessor {
 	cproc := &CommandDeliveryProcessor{
 		Microservice:           ms,
 		CommandResponsesReader: responses,
@@ -220,10 +233,22 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		StrandedSkipped: ms.NewCounterVec("command_delivery_stranded_skipped_total",
 			"Stranded commands the reconciler declined to act on, by reason. A high and steady "+
 				"reason=\"transport\" rate is expected on MQTT deployments and is not a fault", []string{"reason"}),
+		area: ms.FunctionalArea,
+		ResponsesDeadLettered: ms.NewCounter("command_delivery_responses_dead_lettered_total",
+			"Device command responses written to the dead-letter stream after every attempt to "+
+				"record them failed, so an answer the device did give can be seen rather than "+
+				"leaving its command looking unanswered (ADR-024).", nil),
+		ResponsesDeadLetterLost: ms.NewCounter("command_delivery_responses_dead_letter_lost_total",
+			"Device command responses that could be neither recorded NOR dead-lettered — the "+
+				"write failed on a delivery that will not repeat, so the device's answer is gone.", nil),
 		ResponsesRefused: ms.NewCounter("command_delivery_responses_refused_total",
 			"Device responses rejected because the publishing device does not own the command "+
 				"they name. Expected to be zero: either a device is answering for another device, "+
 				"or dispatch addressed a command to the wrong one", nil),
+	}
+
+	if dead != nil {
+		cproc.dead = deadletter.NewSink(dead, func(error) { incr(cproc.ResponsesDeadLetterLost, 1) })
 	}
 
 	// Create lifecycle manager.
@@ -620,7 +645,8 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		// command sweep handles redelivery of the command itself).
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
-				Msg("dropping command response after maximum delivery attempts")
+				Msg("dead-lettering command response after maximum delivery attempts")
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err)
 			_ = msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -808,4 +834,49 @@ func (cproc *CommandDeliveryProcessor) Terminate(ctx context.Context) error {
 // ExecuteTerminate runs termination logic.
 func (cproc *CommandDeliveryProcessor) ExecuteTerminate(context.Context) error {
 	return nil
+}
+
+// deadLetterResponse records a device's answer that could not be written against its
+// command.
+//
+// 🔴 IT RUNS ONLY AT THE REDELIVERY CAP, so no redelivery follows whatever this consumer
+// does; leaving the message unacked would strand it rather than buy another attempt. The
+// write gets bounded in-process retries (core/deadletter), and one that still fails is
+// counted as a LOSS.
+//
+// 🔑 THE REFUSED-RESPONSE PATH ABOVE IS NOT DEAD-LETTERED, and the distinction is the
+// point of having two. A response from a device that does not own the command is not work
+// the platform accepted and failed to finish — it is a claim it declined, and recording it
+// under the command's tenant would file another device's message as that command's answer.
+func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, msg messaging.Message,
+	command string, cause error) {
+	if cproc.dead == nil {
+		return
+	}
+	detail := ""
+	if cause != nil {
+		detail = cause.Error()
+	}
+	err := cproc.dead.Write(ctx, deadletter.Envelope{
+		Kind:   deadletter.KindCommandResponse,
+		Reason: deadletter.ReasonExhausted,
+		Source: cproc.area,
+		Summary: "a device answered a command and the answer could not be recorded against " +
+			"it after every attempt, so the command still looks unanswered",
+		Detail:      detail,
+		Attempts:    msg.NumDelivered,
+		Subject:     msg.Subject,
+		Sequence:    msg.StreamSeq,
+		Correlation: msg.CorrelationID(),
+		Reference:   command,
+		OccurredAt:  time.Now().UTC(),
+		Payload:     msg.Value,
+	})
+	if err != nil {
+		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
+		log.Error().Err(err).Str("command", command).
+			Msg("LOST command response: it could be neither recorded nor dead-lettered.")
+		return
+	}
+	incr(cproc.ResponsesDeadLettered, 1)
 }
