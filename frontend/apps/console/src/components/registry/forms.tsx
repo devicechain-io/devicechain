@@ -7,30 +7,46 @@
 // device/asset/customer/area families. A resource adapts the normalized form
 // values to its own typed create/update request in its config (see resource.tsx).
 //
-// 🔴 EVERY REGISTRY UPDATE IS A FULL REPLACE, AND THESE FORMS EDIT A SUBSET.
+// 🔴 THESE FORMS EDIT A SUBSET, AND WHAT THE SERVER DOES WITH THE REST DEPENDS ON
+// WHICH UPDATE CONTRACT THE FAMILY IS ON. Both are in service, and they want
+// OPPOSITE things from the same adapter.
 //
-// The request a resource sends rebuilds the stored record, so a field the request
-// leaves out is not "unchanged" — it is DELETED. These forms only ever collect a
-// name and a description, which means an adapter that maps them straight onto a
+// A FULL-REPLACE family rebuilds the stored record from the request, so a field the
+// request leaves out is not "unchanged" — it is DELETED. These forms only ever
+// collect a name and a description, so an adapter that maps them straight onto a
 // create request quietly erases everything else the entity had: its metadata, a
-// device's externalId, a type's icon and colours. Nothing about it looks wrong —
-// the save succeeds, the toast is cheerful, and the audit trail says the operator
-// edited the thing.
+// device's externalId, a type's icon and colours. Nothing about it looks wrong — the
+// save succeeds, the toast is cheerful, and the audit trail says the operator edited
+// the thing. Such an adapter must start from its family's `…Preserved(entity)`
+// projection (see lib/api/*.ts) and override only the fields collected here.
 //
-// So every `update` adapter must start from its family's `…Preserved(entity)`
-// projection (see lib/api/*.ts) and override only the fields collected here. Two
-// gates hold that in place, and they catch different mistakes:
+// A PARTIAL-UPDATE family leaves an absent field alone, and there the carry-forward
+// INVERTS from the fix into the bug: an adapter re-sending fields the form never
+// showed is writing them back from a snapshot it read when the page opened, so two
+// operators on two tabs each silently overwrite the other. Such an adapter sends
+// ONLY what this form collects, and its family's `…Preserved` projection is deleted
+// rather than left lying around for someone to reach for.
 //
-//   * every `update*` in the API layer takes `Required<…CreateRequest>`, so an
-//     adapter that OMITS a field no longer compiles, and each `…Preserved` helper
-//     RETURNS `Required<…>`, so a field added to the schema breaks the helper
-//     until someone decides what an edit should do with it;
-//   * `routes/resources.test.tsx` walks every registry resource, renames the
-//     entity, saves, and then asserts that the ONLY fields that changed are the
-//     ones this form edits. That is what catches the mistakes a type cannot see:
-//     an adapter that names a field and sends the wrong value, a projection with
-//     two fields crossed, or a spread written the other way round so the operator's
-//     edit is the thing that gets discarded.
+// 🔑 Which contract a family is on is read off its mutation — `$request:
+// …UpdateRequest` is partial, `…CreateRequest` is a full replace — never off a list
+// kept here by hand.
+//
+// Two gates hold this in place, and they catch different mistakes:
+//
+//   * a full-replace `update*` in the API layer takes `Required<…CreateRequest>`, so
+//     an adapter that OMITS a field no longer compiles, and each `…Preserved` helper
+//     RETURNS `Required<…>`, so a field added to the schema breaks the helper until
+//     someone decides what an edit should do with it. A partial `update*` takes the
+//     plain `…UpdateRequest`, where omission is the whole point and there is nothing
+//     for a type to check;
+//   * `routes/resources.test.tsx` walks every registry resource, renames the entity,
+//     saves, and then asserts that the ONLY fields that changed are the ones this
+//     form edits — reading each family's contract off its document and flipping its
+//     assertion accordingly. That is what catches the mistakes a type cannot see: an
+//     adapter that names a field and sends the wrong value, a projection with two
+//     fields crossed, a spread written the other way round so the operator's edit is
+//     the thing that gets discarded, or a carry-forward regrown on a family that has
+//     since converted.
 //
 // Noun-bearing prose is resolved from the `entities` catalog by the family's
 // `i18nKey` prefix (`${i18nKey}CreateAction`, `${i18nKey}CreatedToast`, …), so the
