@@ -121,7 +121,7 @@ module, so the root-level forms do not do what they look like they do:
 
 - `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
   contain modules listed in go.work or their selected dependencies`. So does `./backend/...`: a
-  `./…` pattern has to start inside a module, and none of them spans all 22. (`go build all` does
+  `./…` pattern has to start inside a module, and no single one spans the workspace. (`go build all` does
   span them, but `all` in a workspace means every module *and every dependency*, so it builds the
   whole Bento tree to tell you about your own code. Not the gate you want.)
 - `gofmt -l .` from the root **prints 8 files** — all under `_legacy/`, the archived pre-migration
@@ -163,9 +163,13 @@ done
 exit "$rc"
 ```
 
-This sweep is a superset of the `go` CI job in one respect: `deploy` is a workspace module
-(`deploy/assets.go`), but CI's module discovery globs only `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
-so nothing in CI builds, vets or tests it.
+This sweep and the `go` CI job now cover the same set, and they do so for the same reason: both
+derive the module list from `go.work` rather than from a glob of directory names. That was not
+always true — CI's discovery used to glob `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
+which silently omitted `deploy` (`deploy/assets.go`, the module embedding the chart and the
+OpenTofu tree into dcctl), so no CI job built, vetted, tested or scanned it. The one thing to know
+about the derived matrix: an empty or truncated module list would run *zero* jobs and report green,
+so the discover step cross-checks its count against a second, independent parse of `go.work`.
 
 Other areas:
 

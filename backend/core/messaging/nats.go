@@ -66,6 +66,44 @@ const (
 	// their dead-letter path (failed-events) on the final attempt rather than
 	// looping forever (ADR-022 review A4). Consumers compare Message.NumDelivered
 	// against this.
+	//
+	// 🔴 THIS IS ONE NUMBER FOR THE WHOLE PLATFORM, DELIBERATELY, AND MAKING IT VARY
+	// IS A BIGGER CHANGE THAN IT LOOKS. Per-consumer or per-tier retry tuning is the
+	// obvious next idea here — streams.Tier is right there, and a "cold" stream
+	// plausibly wants a different retry budget from a "hot" one. It was considered and
+	// declined, for two independent reasons, and the second is the one with teeth.
+	//
+	//  1. The server FREEZES a durable's config. Every field consumerConfig sets is
+	//     compared on AddConsumer, so varying one by tier does not reconfigure an
+	//     existing durable — it makes AddConsumer reject it and crash-loops startup on
+	//     any cluster that is not brand new. Whatever the tuning was worth, it is not
+	//     worth being a fresh-bring-up-only change to a running platform. (AckWait's
+	//     own comment says the same thing in more detail.)
+	//
+	//  2. 🔴 THE DEAD-LETTER ARMS READ THIS CONSTANT DIRECTLY, AND NOTHING WOULD CATCH
+	//     THEM READING A STALE ONE. Consumers across most of the service estate each
+	//     decide "this is the last attempt, write the dead letter now" with
+	//     `msg.NumDelivered >= messaging.MaxDeliver`, and then ack. No count or list of
+	//     them is written here on purpose — one was, it was wrong within the same PR
+	//     that added it (it said eight services and omitted device-management), and a
+	//     tally frozen in prose only ever drifts. Ask the tree:
+	//     `grep -rn 'messaging.MaxDeliver' --include='*.go' backend`. If a consumer's
+	//     actual MaxDeliver came from a tier while its arm kept comparing against this
+	//     package constant, the two would disagree — and the failure is silent in both
+	//     directions. Too low a constant dead-letters and acks a message the broker
+	//     would still have retried (a message lost to a transient outage). Too high a
+	//     constant means the arm never fires: the broker stops redelivering at ITS
+	//     limit and no dead letter is ever written, so the message vanishes with no
+	//     record. Neither shows up in the test estate, because every test of those arms
+	//     constructs the delivery count by hand rather than getting it from a broker.
+	//
+	// So the rule is: the consumer's view of its own retry budget and the consumer
+	// CONFIG must come from one place. Today they do, because there is exactly one
+	// place — this constant. Anyone introducing per-consumer or per-tier tuning owns
+	// making that still true by construction (a value carried ON the Message, or on a
+	// handle the arm already holds), not by remembering to update call sites.
+	// TestEveryStreamGetsTheSameRetryContract fails if the divergence is ever
+	// introduced silently.
 	MaxDeliver = 5
 
 	// readerMaxAckPending pins the consumer's max in-flight unacked messages. It
