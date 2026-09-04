@@ -175,8 +175,8 @@ without needing that passphrase. Without it, a database backup restored into a n
 cluster rehydrates secrets that nothing can decrypt — with no error at restore
 time. See [Disaster Recovery](docs/docs/deployment/disaster-recovery.md).
 
-**High availability, stated precisely.** `dcctl bootstrap --ha` replicates both
-tiers from one flag. The message broker runs as a 3-node RAFT cluster with every
+**High availability, stated precisely.** The `--ha` flag on `dcctl bootstrap`
+replicates both tiers from one flag. The message broker runs as a 3-node RAFT cluster with every
 JetStream stream and KV bucket replicated across it — and `dcctl ha verify`
 asserts that from **live broker state** rather than from the rendered
 configuration, because a three-node cluster whose every stream is single-replica
@@ -206,17 +206,18 @@ is required. The single host prerequisites are **Docker**, **kind**, and
 **OpenTofu** (the CLI's preflight checks guide you through any that are missing).
 
 ```bash
-# Stand up a full instance on a local kind cluster at http://localhost/
-dcctl bootstrap local --host localhost --no-tls
+# Stand up a full instance on a local kind cluster at http://localhost/.
+# Both positional arguments are required: the provider, then a name for the instance.
+dcctl bootstrap local devicechain --host localhost --no-tls
 
 # …then open the printed console URL and log in with the seeded credentials.
 
 # See what is on this machine, and which cluster each instance lives in
 dcctl instances list
 
-# Tear it all back down (use --keep-cluster to uninstall only the instance,
-# or --all to destroy every instance on this machine)
-dcctl destroy
+# Tear it all back down — same two arguments (use --keep-cluster to uninstall only
+# the instance, or --all with no arguments to destroy every instance on this machine)
+dcctl destroy local devicechain
 ```
 
 The bootstrap pipeline renders config → `tofu apply` (NATS + TimescaleDB + ingress)

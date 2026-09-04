@@ -24,9 +24,23 @@ Usted elige qué servicios ejecutar con **ya sea** un perfil nombrado **o** un c
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
+Cualquier perfil que ejecute un área con almacén de secretos —como hace el perfil `default`,
+a través de `notification-management`— requiere la **clave raíz del almacén de secretos** de
+la instancia, y el chart falla el renderizado sin ella en lugar de dejar que el área entre en
+crash-loop. Genera un valor (`openssl rand -base64 32`), consérvalo y pasa el **mismo** valor
+en cada instalación y actualización: una clave nueva vuelve ilegibles los secretos ya
+almacenados bajo la anterior. `dcctl bootstrap` acuña y deposita en escrow esta clave por ti;
+solo tienes que suministrarla tú cuando manejas el chart directamente.
+
 ```bash
-helm install dc deploy/helm/devicechain --set instance.id=devicechain
-# run a smaller set of services:
+DC_ROOT_KEY="$(openssl rand -base64 32)"   # genérala UNA vez, y consérvala
+
+helm install dc deploy/helm/devicechain \
+  --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY"
+
+# Ejecuta un conjunto menor de servicios. `telemetry` no ejecuta ningún área con
+# almacén de secretos, así que no necesita clave raíz.
 helm install dc deploy/helm/devicechain --set profile=telemetry
 ```
 
@@ -36,6 +50,7 @@ en `ghcr.io/devicechain-io`, así que no hace falta construir nada localmente:
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
   --set image.tag=v1.2.0
 ```
 

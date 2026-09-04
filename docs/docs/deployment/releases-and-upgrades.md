@@ -95,9 +95,15 @@ Because the registry is public, no credentials are required to pull released ima
 
 Pin the image tag to the release you want:
 
+`DC_ROOT_KEY` below is the instance's secret-store root key — required by the `default`
+profile, generated once with `openssl rand -base64 32`, and passed unchanged on every
+install and upgrade. See
+[Deploying with Helm](./kubernetes-operator.md#deploying-with-helm) for why.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
   --set image.tag=v1.2.0
 ```
 
@@ -108,6 +114,7 @@ checkout of the repository:
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --version 1.2.0 \
   --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
   --set image.tag=v1.2.0
 ```
 

@@ -98,9 +98,15 @@ Debido a que el registro es público, no se requieren credenciales para descarga
 
 Fije la etiqueta de imagen a la versión que desea:
 
+`DC_ROOT_KEY`, más abajo, es la clave raíz del almacén de secretos de la instancia:
+la requiere el perfil `default`, se genera una sola vez con `openssl rand -base64 32` y se
+pasa sin cambios en cada instalación y actualización. Consulte
+[Desplegando con Helm](./kubernetes-operator.md#desplegando-con-helm) para saber por qué.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
   --set image.tag=v1.2.0
 ```
 
@@ -111,6 +117,7 @@ copia local del repositorio:
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --version 1.2.0 \
   --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
   --set image.tag=v1.2.0
 ```
 
