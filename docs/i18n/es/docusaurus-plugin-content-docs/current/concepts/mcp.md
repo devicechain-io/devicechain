@@ -67,13 +67,27 @@ El servidor MCP es un **servidor de recursos OAuth 2.1**, y `user-management` es
 
 Los clientes son **registrados por un administrador** (a través de la API de administración) en lugar de autorregistrarse, de modo que un operador controla qué aplicaciones pueden solicitar acceso y con qué URIs de redirección.
 
-## Qué no puede hacer (hoy)
+## Límites y fronteras {#limits-and-boundaries}
+
+Algunos de estos puntos son trabajo pendiente y otros son decisiones. Vale la pena distinguirlos, así que cada uno dice cuál es.
+
+**Deliberado, y sin previsión de cambio:**
 
 - **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance elevado *y* una confirmación humana explícita — un asistente nunca accionará un dispositivo en silencio.
-- **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión.
+- **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para cruzar esa frontera.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
+- **Ninguna credencial de servicio está cableada en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: no hay en el servidor MCP ninguna ruta de código que eche mano de una credencial propia, así que no hay nada que un ataque de diputado confundido pueda tomar prestado. Toda lectura hacia abajo sale bajo el token del propio llamante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio — eso es fontanería de despliegue, no algo que el servidor use.)
+- **Los payloads de los comandos no se devuelven.** `list_commands` entrega el nombre, el estado y las marcas de tiempo de un comando; lo que se envió al dispositivo queda fuera del contexto del agente.
 
-También es **opcional (opt-in)** — el servicio `mcp` no forma parte de un despliegue predeterminado y es habilitado explícitamente por un operador.
+**Límites que alcanzarás antes que cualquier otro:**
+
+- Los resultados se paginan de 25 en 25 por defecto y 100 como máximo, y una consulta de varios dispositivos admite como mucho 50 tokens por llamada. Un agente que recorra una flota grande la recorre por páginas.
+- Una respuesta descendente que el servidor vaya a leer está limitada a 8 MiB — es un límite sobre lo que obtiene de las propias APIs de la plataforma, no un límite que anuncie al agente. Una sesión caduca por inactividad a los 30 minutos.
+
+**Habilitar el servicio no basta para poder usarlo.** Hay dos interruptores independientes, y activar solo el primero es la forma habitual de acabar con un servidor que responde y al que no se puede llegar:
+
+1. El área funcional `mcp` no forma parte de un despliegue predeterminado; un operador la habilita explícitamente.
+2. El servidor de autorización en `user-management` está a su vez apagado hasta que se configura una URL de emisor. Hasta entonces, `mcp` arranca y sirve sus metadatos, y **ningún cliente puede obtener un token**. Es un interruptor aparte a propósito: fijar el emisor cambia un claim de **todos** los tokens que emite la instancia, no solo los que usa MCP.
 
 ## Relacionado
 

@@ -50,11 +50,31 @@ Users do **not** pick a model per task. Model choice is operator configuration s
 - **AI packaging** — the cross-tier grant matrix that maps which models each tier may use.
 - **Per-tenant model** — set on the tenant detail page, per function, from the tier-derived menu.
 
-## What the AI never touches
+## Limits and boundaries {#limits-and-boundaries}
+
+### What the AI never touches
 
 - It never runs in the live [detection/REACT](./event-processing.md) path — that path is deterministic CEL, replay-correct, model-free.
 - It never sees another tenant's data, and it is not a privileged backdoor. (Distinct from the [MCP surface](./mcp.md), where an AI *agent* operates the platform under a user's own tenant-scoped token.)
 - Tenant business data (device names, attribute values) and secrets are not the model's to expose; keys stay write-only in the secret store.
+- **It writes nothing.** A drafted rule is returned for a person to review and save through the ordinary authoring path, under their own token. Nothing is persisted by the drafting call itself.
+
+### Bring-your-own-key is not supported, and will not be
+
+A tenant cannot supply its own provider key. Providers are **instance-level operator configuration**: an operator registers them, holds the keys, and decides which tiers and tenants may use which models. The one per-tenant lever is the consent flag for external inference, and that is not self-service either — a tenant can read it, but only an operator can set it.
+
+This is a decision, not a gap. A customer that needs to run on its own key and its own account needs a dedicated instance, which is where every other request for per-tenant infrastructure also lands — and a per-tenant key inside a shared instance would be the one piece of that isolation offered without the rest of it.
+
+### Bounds
+
+- **One provider kind ships today: Anthropic.** The provider entity is built around a seam for others, and other kinds are refused at write until their implementation lands rather than accepted and left inert.
+- **The repair loop is bounded.** A candidate the compiler rejects is fed back with the compiler's own error a fixed, small number of times, and then the request fails. It never loosens the compiler to make a draft fit.
+- **Every tenant call is capped server-side** — prompt size, output length, timeout, and a per-tenant request rate. None of these is caller-supplied, and none of them is unlimited.
+- **One function.** The GA vocabulary has exactly one AI function, rule drafting, and the calling service names it — a caller cannot choose its own function, because choosing a function would be choosing an entitlement.
+
+### One deliberate exception to the consent gate
+
+An operator testing a provider's connectivity from the admin console reaches the provider without a tenant's consent flag, and **without the per-tenant rate limit** — that path resolves the provider by token, so neither gate applies to it. The call is an operator's own prompt against an operator's own configuration, no tenant data crosses the boundary, and the key must still resolve. Every path that carries tenant input goes through both gates.
 
 ## See also
 
