@@ -117,6 +117,19 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	             VALUES (?, ?, ?, ?, 'token', ?)`,
 		base+4, tenant, tenant+"-cred", base+3, tenant+"-cid")
 
+	// 🔴 THE JOURNAL HAS TO BE SEEDED BY HAND, and until it was, this drill certified
+	// the ADR-077 retention without a single row to retain. Every other row here is
+	// written by raw INSERT, which bypasses the GORM callbacks — so no audit row is ever
+	// generated, and a redaction that did nothing would pass every assertion below.
+	// Two schemas, because the journal is core-owned and exists in all ten; both columns
+	// that can name a person, because a redaction covering one reads as settled.
+	for _, schema := range []string{"user-management", "device-management"} {
+		mustExec(t, db, fmt.Sprintf(`INSERT INTO %q.audit_events
+		       (occurred_time, tenant_id, category, actor, table_name, operation, entity_pk, entity_label, rows_affected)
+		     VALUES (now(), ?, 'mutation', ?, 'devices', 'create', '1', ?, 1)`, schema),
+			tenant, tenant+"@example.test", tenant+"-jane-doe")
+	}
+
 	mustExec(t, db, `INSERT INTO "event-processing".device_rosters
 	               (tenant, device_token, profile_token, expected_since, deleted, last_event_at)
 	             VALUES (?, ?, 'p', now(), false, now())`, tenant, tenant+"-dev")
@@ -210,6 +223,17 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	mustExec(t, db, `DELETE FROM "user-management".iam_identities WHERE id = ?`, sharedIdentityID)
 	mustExec(t, db, `DELETE FROM "user-management".iam_roles WHERE id = ?`, sharedRoleID)
 
+	// 🔴 THE JOURNAL HAS TO BE CLEARED BY HAND, and the reason is the change under test.
+	// The preamble above resets by SWEEPING, which worked for every table while every
+	// table was deleted. audit_events is now RETAINED — the sweep empties two columns and
+	// keeps the row — so a second run of this drill found three journal rows where it
+	// asserts one, having reset everything else perfectly. Any harness that leans on the
+	// sweep to reset state has the same problem the day a table becomes retained.
+	for _, a := range areas {
+		mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id IN (?, ?)`, a.name),
+			victim, bystander)
+	}
+
 	seedShared(t, db)
 	seedTenant(t, db, victim, 1000)
 	seedTenant(t, db, bystander, 2000)
@@ -284,6 +308,27 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 		"the entry must still name the store that erases it; an unnamed one is an unfalsifiable "+
 			"claim that something, somewhere, handles it")
 
+	// 🔴 THE JOURNAL IS THE ONE THING THE SWEEP KEEPS, and both halves of that are the
+	// decision. Sweeping it would destroy the evidence that the deletion happened;
+	// keeping it whole would retain the tenant's people by name past the erasure that
+	// record certifies. Asserting only that the rows survive would pass with the
+	// identifiers intact, and asserting only that the names are gone would pass with the
+	// rows deleted — so both are checked, in both schemas, for the victim.
+	for _, schema := range []string{"user-management", "device-management"} {
+		tbl := fmt.Sprintf("%q.audit_events", schema)
+		assert.Equalf(t, int64(1), count(t, db, tbl, "tenant_id = ?", victim),
+			"%s dropped the victim's journal row: the erasure has no evidence", schema)
+		assert.Zerof(t, count(t, db, tbl,
+			"tenant_id = ? AND (actor <> '' OR entity_label <> '')", victim),
+			"%s's retained journal still names the victim's people after their erasure", schema)
+
+		// The bystander is the control for both: a redaction with no tenant predicate,
+		// and a sweep that took everything, each satisfy the two assertions above.
+		assert.Equalf(t, int64(1), count(t, db, tbl,
+			"tenant_id = ? AND actor <> '' AND entity_label <> ''", bystander),
+			"%s redacted a tenant nobody deleted", schema)
+	}
+
 	// The victim is gone everywhere.
 	for _, c := range tenantRowCounts() {
 		assert.Zerof(t, count(t, db, c.table, c.where, victim), "%s still holds the victim", c.label)
@@ -324,6 +369,8 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 
 	clean, err := tenantpurge.Residue(ctx, db, plan, victim)
 	require.NoError(t, err)
+	assert.Zerof(t, clean.Retained(), "the re-verify found a retained row still naming someone: %+v",
+		clean.Redacted)
 	assert.Zerof(t, clean.Rows, "the residual scan found the swept tenant still present: %+v",
 		clean.Tables)
 
@@ -574,4 +621,101 @@ func TestTheRelationalStorePlantsItsFenceWhenItSweeps(t *testing.T) {
 			a.name, rdb.FenceTable), fenced).Row().Scan(&open))
 		assert.Zerof(t, open, "%s's fence outlived the store's own lift", a.name)
 	}
+}
+
+// TestTheSweepRetainsAndRedactsTheJournalThroughTheStore drives the retention through
+// the store that performs it, on a real migrated schema.
+//
+// The store's REFUSAL when a retained row still names someone is not driven here, and
+// that is a property of the mechanism rather than a gap left open: a row still carrying
+// an identifier at scan time is one that landed between the redaction and the read, and a
+// pass that runs both back to back cannot be made to produce one. The scan is exercised
+// directly in core/tenantpurge and the decision in purge.retainedError.
+func TestTheSweepRetainsAndRedactsTheJournalThroughTheStore(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const tenant = "retention-drill-tenant"
+	const bystander = "retention-drill-bystander"
+	clear := func() {
+		for _, a := range areas {
+			for _, tok := range []string{tenant, bystander} {
+				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tok)
+				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tok)
+			}
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+
+	for _, tok := range []string{tenant, bystander} {
+		mustExec(t, db, `INSERT INTO "user-management".audit_events
+		       (occurred_time, tenant_id, category, actor, operation, entity_label, rows_affected)
+		     VALUES (now(), ?, 'mutation', ?, 'create', ?, 1)`, tok, tok+"@example.test", tok+"-jane")
+	}
+
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	if _, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour)); err != nil {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, int64(1),
+		count(t, db, `"user-management".audit_events`, "tenant_id = ?", tenant),
+		"the journal row was swept, so the erasure has no evidence")
+	assert.Zero(t, count(t, db, `"user-management".audit_events`,
+		"tenant_id = ? AND (actor <> '' OR entity_label <> '')", tenant),
+		"the retained journal still names the erased tenant's people")
+
+	// The control: a redaction with no tenant predicate satisfies both assertions above.
+	assert.Equal(t, int64(1), count(t, db, `"user-management".audit_events`,
+		"tenant_id = ? AND actor <> '' AND entity_label <> ''", bystander),
+		"the store redacted a tenant nobody deleted")
+}
+
+// TestTheStoreRefusesToAckWhenTheRedactionDidNotTake drives the store's own reading of
+// the retained scan, on a real migrated schema.
+//
+// 🔴 IT NEEDS A TRIGGER, AND THAT IS THE POINT. The store sweeps and then scans in one
+// pass, so a straggler inserted beforehand is simply redacted by the pass that would have
+// caught it — which is why the branch had no test at all and a mutation disabling it
+// survived. A BEFORE UPDATE trigger that puts the old value back makes the redaction a
+// no-op, so the scan finds exactly what it exists to find: a retained row that still names
+// someone after the erasure the deletion record is about to certify.
+func TestTheStoreRefusesToAckWhenTheRedactionDidNotTake(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const tenant = "redaction-failure-tenant"
+	clear := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tenant)
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tenant)
+		}
+	}
+	clear()
+	mustExec(t, db, `DROP TRIGGER IF EXISTS dc_drill_block_redaction ON "user-management".audit_events`)
+	t.Cleanup(func() {
+		mustExec(t, db, `DROP TRIGGER IF EXISTS dc_drill_block_redaction ON "user-management".audit_events`)
+		clear()
+	})
+
+	mustExec(t, db, `INSERT INTO "user-management".audit_events
+	       (occurred_time, tenant_id, category, actor, operation, entity_label, rows_affected)
+	     VALUES (now(), ?, 'mutation', 'jane@example.test', 'create', 'jane-doe', 1)`, tenant)
+
+	mustExec(t, db, `CREATE OR REPLACE FUNCTION dc_drill_keep_actor() RETURNS trigger AS $$
+	    BEGIN NEW.actor := OLD.actor; RETURN NEW; END; $$ LANGUAGE plpgsql`)
+	mustExec(t, db, `CREATE TRIGGER dc_drill_block_redaction BEFORE UPDATE
+	    ON "user-management".audit_events FOR EACH ROW EXECUTE FUNCTION dc_drill_keep_actor()`)
+
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	_, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	require.Error(t, err, "the store acked while a retained row still named the erased tenant's people")
+	assert.Contains(t, err.Error(), "still name someone")
+	assert.NotContains(t, err.Error(), "still writing",
+		"the refusal reads as a failed delete, which sends an operator looking for a service to stop")
+
+	// The control: with the trigger gone, the identical pass acks. Without it, a store
+	// that refused everything would satisfy the assertion above.
+	mustExec(t, db, `DROP TRIGGER dc_drill_block_redaction ON "user-management".audit_events`)
+	_, err = store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	require.NoError(t, err, "the store refuses a pass whose redaction did take")
 }

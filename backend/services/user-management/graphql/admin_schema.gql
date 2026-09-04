@@ -389,8 +389,10 @@ type AdminAuditEvent {
     tableName: String
     # Primary key of the affected row for a single-row mutation; null otherwise.
     entityPk: String
-    # Human-facing, non-sensitive label of the affected row (e.g. a role/tenant
-    # token or an identity email), captured when the model provides one; null otherwise.
+    # Human-facing label of the affected row (e.g. a role/tenant token or an identity
+    # email), captured when the model provides one; null otherwise. It is emptied for a
+    # tenant that has been deleted: the journal is retained as the evidence of the
+    # deletion, and it does not keep the identifiers the deletion was of.
     entityLabel: String
     # Number of rows the audited statement affected.
     rowsAffected: Int!

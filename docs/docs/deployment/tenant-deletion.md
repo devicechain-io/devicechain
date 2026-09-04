@@ -83,6 +83,43 @@ Some records survive on purpose, and none of them contains the tenant's own data
   when, plus a line per storage system. It deliberately does **not** keep the tenant's
   name or contact details — a record retaining those would leave the erasure's own
   evidence as the last place the customer's details lived.
+- **The audit journal, with the identities in it destroyed.** See below.
+
+### The audit journal {#audit}
+
+Every change to an entity is recorded in an audit journal: when it happened, which table,
+which operation, how many rows, and who did it. That journal is **kept** through a
+deletion, because it is the record that the deletion happened — sweeping it away would
+erase the evidence of the erasure.
+
+What does not survive is anybody's identity. Two fields can name a person — the acting
+user, which for a human sign-in is their email address, and the label of the affected row,
+which can be an email or a name you chose yourself for a customer, device or asset. **Both
+are emptied for a deleted tenant, permanently.** They are written blank rather than
+scrambled or hashed: an email address is short and guessable, so a hash of one can be
+matched back by anyone holding a list of addresses, which would be erasure in name only.
+
+After a deletion, a journal entry for that tenant still shows the shape of what happened —
+"three devices deleted at 14:02" — with nobody named. That is the retention working, not
+data missing.
+
+:::caution Sign-in records belong to no tenant, and are not reached
+Signing in happens in two steps: you authenticate as a person, then you choose a tenant.
+The first step is recorded — successes and failures alike — with the email address and
+**no tenant attached**, because at that point no tenant has been chosen yet.
+
+Records with no tenant cannot be reached by any tenant's deletion, so a former member's
+sign-in history survives it. What a deletion does cover is everything they did *inside*
+the tenant. If your obligations extend to sign-in records, handle those through database
+and log retention rather than through tenant deletion.
+:::
+
+Two smaller limits, for completeness. A former member who tries to sign in to the tenant
+*after* its deletion completes creates a new record naming them, under a token that may by
+then belong to someone else. And a journal entry about a person's own profile still
+records which account was changed — accounts are not owned by a tenant and are not deleted
+with it — so an operator with access to both can still connect the two. What is destroyed
+is the name in the journal, not the existence of the account it referred to.
 
 ## What can hold a deletion open {#stalled}
 

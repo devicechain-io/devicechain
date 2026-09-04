@@ -656,9 +656,10 @@ input EntityAttributeSearchCriteria {
     attrKeys: [String!]
 }
 
-# A row of the append-only audit journal (ADR-019). Captured by construction on
-# every entity mutation in this service; the journal is never mutated via the
-# API. Times are RFC3339 strings.
+# A row of the audit journal (ADR-019). Captured by construction on every entity
+# mutation in this service, and never mutated via the API. It is written to by
+# exactly one other path: deleting a tenant empties the fields that name a person,
+# keeping the row as the evidence of the deletion. Times are RFC3339 strings.
 type AuditEvent {
     id: ID!
     # RFC3339 time the audited statement committed.
@@ -675,8 +676,10 @@ type AuditEvent {
     # Primary key of the affected row when the statement targets a single row;
     # empty for a bulk/condition mutation (rowsAffected then conveys the scope).
     entityPk: String
-    # Human-facing, non-sensitive label of the affected row (e.g. its token),
-    # captured when the model provides one; null otherwise.
+    # Human-facing label of the affected row (e.g. its token), captured when the
+    # model provides one; null otherwise. It is emptied for a tenant that has been
+    # deleted: the journal is retained as the evidence of the deletion, and it does
+    # not keep the identifiers the deletion was of.
     entityLabel: String
     # Number of rows the audited statement affected.
     rowsAffected: Int!
@@ -1634,7 +1637,7 @@ type Query {
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
-    # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
+    # Query the audit journal (ADR-019); tenant-scoped, newest first.
     auditEvents(criteria: AuditEventSearchCriteria!): AuditEventSearchResults!
     # Find devices by unique id.
     devicesById(ids: [ID!]!): [Device!]!

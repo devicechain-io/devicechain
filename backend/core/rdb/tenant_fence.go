@@ -98,7 +98,8 @@ var ErrTenantPurged = errors.New("this tenant has been deleted and its data in t
 // The exclusion is safe on its own terms. The journal records what happened; it cannot
 // resurrect anything, because the mutation it describes was either refused one hook
 // earlier (create, update) or was a delete that should have gone through. Its rows for a
-// purged tenant are swept like any others.
+// purged tenant are not swept but RETAINED, with the two columns that can name a person
+// emptied — see the redaction registry in core/tenantpurge.
 func RegisterTenantFence(db *gorm.DB) error {
 	for _, register := range []func() error{
 		func() error {

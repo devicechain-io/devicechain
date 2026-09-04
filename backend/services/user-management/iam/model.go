@@ -452,10 +452,14 @@ func (OAuthClient) TableName() string { return "iam_oauth_clients" }
 func (c OAuthClient) IsConfidential() bool { return c.SecretHash != "" }
 
 // AuditLabel implements rdb.AuditLabeler: label an audited iam row with its
-// human-facing, non-sensitive identifier — a role/tenant token, a client_id, or
-// an identity's email — so an audit view can show "iam_roles operator" rather than
-// "#3". (Membership has no single natural label and is left to fall back to its
-// pk.)
+// human-facing identifier — a role/tenant token, a client_id, or an identity's
+// email — so an audit view can show "iam_roles operator" rather than "#3".
+// (Membership has no single natural label and is left to fall back to its pk.)
+//
+// 🔴 THE IDENTITY'S LABEL IS AN EMAIL, so this is not the "non-sensitive" set the
+// comment used to call it. It is the most direct of the journal's two personal-data
+// channels, and it is why the ADR-077 purge empties entity_label rather than
+// retaining the journal whole.
 func (r Role) AuditLabel() string        { return r.Token }
 func (t Tenant) AuditLabel() string      { return t.Token }
 func (t TenantTier) AuditLabel() string  { return t.Token }
