@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -42,10 +43,21 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 	return created, nil
 }
 
-// Update an existing asset type.
+// Update an existing asset type, applying only the fields the caller actually
+// sent. The entity is looked up by the `token` ARGUMENT — the request payload no
+// longer carries one, which closes two defects at once: an update can no longer
+// move an asset type's token, and the mandatory `token` argument is no longer dead.
+// It used to be ignored entirely in favour of request.Token, so a caller naming one
+// type in the argument and another in the payload silently updated the second and
+// got a 200 back for it.
+//
+// Each assignment folds the field's three states onto the stored value: absent
+// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
+// argument is what makes an omitted field a no-op, so these must stay assignments
+// FROM the loaded record rather than from the request alone.
 func (api *Api) UpdateAssetType(ctx context.Context, token string,
-	request *AssetTypeCreateRequest) (*AssetType, error) {
-	matches, err := api.AssetTypesByToken(ctx, []string{request.Token})
+	request *AssetTypeUpdateRequest) (*AssetType, error) {
+	matches, err := api.AssetTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -54,15 +66,14 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Token = request.Token
-	found.Name = rdb.NullStrOf(request.Name)
-	found.Description = rdb.NullStrOf(request.Description)
-	found.ImageUrl = rdb.NullStrOf(request.ImageUrl)
-	found.Icon = rdb.NullStrOf(request.Icon)
-	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
-	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
-	found.BorderColor = rdb.NullStrOf(request.BorderColor)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
+	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
+	found.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(found.ImageUrl)))
+	found.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(found.Icon)))
+	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
+	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
+	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
@@ -140,9 +151,12 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 	return created, nil
 }
 
-// Update an existing asset.
-func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetCreateRequest) (*Asset, error) {
-	matches, err := api.AssetsByToken(ctx, []string{request.Token})
+// Update an existing asset, applying only the fields the caller actually sent.
+// Looked up by the `token` ARGUMENT; the payload no longer carries a token, so the
+// argument is no longer dead and a token move is unrepresentable rather than merely
+// refused.
+func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpdateRequest) (*Asset, error) {
+	matches, err := api.AssetsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -150,28 +164,43 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetCre
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// The type hop resolves BEFORE anything is written, so an unknown asset type
+	// refuses the WHOLE update rather than applying the fields it liked first. The
+	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
+	// the comparison this replaces dereferenced it unconditionally.
+	currentTypeToken := ""
+	if updated.AssetType != nil {
+		currentTypeToken = updated.AssetType.Token
+	}
+	retypeTo, retype, err := resolveRequiredTypeRef(request.AssetTypeToken, currentTypeToken, "assetTypeToken")
+	if err != nil {
+		return nil, err
+	}
+	if retype {
+		types, err := api.AssetTypesByToken(ctx, []string{retypeTo})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
+		updated.AssetType = types[0]
+		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
+		// given, so this is not load-bearing the way the device version is (that one is
+		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
+		// value the caller is handed back agrees with the row.
+		updated.AssetTypeId = types[0].ID
+	}
+
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-
-	// Update asset type if changed.
-	if request.AssetTypeToken != updated.AssetType.Token {
-		matches, err := api.AssetTypesByToken(ctx, []string{request.AssetTypeToken})
-		if err != nil {
-			return nil, err
-		}
-		if len(matches) == 0 {
-			return nil, gorm.ErrRecordNotFound
-		}
-		updated.AssetType = matches[0]
-	}
 
 	result := api.RDB.DB(ctx).Save(updated)
 	if result.Error != nil {

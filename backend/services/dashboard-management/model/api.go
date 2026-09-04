@@ -10,6 +10,7 @@ import (
 	"errors"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -99,6 +100,16 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 		return nil, err
 	}
 
+	// The `token` argument names the dashboard; the payload token may only agree with
+	// it. It used to be written onto the row, so an empty one — legal, since
+	// `token: String!` admits "" — blanked the dashboard's token and left it
+	// addressable by nothing. Unlike a connector or a notification channel, nothing
+	// pins a dashboard rename as intended (the test named "rename" sends the same
+	// token), so this takes the reconcile rather than the rename rule.
+	if err := dcgraphql.ErrPayloadTokenDisagrees("dashboard", token, request.Token); err != nil {
+		return nil, err
+	}
+
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -112,7 +123,6 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	// No precondition → unconditional last-write-wins (backward-compatible; used by
 	// non-interactive callers that don't track a version).
 	if expectedUpdatedAt == nil {
-		current.Token = request.Token
 		current.Name = rdb.NullStrOf(request.Name)
 		current.Description = rdb.NullStrOf(request.Description)
 		current.Definition = def
@@ -140,7 +150,6 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	res := api.RDB.DB(ctx).Model(&Dashboard{}).
 		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
 		Updates(map[string]any{
-			"token":       request.Token,
 			"name":        rdb.NullStrOf(request.Name),
 			"description": rdb.NullStrOf(request.Description),
 			"definition":  def,
@@ -154,7 +163,10 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 
 	// Reload for the freshly-bumped updated_at — the caller advances its precondition
 	// baseline from the returned value.
-	reloaded, err := api.DashboardsByToken(ctx, []string{request.Token})
+	// Reloaded by the ARGUMENT, not by request.Token. The payload token is now either
+	// empty or equal to this, and reloading by an empty one would report the dashboard
+	// that was just written successfully as ErrRecordNotFound.
+	reloaded, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}

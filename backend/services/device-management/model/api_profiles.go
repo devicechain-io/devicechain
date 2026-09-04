@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -48,6 +49,16 @@ func (api *Api) CreateDeviceProfile(ctx context.Context, request *DeviceProfileC
 // owned by the future catalog fork-adopt flow, never the editor.
 func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	request *DeviceProfileCreateRequest) (*DeviceProfile, error) {
+	// 🔴 A PAYLOAD TOKEN DIFFERING FROM THE ARGUMENT IS MEANT HERE, so this takes the
+	// RENAME rule rather than the reconcile every other surviving *CreateRequest update
+	// takes. A profile rename is a real capability, guarded below (allowed while unused,
+	// refused once published or adopted). What the shared rule refuses is a BLANK new
+	// token — including a whitespace-only one, which the token grammar does not catch —
+	// because that used to be written straight through and left the profile addressable
+	// by nothing.
+	if err := dcgraphql.ErrRenameTokenUnusable("device profile", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.DeviceProfilesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err

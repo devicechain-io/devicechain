@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -71,7 +72,10 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 // Update an existing metric definition.
 func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
-	matches, err := api.MetricDefinitionsByToken(ctx, []string{request.Token})
+	if err := dcgraphql.ErrPayloadTokenDisagrees("metric definition", token, request.Token); err != nil {
+		return nil, err
+	}
+	matches, err := api.MetricDefinitionsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +96,6 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 
 	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

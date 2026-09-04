@@ -9,7 +9,6 @@ import {
   getCustomerType,
   createCustomerType,
   updateCustomerType,
-  customerTypePreserved,
   deleteCustomerType,
   type CustomerType,
 } from '@/lib/api/customers';
@@ -41,12 +40,10 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
       entityType="customer-type"
       create={(req) => createCustomerType(req)}
       update={(token, req) =>
-        // RegistryTypeForm calls update only when editing, so ct is set. The
-        // appearance fields were already carried by hand here; customerTypePreserved
-        // adds the imageUrl and metadata that were not, and makes the next field
-        // added to the schema a compile error rather than a silent deletion.
+        // A partial update: this form edits name and description, so it sends name
+        // and description. The appearance fields, the imageUrl and the metadata are
+        // untouched because they are not mentioned.
         updateCustomerType(token, {
-          ...customerTypePreserved(ct!),
           name: req.name,
           description: req.description,
         })
@@ -58,10 +55,8 @@ export const customerTypeResource: RegistryResource<CustomerType> = {
   renderDetailExtra: (ct, reload) => (
     <TypeAppearanceForm
       entity={ct}
-      // The appearance tab edits icon + colors; everything else — name,
-      // description, imageUrl, metadata — has to be carried, or saving a colour
-      // deletes it.
-      update={(req) => updateCustomerType(ct.token, { ...customerTypePreserved(ct), ...req })}
+      // The appearance form edits icon and colors, and sends only those.
+      update={(req) => updateCustomerType(ct.token, req)}
       onSaved={reload}
     />
   ),

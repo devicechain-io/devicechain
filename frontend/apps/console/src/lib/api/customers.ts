@@ -9,6 +9,8 @@ import type {
   CustomerTypesQuery,
   CustomerTypeCreateRequest,
   CustomerCreateRequest,
+  CustomerTypeUpdateRequest,
+  CustomerUpdateRequest,
 } from '@/gql/device-management/graphql';
 import {
   listEntityGroups,
@@ -32,7 +34,12 @@ export type CustomerGroup = EntityGroup;
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
-export type { CustomerTypeCreateRequest, CustomerCreateRequest };
+export type {
+  CustomerTypeCreateRequest,
+  CustomerCreateRequest,
+  CustomerTypeUpdateRequest,
+  CustomerUpdateRequest,
+};
 
 // ── Customers ───────────────────────────────────────────────────────────
 
@@ -133,7 +140,7 @@ export async function createCustomer(request: CustomerCreateRequest): Promise<Cu
 }
 
 const UPDATE_CUSTOMER = graphql(`
-  mutation UpdateCustomer($token: String!, $request: CustomerCreateRequest) {
+  mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
     updateCustomer(token: $token, request: $request) {
       id
       token
@@ -154,42 +161,22 @@ const UPDATE_CUSTOMER = graphql(`
   }
 `);
 
-// 🔴 `Required<…>` is not decoration: it makes the OMISSION a compile error.
-// The update is a full replace, so the defect this whole file guards against is a
-// caller that simply does not mention a field. Typing the parameter as the plain
-// request — where every field is optional — is what let that compile. Requiring
-// every key forces each caller to say what it wants done with each one, and
-// `…Preserved(entity)` is how it says "leave this as it was".
+// updateCustomer is a PARTIAL update: pass only the fields being changed. An omitted
+// field is left alone, an explicit null clears it.
+//
+// 🔴 Callers must NOT carry forward the fields they do not edit. The `customerPreserved`
+// projection that used to sit here was the right fix for a full replace and is the
+// WRONG one now: a form that re-sends fields it never showed is writing them back
+// from a snapshot it read minutes ago, so two operators on two tabs each silently
+// overwrite the other. Absence is the carry-forward.
 export async function updateCustomer(
   token: string,
-  request: Required<CustomerCreateRequest>,
+  request: CustomerUpdateRequest,
 ): Promise<Customer> {
   const data = await gql('device-management', UPDATE_CUSTOMER, { token, request });
   return data.updateCustomer;
 }
 
-// 🔴 A customer update is a FULL REPLACE: the stored record is rebuilt from the
-// request, so a field the request omits is DELETED. Every edit therefore starts
-// from this projection of what the entity already is, and overrides only what the
-// form edits. The `Required<…>` RETURN TYPE is the gate that keeps it honest — add a
-// field to the schema and codegen widens the request type, which breaks this
-// function until someone decides what an edit should do with it. Without that,
-// the new field would simply start being erased, silently and successfully.
-//
-// customerTypeToken is deliberately NOT preserved here: it is a required field of the
-// form, so every caller supplies it and the request type refuses to compile
-// without it. Defaulting it would only be a way to send a wrong one.
-export function customerPreserved(c: Customer): Required<Omit<CustomerCreateRequest, 'customerTypeToken'>> {
-  // `?? null` rather than `?? undefined`: for a full replace an explicit null and
-  // an omitted field both land as a nil *string server-side, and null is the one
-  // that says so out loud.
-  return {
-    token: c.token,
-    name: c.name ?? null,
-    description: c.description ?? null,
-    metadata: c.metadata ?? null,
-  };
-}
 
 const DELETE_CUSTOMER = graphql(`
   mutation DeleteCustomer($token: String!) {
@@ -291,7 +278,7 @@ export async function createCustomerType(request: CustomerTypeCreateRequest): Pr
 }
 
 const UPDATE_CUSTOMER_TYPE = graphql(`
-  mutation UpdateCustomerType($token: String!, $request: CustomerTypeCreateRequest) {
+  mutation UpdateCustomerType($token: String!, $request: CustomerTypeUpdateRequest!) {
     updateCustomerType(token: $token, request: $request) {
       id
       token
@@ -310,29 +297,12 @@ const UPDATE_CUSTOMER_TYPE = graphql(`
 
 export async function updateCustomerType(
   token: string,
-  request: Required<CustomerTypeCreateRequest>,
+  request: CustomerTypeUpdateRequest,
 ): Promise<CustomerType> {
   const data = await gql('device-management', UPDATE_CUSTOMER_TYPE, { token, request });
   return data.updateCustomerType;
 }
 
-// The customer-type counterpart of customerPreserved: a customer-type update is a full
-// replace too, and this form edits only name + description while the Appearance
-// tab edits only icon + colors. Each starts from here so the other's fields — and
-// the imageUrl and metadata no console form edits at all — survive the save.
-export function customerTypePreserved(ct: CustomerType): Required<CustomerTypeCreateRequest> {
-  return {
-    token: ct.token,
-    name: ct.name ?? null,
-    description: ct.description ?? null,
-    icon: ct.icon ?? null,
-    backgroundColor: ct.backgroundColor ?? null,
-    foregroundColor: ct.foregroundColor ?? null,
-    borderColor: ct.borderColor ?? null,
-    imageUrl: ct.imageUrl ?? null,
-    metadata: ct.metadata ?? null,
-  };
-}
 
 const DELETE_CUSTOMER_TYPE = graphql(`
   mutation DeleteCustomerType($token: String!) {

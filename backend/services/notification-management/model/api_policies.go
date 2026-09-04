@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -82,6 +83,9 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	if err := validateDeviceTypeScoping(request.DeviceTypeToken); err != nil {
 		return nil, err
 	}
+	if err := dcgraphql.ErrPayloadTokenDisagrees("notification policy", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -93,7 +97,6 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	var updated *NotificationPolicy
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		policy := matches[0]
-		policy.Token = request.Token
 		policy.Name = rdb.NullStrOf(request.Name)
 		policy.Description = rdb.NullStrOf(request.Description)
 		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -40,6 +41,9 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 // UpdateEntityRelationshipType updates an existing relationship type by token.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	request *EntityRelationshipTypeCreateRequest) (*EntityRelationshipType, error) {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("entity relationship type", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -48,7 +52,6 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 	updated := matches[0]
-	updated.Token = request.Token
 	updated.Name = rdb.NullStrOf(request.Name)
 	updated.Description = rdb.NullStrOf(request.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

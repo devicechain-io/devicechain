@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -74,6 +75,16 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 // replaced from the request.
 func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	request *NotificationChannelCreateRequest) (*NotificationChannel, error) {
+	// 🔴 A DIFFERING PAYLOAD TOKEN IS A RENAME HERE, AND THAT IS INTENDED — the
+	// delivery secret is keyed by the channel's immutable id, and a policy's rules
+	// store ChannelId rather than the token, so a rename orphans nothing.
+	// TestUpdateChannelRenamePreservesSecret pins it. So this takes the RENAME rule
+	// rather than the reconcile most updates take. What it refuses is a BLANK new
+	// token: `token: String!` admits "", and that used to be written straight onto the
+	// row, leaving a live channel addressable by nothing and returning success.
+	if err := dcgraphql.ErrRenameTokenUnusable("notification channel", token, request.Token); err != nil {
+		return nil, err
+	}
 	matches, err := api.NotificationChannelsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err

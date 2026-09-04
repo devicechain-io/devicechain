@@ -4,6 +4,7 @@
 package model
 
 import (
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -19,6 +20,38 @@ type AssetTypeCreateRequest struct {
 	ForegroundColor *string
 	BorderColor     *string
 	Metadata        *string
+}
+
+// AssetTypeUpdateRequest is the PARTIAL-update counterpart of
+// AssetTypeCreateRequest. Every field carries the three states the Optional*
+// types express: omitted leaves the stored value alone, an explicit null clears it,
+// a value sets it.
+//
+// The shape this replaces reused AssetTypeCreateRequest, which made an update a
+// FULL REPLACE — a caller renaming an asset type wiped its imageUrl, icon, three
+// colours and its metadata, successfully, and got the emptied entity back with a 200.
+// The console papered over that by reading the whole record and writing it back
+// (assetTypePreserved), which bought a lost update in exchange: two operators on
+// two tabs each wrote the other's fields back from their own stale snapshot.
+//
+// 🔴 TOKEN IS DELIBERATELY ABSENT, exactly as on DeviceTypeUpdateRequest. The old
+// path did not merely allow a token move, it made the payload token the LOOKUP KEY
+// and ignored the mutation's own `token` argument entirely — so a caller who sent
+// a `token` argument naming one type and a `request.token` naming another silently
+// updated the second and got a 200 for it. The argument is now the only identity
+// channel, and a token move is unrepresentable rather than merely refused.
+type AssetTypeUpdateRequest struct {
+	Name            dcgraphql.OptionalString
+	Description     dcgraphql.OptionalString
+	ImageUrl        dcgraphql.OptionalString
+	Icon            dcgraphql.OptionalString
+	BackgroundColor dcgraphql.OptionalString
+	ForegroundColor dcgraphql.OptionalString
+	BorderColor     dcgraphql.OptionalString
+	// Metadata is an opaque JSON string in the schema rather than a map, so it
+	// replaces wholesale when sent and clears on null. There is no per-key merge to
+	// choose between: the API has never been able to address an individual key.
+	Metadata dcgraphql.OptionalString
 }
 
 // Represents an asset type.
@@ -57,6 +90,24 @@ type AssetCreateRequest struct {
 	Description    *string
 	AssetTypeToken string
 	Metadata       *string
+}
+
+// AssetUpdateRequest is the PARTIAL-update counterpart of AssetCreateRequest.
+// Omitted leaves the stored value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 TOKEN IS DELIBERATELY ABSENT — see AssetTypeUpdateRequest for why; the same
+// dead-argument defect applied here.
+type AssetUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// AssetTypeToken re-points the AssetType this asset belongs to. Omitted keeps the
+	// current type. Unlike DeviceType's profileToken, an explicit NULL IS REFUSED: the
+	// asset_type_id column is NOT NULL, so "no type" is not a state an asset can be in,
+	// and accepting a null here would either write a dangling zero FK or silently
+	// ignore what the caller asked for. An unknown token is refused too, and the
+	// refusal is total — nothing is written.
+	AssetTypeToken dcgraphql.OptionalString
+	Metadata       dcgraphql.OptionalString
 }
 
 // Represents an asset.

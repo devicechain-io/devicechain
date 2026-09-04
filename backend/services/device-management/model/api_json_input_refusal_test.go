@@ -104,13 +104,11 @@ func TestMalformedMetadataIsRefusedOnAFullReplaceUpdate(t *testing.T) {
 		t.Fatalf("seed device: %v", err)
 	}
 
-	_, err := api.UpdateDevice(ctx, "dev-1", &DeviceCreateRequest{
-		Token:           "dev-1",
-		DeviceTypeToken: "sensor",
-		Metadata:        strp("{unclosed"),
+	_, err := api.UpdateDevice(ctx, "dev-1", &DeviceUpdateRequest{
+		Metadata: dcgraphql.OptionalStringOf("{unclosed"),
 	})
 	if err == nil {
-		t.Error("a malformed metadata value was accepted on the full-replace path")
+		t.Error("a malformed metadata value was accepted on the partial-update path")
 	}
 	found, ferr := api.DevicesByToken(ctx, []string{"dev-1"})
 	if ferr != nil || len(found) != 1 {

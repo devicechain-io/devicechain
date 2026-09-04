@@ -289,18 +289,19 @@ func (capi *CachedApi) getRelationships(ctx context.Context, key string) *Entity
 }
 
 // UpdateDevice forwards to the DB then evicts the device's by-token entry so a
-// rename or device-type change is not served stale (bounded further by the TTL).
-func (capi *CachedApi) UpdateDevice(ctx context.Context, token string, request *DeviceCreateRequest) (*Device, error) {
+// device-type change is not served stale (bounded further by the TTL).
+//
+// The second eviction this used to perform — of `updated.Token` when it differed
+// from the argument — is gone with the token field it defended against. The update
+// input carries no token, so the row's token cannot move and the argument is the
+// only key the cached entry can be filed under.
+func (capi *CachedApi) UpdateDevice(ctx context.Context, token string, request *DeviceUpdateRequest) (*Device, error) {
 	updated, err := capi.Api.UpdateDevice(ctx, token, request)
 	if err != nil {
 		return nil, err
 	}
 	if tenant, ok := core.TenantFromContext(ctx); ok {
-		// Evict both the lookup token and the (possibly changed) stored token.
 		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
-		if updated != nil && updated.Token != token {
-			_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, updated.Token))
-		}
 	}
 	return updated, nil
 }

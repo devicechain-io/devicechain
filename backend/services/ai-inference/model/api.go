@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/rs/zerolog/log"
@@ -181,6 +182,15 @@ func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateR
 func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIProviderCreateRequest, expectedUpdatedAt *string) (*AIProvider, error) {
 	params, endpoint, err := api.validateRequest(request)
 	if err != nil {
+		return nil, err
+	}
+
+	// 🔴 A DIFFERING PAYLOAD TOKEN IS A RENAME HERE, AND THAT IS INTENDED — the write-only key handle is keyed by the provider's immutable id so a rename keeps it bound, which reloadWithSecret below says in as many words. So
+	// this takes the RENAME rule rather than the reconcile most updates take. What it
+	// refuses is a BLANK new token: `token: String!` admits "", and that used to be
+	// written straight onto the row, leaving a live record addressable by nothing and
+	// returning success.
+	if err := dcgraphql.ErrRenameTokenUnusable("ai provider", token, request.Token); err != nil {
 		return nil, err
 	}
 

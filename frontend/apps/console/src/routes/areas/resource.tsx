@@ -10,7 +10,6 @@ import {
   deleteArea,
   createArea,
   updateArea,
-  areaPreserved,
   listAreaTypes,
   type Area,
 } from '@/lib/api/areas';
@@ -56,11 +55,11 @@ export const areaResource: RegistryResource<Area> = {
         })
       }
       update={(token, req) =>
-        // RegistryInstanceForm calls update only when editing, so a is set.
-        // Start from everything the area already is (areaPreserved) — the update is a
-        // full replace, so anything left out is deleted rather than left alone.
+        // A partial update: this form edits the name, the description and the type,
+        // so it sends exactly those. externalId and metadata are untouched because
+        // they are not mentioned — where the full-replace shape needed them re-sent
+        // from a stale snapshot to survive at all.
         updateArea(token, {
-          ...areaPreserved(a!),
           name: req.name,
           description: req.description,
           areaTypeToken: req.typeToken,
