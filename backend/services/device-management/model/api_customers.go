@@ -187,7 +187,11 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 			return nil, gorm.ErrRecordNotFound
 		}
 		updated.CustomerType = types[0]
-		updated.CustomerTypeId = types[0].ID // keep the FK in lockstep with the association
+		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
+		// given, so this is not load-bearing the way the device version is (that one is
+		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
+		// value the caller is handed back agrees with the row.
+		updated.CustomerTypeId = types[0].ID
 	}
 
 	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))

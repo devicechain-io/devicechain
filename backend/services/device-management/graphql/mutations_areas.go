@@ -34,10 +34,16 @@ func (r *SchemaResolver) CreateAreaType(ctx context.Context, args struct {
 
 // Update an existing area type.
 // The request is a PARTIAL update: a field the caller omitted is left alone, an
-// explicit null clears it, a value sets it. It is declared non-null in the schema
-// and is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field
-// for a required argument, and an update naming no fields at all is a caller error
-// rather than a no-op to absorb silently.
+// explicit null clears it, a value sets it. It is declared non-null in the schema and
+// is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field for a
+// required argument.
+//
+// 🔴 Non-null refuses a MISSING request (`request: null`), not an EMPTY one. `{}` is a
+// perfectly good non-null input object, and it is accepted as a no-op — which is the
+// correct reading of "change nothing", and what the harness's
+// EmptyRequestChangesNothing asserts. An earlier version of this comment claimed an
+// update naming no fields was a caller error; nothing enforced that, and nothing
+// should.
 func (r *SchemaResolver) UpdateAreaType(ctx context.Context, args struct {
 	Token   string
 	Request model.AreaTypeUpdateRequest
@@ -84,10 +90,16 @@ func (r *SchemaResolver) CreateArea(ctx context.Context, args struct {
 
 // Update an existing area.
 // The request is a PARTIAL update: a field the caller omitted is left alone, an
-// explicit null clears it, a value sets it. It is declared non-null in the schema
-// and is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field
-// for a required argument, and an update naming no fields at all is a caller error
-// rather than a no-op to absorb silently.
+// explicit null clears it, a value sets it. It is declared non-null in the schema and
+// is therefore a VALUE here, not a pointer — graphql-go refuses a pointer field for a
+// required argument.
+//
+// 🔴 Non-null refuses a MISSING request (`request: null`), not an EMPTY one. `{}` is a
+// perfectly good non-null input object, and it is accepted as a no-op — which is the
+// correct reading of "change nothing", and what the harness's
+// EmptyRequestChangesNothing asserts. An earlier version of this comment claimed an
+// update naming no fields was a caller error; nothing enforced that, and nothing
+// should.
 func (r *SchemaResolver) UpdateArea(ctx context.Context, args struct {
 	Token   string
 	Request model.AreaUpdateRequest

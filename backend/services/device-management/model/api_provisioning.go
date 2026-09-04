@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -111,7 +112,7 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 // Update an existing provisioning profile.
 func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 	request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error) {
-	if err := errPayloadTokenDisagrees("provisioning profile", token, request.Token); err != nil {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("provisioning profile", token, request.Token); err != nil {
 		return nil, err
 	}
 	matches, err := api.ProvisioningProfilesByToken(ctx, []string{token})

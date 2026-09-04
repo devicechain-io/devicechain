@@ -35,10 +35,19 @@ import (
 // refused the same way; on the nullable profileToken it detaches, which is exactly
 // why the two cannot share one rule.
 //
-// currentToken is the token the entity references today, or "" when the caller
-// could not determine it (a nil preload). "" forces a re-resolve rather than a
-// skip, so a dangling reference is repaired by naming a valid token rather than
-// being compared against nothing and silently kept.
+// currentToken is the token the entity references today, or "" when the caller could
+// not determine it (a nil preload — a dangling FK). The skip below compares the
+// requested token against it, and "" can never equal a requested token, because a
+// blank request has already been refused above. So a nil preload always re-resolves:
+// a dangling reference is repaired by naming a valid token rather than being compared
+// against nothing and silently kept.
+//
+// 🔴 That is a PROPERTY OF THE ORDERING, not of a guard. An earlier version of this
+// wrote `currentToken != "" && requested == currentToken` and a comment claiming the
+// first conjunct forced the re-resolve. It did nothing — the blank check above had
+// already made it unreachable — and a mutant deleting it survived, being exactly
+// behaviour-equivalent. The nil guard in the CALLERS is the real mechanism and is
+// still needed; it is what makes currentToken "" instead of dereferencing nil.
 func resolveRequiredTypeRef(field dcgraphql.OptionalString, currentToken string,
 	refLabel string) (token string, needsResolve bool, err error) {
 	if !field.Set {
@@ -52,40 +61,8 @@ func resolveRequiredTypeRef(field dcgraphql.OptionalString, currentToken string,
 	if requested == "" {
 		return "", false, fmt.Errorf("%s cannot be empty: every entity of this kind must reference one", refLabel)
 	}
-	if currentToken != "" && requested == currentToken {
+	if requested == currentToken {
 		return "", false, nil
 	}
 	return requested, true, nil
-}
-
-// errPayloadTokenDisagrees refuses an update whose payload token names a DIFFERENT
-// row than the `token` argument does.
-//
-// It exists for the update mutations still on the full-replace shape, which reuse a
-// *CreateRequest and therefore carry the token twice: once to say which row, once
-// inside the shared input. Those two used to be able to disagree, and the disagreement
-// resolved the wrong way — the payload token was the LOOKUP KEY and the mandatory
-// `token` argument was ignored outright, so a caller naming one entity in the
-// argument and another in the payload silently updated the second and got a 200
-// describing it. A dead mandatory argument is worse than an absent one: it reads like
-// the identity channel, so a client that gets it right and the payload wrong has no
-// way to find out.
-//
-// The families converted to a dedicated *UpdateRequest do not need this — their input
-// carries no token at all, which makes the disagreement unrepresentable rather than
-// merely refused. This is the interim rule for the ones that still do, and it matches
-// what updateGeoFence has always done (errGeoFenceTokenImmutable); the difference is
-// that a fence refuses a rename because rules name fences by token, whereas these
-// refuse it because a silent lookup-key swap is not something a caller can have meant.
-//
-// An EMPTY payload token is accepted as "unspecified" rather than refused, because
-// under a shared create input a caller who has nothing to say about identity has no
-// other way to say it. Once a family converts, that ambiguity goes away with the field.
-func errPayloadTokenDisagrees(entity, token, requested string) error {
-	if requested == "" || requested == token {
-		return nil
-	}
-	return fmt.Errorf("cannot update %s %q through a request naming %q: the token argument "+
-		"identifies the record, and a request that disagrees with it is refused rather than "+
-		"applied to whichever one the payload happened to name", entity, token, requested)
 }

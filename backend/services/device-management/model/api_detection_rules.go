@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -136,7 +137,7 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 // Update an existing detection rule.
 func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
-	if err := errPayloadTokenDisagrees("detection rule", token, request.Token); err != nil {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("detection rule", token, request.Token); err != nil {
 		return nil, err
 	}
 	matches, err := api.DetectionRulesByToken(ctx, []string{token})
@@ -147,9 +148,12 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	if err := validateDetectionRuleToken(request.Token); err != nil {
-		return nil, err
-	}
+	// The payload token is NOT validated here, and its absence is deliberate. Under the
+	// reconcile above it is either empty ("unspecified") or equal to the argument, and it
+	// is never WRITTEN — so validating it could only refuse the empty case, which is a
+	// caller declining to restate an identity it cannot change. The rule's token is
+	// grammar-checked where it is actually set, in CreateDetectionRule; since an update
+	// cannot move it, that is the only check that can apply.
 	if err := validateDetectionRuleDefinition(request.Definition); err != nil {
 		return nil, err
 	}

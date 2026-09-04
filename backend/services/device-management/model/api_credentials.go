@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -66,7 +67,7 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 // Update an existing device credential.
 func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
-	if err := errPayloadTokenDisagrees("device credential", token, request.Token); err != nil {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("device credential", token, request.Token); err != nil {
 		return nil, err
 	}
 	matches, err := api.DeviceCredentialsByToken(ctx, []string{token})

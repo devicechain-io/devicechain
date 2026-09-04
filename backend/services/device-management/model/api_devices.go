@@ -648,7 +648,10 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 			return nil, gorm.ErrRecordNotFound
 		}
 		updated.DeviceType = types[0]
-		updated.DeviceTypeId = types[0].ID // keep the FK in lockstep for the post-commit roster resolve
+		// The association is what gorm writes; the FK is set explicitly because the
+		// post-commit roster resolve below reads DeviceTypeId directly, before any
+		// reload would have refreshed it from the association.
+		updated.DeviceTypeId = types[0].ID
 	}
 
 	updated.ExternalId = rdb.NullStrOf(request.ExternalId.ApplyTo(dcgraphql.NullStr(updated.ExternalId)))

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
@@ -144,6 +145,15 @@ func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateReq
 func (api *Api) UpdateConnector(ctx context.Context, token string, request *ConnectorCreateRequest, expectedUpdatedAt *string) (*Connector, error) {
 	cfg, err := api.validateRequest(request)
 	if err != nil {
+		return nil, err
+	}
+
+	// 🔴 A DIFFERING PAYLOAD TOKEN IS A RENAME HERE, AND THAT IS INTENDED — the credential is keyed by the connector's immutable id, so a rename keeps it bound, and TestSecretSurvivesTokenRename pins that. So
+	// this takes the RENAME rule rather than the reconcile most updates take. What it
+	// refuses is a BLANK new token: `token: String!` admits "", and that used to be
+	// written straight onto the row, leaving a live record addressable by nothing and
+	// returning success.
+	if err := dcgraphql.ErrRenameTokenUnusable("connector", token, request.Token); err != nil {
 		return nil, err
 	}
 

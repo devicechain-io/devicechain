@@ -6,6 +6,8 @@ package model
 import (
 	"context"
 	"database/sql"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -145,6 +147,14 @@ func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	}
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
+	}
+	// 🔴 The token grammar too, so this fixture is not MORE PERMISSIVE than production.
+	// It was: without this callback the harness accepted tokens the live callback
+	// refuses, which is the shape that lets a defect through green — a check run
+	// against a weaker world than the one it certifies. It is also why the fixture
+	// tokens below are grammar-conforming rather than arbitrary strings.
+	if err := rdb.RegisterTokenGrammar(db); err != nil {
+		t.Fatalf("register token grammar: %v", err)
 	}
 	if err := db.AutoMigrate(tables...); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -459,5 +469,53 @@ func requiredRefField[R any](name, seeded, replace string,
 		name: name, seeded: seeded, replace: replace,
 		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
 		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
+	}
+}
+
+// 🔴 THE EXHAUSTIVENESS CHECK, AND THE REASON IT IS NOT A HAND-WRITTEN LIST.
+//
+// Everything above is driven by the family's `fields` table, so a field MISSING from
+// that table is a field nothing here tests — and the update could go on writing it
+// from a zero value with the whole suite green. The check inside
+// SeedPopulatesEveryFieldDistinctly is the wrong DIRECTION for this: it asserts
+// read() ⊆ declared, so dropping a field from BOTH the table and read() satisfies it.
+// That is a hand-written list cross-checked against a second hand-written list —
+// the same guard twice, with two chances to be wrong in the same way.
+//
+// This asks the TYPE instead. Every exported field of the *UpdateRequest is a field a
+// caller can send and the resolver must fold, so every one has to be declared; and a
+// field ADDED to the request later fails here on the day it is added rather than the
+// day someone notices it being erased.
+func TestPartialUpdate_EveryRequestFieldIsDeclared(t *testing.T) {
+	for _, fam := range partialUpdateFamilies() {
+		t.Run(fam.name, func(t *testing.T) {
+			rt := reflect.TypeOf(fam.newRequest())
+			if rt.Kind() != reflect.Ptr || rt.Elem().Kind() != reflect.Struct {
+				t.Fatalf("newRequest() returned %s, want a pointer to a struct", rt)
+			}
+			rt = rt.Elem()
+
+			declared := map[string]bool{}
+			for _, f := range fam.fields {
+				declared[strings.ToLower(f.name)] = true
+			}
+			for i := 0; i < rt.NumField(); i++ {
+				sf := rt.Field(i)
+				if sf.PkgPath != "" {
+					continue // unexported: not reachable from the wire
+				}
+				if !declared[strings.ToLower(sf.Name)] {
+					t.Errorf("%s.%s is a field callers can send, but no partialField declares "+
+						"it — nothing in this harness would notice it being written from a zero "+
+						"value on every update", rt.Name(), sf.Name)
+				}
+			}
+			// The other direction, so the map cannot be satisfied by a table declaring
+			// fields the request does not have (a rename leaving a stale row behind).
+			if n := rt.NumField(); n != len(fam.fields) {
+				t.Errorf("%s has %d exported fields but the family declares %d — the two lists "+
+					"have diverged", rt.Name(), n, len(fam.fields))
+			}
+		})
 	}
 }

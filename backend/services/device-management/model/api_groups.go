@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/internal/selector"
 	"github.com/devicechain-io/dc-microservice/entity"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -115,7 +116,7 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 // members, so a mismatch fails closed.
 func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	request *EntityGroupCreateRequest) (*EntityGroup, error) {
-	if err := errPayloadTokenDisagrees("entity group", token, request.Token); err != nil {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("entity group", token, request.Token); err != nil {
 		return nil, err
 	}
 	matches, err := api.EntityGroupsByToken(ctx, []string{token})

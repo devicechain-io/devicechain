@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -40,7 +41,7 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 // UpdateEntityRelationshipType updates an existing relationship type by token.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	request *EntityRelationshipTypeCreateRequest) (*EntityRelationshipType, error) {
-	if err := errPayloadTokenDisagrees("entity relationship type", token, request.Token); err != nil {
+	if err := dcgraphql.ErrPayloadTokenDisagrees("entity relationship type", token, request.Token); err != nil {
 		return nil, err
 	}
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})

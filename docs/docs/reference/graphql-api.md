@@ -179,10 +179,13 @@ so it works on all three routes (ingress, port-forward, and the console's dev pr
 
 **Two update contracts are in service at once, and which one a mutation is on is visible in its
 signature.** A mutation taking a dedicated `*UpdateRequest` is a **partial update**; one taking its
-`create*` sibling's input is a **full replace**. There is no third case and no per-field guesswork
-— though a handful of individual fields on the full-replace mutations behave differently, and one
-behaves in exactly the opposite way. Those are enumerated
-[below](#where-the-default-does-not-hold); read that table before you automate anything.
+`create*` sibling's input is a **full replace**. Those are the only two contracts — but two caveats
+sit on top of them and both bite in practice. A handful of individual fields on the full-replace
+mutations behave differently from the mutation they are on, and one behaves in exactly the opposite
+way; those are enumerated [below](#where-the-default-does-not-hold). And the **token** inside a
+full-replace payload has its own rules, which differ by mutation — see
+[the token argument](#the-token-argument-names-the-record). Read both tables before you automate
+anything.
 
 A **partial update** distinguishes three states rather than two:
 
@@ -226,30 +229,44 @@ optional `expectedUpdatedAt` and refuse the write when the stored timestamp has 
 read it. And because the update input is the create input, it carries a **token**, which is where
 the two contracts differ most.
 
-#### The `token` argument names the record. Nothing else does {#the-token-argument-names-the-record}
+#### The `token` argument names the record {#the-token-argument-names-the-record}
 
-Every `update*` declares `token: String!`, and **that argument is the only thing that decides which
-record is written.**
+Every `update*` declares `token: String!`, and **that argument is what decides which record is
+written.** What the *payload* token does — where one still exists — depends on the mutation, and
+there are three answers rather than one. The differences are real, so they are listed rather than
+smoothed over.
 
-On a partial update this is structural: the `*UpdateRequest` has no `token` field at all, so naming
-a second record is not something the API can express. On a full replace the shared create input
-still carries one, and a payload token that **disagrees** with the argument is **refused** rather
-than applied — an empty one is read as "unspecified" and ignored.
+| The payload token | Which mutations | A token that **disagrees** | A token that is **empty** |
+| --- | --- | --- | --- |
+| **Is not there at all** | every [partial update](#which-mutations-are-partial-updates) | *unrepresentable* — the input has no `token` field, so the schema rejects it | — |
+| **Must agree** | `updateMetricDefinition`, `updateCommandDefinition`, `updateDetectionRule`, `updateEntityGroup`, `updateDeviceCredential`, `updateProvisioningProfile`, `updateEntityRelationshipType`, `updateNotificationPolicy`, `updateDashboard` | **refused** | ignored — read as "unspecified" |
+| **Names the new token** (a rename) | `updateDeviceProfile`, `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **renames the record** | **refused** |
+| **Must agree, exactly** | `updateGeoFence` | **refused** | **refused** — a fence token must also satisfy the [token grammar](#what-a-token-may-contain) |
 
-`updateDeviceProfile` is the single exception, and a deliberate one: a profile rename is a real
-capability there, expressed by sending the new token in the payload. It is refused once the profile
-has been published or adopted by a device type, because rules and rosters name a profile by token
-and a rename would leave them naming nothing. A geofence refuses a rename outright, for the same
-reason.
+The rename row is not a leftover. Each of those four keys the things that depend on the record by
+its internal id rather than by its token — a channel's delivery secret, a connector's credential, a
+provider's key handle — so renaming one orphans nothing. Two carry an extra guard of their own:
+`updateDeviceProfile` refuses a rename once the profile has been **published or adopted** by a
+device type, because from that point published rules and device rosters *do* name it by token; and
+`updateGeoFence` refuses a rename outright, because detection rules name fences by token inside
+compiled expressions this service cannot rewrite.
+
+What every row agrees on is that a payload token can no longer **blank** a record, and can never
+make the mutation write a record other than the one `token:` names.
 
 :::note[This changed]
-Before this release the behaviour was neither uniform nor safe. Most `update*` mutations located
-the record by the **payload** token and ignored the argument entirely, so a request naming one
-entity in `token:` and another in `request.token` silently updated the second and returned it with
-a success. The rest honoured the argument but then wrote the payload token over the stored one, so
-the payload still moved the record — and an empty payload token, which `token: String!` permits,
-blanked the record's token outright. If you have a client that relied on the payload naming the
-record, it now gets an error instead of writing the wrong row.
+Before this release the behaviour was neither uniform nor safe, and both failures returned success.
+
+Most `update*` mutations located the record by the **payload** token and ignored the argument
+entirely, so a request naming one entity in `token:` and another in `request.token` silently updated
+the second and returned it. The rest honoured the argument but then wrote the payload token over the
+stored one — so the payload still moved the record, and an **empty** payload token, which
+`token: String!` permits (`""` is a perfectly good non-null String), blanked the record's token and
+left a live row addressable by nothing.
+
+If you have a client that relied on the payload naming the record, it now gets an error rather than
+writing the wrong row. If you have one that sends `token: ""` on an update, it now gets an error on
+the rename mutations and is ignored on the rest — where before it destroyed the record's identity.
 :::
 
 ### Where the default does not hold {#where-the-default-does-not-hold}
@@ -289,8 +306,14 @@ convert the rest before 1.0. In device-management this release, these take a ded
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
 `updateCustomer` · `updateAreaType` · `updateArea`
 
-Everything else is still a full replace. You do not have to keep that list: **read the signature**.
-`request: FooUpdateRequest!` is partial, `request: FooCreateRequest` is a full replace, and the
+No other area has converted yet: notification-management, dashboard-management,
+outbound-connectors, ai-inference and user-management are all still full replaces. (The five
+`update*` mutations on user-management's admin plane already take a dedicated `*UpdateRequest` that
+drops the token, so they carry no payload-token question — but they are still full replaces on
+every field they do declare.)
+
+You do not have to keep that list: **read the signature**. `request: FooUpdateRequest!` is partial;
+a `FooCreateRequest` is a full replace, whether or not it is spelled with a trailing `!`. The
 [schema you downloaded](#download-the-schemas) is the authority.
 
 #### Two fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}

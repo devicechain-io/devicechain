@@ -185,10 +185,14 @@ proxy de desarrollo de la consola).
 
 **Hay dos contratos de actualización en servicio a la vez, y cuál rige para una mutación se ve en su
 firma.** Una mutación que toma un `*UpdateRequest` propio es una **actualización parcial**; una que
-toma la entrada de su hermana `create*` es un **reemplazo completo**. No hay un tercer caso ni
-conjeturas campo por campo — aunque unos pocos campos concretos de las mutaciones de reemplazo
-completo se comportan de otra manera, y uno se comporta exactamente al revés. Están enumerados
-[más abajo](#where-the-default-does-not-hold); lee esa tabla antes de automatizar nada.
+toma la entrada de su hermana `create*` es un **reemplazo completo**. Esos son los dos únicos
+contratos — pero encima hay dos salvedades y ambas muerden en la práctica. Unos pocos campos
+concretos de las mutaciones de reemplazo completo se comportan de forma distinta a la mutación en la
+que están, y uno se comporta exactamente al revés; están enumerados
+[más abajo](#where-the-default-does-not-hold). Y el **token** dentro de una petición de reemplazo
+completo tiene reglas propias, que difieren según la mutación — consulta
+[el argumento token](#the-token-argument-names-the-record). Lee ambas tablas antes de automatizar
+nada.
 
 Una **actualización parcial** distingue tres estados en lugar de dos:
 
@@ -232,32 +236,47 @@ salvo en `updateDashboard`, `updateConnector` y `updateAiProvider`, que aceptan 
 desde que la leíste. Y como la entrada de actualización es la de creación, lleva un **token**, que
 es donde más se diferencian ambos contratos.
 
-#### El argumento `token` nombra el registro. Nada más lo hace {#the-token-argument-names-the-record}
+#### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
-Toda `update*` declara `token: String!`, y **ese argumento es lo único que decide qué registro se
-escribe.**
+Toda `update*` declara `token: String!`, y **ese argumento es lo que decide qué registro se
+escribe.** Lo que hace el token de la *petición* — donde todavía existe uno — depende de la
+mutación, y hay tres respuestas, no una. Las diferencias son reales, así que se enumeran en lugar de
+disimularse.
 
-En una actualización parcial esto es estructural: el `*UpdateRequest` no tiene campo `token`, así
-que nombrar un segundo registro no es algo que la API pueda expresar. En un reemplazo completo la
-entrada de creación compartida sigue llevando uno, y un token de la petición que **no coincida** con
-el argumento se **rechaza** en lugar de aplicarse — uno vacío se interpreta como «sin especificar» y
-se ignora.
+| El token de la petición | Qué mutaciones | Un token que **no coincide** | Un token **vacío** |
+| --- | --- | --- | --- |
+| **No existe** | toda [actualización parcial](#which-mutations-are-partial-updates) | *no representable* — la entrada no tiene campo `token`, así que el esquema lo rechaza | — |
+| **Debe coincidir** | `updateMetricDefinition`, `updateCommandDefinition`, `updateDetectionRule`, `updateEntityGroup`, `updateDeviceCredential`, `updateProvisioningProfile`, `updateEntityRelationshipType`, `updateNotificationPolicy`, `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
+| **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
+| **Debe coincidir, exactamente** | `updateGeoFence` | **rechazado** | **rechazado** — el token de un geocerco también debe cumplir la [gramática de tokens](#what-a-token-may-contain) |
 
-`updateDeviceProfile` es la única excepción, y es deliberada: allí renombrar un perfil es una
-capacidad real, que se expresa enviando el nuevo token en la petición. Se rechaza una vez que el
-perfil se ha publicado o lo ha adoptado un tipo de dispositivo, porque las reglas y los inventarios
-nombran un perfil por su token y un renombrado los dejaría sin nombrar nada. Un geocerco rechaza el
-renombrado sin más, por la misma razón.
+La fila del renombrado no es un resto del pasado. Cada una de esas cuatro vincula lo que depende del
+registro por su id interno y no por su token — el secreto de entrega de un canal, la credencial de
+un conector, el manejador de clave de un proveedor —, así que renombrar uno no deja nada huérfano.
+Dos llevan además una salvaguarda propia: `updateDeviceProfile` rechaza el renombrado una vez que el
+perfil ha sido **publicado o adoptado** por un tipo de dispositivo, porque a partir de ahí las
+reglas publicadas y los inventarios de dispositivos *sí* lo nombran por token; y `updateGeoFence`
+rechaza el renombrado sin más, porque las reglas de detección nombran los geocercos por token dentro
+de expresiones compiladas que este servicio no puede reescribir.
+
+En lo que coinciden todas las filas es en que un token de petición ya no puede **dejar en blanco** un
+registro, y nunca puede hacer que la mutación escriba un registro distinto del que nombra `token:`.
 
 :::note[Esto ha cambiado]
-Antes de esta versión el comportamiento no era ni uniforme ni seguro. La mayoría de las mutaciones
-`update*` localizaban el registro por el token de la **petición** e ignoraban el argumento por
-completo, así que una petición que nombraba una entidad en `token:` y otra en `request.token`
-actualizaba en silencio la segunda y la devolvía con éxito. Las demás respetaban el argumento pero
-luego escribían el token de la petición sobre el almacenado, así que la petición seguía moviendo el
-registro — y un token de petición vacío, que `token: String!` permite, dejaba el token del registro
-en blanco. Si tienes un cliente que dependía de que la petición nombrase el registro, ahora recibe
-un error en lugar de escribir la fila equivocada.
+Antes de esta versión el comportamiento no era ni uniforme ni seguro, y ambos fallos devolvían éxito.
+
+La mayoría de las mutaciones `update*` localizaban el registro por el token de la **petición** e
+ignoraban el argumento por completo, así que una petición que nombraba una entidad en `token:` y otra
+en `request.token` actualizaba en silencio la segunda y la devolvía. Las demás respetaban el
+argumento pero luego escribían el token de la petición sobre el almacenado — así que la petición
+seguía moviendo el registro, y un token de petición **vacío**, que `token: String!` permite (`""` es
+una cadena no nula perfectamente válida), dejaba en blanco el token del registro y una fila viva sin
+forma de direccionarla.
+
+Si tienes un cliente que dependía de que la petición nombrase el registro, ahora recibe un error en
+lugar de escribir la fila equivocada. Si tienes uno que envía `token: ""` en una actualización, ahora
+recibe un error en las mutaciones de renombrado y se ignora en las demás — donde antes destruía la
+identidad del registro.
 :::
 
 ### Dónde no rige el comportamiento por defecto {#where-the-default-does-not-hold}
@@ -296,9 +315,15 @@ convertir el resto antes de la 1.0. En device-management, en esta versión, esta
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
 `updateCustomer` · `updateAreaType` · `updateArea`
 
-Todo lo demás sigue siendo un reemplazo completo. No hace falta que guardes esa lista: **lee la
-firma**. `request: FooUpdateRequest!` es parcial, `request: FooCreateRequest` es un reemplazo
-completo, y el [esquema que descargaste](#descargar-los-esquemas) es la autoridad.
+Ninguna otra área se ha convertido todavía: notification-management, dashboard-management,
+outbound-connectors, ai-inference y user-management siguen siendo reemplazos completos. (Las cinco
+mutaciones `update*` del plano de administración de user-management ya toman un `*UpdateRequest`
+propio que omite el token, así que no plantean la cuestión del token en la petición — pero siguen
+siendo reemplazos completos en todos los campos que sí declaran.)
+
+No hace falta que guardes esa lista: **lee la firma**. `request: FooUpdateRequest!` es parcial; un
+`FooCreateRequest` es un reemplazo completo, se escriba o no con un `!` final. El
+[esquema que descargaste](#descargar-los-esquemas) es la autoridad.
 
 #### Dos campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
 
