@@ -98,13 +98,22 @@ func TestResolveLocaleFallsBackToTheOperatorDefault(t *testing.T) {
 	require.Equal(t, "es", *got)
 }
 
-// Rung 2c: with no stored override anywhere, the settings service hands back the code
-// default, and that is what resolves. Read from the registry rather than retyped, so
-// this follows the shipped value rather than pinning a copy of it.
-func TestResolveLocaleFallsBackToTheShippedCodeDefault(t *testing.T) {
-	got := resolveLocale(nil, shippedLocaleDefault(t))
-	require.NotNil(t, got)
-	require.Equal(t, "en", *got)
+// 🔴 RUNG 2c, AND THE ONE THAT MATTERS MOST: with no stored override anywhere, the
+// settings service hands back the CODE default, and that must resolve to NOTHING — so
+// the console falls through to the browser.
+//
+// This test previously asserted "en", which pinned the defect rather than the contract.
+// The chain was: code default "en" -> Get returns it -> resolveLocale yields "en" ->
+// tenant.locale is "en" -> applyTenantDefaultLocale("en") -> changeLanguage("en"). A
+// user whose browser asked for Spanish, on an instance nobody had configured, got
+// English, and no rung-3 test could see it because every one of them fed a locale the
+// server could not actually emit.
+//
+// Read from the registry rather than retyped, so this follows the shipped value rather
+// than pinning a copy of it.
+func TestResolveLocaleResolvesToNothingUnderTheShippedCodeDefault(t *testing.T) {
+	require.Nil(t, resolveLocale(nil, shippedLocaleDefault(t)),
+		"an unconfigured instance must decline to answer, leaving the browser rung in force")
 }
 
 // 🔴 A stored blank at the TENANT tier must not mask the operator's default. This is
@@ -143,11 +152,52 @@ func TestResolveLocaleKeepsTheTenantChoiceThroughAMalformedDefault(t *testing.T)
 	require.Equal(t, "es", *got)
 }
 
-// Nothing at either tier resolves to nothing, which is what the console reads as "fall
-// through to the browser". It must NOT be an error and must NOT be `en` — inventing a
-// value here would silently outrank the browser rung it is supposed to defer to.
-func TestResolveLocaleResolvesToNothingWhenNoTierSetsOne(t *testing.T) {
-	require.Nil(t, resolveLocale(nil, []byte(`null`)))
+// 🔴 THE COMPOSITION TEST, run through the REAL settings service rather than a hand-
+// written byte string. This is the one that was missing, and its absence is why the
+// regression above survived a suite that looked thorough: every unit test fed
+// resolveLocale a `storedDefault` chosen by the test, so nothing anywhere asserted what
+// settings.Get ACTUALLY HANDS IT on an instance nobody has configured. A property
+// proved only on inputs the system cannot produce is not proved.
+//
+// Fresh install, operator has never touched the setting, tenant has set no override:
+// the resolved locale must be nil, so the console leaves the language to the browser.
+func TestAFreshInstallResolvesNoTenantLocaleAtAll(t *testing.T) {
+	ctx, _ := newSettingsCtx(t)
+
+	got, err := (&TenantResolver{t: &iam.Tenant{}, svc: &SchemaResolver{}}).Locale(ctx)
+
+	require.NoError(t, err)
+	require.Nil(t, got,
+		"with nothing stored at either tier the server must answer 'no default'; any tag here "+
+			"is applied by the console and silently outranks the browser rung on every instance")
+}
+
+// The positive control on the composition above, through the same real service: once an
+// operator DOES store a default, it reaches the tenant. Without this, a resolver that
+// always returned nil would pass the test above.
+func TestAStoredInstanceDefaultReachesATenantThatSetsNone(t *testing.T) {
+	ctx, svc := newSettingsCtx(t, string(auth.SettingsWrite))
+	_, err := svc.Set(ctx, settingsdefs.KeyLocaleDefault, []byte(`"es"`), "operator@devicechain.local")
+	require.NoError(t, err)
+
+	got, err := (&TenantResolver{t: &iam.Tenant{}, svc: &SchemaResolver{}}).Locale(ctx)
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "es", *got)
+}
+
+// And the tenant still outranks it, through the real service.
+func TestATenantOverrideBeatsTheStoredInstanceDefault(t *testing.T) {
+	ctx, svc := newSettingsCtx(t, string(auth.SettingsWrite))
+	_, err := svc.Set(ctx, settingsdefs.KeyLocaleDefault, []byte(`"es"`), "operator@devicechain.local")
+	require.NoError(t, err)
+
+	got, err := (&TenantResolver{t: &iam.Tenant{Locale: sp("pt-BR")}, svc: &SchemaResolver{}}).Locale(ctx)
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "pt-BR", *got)
 }
 
 // ---- localeOverride: the RAW column, no cascade ------------------------------

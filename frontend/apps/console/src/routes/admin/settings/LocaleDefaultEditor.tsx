@@ -24,7 +24,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { Button } from '@/components/ui/button';
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/config';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isShippedLocale } from '@/i18n/config';
 import { defineSetting, parseJson, type SettingEditorProps, type SettingIssue } from './registry';
 
 // The tag grammar the server enforces, and the same subset: a 2- or 3-letter
@@ -38,36 +38,66 @@ const TAG = /^[A-Za-z]{2,3}(-[A-Za-z]{4})?(-([A-Za-z]{2}|[0-9]{3}))?$/;
 const MAX_LEN = 35;
 
 /**
- * Stored JSON → the form state, which is just the tag as text.
+ * The canonical form the server stores: trimmed, language lowercased, a 4-letter
+ * script Titlecased, everything else uppercased. Mirrors locale.Normalize in Go.
  *
- * Returns null for anything that is not a JSON string — an object, a number, or
- * `null` — which drops the setting to the raw editor rather than loading part of
- * it. `null` in particular is a value the server refuses but that an override
- * stored before that gate existed could still hold; showing it as raw JSON is the
- * honest answer, and the operator can repair or reset it there.
+ * 🔴 The editor emits this rather than what was typed, because the server REFUSES a
+ * non-canonical tag — it holds a Validator and no normalizer, so anything it accepts
+ * is stored verbatim, and a stored `"  ES-mx "` would come back and make this setting
+ * read as DIRTY on load (the host compares the serialized draft against the stored
+ * bytes) with Save enabled before anyone typed. Canonicalizing here keeps that refusal
+ * invisible in the UI: it can only be reached by a raw caller, who is told the form to
+ * send.
+ */
+function canonicalize(tag: string): string {
+  return tag
+    .trim()
+    .split('-')
+    .map((part, i) => {
+      if (i === 0) return part.toLowerCase();
+      if (part.length === 4) return part[0].toUpperCase() + part.slice(1).toLowerCase();
+      return part.toUpperCase();
+    })
+    .join('-');
+}
+
+/**
+ * Stored JSON → the form state, which is the tag as text — with an EMPTY string
+ * standing for the setting's `null`.
+ *
+ * 🔴 `null` IS A REAL STATE HERE, not a missing value: it is the shipped default and
+ * it means "no instance default — each viewer's browser decides". Dropping it to the
+ * raw JSON editor (which is what returning null here would do) would leave the one
+ * value an operator most needs to be able to choose reachable only by typing `null`
+ * into a textarea.
+ *
+ * Anything that is neither a string nor null — an object, a number, an unparseable
+ * value — still falls back, because this editor genuinely cannot model it.
  */
 function seed(json: string): string | null {
   const v = parseJson(json);
+  if (v === null) return '';
   return typeof v === 'string' ? v : null;
 }
 
-// TOTAL, as the contract requires: whatever the operator has typed is written
-// through, valid or not, so validate can see it and refuse it. Trims freely —
-// safe because the result never returns to the editor.
+// TOTAL, as the contract requires: whatever the operator has typed is written through,
+// valid or not, so validate can see it and refuse it. An empty field is the `null`
+// state rather than a blank tag — the server refuses a blank precisely so the two
+// cannot be confused.
 function toJson(tag: string): string {
-  return JSON.stringify(tag.trim());
+  return tag.trim() === '' ? 'null' : JSON.stringify(canonicalize(tag));
 }
 
-// Validates the produced JSON rather than the draft, so the thing checked IS the
-// thing sent.
+// Validates the produced JSON rather than the draft, so the thing checked IS the thing
+// sent.
 function validate(json: string): SettingIssue | null {
   const v = parseJson(json);
+  if (v === null) return null; // "the browser decides" — the shipped default, and legal
   if (typeof v !== 'string') return { key: 'valueMustBeJsonError' };
   const tag = v.trim();
-  // Empty is refused rather than treated as "no default". Clearing the setting is
-  // how an operator reverts to the shipped default, and admitting a second
-  // spelling would give this page two states that look identical and behave
-  // differently on Reset — the same rule the server applies.
+  // Unreachable from this editor (an empty field serializes to null above), but a value
+  // typed into the raw editor or written by a script can hold one, and the server
+  // refuses it: a blank is a MISSING tag, not a second spelling of null.
   if (tag === '') return { key: 'localeIssueRequired' };
   if (tag.length > MAX_LEN) return { key: 'localeIssueTooLong', values: { max: MAX_LEN } };
   if (!TAG.test(tag)) return { key: 'localeIssueNotATag', values: { tag } };
@@ -76,12 +106,12 @@ function validate(json: string): SettingIssue | null {
 
 function LocaleDefaultEditor({ value, onChange }: SettingEditorProps<string>) {
   const { t } = useTranslation('adminSettings');
-  // Matches applyTenantDefaultLocale's own resolvability test: a regional tag folds
-  // onto its base catalog through i18next's nonExplicitSupportedLngs, so `es-MX`
-  // renders Spanish and must NOT be warned about as though it rendered nothing.
   const tag = value.trim();
-  const base = tag.split('-')[0].toLowerCase();
-  const isShipped = SUPPORTED_LOCALES.some((l) => l.code === tag || l.code.toLowerCase() === base);
+  // 🔴 One question, one answer: isShippedLocale is i18next's own resolution test, the
+  // same one applyTenantDefaultLocale gates on. This file used to carry a second,
+  // hand-rolled copy that disagreed with i18next on case — so the warning below could
+  // stay silent for a tag that renders nothing.
+  const isShipped = tag !== '' && isShippedLocale(canonicalize(tag));
 
   return (
     <div className="max-w-xl space-y-3">
@@ -90,9 +120,10 @@ function LocaleDefaultEditor({ value, onChange }: SettingEditorProps<string>) {
         htmlFor="locale-default-tag"
         description={t('localeTagHelp')}
       >
-        {/* The placeholder is the SHIPPED DEFAULT rather than a hard-coded example,
-            so it cannot drift away from what an unset instance actually means. It is
-            a language TAG — an identifier like a token, never localized. */}
+        {/* The placeholder is the SHIPPED FALLBACK language rather than a hard-coded
+            example. It is a language TAG — an identifier like a token, never
+            localized. Note it is NOT the shipped default of this setting, which is
+            "no default at all"; an empty field is that state. */}
         <Input
           id="locale-default-tag"
           value={value}
@@ -119,6 +150,12 @@ function LocaleDefaultEditor({ value, onChange }: SettingEditorProps<string>) {
           </Button>
         ))}
       </div>
+
+      {/* 🔴 An empty field is a CHOICE, so it says what that choice does. Left unlabelled
+          it reads as an unfinished form, which is how the shipped default came to be a
+          concrete "en" in the first place — and that silently outranked every viewer's
+          browser on every instance nobody had configured. */}
+      {tag === '' && <HintText size="md">{t('localeNoDefaultHint')}</HintText>}
 
       {/* 🔴 A WARNING, NOT AN ERROR — the save stays enabled. A tag with no catalog
           in this build is legal and inert until the catalog ships, so refusing it

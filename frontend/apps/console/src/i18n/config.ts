@@ -296,32 +296,60 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
   // NOT block an effective tenant default; treating any string as "chosen" would
   // let an ineffective rung-1 suppress an effective rung-2.
   const chosen = localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (chosen && isResolvable(chosen)) return;
-  if (!isResolvable(locale)) return; // never select a locale that would render raw keys
+  if (chosen && isShippedLocale(chosen)) return;
+  if (!isShippedLocale(locale)) return; // never select a locale that would render raw keys
   void i18n.changeLanguage(locale);
 }
 
 /**
- * Whether a language tag resolves to a catalog this build actually ships — by exact
- * code, or by its primary language subtag.
+ * Whether a language tag resolves to a catalog this build actually ships.
  *
- * 🔴 THE SUBTAG FOLD IS NOT LENIENCY, IT IS AGREEMENT WITH RUNG 3. `es-MX` resolves
- * to the `es` catalog through i18next's own `nonExplicitSupportedLngs`, which is set
- * above precisely so a regional browser language does not fall past Spanish to
- * English. An exact-match test here made the tenant rung the ONE rung that refused a
- * regional tag: a browser advertising `es-MX` got Spanish, while a tenant default of
- * `es-MX` was silently dropped and the same user got English. Two surfaces resolving
- * the same tag differently is the defect this cascade exists to prevent, and the
- * server stores regional tags happily (the operator's `locale.default` editor is free
- * text and offers `pt-BR` as an example), so the tag really does arrive.
+ * 🔴 IT ASKS i18next RATHER THAN RE-DERIVING THE ANSWER, and that is the whole point.
+ * The question "would this tag render one of our catalogs?" has exactly one correct
+ * answer — the one `changeLanguage` is about to act on — and any second implementation
+ * of it is a source of disagreement rather than a convenience. The first version here
+ * was hand-rolled (`code === tag || code.toLowerCase() === base`) and disagreed on
+ * case: it called `ES` resolvable, handed it to `changeLanguage`, and i18next resolved
+ * `en`, because `lowerCaseLng` is off and i18next only case-normalizes the REGION half
+ * of a hyphenated tag. The seam was selecting a language that renders raw keys by its
+ * own definition.
  *
- * The full tag is still what gets passed to changeLanguage, never the folded base:
- * i18next does the folding, so the day an `es-MX` catalog ships it is picked up with
- * no change here.
+ * `isSupportedCode` applies `nonExplicitSupportedLngs` itself, so the regional fold
+ * this function used to hand-roll comes for free and stays correct if that option ever
+ * changes. Measured, not assumed — `es-MX`, `es-419` and `es-Latn-MX` are supported and
+ * render Spanish; `ES`, `pt-BR`, `fr-CA` and `zh-Hans-CN` are not and render English.
+ *
+ * The full tag is still what gets passed to changeLanguage, never a folded base: i18next
+ * does the folding, so the day an `es-MX` catalog ships it is picked up with no change
+ * here.
+ *
+ * Exported because the operator's `locale.default` editor asks the same question about
+ * the same tag, and asked it with its own second copy of the old hand-rolled fold.
  */
-function isResolvable(tag: string): boolean {
-  const base = tag.split('-')[0].toLowerCase();
-  return SUPPORTED_LOCALES.some((l) => l.code === tag || l.code.toLowerCase() === base);
+export function isShippedLocale(tag: string): boolean {
+  // services.languageUtils exists once init() has run, and init is synchronous here
+  // (catalogs are bundled, no async backend). Guarded anyway, and fail-CLOSED: an
+  // unanswerable question must not select a language.
+  const utils = i18n.services?.languageUtils;
+  return utils ? utils.isSupportedCode(tag) : false;
+}
+
+/**
+ * Hand the language back to the rungs that do not need a tenant: an explicit user
+ * choice, then the browser, then English.
+ *
+ * TenantProvider calls this when it unmounts — leaving the tenant shell for the login
+ * screen or the instance-scoped /admin console — so a tenant default does not outlive
+ * the tenant it belongs to.
+ *
+ * 🔴 The no-argument `changeLanguage()` RE-RUNS DETECTION rather than picking a
+ * constant, which is what makes this a revert rather than a second opinion: it lands on
+ * whatever rungs 1, 3 and 4 say, with no knowledge of them here. Measured on all three
+ * arms — a stored user choice wins, otherwise a shipped browser language wins,
+ * otherwise English.
+ */
+export function resetToDetectedLocale(): void {
+  void i18n.changeLanguage();
 }
 
 export default i18n;

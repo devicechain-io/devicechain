@@ -96,17 +96,34 @@ const DefaultBasemapJSON = `{"tileUrl":"https://tile.openstreetmap.org/{z}/{x}/{
 // unchanged — but note the consequence: an operator typing `es` without the quotes is
 // not valid JSON and is refused by the store before this validator ever runs.
 //
-// The code default is "en", which is the same value the console's own fallbackLng
-// carries. That duplication is deliberate rather than a seam worth removing: the two
-// answer different questions — this one is "what does an unconfigured INSTANCE mean by
-// no locale", the console's is "what do I render when the resolved catalog is missing
-// a key" — and a console that could not fall back without asking the server would fail
-// to render at all when the server is unreachable.
+// 🔴 THE SHIPPED DEFAULT IS JSON `null`, MEANING "NO INSTANCE DEFAULT — THE BROWSER
+// DECIDES", AND THAT IS THE WHOLE POINT OF THE KEY'S SHAPE. It was "en" first, and
+// that shipped a silent, instance-wide regression: settings.Get returns the code
+// default when nothing is stored, so EVERY fresh install resolved a tenant locale of
+// "en", the console applied it as the tenant default, and the browser rung below it
+// never ran. A user whose browser asked for Spanish, on an instance nobody had
+// configured, got English. Worse, the state was inexpressible — the validator refused
+// both `null` and `""`, and Reset reverts to the code default — so an operator had no
+// way to hand the decision back to the browser.
+//
+// So `null` here is not "unset waiting for a value". It IS the value, and it carries
+// exactly the meaning nil already carries one tier up on the tenant row: inherit the
+// tier below. There, the tier below is this setting; here, it is the browser, which
+// the server has no view of and must therefore decline to answer for.
+//
+// Note what that means for Clear: it reverts to `null`, i.e. back to "the browser
+// decides", which is the right destination for a Reset on this key.
 const KeyLocaleDefault = "locale.default"
 
-// DefaultLocaleJSON is the shipped instance default language: English, as a bare JSON
-// string.
-const DefaultLocaleJSON = `"en"`
+// DefaultLocaleJSON is the shipped instance default language: JSON `null` — no
+// instance-wide default, so an unconfigured instance leaves the choice to each
+// viewer's browser rather than answering for it.
+//
+// 🔴 THIS CONSTANT AND validateLocaleDefault MOVE TOGETHER. NewRegistry rejects a code
+// default its own validator refuses, and it PANICS — so changing this to a value the
+// validator does not admit does not fail in this package's own tests alone; it takes
+// down every test that builds the registry, including the basemap ones.
+const DefaultLocaleJSON = `null`
 
 // Registry returns the registry of every known system setting.
 //
@@ -137,7 +154,7 @@ func Registry() *settings.Registry {
 		settings.Define(
 			KeyLocaleDefault,
 			json.RawMessage(DefaultLocaleJSON),
-			`Instance-wide default console language, as a BCP-47 language tag in a JSON string (for example "en" or "es"). Sits below any per-tenant default, and both sit below a user's own explicit choice — setting this changes the language only for users who have not picked one. A tag whose catalog this console build does not ship has no effect until it does.`,
+			`Instance-wide default console language, as a BCP-47 language tag in a JSON string (for example "en" or "es"), or null to leave the choice to each viewer's browser. Sits below any per-tenant default, and both sit below a user's own explicit choice — setting this changes the language only for users who have not picked one. A tag whose catalog this console build does not ship has no effect until it does.`,
 			validateLocaleDefault,
 		),
 	)
@@ -198,15 +215,36 @@ func validateBrandingDefault(value json.RawMessage) error {
 // so `tileURL` is not an unknown field — it binds to TileURL and works. Only a
 // genuinely different key (`tile_url`) is refused. Pinned by
 // TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive.
-// validateLocaleDefault rejects a locale.default value that is not a JSON string
-// holding a well-formed language tag (ADR-066 sub-workstream d).
+// validateLocaleDefault rejects a locale.default value that is neither JSON `null` nor
+// a JSON string holding a well-formed, canonical language tag (ADR-066 sub-workstream d).
 //
-// 🔴 JSON `null` is REFUSED rather than read as "no default". The store already has a
-// way to say that — Clear removes the override row and reverts to the code default —
-// and admitting a second spelling would give the settings page two states that look
-// identical (an override badge over a value the cascade treats as absent) and behave
-// differently on Reset. Decoding into *string is what makes null distinguishable from
-// an absent key here at all, which is why it is decoded that way and then rejected.
+// 🔴 JSON `null` IS ADMITTED, and it means "no instance default — the browser decides".
+// An earlier version refused it, reasoning that Clear already expressed "no value"; that
+// was wrong in a way that took out a whole precedence rung. Clear reverts to the CODE
+// default, so "no value" is only expressible if the code default itself is the absent
+// one — which it now is. Refusing null while shipping "en" made the browser rung
+// unreachable on every instance nobody had configured. Decoding into *string is what
+// makes null distinguishable from an absent key at all, which is why it is decoded that
+// way; it is now ACCEPTED rather than rejected.
+//
+// 🔴 A BLANK IS STILL REFUSED, and the distinction from null is the point rather than
+// pedantry. `""` and `"   "` are not a second spelling of "no default" — they are a
+// language tag that is missing, and admitting them would give the settings page two
+// states that look the same and resolve the same while only one of them was chosen.
+// Note that locale.Normalize collapses a blank to nil and locale.Validate ACCEPTS nil
+// (at the TENANT tier nil is "inherit", a real intent), so a blank cannot be caught by
+// validating the normalized value — it has to be caught before the two are conflated,
+// which is what the explicit blank check below does.
+//
+// 🔴 A NON-CANONICAL TAG IS REFUSED rather than silently normalized, so the bytes
+// STORED are the bytes VALIDATED — the same property prepareLocaleWrite argues for on
+// the tenant path, which this one was quietly failing to hold. A settings Definition
+// carries a Validator and no normalizer, so accepting `"  ES-mx "` meant storing it
+// verbatim: it resolved correctly (the read path normalizes) but the admin editor
+// compares its serialized draft against the stored bytes, so the setting came up DIRTY
+// with Save enabled before anyone had typed. The refusal names the canonical form, and
+// the console's editor emits it, so this is invisible in the UI and only bites a raw
+// caller — who gets told exactly what to send.
 //
 // The tag itself is checked for SHAPE, not for membership in the console's shipped
 // catalogs — see the locale package for why that list stays where the catalogs are.
@@ -214,26 +252,20 @@ func validateLocaleDefault(value json.RawMessage) error {
 	var l *string
 	dec := json.NewDecoder(strings.NewReader(string(value)))
 	if err := dec.Decode(&l); err != nil {
-		return fmt.Errorf("%s must be a JSON string holding a language tag: %w", KeyLocaleDefault, err)
+		return fmt.Errorf("%s must be a JSON string holding a language tag, or null: %w", KeyLocaleDefault, err)
 	}
-	// Normalize before validating so a tag that only needs trimming or re-casing is
-	// accepted rather than refused for a difference the cascade erases anyway.
-	//
-	// 🔴 That normalization is why the emptiness check sits AFTER it and covers nil,
-	// `""` and `"   "` together. locale.Validate ACCEPTS nil — at the tenant tier nil
-	// is "inherit", which is a real intent — and Normalize collapses a blank to nil,
-	// so validating the normalized value alone would let `""` through as though the
-	// operator had chosen to inherit. There is nothing to inherit at this tier: the
-	// way to say "no instance default" is to CLEAR the key, which reverts to the
-	// shipped code default. Admitting a second spelling would give the settings page
-	// two states that look the same (an override badge over a value the cascade treats
-	// as absent) and behave differently on Reset.
+	if l == nil {
+		return nil // "the browser decides" — the shipped default, and a legal choice
+	}
+	if strings.TrimSpace(*l) == "" {
+		return fmt.Errorf("%s must be a language tag, or null to leave the language to each viewer's browser; a blank string is neither", KeyLocaleDefault)
+	}
 	normalized := locale.Normalize(l)
-	if normalized == nil {
-		return fmt.Errorf("%s must be a language tag; clear the setting to revert to the shipped default", KeyLocaleDefault)
-	}
 	if err := locale.Validate(normalized); err != nil {
 		return fmt.Errorf("%s: %w", KeyLocaleDefault, err)
+	}
+	if *normalized != *l {
+		return fmt.Errorf("%s must be stored in canonical form: send %q rather than %q", KeyLocaleDefault, *normalized, *l)
 	}
 	return nil
 }

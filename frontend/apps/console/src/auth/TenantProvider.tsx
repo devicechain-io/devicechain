@@ -11,7 +11,7 @@ import {
 } from '@/lib/api/user-management';
 import { useCachedResource } from '@/lib/hooks/use-cached-resource';
 import { applyBranding } from '@/lib/branding';
-import { applyTenantDefaultLocale } from '@/i18n/config';
+import { applyTenantDefaultLocale, resetToDetectedLocale } from '@/i18n/config';
 import { MapRuntimeProvider, TenantBasemapProvider } from '@devicechain/widgets';
 
 import { MAP_RUNTIME } from '../map-runtime';
@@ -129,18 +129,36 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   // there is no render site to forget, and the same argument that put both map
   // providers here applies unchanged.
   //
-  // 🔴 THERE IS NO CLEANUP, and that asymmetry with applyBranding above is deliberate
-  // rather than an omission. Branding is shell CHROME that must be reverted on unmount
-  // or a tenant's palette leaks onto the login and admin screens. A language is not
-  // chrome: reverting it on unmount would flip the user back to English mid-logout and,
-  // worse, on any remount — and there is nothing to revert TO, since rungs 1, 3 and 4
-  // are exactly where i18next already is. applyTenantDefaultLocale is idempotent and
-  // refuses to override an explicit user choice, so leaving the language in place is
-  // both the correct behaviour and the safe one.
   const locale = info?.locale ?? null;
   useEffect(() => {
     applyTenantDefaultLocale(locale);
   }, [locale]);
+
+  // 🔴 AND HAND IT BACK ON UNMOUNT. An earlier version of this file argued there was
+  // "nothing to revert TO, since rungs 1, 3 and 4 are exactly where i18next already
+  // is". That was true only while the browser rung was dead: the shipped
+  // `locale.default` was "en", so every tenant carried a default and i18next was never
+  // sitting on a browser-detected language to begin with. With the shipped default now
+  // absent, it routinely is — and without this, logging out of a Spanish-default tenant
+  // and into one with no default leaves the console in Spanish against an English
+  // browser, because nothing ever moves it back.
+  //
+  // 🔴 SEPARATE EFFECT, EMPTY DEPS, ON PURPOSE. Hanging the cleanup off the [locale]
+  // effect above would run it on every CHANGE as well — React tears down before it
+  // re-runs — so each tenant fetch would bounce the language through detection on its
+  // way to the value it was about to set. This one runs its cleanup only when the
+  // tenant shell itself goes away, which is the event that actually means "this tenant
+  // no longer decides".
+  //
+  // 🔴 Unmount is SUFFICIENT because there is no way to change tenant without one, and
+  // that is a property of the route tree rather than a hope: selectTenant is reachable
+  // only from /login and from /admin, both of which sit OUTSIDE AppLayout (App.tsx
+  // mounts AppLayout and AdminLayout as siblings under separate guards). If a
+  // tenant-switcher ever lands inside the tenant shell, this effect stops covering it —
+  // the [locale] effect above would no-op on a new tenant that sets no default, leaving
+  // the previous tenant's language in force — and the fix is to key this effect on the
+  // tenant token rather than to widen its deps.
+  useEffect(() => resetToDetectedLocale, []);
 
   // 🔴 BOTH map providers are installed HERE, once, rather than at each place the
   // console renders widgets — the dashboard workspace, the canvas editor, the

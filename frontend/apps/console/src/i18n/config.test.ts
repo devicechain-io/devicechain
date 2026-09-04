@@ -7,6 +7,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import i18n, {
   SUPPORTED_LOCALES,
+  isShippedLocale,
+  resetToDetectedLocale,
   DEFAULT_LOCALE,
   LOCALE_STORAGE_KEY,
   setUserLocale,
@@ -122,6 +124,62 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  // 🔴 CASE. i18next case-normalizes only the REGION half of a hyphenated tag —
+  // `lowerCaseLng` is off — so `ES` is NOT a supported code and renders English. A
+  // hand-rolled `.toLowerCase()` fold declared it resolvable, handed it to
+  // changeLanguage, and the seam selected a language that renders raw keys by its own
+  // definition. Unreachable through the wired path (the server canonicalizes) but a
+  // contract this function states about itself.
+  it('does not claim an upper-cased language is resolvable, because i18next does not', () => {
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('ES');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same measurement, and the reason the fold cannot simply be
+  // dropped: i18next DOES case-normalize the region, so `es-mx` is supported.
+  it('accepts a lower-cased region, because i18next does', async () => {
+    applyTenantDefaultLocale('es-mx');
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+});
+
+// 🔴 isShippedLocale must agree with changeLanguage on EVERY tag, because disagreement
+// is the whole defect class: the guard says "this renders" and the renderer says
+// otherwise. Asserted as a property over a table rather than case by case, so a future
+// i18next option change (lowerCaseLng, load:'languageOnly', a new supportedLng) moves
+// both sides together or reddens.
+describe('isShippedLocale agrees with what i18next actually resolves', () => {
+  // 🔴 NO TAG WHOSE BASE LANGUAGE IS `en` AND WHICH IS UNSUPPORTED CAN APPEAR HERE,
+  // and that is a limit of the ORACLE rather than a gap in the guard. Every
+  // unsupported tag lands on `en` through fallbackLng, so for `En` the two outcomes
+  // this test distinguishes — "matched its own catalog" and "fell back to English" —
+  // are the same observation. `ES` is the same misspelling shape and IS observable,
+  // because its base is `es`, so the case property is still covered; the dedicated
+  // upper-case test above covers `ES` directly.
+  const TAGS = [
+    'en', 'es', 'ES',
+    'es-MX', 'es-mx', 'es-419', 'es-Latn-MX',
+    'pt-BR', 'fr', 'fr-CA', 'zh-Hans-CN',
+  ];
+
+  it('reports shipped exactly when the tag renders its own language', async () => {
+    for (const tag of TAGS) {
+      const claimed = isShippedLocale(tag);
+      await i18n.changeLanguage(tag);
+      const rendered = i18n.resolvedLanguage;
+      // "Renders its own language" means the catalog i18next landed on is the tag's
+      // own primary subtag — not merely that it landed somewhere. Every unsupported
+      // tag lands on `en` via fallbackLng, so comparing against "did it resolve?"
+      // would call `fr` a success.
+      const base = tag.split(/[-_]/)[0].toLowerCase();
+      const renderedOwnLanguage = rendered?.toLowerCase() === base;
+      expect(claimed, `${tag}: guard said ${claimed}, i18next rendered ${rendered}`).toBe(
+        renderedOwnLanguage,
+      );
+    }
+  });
+
   it('loses to an explicit user choice already in localStorage', () => {
     localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
     const spy = vi.spyOn(i18n, 'changeLanguage');
@@ -217,6 +275,41 @@ describe('browser + fallback rungs (ADR-066 rungs 3 and 4)', () => {
     await i18n.changeLanguage(detected()[0]);
     expect(i18n.resolvedLanguage).toBe(DEFAULT_LOCALE);
     expect(DEFAULT_LOCALE).toBe('en');
+  });
+
+  // 🔴 resetToDetectedLocale hands the language back to the rungs that do not need a
+  // tenant. TenantProvider calls it on unmount so a tenant default does not outlive the
+  // tenant — without it, logging out of a Spanish-default tenant into one with no
+  // default leaves the console in Spanish against an English browser.
+  //
+  // These pin that it RE-RUNS DETECTION rather than picking a constant: the same call
+  // lands on a different language for each of the three rungs below.
+  it('reverts to the browser language', async () => {
+    withNavigatorLanguages(['es-MX', 'es']);
+    await i18n.changeLanguage('en');
+
+    resetToDetectedLocale();
+
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+
+  it('reverts to an explicit user choice ahead of the browser', async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'es');
+    withNavigatorLanguages(['en-US', 'en']);
+    await i18n.changeLanguage('en');
+
+    resetToDetectedLocale();
+
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+
+  it('reverts to English when the browser asks for a language we do not ship', async () => {
+    withNavigatorLanguages(['fr-FR', 'fr']);
+    await i18n.changeLanguage('es');
+
+    resetToDetectedLocale();
+
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('en'));
   });
 });
 

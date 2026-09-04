@@ -508,15 +508,43 @@ describe('locale default editor', () => {
     expect(setSettingMock).not.toHaveBeenCalled();
   });
 
-  // Clearing the field is refused rather than read as "no default": Reset is how an
-  // operator reverts to the shipped value, and admitting a second spelling would
-  // give this page two states that look the same and behave differently on Reset.
-  it('blocks an emptied field and points at Reset instead', async () => {
-    await renderWith([setting(LOCALE, '"en"')]);
+  // 🔴 AN EMPTY FIELD IS A CHOICE, NOT AN UNFINISHED FORM — it stores JSON `null`,
+  // meaning "no instance-wide default; each viewer's browser decides". This is the
+  // state the setting SHIPS in, and the first version of this editor could not express
+  // it at all: the field refused to be emptied and the shipped default was a concrete
+  // "en", which every unconfigured instance then applied over every viewer's browser
+  // language. The screen says what the empty state does, so it does not read as a form
+  // waiting to be filled.
+  it('saves an emptied field as null, and says what that means', async () => {
+    await renderWith([setting(LOCALE, '"es"')]);
     fireEvent.change(tagField(), { target: { value: '' } });
 
-    expect(await screen.findByText(/reset this setting/i)).toBeTruthy();
-    expect(saveButton().disabled).toBe(true);
+    expect(await screen.findByText(/no instance-wide default/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, 'null'));
+  });
+
+  // The other direction: a stored null loads AS the empty field rather than dropping to
+  // the raw editor, so the operator can see and change the state the setting ships in.
+  it('loads a stored null as the empty field rather than as raw JSON', async () => {
+    await renderWith([setting(LOCALE, 'null')]);
+
+    expect(tagField().value).toBe('');
+    expect(screen.queryByRole('textbox', { name: /raw json/i })).toBeNull();
+  });
+
+  // 🔴 The editor emits the CANONICAL form, because the server refuses anything else —
+  // it holds a validator and no normalizer, so whatever it accepts is stored verbatim,
+  // and a stored "  ES-mx " would make this setting read as dirty on load with Save
+  // enabled before anyone typed.
+  it('sends the canonical form of what was typed', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: '  ES-mx ' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, '"es-MX"'));
   });
 
   // 🔴 The counterweight to every block above: a well-formed tag with no catalog in
@@ -535,21 +563,21 @@ describe('locale default editor', () => {
     await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, '"fr"'));
   });
 
-  // A value that is not a string at all cannot be modelled by this editor, so it
-  // must fall back to raw JSON rather than load as blank and then be saved over.
-  // `null` is the case worth naming: the server refuses it now, but an override
-  // stored before that gate existed could still hold one.
-  it('falls back to the raw editor for a value that is not a string', async () => {
-    await renderWith([setting(LOCALE, 'null')]);
-
-    expect(rawJson().value).toContain('null');
-    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
-  });
-
+  // A value that is neither a string NOR null cannot be modelled by this editor, so it
+  // must fall back to raw JSON rather than load as blank and then be saved over — the
+  // full-replace field loss the registry exists to prevent. (`null` is excluded from
+  // this rule on purpose: it is a state this editor models, see above.)
   it('falls back to the raw editor for an object-shaped value', async () => {
     await renderWith([setting(LOCALE, '{"locale":"es"}')]);
 
     expect(rawJson().value).toContain('locale');
+    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
+  });
+
+  it('falls back to the raw editor for a number', async () => {
+    await renderWith([setting(LOCALE, '5')]);
+
+    expect(rawJson().value).toContain('5');
     expect(screen.queryByLabelText(/language tag/i)).toBeNull();
   });
 });

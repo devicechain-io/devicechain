@@ -13,7 +13,7 @@
 // tenant's basemap through the widgets-package hook. That is the whole contract
 // between the console and every map it renders.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { tenantPayload, getCurrentTenantMock } = vi.hoisted(() => ({
@@ -196,5 +196,57 @@ describe('TenantProvider applies the tenant default locale (precedence rung 2)',
 
     await waitFor(() => expect(getCurrentTenantMock).toHaveBeenCalled());
     expect(i18n.resolvedLanguage).toBe('es');
+  });
+});
+
+// 🔴 A tenant default must not outlive the tenant. Leaving the tenant shell — logging
+// out, or crossing to the instance-scoped /admin console — unmounts TenantProvider, and
+// the language has to go back to the rungs that do not need a tenant.
+//
+// This was argued as unnecessary while the browser rung was dead: the shipped
+// `locale.default` was "en", so every tenant carried a default and i18next was never
+// sitting on a browser-detected language to revert TO. With the shipped default now
+// absent, it routinely is.
+describe('TenantProvider hands the language back when it unmounts', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    await i18n.changeLanguage(DEFAULT_LOCALE);
+  });
+
+  it('reverts to the browser language after the tenant shell goes away', async () => {
+    vi.spyOn(window.navigator, 'languages', 'get').mockReturnValue(['en-US', 'en']);
+    tenantPayload.value = { ...(tenantPayload.value as Record<string, unknown>), locale: 'es' };
+
+    const view = render(
+      <TenantProvider>
+        <Probe />
+      </TenantProvider>,
+    );
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+
+    act(() => view.unmount());
+
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe('en'));
+  });
+
+  // The counterweight: the revert re-runs DETECTION, so a user who chose a language
+  // keeps it across the unmount. A cleanup that forced English instead would pass the
+  // test above and take a chosen language away on every logout.
+  it('leaves an explicit user choice in place across the unmount', async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'es');
+    vi.spyOn(window.navigator, 'languages', 'get').mockReturnValue(['en-US', 'en']);
+    await i18n.changeLanguage('es');
+    tenantPayload.value = { ...(tenantPayload.value as Record<string, unknown>), locale: null };
+
+    const view = render(
+      <TenantProvider>
+        <Probe />
+      </TenantProvider>,
+    );
+    await waitFor(() => expect(getCurrentTenantMock).toHaveBeenCalled());
+
+    act(() => view.unmount());
+
+    await waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
   });
 });
