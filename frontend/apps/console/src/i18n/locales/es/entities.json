@@ -279,5 +279,6 @@
   "assetVersionPublishDrawerDescription": "Congela el contrato borrador actual en una nueva versión y hazla la que valida a los activos de este tipo.",
   "assetVersionPublishDrawerTitle": "Publicar contrato de propiedades",
   "assetVersionPublishExplain": "Publicar congela el contrato borrador actual en una nueva versión y la hace la que valida a los activos de este tipo. Las ediciones del borrador solo tienen efecto al publicarse.",
-  "assetVersionRollbackConfirm": "¿Hacer que la versión {{version}} sea el contrato que valida a los activos de este tipo? El borrador no se modifica y las propiedades ya almacenadas no se revalidan."
+  "assetVersionRollbackConfirm": "¿Hacer que la versión {{version}} sea el contrato con el que se validan los nuevos valores de propiedades? El borrador no se modifica y las propiedades ya almacenadas no se revalidan ni se reescriben: los activos que ya no encajan siguen siendo editables hasta que alguien vuelva a escribir sus propiedades.",
+  "assetPropertiesRequiredUnset": "Obligatorio"
 }

@@ -13,11 +13,17 @@
 // each coerced values their own way would produce documents that differ by which
 // screen an operator happened to use.
 //
-// TWO BEHAVIOURS TO KNOW, both inherited from those shared helpers and both stated
-// because they are visible to an operator:
+// 🔴 THE SERIALIZER IS THIS FILE'S OWN, AND buildPayload IS NOT REUSED. That is the
+// one place the asset side must NOT share the command side's behaviour: buildPayload
+// writes every declared BOOLEAN, always, because a command is an actuation and a
+// device should not have to interpret an absent argument. Applied to a stored asset
+// fact the same rule records a claim the operator never made — editing any property
+// on an asset whose optional boolean was never set would write `false` into it — and
+// the API distinguishes absent from false. So booleans render tri-state and an unset
+// one is OMITTED. Everything else coerces exactly as buildPayload does.
 //
-//   - A declared BOOLEAN is ALWAYS written, as true or false. Its checkbox has no
-//     third state, so "absent" is not a value this form can express for one.
+// ONE BEHAVIOUR TO KNOW, stated because it is visible to an operator:
+//
 //   - A STRUCTURED (OBJECT) property cannot be filled in here. Rather than saving a
 //     document with it silently dropped, the panel refuses to open as a form at all
 //     and shows the stored document instead — a partial editor that looked complete
@@ -26,7 +32,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CommandParameter } from '@devicechain/dashboards';
-import { parseParameterSchema, isScalar, validateParams, buildPayload } from '@devicechain/widgets';
+import { parseParameterSchema, isScalar, validateParams } from '@devicechain/widgets';
 import { hasAuthority } from '@devicechain/client';
 import { Button } from '@/components/ui/button';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -58,6 +64,51 @@ function storedValues(document: string | null | undefined): Record<string, strin
     out[k] = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
   }
   return out;
+}
+
+// buildProperties serializes the form's values to the property document. It differs
+// from @devicechain/widgets' buildPayload in exactly one rule — an unset BOOLEAN is
+// omitted rather than written as false — and matches it everywhere else: numbers
+// coerce, empty optional values are omitted, and a document with no entries at all is
+// undefined so the caller can clear the column.
+function buildProperties(
+  params: CommandParameter[],
+  values: Record<string, string>,
+): string | undefined {
+  const doc: Record<string, unknown> = {};
+  for (const p of params) {
+    if (!isScalar(p)) continue;
+    const raw = (values[p.name] ?? '').trim();
+    if (raw === '') continue;
+    if (p.dataType === 'BOOLEAN') {
+      doc[p.name] = raw === 'true';
+      continue;
+    }
+    if (p.dataType === 'INT' || p.dataType === 'DOUBLE') {
+      const n = Number(raw);
+      doc[p.name] = Number.isFinite(n) ? n : raw;
+      continue;
+    }
+    doc[p.name] = raw;
+  }
+  return Object.keys(doc).length === 0 ? undefined : JSON.stringify(doc);
+}
+
+// requiredBooleansLeftUnset is the check validateParams structurally cannot make: it
+// skips BOOLEAN entirely, on the grounds that a checkbox always carries a value. With
+// a tri-state control that stops being true, so a required boolean left unset would
+// otherwise be silently omitted and refused by the server instead of by the form.
+function requiredBooleansLeftUnset(
+  params: CommandParameter[],
+  values: Record<string, string>,
+  message: string,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const p of params) {
+    if (!isScalar(p) || p.dataType !== 'BOOLEAN' || !p.required) continue;
+    if ((values[p.name] ?? '') === '') errors[p.name] = message;
+  }
+  return errors;
 }
 
 export function AssetPropertiesPanel({
@@ -95,15 +146,18 @@ export function AssetPropertiesPanel({
   }, [asset.token, asset.properties]);
 
   const save = async () => {
-    const found = validateParams(params, values);
+    const found = {
+      ...validateParams(params, values),
+      ...requiredBooleansLeftUnset(params, values, t('entities:assetPropertiesRequiredUnset')),
+    };
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     setBusy(true);
     try {
-      // buildPayload returns undefined when no property contributes a value, which is
-      // exactly the "this asset carries none" state — sent as an explicit null so the
-      // stored document is cleared rather than left behind.
-      const payload = buildPayload(params, values);
+      // undefined when no property contributes a value, which is exactly the "this
+      // asset carries none" state — sent as an explicit null so the stored document is
+      // cleared rather than left behind.
+      const payload = buildProperties(params, values);
       await updateAsset(asset.token, { properties: payload ?? null });
       toast(t('entities:assetPropertiesSavedToast'));
       onSaved();
@@ -157,6 +211,7 @@ export function AssetPropertiesPanel({
         values={values}
         errors={errors}
         disabled={!canWrite}
+        booleanTriState
         onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
       />
       {canWrite && (

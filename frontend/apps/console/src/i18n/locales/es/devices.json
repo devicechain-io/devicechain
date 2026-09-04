@@ -218,5 +218,8 @@
   "replacedByColumn": "Por",
   "replacementReasonColumn": "Motivo",
   "newUnitColumn": "Unidad nueva",
-  "retiredCredentialsColumn": "Credenciales retiradas"
+  "retiredCredentialsColumn": "Credenciales retiradas",
+  "booleanUnset": "Sin definir",
+  "booleanTrue": "Verdadero",
+  "booleanFalse": "Falso"
 }

@@ -74,6 +74,25 @@ type entity struct {
 	// already depends on.
 	ReadVars map[string]any
 
+	// Requires names TYPE.FIELD pairs the baseline must declare for this row to be
+	// seedable — the FIELD-level check `supports` otherwise refuses to make.
+	//
+	// 🔑 IT IS OPT-IN PER ROW, WHICH IS WHAT MAKES IT SAFE. baseline.go's header
+	// explains why field-checking every row would be a fail-open dressed as caution:
+	// a later release adding one field to a covered type would silently skip the
+	// WHOLE entity, trading that field for the loss of every other field on the row,
+	// in a tool whose job is to notice loss. Naming the requirement here inverts
+	// that: a row is skipped only for the field it was WRITTEN for, and a row that
+	// names none is matched by name exactly as before.
+	//
+	// The rule for using it: a row that carries a Requires must be a LEAF — no
+	// Record, and nothing may read its token out of the state — because a skipped
+	// row that others depend on is refused rather than skipped, which turns the
+	// escape hatch back into a hard failure. Dependents derive its token with
+	// state.tok and carry the SAME Requires, so a dependent can never outlive the
+	// row it needs.
+	Requires []string
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -704,22 +723,46 @@ var entities = []entity{
 		Mutation: "createAssetType",
 		Input:    "AssetTypeCreateRequest!",
 		Read:     "assetTypesByToken",
+		Fields:   "token name description imageUrl icon backgroundColor foregroundColor borderColor metadata",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": brandedType(s.tok("asset-type"), "apiprobe asset type",
+				"Parent of the probe asset.", meta("asset-type"))}
+		},
+		Record: record("assetType"),
+	},
+	{
+		// Depends on: nothing. A SECOND asset type, carrying a draft property contract —
+		// the thing publishAssetType freezes and every asset property is checked against.
+		//
+		// 🔴 IT IS ITS OWN ROW RATHER THAN A FIELD ON THE ONE ABOVE, and that is the
+		// whole point of Requires. `supports` matches mutation, read and input by NAME
+		// only, deliberately: field-checking a shared row would trade one new field for
+		// the silent loss of every other field on it. So the schema-bearing create is
+		// SPLIT OUT, where skipping it costs exactly itself. The row above keeps seeding
+		// against every baseline; this one appears from the release that can express it.
+		//
+		// It deliberately does NOT Record. A recorded row cannot be skipped at all (plan
+		// refuses it, because dependents would send an empty token), and the two rows
+		// that reference this one derive its token with state.tok instead — a pure
+		// function of the name, so it is the same string whether or not this row ran.
+		//
+		// activeVersion is NOT in the selection, for the same reason the profile's is
+		// not: the publish phase advances it AFTER this row is recorded, so comparing it
+		// at verify would report a healthy run as MISMATCH.
+		Name:     "asset-type-schema",
+		Area:     "device-management",
+		Mutation: "createAssetType",
+		Input:    "AssetTypeCreateRequest!",
+		Read:     "assetTypesByToken",
+		Requires: []string{"AssetTypeCreateRequest.propertySchema"},
 		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
 			"metadata propertySchema",
 		Vars: func(s *state) map[string]any {
-			req := brandedType(s.tok("asset-type"), "apiprobe asset type",
-				"Parent of the probe asset.", meta("asset-type"))
-			// The DRAFT property contract. It is seeded here rather than left null because
-			// publishAssetType refuses a type that has none, so without it the publish that
-			// fills asset_type_versions could not run at all.
-			//
-			// activeVersion is deliberately NOT in the selection above, for the same reason
-			// the profile's is not: the publish phase advances it AFTER this entity is
-			// recorded, so comparing it at verify would report a healthy run as MISMATCH.
+			req := brandedType(s.tok("asset-type-schema"), "apiprobe asset type with a contract",
+				"Declares what its assets carry.", meta("asset-type-schema"))
 			req["propertySchema"] = probeAssetPropertySchema
 			return map[string]any{"req": req}
 		},
-		Record: record("assetType"),
 	},
 	{
 		// Depends on: asset-type.

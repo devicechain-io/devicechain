@@ -119,13 +119,20 @@ func (api *Api) PublishAssetType(ctx context.Context, token string,
 // untouched, so a bad publish is reverted instantly and can be rolled forward again.
 // Returns gorm.ErrRecordNotFound if the type or the target version does not exist.
 //
-// 🔴 It does NOT re-validate assets already stored. Conformance is enforced when a
-// property document is WRITTEN, against the version active at that moment; rolling
-// back to a narrower contract can therefore leave stored documents that no longer
-// satisfy it, and nothing sweeps for them. That is the same shape as a device whose
-// profile rolls back to a version declaring fewer metrics, and it is stated here
-// rather than implied because the alternative — a comment claiming stored properties
-// always conform — would be an invariant nothing enforces.
+// 🔴 It does NOT re-validate assets already stored, and — since the gate in
+// UpdateAsset runs only when the document or the type actually moves — those assets
+// stay EDITABLE. Conformance is enforced when a property document is WRITTEN, against
+// the version active at that moment; rolling back to a narrower contract can
+// therefore leave stored documents that no longer satisfy it, nothing sweeps for
+// them, and renaming one is not refused on their account.
+//
+// The last clause is the one that had to be earned rather than asserted. This comment
+// previously said stored assets were not rechecked while UpdateAsset rechecked them
+// on EVERY write, so a rename after a rollback failed with `unknown property "x"` —
+// the comment was false on the very next write, and TestRenameAfterRollbackIsNotRefused
+// is what now holds it true. That mattered beyond tidiness: once assets diverge, no
+// version satisfies all of them, so an every-write gate leaves some set of them
+// permanently uneditable whichever version the operator rolls to.
 func (api *Api) RollbackAssetType(ctx context.Context, token string, version int32) (*AssetType, error) {
 	assetType, err := api.assetTypeByToken(ctx, token)
 	if err != nil {

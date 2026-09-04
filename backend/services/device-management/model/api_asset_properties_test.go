@@ -89,6 +89,16 @@ func TestAssetTypeDraftSchemaIsValidatedOnWrite(t *testing.T) {
 		schema string
 	}{
 		{"not an array", `{"name":"vendor","dataType":"STRING"}`},
+		// 🔴 THE LITERAL null, AND IT USED TO BE ACCEPTED. It unmarshals into a slice as
+		// a nil slice with no error, so it passed the decoder, stored as a non-nil column
+		// holding jsonb null, and published — PublishAssetType's "no draft" test is
+		// pointer-nil, which a column holding `null` passes. The result was a version
+		// whose NOT NULL property_schema was `null`, behaving as an empty contract while
+		// reading as though nothing had been declared. The padding is deliberate: the
+		// check has to see past whitespace.
+		{"the literal null", ` null `},
+		{"a JSON string", `"vendor"`},
+		{"a JSON number", `42`},
 		{"not JSON at all", `[{`},
 		{"unknown constraint key", `[{"name":"psi","dataType":"INT","maximum":10}]`},
 		{"empty property name", `[{"dataType":"STRING"}]`},
@@ -473,6 +483,99 @@ func TestAssetRetypeRevalidatesTheStoredProperties(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// 🔴 THE ROLLBACK ESCAPE HATCH HAS TO ACTUALLY LET GO. RollbackAssetType promises
+// that stored properties are not rechecked; the gate in UpdateAsset is what makes
+// that true, by running only when the document or the type actually moves.
+//
+// Before that gate existed the promise was false on the very next write: after
+// rolling back from a contract that added `serial` to one declaring only `vendor`,
+// renaming an asset that had filled `serial` was refused with `unknown property
+// "serial"`. The rollback is offered as the way out of a contract nobody can satisfy,
+// so a rollback that leaves assets uneditable is not an escape hatch.
+//
+// The second half is why it matters beyond one refused rename: once assets DIVERGE —
+// one filled the new property, one did not — no version satisfies both, so an
+// every-write gate strands one set whichever version the operator picks.
+func TestRenameAfterRollbackIsNotRefused(t *testing.T) {
+	api, ctx := assetPropertyTestApi(t)
+	seedTypeWithSchema(t, api, ctx, "pump", `[{"name":"vendor","dataType":"STRING"}]`, true)
+
+	// An asset that satisfies v1 and will still satisfy it afterwards.
+	_, err := api.CreateAsset(ctx, &AssetCreateRequest{
+		Token: "old", AssetTypeToken: "pump", Properties: strp(`{"vendor":"Acme"}`),
+	})
+	require.NoError(t, err)
+
+	// v2 replaces the vocabulary outright.
+	_, err = api.UpdateAssetType(ctx, "pump", &AssetTypeUpdateRequest{
+		PropertySchema: dcgraphql.OptionalStringOf(`[{"name":"serial","dataType":"STRING"}]`),
+	})
+	require.NoError(t, err)
+	_, err = api.PublishAssetType(ctx, "pump", nil, nil, "alice")
+	require.NoError(t, err)
+
+	// An asset that satisfies v2 and not v1. The two now DIVERGE.
+	_, err = api.CreateAsset(ctx, &AssetCreateRequest{
+		Token: "new", AssetTypeToken: "pump", Properties: strp(`{"serial":"SN-1"}`),
+	})
+	require.NoError(t, err)
+
+	_, err = api.RollbackAssetType(ctx, "pump", 1)
+	require.NoError(t, err)
+
+	// BOTH must still be editable, and that is the whole claim: under v1 the `new`
+	// asset is non-conformant and the `old` one is not, so a test that renamed only
+	// one of them would pass with the gate half-removed.
+	for _, token := range []string{"old", "new"} {
+		_, err := api.UpdateAsset(ctx, token, &AssetUpdateRequest{
+			Name: dcgraphql.OptionalStringOf("Renamed " + token),
+		})
+		require.NoError(t, err, "renaming %q was refused for stored non-conformance", token)
+	}
+
+	// The stored documents are untouched by the renames — the gate skips the check,
+	// it does not rewrite or drop the column.
+	rows, err := api.AssetsByToken(ctx, []string{"new"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.JSONEq(t, `{"serial":"SN-1"}`, string(*rows[0].Properties))
+}
+
+// THE COUNTERWEIGHT to the test above, and it is not optional: a gate that skipped
+// the check on every update would pass that one too. Sending the document still
+// validates it, even when the stored one is already non-conformant.
+func TestSendingPropertiesIsStillValidatedAfterARollback(t *testing.T) {
+	api, ctx := assetPropertyTestApi(t)
+	seedTypeWithSchema(t, api, ctx, "pump", `[{"name":"vendor","dataType":"STRING"}]`, true)
+	_, err := api.UpdateAssetType(ctx, "pump", &AssetTypeUpdateRequest{
+		PropertySchema: dcgraphql.OptionalStringOf(`[{"name":"serial","dataType":"STRING"}]`),
+	})
+	require.NoError(t, err)
+	_, err = api.PublishAssetType(ctx, "pump", nil, nil, "alice")
+	require.NoError(t, err)
+	_, err = api.CreateAsset(ctx, &AssetCreateRequest{
+		Token: "p-1", AssetTypeToken: "pump", Properties: strp(`{"serial":"SN-1"}`),
+	})
+	require.NoError(t, err)
+	_, err = api.RollbackAssetType(ctx, "pump", 1)
+	require.NoError(t, err)
+
+	// Re-sending the stored document is now a WRITE of a non-conformant document, and
+	// it is refused — the operator is choosing to write it, which is the moment the
+	// contract applies.
+	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+		Properties: dcgraphql.OptionalStringOf(`{"serial":"SN-2"}`),
+	})
+	require.Error(t, err, "sending a document must still be checked against the active contract")
+
+	// And writing one that DOES satisfy v1 succeeds, which is how the asset is
+	// brought back into conformance.
+	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+		Properties: dcgraphql.OptionalStringOf(`{"vendor":"Acme"}`),
+	})
+	require.NoError(t, err)
+}
+
 // Clearing the document is how an asset stops carrying properties, and it is allowed
 // as long as the contract demands nothing.
 func TestAssetPropertiesCanBeCleared(t *testing.T) {
@@ -488,6 +591,50 @@ func TestAssetPropertiesCanBeCleared(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Nil(t, updated.Properties)
+}
+
+// The literal `null` as a property DOCUMENT means the same thing as sending none, and
+// is stored that way. Two spellings reaching the column would mean a reader had to
+// know that the four-character string "null" is not a document — and the console does
+// hand this value to JSON.parse and then to a property form.
+//
+// Unlike a device profile's location declaration, where nil and `{}` are a
+// distinction worth preserving, nil and null here say the identical thing: the asset
+// carries no properties.
+func TestALiteralNullPropertyDocumentIsStoredAsNone(t *testing.T) {
+	api, ctx := assetPropertyTestApi(t)
+	seedTypeWithSchema(t, api, ctx, "pump", `[{"name":"psi","dataType":"INT"}]`, true)
+
+	created, err := api.CreateAsset(ctx, &AssetCreateRequest{
+		Token: "p-1", AssetTypeToken: "pump", Properties: strp(`null`),
+	})
+	require.NoError(t, err)
+	require.Nil(t, created.Properties, "the literal null was stored as a document")
+
+	// And on the update path, which reaches the column through a different projection.
+	_, err = api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+		Properties: dcgraphql.OptionalStringOf(`{"psi":40}`),
+	})
+	require.NoError(t, err)
+	updated, err := api.UpdateAsset(ctx, "p-1", &AssetUpdateRequest{
+		Properties: dcgraphql.OptionalStringOf(` null `),
+	})
+	require.NoError(t, err)
+	require.Nil(t, updated.Properties, "the literal null was stored as a document on update")
+}
+
+// The counterweight: an EMPTY ARRAY is still a publishable draft. The array check
+// added for the literal null must reject a non-array, not a short one — `[]` is the
+// reachable "declares nothing" state and TestPublishAssetTypeAcceptsAnEmptyContract
+// depends on it surviving declaration.
+func TestAnEmptyArrayIsStillAValidDraft(t *testing.T) {
+	api, ctx := assetPropertyTestApi(t)
+	created, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{
+		Token: "pump", PropertySchema: strp(`  []  `),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, created.PropertySchema)
+	require.JSONEq(t, `[]`, string(*created.PropertySchema))
 }
 
 // ---------------------------------------------------------------------------

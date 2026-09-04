@@ -54,6 +54,23 @@ func validateAssetPropertySchemaInput(raw *string) (*datatypes.JSON, error) {
 	if len(bytes.TrimSpace([]byte(*raw))) == 0 {
 		return nil, nil
 	}
+	// 🔴 THE DOCUMENT MUST BE AN ARRAY, AND decodeSpecsStrict DOES NOT SAY SO. A JSON
+	// `null` unmarshals into a slice as a nil slice with NO error, so without this
+	// check the literal `null` was accepted as a draft, stored as a non-nil column
+	// holding jsonb null, published (PublishAssetType's "no draft" test is
+	// pointer-nil, which this passes), and then read back by decodeSpecsStrict as an
+	// empty contract — a published version whose NOT NULL property_schema is `null`,
+	// behaving as `[]` while looking like nothing was ever declared.
+	//
+	// The check is here rather than inside decodeSpecsStrict because that decoder is
+	// shared with the command path, where a null parameter schema is the documented
+	// free-form case. This contract has no free-form case: a type either declares no
+	// contract (a nil column, which the caller expresses by sending null the GraphQL
+	// way, not as the four characters n-u-l-l) or declares a list, possibly empty.
+	if trimmed := bytes.TrimSpace([]byte(*raw)); len(trimmed) == 0 || trimmed[0] != '[' {
+		return nil, fmt.Errorf(
+			"propertySchema must be a JSON array of property descriptors (send null to declare none)")
+	}
 	specs, err := decodeSpecsStrict([]byte(*raw))
 	if err != nil {
 		return nil, fmt.Errorf("propertySchema: %w", err)
@@ -63,6 +80,29 @@ func validateAssetPropertySchemaInput(raw *string) (*datatypes.JSON, error) {
 	}
 	stored := datatypes.JSON([]byte(*raw))
 	return &stored, nil
+}
+
+// jsonNullToNil collapses a property document that is the JSON literal `null` onto
+// the nil column value, so "this asset carries no properties" has ONE representation
+// in storage.
+//
+// Without it, `properties: "null"` stored a non-nil column holding jsonb null, which
+// reads back out of the resolver as the four-character string "null" — a value no
+// client can tell from a document, and one the console would hand to JSON.parse and
+// then to a property form. `null` and absent mean the same thing here (unlike a
+// profile's location declaration, where nil and `{}` are a distinction worth
+// keeping), so collapsing them loses nothing and removes a second spelling.
+//
+// It runs on the way IN, so the column never holds the value rather than every
+// reader having to know about it.
+func jsonNullToNil(doc *datatypes.JSON) *datatypes.JSON {
+	if doc == nil {
+		return nil
+	}
+	if string(bytes.TrimSpace([]byte(*doc))) == "null" {
+		return nil
+	}
+	return doc
 }
 
 // validateAssetProperties checks an asset's property document against the ACTIVE

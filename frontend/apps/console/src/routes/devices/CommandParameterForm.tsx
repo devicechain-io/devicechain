@@ -14,6 +14,7 @@ import type { CommandParameter } from '@devicechain/dashboards';
 import { isScalar } from '@devicechain/widgets';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { Combobox } from '@/components/ui/combobox';
@@ -34,6 +35,17 @@ function numericStep(dataType: string | undefined): number | 'any' {
 // Hoisted for the same lint reason as numericStep above.
 function checkedToParamValue(checked: boolean | 'indeterminate'): 'true' | 'false' {
   return checked ? 'true' : 'false';
+}
+
+// boolTriStateValue folds any stored spelling onto the three the control offers, so a
+// value that is neither 'true' nor 'false' — including the empty string a never-set
+// property carries — lands on "unset" rather than on a segment nothing matches.
+const BOOL_UNSET = '';
+const BOOL_TRUE = 'true';
+const BOOL_FALSE = 'false';
+
+function boolTriStateValue(raw: string | undefined): '' | 'true' | 'false' {
+  return raw === 'true' ? 'true' : raw === 'false' ? 'false' : '';
 }
 
 // describe builds the muted helper line under an input from whatever the definition
@@ -62,12 +74,25 @@ export function CommandParameterForm({
   errors,
   onChange,
   disabled,
+  booleanTriState = false,
 }: {
   params: CommandParameter[];
   values: Record<string, string>;
   errors: Record<string, string>;
   onChange: (name: string, value: string) => void;
   disabled?: boolean;
+  /**
+   * Render a declared BOOLEAN as unset / true / false instead of as a checkbox.
+   *
+   * 🔴 OFF BY DEFAULT, AND THE DEFAULT IS THE POINT. For a COMMAND a checkbox is
+   * right: an actuation must be complete, so every declared boolean is sent, and
+   * "absent" is not a state the device should have to interpret. For a STORED ASSET
+   * FACT it is wrong in the way that matters — writing `false` for a property the
+   * operator never touched records a claim nobody made, and the API distinguishes
+   * absent from false. A checkbox cannot express three states, so the caller that
+   * needs the third asks for a control that can.
+   */
+  booleanTriState?: boolean;
 }) {
   const { t } = useTranslation('devices');
   if (params.length === 0) return null;
@@ -92,12 +117,29 @@ export function CommandParameterForm({
           return (
             <FormField key={param.name} label={label} description={describe(param, t)}>
               <div className="flex h-10 items-center">
-                <Checkbox
-                  checked={values[param.name] === 'true'}
-                  disabled={disabled}
-                  onCheckedChange={(checked) => onChange(param.name, checkedToParamValue(checked))}
-                />
+                {booleanTriState ? (
+                  <SegmentedControl
+                    options={[
+                      { value: BOOL_UNSET, label: t('booleanUnset') },
+                      { value: BOOL_TRUE, label: t('booleanTrue') },
+                      { value: BOOL_FALSE, label: t('booleanFalse') },
+                    ]}
+                    value={boolTriStateValue(values[param.name])}
+                    onValueChange={(v) => onChange(param.name, v)}
+                    ariaLabel={param.name}
+                    disabled={disabled}
+                  />
+                ) : (
+                  <Checkbox
+                    checked={values[param.name] === 'true'}
+                    disabled={disabled}
+                    onCheckedChange={(checked) => onChange(param.name, checkedToParamValue(checked))}
+                  />
+                )}
               </div>
+              {/* A checkbox can never be invalid, but a tri-state left unset on a
+                  REQUIRED property can, so the error line is rendered here too. */}
+              {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
             </FormField>
           );
         }

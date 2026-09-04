@@ -158,6 +158,9 @@ func (api *Api) CreateAsset(ctx context.Context, request *AssetCreateRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	// The literal `null` means the same thing as no document; store it that way so
+	// the column has one representation of "carries none".
+	propertiesJSON = jsonNullToNil(propertiesJSON)
 	// The property document is checked against the type's ACTIVE PUBLISHED contract
 	// before anything is written, so a create either stores a conformant asset or
 	// stores nothing. A type declaring a required property therefore cannot have an
@@ -242,13 +245,35 @@ func (api *Api) UpdateAsset(ctx context.Context, token string, request *AssetUpd
 	if err != nil {
 		return nil, err
 	}
-	// Validate the RESULTING pair, not the incoming field. Either half can move: a
-	// retype re-points the contract while leaving the document alone, and a document
-	// edit fills a contract that did not move. Checking only what the caller mentioned
-	// would let a retype strand an asset carrying properties its new type never
-	// declared — conformant when it was written, silently not afterwards.
-	if err := api.validateAssetProperties(ctx, updated.AssetType, propertiesJSON); err != nil {
-		return nil, err
+	propertiesJSON = jsonNullToNil(propertiesJSON)
+	// Validate the RESULTING pair whenever either half MOVES — the document was sent,
+	// or the type was re-pointed — and not otherwise.
+	//
+	// 🔴 THE `|| retype` IS THE POINT, and so is the absence of a third case. A retype
+	// re-points the contract while leaving the document alone, so checking only what
+	// the caller mentioned would let it strand an asset carrying properties its new
+	// type never declared. But an update that moves NEITHER half must not run the gate
+	// at all, and an earlier version of this ran it unconditionally.
+	//
+	// That was a trap rather than a stricter rule. Conformance is enforced when a
+	// document is WRITTEN, against the version active at that moment; a rollback then
+	// deliberately leaves stored documents that no longer satisfy the contract, which
+	// RollbackAssetType says in as many words. Re-checking on every write turned that
+	// documented state into an embargo: after rolling back from a contract that added
+	// `serial` to one declaring only `vendor`, RENAMING an asset that had filled
+	// `serial` was refused with `unknown property "serial"`. Worse, once assets
+	// diverge — some filled the new property, some did not — NO version unblocks
+	// everyone, so whichever the operator rolls to strands the other set on any write.
+	//
+	// And it bought no invariant for that cost. The stored non-conformance exists
+	// either way; refusing an unrelated rename does not remove it, it only makes the
+	// asset uneditable. Required-ness is still honestly enforced where it means
+	// something: at document-write time, where an absent document is validated as `{}`
+	// and a declared default does not satisfy a required field.
+	if request.Properties.Set || retype {
+		if err := api.validateAssetProperties(ctx, updated.AssetType, propertiesJSON); err != nil {
+			return nil, err
+		}
 	}
 	updated.Properties = propertiesJSON
 

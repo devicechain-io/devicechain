@@ -33,7 +33,7 @@ design:
 | Premise | What was actually there |
 | --- | --- |
 | "The pattern exists three times over; reuse it." | **Four** times — dashboards, connectors, device profiles, entity groups — and there is **no shared helper**. `backend/core` has nothing version-related; the four are copy-and-adapt descendants and each one's comments say so. This is the fifth. |
-| "Nothing declares a typed field contract; facet keys are the closest thing." | Something does, and completely: `CommandDefinition.ParameterSchema` (ADR-043) declares typed fields and `command_validation.go` validates values against them, in two passes, strictly. That validator is now shared rather than re-spelled. |
+| "Nothing declares a typed field contract; facet keys are the closest thing." | Something does, and completely: `CommandDefinition`'s `ParameterSchema` declares typed fields and `command_validation.go` validates values against them, in two passes, strictly. That validator is now shared rather than re-spelled. |
 
 ## The descriptor is one vocabulary, not two
 
@@ -44,7 +44,7 @@ values that fill it (`required`, `default`, `unit`, `minValue`, `maxValue`, `enu
 
 It was called `CommandParameter` while it had one user. Renaming it was the whole of what made
 reuse honest: giving the asset side that name would have made every asset-side signature read
-as if it were about commands, and writing a structurally identical `AssetPropertyDefinition`
+as if it were about commands, and writing a structurally identical asset-property descriptor
 beside it would have let the two contracts diverge one constraint at a time. `MetricDataType`
 had already crossed the same line — it is the metric vocabulary *and* the command-parameter one
 — so this follows a precedent rather than setting one.
@@ -166,7 +166,7 @@ harness can see that; the fixtures that leave it off cannot.
 ## Properties are not attributes, and the distinction is the point
 
 An asset can already carry `EntityAttribute` rows — free-form, entity-agnostic current-state
-key/values that facet keys classify (ADR-012). Properties are a different thing and live in a
+key/values that facet keys classify. Properties are a different thing and live in a
 different column:
 
 | | Entity attribute | Asset property |

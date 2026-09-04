@@ -443,6 +443,149 @@ func TestAnUnsupportedDEPENDENCYIsRefusedRatherThanSkipped(t *testing.T) {
 	}
 }
 
+// 🔴 THE TEST THAT WOULD HAVE CAUGHT IT, AND DID NOT EXIST. Everything else here
+// either points the baseline at the CURRENT tree (where nothing may be skipped) or at
+// a two-line stub (where everything is). Neither shape is what a drill actually runs:
+// a PREVIOUS RELEASE's schema, which declares the mutation, the read and the input
+// type this table names — and not the FIELD a new row sends through them.
+//
+// That gap is why the asset-property rows reached CI green and died in the upgrade
+// drill with `Field "propertySchema" is not defined by type "AssetTypeCreateRequest"`.
+// supports() answered yes, because it matches names and the names were all there.
+//
+// The stand-in is built from the real current schema with exactly the lines a release
+// predating this feature would not have: the two field declarations and the four
+// version doors. That makes it a faithful older release rather than a hand-written
+// fiction that could agree with the code by construction.
+//
+// It asserts BOTH directions, which is what makes it a control rather than a hope:
+// the three field-gated rows are skipped, and every other row in the whole table is
+// still supported. A Requires that matched nothing would fail the second half.
+func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T) {
+	current, err := os.ReadFile(filepath.Join("..", "..", "services", "device-management",
+		"graphql", "schema.graphql"))
+	if err != nil {
+		t.Fatalf("read the current device-management schema: %v", err)
+	}
+
+	var kept []string
+	var droppedFields, droppedDoors int
+	for _, line := range strings.Split(string(current), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "propertySchema:") || strings.HasPrefix(trimmed, "properties:") {
+			droppedFields++
+			continue
+		}
+		if strings.HasPrefix(trimmed, "publishAssetType(") ||
+			strings.HasPrefix(trimmed, "rollbackAssetType(") ||
+			strings.HasPrefix(trimmed, "assetTypeVersions(") ||
+			strings.HasPrefix(trimmed, "activeAssetTypeVersion(") {
+			droppedDoors++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	// If the SDL is reshaped so these no longer match, this test would silently become
+	// "the current tree supports everything", which the test above already says.
+	if droppedFields == 0 || droppedDoors == 0 {
+		t.Fatalf("the stand-in removed %d field line(s) and %d door(s); it is no longer "+
+			"standing in for a release without them", droppedFields, droppedDoors)
+	}
+
+	// Every other area is copied verbatim: this is a release missing ONE feature, not a
+	// tree missing every area, and a row skipped for the wrong reason must not be able
+	// to hide behind a missing schema.
+	schemas := map[string]string{"device-management": strings.Join(kept, "\n")}
+	areas, err := os.ReadDir(filepath.Join("..", "..", "services"))
+	if err != nil {
+		t.Fatalf("list services: %v", err)
+	}
+	for _, a := range areas {
+		if !a.IsDir() || a.Name() == "device-management" {
+			continue
+		}
+		for _, ext := range []string{"*.graphql", "*.gql"} {
+			found, _ := filepath.Glob(filepath.Join("..", "..", "services", a.Name(), "graphql", ext))
+			for _, f := range found {
+				body, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatalf("read %s: %v", f, err)
+				}
+				schemas[a.Name()] += string(body) + "\n"
+			}
+		}
+	}
+
+	b, err := loadBaseline(writeBaseline(t, schemas))
+	if err != nil {
+		t.Fatalf("load the stand-in baseline: %v", err)
+	}
+
+	wantSkipped := map[string]bool{
+		"asset-type-schema":     true,
+		"asset-type-version":    true,
+		"asset-with-properties": true,
+	}
+	for _, e := range allEntities() {
+		ok, why := b.supports(e)
+		if wantSkipped[e.Name] {
+			if ok {
+				t.Errorf("%q is supported by a baseline that lacks the field it sends; "+
+					"the seed would be REFUSED by the server instead of skipping the row", e.Name)
+			}
+			// A skipped row must also be SKIPPABLE. plan() refuses rather than skips a row
+			// other rows read a token from, so a Requires on a recorded row turns the
+			// escape hatch into a hard failure — the exact shape this is here to avoid.
+			write, reason, err := plan(e, b)
+			if err != nil {
+				t.Errorf("%q could not be skipped: %v", e.Name, err)
+			}
+			if write {
+				t.Errorf("%q was planned for writing despite being unsupported", e.Name)
+			}
+			if reason == "" {
+				t.Errorf("%q skipped with no reason", e.Name)
+			}
+			continue
+		}
+		if !ok {
+			t.Errorf("%q is skipped by a baseline that only lacks the asset-property "+
+				"fields: %s", e.Name, why)
+		}
+	}
+}
+
+// The narrow unit under the test above: the field scan itself, including the two ways
+// a substring match would say yes when it must say no.
+func TestDeclaresField(t *testing.T) {
+	raw := `input AssetTypeCreateRequest {
+    token: String!
+    # propertySchema: String  -- mentioned in a comment, not declared
+    propertySchemaVersion: String
+}
+
+type Asset {
+    token: String!
+    properties: String
+}
+`
+	if declaresField(raw, "AssetTypeCreateRequest", "propertySchema") {
+		t.Error("a commented-out declaration and a longer field name were read as the field")
+	}
+	if !declaresField(raw, "Asset", "properties") {
+		t.Error("a real declaration on a `type` was not found")
+	}
+	if !declaresField(raw, "AssetTypeCreateRequest", "propertySchemaVersion") {
+		t.Error("a real declaration on an `input` was not found")
+	}
+	if declaresField(raw, "Asset", "propertySchema") {
+		t.Error("a field declared on ANOTHER type was attributed to this one")
+	}
+	if declaresField(raw, "NoSuchType", "properties") {
+		t.Error("a type the schema does not declare answered yes")
+	}
+}
+
 // writeBaseline lays out a throwaway `backend/services`-shaped tree.
 func writeBaseline(t *testing.T, schemas map[string]string) string {
 	t.Helper()
