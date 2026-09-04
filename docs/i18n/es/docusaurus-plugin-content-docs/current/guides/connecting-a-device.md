@@ -11,6 +11,40 @@ Los dispositivos se conectan a DeviceChain mediante **MQTT** (servido directamen
 La ingesta por MQTT y HTTP están disponibles. **Las conexiones se protegen a nivel del broker:** los listeners de MQTT/NATS son **TLS**, y un auth-callout de NATS autentica cada conexión y la vincula a los subjects de ese único dispositivo, de modo que un dispositivo solo puede publicar sus propios eventos y leer sus propios comandos. La autenticación del dispositivo también se aplica **por evento** mediante credencial, y el modo de autenticación de dispositivo predeterminado es **`required`** — por lo que se espera una credencial tanto en la conexión como en el evento. Consulte [Credenciales de dispositivo](./device-credentials.md). Los dispositivos restringidos pueden conectarse en su lugar sobre CoAP/UDP con DTLS mediante la [ingesta LwM2M](../concepts/lwm2m.md), y las flotas heredadas mediante [Sparkplug B](../concepts/sparkplug.md); ambos autentican en el handshake del transporte en lugar de por evento. Aún están planificados un transporte WebSocket y el flujo completo de aprovisionamiento/reclamación de autoservicio.
 :::
 
+:::danger Tres identificadores, tres funciones — y a los tres se les llama «token» en algún sitio
+Conectar un dispositivo por MQTT significa acertar con **tres identificadores distintos**. Cumplen
+funciones diferentes, no son intercambiables, y a todos se les llama token o id en algún lugar de la
+consola. Lea esto una vez y el resto de la página cobrará sentido.
+
+**1. El token del dispositivo** — la identidad del dispositivo en el registro, p. ej. `sensor-001`.
+Usted lo elige. Es el campo `device` del cuerpo del evento **y** el segmento `{token}` del topic, y
+ambos deben coincidir: un evento que dice venir de un dispositivo distinto al de su topic se rechaza.
+
+**2. El id de credencial** — lo que el dispositivo presenta para demostrar que es él mismo. La consola
+lo etiqueta **Access token** en una credencial `ACCESS_TOKEN` y **Username** en `MQTT_BASIC`. Autentica
+dos veces: en la conexión MQTT y de nuevo por evento en el pipeline.
+
+  🔴 **El nombre de usuario MQTT no es el id de credencial por sí solo — es `{tenant}:{credentialId}`.**
+  Copiar el valor «Username» de la consola directamente al cliente es el fallo de conexión más común.
+
+**3. El client id de MQTT** — `{instanceId}:{tenant}:{deviceToken}`. Este **no aparece en ninguna parte
+de la consola**, y el broker rechaza cualquier otro valor, incluido el aleatorio que inventa su
+biblioteca cliente cuando usted no lo fija. Es una clave de sesión, no una etiqueta; vea
+[MQTT](#mqtt) más abajo para saber por qué debe derivarse así y cómo abrir más de una conexión por
+dispositivo.
+
+**Cómo se tuercen las cosas.** Una conexión rechazada se **cierra, no se responde** — su cliente
+informa de un reset o un EOF inesperado, nunca de un fallo de autorización, y un dispositivo que
+reconecta automáticamente entrará en bucle. Así que los tres errores se ven idénticos desde el
+dispositivo. Si un dispositivo no consigue conectar, revise el client id, luego el prefijo
+`{tenant}:` del nombre de usuario, y después la credencial en sí — en ese orden, porque ese es el
+orden de frecuencia con que cada uno es la causa.
+
+Y un cuarto, más adelante: el `token` del sobre de un **comando** identifica al *comando*, no al
+dispositivo. Devolver el token del dispositivo en una respuesta de comando no coincide con nada y la
+respuesta se descarta — vea [Respuesta a un comando](#responding-to-a-command).
+:::
+
 ## El cuerpo del evento
 
 Todo evento entrante — sobre cualquier transporte — es un objeto JSON:

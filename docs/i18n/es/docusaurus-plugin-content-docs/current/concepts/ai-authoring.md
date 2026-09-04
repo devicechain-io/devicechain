@@ -50,11 +50,31 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 - **Empaquetado de IA** — la matriz de concesión entre niveles que mapea qué modelos puede usar cada nivel.
 - **Modelo por inquilino** — configurado en la página de detalle del inquilino, por función, desde el menú derivado del nivel.
 
-## Lo que la IA nunca toca
+## Límites y fronteras {#limits-and-boundaries}
+
+### Lo que la IA nunca toca
 
 - Nunca se ejecuta en la ruta [de detección/REACT](./event-processing.md) en vivo — esa ruta es CEL determinista, replay-correct, sin modelo.
 - Nunca ve los datos de otro inquilino, y no es una puerta trasera privilegiada. (Distinto de la [superficie MCP](./mcp.md), donde un *agente* de IA opera la plataforma bajo el propio token con alcance de inquilino de un usuario.)
 - Los datos comerciales del inquilino (nombres de dispositivos, valores de atributos) y los secretos no son del modelo para exponer; las claves permanecen de solo escritura en el almacén de secretos.
+- **No escribe nada.** Una regla redactada se devuelve para que una persona la revise y la guarde por la vía de autoría habitual, bajo su propio token. La llamada de redacción no persiste nada por sí misma.
+
+### No se admiten claves propias del inquilino (BYOK), y no se admitirán
+
+Un inquilino no puede aportar su propia clave de proveedor. Los proveedores son **configuración del operador a nivel de instancia**: un operador los registra, custodia las claves y decide qué niveles e inquilinos pueden usar qué modelos. La única palanca autoservicio de un inquilino es el indicador binario de consentimiento para la inferencia externa.
+
+Esto es una decisión, no una carencia. Un cliente que necesite ejecutarse con su propia clave y su propia cuenta necesita una instancia dedicada, que es donde acaba también cualquier otra petición de infraestructura por inquilino — y una clave por inquilino dentro de una instancia compartida sería la única pieza de ese aislamiento ofrecida sin el resto.
+
+### Límites
+
+- **Hoy se despacha un solo tipo de proveedor: Anthropic.** La entidad de proveedor está construida sobre una costura preparada para otros, y los demás tipos se rechazan en la escritura hasta que llegue su implementación, en lugar de aceptarse y quedar inertes.
+- **El bucle de reparación está acotado.** Un candidato que el compilador rechaza se le devuelve, con el error del propio compilador, un número fijo y pequeño de veces, y después la petición falla. Nunca se relaja el compilador para que un borrador encaje.
+- **Cada llamada está limitada del lado del servidor** — tamaño del prompt, longitud de la salida, tiempo de espera y una tasa de peticiones por inquilino. Ninguno de estos valores lo aporta quien llama, y ninguno es ilimitado.
+- **Una sola función.** El vocabulario de GA tiene exactamente una función de IA, la redacción de reglas, y es el servicio que llama quien la nombra — quien llama no puede elegir su propia función, porque elegir una función sería elegir un derecho de uso.
+
+### Una excepción deliberada a la puerta de consentimiento
+
+Un operador que prueba la conectividad de un proveedor desde la consola de administración llega al proveedor sin el indicador de consentimiento de ningún inquilino. Esa llamada es el prompt de un operador contra la configuración de un operador — ningún dato de inquilino cruza la frontera — y la clave debe resolverse igualmente. Toda ruta que transporte entrada de un inquilino pasa por la puerta de consentimiento.
 
 ## Ver también
 

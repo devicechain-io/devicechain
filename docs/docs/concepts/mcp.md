@@ -67,13 +67,27 @@ The MCP server is an **OAuth 2.1 resource server**, and `user-management` is its
 
 Clients are **registered by an administrator** (through the admin API) rather than self-registering, so an operator controls which applications may request access and with what redirect URIs.
 
-## What it cannot do (today)
+## Limits and boundaries {#limits-and-boundaries}
+
+Some of these are unfinished work and some are decisions. They are worth telling apart, so each one says which.
+
+**Deliberate, and not scheduled to change:**
 
 - **No writes.** Sending a command or acknowledging an alarm through MCP is planned, but only behind an elevated scope *and* an explicit human confirmation — an assistant will never silently actuate a device.
-- **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time.
+- **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time. Tenancy is never a tool parameter, so there is no argument an agent can vary to reach across.
 - **No arbitrary queries.** Only the curated tool set is reachable; there is no `run_graphql`.
+- **The server holds no credential of its own.** This is stronger than "it does not use a service token": there is no service credential wired into it at all, so there is nothing for a confused-deputy attack to borrow. An agent that has no permission to read something gets the same refusal a person would.
+- **Command payloads are not returned.** `list_commands` gives you a command's name, status and timings; what was sent to the device stays out of the agent's context.
 
-It is also **opt-in** — the `mcp` service is not part of a default deployment and is enabled explicitly by an operator.
+**Bounds you will hit before you hit anything else:**
+
+- Results are paged at 25 by default and 100 at most, and a multi-device lookup takes at most 50 tokens per call. An agent surveying a large fleet pages through it.
+- A single response is capped at 8 MiB; a session idles out after 30 minutes.
+
+**Enabling the service is not enough to use it.** There are two independent switches, and turning on only the first is the common way to end up with a server that answers and cannot be reached:
+
+1. The `mcp` functional area is not in a default deployment; an operator enables it explicitly.
+2. The authorization server on `user-management` is itself off until an issuer URL is configured. Until then, `mcp` starts and serves its metadata, and **no client can obtain a token**. It is a separate switch on purpose: setting the issuer changes a claim on every token the instance mints, not just the ones MCP uses.
 
 ## Related
 

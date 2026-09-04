@@ -301,6 +301,37 @@ credenciales por cliente y permisos de topic **en su propio broker**, que es don
 frontera.
 :::
 
+:::danger Tres identificadores, tres funciones — y en estos transportes ninguno es el que usted escribió
+Todo dispositivo en un transporte de borde lleva **tres** identificadores que cumplen tres funciones
+distintas. Es fácil confundirlos porque dos parecen nombres y el tercero es generado. Aclárelos antes
+de aprovisionar, porque los fallos son todos silenciosos o engañosos.
+
+**1. El ancla de pertenencia a inquilino** — lo que decide a qué inquilino pertenecen los datos. En
+Sparkplug es la **conexión de broker**; en LwM2M es la **identidad PSK autenticada**. Nunca nada que
+venga en el mensaje. Tratado más arriba.
+
+**2. La clave de resolución del dispositivo** — lo que decide *qué dispositivo*. En ambos transportes
+de borde es el **id externo** del dispositivo, y no es algo que el dispositivo elija:
+
+- En Sparkplug es la cadena `group/node[/device]` del topic, p. ej. `plant-a/line-3/press-1`.
+- En LwM2M es el id externo que usted escribió **junto a la identidad PSK en la configuración del
+  servicio** — no el nombre de endpoint (`ep`) que envía el dispositivo. `ep` se registra en el log y
+  por lo demás se ignora. Un dispositivo cuyo firmware envía `ep=urn:imei:35…` nunca será emparejado
+  por él, y nada se lo indicará.
+
+**3. El token del dispositivo** — lo que la consola, la API y todos los eventos usan realmente. Es
+**generado**, no elegido: el id externo contiene con frecuencia `/`, `.`, espacios o caracteres no
+ASCII, nada de lo cual puede contener un token. Así, `plant-a/line-3/press-1` se convierte en algo
+como `sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` en LwM2M). El sufijo desambigua dos ids
+externos que de otro modo se reducirían a la misma cadena.
+
+**La consecuencia práctica:** buscar en la lista de dispositivos el nombre que usted configuró no
+encuentra nada, porque ese nombre vive en el campo **id externo** y la lista muestra tokens. Busque
+por id externo. Y cuando un dispositivo no aparezca en absoluto, revise el identificador 2 antes de
+sospechar del transporte — en LwM2M en particular, una identidad PSK equivocada falla en el
+handshake DTLS, antes del registro, y el rechazo deliberadamente no le dice nada.
+:::
+
 ## LwM2M: lo que un operador debe saber
 
 **Solo se decodifica telemetría en SenML-JSON.** Las notificaciones en cualquier otro formato de

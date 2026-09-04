@@ -274,6 +274,36 @@ identity matters to you, enforce it with per-client credentials and topic permis
 broker**, which is where that boundary actually lives.
 :::
 
+:::danger Three identifiers, three jobs — and on these transports none of them is the one you typed
+Every device on an edge transport carries **three** identifiers doing three different jobs. They
+are easy to confuse because two of them look like names and the third is generated. Get them
+straight before provisioning, because the failures are all silent or misdirected.
+
+**1. The tenancy anchor** — what decides which tenant the data belongs to. On Sparkplug it is the
+**broker connection**; on LwM2M it is the **authenticated PSK identity**. Never anything in the
+message. Covered above.
+
+**2. The device-resolution key** — what decides *which device*. On both edge transports this is the
+device's **external id**, and it is not something the device chooses:
+
+- On Sparkplug it is the topic's `group/node[/device]` string, e.g. `plant-a/line-3/press-1`.
+- On LwM2M it is the external id you wrote **beside the PSK identity in the service configuration**
+  — not the endpoint name (`ep`) the device sends. `ep` is logged and otherwise ignored. A device
+  whose firmware sends `ep=urn:imei:35…` will never be matched by it, and nothing will say so.
+
+**3. The device token** — what the console, the API and every event actually use. It is
+**generated**, not chosen: the external id routinely contains `/`, `.`, spaces or non-ASCII, none of
+which a token may hold. So `plant-a/line-3/press-1` becomes something like
+`sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` for LwM2M). The suffix disambiguates two external
+ids that would otherwise reduce to the same string.
+
+**The practical consequence:** searching the device list for the name you configured finds nothing,
+because that name lives in the **external id** field and the list shows tokens. Search on external
+id. And when a device does not appear at all, check identifier 2 before you suspect the transport —
+on LwM2M in particular, a wrong PSK identity fails at the DTLS handshake, before registration, and
+the refusal deliberately tells you nothing.
+:::
+
 ## LwM2M: what an operator must know
 
 **Only SenML-JSON telemetry is decoded.** Notifications in any other content format are counted and
