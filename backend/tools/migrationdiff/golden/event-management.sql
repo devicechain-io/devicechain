@@ -6,6 +6,8 @@ ALTER TABLE ONLY "event-management".event_management_migrations
  ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, event_id, occurred_time);
+ALTER TABLE ONLY "event-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management".alert_events USING btree (tenant_id);
 CREATE INDEX "idx_event-management_event_anchors_tenant_id" ON "event-management".event_anchors USING btree (tenant_id);
 CREATE INDEX "idx_event-management_location_events_tenant_id" ON "event-management".location_events USING btree (tenant_id);
@@ -106,6 +108,12 @@ CREATE TABLE "event-management".measurement_events (
  classifier bigint,
  unit text,
  data_type character varying(32)
+);
+CREATE TABLE "event-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE TABLE "event-management".state_change_events (
  tenant_id character varying(128) NOT NULL,

@@ -483,10 +483,16 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	//
 	// What it does NOT do, stated because a reader will assume otherwise: it refuses new
 	// REGISTRATIONS and new telemetry, not sessions already installed. A device that
-	// registered before the delete keeps its entry (Update never re-resolves) and stays
-	// CONNECTED in the projection until its lifetime lapses — its telemetry is cut, its
-	// presence is not. Closing that belongs with slice 2's per-area fence, which is the
-	// correctness path; this gate stops the inflow.
+	// registered before the delete keeps its entry here, because Update never re-resolves,
+	// and the entry lapses only when its own lifetime does.
+	//
+	// What that entry can still CAUSE is now bounded elsewhere rather than here. The
+	// presence it would write lands in device-state, whose writes go through the ADR-077
+	// erasure fence (rdb.RegisterTenantFence) like every other tenant-scoped write, so a
+	// stale registration cannot re-create a projection row for a tenant whose data has
+	// been reclaimed. This gate stops the inflow; the fence is the correctness path, and
+	// it is at the area that owns the row rather than at the transport that would have
+	// caused it.
 	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest")
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK

@@ -267,6 +267,27 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
+	// Register the erasure fence (ADR-077) so a write for a tenant this area has
+	// already reclaimed is refused inside the writing transaction.
+	//
+	// It goes here, beside the other three, for the same reason they are here: the
+	// six areas that write tenant rows without any lifecycle gate — device-state,
+	// event-processing, event-management, dashboard-management, ai-inference and
+	// user-management — do not gain one by being remembered, they gain one by there
+	// being nowhere to put a write that does not pass through this callback chain.
+	// Two of those six are the consumer paths carrying the create-on-miss and
+	// ON CONFLICT upserts that ADR-077 verified as resurrection vectors, and neither
+	// has a call site anyone could have wired a gate onto.
+	//
+	// Same table-before-writer note as the journal above: purged_tenants is created by
+	// the AutoMigrate in ExecuteInitialize, behind the migration advisory lock, and no
+	// gorm row operation runs in the gap. The fence FAILS CLOSED on an unreadable
+	// table, so getting that order wrong would wedge startup loudly rather than
+	// silently disarming the fence — which is the direction this check should fail in.
+	if err := RegisterTenantFence(rdb.Database); err != nil {
+		return err
+	}
+
 	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
 }
 

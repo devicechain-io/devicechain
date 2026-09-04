@@ -153,6 +153,25 @@ dependencia estricta de la conectividad de los dispositivos para todos los inqui
 instancia. Los rechazos existen para detener el tráfico pronto, de modo que la recuperación
 no persiga datos que siguen llegando; el borrado en sí no depende de ellos.
 
+**La escritura en las bases de datos se rechaza por separado, y ese rechazo no depende de
+ningún otro servicio.** Desde el momento en que la recuperación alcanza por primera vez la
+base de datos principal y la base de datos de telemetría, cada una rechaza toda escritura
+del inquilino eliminado —llegue por la API, por un flujo que consume un servicio o por un
+trabajo en segundo plano propio— y la comprobación se ejecuta dentro de la misma
+transacción de base de datos que la escritura que rechaza. Esto es lo que convierte la
+garantía en un borrado y no en una limpieza: las filas recuperadas no pueden volver
+mientras la eliminación está en curso, aunque haya fallado todo lo que debía detener el
+tráfico antes. El rechazo se levanta únicamente cuando la eliminación se completa, que es
+también cuando se libera el identificador, de modo que un inquilino nuevo creado con ese
+identificador escribe con normalidad desde su primera petición.
+
+Esto cubre las dos bases de datos, que es donde viven los registros de un inquilino. El
+bróker, el almacén clave-valor y el almacén de objetos se recuperan en las mismas pasadas
+pero no tienen un rechazo equivalente, así que un mensaje o un objeto que llegue tarde se
+recoge en una pasada posterior en lugar de rechazarse —y por eso la eliminación tampoco se
+da por terminada hasta que todos ellos se han mantenido limpios durante la ventana de
+reposo.
+
 **Los conectores de salida están cubiertos por el mismo rechazo**, y es allí donde más
 importa. En todos los demás casos, un mensaje admitido un instante demasiado tarde son
 datos que permanecen en la plataforma hasta que la recuperación llega a ellos. Un conector

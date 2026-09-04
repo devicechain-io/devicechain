@@ -144,6 +144,23 @@ of device connectivity for every tenant on the instance. The refusals exist to s
 traffic early so the reclamation is not chasing data that is still arriving; the erasure
 itself does not depend on them.
 
+**Writing to the databases is refused separately, and that refusal does not depend on any
+other service.** From the moment the reclamation first reaches the main database and the
+telemetry database, each refuses every write for the deleted tenant — whether it arrives
+through the API, through a stream a service consumes, or through a background job of its
+own — and the check runs inside the same database transaction as the write it is refusing.
+This is what makes the guarantee an erasure rather than a cleanup: reclaimed rows cannot
+come back while the deletion is in progress, even if everything that was supposed to stop
+the traffic earlier failed to. The refusal is lifted only when the deletion completes,
+which is also when the token is released, so a new tenant created at that token writes
+normally from its first request.
+
+This covers the two databases, which is where a tenant's records live. The broker, the
+key-value store and the object store are reclaimed by the same passes but have no
+equivalent refusal, so a message or object arriving late is collected on a later pass
+rather than being turned away — which is also why the deletion is not reported as
+finished until every one of them has stayed clean for the settle window.
+
 **Outbound connectors are covered by the same refusal**, and it matters most there. Every
 other place this applies, a message admitted a moment too late is data that stays on the
 platform until the reclamation reaches it. An outbound connector sends a tenant's data to

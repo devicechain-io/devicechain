@@ -55,8 +55,10 @@ const LifecycleActive = "active"
 // commands until the cache warms.
 //
 // That is defensible because of what this gate is FOR. It is not the correctness path
-// for erasure — ADR-077's epoch-bounded per-area fence is, and it runs at the areas that
-// own the data, where it cannot be bypassed by an unreachable authority. This gate exists
+// for erasure — ADR-077's epoch-bounded per-area fence is (rdb.PurgedTenant and the
+// callbacks in rdb.RegisterTenantFence), and it runs at the areas that own the data,
+// inside the writing transaction, where it cannot be bypassed by an unreachable
+// authority, cannot be stale, and cannot be missing from a call site. This gate exists
 // to stop the bleeding early: it cuts the hot flows within one TTL of the operator's
 // delete so the sweep is not chasing rows that are still arriving. Failing closed instead
 // would make user-management a hard dependency of device connectivity for EVERY tenant —

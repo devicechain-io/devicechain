@@ -448,6 +448,124 @@ deletion record that is false).
 What is still missing: nothing renders `elapsesAt` as a live countdown, and the history page has no
 total count to page against — `tenantDeletions` is offset/limit with no envelope.
 
+## 8b. The erasure fence
+
+`backend/core/rdb/tenant_fence.go`. Erasing a tenant's rows is only half of an area's claim. The
+other half is that no more of them arrive — decision 6 of the design is that an area acks *"swept
+AND fenced"*, never *"swept"* — and four verified paths write for a tenant nobody is talking to
+any more: auto-registration re-creating a device root on a cache miss
+(`backend/services/event-sources/adapter/ingest.go`), create-on-miss in device-state's three merge
+paths (`backend/services/device-state/model/api.go`), notification-management's `markTerminal`
+inserting a tombstone that re-wakes the escalation scheduler
+(`backend/services/notification-management/model/api_state.go`), and event-processing's
+`ON CONFLICT … DO UPDATE` upserts re-inserting on any redelivered fact
+(`backend/services/event-processing/model/device_roster_store.go` and its four neighbours).
+
+**The fence is a row in the area's OWN schema, read inside the writing transaction.** Core creates
+`purged_tenants` in every schema it manages, beside the audit journal and for the same reason
+(`backend/core/rdb/rdb.go`), and registers two GORM callbacks beside the tenant-scope predicate
+(`backend/core/rdb/postgres.go`) so a tenant-scoped Create or Update is refused when a fence for
+its tenant stands.
+
+**Why not the lifecycle gate, which already exists.** Three reasons, each of which is on its own
+enough:
+
+- It resolves the tenant's state from another service through a cache that **fails open**, so the
+  answer can be "active" because nobody could answer.
+- It goes **blind exactly when the purge finishes**: completion removes the tenant row, the
+  governance query then errors, and an unresolvable tenant reads as active.
+- It is wired onto **data-plane admission hooks only**. No GraphQL mutation anywhere consults it,
+  and the two areas holding the upsert and create-on-miss vectors — event-processing and
+  device-state — are pure NATS consumers with no admission hook to wire it onto.
+
+The fence has none of those properties, and the last one is the structural argument: it is not a
+check anybody has to remember to add. Every service writes its rows through gorm, and the callback
+chain the fence lives in is the one thing all of those writes share.
+
+🔴 **Be exact about that, because the tempting sentence is stronger than the truth.** The fence is
+a property of the ORM path, not of the database: a statement that never builds a gorm schema —
+raw `Exec`, or a `Create` against a bare `Table(...)` with a map — writes its row with no callback
+running at all. That is what lets the sweep itself work, since the sweep is raw `Exec`. Nothing in
+`backend/services` writes a tenant row that way today, and a trigger or a row-level policy is what
+it would take to make the claim hold at the database instead.
+
+**The audit journal is excluded, and the exclusion is load-bearing** (`backend/core/rdb/audit.go`).
+Its callback is registered after the create hook, which gorm sorts after the commit callback, so an
+audit row is inserted once the mutation it describes has already committed. Fencing it would hand
+the caller `ErrTenantPurged` for a delete that happened — the sweeper being told it failed to remove
+rows it had removed. The journal records what happened and can resurrect nothing.
+
+**A refusal must never be retried forever**, and one consumer had to change for that
+(`backend/services/event-processing/processor/roster_consumer.go`). Its persist-before-ack loop
+retries until the write commits, which is right for a store that is briefly down and catastrophic
+for a refusal that stands for the whole purge: the loop blocks a goroutine serving every tenant, and
+the broker's own purge then removes the message from under it. A fence refusal is treated as poison —
+dropped and acked — because the row it would have written is one the sweep is erasing.
+
+**What it does NOT fence, deliberately.** Deletes and reads. The sweep is a delete, and
+notification-management's retention sweeper deletes its own cleared rows — fencing deletes would
+stop the erasure the fence exists to protect. Reads resurrect nothing, and the residual scan that
+grades the purge is a read.
+
+**Two spellings of the tenant, and both are read.** Most models embed the tenant-scoped mixin and
+carry `tenant_id`, and for those the tenant is in the request context. event-processing's
+projections carry a plain `tenant` column with no embed, deliberately, so the scoping callbacks
+never fire for them and nothing puts a tenant in their context — their tenant is in the row being
+written. A fence reading only the context would be silently off for the area holding two of the
+four vectors.
+
+**It fails closed.** A fence table that cannot be read refuses the write. That is the property a
+remote gate cannot have, and it costs nothing: the fence is in the same schema, on the same
+connection, inside the same transaction as the write being checked, so a query that cannot answer
+is a write that was not going to succeed either.
+
+### Planted before the sweep, lifted before the token
+
+`backend/core/tenantpurge/fence.go`, called from `backend/services/user-management/purge/relational.go`.
+
+The fence is planted in its own committed transaction **before** the sweep runs, on every pass. A
+fence planted inside the sweep's transaction would become visible to other sessions at the instant
+the delete committed, which would stop nothing the delete had not already caught. Planting first is
+what makes the sweep converge instead of racing; the residual scan afterwards is the re-verify.
+
+It carries the same in-transaction precondition the sweep does, and the reason is sharper than the
+sweep's. A sweep misdirected at a live tenant deletes rows — catastrophic and obvious. A fence
+misdirected at a live tenant deletes nothing and **bricks the tenant**: every write it makes from
+that moment is refused, with no row missing to make anyone look.
+
+The **area set is derived from the plan, not listed**. An area is a schema holding its own
+migration bookkeeping table, which is the one object every area has and nothing else does. A
+functional area with no fence table is an **error, not a skip** — skipping would ack "swept and
+fenced" for a schema with no fence, which is the silence this whole design is built to make
+impossible.
+
+The cost of that direction is worth stating rather than discovering: an area whose schema exists but
+whose service no longer runs a current core — an opt-in area that was enabled once and then turned
+off — keeps its migration bookkeeping table, never gets the fence table, and wedges **every** purge
+on the instance until someone drops the schema or starts the service. Pre-GA the remedy is to
+recreate the instance; after GA it wants either a way to retire a schema or a narrower rule.
+
+Lifting is stamping `completed_at`, not deleting the row: what remains is that area's own local
+evidence that it erased that tenant at that epoch, in the schema that held the data. It happens in
+the pass that releases the token and **immediately before** it, and that order is chosen for how it
+fails. Crashing between the two leaves the fences down while the token is still held — the state
+the token hold has already established is safe. The other order would leave the token released
+while the fences still stood, and every write by the successor at that token would be refused,
+permanently, by rows nothing would ever come back to clear.
+
+🔴 **Lifting is safe only because of the token hold**, and the two must not be reasoned about
+separately. A purge completes only once it has been clean for the settle window *and* is older than
+the token hold, which defaults to the full lifetime of a broker credential. By then no session
+minted before the deletion can still authenticate, so there is no pre-deletion writer left for the
+fence to stop.
+
+**The fence table is registered exempt from the sweep**, by a derived rule rather than ten entries
+(`backend/core/tenantpurge/exempt.go`). The honest part is that it does name a tenant: the same
+token the deletion record deliberately retains, on the same reasoning — a record certifying that a
+tenant's data was erased cannot certify anything if it may not say whose. It holds evidence *of* the
+erasure and none of the data erased. Sweeping it would delete, inside the sweep's own transaction,
+the fence that stops writes arriving while the sweep runs.
+
 ## 9. The device plane during a purge
 
 One shared mechanism, `governance.NewTenantLifecycleGate`, wired at the broker auth-callout in
@@ -467,8 +585,8 @@ constructor argument, so it cannot be forgotten — and the lifecycle check miss
 **It fails open, deliberately.** An unresolvable or not-yet-fetched tenant reads as active, so a
 user-management outage lets devices under a purging tenant keep connecting and ingesting until the
 cache warms. That is defensible because of what this gate is *for*: it is not the correctness path
-for erasure — the sweep at each store is — it exists to stop the bleeding early, so the sweep is not
-chasing rows that are still arriving. Failing closed instead would make user-management a hard
+for erasure — the sweep and the fence at each area are (section 8b) — it exists to stop the bleeding
+early, so the sweep is not chasing rows that are still arriving. Failing closed instead would make user-management a hard
 dependency of device connectivity for **every** tenant, trading a bounded window of data the sweep
 would have reclaimed anyway for an instance-wide availability regression.
 

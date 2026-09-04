@@ -35,17 +35,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
+	"github.com/devicechain-io/dc-user-management/purge"
 )
 
 const (
@@ -406,4 +410,168 @@ func TestTheDetectPartitionQueryRunsOnTheRealSchema(t *testing.T) {
 	require.Contains(t, ids, "drill-partition",
 		"the query ran but did not return a row that is demonstrably in the table, so it is "+
 			"reading something other than the DETECT checkpoint")
+}
+
+// TestTheFenceExistsInEveryAreaAndIsPlantedAndLifted drives the ADR-077 erasure fence
+// against a database with every area migrated into it.
+//
+// 🔴 THIS IS THE ONLY PLACE THE FENCE'S CENTRAL CLAIM CAN BE CHECKED. The unit tests
+// prove the callback refuses a write when a row stands; they cannot prove the row can be
+// stood in the first place, because that depends on core having created purged_tenants in
+// EVERY functional area's schema. An area missing the table would leave its writes
+// unfenced while every unit test stayed green, and the coordinator's fail-closed
+// derivation would only discover it during a real customer's deletion.
+//
+// It also pins the direction the plant and the lift move: a planted fence has a null
+// completed_at (it stands), and a lifted one does not (a successor at the released token
+// can write). Asserting only that the rows exist would pass with the two swapped.
+func TestTheFenceExistsInEveryAreaAndIsPlantedAndLifted(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	plan, err := tenantpurge.Classify(ctx, db)
+	require.NoError(t, err)
+
+	const fenced = "fence-drill-tenant"
+	epoch := time.Now().UTC().Add(-time.Hour)
+
+	// 🔴 START FROM A KNOWN-EMPTY STATE, IN EVERY SCHEMA. A first draft cleaned up only
+	// user-management and only at the end, which left a standing fence in the other nine
+	// and a fresh epoch each run — so the second run of this test saw three rows where it
+	// asserts one, and the drill went red on a defect that was entirely the test's. The
+	// preamble of the sweep test above exists for the same reason.
+	clearFences := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), fenced)
+		}
+	}
+	clearFences()
+	t.Cleanup(clearFences)
+
+	schemas, err := tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err, "the fence could not be planted against a real migrated database")
+
+	// The area set is derived from the plan, so assert it against the areas this harness
+	// knows it migrated rather than against itself.
+	require.Len(t, schemas, len(areas),
+		"the fence was planted in %d schema(s) but this database holds %d functional areas — "+
+			"an unfenced area is one whose writes keep being accepted after it acks swept",
+		len(schemas), len(areas))
+	for _, a := range areas {
+		assert.Containsf(t, schemas, a.name, "%s was not fenced", a.name)
+	}
+
+	standing := func(schema string) (total, open int64) {
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*), count(*) FILTER (WHERE completed_at IS NULL) FROM %q.%s WHERE token = ?`,
+			schema, rdb.FenceTable), fenced).Row().Scan(&total, &open))
+		return
+	}
+
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s carries %d fence rows, want exactly one", a.name, total)
+		assert.Equalf(t, int64(1), open, "%s's fence is not standing, so writes for a purged "+
+			"tenant would be admitted there while the sweep ran", a.name)
+	}
+
+	// Planting is idempotent: every pass plants, and a second pass must not double the row.
+	_, err = tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err, "planting is not idempotent, so every pass after the first errors")
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s gained a second row from the second plant", a.name)
+		assert.Equalf(t, int64(1), open, "%s's fence closed on a re-plant", a.name)
+	}
+
+	require.NoError(t, tenantpurge.LiftFence(ctx, db, plan, fenced, time.Now().UTC(), nil))
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s gained a row from the lift", a.name)
+		assert.Zerof(t, open, "%s's fence is still standing after completion, so a successor "+
+			"tenant at the released token could never write and nothing would say why", a.name)
+	}
+
+	// 🔴 A LIFTED FENCE IS RE-OPENED BY THE NEXT PLANT. Lifting happens immediately before
+	// the token is released, so anything that fails in between leaves a purge running with
+	// its fences down — and a plant that treated the completed row as "already there"
+	// would leave that area unfenced for every remaining pass.
+	_, err = tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err)
+	for _, a := range areas {
+		_, open := standing(a.name)
+		assert.Equalf(t, int64(1), open, "%s's fence was not re-opened after a lift, so a purge "+
+			"that failed between lifting and completing would run on unfenced areas", a.name)
+	}
+}
+
+// drillDatabase adapts the drill's gorm handle to the purge store's Database interface.
+// The handle is already in whatever context the store hands it; the drill has no
+// per-request scope of its own.
+type drillDatabase struct{ db *gorm.DB }
+
+func (d drillDatabase) DB(ctx context.Context) *gorm.DB { return d.db.WithContext(ctx) }
+
+// TestTheRelationalStorePlantsItsFenceWhenItSweeps closes the one hole the fence's own
+// tests leave open.
+//
+// 🔴 A MUTATION FOUND THIS: deleting the PlantFence call from Relational.Erase left every
+// test in the tree green. The direct test above proves the fence CAN be planted; nothing
+// proved the store that sweeps a tenant's rows is the thing that plants it. That is the
+// wiring, and it is the half that can be removed by accident — the mechanism keeps
+// working, in a package nobody calls, while every purge acks "swept" over an area whose
+// writes were never stopped.
+//
+// It sweeps a tenant with no rows on purpose. What is under test is not the delete — the
+// test above this one covers that exhaustively — it is that the pass plants before it
+// sweeps, which has to hold on a pass that finds nothing as much as on one that does.
+func TestTheRelationalStorePlantsItsFenceWhenItSweeps(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const fenced = "fence-wiring-tenant"
+	clear := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), fenced)
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+
+	// No precondition: the interlock is user-management's, and iam_tenants holds no row
+	// for this token. What is under test is the plant, not the guard on it.
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	if _, err := store.Erase(ctx, fenced, time.Now().UTC().Add(-time.Hour)); err != nil {
+		require.NoError(t, err)
+	}
+
+	for _, a := range areas {
+		var open int64
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*) FROM %q.%s WHERE token = ? AND completed_at IS NULL`,
+			a.name, rdb.FenceTable), fenced).Row().Scan(&open))
+		assert.Equalf(t, int64(1), open, "the relational store swept %s without fencing it, so "+
+			"its writes for this tenant were never stopped while the sweep ran", a.name)
+	}
+
+	// 🔴 AND BOTH ENDS CARRY THE PRECONDITION, which a mutation showed nothing pinned. A
+	// lift misdirected at a live token takes down the fence protecting a purge that is
+	// still running; the guard that stops it is a parameter, and a parameter passed as nil
+	// looks exactly like one passed correctly at every call site.
+	refused := errors.New("that token names a live tenant")
+	guarded := purge.NewRelational("rdb", drillDatabase{db},
+		func(string) tenantpurge.Precondition { return func(*gorm.DB) error { return refused } })
+	require.ErrorIs(t, guarded.LiftFence(ctx, fenced, time.Now().UTC()), refused,
+		"the store lifted a fence over a refusing precondition")
+	if _, err := guarded.Erase(ctx, fenced, time.Now().UTC()); !errors.Is(err, refused) {
+		t.Fatalf("the store planted over a refusing precondition: %v", err)
+	}
+
+	// And the store lifts what it planted, through the same wiring.
+	require.NoError(t, store.LiftFence(ctx, fenced, time.Now().UTC()))
+	for _, a := range areas {
+		var open int64
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*) FROM %q.%s WHERE token = ? AND completed_at IS NULL`,
+			a.name, rdb.FenceTable), fenced).Row().Scan(&open))
+		assert.Zerof(t, open, "%s's fence outlived the store's own lift", a.name)
+	}
 }

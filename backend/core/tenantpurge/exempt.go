@@ -3,7 +3,11 @@
 
 package tenantpurge
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
+)
 
 // Exemption excuses one table from the sweep, with the reason recorded next to it.
 //
@@ -201,6 +205,9 @@ func exemptionFor(t Table) (Exemption, bool) {
 	if e, ok := migrationTableExemption(t); ok {
 		return e, true
 	}
+	if e, ok := fenceTableExemption(t); ok {
+		return e, true
+	}
 	for _, e := range exemptions {
 		if e.Schema == t.Schema && e.Name == t.Name {
 			return e, true
@@ -221,5 +228,35 @@ func migrationTableExemption(t Table) (Exemption, bool) {
 		Schema: t.Schema, Name: t.Name, Class: ClassExempt,
 		Reason: "gormigrate bookkeeping: one row per applied migration id, for this functional " +
 			"area. Records schema history, never tenant data.",
+	}, true
+}
+
+// fenceTableExemption covers the second table every area carries: the ADR-077 erasure
+// fence, created by core in each schema it manages (see rdb.PurgedTenant).
+//
+// 🔑 THE HONEST PART IS THAT THIS TABLE DOES NAME A TENANT. It is exempt anyway, and not
+// because the token in it is unimportant — it is the same identifier the deletion record
+// deliberately retains, on the same reasoning: a record certifying that a tenant's data
+// was erased cannot certify anything if it may not say whose. What it holds is evidence
+// OF the erasure, not any of the data erased. There is no measurement, no device, no
+// address and no name in it; the columns are a token, the purge cut, and two timestamps.
+//
+// 🔴 SWEEPING IT WOULD DELETE THE FENCE MID-PURGE. The fence is planted before the sweep
+// precisely so writes stop while the sweep runs; a sweep that then deleted it would
+// re-open the area on its own last statement, and every subsequent pass would repeat the
+// cycle while reporting the area clean. The row is not left behind either — the pass that
+// releases the token stamps it completed, which is what lets a successor at that token
+// write. That is the mechanism, not an omission from it.
+func fenceTableExemption(t Table) (Exemption, bool) {
+	if t.Name != rdb.FenceTable {
+		return Exemption{}, false
+	}
+	return Exemption{
+		Schema: t.Schema, Name: t.Name, Class: ClassExempt,
+		Reason: "the ADR-077 erasure fence for this functional area: one row per purge of a " +
+			"token, carrying the token, the purge epoch and when the fence was planted and " +
+			"lifted. It is evidence OF an erasure and holds none of the data erased. Sweeping " +
+			"it would delete, inside the sweep's own transaction, the fence that stops writes " +
+			"arriving while the sweep runs.",
 	}, true
 }

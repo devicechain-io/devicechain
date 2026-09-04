@@ -701,3 +701,64 @@ func TestANoteIsClearedWhenItNoLongerApplies(t *testing.T) {
 	require.Empty(t, h.ledger("acme", *tenant.PurgeEpoch)["tsdb"].Note,
 		"a note that no longer applies must be cleared, not carried forward from the previous pass")
 }
+
+// fencingStore is a store that plants an erasure fence, so the coordinator's
+// fence-lifting step has something to drive.
+type fencingStore struct {
+	fakeStore
+	lifted   []string
+	liftErr  error
+	liftedAt time.Time
+}
+
+func (f *fencingStore) LiftFence(_ context.Context, tenant string, at time.Time) error {
+	if f.liftErr != nil {
+		return f.liftErr
+	}
+	f.lifted = append(f.lifted, tenant)
+	f.liftedAt = at
+	return nil
+}
+
+// 🔴 A TOKEN RELEASED BEHIND A STANDING FENCE IS A TENANT THAT CAN NEVER WRITE, and
+// nothing would be missing to say why — every area would simply refuse, silently, for the
+// life of the instance. So a store that cannot lift its fence must stop the completion
+// rather than be logged past.
+func TestAStoreThatCannotLiftItsFenceBlocksCompletion(t *testing.T) {
+	stuck := &fencingStore{fakeStore: fakeStore{name: "rdb"}, liftErr: errors.New("database is away")}
+	h := newHarness(t, stuck)
+	tenant := h.deleteTenant("acme")
+	epoch := *tenant.PurgeEpoch
+
+	h.pass()
+	h.clock = h.clock.Add(settleWindow + tokenHoldWindow + time.Hour)
+	h.pass()
+
+	require.True(t, h.exists("acme"),
+		"the token was released while this area's fence still stands, so a successor at it "+
+			"could never write and no row would say why")
+	rec, err := h.iam.PurgeRecordFor(context.Background(), "acme", epoch)
+	require.NoError(t, err)
+	require.Nil(t, rec.CompletedAt)
+}
+
+// The positive half: a store that CAN lift is asked exactly once, for the right tenant,
+// and the purge then completes. Without this, the test above passes for a coordinator
+// that never completes anything.
+func TestEveryFencingStoreIsLiftedBeforeTheTokenIsReleased(t *testing.T) {
+	lifter := &fencingStore{fakeStore: fakeStore{name: "rdb"}}
+	plain := &fakeStore{name: "kv"}
+	h := newHarness(t, lifter, plain)
+	h.deleteTenant("acme")
+
+	h.pass()
+	require.Empty(t, lifter.lifted, "the fence was lifted on a pass that did not complete the purge")
+
+	h.clock = h.clock.Add(settleWindow + tokenHoldWindow + time.Hour)
+	h.pass()
+
+	require.False(t, h.exists("acme"), "the purge did not complete, so this proves nothing")
+	require.Equal(t, []string{"acme"}, lifter.lifted,
+		"the fence-planting store was not asked to lift, so the token was released behind a "+
+			"standing fence")
+}
