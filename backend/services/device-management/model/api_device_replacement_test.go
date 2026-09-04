@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -253,6 +254,48 @@ func TestReplaceDeviceWithNoLiveCredentials(t *testing.T) {
 	require.Equal(t, []string{}, result.Replacement.RetiredCredentialTokenList(),
 		"empty retired list did not round-trip as an empty array")
 	require.NotNil(t, result.NewCredential, "no credential minted")
+}
+
+// RetiredCredentialTokenList answers an EMPTY SLICE for a row whose column holds
+// nothing, and for one holding bytes it cannot decode.
+//
+// 🔴 THIS COVERS AN INPUT CLASS NOTHING ELSE IN THIS FILE CAN REACH, and it was found
+// by a surviving mutant rather than by reading the code. Every other test here works
+// through ReplaceDevice, which always writes at least `[]` — two bytes — so the
+// `len(…) == 0` guard is UNREACHABLE from all of them. Replacing its `return tokens`
+// with `return nil` left the whole estate green.
+//
+// The distinction is not cosmetic. The SDL field is `retiredCredentialTokens:
+// [String!]!` — non-null — so a nil here renders null for a non-null field and errors
+// the entire query, not just that field. The rows that can carry a zero-length column
+// are the ones this package did not write: a row restored from elsewhere, or one read
+// back before the column existed.
+func TestRetiredCredentialTokenListIsAlwaysASlice(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stored datatypes.JSON
+	}{
+		{"zero value", nil},
+		{"empty bytes", datatypes.JSON{}},
+		{"sql null", datatypes.JSON("null")},
+		{"not an array", datatypes.JSON(`{"nope":1}`)},
+		{"malformed", datatypes.JSON("[")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := DeviceReplacement{RetiredCredentialTokens: tc.stored}
+			got := record.RetiredCredentialTokenList()
+			require.NotNil(t, got,
+				"a %s column decoded to nil; the non-null SDL field would render null and "+
+					"error the whole query", tc.name)
+			require.Empty(t, got, "a %s column decoded to something", tc.name)
+		})
+	}
+
+	// The counterweight: a real array still decodes, in order. A reader that answered
+	// the empty slice unconditionally would pass every assertion above.
+	record := DeviceReplacement{RetiredCredentialTokens: datatypes.JSON(`["a","b"]`)}
+	require.Equal(t, []string{"a", "b"}, record.RetiredCredentialTokenList(),
+		"a populated retired list did not decode")
 }
 
 // An ALREADY DISABLED credential is not claimed as retired by this replacement. The

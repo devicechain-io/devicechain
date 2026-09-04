@@ -273,16 +273,33 @@ func (api *Api) DeviceReplacements(ctx context.Context,
 }
 
 // RetiredCredentialTokenList decodes the stored JSON array of retired credential
-// tokens. A malformed or absent value yields an empty slice rather than an error:
-// the column is written by ReplaceDevice alone and is always a valid array, so the
-// only way to reach the fallback is corruption — and a read of a history journal
-// should not fail wholesale because one row's annotation is unreadable.
+// tokens, and NEVER returns nil.
+//
+// 🔴 THE NEVER-NIL PART IS A CONTRACT, NOT A COURTESY, and it is enforced on every
+// exit below rather than asserted here. The SDL field is `retiredCredentialTokens:
+// [String!]!` — non-null — so a nil slice renders `null` for a non-null field, which
+// errors the WHOLE query rather than that one field. A journal read failing wholesale
+// because one row's annotation is unreadable is exactly the outcome to avoid.
+//
+// 🔴 THE THIRD EXIT IS THE ONE THAT WAS WRONG, AND A MUTANT IS WHAT FOUND IT. The
+// stored bytes `null` are VALID JSON: Unmarshal succeeds and leaves the slice nil, so
+// a guard covering only "no bytes" and "decode failed" let a nil out through the one
+// path that reported no error at all. Nothing written by ReplaceDevice can be `null`
+// — it always marshals at least `[]` — which is precisely why no test working through
+// ReplaceDevice could reach it. See TestRetiredCredentialTokenListIsAlwaysASlice.
 func (r DeviceReplacement) RetiredCredentialTokenList() []string {
 	tokens := make([]string, 0)
 	if len(r.RetiredCredentialTokens) == 0 {
 		return tokens
 	}
 	if err := json.Unmarshal(r.RetiredCredentialTokens, &tokens); err != nil {
+		return make([]string, 0)
+	}
+	// A SUCCESSFUL decode can still leave a nil slice: `null` unmarshals into one
+	// without error, and so does any JSON whose top level is not an array once the
+	// error branch above has been passed. This is the exit the never-nil contract is
+	// actually enforced on.
+	if tokens == nil {
 		return make([]string, 0)
 	}
 	return tokens
