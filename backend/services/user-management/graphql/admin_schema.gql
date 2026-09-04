@@ -435,10 +435,15 @@ type DeadLetter {
     tenant: String!
     # When the platform gave up, RFC3339.
     occurredTime: String!
-    # What was given up on: detection-action, notification, or command-response.
+    # What was given up on: detection-action, notification, command-response, or
+    # connector-dispatch. A connector-dispatch record is an INDEX entry — the request
+    # itself is kept verbatim on the instance's connector-dispatch dead-letter subject,
+    # located by this record's subject and sequence, so this one carries no payload.
     kind: String!
-    # Why: exhausted (retried to the cap) or unprocessable (accepted, then found to be
-    # something this consumer can never complete).
+    # Why: exhausted (retried to the cap), unprocessable (accepted, then found to be
+    # something this consumer can never complete), or shed (refused on a governed
+    # ceiling — the tenant stayed over its rate for longer than the smoothing budget
+    # allows, so the work is not broken and nothing was attempted).
     reason: String!
     # The functional area that gave up.
     source: String!

@@ -39,6 +39,7 @@ var (
 	CommandResponsesReader   messaging.MessageReader
 	DeviceCommandsWriter     messaging.MessageWriter
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
+	DeadLetterWriteback      *processor.DeadLetterWriteback
 )
 
 func main() {
@@ -115,7 +116,31 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// The other half of that arm: writing the dead letter stops the MESSAGE going round
+	// forever, and this stops the COMMAND reading as though it were still in flight. It
+	// consumes the same stream the writer above publishes to, so a response the platform
+	// gave up on settles its command minutes later — against a database that has had time
+	// to come back, which a write issued from inside the original failure would not have.
+	//
+	// 🔴 BUILT HERE, INSIDE THE CALLBACK, NOT MERELY ITS READER. This function runs in the
+	// NatsManager's ExecuteSTART, not its Initialize, so a component constructed out in
+	// afterMicroserviceInitialized would capture a nil reader by value and panic on its
+	// first read. That defect nearly shipped in the identity service's dead-letter
+	// consumer and nothing in the test estate would have caught it, because nothing
+	// exercises main.go's wiring. Its constructor refuses a nil reader for the same
+	// reason: a wiring mistake must stop the service starting, never turn into a consumer
+	// that reads everything and writes nothing.
+	deadReader, err := nmgr.NewReader(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+	DeadLetterWriteback, err = processor.NewDeadLetterWriteback(Microservice, deadReader, Api,
+		core.NewNoOpLifecycleCallbacks())
+	if err != nil {
+		return err
+	}
+	return DeadLetterWriteback.Initialize(context.Background())
 }
 
 // presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
@@ -346,13 +371,27 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the dead-letter write-back. After the nats manager, whose create callback
+	// builds it — it does not exist until that has run.
+	err = DeadLetterWriteback.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the dead-letter write-back before the broker it reads from and the database it
+	// writes to, in the reverse of the start order.
+	err := DeadLetterWriteback.Stop(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Stop command delivery processor.
-	err := CommandDeliveryProcessor.Stop(ctx)
+	err = CommandDeliveryProcessor.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -380,8 +419,14 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	// Terminate the dead-letter write-back before the nats manager it reads through.
+	err := DeadLetterWriteback.Terminate(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Terminate nats manager.
-	err := NatsManager.Terminate(ctx)
+	err = NatsManager.Terminate(ctx)
 	if err != nil {
 		return err
 	}

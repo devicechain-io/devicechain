@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
@@ -41,6 +42,11 @@ type DispatchConsumer struct {
 	dead     messaging.MessageWriter
 	executor *Executor
 	metrics  *dispatchMetrics
+
+	// deadIndex writes the platform-wide (ADR-024) index entry for a give-up, so an outbound
+	// dispatch the service abandoned appears in the one list an operator reads rather than only on
+	// this service's own terminal subject. See index for why it is best-effort.
+	deadIndex *deadletter.Sink
 
 	// rate is the per-tenant outbound egress limiter (ADR-060 SD-3). nil disables egress rate
 	// limiting (every dispatch admitted; the bounded worker pool + per-send timeout still bound
@@ -76,13 +82,19 @@ type DispatchConsumer struct {
 // is: this is the only consumer in the service, so the property worth buying is that a second one
 // added later cannot be constructed without answering the question.
 func NewDispatchConsumer(ms *core.Microservice, reader messaging.MessageReader, dead messaging.MessageWriter,
-	executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
+	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
 	tenantDeleted func(string) bool, workers, backlog int) *DispatchConsumer {
+	metrics := newDispatchMetrics(ms)
+	var index *deadletter.Sink
+	if deadIndex != nil {
+		index = deadletter.NewSink(deadIndex, func(error) { metrics.recordOutcome(actionUnknown, outcomeDeadIndexFailed) })
+	}
 	return &DispatchConsumer{
 		reader:        reader,
 		dead:          dead,
+		deadIndex:     index,
 		executor:      executor,
-		metrics:       newDispatchMetrics(ms),
+		metrics:       metrics,
 		rate:          rate,
 		waitBudget:    waitBudget,
 		tenantDeleted: tenantDeleted,
@@ -306,7 +318,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			// tenant this fires on.
 			log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
 				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
-			c.deadLetter(tctx, msg, action, outcomeRateLimited)
+			c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
 			return
 		}
 	}
@@ -322,7 +334,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
 				Msg("Connector dispatch dead-lettered after the redelivery cap.")
-			c.deadLetter(tctx, msg, action, outcomeDead)
+			c.deadLetter(tctx, msg, req.RuleID, action, outcomeDead)
 			return
 		}
 		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
@@ -335,7 +347,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		// cannot help, so dead-letter it visibly rather than churn the cap or silently drop it.
 		log.Error().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).
 			Msg("Connector dispatch is terminally undeliverable; dead-lettering.")
-		c.deadLetter(tctx, msg, action, res.outcome)
+		c.deadLetter(tctx, msg, req.RuleID, action, res.outcome)
 	}
 }
 
@@ -361,7 +373,7 @@ const headerDeadReason = "Dc-Dead-Reason"
 // the write a bounded number of times in-process, and if it still fails we record an explicit,
 // alertable LOSS (never the false "will retry") so an operator sees a dispatch that could be neither
 // delivered nor dead-lettered.
-func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Message, action, outcome string) {
+func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Message, rule, action, outcome string) {
 	// Stamp the disposition on the dead-lettered message (not just the metric/log) so an operator or a
 	// future replay tool can tell a healthy-but-rate-shed dispatch (replayable) apart from genuine
 	// poison (unsupported/invalid/permanently-failed) sharing this terminal subject. The header rides
@@ -379,6 +391,14 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 		if err = c.dead.WriteMessages(tctx, dead); err == nil {
 			c.metrics.recordOutcome(action, outcome)
 			c.ack(msg)
+			// 🔑 AFTER THE ACK, DELIBERATELY. The index is best-effort and its sink retries
+			// on its own deadline; running it before the ack would put a bounded-but-slow
+			// broker write between "durably dead-lettered" and "stops redelivering", so a
+			// pod dying in that window would redeliver a dispatch that was already
+			// terminal. Nothing is lost by running it after: the authoritative copy is on
+			// the terminal subject either way, and a lost index entry costs the operator's
+			// VIEW of a give-up rather than the give-up.
+			c.index(tctx, msg, rule, action, outcome)
 			return
 		}
 		if i < attempts-1 {
@@ -402,6 +422,74 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 	// dead-lettering on the next attempt.
 	log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 		Msg("Failed to write connector dispatch to the dead-letter subject; leaving unacked to retry (not yet at the cap).")
+}
+
+// index records the give-up in the PLATFORM's dead-letter list (ADR-024) after the verbatim copy is
+// safely on this service's own terminal subject.
+//
+// 🔴 THE GAP IT CLOSES IS AN OPERATOR SEEING NOTHING, FOREVER. connector-dispatch.dead has no reader,
+// no store and no query surface: a dispatch written there is invisible to the one place an operator
+// asks "what has the platform given up on", and then it ages out with the stream. Every other arm in
+// the platform lands in that list; this one did not, so the list an operator trusts was quietly
+// missing the noisiest egress path in the product.
+//
+// 🔑 IT IS AN INDEX ENTRY, NOT A SECOND COPY. The verbatim request stays where it is — a replay of an
+// outbound send has to be byte-identical, which a summary cannot be — so the envelope carries the
+// original's SUBJECT and SEQUENCE (the fields that exist to locate it) and no Payload. Writing the
+// body twice would double the retention cost of this path to say the same thing.
+//
+// 🔑 BEST-EFFORT, AND THAT IS A DIFFERENT THING FROM FAIL-OPEN HERE. The authoritative record is
+// already durable one line above; failing to write the index loses the operator's VIEW of a give-up,
+// not the give-up itself, and the sink counts every such loss through its own hook. Blocking the ack
+// on it would trade a durable terminal record for a redelivery of a dispatch that has already been
+// given up on — which is how a visibility improvement becomes a duplicate outbound call.
+func (c *DispatchConsumer) index(tctx context.Context, msg messaging.Message, rule, action, outcome string) {
+	if c.deadIndex == nil {
+		return
+	}
+	_ = c.deadIndex.Write(tctx, deadletter.Envelope{
+		Kind:   deadletter.KindConnectorDispatch,
+		Reason: indexReasonFor(outcome),
+		Source: connectorsArea,
+		Summary: "an outbound connector dispatch was given up on; the request itself is on this " +
+			"instance's connector-dispatch dead-letter subject",
+		// 🔴 THE DETAIL IS THE BOUNDED OUTCOME LABEL, NEVER THE ENDPOINT'S OWN ERROR TEXT. A send
+		// failure's message carries the status and address of a destination the TENANT chose, and
+		// this record is read across tenants; the egress boundary closed exactly that oracle.
+		Detail:      action + "/" + outcome,
+		Attempts:    msg.NumDelivered,
+		Subject:     msg.Subject,
+		Sequence:    msg.StreamSeq,
+		Correlation: msg.CorrelationID(),
+		Reference:   rule,
+		OccurredAt:  time.Now().UTC(),
+	})
+}
+
+// connectorsArea is the source recorded on this service's dead letters. It is a literal rather than
+// the Microservice's FunctionalArea because the consumer is constructed with a nil Microservice in
+// tests, and a source that silently became "" would fail the envelope's own validation on the one
+// path that must not fail quietly.
+const connectorsArea = "outbound-connectors"
+
+// indexReasonFor maps this service's terminal outcome onto the platform's bounded reason vocabulary.
+//
+// 🔑 THE RATE-SHED CASE IS WHY THIS IS NOT A ONE-LINER. A shed dispatch is not broken and was never
+// attempted — it is work a governed ceiling refused — so reporting it as "exhausted" would send an
+// operator to inspect a destination that is perfectly healthy, and reporting it as "unprocessable"
+// would call replayable work poison. It gets its own reason.
+func indexReasonFor(outcome string) deadletter.Reason {
+	switch outcome {
+	case outcomeRateLimited:
+		return deadletter.ReasonShed
+	case outcomeUnsupported, outcomeInvalid:
+		return deadletter.ReasonUnprocessable
+	default:
+		// outcomeDead, and anything a later build adds without revisiting this: exhausted is the
+		// vocabulary's own "says nothing about the cause" value, which is the safe default for an
+		// outcome nobody has classified rather than a claim about it.
+		return deadletter.ReasonExhausted
+	}
 }
 
 // tenantIsDeleted reads the ADR-077 lifecycle gate, treating an unconfigured gate as "not deleted".

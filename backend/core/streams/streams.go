@@ -476,8 +476,9 @@ var All = []Stream{
 	// otherwise have a stream the replication check believes should not be there.
 	{Suffix: DeadLetters,
 		Areas: []string{"event-processing", "notification-management", "command-delivery",
-			"device-management", "user-management"},
-		Tier: Cold, Why: "ADR-024 dead-letter sink: four consumers write it, user-management stores it"},
+			"device-management", "user-management", "outbound-connectors"},
+		Tier: Cold, Why: "ADR-024 dead-letter sink: five areas write it, user-management stores it, " +
+			"command-delivery reads it back to settle the commands its letters are about"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

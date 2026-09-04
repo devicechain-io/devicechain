@@ -117,6 +117,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
+	// The ADR-024 index writer. The subject above is this service's own terminal sink and has no
+	// reader, no store and no query surface, so a dispatch written there was invisible to the one
+	// list an operator asks "what has the platform given up on" — and then aged out with the stream.
+	// Every other arm in the platform lands in that list; this one now does too. Created here, beside
+	// the stream it indexes, so a deployment that cannot create it fails at startup rather than at
+	// the first give-up — the one moment the arm has to work.
+	deadIndex, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+
 	// Dispatch reader: a durable pull consumer over the cross-tenant connector-dispatch wildcard.
 	// DeliverNew starts the durable at the stream tail on first creation, so enabling this service on
 	// a running fleet does NOT replay the backlog of dispatch requests event-processing has published
@@ -157,7 +168,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	executor := processor.NewExecutor(resolver, Api, &http.Client{Transport: egressGuard.Transport()},
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
-	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, executor,
+	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, deadIndex, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog)
 	return nil
