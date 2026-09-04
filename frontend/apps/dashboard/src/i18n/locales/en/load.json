@@ -1,0 +1,14 @@
+{
+  "definitionLabel": "Definition (JSON)",
+  "definitionPlaceholder": "Paste an exported dashboard definition…",
+  "errorDefinitionInvalid": "Definition: {{detail}}",
+  "errorDefinitionTooLarge": "Definition is too large (over {{limit}} MiB).",
+  "errorManifestDropped_one": "Binding manifest: {{slots}} was ignored — check the shape (kind + deviceToken, or anchor with a targetToken).",
+  "errorManifestDropped_other": "Binding manifest: {{slots}} were ignored — check the shape (kind + deviceToken, or anchor with a targetToken).",
+  "errorManifestInvalid": "Binding manifest: {{detail}}",
+  "errorManifestNotObject": "Binding manifest must be a JSON object of slot → binding.",
+  "manifestLabel": "Binding manifest (JSON, optional)",
+  "manifestSampleJoiner": "or",
+  "render": "Render",
+  "title": "Load a dashboard"
+}

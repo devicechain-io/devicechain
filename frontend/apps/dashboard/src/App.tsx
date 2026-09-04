@@ -34,10 +34,14 @@ import {
   useSlotCandidates,
 } from '@devicechain/widgets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type { Basemap } from '@devicechain/client';
 
-import { errorMessage, loadDashboard, type Loaded } from './load';
+import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
+import { loadErrorMessage } from './i18n/loadError';
+import { signInErrorKey } from './i18n/signInError';
+import { loadDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 
@@ -79,6 +83,7 @@ export default function App() {
 // error; one auto-selects; many show a picker. selectTenant yields the access token.
 
 function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
+  const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [identityToken, setIdentityToken] = useState<string | null>(null);
@@ -86,13 +91,17 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 🔴 The two `rejectedKey`s differ because the two failures are different facts. At
+  // this point the identity is already proven — the tenant is what did not work — so
+  // reporting "invalid email or password" here would send the viewer to re-type
+  // credentials the server has just accepted.
   const selectTenant = (idToken: string, tenant: string) => {
     setBusy(true);
     setError(null);
     gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
       .then((r) => onAuthed(r.selectTenant.accessToken))
       .catch((err: unknown) => {
-        setError(errorMessage(err));
+        setError(t(signInErrorKey(err, 'signIn:enterTenantFailed')));
         setBusy(false);
       });
   };
@@ -105,7 +114,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
       .then((r) => {
         const { identityToken: idToken, memberships: mships } = r.login;
         if (mships.length === 0) {
-          setError('This account has no tenants.');
+          setError(t('signIn:noTenants'));
           setBusy(false);
           return;
         }
@@ -119,7 +128,9 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
         setBusy(false);
       })
       .catch((err: unknown) => {
-        setError(errorMessage(err));
+        // The backend deliberately does not distinguish a bad email from a bad
+        // password, so neither does this.
+        setError(t(signInErrorKey(err, 'signIn:invalidCredentials')));
         setBusy(false);
       });
   };
@@ -129,7 +140,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
     return (
       <Centered>
         <Card>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Choose a tenant</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{t('signIn:chooseTenant')}</div>
           {error && <ErrorText>{error}</ErrorText>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {memberships.map((m) => (
@@ -142,6 +153,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
               </HeaderButton>
             ))}
           </div>
+          <LocaleSwitcher />
         </Card>
       </Centered>
     );
@@ -151,8 +163,8 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
     <Centered>
       <form onSubmit={submit} style={{ display: 'contents' }}>
         <Card>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Sign in</div>
-          <Field label="Email">
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{t('signIn:title')}</div>
+          <Field label={t('signIn:emailLabel')}>
             <TextInput
               type="email"
               value={email}
@@ -161,7 +173,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
               autoFocus
             />
           </Field>
-          <Field label="Password">
+          <Field label={t('signIn:passwordLabel')}>
             <TextInput
               type="password"
               value={password}
@@ -171,8 +183,9 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
           </Field>
           {error && <ErrorText>{error}</ErrorText>}
           <HeaderButton type="submit" primary disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
+            {busy ? t('signIn:submitting') : t('signIn:submit')}
           </HeaderButton>
+          <LocaleSwitcher />
         </Card>
       </form>
     </Centered>
@@ -184,9 +197,24 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
 // advance. Parse errors show inline; nothing throws to a white screen. The parsing
 // itself is loadDashboard, in load.ts, so a test can drive it.
 
-const MANIFEST_HELP =
-  '{ "slotName": { "kind": "device", "deviceToken": "..." } }  or  ' +
-  '{ "slotName": { "kind": "anchor", "anchor": { "relationship": "...", "targetType": "area", "targetToken": "..." } } }';
+// The two manifest shapes, as JSON templates. Every token in them (`kind`,
+// `deviceToken`, `anchor`, `targetToken`) is a field name the parser matches literally,
+// so translating one would produce a manifest the parser refuses — they stay module
+// consts, and the i18n lint reads them as the code samples they are.
+//
+// 🔴 SPLIT INTO AN ARRAY BECAUSE THE JOINER IS THE ONE PART THAT IS PROSE. This was a
+// single string reading `…} }  or  { {…`, and that "or" is an English word sitting in
+// the middle of what looks like code — the kind of literal an enumeration finds and a
+// glance does not, because the line as a whole reads as a sample. The samples are data;
+// the conjunction between them is copy, and it comes from the catalog below.
+const MANIFEST_SAMPLES = [
+  '{ "slotName": { "kind": "device", "deviceToken": "..." } }',
+  '{ "slotName": { "kind": "anchor", "anchor": { "relationship": "...", "targetType": "area", "targetToken": "..." } } }',
+];
+
+// The manifest box's placeholder: an empty JSON object, i.e. "no overrides". A code
+// sample like MANIFEST_SAMPLES above, never translated.
+const EMPTY_OBJECT = '{ }';
 
 function Load({
   onRender,
@@ -195,6 +223,7 @@ function Load({
   onRender: (loaded: Loaded) => void;
   onSignOut: () => void;
 }) {
+  const { t } = useTranslation();
   const [definitionText, setDefinitionText] = useState('');
   const [manifestText, setManifestText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -202,7 +231,7 @@ function Load({
   const render = () => {
     const result = loadDashboard(definitionText, manifestText);
     if ('error' in result) {
-      setError(result.error);
+      setError(loadErrorMessage(result.error, t));
       return;
     }
     setError(null);
@@ -221,8 +250,9 @@ function Load({
           flex: '0 0 auto',
         }}
       >
-        <div style={{ flex: '1 1 auto', fontWeight: 600 }}>Load a dashboard</div>
-        <HeaderButton onClick={onSignOut}>Sign out</HeaderButton>
+        <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{t('load:title')}</div>
+        <LocaleSwitcher />
+        <HeaderButton onClick={onSignOut}>{t('common:signOut')}</HeaderButton>
       </header>
 
       <main
@@ -239,21 +269,24 @@ function Load({
           margin: '0 auto',
         }}
       >
-        <Field label="Definition (JSON)">
+        <Field label={t('load:definitionLabel')}>
           <TextArea
             value={definitionText}
             onChange={setDefinitionText}
             rows={14}
-            placeholder="Paste an exported dashboard definition…"
+            placeholder={t('load:definitionPlaceholder')}
           />
         </Field>
 
-        <Field label="Binding manifest (JSON, optional)" hint={MANIFEST_HELP}>
+        <Field
+          label={t('load:manifestLabel')}
+          hint={MANIFEST_SAMPLES.join(`  ${t('load:manifestSampleJoiner')}  `)}
+        >
           <TextArea
             value={manifestText}
             onChange={setManifestText}
             rows={7}
-            placeholder="{ }"
+            placeholder={EMPTY_OBJECT}
           />
         </Field>
 
@@ -261,7 +294,7 @@ function Load({
 
         <div>
           <HeaderButton onClick={render} primary disabled={definitionText.trim() === ''}>
-            Render
+            {t('load:render')}
           </HeaderButton>
         </div>
       </main>
@@ -284,6 +317,7 @@ function View({
   onChange: () => void;
   onSignOut: () => void;
 }) {
+  const { t } = useTranslation();
   const { definition, manifest } = loaded;
 
   // base = definition defaults merged with the pasted manifest override; the cascade
@@ -316,7 +350,7 @@ function View({
   );
   useEffect(() => () => hub.disposeAll(), [hub]);
 
-  const title = definition.title || 'Dashboard';
+  const title = definition.title || t('view:untitled');
   const basemap = useTenantBasemapQuery();
 
   return (
@@ -332,8 +366,9 @@ function View({
         }}
       >
         <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
-        <HeaderButton onClick={onChange}>Change</HeaderButton>
-        <HeaderButton onClick={onSignOut}>Sign out</HeaderButton>
+        <LocaleSwitcher />
+        <HeaderButton onClick={onChange}>{t('view:change')}</HeaderButton>
+        <HeaderButton onClick={onSignOut}>{t('common:signOut')}</HeaderButton>
       </header>
 
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
@@ -386,6 +421,67 @@ function useTenantBasemapQuery(): Basemap | null {
 }
 
 // ── Presentational helpers (inline styles + CSS vars — no Tailwind/shadcn) ────
+
+/**
+ * Language picker — chrome, not a form field. Mounted on all three steps, because a
+ * viewer who cannot read the sign-in form cannot reach a switcher that only appears
+ * after signing in; that ordering is the whole reason this control exists rather than
+ * leaving the language to browser detection alone.
+ *
+ * Selecting a locale persists it as an explicit choice (setUserLocale) under the same
+ * key the console writes, so a viewer who chose Spanish there arrives here in Spanish.
+ * It reads SUPPORTED_LOCALES, so a new locale needs no change in this file.
+ *
+ * Deliberately NOT the console's SegmentedControl: this app ships no component kit —
+ * that is part of what it demonstrates to an external embedder — so it is a group of
+ * pressed-state buttons carrying their own accessible names. The endonym is the
+ * accessible name and the code badge beside it is decorative, since a screen reader
+ * reading "EN English" twice is noise.
+ */
+function LocaleSwitcher() {
+  const { t, i18n } = useTranslation();
+  // resolvedLanguage is the locale actually in effect after supportedLngs/fallback
+  // resolution, never a raw unshipped browser value. Before it resolves there is no
+  // language in effect, and '' matches no locale — the honest rendering of "not yet".
+  const active = i18n.resolvedLanguage ?? '';
+
+  return (
+    <div
+      role="group"
+      aria-label={t('common:languagePicker')}
+      style={{ display: 'flex', gap: 4, flex: '0 0 auto' }}
+    >
+      {SUPPORTED_LOCALES.map(({ code, label, badge }) => {
+        const current = code === active;
+        return (
+          <button
+            key={code}
+            type="button"
+            onClick={() => setUserLocale(code)}
+            aria-pressed={current}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              padding: '4px 8px',
+              borderRadius: 6,
+              border: '1px solid hsl(var(--input))',
+              cursor: 'pointer',
+              color: current ? 'hsl(var(--primary-foreground))' : 'hsl(var(--foreground))',
+              background: current ? 'hsl(var(--primary))' : 'hsl(var(--card))',
+            }}
+          >
+            <span aria-hidden style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+              {badge}
+            </span>
+            <span>{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (

@@ -954,10 +954,19 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # i18n gate (ADR-066): the console's eslint `no-literal-string` rule fails
-      # on any hard-coded user-facing string, keeping the app fully externalized
-      # into the react-i18next catalogs. Only apps/console defines a lint script,
-      # so `--workspaces --if-present` runs exactly that gate.
+      # i18n gate (ADR-066): eslint's `no-literal-string` rule fails on any
+      # hard-coded user-facing string, keeping each app fully externalized into its
+      # react-i18next catalogs. BOTH front-end apps define a `lint` script now —
+      # apps/console and apps/dashboard (the /dash viewer) — and each carries its own
+      # flat config, because the two have different JSX vocabularies.
+      #
+      # 🔴 `--if-present` IS THE HOLE THIS STEP ONCE HAD, and it is worth naming
+      # because nothing in the log would ever have shown it. /dash had no i18n at all
+      # — no catalogs, no dependency, no lint script — and a workspace with no script
+      # is SKIPPED silently, which reads in the log exactly like a workspace that
+      # passed. So a step named "i18n gate" reported success while checking one of the
+      # two apps. A new app is in the same position the day it is created: adding the
+      # script is what enrols it, and nothing here will say that it has not.
       - name: Lint (i18n no-literal-string gate)
         run: npm run lint
 
