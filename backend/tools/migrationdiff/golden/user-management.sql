@@ -53,6 +53,8 @@ ALTER TABLE ONLY "user-management".iam_tenants
 ALTER TABLE ONLY "user-management".iam_tenants
  ADD CONSTRAINT iam_tenants_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_tenants ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenants_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "user-management".signing_keys
  ADD CONSTRAINT signing_keys_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".signing_keys ALTER COLUMN id SET DEFAULT nextval('"user-management".signing_keys_id_seq'::regclass);
@@ -270,6 +272,12 @@ CREATE TABLE "user-management".iam_tenants (
  geo_fence_position_ceiling bigint,
  geo_fence_ceiling bigint,
  geo_fence_position_budget bigint
+);
+CREATE TABLE "user-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,

@@ -209,12 +209,20 @@ const (
 // defaultTenantPurgeTokenHoldSeconds is how long a purged token stays reserved, and it is
 // tied to the broker credential's own lifetime rather than chosen.
 //
-// 🔴 THE FENCE DIES WITH THE TENANT ROW. Every ADR-077 device-plane gate resolves the
-// tenant's lifecycle through user-management, and an UNKNOWN tenant reads as not deleted —
-// the fail-open posture is deliberate and documented, because failing closed would make
-// user-management a hard dependency of device connectivity. So the instant completion
-// removes the row, all of those gates start admitting the released token again. Nothing
-// downstream is epoch-aware; the data plane knows only tokens.
+// 🔴 EVERY REFUSAL ENDS AT COMPLETION, BOTH KINDS OF IT, AND THAT IS WHY THIS NUMBER
+// EXISTS. Two mechanisms refuse work for a deleted tenant, and completion switches both
+// off in the same pass. The device-plane gates resolve the lifecycle through
+// user-management, where an UNKNOWN tenant reads as not deleted — the fail-open posture is
+// deliberate and documented, because failing closed would make user-management a hard
+// dependency of device connectivity — so removing the row makes them admit the released
+// token again. The per-area erasure fence (rdb.PurgedTenant) is the correctness path and
+// does not fail open, but it is LIFTED deliberately, immediately before the row is
+// removed, because a token released behind a standing fence would belong to a successor
+// that could never write.
+//
+// So neither is a bound on the straggler; this is. Nothing downstream is epoch-aware —
+// the fence's epoch identifies the PURGE, not the writer, because a device presenting a
+// pre-deletion credential has no epoch to present.
 //
 // What can still present itself at that point is a session established BEFORE the cut. Its
 // credential rows were swept, so it cannot re-authenticate — but the broker arms its

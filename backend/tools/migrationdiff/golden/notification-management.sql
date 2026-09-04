@@ -21,6 +21,8 @@ ALTER TABLE ONLY "notification-management".notification_rules ALTER COLUMN id SE
 ALTER TABLE ONLY "notification-management".notification_states
  ADD CONSTRAINT notification_states_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".notification_states ALTER COLUMN id SET DEFAULT nextval('"notification-management".notification_states_id_seq'::regclass);
+ALTER TABLE ONLY "notification-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "notification-management".secrets
  ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".secrets ALTER COLUMN id SET DEFAULT nextval('"notification-management".secrets_id_seq'::regclass);
@@ -153,6 +155,12 @@ CREATE TABLE "notification-management".notification_states (
  cleared_at timestamp with time zone,
  escalation_level bigint DEFAULT 0 NOT NULL,
  last_escalated_at timestamp with time zone
+);
+CREATE TABLE "notification-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE TABLE "notification-management".secrets (
  id bigint NOT NULL,

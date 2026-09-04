@@ -12,6 +12,8 @@ ALTER TABLE ONLY "command-delivery".command_delivery_migrations
 ALTER TABLE ONLY "command-delivery".commands
  ADD CONSTRAINT commands_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".commands ALTER COLUMN id SET DEFAULT nextval('"command-delivery".commands_id_seq'::regclass);
+ALTER TABLE ONLY "command-delivery".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_command-delivery_command_batches_deleted_at" ON "command-delivery".command_batches USING btree (deleted_at);
 CREATE INDEX "idx_command-delivery_command_batches_tenant_id" ON "command-delivery".command_batches USING btree (tenant_id);
 CREATE INDEX "idx_command-delivery_command_batches_token" ON "command-delivery".command_batches USING btree (token);
@@ -101,6 +103,12 @@ CREATE TABLE "command-delivery".commands (
  batch_id bigint,
  batch_token character varying(128),
  dispatch_nonce character varying(64)
+);
+CREATE TABLE "command-delivery".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE UNIQUE INDEX uix_command_batches_tenant_token ON "command-delivery".command_batches USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_commands_batch_device ON "command-delivery".commands USING btree (tenant_id, batch_id, device_token) WHERE ((batch_id IS NOT NULL) AND (deleted_at IS NULL));

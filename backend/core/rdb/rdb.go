@@ -193,7 +193,12 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 		// each service's migration list, so no per-service wiring is required. It must
 		// exist BEFORE the chain runs: a baseline that seeds rows fires the audit
 		// callbacks registered in initializePostgres, and those INSERT into it.
-		if err := migrateDB.AutoMigrate(&AuditEvent{}); err != nil {
+		// The erasure fence (ADR-077) is core-owned for the same reason: it must exist
+		// in EVERY area's schema, and an area that forgot to create it would be an area
+		// with no fence and no error. It is migrated ahead of the chain because the
+		// fence callback registered in initializePostgres reads it on every tenant-scoped
+		// write, and a baseline that seeds tenant rows is such a write.
+		if err := migrateDB.AutoMigrate(&AuditEvent{}, &PurgedTenant{}); err != nil {
 			return err
 		}
 		return m.Migrate()

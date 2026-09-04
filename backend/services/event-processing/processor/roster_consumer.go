@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 )
 
@@ -67,9 +68,22 @@ func validRosterToken(tok string) bool { return len(tok) <= core.MaxTokenLen }
 // unique version token), since this blocks the consumer while the store recovers. desc labels the
 // retry log. Returns false ONLY on shutdown mid-retry — the caller then returns without acking, so
 // the fact redelivers next start.
+// 🔴 ONE ERROR IS TERMINAL AND MUST NOT BE RETRIED: the tenant has been deleted and this
+// area's erasure fence refuses its writes (ADR-077). That refusal stands for the whole
+// purge — twelve hours at the default token hold — and this loop blocks the consumer
+// goroutine it runs on, which serves EVERY tenant. Retrying would stop rule and roster
+// facts platform-wide until the pod restarted, with nothing but log lines to show it, and
+// the broker's own purge then removes the message from under the loop so it could never
+// drain even in principle. The fact is dropped and acked: the projection row it would have
+// written is one the sweep is in the middle of erasing.
 func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error) bool {
 	backoff := readErrorBackoff
-	for op() != nil {
+	for err := op(); err != nil; err = op() {
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			log.Warn().Str("what", desc).Err(err).
+				Msg("Dropping a fact projection for a deleted tenant; its rows are being erased.")
+			return true
+		}
 		log.Error().Str("what", desc).Msg("Failed to persist a fact projection; retrying (fact stays unacked).")
 		select {
 		case <-time.After(backoff):

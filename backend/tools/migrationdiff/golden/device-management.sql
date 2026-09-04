@@ -134,6 +134,8 @@ ALTER TABLE ONLY "device-management".provisioning_profiles
 ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT provisioning_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".provisioning_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".provisioning_profiles_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_device-management_alarms_deleted_at" ON "device-management".alarms USING btree (deleted_at);
 CREATE INDEX "idx_device-management_alarms_tenant_id" ON "device-management".alarms USING btree (tenant_id);
 CREATE INDEX "idx_device-management_alarms_token" ON "device-management".alarms USING btree (token);
@@ -853,6 +855,12 @@ CREATE TABLE "device-management".provisioning_profiles (
  credential_type character varying(32) NOT NULL,
  enabled boolean NOT NULL,
  expires_at timestamp with time zone
+);
+CREATE TABLE "device-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE UNIQUE INDEX idx_command_definition_profile_key ON "device-management".command_definitions USING btree (device_profile_id, command_key);
 CREATE UNIQUE INDEX idx_device_claim_device ON "device-management".device_claims USING btree (device_id);

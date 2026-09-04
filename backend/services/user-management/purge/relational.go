@@ -79,7 +79,7 @@ func (r *Relational) Name() string { return r.name }
 // nature: the next pass sweeps it again, and the settle window will not let the purge
 // complete until a pass finds nothing. So it is returned as an error, which is what the
 // ledger records as retryable.
-func (r *Relational) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome, error) {
+func (r *Relational) Erase(ctx context.Context, tenant string, epoch time.Time) (Outcome, error) {
 	db := r.handle(ctx)
 
 	plan, err := tenantpurge.Classify(ctx, db)
@@ -91,6 +91,18 @@ func (r *Relational) Erase(ctx context.Context, tenant string, _ time.Time) (Out
 	if r.pre != nil {
 		pre = r.pre(tenant)
 	}
+
+	// 🔴 PLANT THE FENCE BEFORE SWEEPING, IN ITS OWN COMMITTED TRANSACTION. Every pass
+	// plants; the insert is idempotent. Doing it here rather than inside the sweep is
+	// what makes the sweep converge instead of racing: a fence that became visible only
+	// when the delete committed would stop no writer the delete had not already caught,
+	// and each pass would find fresh rows from the last. Doing it before CLASSIFYING
+	// would be wrong in the other direction — the plan is what says which schemas are
+	// functional areas and therefore where a fence has to land.
+	if _, err := tenantpurge.PlantFence(ctx, db, plan, tenant, epoch, time.Now().UTC(), pre); err != nil {
+		return Outcome{}, fmt.Errorf("fencing %s: %w", r.name, err)
+	}
+
 	swept, err := tenantpurge.Sweep(ctx, db, plan, tenant, pre)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("sweeping %s: %w", r.name, err)
@@ -108,6 +120,29 @@ func (r *Relational) Erase(ctx context.Context, tenant string, _ time.Time) (Out
 			residue.Rows, tenant, r.name, describe(residue))
 	}
 	return out, nil
+}
+
+// LiftFence stamps this database's standing fence rows for a tenant as completed, in
+// every functional-area schema, so a successor at the released token can write.
+//
+// It re-classifies rather than remembering the plan from Erase, for the reason Erase
+// gives: a plan is a snapshot of the catalog, and this call can be a pass — or a
+// deploy — later than the sweep that planted the fence. A schema added since would
+// otherwise keep a fence nothing lifts.
+func (r *Relational) LiftFence(ctx context.Context, tenant string, at time.Time) error {
+	db := r.handle(ctx)
+	plan, err := tenantpurge.Classify(ctx, db)
+	if err != nil {
+		return fmt.Errorf("classifying %s to lift its fence: %w", r.name, err)
+	}
+	var pre tenantpurge.Precondition
+	if r.pre != nil {
+		pre = r.pre(tenant)
+	}
+	if err := tenantpurge.LiftFence(ctx, db, plan, tenant, at, pre); err != nil {
+		return fmt.Errorf("lifting the fence in %s: %w", r.name, err)
+	}
+	return nil
 }
 
 // handle returns a gorm handle in the system context.
