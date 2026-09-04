@@ -11,9 +11,15 @@
 # build compiles, it is honoured for javascript-typescript, which is analyzed
 # without building.
 #
-# Scoped to the frontend job deliberately: applying it to the Go analysis would
+# Scoped to the frontend analysis deliberately: applying it to the Go one would
 # silently do nothing, which is worse than not applying it, because the file
 # would read as protection that is not there.
+#
+# 🔴 `_legacy/` is deliberately NOT listed. It looks like it belongs — it is the
+# archived pre-migration tree, and codeql.yml's path filter negates it — but it
+# has ZERO tracked files, so it never reaches a CI checkout and there is nothing
+# for the extractor to see. An exclusion for a directory that cannot appear is a
+# comment describing a mechanism about nothing, which reads as protection.
 name: "DeviceChain frontend"
 
 paths-ignore:
@@ -28,8 +34,3 @@ paths-ignore:
   # scanner is built to flag — hard-coded tokens, unsanitised strings — and are
   # never served.
   - "frontend/testdata/**"
-
-  # The archived pre-migration tree. `go.work` does not reference it and the Go
-  # analysis never sees it; without this line the JS extractor WOULD, since it
-  # needs no build to reach a file.
-  - "_legacy/**"

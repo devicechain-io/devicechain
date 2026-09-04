@@ -119,8 +119,22 @@ jobs:
             echo "changed=$changed"
           } >> "$GITHUB_OUTPUT"
 
-      # Everything below is skipped when the digest has not moved. The run still
-      # completes successfully, and THAT is what the liveness guard reads.
+      # Only the REWRITE and the pull request are conditional. The toolchain
+      # setup and the smoke-build below run every week whether or not the digest
+      # moved, and that is a correction rather than a preference.
+      #
+      # 🔴 The heartbeat used to measure nothing. `check-ko-base-pin.sh` reads
+      # "this workflow succeeded recently" as proof the pin is being maintained
+      # — but when `changed=false` every expensive step was skipped, so a green
+      # run said only that the resolve step could reach the registry. The
+      # 2026-08-06 and 2026-08-12 runs are both green and both skipped the build.
+      # The smoke-build had in fact NEVER passed: this workflow was written on
+      # 2026-08-06 already unable to build (the workspace floor had moved to
+      # 1.26.5 on 2026-07-13), and that only became visible on 2026-08-19, the
+      # first week a digest moved and the step actually ran.
+      #
+      # Building unconditionally costs about a minute a week and makes a green
+      # run mean the thing the guard is reading it as: the current pin builds.
       - name: Apply the new digest
         if: steps.resolve.outputs.changed == 'true'
         run: |
@@ -137,7 +151,6 @@ jobs:
           git diff --stat
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        if: steps.resolve.outputs.changed == 'true'
         with:
           # go.work, NOT a module's go.mod. setup-go pins GOTOOLCHAIN=local, so
           # the version installed here is the only one available — and a module
@@ -149,12 +162,13 @@ jobs:
           cache: false
 
       - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
-        if: steps.resolve.outputs.changed == 'true'
         with:
           version: v0.19.1
 
-      - name: Smoke-build an image against the new base
-        if: steps.resolve.outputs.changed == 'true'
+      # Runs every week, not only when the digest moves — see the note above the
+      # rewrite step. When nothing moved this builds the CURRENT pin, which is
+      # exactly the claim the liveness guard is making on this workflow's behalf.
+      - name: Smoke-build an image against the base
         env:
           KO_DOCKER_REPO: ghcr.io/devicechain-io
         run: |
@@ -166,7 +180,7 @@ jobs:
             echo "::error::no services discovered — cannot smoke-build the new base"
             exit 1
           fi
-          echo "smoke-building backend/services/${svc} on the new base"
+          echo "smoke-building backend/services/${svc} on ${KO_FILE}'s current base"
           cd "backend/services/${svc}"
           # This is the PR's only evidence — see the GITHUB_TOKEN note at the top
           # of this file. A base that cannot build must never be proposed.
