@@ -6,14 +6,23 @@
 // "what the SDK can throw" is only as good as the list of things the SDK can throw, and
 // a hand-imagined list is how `instanceof GraphQLRequestError` came to look sufficient.
 //
-// gql() throws in exactly four shapes:
+// gql() throws four shapes of its OWN:
 //
 //   fetch() rejected            -> GraphQLRequestError(<browser text>, 0)          no errors
 //   !res.ok                     -> GraphQLRequestError('Request failed (503)', 503) no errors
 //   body.errors non-empty       -> GraphQLRequestError(<server text>, 200, errors)  HAS errors
 //   body.data undefined         -> GraphQLRequestError('Empty GraphQL response', 200) no errors
 //
-// Only the third is the server saying no. Every other one is "no answer", however
+// …and a FIFTH it does not construct and does not catch: `await res.json()` REJECTS on a
+// 200 whose body is not JSON — an ingress misroute serving the SPA's index.html under the
+// API path, a captive portal — and that SyntaxError propagates to the caller as itself. It
+// is not a GraphQLRequestError at all, so the predicate answers false and the viewer is
+// told the server is unreachable, which is the right answer; the "not a GraphQLRequestError"
+// cases below are where it is pinned. Worth naming rather than leaving as an unstated
+// fifth, because "the four shapes" is the kind of closed list a later predicate gets
+// written against.
+//
+// Only the third shape is the server saying no. Every other one is "no answer", however
 // plausible its HTTP status looks.
 
 import { GraphQLRequestError } from '@devicechain/client';

@@ -34,9 +34,18 @@ import { GraphQLRequestError } from '@devicechain/client';
  *     from the ingress, or a 502 from a service that is down, carries a real HTTP status
  *     and no `errors` array — so it is `!== 0`, and it still reports as a bad password.
  *
- * The `errors` array is present on exactly one throw in the transport: the one taken
- * after the server returned a GraphQL body containing errors. That is the same as saying
- * "the server received this, ran it, and said no" — which is the actual question.
+ * The `errors` array is present on exactly one throw in the transport: the one taken after
+ * the server returned a GraphQL body containing errors. That is the same as saying "the
+ * resolver ran and returned an error" — which is the question this screen can actually ask.
+ *
+ * 🔴 IT IS NOT THE SAME AS "the server decided about these credentials", and the gap is
+ * real rather than theoretical. `login` returns whatever `IdentityByEmail` gives it for any
+ * non-not-found database error, so Postgres failing over mid-login also arrives as HTTP 200
+ * with an `errors` array and is reported here as a bad password. Nothing in the response
+ * distinguishes the two today — there is no error-extensions convention on any of these
+ * schemas — so the fix is server-side and this predicate is as good as the wire allows. It
+ * is still strictly better than what it replaced, which reported every unreachable server
+ * the same way.
  *
  * 🔴 VERIFIED AGAINST THE SERVER, NOT REASONED FROM THE CLIENT. Both of this screen's
  * calls — `login` and `selectTenant` — pass `{ anonymous: true }`, so they carry no

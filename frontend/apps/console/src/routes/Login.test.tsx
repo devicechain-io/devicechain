@@ -57,19 +57,26 @@ async function submitCredentials() {
   fireEvent.submit(screen.getByRole('button', { name: t('login:signIn') }));
 }
 
-// The four shapes packages/client/src/transport.ts can throw, named by what actually
-// happened rather than by their HTTP status — which is the whole point: three of the four
-// carry no `errors` array however healthy their status looks.
+// What packages/client/src/transport.ts can put in front of this screen, named by what
+// actually happened rather than by its HTTP status — which is the whole point: only one of
+// them carries an `errors` array, however healthy the others' statuses look.
 const REJECTED = new GraphQLRequestError('invalid credentials', 200, [
   { message: 'invalid credentials' },
 ]);
-const NO_ANSWER: [string, GraphQLRequestError][] = [
+const NO_ANSWER: [string, unknown][] = [
   // The live defect: `instanceof GraphQLRequestError` is TRUE here.
   ['the API is unreachable (fetch rejected)', new GraphQLRequestError('Failed to fetch', 0)],
   // The narrower fix's blind spot: a real status, no errors array.
   ['the ingress returns 503', new GraphQLRequestError('Request failed (503)', 503)],
   ['the service returns 502', new GraphQLRequestError('Request failed (502)', 502)],
   ['the server answers 200 with no data', new GraphQLRequestError('Empty GraphQL response', 200)],
+  // 🔴 THE SHAPE THE TRANSPORT DOES NOT WRAP, and the reason "gql throws four shapes" is
+  // not a closed list. `await res.json()` REJECTS on a 200 whose body is not JSON — an
+  // ingress misroute serving the SPA's index.html under the API path, a captive portal —
+  // and that SyntaxError leaves gql() as itself, never becoming a GraphQLRequestError. The
+  // screen must still say "unreachable", which it does because the predicate is a test and
+  // not a list of known errors.
+  ['the API path serves HTML instead of JSON', new SyntaxError("Unexpected token '<'")],
 ];
 
 describe('signing in when the server says no', () => {

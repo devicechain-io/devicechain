@@ -352,8 +352,20 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
  *
  * `isSupportedCode` applies `nonExplicitSupportedLngs` itself, so the regional fold
  * this function used to hand-roll comes for free and stays correct if that option ever
- * changes. Measured, not assumed — `es-MX`, `es-419` and `es-Latn-MX` are supported and
- * render Spanish; `ES`, `pt-BR`, `fr-CA` and `zh-Hans-CN` are not and render English.
+ * changes. Measured, not assumed — `es-MX`, `es-mx`, `es-419` and `es-Latn-MX` are
+ * supported and render Spanish; `ES`, `pt-BR`, `fr-CA` and `zh-Hans-CN` are not and render
+ * English.
+ *
+ * 🔴 ONE CLASS OF TAG WHERE THE TWO STILL DISAGREE, measured the same way and recorded
+ * because "asks i18next" reads like it cannot: `ES-MX`, `eS-mx` and `ES-419` are answered
+ * NO here and rendered as Spanish by changeLanguage. It is i18next's own seam —
+ * isSupportedCode splits the tag before formatting it, while the resolve hierarchy
+ * canonicalises the whole tag first — not a fold of ours. The disagreement is FAIL-CLOSED
+ * (a tag that would have worked is refused, never a tag that would render raw keys), no
+ * browser sends an upper-cased language subtag, and the `locale.default` editor refuses the
+ * same tags through this same function, so the tenant cannot end up storing one. Left as is
+ * rather than papered over with a second normalisation, which is the thing this function
+ * exists to not have.
  *
  * The full tag is still what gets passed to changeLanguage, never a folded base: i18next
  * does the folding, so the day an `es-MX` catalog ships it is picked up with no change

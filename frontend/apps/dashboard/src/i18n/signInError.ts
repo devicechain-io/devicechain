@@ -38,8 +38,14 @@ import { GraphQLRequestError } from '@devicechain/client';
  *     and no `errors` array — so it is `!== 0`, and it still reports as a bad password.
  *
  * The `errors` array is present on exactly one throw in the transport: the one taken
- * after the server returned a GraphQL body containing errors. That is the same as
- * saying "the server received this, ran it, and said no" — which is the actual question.
+ * after the server returned a GraphQL body containing errors. That is the same as saying
+ * "the resolver ran and returned an error" — the question this screen can actually ask.
+ *
+ * 🔴 IT IS NOT THE SAME AS "the server decided about these credentials". `login` returns
+ * whatever the identity lookup gives it for any non-not-found database error, so a
+ * database failing over mid-login also arrives as HTTP 200 with an `errors` array and is
+ * reported here as a bad password. Nothing on the wire distinguishes the two today, so
+ * the fix is server-side; this stays as good as the response allows.
  *
  * This app's two sign-in calls are both anonymous, so the 401 branch of the GraphQL
  * handler (which needs a bearer token to reject) cannot fire on them: a rejected login
