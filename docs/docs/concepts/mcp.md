@@ -76,13 +76,13 @@ Some of these are unfinished work and some are decisions. They are worth telling
 - **No writes.** Sending a command or acknowledging an alarm through MCP is planned, but only behind an elevated scope *and* an explicit human confirmation — an assistant will never silently actuate a device.
 - **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time. Tenancy is never a tool parameter, so there is no argument an agent can vary to reach across.
 - **No arbitrary queries.** Only the curated tool set is reachable; there is no `run_graphql`.
-- **The server holds no credential of its own.** This is stronger than "it does not use a service token": there is no service credential wired into it at all, so there is nothing for a confused-deputy attack to borrow. An agent that has no permission to read something gets the same refusal a person would.
+- **No service credential is wired into any code path it runs.** This is stronger than "it does not use a service token": there is no code path in the MCP server that reaches for a credential of its own, so there is nothing for a confused-deputy attack to borrow. Every downstream read goes out under the caller's own token, and an agent with no permission to read something gets the same refusal a person would. (Its pod mounts the instance configuration like every other service's does — that is deployment plumbing, not something the server uses.)
 - **Command payloads are not returned.** `list_commands` gives you a command's name, status and timings; what was sent to the device stays out of the agent's context.
 
 **Bounds you will hit before you hit anything else:**
 
 - Results are paged at 25 by default and 100 at most, and a multi-device lookup takes at most 50 tokens per call. An agent surveying a large fleet pages through it.
-- A single response is capped at 8 MiB; a session idles out after 30 minutes.
+- A single downstream response the server will read is capped at 8 MiB — that is a bound on what it fetches from the platform's own APIs, not a limit it advertises to the agent. A session idles out after 30 minutes.
 
 **Enabling the service is not enough to use it.** There are two independent switches, and turning on only the first is the common way to end up with a server that answers and cannot be reached:
 

@@ -297,11 +297,25 @@ which a token may hold. So `plant-a/line-3/press-1` becomes something like
 `sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` for LwM2M). The suffix disambiguates two external
 ids that would otherwise reduce to the same string.
 
-**The practical consequence:** searching the device list for the name you configured finds nothing,
-because that name lives in the **external id** field and the list shows tokens. Search on external
-id. And when a device does not appear at all, check identifier 2 before you suspect the transport —
-on LwM2M in particular, a wrong PSK identity fails at the DTLS handshake, before registration, and
-the refusal deliberately tells you nothing.
+**The practical consequence, and it is worse than it sounds:** an auto-provisioned device arrives
+with **no name at all**. The registration carries only the token, the external id and the device
+type, so the console's device list shows the device under its generated `sp-…` / `lw-…` token with
+`—` in the Name column. There is nothing there to recognise it by.
+
+And you cannot search for it. **The console's device list has no search box** — it is a plain paged
+listing of Status, Token, Name, Type, Description and Created, with no external-id column — and the
+API's device search takes only a page number, a page size and a device type. So:
+
+- **In the console**, find it by its token. The generated token embeds the external id
+  (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), so paging the list and reading the
+  token column is the whole technique.
+- **Over the API**, use `devicesByExternalId`, which takes exact external ids and returns the
+  devices. It is an exact-match lookup, not a search: no prefixes, no substrings. Nothing in the
+  console calls it, so this is an API-only route.
+
+When a device does not appear at all, check identifier 2 before you suspect the transport — on
+LwM2M in particular, a wrong PSK identity fails at the DTLS handshake, before registration, and the
+refusal deliberately tells you nothing.
 :::
 
 ## LwM2M: what an operator must know

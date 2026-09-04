@@ -43,6 +43,14 @@
 # pointing at it — reachable by URL, unreachable by navigation, and invisible to
 # every other check in the repo.
 #
+# 🔴 AND SO IS A WHOLE MISSING VERSION TREE, which the per-file comparison alone
+# could not see. The file loop is driven by the instances that exist on the
+# TRANSLATED side, so an English `versioned_docs/version-1.0` with no `es`
+# counterpart walked zero iterations and reported parity. That is precisely the
+# shape `docs:version` produces when it warns-and-skips a locale, and the shape a
+# deleted snapshot leaves behind, so the English versioned trees are enumerated
+# separately and each one is required to have its translated twin.
+#
 # 🔴 SCOPE, stated so a green run is not read as a broader claim than it is:
 # this compares FILE SETS, not content. It proves a translated page EXISTS. It
 # cannot prove the page was translated rather than copied, and it cannot prove a
@@ -120,7 +128,7 @@ english_tree_for() {
 check() {
   local docs_root="${1:-$DOCS_ROOT_DEFAULT}"
   local problems=0 compared=0 locale_dir locale plugin_dir instance_dir instance
-  local en_tree en_set loc_set only_en only_loc
+  local en_tree en_set loc_set only_en only_loc en_version_dir
 
   if [ ! -d "$docs_root/docs" ]; then
     echo "::error::no English docs tree at $docs_root/docs — the enumeration is broken, not the tree" >&2
@@ -172,6 +180,29 @@ check() {
       if [ -n "$only_loc" ]; then
         echo "  $locale/$instance: present in the translation, MISSING from $en_tree:"
         printf '%s\n' "$only_loc" | sed 's|^|      |'
+        problems=$((problems + 1))
+      fi
+    done
+
+    # 🔑 THE LOOP ABOVE IS DRIVEN BY THE TRANSLATED SIDE, SO IT CANNOT SEE AN
+    # ENGLISH TREE THAT HAS NO TRANSLATED COUNTERPART AT ALL. For `current` that
+    # is harmless — a locale with no `current` compares nothing and is caught by
+    # the compared-nothing guard below — but a VERSIONED tree is not: with
+    # `current` pairing cleanly, an English `versioned_docs/version-1.0` and no
+    # `es/version-1.0` walks zero iterations here and the run reports parity.
+    #
+    # That is not hypothetical at the tag. `docs:version` WARNS AND SKIPS a locale
+    # whose current directory is empty, so the half-snapshot it produces is exactly
+    # this shape — one English version tree, no translated twin — and it is the
+    # one direction the loop above is structurally unable to look in. A deleted
+    # snapshot has the same shape and is just as invisible.
+    for en_version_dir in "$docs_root"/versioned_docs/*/; do
+      [ -d "$en_version_dir" ] || continue
+      instance="$(basename "$en_version_dir")"
+      if [ ! -d "$plugin_dir/$instance" ]; then
+        echo "  $locale/$instance: $en_version_dir is a frozen English version with NO"
+        echo "      translated counterpart at $plugin_dir/$instance — every page in that"
+        echo "      version serves English to $locale readers, and the version is released."
         problems=$((problems + 1))
       fi
     done
@@ -321,7 +352,45 @@ self_test() {
     return 1
   fi
 
-  # Case 6 — a locale whose translations are entirely absent. Every loop in
+  # Case 6 — AN ENGLISH VERSION TREE WITH NO TRANSLATED TWIN AT ALL. Distinct
+  # from case 5, which drifts by a file: here the whole `es/version-1.0` is
+  # absent, so a comparison driven by the translated side never runs and the
+  # guard reports parity on a released version that serves English throughout.
+  # `current` is deliberately left correct, so nothing else can fail this case —
+  # it fails only if the English side is enumerated in its own right.
+  fixture
+  mkdir -p "$root/versioned_docs/version-1.0"
+  printf 'frozen\n' > "$root/versioned_docs/version-1.0/intro.md"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: a frozen English version with NO translated tree was accepted." >&2
+    echo "        The file comparison is driven by the translated side, so this" >&2
+    echo "        direction is only covered if the English side is enumerated too." >&2
+    return 1
+  fi
+  case "$out" in
+    *"es/version-1.0"*"NO"*)
+      echo "  ok: a frozen English version with no translated tree is reported" ;;
+    *) echo "  FAIL: wrong message for a wholly untranslated version: $out" >&2; return 1 ;;
+  esac
+
+  # And its counterweight: adding the translated tree must make the same fixture
+  # pass, comparing TWO trees. Without it, case 6 is satisfied by a check that
+  # rejects every repository that has a versioned tree at all.
+  mkdir -p "$root/i18n/es/docusaurus-plugin-content-docs/version-1.0"
+  printf 'frozen\n' > "$root/i18n/es/docusaurus-plugin-content-docs/version-1.0/intro.md"
+  if out="$(check "$root" 2>&1)"; then
+    case "$out" in
+      *"2 translated docs tree(s) match"*)
+        echo "  ok: supplying the translated version tree clears it, and both were compared" ;;
+      *) echo "  FAIL: passed without comparing two trees: $out" >&2; return 1 ;;
+    esac
+  else
+    echo "  FAIL: a complete versioned pair was rejected — the English-side sweep" >&2
+    echo "        fires even when the twin is present: $out" >&2
+    return 1
+  fi
+
+  # Case 7 — a locale whose translations are entirely absent. Every loop in
   # check() steps over a directory that is not there, so this shape would
   # otherwise walk through and report success on a locale with zero pages.
   fixture
@@ -338,7 +407,7 @@ self_test() {
     *) echo "  FAIL: wrong message for an untranslated locale: $out" >&2; return 1 ;;
   esac
 
-  # Case 7 — THE CANNOT-FAIL SHAPE, asserted rather than assumed. If the plugin
+  # Case 8 — THE CANNOT-FAIL SHAPE, asserted rather than assumed. If the plugin
   # directory is renamed upstream, or a locale holds only theme JSON, every
   # comparison is skipped and the guard has proved nothing. That must be a
   # failure with its own message, not the same "OK" a clean tree produces.

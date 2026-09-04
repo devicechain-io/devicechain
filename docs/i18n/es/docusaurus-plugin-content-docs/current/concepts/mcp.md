@@ -76,13 +76,13 @@ Algunos de estos puntos son trabajo pendiente y otros son decisiones. Vale la pe
 - **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance elevado *y* una confirmación humana explícita — un asistente nunca accionará un dispositivo en silencio.
 - **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para cruzar esa frontera.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
-- **El servidor no posee ninguna credencial propia.** Esto es más fuerte que «no usa un token de servicio»: no hay ninguna credencial de servicio cableada en él, así que no hay nada que un ataque de diputado confundido pueda tomar prestado. Un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona.
+- **Ninguna credencial de servicio está cableada en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: no hay en el servidor MCP ninguna ruta de código que eche mano de una credencial propia, así que no hay nada que un ataque de diputado confundido pueda tomar prestado. Toda lectura hacia abajo sale bajo el token del propio llamante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio — eso es fontanería de despliegue, no algo que el servidor use.)
 - **Los payloads de los comandos no se devuelven.** `list_commands` entrega el nombre, el estado y las marcas de tiempo de un comando; lo que se envió al dispositivo queda fuera del contexto del agente.
 
 **Límites que alcanzarás antes que cualquier otro:**
 
 - Los resultados se paginan de 25 en 25 por defecto y 100 como máximo, y una consulta de varios dispositivos admite como mucho 50 tokens por llamada. Un agente que recorra una flota grande la recorre por páginas.
-- Una respuesta individual está limitada a 8 MiB; una sesión caduca por inactividad a los 30 minutos.
+- Una respuesta descendente que el servidor vaya a leer está limitada a 8 MiB — es un límite sobre lo que obtiene de las propias APIs de la plataforma, no un límite que anuncie al agente. Una sesión caduca por inactividad a los 30 minutos.
 
 **Habilitar el servicio no basta para poder usarlo.** Hay dos interruptores independientes, y activar solo el primero es la forma habitual de acabar con un servidor que responde y al que no se puede llegar:
 

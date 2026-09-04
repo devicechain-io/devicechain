@@ -29,15 +29,16 @@ authenticates twice: on the MQTT connection, and again per event in the pipeline
   connection failure.
 
 **3. The MQTT client id** — `{instanceId}:{tenant}:{deviceToken}`. This one appears **nowhere in the
-console**, and the broker refuses any other value, including the random one your client library
-invents when you leave it unset. It is a session key, not a label; see [MQTT](#mqtt) below for why
-it must be derived this way and how to run more than one connection per device.
+console**, and the broker refuses anything that is not that value or that value plus a `:suffix` —
+including the random id your client library invents when you leave it unset. (The suffix is how one
+device runs two connections; see [MQTT](#mqtt) below.) It is a session key, not a label.
 
 **How they go wrong.** A refused connection is **closed, not answered** — your client reports a
 reset or an unexpected EOF, never an authorization failure, and a device that reconnects
 automatically will loop on it. So all three of these mistakes look identical from the device. If a
-device cannot connect, check the client id, then the `{tenant}:` prefix on the username, then the
-credential itself — in that order, because that is the order of how often each is the cause.
+device cannot connect, check the client id first — it is the one value the console never shows you,
+so it is the one you had to construct — then the `{tenant}:` prefix on the username, then the
+credential itself.
 
 And a fourth, further on: the `token` in a **command** envelope identifies the *command*, not the
 device. Sending the device token back in a command response matches nothing and the response is
@@ -205,7 +206,7 @@ An MQTT topic maps directly to a NATS subject, so a publish on `{instanceId}/{te
 
 The listener is **TLS** and the connection is **broker-authenticated**: connect over TLS with the instance CA and present the device's credential as the MQTT username **`{tenant}:{credentialId}`** and password.
 
-The connection must also say **which device it is**: set the MQTT **client id** to `{instanceId}:{tenant}:{deviceToken}`. The broker refuses any other value — including the random one your client library invents when you leave it unset.
+The connection must also say **which device it is**: set the MQTT **client id** to `{instanceId}:{tenant}:{deviceToken}`. The broker refuses anything else — including the random one your client library invents when you leave it unset. (One exception, below: a `:suffix` after the device token is admitted, and is how a device opens a second connection.)
 
 That requirement is not bookkeeping. An MQTT client id is the key a broker files a device's session under, and the protocol says a connection presenting an id that is already in use *takes that session over*: the device holding it is disconnected and the arrival inherits its subscriptions. Deriving the id from the identity the broker has already authenticated is what stops one device — in your tenant or anyone else's — evicting another, and it is what lets a tenant's session state be found and removed if the tenant is ever deleted.
 

@@ -11,10 +11,23 @@ mirando esa lectura en la consola. Sin hardware y sin firmware — el «disposit
 Calcule alrededor de media hora, la mayor parte esperando al arranque inicial.
 
 :::note Qué da por supuesto esta página
-`dcctl`, un clúster de Kubernetes (1.29 o posterior) al que pueda llegar con `kubectl`, y
-[OpenTofu](https://opentofu.org/) (`tofu`) en su `PATH`. `dcctl` no crea el clúster —
-[kind](https://kind.sigs.k8s.io/) es la opción habitual en local. Todo lo demás lo lleva dentro.
-`dcctl preflight local` comprueba todo esto antes de empezar, y la
+**`dcctl`, más cinco herramientas en su `PATH`:** `docker`, `kubectl`, `helm`,
+[`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) (el binario `tofu`;
+`terraform` también sirve). Todo arranque inicial ejecuta primero una comprobación previa y **se
+detiene** si falta alguna, así que una carencia le cuesta los diez primeros segundos y no diez
+minutos.
+
+`helm` está en esa lista aunque `dcctl` lleve el chart dentro y lo instale con la biblioteca Go de
+Helm en vez de con el comando — la comprobación previa busca el binario igualmente, así que trátelo
+como obligatorio. `ko` y `cloud-provider-kind` son solo advertencias: `ko` hace falta únicamente
+para compilar imágenes desde el código (`--build`).
+
+**No** necesita un clúster de antemano. `dcctl bootstrap local` busca un clúster de kind con el
+nombre de la instancia y se ofrece a crear uno si no lo hay; `--kube-context <nombre>` lo apunta a
+un clúster que ya opere, y ese nunca lo crea ni lo borra. Kubernetes **1.29 o posterior** en
+cualquier caso — se rechaza uno más antiguo, porque los charts de la base de datos lo rechazan.
+
+`dcctl preflight local` ejecuta exactamente estas comprobaciones sin arrancar nada, y la
 [guía de arranque inicial](../deployment/bootstrap.md#prerequisites) tiene el detalle.
 
 Los comandos de abajo suponen que la instancia es alcanzable en `localhost` por HTTP sin cifrar, que
@@ -171,7 +184,13 @@ porque atrapan a casi todo el mundo una vez:
 - **Todo valor numérico es una cadena JSON.** `"21.5"`, no `21.5`. Un número desnudo se rechaza.
 
 La ruta es `/{instanceId}/{tenant}/events` — `devicechain` es la instancia del paso 1 y `sim-demo` el
-inquilino del paso 2. Un `404` aquí casi siempre significa que uno de los dos está mal.
+inquilino del paso 2. Un `404` aquí significa que el **id de instancia** está mal: la ruta solo
+existe bajo el id propio de esta instancia.
+
+Un **inquilino** equivocado no da 404, y conviene saberlo antes de ponerse a depurar. Cualquier
+nombre de inquilino bien formado se acepta con `202`, exista o no un inquilino con ese nombre; el
+evento se descarta más abajo en la cadena, y nada en la respuesta lo dice. Si un `202` no produce
+datos, compruebe el nombre del inquilino antes que cualquier otra cosa.
 
 Envíe algunas más con valores distintos, para tener una línea que mirar en vez de un punto:
 
@@ -190,7 +209,8 @@ done
 ## 7. Ver sus datos
 
 **En la consola**, abra `http://localhost/devices/sensor-001`. El dispositivo aparece ahora como
-activo, con `temperature` y su último valor.
+**En línea**, con `temperature` y su último valor. Nada lo declaró en línea — aquí la presencia se
+infiere del hecho de que llegó un evento, que es como funciona para un dispositivo sobre HTTP.
 
 **Por la API**, lo mismo:
 
@@ -214,11 +234,12 @@ Eso es un dispositivo de principio a fin: registrado, con credencial, reportando
 
 | Lo que ve | Normalmente significa |
 | --- | --- |
-| `404` en el `POST` de ingesta | El id de instancia o el inquilino de la ruta están mal. Son `devicechain` y `sim-demo` salvo que los cambiara. |
+| `404` en el `POST` de ingesta | El **id de instancia** de la ruta está mal — es `devicechain` salvo que lo cambiara. Un inquilino equivocado no produce esto. |
 | Conexión rechazada en `:8081` | La redirección de puerto del paso 5 no está corriendo. |
-| `400` en el `POST` de ingesta | Un número desnudo en vez de una cadena, o lecturas no envueltas en `entries`. |
-| El evento se acepta pero no aparece nada | La credencial no coincidió. El `credentialId` del cuerpo debe ser exactamente el que creó en el paso 4. |
+| `400` en el `POST` de ingesta | Un número desnudo en vez de una cadena, lecturas no envueltas en `entries`, o un segmento de inquilino que no es un token válido. |
+| `202`, pero no aparece nada | O el **inquilino** no existe —se acepta cualquier nombre bien formado, exista o no— o la credencial no coincidió. El `credentialId` del cuerpo debe ser exactamente el que creó en el paso 4. |
 | `429` en el `POST` de ingesta | El inquilino supera su límite de tasa de ingesta — está enviando más rápido de lo que permite su nivel. |
+| `503` en el `POST` de ingesta | El evento no pudo entregarse al stream, y **no** se almacenó. Este es el único estado que hay que reintentar; los demás son terminales para esa petición. |
 | No autorizado en una llamada a la API | El token de acceso ha caducado, o está enviando el `identityToken` de la primera llamada del paso 3 en vez del `accessToken` de la segunda. |
 
 ## Adónde ir después {#where-to-go-next}

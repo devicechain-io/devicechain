@@ -61,7 +61,7 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 
 ### No se admiten claves propias del inquilino (BYOK), y no se admitirán
 
-Un inquilino no puede aportar su propia clave de proveedor. Los proveedores son **configuración del operador a nivel de instancia**: un operador los registra, custodia las claves y decide qué niveles e inquilinos pueden usar qué modelos. La única palanca autoservicio de un inquilino es el indicador binario de consentimiento para la inferencia externa.
+Un inquilino no puede aportar su propia clave de proveedor. Los proveedores son **configuración del operador a nivel de instancia**: un operador los registra, custodia las claves y decide qué niveles e inquilinos pueden usar qué modelos. La única palanca por inquilino es el indicador de consentimiento para la inferencia externa, y tampoco es de autoservicio: un inquilino puede leerlo, pero solo un operador puede fijarlo.
 
 Esto es una decisión, no una carencia. Un cliente que necesite ejecutarse con su propia clave y su propia cuenta necesita una instancia dedicada, que es donde acaba también cualquier otra petición de infraestructura por inquilino — y una clave por inquilino dentro de una instancia compartida sería la única pieza de ese aislamiento ofrecida sin el resto.
 
@@ -69,12 +69,12 @@ Esto es una decisión, no una carencia. Un cliente que necesite ejecutarse con s
 
 - **Hoy se despacha un solo tipo de proveedor: Anthropic.** La entidad de proveedor está construida sobre una costura preparada para otros, y los demás tipos se rechazan en la escritura hasta que llegue su implementación, en lugar de aceptarse y quedar inertes.
 - **El bucle de reparación está acotado.** Un candidato que el compilador rechaza se le devuelve, con el error del propio compilador, un número fijo y pequeño de veces, y después la petición falla. Nunca se relaja el compilador para que un borrador encaje.
-- **Cada llamada está limitada del lado del servidor** — tamaño del prompt, longitud de la salida, tiempo de espera y una tasa de peticiones por inquilino. Ninguno de estos valores lo aporta quien llama, y ninguno es ilimitado.
+- **Cada llamada de inquilino está limitada del lado del servidor** — tamaño del prompt, longitud de la salida, tiempo de espera y una tasa de peticiones por inquilino. Ninguno de estos valores lo aporta quien llama, y ninguno es ilimitado.
 - **Una sola función.** El vocabulario de GA tiene exactamente una función de IA, la redacción de reglas, y es el servicio que llama quien la nombra — quien llama no puede elegir su propia función, porque elegir una función sería elegir un derecho de uso.
 
 ### Una excepción deliberada a la puerta de consentimiento
 
-Un operador que prueba la conectividad de un proveedor desde la consola de administración llega al proveedor sin el indicador de consentimiento de ningún inquilino. Esa llamada es el prompt de un operador contra la configuración de un operador — ningún dato de inquilino cruza la frontera — y la clave debe resolverse igualmente. Toda ruta que transporte entrada de un inquilino pasa por la puerta de consentimiento.
+Un operador que prueba la conectividad de un proveedor desde la consola de administración llega al proveedor sin el indicador de consentimiento de ningún inquilino y **sin el límite de tasa por inquilino** — esa ruta resuelve el proveedor por token, así que no le aplica ninguna de las dos compuertas. La llamada es el prompt de un operador contra la configuración de un operador, ningún dato de inquilino cruza la frontera, y la clave debe resolverse igualmente. Toda ruta que transporte entrada de un inquilino pasa por ambas compuertas.
 
 ## Ver también
 

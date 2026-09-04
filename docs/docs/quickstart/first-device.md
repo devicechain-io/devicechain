@@ -11,10 +11,22 @@ command, which is all a device is from the platform's side.
 Budget about half an hour, most of it waiting for the bootstrap.
 
 :::note What this page assumes
-`dcctl`, a Kubernetes cluster (1.29 or newer) you can reach with `kubectl`, and
-[OpenTofu](https://opentofu.org/) (`tofu`) on your `PATH`. `dcctl` does not create the cluster
-— [kind](https://kind.sigs.k8s.io/) is the usual choice locally. Everything else it carries
-inside itself. `dcctl preflight local` checks all of this before you start, and the
+**`dcctl`, plus five tools on your `PATH`:** `docker`, `kubectl`, `helm`,
+[`kind`](https://kind.sigs.k8s.io/), and [OpenTofu](https://opentofu.org/) (the `tofu` binary;
+`terraform` also works). Every bootstrap runs a preflight first and **stops** if one of them is
+missing, so a gap costs you the first ten seconds rather than ten minutes.
+
+`helm` is on that list even though `dcctl` carries the chart inside itself and installs it
+through Helm's Go library rather than the command — the preflight checks for the binary
+regardless, so treat it as required. `ko` and `cloud-provider-kind` are only warnings: you need
+`ko` solely to build images from source (`--build`).
+
+You do **not** need a cluster in advance. `dcctl bootstrap local` looks for a kind cluster named
+after the instance and offers to create one if there is none; `--kube-context <name>` points it
+at a cluster you already run, which it will never create or delete. Kubernetes **1.29 or newer**
+either way — older is refused, because the database charts refuse it.
+
+`dcctl preflight local` runs exactly these checks without bootstrapping anything, and the
 [bootstrap guide](../deployment/bootstrap.md#prerequisites) has the detail.
 
 Commands below assume the instance is reachable at `localhost` over plain HTTP, which is what
@@ -171,8 +183,13 @@ because they catch nearly everyone once:
 - **Every numeric value is a JSON string.** `"21.5"`, not `21.5`. A bare number is rejected.
 
 The path is `/{instanceId}/{tenant}/events` — `devicechain` is the instance from step 1 and
-`sim-demo` is the tenant from step 2. A `404` here almost always means one of those two is
-wrong.
+`sim-demo` is the tenant from step 2. A `404` here means the **instance id** is wrong: the route
+exists only under this instance's own id.
+
+A wrong **tenant** does not 404, and that is worth knowing before you debug one. Any
+well-formed tenant name is accepted with `202` whether or not a tenant of that name exists; the
+event is dropped further downstream, and nothing in the response says so. If a `202` produces no
+data, check the tenant name before anything else.
 
 Send a few more with different values, so there is a line to look at rather than a point:
 
@@ -190,8 +207,9 @@ done
 
 ## 7. See your data
 
-**In the console**, open `http://localhost/devices/sensor-001`. The device now shows as active,
-with `temperature` and its latest value.
+**In the console**, open `http://localhost/devices/sensor-001`. The device now shows as
+**Online**, with `temperature` and its latest value. Nothing declared it online — presence here
+is inferred from the fact that an event arrived, which is how it works for a device on HTTP.
 
 **Over the API**, the same thing:
 
@@ -215,11 +233,12 @@ That is a device, end to end: registered, credentialed, reporting, and queryable
 
 | What you see | Usually means |
 | --- | --- |
-| `404` from the ingest `POST` | The instance id or tenant in the path is wrong. They are `devicechain` and `sim-demo` unless you changed them. |
+| `404` from the ingest `POST` | The **instance id** in the path is wrong — it is `devicechain` unless you changed it. A wrong tenant does not produce this. |
 | Connection refused on `:8081` | The port-forward in step 5 is not running. |
-| `400` from the ingest `POST` | A bare number instead of a string, or readings not wrapped in `entries`. |
-| The event is accepted but nothing appears | The credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
+| `400` from the ingest `POST` | A bare number instead of a string, readings not wrapped in `entries`, or a tenant segment that is not a valid token. |
+| `202`, but nothing appears | Either the **tenant** does not exist — a well-formed name is accepted whether or not it names anything — or the credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
 | `429` from the ingest `POST` | The tenant is over its ingest rate limit — you are sending faster than its tier allows. |
+| `503` from the ingest `POST` | The event could not be handed to the stream, and it was **not** stored. This is the one status to retry; the others are terminal for that request. |
 | Unauthorized on an API call | The access token has expired, or you are sending the `identityToken` from the first call in step 3 instead of the `accessToken` from the second. |
 
 ## Where to go next {#where-to-go-next}

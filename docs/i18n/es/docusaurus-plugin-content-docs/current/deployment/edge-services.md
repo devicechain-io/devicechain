@@ -325,11 +325,26 @@ ASCII, nada de lo cual puede contener un token. Así, `plant-a/line-3/press-1` s
 como `sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` en LwM2M). El sufijo desambigua dos ids
 externos que de otro modo se reducirían a la misma cadena.
 
-**La consecuencia práctica:** buscar en la lista de dispositivos el nombre que usted configuró no
-encuentra nada, porque ese nombre vive en el campo **id externo** y la lista muestra tokens. Busque
-por id externo. Y cuando un dispositivo no aparezca en absoluto, revise el identificador 2 antes de
-sospechar del transporte — en LwM2M en particular, una identidad PSK equivocada falla en el
-handshake DTLS, antes del registro, y el rechazo deliberadamente no le dice nada.
+**La consecuencia práctica, y es peor de lo que parece:** un dispositivo aprovisionado
+automáticamente llega **sin nombre alguno**. El registro lleva solo el token, el id externo y el tipo
+de dispositivo, así que la lista de dispositivos de la consola lo muestra bajo su token generado
+`sp-…` / `lw-…` con un `—` en la columna Nombre. No hay nada ahí por lo que reconocerlo.
+
+Y no puede buscarlo. **La lista de dispositivos de la consola no tiene caja de búsqueda** —es un
+listado paginado sin más de Estado, Token, Nombre, Tipo, Descripción y Creado, sin columna de id
+externo— y la búsqueda de dispositivos de la API solo admite número de página, tamaño de página y
+tipo de dispositivo. Así que:
+
+- **En la consola**, localícelo por su token. El token generado incrusta el id externo
+  (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), así que paginar la lista y leer la
+  columna del token es toda la técnica.
+- **Por la API**, use `devicesByExternalId`, que recibe ids externos exactos y devuelve los
+  dispositivos. Es una consulta de coincidencia exacta, no una búsqueda: sin prefijos ni subcadenas.
+  Nada en la consola la invoca, así que esta vía es solo de API.
+
+Cuando un dispositivo no aparezca en absoluto, revise el identificador 2 antes de sospechar del
+transporte — en LwM2M en particular, una identidad PSK equivocada falla en el handshake DTLS, antes
+del registro, y el rechazo deliberadamente no le dice nada.
 :::
 
 ## LwM2M: lo que un operador debe saber
