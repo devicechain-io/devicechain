@@ -44,7 +44,7 @@ func TestGiveUpIsIndexedOnThePlatformDeadLetterStream(t *testing.T) {
 	msg := messaging.Message{
 		Subject: messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
 		Value:   []byte(`{"kind":"httpCall"}`), NumDelivered: messaging.MaxDeliver, StreamSeq: 41,
-	}
+	}.WithCorrelationID("corr-9")
 
 	c.deadLetter(tctx, msg, "rule-7", "httpCall", outcomeDead)
 
@@ -62,12 +62,28 @@ func TestGiveUpIsIndexedOnThePlatformDeadLetterStream(t *testing.T) {
 	if e.Source != connectorsArea {
 		t.Fatalf("index source = %q, want %q", e.Source, connectorsArea)
 	}
-	// 🔑 SUBJECT AND SEQUENCE ARE THE POINTER TO THE VERBATIM COPY, and they are the whole reason
-	// the envelope can leave Payload empty. Losing them turns the index entry into a note that
+	// 🔑 SUBJECT AND SEQUENCE ARE THE ORIGINAL'S COORDINATES ON THE SOURCE STREAM — the consumed
+	// message's own — and NOT the copy's on connector-dispatch.dead, whose position nothing here
+	// can know (the write returns no PubAck). Losing them turns the index entry into a note that
 	// something failed with no way to find what.
 	if e.Subject != msg.Subject || e.Sequence != msg.StreamSeq {
 		t.Fatalf("index locates the original at %q/%d, want %q/%d",
 			e.Subject, e.Sequence, msg.Subject, msg.StreamSeq)
+	}
+	// 🔴 AND THE JOIN ONTO THE DEAD SUBJECT IS THE CORRELATION, which is the only field the
+	// verbatim copy and this record share. Without it the copy is unfindable: an operator reading
+	// subject/sequence as the copy's address lands on a different message.
+	if e.Correlation != "corr-9" {
+		t.Fatalf("index correlation = %q, want %q — it is what joins this record to the verbatim "+
+			"copy on the dead subject", e.Correlation, "corr-9")
+	}
+	// ...and the verbatim copy really does carry the same id, or the join has one end only.
+	dead.mu.Lock()
+	copied := dead.messages[0].CorrelationID()
+	dead.mu.Unlock()
+	if copied != "corr-9" {
+		t.Fatalf("the verbatim copy carries correlation %q, want %q; without it the index entry "+
+			"names a message that cannot be found on the dead subject", copied, "corr-9")
 	}
 	// 🔑 THE REFERENCE IDENTIFIES THE WORK WITHIN ITS KIND, which for a connector dispatch
 	// is the rule that drove it — the thing an operator can act on. The action alone would
@@ -156,6 +172,58 @@ func TestAFailedIndexWriteStillAcksTheTerminalMessage(t *testing.T) {
 type countingAcker struct{ n int }
 
 func (a *countingAcker) Ack() error { a.n++; return nil }
+
+// orderRecordingAcker is a countingAcker that also records how much the index writer had
+// taken AT THE MOMENT OF THE ACK, which is the only way to observe an ordering from the
+// outside: both writes happen, so counting them afterwards cannot tell which came first.
+type orderRecordingAcker struct {
+	index        *fakeWriter
+	n            int
+	indexedAtAck int
+}
+
+func (a *orderRecordingAcker) Ack() error {
+	a.n++
+	a.index.mu.Lock()
+	a.indexedAtAck = len(a.index.messages)
+	a.index.mu.Unlock()
+	return nil
+}
+
+// 🔴 THE ACK COMES BEFORE THE INDEX, AND UNTIL NOW ONLY A COMMENT SAID SO. The ordering is
+// deliberate: the index is best-effort and its sink retries on its own deadline, so running
+// it FIRST would put a bounded-but-slow broker write between "durably dead-lettered" and
+// "stops redelivering" — and a pod dying in that window redelivers a dispatch that was
+// already terminal, which for an outbound connector is a duplicate call to a tenant's
+// endpoint. Swapping the two lines is a one-character-looking edit that no other assertion
+// in this package can see, because both writes still happen and both counts still match.
+func TestTheGiveUpIsAckedBeforeTheIndexIsWritten(t *testing.T) {
+	dead, index := &fakeWriter{}, &fakeWriter{}
+	c := newIndexingConsumer(dead, index)
+	acker := &orderRecordingAcker{index: index}
+	msg := messaging.NewConsumedMessage(
+		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
+		[]byte(`{}`), messaging.MaxDeliver, nil, acker)
+
+	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
+
+	if acker.n != 1 {
+		t.Fatalf("acks = %d, want 1; with no ack this proves nothing about what precedes one", acker.n)
+	}
+	if acker.indexedAtAck != 0 {
+		t.Errorf("the index writer had already taken %d message(s) when the ack ran; the index "+
+			"must follow the ack, or a slow index write holds a terminal dispatch open for "+
+			"redelivery", acker.indexedAtAck)
+	}
+	// The counterweight: "nothing indexed before the ack" is also true of an index that
+	// never runs, which would pass the assertion above while losing the operator's view.
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if len(index.messages) != 1 {
+		t.Fatalf("index writes = %d, want 1; ordering is only worth asserting about a write "+
+			"that happens", len(index.messages))
+	}
+}
 
 // An unconfigured index writer must not panic the worker. It is reachable only from a test-built
 // consumer today, but the nil check is what keeps that true rather than a comment saying so.

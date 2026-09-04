@@ -246,9 +246,11 @@ func TestWritebackTreatsAPurgedTenantAsTerminal(t *testing.T) {
 	}
 }
 
-// An already-terminal command is a normal outcome, not a failure: the write reports no
-// transition and the letter is done with.
-func TestWritebackAcksALetterWhoseCommandAlreadyFinished(t *testing.T) {
+// A command the write cannot settle is a normal outcome, not a failure: the write reports
+// no transition and the letter is done with. It covers BOTH misses of the predicate — a
+// command already terminal some other way, and one that has gone back to being live — which
+// is why the counter it feeds is named for the predicate rather than for finishing.
+func TestWritebackAcksALetterWhoseCommandIsNotAnswerable(t *testing.T) {
 	api := &dispositionRecorder{settled: false}
 	w := newTestWriteback(t, api)
 	ack := &countingAck{}

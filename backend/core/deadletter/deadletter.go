@@ -64,10 +64,22 @@ const (
 	// terminal sink (connector-dispatch.dead) holding the request VERBATIM, because a
 	// replay of an outbound send has to be byte-identical and an envelope is a summary.
 	// This letter is the INDEX entry for it: it puts the give-up in the one list an
-	// operator reads, and its Subject/Sequence point at the verbatim copy. So it carries
-	// no Payload — the body is already durable one stream over, and storing it twice
-	// would double the retention cost of the platform's noisiest error path to say the
-	// same thing.
+	// operator reads. So it carries no Payload — the body is already durable one stream
+	// over, and storing it twice would double the retention cost of the platform's
+	// noisiest error path to say the same thing.
+	//
+	// 🔴 SUBJECT AND SEQUENCE LOCATE THE ORIGINAL ON THE SOURCE STREAM, NOT THE COPY ON
+	// THE DEAD SUBJECT, and reading them the other way sends an operator to a sequence
+	// holding a different message. The copy's own sequence is not knowable to record:
+	// messaging.WriteMessages returns an error and no PubAck, so nothing that writes a
+	// dead letter ever learns where it landed. What joins the two is CORRELATION, which
+	// the verbatim copy carries through the writer — so the pointer is "this dispatch, at
+	// this position on connector-dispatch", and the copy is found by scanning the dead
+	// subject for that correlation id. Both streams share the platform's 7-day age
+	// limit, so the pointer is usually still good — but connector-dispatch is a HOT
+	// stream carrying every dispatch and the dead sink is a COLD one carrying only the
+	// give-ups, so on a busy instance the original can be discarded on the byte ceiling
+	// first. That is why the verbatim copy, not the pointer, is the durable record.
 	KindConnectorDispatch Kind = "connector-dispatch"
 )
 

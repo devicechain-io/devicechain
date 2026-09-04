@@ -72,10 +72,18 @@ type DeadLetterWriteback struct {
 
 	// settled counts commands this consumer drove to a terminal state.
 	settled prometheus.Counter
-	// alreadyFinished counts letters whose command had already reached a terminal state
-	// some other way. It is a normal outcome, not an error: the write is predicated on
-	// the states a response could still settle, so a late letter is a no-op by design.
-	alreadyFinished prometheus.Counter
+	// notAnswerable counts letters whose command was not in a state a response could
+	// settle. It is a normal outcome, not an error: the write is predicated on
+	// answerableStatusStrings(), so a letter that misses is a no-op by design.
+	//
+	// 🔑 IT IS TWO OUTCOMES, NOT ONE, AND THE NAME HAS TO ADMIT THAT. The predicate misses
+	// both a command that has already reached a terminal outcome some other way AND one
+	// that has gone BACK to being live — ReleaseClaim returning it to QUEUED, or a hold —
+	// which is a race this consumer LOST rather than work that finished. Calling the
+	// second "already finished" would report a command the platform still intends to
+	// deliver as one that is over, on the counter an operator would reach for to ask
+	// whether the write-back is doing anything.
+	notAnswerable prometheus.Counter
 	// notOurs counts letters for other kinds of work. Every producer shares one stream,
 	// so most of what arrives here belongs to somebody else.
 	notOurs prometheus.Counter
@@ -125,10 +133,12 @@ func NewDeadLetterWriteback(ms *core.Microservice, reader messaging.MessageReade
 			"Commands driven to a terminal state because the device's answer to them was "+
 				"dead-lettered, so a command whose response the platform lost stops reading "+
 				"as though it were still in flight.", nil),
-		alreadyFinished: ms.NewCounter("command_response_lost_already_finished_total",
-			"Dead-lettered responses whose command had already reached a terminal state some "+
-				"other way. Nothing is written: a late dead letter must not overwrite an "+
-				"outcome that really happened.", nil),
+		notAnswerable: ms.NewCounter("command_response_lost_not_answerable_total",
+			"Dead-lettered responses whose command was not in a state a response could settle: "+
+				"it had already reached a terminal outcome some other way, or it has gone back "+
+				"to being live (re-dispatched or held) since the answer was lost. Nothing is "+
+				"written in either case — a late dead letter must not overwrite an outcome that "+
+				"really happened, nor fail a command the platform still intends to deliver.", nil),
 		notOurs: ms.NewCounter("command_dead_letters_not_ours_total",
 			"Dead letters read from the shared stream that describe some other kind of work. "+
 				"Acked and ignored — every producer writes to one stream.", nil),
@@ -305,7 +315,10 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 				"is FAILED, with the reason on the record.")
 		w.settled.Inc()
 	} else {
-		w.alreadyFinished.Inc()
+		// Not settled, and the two reasons for that are deliberately counted together:
+		// see notAnswerable. Distinguishing them would take a second read of the row,
+		// which is a database round trip bought to label a no-op.
+		w.notAnswerable.Inc()
 	}
 	w.ack(msg)
 }

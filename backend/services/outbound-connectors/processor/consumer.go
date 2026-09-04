@@ -434,9 +434,16 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 // missing the noisiest egress path in the product.
 //
 // 🔑 IT IS AN INDEX ENTRY, NOT A SECOND COPY. The verbatim request stays where it is — a replay of an
-// outbound send has to be byte-identical, which a summary cannot be — so the envelope carries the
-// original's SUBJECT and SEQUENCE (the fields that exist to locate it) and no Payload. Writing the
-// body twice would double the retention cost of this path to say the same thing.
+// outbound send has to be byte-identical, which a summary cannot be — so the envelope carries no
+// Payload. Writing the body twice would double the retention cost of this path to say the same thing.
+//
+// 🔴 SUBJECT AND SEQUENCE ARE THE ORIGINAL'S COORDINATES ON connector-dispatch, NOT THE COPY'S ON
+// connector-dispatch.dead. They are msg's own, and msg is what was consumed from the source stream;
+// the copy's sequence cannot be recorded here at all, because WriteMessages returns an error and no
+// PubAck, so the write never learns where it landed. CORRELATION is the join onto the dead subject —
+// it rides through the writer onto the verbatim copy — so an operator locates the original by
+// subject/sequence and the copy by scanning the dead subject for the correlation id. Reading these
+// fields as the copy's address sends them to a sequence holding somebody else's message.
 //
 // 🔑 BEST-EFFORT, AND THAT IS A DIFFERENT THING FROM FAIL-OPEN HERE. The authoritative record is
 // already durable one line above; failing to write the index loses the operator's VIEW of a give-up,

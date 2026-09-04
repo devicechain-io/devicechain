@@ -1124,8 +1124,8 @@ func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (
 }
 
 // ResponseLostReason is the fixed sentence written into a command's Error column when
-// the device's answer to it was dead-lettered — the platform accepted the response,
-// exhausted every attempt to record it, and gave up.
+// the device's answer to it was dead-lettered — the platform accepted the response, could
+// not record it against the command, and gave up.
 //
 // 🔴 IT IS FIXED, NOT INTERPOLATED, and the dead letter's own Detail is deliberately not
 // spliced in. Detail carries the underlying error text, which core/deadletter warns is
@@ -1133,8 +1133,16 @@ func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (
 // persistence failure's text can name hosts, drivers and schema. The dead-letter store is
 // where an operator reads the cause; this column says the part the tenant needs, which is
 // that the outcome the device reported is not recoverable.
+//
+// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, AND THAT IS WHAT LETS THE WRITE-BACK
+// FILTER ON KIND ALONE. The consumer settles any command-response dead letter, whatever
+// Reason it carries; today the only producer writes ReasonExhausted, but an unprocessable
+// one would settle the same command through the same call. A sentence claiming the answer
+// was retried "after every attempt" would then be a statement about a retry that never
+// happened — so the claim is left out rather than guarded by a Reason check that a second
+// producer would have to remember to keep in step with.
 const ResponseLostReason = "the device answered this command and the platform could not " +
-	"record the answer after every attempt; the outcome it reported is not recoverable"
+	"record the answer; the outcome it reported is not recoverable"
 
 // MarkResponseLost drives a command to FAILED because the device's answer to it was
 // dead-lettered, reporting whether THIS call performed the transition.
