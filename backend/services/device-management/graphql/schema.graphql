@@ -569,6 +569,34 @@ type GeoFenceGeometry {
     geometry: String!
 }
 
+# One alarm a bulk acknowledge did not act on, and why.
+type AlarmAckRefusal {
+    # The alarm this refusal is about, exactly as the caller spelled it.
+    token: String!
+    # The machine-readable classification. Branch on this, never on `reason`.
+    #
+    # ALARM_NOT_FOUND is the only value, and that is a fact about acknowledgment rather than an
+    # omission: acknowledgment is orthogonal to ACTIVE/CLEARED (either may be acknowledged) and
+    # is idempotent, so no alarm STATE refuses it. A token naming nothing is the whole failure
+    # space. Treat the field as an open vocabulary anyway.
+    code: String!
+    # Why it was refused, in client-safe terms.
+    reason: String!
+}
+
+# What one bulk acknowledge did.
+#
+# Every token the caller supplied appears in EXACTLY ONE of the two lists, so a selection can be
+# reconciled completely rather than inferred from a count.
+type BulkAcknowledgeAlarmsResult {
+    # The alarms that are now acknowledged — including any that ALREADY were, matching
+    # acknowledgeAlarm, which likewise returns an already-acknowledged alarm rather than
+    # treating the repeat as a failure.
+    acknowledged: [Alarm!]!
+    # The tokens that named no alarm. Empty for a clean request.
+    refusals: [AlarmAckRefusal!]!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -1793,6 +1821,22 @@ type Mutation {
     # Acknowledge a raised alarm (operator action). The acknowledging identity is the
     # authenticated subject, recorded server-side — not a client-supplied value.
     acknowledgeAlarm(token: String!): Alarm!
+    # Acknowledge many raised alarms at once — the fan-out counterpart of acknowledgeAlarm, for
+    # an operator working through an alarm storm. Same authority, same transition, and the same
+    # server-side acknowledging identity.
+    #
+    # 🔑 IT IS PARTIAL. A token naming no alarm is REFUSED and named in `refusals`; every other
+    # alarm is still acknowledged. A stale selection is the normal case here — alarms are being
+    # erased and devices deleted while an operator works — so refusing the whole request over one
+    # vanished row would leave no way to make progress but to bisect the list by hand.
+    #
+    # 🔴 AN EMPTY LIST ACKNOWLEDGES NOTHING. It is not "all alarms" and never has been.
+    #
+    # At most 2000 tokens per request. Over that is a GraphQL ERROR rather than a refusal list:
+    # it is a fault in how the caller chunked its work, not a verdict about any alarm. Duplicate
+    # tokens are collapsed and both result lists come back in the order each token was first
+    # named, so the answer is a deterministic function of the request.
+    acknowledgeAlarms(tokens: [String!]!): BulkAcknowledgeAlarmsResult!
     # Clear a raised alarm (manual operator override).
     clearAlarm(token: String!): Alarm!
     # Set (upsert) an entity attribute.
