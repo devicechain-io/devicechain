@@ -21,7 +21,7 @@
   "dirtyTestWarning": "Tienes cambios sin guardar. Esto prueba la última configuración guardada — guarda primero para probar tus cambios.",
   "emptyProviders": "Aún no hay proveedores. Crea uno y luego concédelo a un nivel para habilitar la redacción de reglas por lenguaje natural para esos inquilinos.",
   "enabledHint": "— un proveedor deshabilitado permanece listado pero nunca sirve una llamada.",
-  "endpointDescription": "Anula la URL base predeterminada del tipo (autoalojado / con proxy). En blanco = el valor predeterminado integrado.",
+  "endpointDescription": "Anula la URL base predeterminada del tipo (autoalojado / con proxy). En blanco = el valor predeterminado integrado. Obligatorio para un tipo sin valor predeterminado, como openai-compatible.",
   "endpointInvalidError": "El endpoint debe ser una URL http(s), o quedar en blanco para el valor predeterminado del tipo.",
   "endpointLabel": "Endpoint",
   "endpointPlaceholder": "https://api.anthropic.com",

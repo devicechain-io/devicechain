@@ -34,10 +34,16 @@ type SearchResultsPagination {
 }
 
 # An instance-scoped, operator-managed inference-provider config (ADR-056 §4). The
-# `kind` selects the provider implementation (`anthropic` at GA); `endpoint`
-# overrides the kind's default base URL (for a self-hosted / proxied model); `params`
-# is the opaque per-kind tuning document. The API key is never returned — `hasSecret`
-# reports only whether one is configured.
+# `kind` selects the provider implementation; `params` is the opaque per-kind tuning
+# document. The API key is never returned — `hasSecret` reports only whether one is
+# configured.
+#
+# `endpoint` means one of two things depending on the kind, and the difference is
+# enforced at write. For a kind with a built-in base URL (`anthropic`) it is an
+# optional OVERRIDE, for a self-hosted or proxied deployment. For a kind defined by
+# its address (`openai-compatible` — vLLM, Ollama, DeepSeek, or anything else serving
+# the chat-completions API) there is no default to override and it is REQUIRED: a
+# provider of that kind written without one is refused rather than stored unusable.
 type AiProvider {
     id: ID!
     createdAt: String
@@ -121,6 +127,8 @@ input AiProviderCreateRequest {
     name: String
     description: String
     kind: String!
+    # The provider API base URL. Optional for a kind with a built-in default; REQUIRED
+    # for a kind defined by its address, such as `openai-compatible`.
     endpoint: String
     model: String!
     params: String
