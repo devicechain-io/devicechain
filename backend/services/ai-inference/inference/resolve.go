@@ -231,6 +231,17 @@ func (r *Resolver) build(ctx context.Context, p *model.AIProvider) (*Resolved, e
 			return nil, err
 		}
 		return &Resolved{Provider: provider, Token: p.Token, Kind: p.Kind}, nil
+	case model.AIProviderKindOpenAICompatible:
+		// The endpoint is REQUIRED here, unlike above: this kind has no built-in base URL,
+		// and the constructor refuses an empty one rather than sending a real credential
+		// and a tenant's prompt to whatever a bare path resolves to. Everything else on
+		// this path — key resolution, the bounds, the consent gate that already ran — is
+		// identical, which is the point of the interface.
+		provider, err := newOpenAICompatibleProvider(r.client, p.Endpoint, p.ModelID, string(key), r.bounds.MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
+		return &Resolved{Provider: provider, Token: p.Token, Kind: p.Kind}, nil
 	default:
 		return nil, fmt.Errorf("%w: no implementation for provider kind %q", ErrUnavailable, p.Kind)
 	}

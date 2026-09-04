@@ -6,8 +6,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dcctl/deadletters"
 	"github.com/devicechain-io/dcctl/sim"
@@ -62,8 +64,12 @@ func init() {
 	deadLettersCmd.PersistentFlags().StringVar(&dlPassword, "password", "", "password for the identity (required)")
 
 	deadLettersListCmd.Flags().StringVarP(&dlTenant, "tenant", "t", "", "only this tenant's records")
+	// 🔑 THE VOCABULARY IS DERIVED, NOT TYPED OUT. This help used to carry its own copy of
+	// the kind list, which was already one short the moment a fourth kind was added — and
+	// the symptom is an operator being told a real filter value does not exist, on the one
+	// surface whose job is to help them find what failed.
 	deadLettersListCmd.Flags().StringVar(&dlKind, "kind", "",
-		"only this kind: detection-action, notification, or command-response")
+		"only this kind: "+strings.Join(deadletter.Kinds(), ", "))
 	deadLettersListCmd.Flags().StringVar(&dlSource, "source", "", "only records written by this functional area")
 	deadLettersListCmd.Flags().StringVar(&dlSince, "since", "",
 		"only records from this RFC3339 time onward (e.g. 2026-09-04T00:00:00Z)")

@@ -118,6 +118,12 @@ func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSO
 	if err != nil {
 		return nil, "", err
 	}
+	// A kind with no built-in base URL is unusable without one, so it is refused at the
+	// write rather than at the first call — the same fail-closed reasoning that keeps an
+	// unregistered kind out of the store.
+	if err := validateEndpointForKind(AIProviderKind(request.Kind), endpoint); err != nil {
+		return nil, "", err
+	}
 	params, err := paramsJSON(request.Params)
 	if err != nil {
 		return nil, "", err

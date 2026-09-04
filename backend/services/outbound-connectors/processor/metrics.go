@@ -50,6 +50,11 @@ const (
 	// last delivery the broker will make, so the dispatch could be neither delivered nor durably
 	// dead-lettered: an explicit, alertable LOSS signal (never silently swallowed).
 	outcomeDeadWriteFailed = "dead_write_failed"
+	// outcomeDeadIndexFailed — the give-up was durably dead-lettered on this service's own terminal
+	// subject, but its INDEX entry on the platform dead-letter stream could not be written. Nothing
+	// is lost that a replay needs; what is lost is the operator's view of it in the one list they
+	// read, which is worth a counter of its own rather than a log line.
+	outcomeDeadIndexFailed = "dead_index_failed"
 )
 
 // actionUnknown labels a message whose action kind could not be determined (malformed), so the

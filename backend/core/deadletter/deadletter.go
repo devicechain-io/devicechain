@@ -57,7 +57,54 @@ const (
 	// KindCommandResponse is a device's reply to a command that could not be recorded
 	// against that command.
 	KindCommandResponse Kind = "command-response"
+	// KindConnectorDispatch is an outbound send — a webhook call or a broker publish to
+	// a tenant's registered connector — that the connectors service gave up on.
+	//
+	// 🔑 IT IS THE ONE KIND WHOSE ORIGINAL LIVES ELSEWHERE. That service keeps its own
+	// terminal sink (connector-dispatch.dead) holding the request VERBATIM, because a
+	// replay of an outbound send has to be byte-identical and an envelope is a summary.
+	// This letter is the INDEX entry for it: it puts the give-up in the one list an
+	// operator reads. So it carries no Payload — the body is already durable one stream
+	// over, and storing it twice would double the retention cost of the platform's
+	// noisiest error path to say the same thing.
+	//
+	// 🔴 SUBJECT AND SEQUENCE LOCATE THE ORIGINAL ON THE SOURCE STREAM, NOT THE COPY ON
+	// THE DEAD SUBJECT, and reading them the other way sends an operator to a sequence
+	// holding a different message. The copy's own sequence is not knowable to record:
+	// messaging.WriteMessages returns an error and no PubAck, so nothing that writes a
+	// dead letter ever learns where it landed. What joins the two is CORRELATION, which
+	// the verbatim copy carries through the writer — so the pointer is "this dispatch, at
+	// this position on connector-dispatch", and the copy is found by scanning the dead
+	// subject for that correlation id. Both streams share the platform's 7-day age
+	// limit, so the pointer is usually still good — but connector-dispatch is a HOT
+	// stream carrying every dispatch and the dead sink is a COLD one carrying only the
+	// give-ups, so on a busy instance the original can be discarded on the byte ceiling
+	// first. That is why the verbatim copy, not the pointer, is the durable record.
+	KindConnectorDispatch Kind = "connector-dispatch"
 )
+
+// allKinds is the vocabulary in one place, so a reader that has to OFFER the set — the
+// dcctl `--kind` filter's help, and anything else that lists it — derives it instead of
+// typing it out again.
+//
+// 🔴 IT IS DECLARED BESIDE THE CONSTANTS FOR THE REASON EVERY LIST-OF-A-LIST IN THIS TREE
+// IS. dcctl's help already carried a hand-written copy of three of these, and a
+// hand-written copy of a closed set is wrong the first time the set grows: an operator is
+// then told a filter value does not exist, on the one surface whose job is to help them
+// find what failed. Adding a Kind above without adding it here leaves it unlistable, which
+// is a visible gap rather than a silent one — but keep them together anyway.
+var allKinds = []Kind{
+	KindDetectionAction, KindNotification, KindCommandResponse, KindConnectorDispatch,
+}
+
+// Kinds returns the Kind vocabulary as strings, in declaration order.
+func Kinds() []string {
+	out := make([]string, 0, len(allKinds))
+	for _, k := range allKinds {
+		out = append(out, string(k))
+	}
+	return out
+}
 
 // Reason is why it was given up on, bounded for the same reasons Kind is.
 type Reason string
@@ -69,6 +116,16 @@ const (
 	// ReasonUnprocessable means the work was accepted and then found to be something
 	// this consumer can never complete, so retrying it would only burn the cap.
 	ReasonUnprocessable Reason = "unprocessable"
+	// ReasonShed means the work was refused on a GOVERNED CEILING rather than failing —
+	// the tenant was over its rate and stayed over it for longer than the smoothing
+	// budget allows.
+	//
+	// 🔑 IT IS ITS OWN REASON BECAUSE THE REMEDY IS DIFFERENT AND THE WORK IS NOT BROKEN.
+	// Folded into ReasonExhausted it would read as "we tried and failed", sending an
+	// operator to look at a destination that is perfectly healthy; folded into
+	// ReasonUnprocessable it would read as poison, when it is the one reason here whose
+	// letter describes work that would succeed if it were sent again.
+	ReasonShed Reason = "shed"
 )
 
 // Envelope is one dead letter. It is JSON rather than protobuf, unlike the failed-event

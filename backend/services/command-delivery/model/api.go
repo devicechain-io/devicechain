@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -1115,6 +1116,71 @@ func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (
 		Updates(map[string]any{
 			"status": CommandFailed.String(),
 			"error":  sql.NullString{String: reason, Valid: true},
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ResponseLostReason is the fixed sentence written into a command's Error column when
+// the device's answer to it was dead-lettered — the platform accepted the response, could
+// not record it against the command, and gave up.
+//
+// 🔴 IT IS FIXED, NOT INTERPOLATED, and the dead letter's own Detail is deliberately not
+// spliced in. Detail carries the underlying error text, which core/deadletter warns is
+// not always safe to show: this column is read by the TENANT on its own command, and a
+// persistence failure's text can name hosts, drivers and schema. The dead-letter store is
+// where an operator reads the cause; this column says the part the tenant needs, which is
+// that the outcome the device reported is not recoverable.
+//
+// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, AND THAT IS WHAT LETS THE WRITE-BACK
+// FILTER ON KIND ALONE. The consumer settles any command-response dead letter, whatever
+// Reason it carries; today the only producer writes ReasonExhausted, but an unprocessable
+// one would settle the same command through the same call. A sentence claiming the answer
+// was retried "after every attempt" would then be a statement about a retry that never
+// happened — so the claim is left out rather than guarded by a Reason check that a second
+// producer would have to remember to keep in step with.
+const ResponseLostReason = "the device answered this command and the platform could not " +
+	"record the answer; the outcome it reported is not recoverable"
+
+// MarkResponseLost drives a command to FAILED because the device's answer to it was
+// dead-lettered, reporting whether THIS call performed the transition.
+//
+// 🔑 FAILED, NOT TIMEOUT, AND NOT A NEW STATE. The vocabulary already has the shape this
+// needs: MarkUndeliverable drives a command the platform cannot deliver to FAILED and
+// writes WHY into the same Error column a device's own failure response uses, on the
+// argument that from the caller's side both mean "this command will not happen, and here
+// is why". A lost response is that same statement one step later in the lifecycle.
+// TIMEOUT is the natural-looking choice and is the wrong one for exactly the reason
+// PARKED exists: it means "dispatched, and never answered", which blames hardware that in
+// fact answered. EXPIRED claims the platform never sent it, which is false. SUCCESSFUL —
+// and FAILED read as the device's own verdict — would claim to know an outcome nobody
+// recorded. So the status says what the platform can say (this command did not complete)
+// and the Error column carries the part only this path knows (an answer existed, and the
+// platform lost it).
+//
+// 🔴 IT CANNOT CLOBBER A REAL TERMINAL. The from-set is answerableStatusStrings() — the
+// same two states in which a response could have settled this command — so a row that has
+// since reached SUCCESSFUL, FAILED, TIMEOUT, EXPIRED or CANCELLED some other way matches
+// nothing and is left exactly as it is. A late dead letter for a command that a
+// redelivery answered, the sweep expired, or a human cancelled is a no-op reporting false,
+// never a rewrite. The same predicate declines a row that has gone BACK to QUEUED
+// (ReleaseClaim) or HELD: that is a live command the platform still intends to deliver,
+// and it must not be failed on the strength of an answer to an earlier dispatch.
+//
+// Keyed by token rather than id because the token is what the dead letter carries — it is
+// the client-facing key the response envelope names — and the write is confined to one
+// tenant by the scope callbacks, which is what makes that token unambiguous.
+func (api *Api) MarkResponseLost(ctx context.Context, token string) (bool, error) {
+	if strings.TrimSpace(token) == "" {
+		return false, errors.New("cannot record a lost response without a command token")
+	}
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where("token = ? AND status IN ?", token, answerableStatusStrings()).
+		Updates(map[string]any{
+			"status": CommandFailed.String(),
+			"error":  sql.NullString{String: ResponseLostReason, Valid: true},
 		})
 	if res.Error != nil {
 		return false, res.Error

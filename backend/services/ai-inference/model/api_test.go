@@ -146,10 +146,15 @@ func TestProviderCrud(t *testing.T) {
 
 // TestUnknownKindRejected pins the fail-closed vocabulary gate: a kind with no shipped
 // Provider impl is refused at write.
+//
+// It used to name `openai-compatible` as the example, which stopped being one when that
+// kind gained an impl. The example is now a value nothing will ever implement, on
+// purpose: an example drawn from the "reserved but not yet built" list is a test that
+// silently stops testing the day the thing is built.
 func TestUnknownKindRejected(t *testing.T) {
 	api := newTestApi(t)
 	req := claudeReq("x", nil)
-	req.Kind = "openai-compatible" // reserved, but no impl at GA
+	req.Kind = "no-such-provider-family"
 	_, err := api.CreateAIProvider(context.Background(), req)
 	assert.ErrorIs(t, err, ErrUnknownProviderKind)
 }
