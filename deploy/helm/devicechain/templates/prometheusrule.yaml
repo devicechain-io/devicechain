@@ -122,8 +122,21 @@ spec:
             severity: critical
             devicechain_instance: {{ $ns }}
           annotations:
-            summary: "REACT is dropping un-dispatchable derived events"
-            description: "Derived events are being dropped after the redelivery cap — raised alarms or dispatched commands are being lost. A REACT sink (alarm/command) is likely down."
+            summary: "REACT is giving up on un-dispatchable derived events"
+            description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
+        - alert: DeadLetterWriteLost
+          expr: |
+            sum(rate(devicechain_eventprocessing_react_events_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
+              + sum(rate(devicechain_notificationmanagement_notifications_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
+              + sum(rate(devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
+              > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $ns }}
+          annotations:
+            summary: "work is being lost with no record of it"
+            description: "A consumer gave up on a message AND could not write it to the dead-letter stream, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. The dead-letter stream is the thing to look at: JetStream unreachable, or the stream at its byte ceiling."
         - alert: ReactConnectorEgressShedding
           expr: sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

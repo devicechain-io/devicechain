@@ -80,10 +80,16 @@ The telemetry path is at-least-once end to end, so plan for a repeat rather than
 When a downstream system is unavailable, the message is left unacknowledged and retried on a timer
 rather than hammered. After five delivery attempts, roughly four minutes apart in total:
 
-- an **outbound connector** request is **dead-lettered**, so it can be inspected or replayed;
-- a **detection** is **dropped with a loud error** — there is no dead-letter queue on that path. A
-  dropped *raise* will not re-appear until the condition clears and breaches again; a dropped
-  *resolve* leaves an alarm active that should have cleared.
+- an **outbound connector** request is **dead-lettered**, so it can be inspected;
+- a **detection** whose actions could not be dispatched is **dead-lettered too**, with a loud error.
+
+:::caution Dead-lettered is recorded, not retried
+Nothing re-runs a dead letter. The record exists so a failure is visible and diagnosable
+rather than silent — the consequences of the failure itself stand either way. A *raise*
+that was not dispatched will not re-appear until the condition clears and breaches again,
+and a *resolve* that was not dispatched leaves an alarm active that should have cleared.
+Treat a dead letter as something to investigate, not something that will drain on its own.
+:::
 
 The `ReactPoisonDropping` alert exists for exactly that case and should be treated as urgent.
 

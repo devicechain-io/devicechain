@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
@@ -35,6 +36,13 @@ type ReactDispatcher struct {
 	reader     messaging.MessageReader
 	dispatcher *react.Dispatcher
 	metrics    *reactMetrics
+	// dead records an event whose actions could not be dispatched (ADR-024). Nil when no
+	// dead-letter writer is configured, in which case the event is dropped as before.
+	dead *deadletter.Sink
+	// area names this service on the dead letters it writes. Carried rather than
+	// re-derived so a letter written by a service says which service wrote it even after
+	// the kind moves.
+	area string
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -50,13 +58,20 @@ type ReactDispatcher struct {
 // the whole REACT wiring lives behind one type.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
-	connectorRate react.ConnectorRateGate) *ReactDispatcher {
+	connectorRate react.ConnectorRateGate, dead deadletter.Writer) *ReactDispatcher {
 	m := newReactMetrics(ms)
-	return &ReactDispatcher{
+	rd := &ReactDispatcher{
 		reader:     reader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 	}
+	if ms != nil {
+		rd.area = ms.FunctionalArea
+	}
+	if dead != nil {
+		rd.dead = deadletter.NewSink(dead, func(error) {})
+	}
+	return rd
 }
 
 // Start launches the consumer goroutine. It is called after the NATS manager is started (the reader
@@ -150,11 +165,14 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 		rd.ack(msg)
 		return
 	}
-	// Retry: redeliver, unless the cap is exhausted — then give up (poison) so one un-dispatchable
-	// event cannot redeliver forever.
+	// Retry: redeliver, unless the cap is exhausted — then give up so one un-dispatchable
+	// event cannot redeliver forever. Giving up now means DEAD-LETTERING (ADR-024): the
+	// event's actions are recorded where they can be inspected rather than vanishing into
+	// a log line and a counter.
 	if msg.NumDelivered >= messaging.MaxDeliver {
 		log.Error().Str("rule", ev.RuleID).Str("series", ev.Series).Int("attempts", msg.NumDelivered).
-			Msg("Dropping derived event after the redelivery cap; its actions could not be dispatched (no dead-letter path yet).")
+			Msg("Dead-lettering derived event after the redelivery cap; its actions could not be dispatched.")
+		rd.deadLetter(tctx, msg, ev)
 		rd.metrics.recordPoisonDropped()
 		rd.ack(msg)
 		return
@@ -163,6 +181,44 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	// immediate nak would burn MaxDeliver in ~1.4ms inside an outage, and the
 	// derived event redelivers on ack timeout. Reference: event-sources' settler
 	// (ADR-030).
+}
+
+// deadLetter records an un-dispatchable derived event on the dead-letter stream.
+//
+// 🔴 THE ACK HAPPENS EITHER WAY, and that is deliberate rather than sloppy. This runs only
+// at the redelivery cap, so JetStream will not redeliver whatever the consumer does —
+// leaving the message unacked here would not buy another attempt, it would leave it
+// dangling. So the write gets its own bounded in-process retries (core/deadletter), and a
+// write that still fails is counted as a LOSS rather than logged as something that will
+// be retried.
+//
+// A nil sink means the deployment has no dead-letter writer wired, which is the shape unit
+// tests build. The event is dropped as it always was, and the counter above still moves.
+func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Message, ev runtime.DerivedEvent) {
+	if rd.dead == nil {
+		return
+	}
+	err := rd.dead.Write(tctx, deadletter.Envelope{
+		Kind:   deadletter.KindDetectionAction,
+		Reason: deadletter.ReasonExhausted,
+		Source: rd.area,
+		Summary: "a detection fired and its authored actions could not be dispatched after " +
+			"every delivery attempt",
+		Attempts:    msg.NumDelivered,
+		Subject:     msg.Subject,
+		Sequence:    msg.StreamSeq,
+		Correlation: msg.CorrelationID(),
+		Reference:   ev.RuleID,
+		OccurredAt:  time.Now().UTC(),
+		Payload:     msg.Value,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).
+			Msg("LOST derived event: it could be neither dispatched nor dead-lettered.")
+		rd.metrics.recordDeadLetterLost()
+		return
+	}
+	rd.metrics.recordDeadLettered()
 }
 
 // ack best-effort acks, logging a failed ack (a redelivery re-dispatches idempotently).

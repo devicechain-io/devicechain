@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -182,5 +183,146 @@ func TestReactHandleLeavesResolverErrorUnacked(t *testing.T) {
 	}
 	if ack.acks != 0 {
 		t.Fatalf("a resolver error must be left unacked (retry), not acked: acks=%d", ack.acks)
+	}
+}
+
+// deadRecorder captures what an arm writes, so the test can assert on the letter rather
+// than only on the fact that something was written.
+type deadRecorder struct {
+	msgs []messaging.Message
+	err  error
+}
+
+func (d *deadRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	if d.err != nil {
+		return d.err
+	}
+	d.msgs = append(d.msgs, msgs...)
+	return nil
+}
+
+func (d *deadRecorder) letters(t *testing.T) []deadletter.Envelope {
+	t.Helper()
+	out := make([]deadletter.Envelope, 0, len(d.msgs))
+	for _, m := range d.msgs {
+		e, err := deadletter.Unmarshal(m.Value)
+		if err != nil {
+			t.Fatalf("a written dead letter does not read back: %v", err)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func reactDispatcherWithSink(resolver react.RuleResolver, sink react.CommandSink,
+	dead deadletter.Writer) *ReactDispatcher {
+	rd := newTestReactDispatcher(resolver, sink)
+	rd.area = "event-processing"
+	rd.dead = deadletter.NewSink(dead, func(error) {})
+	return rd
+}
+
+// 🔴 THE ARM. An event whose actions could not be dispatched used to end as a log line and
+// a counter; the letter is what makes it something an operator can look at.
+func TestReactDeadLettersAtTheCap(t *testing.T) {
+	dead := &deadRecorder{}
+	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, dead)
+	ack := &fakeAck{}
+
+	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, ack))
+
+	letters := dead.letters(t)
+	if len(letters) != 1 {
+		t.Fatalf("wrote %d dead letters at the cap, want 1", len(letters))
+	}
+	e := letters[0]
+	if e.Kind != deadletter.KindDetectionAction {
+		t.Fatalf("kind = %q", e.Kind)
+	}
+	if e.Reference != "acme/p@1/r1" {
+		t.Fatalf("the letter does not name the rule that fired: %q", e.Reference)
+	}
+	if e.Attempts != messaging.MaxDeliver {
+		t.Fatalf("attempts = %d, want %d", e.Attempts, messaging.MaxDeliver)
+	}
+	if e.Subject == "" || e.OccurredAt.IsZero() || len(e.Payload) == 0 {
+		t.Fatalf("the letter cannot be located or understood: %+v", e)
+	}
+	// 🔑 THE ACK STILL HAPPENS. This runs at the cap, so no redelivery follows whatever
+	// the consumer does — leaving it unacked would strand the message, not retry it.
+	if ack.acks != 1 {
+		t.Fatalf("a dead-lettered event must still be acked: acks=%d", ack.acks)
+	}
+}
+
+// 🔴 AND NOT BELOW THE CAP. An event still being retried has not been given up on, and a
+// letter for it would say the platform had stopped trying when it had not.
+func TestReactDoesNotDeadLetterBelowTheCap(t *testing.T) {
+	dead := &deadRecorder{}
+	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, dead)
+
+	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), 1, &fakeAck{}))
+
+	if len(dead.msgs) != 0 {
+		t.Fatalf("wrote %d dead letters below the cap, want 0", len(dead.msgs))
+	}
+}
+
+// 🔴 THE UNATTRIBUTABLE PATHS STAY DROPS. A message with no parseable tenant, a forged
+// tenant, or an undecodable body is not work the platform accepted and failed to finish —
+// writing it to a tenant's dead-letter subject would file it against a tenant it was never
+// demonstrably from.
+func TestReactDoesNotDeadLetterWhatItCannotAttribute(t *testing.T) {
+	for name, msg := range map[string]messaging.Message{
+		"undecodable": messaging.NewConsumedMessage("dc.acme.derived-events", []byte("not json"),
+			messaging.MaxDeliver, nil, &fakeAck{}),
+		"no tenant in subject": messaging.NewConsumedMessage("derived-events", []byte("{}"),
+			messaging.MaxDeliver, nil, &fakeAck{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dead := &deadRecorder{}
+			rd := reactDispatcherWithSink(reactFakeResolver{found: true}, &reactFakeSink{}, dead)
+			rd.handle(msg)
+			if len(dead.msgs) != 0 {
+				t.Fatalf("an unattributable message was dead-lettered: %s", name)
+			}
+		})
+	}
+
+	// The payload-tenant mismatch, which needs a well-formed event to reach.
+	dead := &deadRecorder{}
+	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true}, &reactFakeSink{}, dead)
+	ev := sendCmdEvent()
+	ev.Tenant = "globex"
+	rd.handle(derivedMsg(t, "acme", ev, messaging.MaxDeliver, &fakeAck{}))
+	if len(dead.msgs) != 0 {
+		t.Fatal("a forged-tenant event was dead-lettered under the subject's tenant")
+	}
+}
+
+// 🔴 A DISPATCHER WITH NO SINK MUST STILL DROP RATHER THAN PANIC. That is the shape a
+// deployment without the stream has, and the shape every other test in this file builds.
+func TestReactWithNoDeadLetterSinkStillDrops(t *testing.T) {
+	rd := newTestReactDispatcher(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true})
+	ack := &fakeAck{}
+	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, ack))
+	if ack.acks != 1 {
+		t.Fatalf("acks=%d", ack.acks)
+	}
+}
+
+// A write that never succeeds must not stop the event being acked: no redelivery follows,
+// so leaving it unacked would strand it on top of losing it.
+func TestReactAcksEvenWhenTheDeadLetterWriteFails(t *testing.T) {
+	dead := &deadRecorder{err: errors.New("broker is away")}
+	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, dead)
+	ack := &fakeAck{}
+	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, ack))
+	if ack.acks != 1 {
+		t.Fatalf("a lost dead letter must still ack its source: acks=%d", ack.acks)
 	}
 }

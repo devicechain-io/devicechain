@@ -12,6 +12,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
 )
@@ -154,4 +155,85 @@ func TestLogNotifierNeverFails(t *testing.T) {
 		State:      "ACTIVE",
 	})
 	assert.Nil(t, err)
+}
+
+// deadRecorder captures what the arm writes so a test can read the letter back.
+type deadRecorder struct {
+	msgs []messaging.Message
+	err  error
+}
+
+func (d *deadRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	if d.err != nil {
+		return d.err
+	}
+	d.msgs = append(d.msgs, msgs...)
+	return nil
+}
+
+func processorWithDeadLetters(n Notifier, dead deadletter.Writer) *NotificationProcessor {
+	np := newTestProcessor(n)
+	np.area = "notification-management"
+	np.dead = deadletter.NewSink(dead, func(error) {})
+	return np
+}
+
+// 🔴 THE ARM. An alarm that reached nobody used to end as a log line, and an alarm nobody
+// was paged about is exactly the failure an operator most needs to be able to find.
+func TestANotificationThatReachedNobodyIsDeadLettered(t *testing.T) {
+	dead := &deadRecorder{}
+	np := processorWithDeadLetters(&fakeNotifier{err: errors.New("smtp is down")}, dead)
+	ack := &recordingAck{}
+
+	np.dispatchOne(context.Background(),
+		msgWith(testAlarmSubject, validEventBytes(t), messaging.MaxDeliver, ack))
+
+	assert.Len(t, dead.msgs, 1, "no dead letter was written for an alarm that reached nobody")
+	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	assert.Nil(t, err)
+	assert.Equal(t, deadletter.KindNotification, e.Kind)
+	assert.Equal(t, "alarm-1", e.Reference, "the letter must name the alarm nobody was paged about")
+	assert.Equal(t, messaging.MaxDeliver, e.Attempts)
+	assert.Contains(t, e.Detail, "smtp is down", "the delivery error is what makes the letter diagnosable")
+	assert.NotEmpty(t, e.Payload)
+	// The ack still happens: at the cap no redelivery follows, so leaving it unacked
+	// would strand the message rather than retry it.
+	assert.Equal(t, 1, ack.acked)
+}
+
+// 🔴 AND NOT BELOW THE CAP — an alarm still being retried has not been given up on.
+func TestANotificationBelowTheCapIsNotDeadLettered(t *testing.T) {
+	dead := &deadRecorder{}
+	np := processorWithDeadLetters(&fakeNotifier{err: errors.New("smtp is down")}, dead)
+	ack := &recordingAck{}
+
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, validEventBytes(t), 1, ack))
+
+	assert.Empty(t, dead.msgs, "an alarm still being retried was reported as given up on")
+	assert.Equal(t, 0, ack.acked)
+}
+
+// 🔴 AN UNDECODABLE ENVELOPE STAYS A DROP. It is not work the platform accepted and failed
+// to finish; filing it under the subject's tenant would attribute to them a message that
+// was never demonstrably theirs.
+func TestAnUndecodableAlarmIsNotDeadLettered(t *testing.T) {
+	dead := &deadRecorder{}
+	np := processorWithDeadLetters(&fakeNotifier{}, dead)
+	ack := &recordingAck{}
+
+	np.dispatchOne(context.Background(),
+		msgWith(testAlarmSubject, []byte("not protobuf at all"), messaging.MaxDeliver, ack))
+
+	assert.Empty(t, dead.msgs)
+	assert.Equal(t, 1, ack.acked)
+}
+
+// A processor with no sink — the shape a deployment without the stream has, and the shape
+// every other test in this file builds — must still drop rather than panic.
+func TestANotificationDropsWithNoDeadLetterSink(t *testing.T) {
+	np := newTestProcessor(&fakeNotifier{err: errors.New("smtp is down")})
+	ack := &recordingAck{}
+	np.dispatchOne(context.Background(),
+		msgWith(testAlarmSubject, validEventBytes(t), messaging.MaxDeliver, ack))
+	assert.Equal(t, 1, ack.acked)
 }

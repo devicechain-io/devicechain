@@ -341,8 +341,18 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	// The ADR-024 arm. A detection whose actions cannot be dispatched used to end as a log
+	// line and a counter; it is now written where it can be inspected. The writer is built
+	// here rather than inside the dispatcher so a deployment that could not create it
+	// fails at startup, next to every other stream this service needs, rather than at the
+	// first failure — which is the one moment the arm has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
-		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate)
+		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
+		deadWriter)
 	return nil
 }
 

@@ -216,6 +216,19 @@ const (
 	RaiseAlarm          = "raise-alarm"
 	FailedDecode        = "failed-decode"
 	FailedEvents        = "failed-events"
+
+	// DeadLetters is the platform's one sink for work a consumer accepted and then gave
+	// up on (ADR-024) — a detection's actions that could not be dispatched, an alarm
+	// that could not be delivered to anyone, a command response that could not be
+	// recorded.
+	//
+	// 🔑 ONE STREAM, NOT A `.dead` TWIN PER SOURCE, and the reason is this budget. The
+	// convention above is `<base>.dead`, and following it for the three consumers that
+	// lacked an arm would have cost three more cold streams — three more MaxBytes
+	// RESERVED UP FRONT on every deployment's JetStream volume, forever, to hold
+	// something that is empty in steady state. What that gives up is telling producers
+	// apart by subject, which the envelope carries anyway (core/deadletter).
+	DeadLetters = "dead-letters"
 )
 
 // ConnectorDispatchDead is the terminal dead-letter sink for connector dispatch
@@ -455,6 +468,8 @@ var All = []Stream{
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
+	{Suffix: DeadLetters, Areas: []string{"event-processing", "notification-management", "command-delivery"},
+		Tier: Cold, Why: "ADR-024 dead-letter sink for the three consumers that gave up silently"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

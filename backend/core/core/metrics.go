@@ -82,9 +82,17 @@ func (pm *ProcessorMetrics) Start() func(result string) {
 
 // Result labels for ProcessorMetrics completion, kept as constants so every
 // service reports the same vocabulary.
+//
+// 🔴 "failed" MEANT "routed to the dead-letter path" FOR A LONG TIME BEFORE ANY SUCH PATH
+// EXISTED, and one of the consumers using it said so in a TODO beside the line. The label
+// is true now (ADR-024) for the consumers that dead-letter — but making it true was not
+// only a matter of building the sink, because one consumer using it never intended to
+// route anywhere. That is what "dropped" is for: a projection that gives up is not
+// deferring the work, it is discarding it, and the two must not report the same word.
 const (
 	ResultOK      = "ok"      // handled successfully
-	ResultInvalid = "invalid" // poison: unparseable / no tenant (dropped)
-	ResultFailed  = "failed"  // routed to the dead-letter path
+	ResultInvalid = "invalid" // poison: unparseable / no tenant (dropped where found)
+	ResultFailed  = "failed"  // gave up and DEAD-LETTERED: the work is recorded (ADR-024)
+	ResultDropped = "dropped" // gave up and DISCARDED: nothing records it, deliberately
 	ResultRetry   = "retry"   // transient failure, redelivery requested
 )

@@ -91,11 +91,18 @@ reintenta con un temporizador, en lugar de martillear el destino. Tras cinco int
 repartidos en unos cuatro minutos en total:
 
 - la solicitud de un **conector de salida** se envía a la **cola de mensajes no entregados**, de
-  modo que se puede inspeccionar o reprocesar;
-- una **detección** **se descarta con un error ruidoso**: en esa vía no hay cola de mensajes no
-  entregados. Un *levantamiento* descartado no volverá a aparecer hasta que la condición se despeje
-  y se vuelva a incumplir; una *resolución* descartada deja activa una alarma que debería haberse
-  limpiado.
+  modo que se puede inspeccionar;
+- una **detección** cuyas acciones no se pudieron despachar **también se envía a esa cola**, con un
+  error ruidoso.
+
+:::caution Enviado a la cola es quedar registrado, no reintentado
+Nada vuelve a ejecutar un mensaje de esa cola. El registro existe para que un fallo sea visible y
+diagnosticable en lugar de silencioso; las consecuencias del propio fallo se mantienen igualmente.
+Un *levantamiento* que no se despachó no volverá a aparecer hasta que la condición se despeje y se
+vuelva a incumplir, y una *resolución* que no se despachó deja activa una alarma que debería
+haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no como algo que se
+vaciará por sí solo.
+:::
 
 La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse como urgente.
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -135,5 +136,90 @@ func TestProcessMessageDoesNotRetryARefusedResponse(t *testing.T) {
 	}
 	if !errors.Is(api.responseErr, model.ErrResponderNotCommandOwner) {
 		t.Fatal("premise lost: the fake must be refusing with the sentinel")
+	}
+}
+
+// deadRecorder captures what the arm writes so a test can read the letter back.
+type deadRecorder struct {
+	msgs []messaging.Message
+}
+
+func (d *deadRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	d.msgs = append(d.msgs, msgs...)
+	return nil
+}
+
+// responseProcessorAtCap builds a processor whose one message is on its final delivery.
+func responseProcessorAtCap(t *testing.T, api *fakeApi, dead *deadRecorder, numDelivered int) *CommandDeliveryProcessor {
+	t.Helper()
+	return &CommandDeliveryProcessor{
+		Api:  api,
+		area: "command-delivery",
+		dead: deadletter.NewSink(dead, func(error) {}),
+		CommandResponsesReader: &oneMessageReader{
+			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
+				[]byte(`{"commandToken":"cmd-1","success":true}`), numDelivered, nil, nil),
+		},
+	}
+}
+
+// 🔴 THE ARM. A device's answer that could not be recorded used to end as a log line,
+// leaving its command looking unanswered with nothing anywhere saying the device had in
+// fact replied.
+func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
+	api := &fakeApi{responseErr: errors.New("the database is away")}
+	dead := &deadRecorder{}
+	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver)
+
+	p.ProcessMessage(context.Background())
+
+	if len(dead.msgs) != 1 {
+		t.Fatalf("wrote %d dead letters at the cap, want 1", len(dead.msgs))
+	}
+	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	if err != nil {
+		t.Fatalf("the written letter does not read back: %v", err)
+	}
+	if e.Kind != deadletter.KindCommandResponse {
+		t.Fatalf("kind = %q", e.Kind)
+	}
+	if e.Reference != "cmd-1" {
+		t.Fatalf("the letter must name the command that still looks unanswered: %q", e.Reference)
+	}
+	if e.Attempts != messaging.MaxDeliver || e.Subject == "" || len(e.Payload) == 0 {
+		t.Fatalf("the letter cannot be located or understood: %+v", e)
+	}
+}
+
+// 🔴 AND NOT BELOW THE CAP — a response still being retried has not been given up on.
+func TestACommandResponseBelowTheCapIsNotDeadLettered(t *testing.T) {
+	api := &fakeApi{responseErr: errors.New("the database is away")}
+	dead := &deadRecorder{}
+	p := responseProcessorAtCap(t, api, dead, 1)
+
+	p.ProcessMessage(context.Background())
+
+	if len(dead.msgs) != 0 {
+		t.Fatalf("wrote %d dead letters below the cap, want 0", len(dead.msgs))
+	}
+}
+
+// 🔑 A REFUSED RESPONSE IS NOT DEAD-LETTERED, and the distinction is the point of having
+// two dispositions. A response from a device that does not own the command is not work the
+// platform accepted and failed to finish — it is a claim it declined, and recording it
+// would file another device's message as that command's answer.
+func TestARefusedResponseIsNotDeadLettered(t *testing.T) {
+	api := &fakeApi{responseErr: model.ErrResponderNotCommandOwner}
+	dead := &deadRecorder{}
+	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver)
+	p.ResponsesRefused = prometheus.NewCounter(prometheus.CounterOpts{Name: "refused2_total"})
+
+	p.ProcessMessage(context.Background())
+
+	if len(dead.msgs) != 0 {
+		t.Fatal("a response the platform declined was filed as one it failed to finish")
+	}
+	if got := counterValue(t, p.ResponsesRefused); got != 1 {
+		t.Fatalf("ResponsesRefused = %v, want 1 (premise lost)", got)
 	}
 }
