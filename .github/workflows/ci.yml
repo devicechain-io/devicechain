@@ -96,13 +96,23 @@ jobs:
           echo "Services: $services"
 
       # The toolchain is needed for `go list -m` below and for nothing else in this
-      # job, so the build cache is off: this job compiles nothing, and setup-go's
-      # cache step would demand a resolvable cache-dependency-path for a job that has
-      # no dependencies to restore.
+      # job, so the build cache is off: this job compiles nothing, so there is no build
+      # output worth persisting, and restoring/saving an entry here would only spend
+      # time and cache quota on something no other job can use — the `go` matrix keys
+      # its caches per module. (It is NOT off because the cache step would fail; it
+      # would not. See the cache-dependency-path note in the `go` job for what setup-go
+      # actually does when a cache path resolves to nothing.)
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work
           cache: false
+
+      # Self-test first, as with every guard in this workflow. The cross-check below
+      # is only worth having while its second reader can be shown to read correctly —
+      # and a parser that returns a plausible-looking count for a file it misparsed is
+      # exactly the failure this pair exists to catch.
+      - name: workspace-module reader self-test
+        run: hack/list-workspace-modules.sh --self-test
 
       - name: Discover Go modules
         id: mod
@@ -128,10 +138,17 @@ jobs:
           # fail: `strategy.matrix` over zero entries runs zero jobs, every one of them
           # "succeeds" by not existing, and the `go` job reports green having compiled
           # nothing at all. So the count is cross-checked against a SECOND, independent
-          # reader of the same file — a plain awk over go.work's `use` block, which needs
-          # no toolchain and shares no code with the go command. Two readers disagreeing
-          # is the only cheap signal that one of them silently dropped something.
-          want="$(awk '/^use[[:space:]]*\(/{u=1;next} u&&/^\)/{u=0;next} u&&NF&&$0!~/^[[:space:]]*\/\//{n++} END{print n+0}' go.work)"
+          # reader of the same file — hack/list-workspace-modules.sh, a plain awk over
+          # go.work's `use` directives that needs no toolchain and shares no code with
+          # the go command. Two readers disagreeing is the only cheap signal that one of
+          # them silently dropped something.
+          #
+          # It is a script rather than an awk one-liner inline here because the
+          # one-liner was WRONG: it read only the parenthesised `use (...)` block, so a
+          # single-line `use ./backend/tools/x` — valid syntax — counted as zero and a
+          # perfectly good go.work failed this check. The script parses both forms and
+          # its --self-test pins them.
+          want="$(hack/list-workspace-modules.sh | wc -l)"
           got="$(echo "$modules" | jq 'length')"
           if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
             echo "::error::module discovery disagrees with go.work: go list -m gave $got, go.work declares $want."
@@ -187,17 +204,26 @@ jobs:
           # cold on nearly every run. A per-module key gives each entry its own cache to
           # restore from.
           #
-          # 🔴 go.mod IS LISTED FIRST BECAUSE NOT EVERY WORKSPACE MODULE HAS A go.sum,
-          # AND THE MISSING-FILE CASE IS A HARD ERROR RATHER THAN A SHRUG. `deploy`
-          # requires nothing at all — a three-line go.mod and no go.sum, because there
-          # are no hashes to record — so with go.sum alone the pattern set resolves to
-          # zero files. setup-go does not quietly skip the cache there: its
-          # cache-restore path throws `Some specified paths were not resolved, unable to
-          # cache dependencies.` when hashFiles comes back empty, which fails the step
-          # and takes the whole matrix entry with it. (Read out of setup-go's source
-          # rather than guessed.) Every module has a go.mod by definition, so listing it
-          # makes the set always resolve; the two are hashed together so the key stays
-          # per-module, and go.mod moving is precisely when dependencies changed anyway.
+          # 🔴 go.mod IS LISTED ALONGSIDE go.sum BECAUSE NOT EVERY WORKSPACE MODULE
+          # HAS A go.sum. `deploy` requires nothing at all — a three-line go.mod and no
+          # go.sum, because there are no hashes to record — so with go.sum alone the
+          # pattern set resolves to zero files.
+          #
+          # 🔴 AND WHAT THAT COSTS IS A WARNING AND AN UNCACHED BUILD, NOT A RED MATRIX
+          # ENTRY. The stronger claim ("a hard error") was written here first and is
+          # wrong, which is worth recording because it was wrong in the direction that
+          # would have made this line look urgent for the wrong reason. setup-go's
+          # cache-restore does throw when hashFiles comes back empty (`Some specified
+          # paths were not resolved, unable to cache dependencies.`), but at the pinned
+          # v7 commit its entrypoint WRAPS that call in try/catch and downgrades it to
+          # `core.warning`, and the post/save step returns early on an empty key. So
+          # `deploy` would have gone yellow and recompiled cold on every run, silently,
+          # while the job still reported success.
+          #
+          # That silent-and-slow failure is the one this fixes. Every module has a
+          # go.mod by definition, so listing it makes the set always resolve; the two
+          # are hashed together so the key stays per-module, and go.mod moving is
+          # precisely when dependencies changed anyway.
           cache-dependency-path: |
             ${{ matrix.module }}/go.mod
             ${{ matrix.module }}/go.sum
