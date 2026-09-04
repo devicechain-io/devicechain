@@ -198,7 +198,7 @@ func TestFacetValueTypeIsPartOfTheMatch(t *testing.T) {
 	assert.Equal(t, string(AttributeValueLong), elevation.ValueType,
 		"the declaration is where the panel takes the value type from")
 
-	for _, token := range []string{"d-long", "d-string", "d-unparseable"} {
+	for _, token := range []string{"d-long", "d-string", "d-refused"} {
 		newDevice(t, api, ctx, token)
 	}
 
@@ -207,11 +207,6 @@ func TestFacetValueTypeIsPartOfTheMatch(t *testing.T) {
 	// the text, or defaulted it, would write.
 	authorValue(t, api, ctx, "d-string", consoleFacetScope, elevation.Key,
 		string(AttributeValueString), "1500")
-	// 🔴 THE SERVER DOES NOT REFUSE THIS. A LONG write it cannot parse is coerced to unset
-	// (normalizeAttributeValue), so the mutation SUCCEEDS and stores a row with no value.
-	// That is why the panel validates before sending rather than trusting the write.
-	authorValue(t, api, ctx, "d-unparseable", consoleFacetScope, elevation.Key,
-		elevation.ValueType, "high")
 
 	assert.Equal(t, []string{"d-long"},
 		browseMatches(t, api, ctx, `attr["elevation"] == 1500`),
@@ -221,12 +216,78 @@ func TestFacetValueTypeIsPartOfTheMatch(t *testing.T) {
 		"and the same holds for an ordered comparison")
 
 	// 🔑 THE PRESENCE OPERATOR CANNOT SEE THE TYPE MISTAKE. `k in attr` emits no value
-	// predicate at all, so all three rows satisfy it — including the one holding nothing.
-	// Recorded because it is precisely why the equality arms above are the control: a suite
-	// that only exercised "has any value" would pass with the value type wrong.
-	assert.ElementsMatch(t, []string{"d-long", "d-string", "d-unparseable"},
+	// predicate at all, so both rows satisfy it. Recorded because it is precisely why the
+	// equality arms above are the control: a suite that only exercised "has any value"
+	// would pass with the value type wrong.
+	assert.ElementsMatch(t, []string{"d-long", "d-string"},
 		browseMatches(t, api, ctx, `"elevation" in attr`),
 		"presence ignores the value type, so it can never be the check that catches this")
+
+	// 🔴 THE THIRD DOOR, NOW CLOSED AT THE SERVER. A value the declared type cannot hold is
+	// REFUSED. It used to be coerced to unset — a mutation that returned the row, reported
+	// success, and stored nothing, so the axis matched nothing and the panel went on showing
+	// the text. The console's own check is the friendly message; this is the gate, because
+	// the client validates by pattern and the server by parser, and the two disagree exactly
+	// where it matters (see TestSetAttribute_UnparseableNumberIsRefused).
+	_, err := api.SetEntityAttribute(ctx, &EntityAttributeSetRequest{
+		EntityType: entity.TypeDevice.String(), Entity: "d-refused",
+		Scope: consoleFacetScope, AttrKey: elevation.Key,
+		ValueType: elevation.ValueType, Value: strp("high"),
+	})
+	assert.Error(t, err, "a LONG value that does not parse is refused")
+	assert.Equal(t, []string{"d-long", "d-string"},
+		browseMatches(t, api, ctx, `"elevation" in attr`),
+		"and the refusal leaves no half-written row on the axis")
+}
+
+// The BOOLEAN arm of the same rule. `lower.go`'s string-equality and numeric branches each
+// pin value_type, and so does the boolean one (`ea.value_type = 'BOOLEAN'`) — but until this
+// test nothing gave that pin a row to exclude, which is the same hole the surviving M8b
+// mutant named on the STRING branch, one arm over.
+//
+// 🔑 THE STORED FORM IS CANONICAL, AND THE CANONICALIZATION IS PART OF THE MATCH. A caller
+// may write "True" or "1"; the server stores 'true', which is what a CEL `true` literal
+// lowers to comparing against. A BOOLEAN row holding an uncanonicalized spelling would
+// satisfy the type pin and fail the value compare, which is the type mistake wearing a
+// different hat.
+func TestBooleanFacetValueMatchesOnlyUnderItsOwnType(t *testing.T) {
+	api, ctx := newFacetAuthoringTestApi(t)
+	managed := declareFacet(t, api, ctx, "managed", string(AttributeValueBoolean))
+	assert.Equal(t, string(AttributeValueBoolean), managed.ValueType)
+
+	for _, token := range []string{"d-true", "d-spelled", "d-false", "d-string-true"} {
+		newDevice(t, api, ctx, token)
+	}
+	authorValue(t, api, ctx, "d-true", consoleFacetScope, managed.Key, managed.ValueType, "true")
+	// A non-canonical spelling the server accepts and normalizes — it must match exactly as
+	// the canonical one does, or the axis would depend on how the operator typed it.
+	authorValue(t, api, ctx, "d-spelled", consoleFacetScope, managed.Key, managed.ValueType, "True")
+	authorValue(t, api, ctx, "d-false", consoleFacetScope, managed.Key, managed.ValueType, "false")
+	// 🔴 The type mistake: the text "true" stored as STRING. It reads back identically and is
+	// invisible to `attr["managed"] == true`.
+	authorValue(t, api, ctx, "d-string-true", consoleFacetScope, managed.Key,
+		string(AttributeValueString), "true")
+
+	assert.ElementsMatch(t, []string{"d-true", "d-spelled"},
+		browseMatches(t, api, ctx, `attr["managed"] == true`),
+		"both spellings of the BOOLEAN match; the STRING row does not")
+	assert.Equal(t, []string{"d-false"},
+		browseMatches(t, api, ctx, `attr["managed"] == false`))
+	// The inequality arm sees the same type pin, so the STRING row is not "different", it is
+	// absent — a `!=` leaf is present-and-different, never a match on a missing facet.
+	assert.Equal(t, []string{"d-false"},
+		browseMatches(t, api, ctx, `attr["managed"] != true`))
+
+	// And a value the type cannot hold is refused rather than stored as unset.
+	_, err := api.SetEntityAttribute(ctx, &EntityAttributeSetRequest{
+		EntityType: entity.TypeDevice.String(), Entity: "d-true",
+		Scope: consoleFacetScope, AttrKey: managed.Key,
+		ValueType: managed.ValueType, Value: strp("maybe"),
+	})
+	assert.Error(t, err, "a BOOLEAN value that does not parse is refused")
+	assert.ElementsMatch(t, []string{"d-true", "d-spelled"},
+		browseMatches(t, api, ctx, `attr["managed"] == true`),
+		"the refused write left the previous value standing")
 }
 
 // 🔴 A FACET'S DECLARED TYPE CAN BE CHANGED, AND THE VALUES ALREADY AUTHORED DO NOT MOVE

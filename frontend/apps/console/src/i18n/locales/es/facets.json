@@ -1,6 +1,6 @@
 {
   "addAttribute": "Añadir atributo",
-  "addHint": "Una clave no declarada se almacena igual que una declarada; decláratela en la pantalla Facetas para poder explorar por ella.",
+  "addHint": "Una clave no declarada se almacena igual que una declarada; declárala en la pantalla Facetas para poder explorar por ella.",
   "all": "Todas",
   "attributeKey": "Clave de atributo",
   "clearValue": "Borrar",
@@ -38,6 +38,8 @@
   "panelTab": "Facetas",
   "saveFacet": "Guardar faceta",
   "saveValue": "Guardar",
+  "strandedHint": "Este valor se creó cuando la faceta estaba declarada como {{stored}}, por lo que el eje de exploración {{declared}} no lo encuentra. Guarda para volver a tiparlo.",
+  "strandedType": "almacenado como {{stored}}",
   "system": "sistema",
   "title": "Facetas",
   "usedByGroups": "Cambiar este valor mueve esta entidad dentro o fuera de: {{groups}}",

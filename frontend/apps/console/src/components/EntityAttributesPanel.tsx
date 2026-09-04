@@ -23,11 +23,13 @@
 //     invisible to `attr["floors"] == 3`. The value type therefore comes from the
 //     FACET KEY'S DECLARATION, never from inspecting the text the user typed.
 //
-//     There is a third door into the same room: the backend COERCES a numeric write it
-//     cannot parse to unset rather than rejecting it (normalizeAttributeValue), so
-//     "hot" written to a LONG facet stores a row with a NULL value — which again reads
-//     back without error and matches nothing. That is why this panel validates the text
-//     against the declared type BEFORE sending, instead of letting the server decide.
+//     There was a third door into the same room, and it is now shut at the SERVER, which is
+//     the only place it could be shut properly: a numeric or boolean write the declared type
+//     cannot hold used to be coerced to unset rather than refused, so "hot" on a LONG facet
+//     stored a row with a NULL value that read back without error and matched nothing. The
+//     check below is the FRIENDLY MESSAGE, not the gate — it validates by pattern while the
+//     server validates by parser, and the two disagree exactly where it matters (`1e400`
+//     matches any decimal pattern and overflows float64 to +Inf).
 //
 // Reads every scope and shows the non-SHARED rows read-only: "I set climate and Browse
 // still says 0" has a visible cause when the device reported its own `climate`.
@@ -83,15 +85,22 @@ const BOOLEAN_OPTIONS: ComboboxOption[] = [{ value: 'true' }, { value: 'false' }
  * facetValueIssue reports why `raw` cannot be stored under `valueType`, as an i18n key
  * in the `facets` namespace — or null when it is storable.
  *
- * 🔴 This exists because the backend does NOT reject a bad numeric or boolean: it
- * coerces it to unset (normalizeAttributeValue), which is a successful write that
- * stores no value. A panel that trusted the server here would report "saved" and leave
- * the user with the exact "matches 0" symptom this whole slice exists to end.
+ * 🔴 THIS IS THE MESSAGE, NOT THE GATE. The server now REFUSES a present value its declared
+ * type cannot hold (`normalizeAttributeValue`), so a wrong value fails whether or not this
+ * function catches it. What this buys is a specific, translated sentence beside the field
+ * instead of a server error in a banner — and it deliberately does NOT try to reproduce the
+ * parser: a pattern cannot see that `1e400` overflows float64 to +Inf, or that a 20-digit
+ * LONG overflows int64, which is exactly why the refusal has to live on the server.
  *
- * The forms accepted are deliberately the ones the CONSOLE'S SELECTOR COMPOSER can
- * write as a CEL literal (lib/selector.ts `literalFor`), not merely the ones storage
- * would take: a value you can store but cannot compose a filter against is a value
- * Browse can never match.
+ * The forms accepted are the ones the CONSOLE'S SELECTOR COMPOSER can write as a CEL literal
+ * (lib/selector.ts `literalFor`), which is narrower than what storage would take: a value you
+ * can store but cannot compose a filter against is a value Browse can never match.
+ *
+ * ⚠️ JSON IS THE ACKNOWLEDGED EXCEPTION TO THAT SENTENCE, not an oversight in it.
+ * `literalFor('JSON')` returns null, so a JSON facet's value is perfectly storable and has no
+ * scalar literal form to compose against — the only operator Browse offers for a JSON axis is
+ * presence. This function therefore checks a JSON value is well-formed and nothing more;
+ * whether a JSON facet should be value-authorable at all is a separate question, filed.
  */
 export function facetValueIssue(valueType: string, raw: string): string | null {
   const trimmed = raw.trim();
@@ -132,6 +141,16 @@ export function selectorReferencesKey(selector: string | null | undefined, key: 
   if (!selector) return false;
   const quoted = JSON.stringify(key);
   return selector.includes(`attr[${quoted}]`) || selector.includes(`${quoted} in attr`);
+}
+
+/**
+ * facetRowKey identifies the stored state a facet row was built from, so React remounts the
+ * row — and re-seeds its draft — whenever the server's answer changes. Exported for the
+ * test that pins it: the whole point is that it moves when the stored row does, and a key
+ * that silently stops moving leaves the previous draft on screen looking saved.
+ */
+export function facetRowKey(facet: FacetKey, current: EntityAttribute | undefined): string {
+  return [facet.id, current?.id ?? '', current?.valueType ?? '', current?.value ?? ''].join(':');
 }
 
 export function EntityAttributesPanel({
@@ -190,10 +209,21 @@ export function EntityAttributesPanel({
   const loading = facetsQ.loading || attrsQ.loading;
   const error = facetsQ.error ?? attrsQ.error;
 
-  if (loading && facetsQ.data == null && attrsQ.data == null) {
+  // 🔴 THE FOLD IS OVER BOTH READS, AND IT HAS TO BE. The declarations and the values come
+  // from two independent queries, and a panel that rendered on the declarations alone would
+  // answer a FAILED attribute read with "every facet is unset" — every row showing Not set,
+  // a Save button, no Clear, and the error never surfaced. That is a wrong ANSWER rather
+  // than an error, which is the exact class of failure this whole panel exists to end: it
+  // would invite the user to re-author values that already exist, and one save would then
+  // overwrite whatever was really there.
+  //
+  // `data == null` rather than `loading`, because useQuery keeps the previous data across a
+  // refetch — a background reload should update in place, not blank the tab.
+  const nothingLoaded = facetsQ.data == null || attrsQ.data == null;
+  if (loading && nothingLoaded) {
     return <LoadingState description={t('valuesLoading')} />;
   }
-  if (error && facetsQ.data == null) {
+  if (error && nothingLoaded) {
     return <ErrorState description={error} />;
   }
 
@@ -210,9 +240,13 @@ export function EntityAttributesPanel({
         <div className="space-y-3">
           {facets.map((facet) => (
             <FacetValueRow
-              // Re-key on the stored value so a saved row rebuilds its draft from the
-              // reloaded server state instead of keeping the text the user typed.
-              key={`${facet.id}:${facetValue.get(facet.key)?.value ?? ''}`}
+              // Re-key on the stored ROW'S IDENTITY — its id, its value and its value type —
+              // not on the value alone. The draft is state seeded from the server, so the row
+              // has to remount whenever what the server holds changes; keying on the value
+              // alone made a write that did not change the text (a re-type of a stranded
+              // value, or a save the server refused) leave the box showing the text the user
+              // typed as though it had been stored.
+              key={facetRowKey(facet, facetValue.get(facet.key))}
               facet={facet}
               entityType={entityType}
               entityToken={entityToken}
@@ -303,6 +337,15 @@ function FacetValueRow({
   // there is nothing here to author (the seam is declared but unbuilt).
   const editable = canWrite && facet.source !== 'system';
 
+  // 🔴 A STRANDED VALUE MUST NOT BE PRESENTED AS A CORRECT ONE. Re-declaring a facet's value
+  // type rewrites the DECLARATION and no rows, so every value authored under the old type
+  // stays exactly where it was — stored, readable, and no longer matched by its own axis.
+  // Printing `facet.valueType` beside a value whose row carries a different one turns that
+  // into an active lie: three devices reading `arid · STRING` while Browse matches none of
+  // them. The row says what is actually stored, and that saving re-types it — which is true,
+  // because setFacetValue writes the declared type and the write is an upsert on the key.
+  const stranded = current != null && current.valueType !== facet.valueType;
+
   const save = async () => {
     const problem = facetValueIssue(facet.valueType, draft);
     if (problem) {
@@ -355,6 +398,11 @@ function FacetValueRow({
         <span className="font-mono text-xs text-muted-foreground">{facet.valueType}</span>
         {facet.source === 'system' && <Badge variant="secondary">{t('system')}</Badge>}
         {current == null && <Badge variant="outline">{t('notSet')}</Badge>}
+        {stranded && (
+          <Badge variant="warning">
+            {t('strandedType', { stored: current.valueType })}
+          </Badge>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -409,6 +457,12 @@ function FacetValueRow({
           </>
         )}
       </div>
+
+      {stranded && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t('strandedHint', { stored: current.valueType, declared: facet.valueType })}
+        </p>
+      )}
 
       {issue && <p className="mt-2 text-xs text-destructive">{issue}</p>}
 

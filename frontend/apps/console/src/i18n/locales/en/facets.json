@@ -38,6 +38,8 @@
   "panelTab": "Facets",
   "saveFacet": "Save facet",
   "saveValue": "Save",
+  "strandedHint": "This value was authored while the facet was declared {{stored}}, so the {{declared}} browse axis does not match it. Save to re-type it.",
+  "strandedType": "stored as {{stored}}",
   "system": "system",
   "title": "Facets",
   "usedByGroups": "Changing this value moves this entity in or out of: {{groups}}",
