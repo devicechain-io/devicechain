@@ -18,13 +18,25 @@
 # reads: it records success whether or not the digest moved, so CI can tell
 # "the pin is current" from "the bumper died and the pin is frozen".
 #
-# ⚠️ KNOWN LIMITATION, stated because it is invisible otherwise: a pull request
-# opened with GITHUB_TOKEN does not trigger other workflows, so the bump PR
-# arrives with NO CI checks. That is why this workflow smoke-builds an image
-# against the new base itself before opening anything — the build is the
-# evidence, since the PR will not carry any. Full CI still runs on the merge to
-# main. If you would rather have checks on the PR, that needs a PAT, which is a
-# credential to rotate; the smoke build was judged the better trade.
+# 🔴 THIS WORKFLOW DOES NOT OPEN A PULL REQUEST, AND THAT IS DELIBERATE
+# (Derek, 2026-09-04). It pushes the bump to a branch and stops.
+#
+# It could not open one even if we wanted it to: the repository has
+# `can_approve_pull_request_reviews: false`, which is the flag behind GitHub's
+# combined "Allow GitHub Actions to create and approve pull requests" setting,
+# so `gh pr create` fails with `GitHub Actions is not permitted to create or
+# approve pull requests`. Enabling it would also let any workflow here APPROVE
+# a pull request, which on a protected branch is the half that matters.
+#
+# Nor does it open an issue. The signal lives where someone is already looking:
+# `hack/check-ko-base-pin.sh` runs on every pull request and reports that a bump
+# is waiting on this branch, turning red once one has waited too long. That
+# grants Actions nothing, cannot spam, and gives the bump a deadline — which the
+# liveness window on its own never did.
+#
+# ⚠️ A pull request opened from this branch BY A PERSON carries full CI, which a
+# GITHUB_TOKEN-opened one would not have. The smoke build below is still run
+# before the push, because a base that cannot build must never be proposed.
 
 name: ko base image
 
@@ -186,21 +198,20 @@ jobs:
           # of this file. A base that cannot build must never be proposed.
           ko build --local --bare ./
 
-      - name: Open or refresh the bump pull request
+      - name: Push the bump to its branch
         if: steps.resolve.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           old='${{ steps.resolve.outputs.old }}'
           new='${{ steps.resolve.outputs.new }}'
           ref='${{ steps.resolve.outputs.ref }}'
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-          # A fixed branch, force-pushed: successive weeks refresh ONE pull
-          # request instead of stacking a new one every time the base moves.
+          # A fixed branch, force-pushed: successive weeks refresh ONE branch
+          # rather than stacking a new one every time the base moves.
           git checkout -B "$BRANCH"
           git add "$KO_FILE"
 
@@ -215,49 +226,26 @@ jobs:
           to
             ${new}
 
-          Opened automatically by .github/workflows/ko-base-image.yml. The digest
+          Pushed automatically by .github/workflows/ko-base-image.yml. The digest
           pin in .ko.yaml is the base for every published image, and Chainguard's
           rebuilds are how that base ships its CVE fixes - a pin nobody advances
           is worse than the mutable tag it replaced.
 
-          This pull request carries no checks: it was opened with GITHUB_TOKEN,
-          which does not trigger workflows. The evidence is the smoke build in
-          the run that produced it, plus full CI on the merge.
+          Smoke-built against the new base by ${run_url} before being pushed.
           EOF
           # Strip the YAML-level indentation the heredoc had to carry.
           sed -i 's/^          //' "${RUNNER_TEMP}/commit.txt"
           git commit -F "${RUNNER_TEMP}/commit.txt"
           git push --force-with-lease origin "$BRANCH"
 
-          if gh pr view "$BRANCH" --json number -q .number >/dev/null 2>&1; then
-            echo "existing pull request refreshed by the force-push"
-            exit 0
-          fi
-
-          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          cat >"${RUNNER_TEMP}/body.md" <<EOF
-          \`${ref}\` moved.
-
-          | | digest |
-          |---|---|
-          | from | \`${old}\` |
-          | to | \`${new}\` |
-
-          This is the base image of **every artifact we publish** - all service
-          images, the operator and the edge agent. Chainguard rebuilds it to ship
-          CVE fixes, so advancing the pin is how those reach us; a digest nobody
-          moves is worse than the mutable tag it replaced.
-
-          > [!WARNING]
-          > **This pull request has no checks.** It was opened with
-          > \`GITHUB_TOKEN\`, which does not trigger workflows. The evidence is the
-          > ko smoke build in [the run that produced it](${run_url}) - a base that
-          > cannot build is never proposed. Full CI runs on the merge to \`main\`.
-
-          Opened by \`.github/workflows/ko-base-image.yml\`.
-          EOF
-          sed -i 's/^          //' "${RUNNER_TEMP}/body.md"
-
-          gh pr create --base main --head "$BRANCH" \
-            --title "chore(ci): bump the ko base image" \
-            --body-file "${RUNNER_TEMP}/body.md"
+          {
+            echo "### Base image bump pushed"
+            echo
+            echo "\`${ref}\` moved to \`${new}\`, smoke-built, and pushed to"
+            echo "\`${BRANCH}\`. **Open a pull request from that branch to take it.**"
+            echo
+            echo "This workflow deliberately does not open one itself — see the note"
+            echo "at the top of \`.github/workflows/ko-base-image.yml\`. Every pull"
+            echo "request's \`ko base image is pinned\` check reports that a bump is"
+            echo "waiting, and turns red once one has been waiting too long."
+          } >> "$GITHUB_STEP_SUMMARY"
