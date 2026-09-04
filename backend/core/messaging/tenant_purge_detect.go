@@ -63,7 +63,8 @@ const (
 	// request itself.
 	DetectPurgeWindow = 5 * time.Second
 
-	// detectPurgeQuiesce is how long the gather keeps listening AFTER the first reply.
+	// detectPurgeQuiesce is how long the gather keeps listening after the first reply THAT
+	// ERASED AND COMMITTED. An error reply does not start it — see the gather loop.
 	//
 	// It exists because the full window is the wrong wait once something has answered. With
 	// no expected partitions there is nothing for a reply to satisfy, so without this the
@@ -258,11 +259,29 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 				return res, nil // the last partition we were waiting on has committed
 			}
 		}
-		if gather == ctx {
-			// First reply: something is alive and answering, so drop from the full window to
-			// the straggler window. Derived from ctx rather than the caller's context, so it
-			// can only ever shorten the wait — never outlive DetectPurgeWindow, and still
-			// cancelled the moment the caller is.
+		if reply.Error == "" && gather == ctx {
+			// First reply THAT DID THE WORK: something is alive and answering, so drop from
+			// the full window to the straggler window. Derived from ctx rather than the
+			// caller's context, so it can only ever shorten the wait — never outlive
+			// DetectPurgeWindow, and still cancelled the moment the caller is.
+			//
+			// 🔴 AN ERROR REPLY MUST NOT START THIS CLOCK, and leaving it out was the same
+			// bug as clearing `awaited` above — reintroduced 260 milliseconds later. The
+			// paragraph above says why a partition can answer twice and why the FAST answer
+			// is the one that did nothing; a warm standby (ADR-070) answers "I hold no term"
+			// in microseconds, and the halted split-brain writer answers just as fast. If
+			// that reply shortened the gather to 300ms, the replica that is actually
+			// evicting — a sweep of the whole instance's state, a snapshot serialization
+			// and a database commit — would have 300ms to finish, and past that the caller
+			// records "this tenant's windows are still in its checkpoint" about a partition
+			// that erased them. Deterministic, self-repeating, and worse under a warm
+			// standby than under the split brain, because a standby is the NORMAL posture
+			// rather than a fault.
+			//
+			// The cost of not starting it is bounded and lands where it should: a pass in
+			// which NOTHING answered cleanly waits out the full DetectPurgeWindow. That is
+			// the case where something really is wrong, and the wait buys the one thing
+			// worth waiting for — the chance that the replica doing the work still answers.
 			quiesced, cancelQuiesce := context.WithTimeout(ctx, detectPurgeQuiesce)
 			defer cancelQuiesce()
 			gather = quiesced

@@ -40,6 +40,27 @@ import (
 // be inside a fetch, a persist or a Save. So we wait out the worst case before
 // restore reads the snapshot — see termSlack.
 
+// PartitionLease is the acquisition half of a partition lease — the two questions the
+// supervisor asks while it still owns nothing. *messaging.DistributedLease implements it,
+// and is what main wires.
+//
+// The split is where it is because of what is on each side of it. Acquire's ANSWER is the
+// standby posture: ErrLeaseHeld means another replica owns the partition and this one waits,
+// which is the ordinary state of the second replica in a warm-standby deployment and cannot
+// be produced from a single process holding a real lease. Everything the term does after a
+// successful acquisition — the holder watch, the renewals, the release — is on the concrete
+// *messaging.Lease handed back, whose mechanics are pinned against a real broker in
+// core/messaging and are not usefully faked.
+type PartitionLease interface {
+	// Acquire takes ownership of a partition, or reports messaging.ErrLeaseHeld when
+	// another replica already owns it.
+	Acquire(partition string) (*messaging.Lease, error)
+	// PriorOwnerReleasedCleanly reports whether the partition's last state was an explicit
+	// release rather than an entry that expired under a running owner — the difference
+	// between skipping the handover wait and paying it. It must be asked BEFORE Acquire.
+	PriorOwnerReleasedCleanly(partition string) bool
+}
+
 // termSlack is how long a fresh leader waits, after acquiring the lease and before
 // reading any state, for the previous owner to stop writing.
 //
@@ -228,31 +249,39 @@ func drain[T any](ch chan T) {
 }
 
 // runTerms is the supervisor: it owns the lease for the process lifetime and drives
-// one term after another. ExecuteStart starts it only after the FIRST term is live.
+// one term after another. ExecuteStart backgrounds it and returns, so this replica is
+// Ready as a WARM STANDBY from the moment it starts and leads whenever the partition
+// becomes free (ADR-070 decision 4a).
 //
-// 🔴 WHY THE FIRST TERM IS AWAITED RATHER THAN BACKGROUNDED. A pod that reported
-// Ready while standing by would be a warm standby, and DETECT is not ready for one
-// yet: the tenant-purge responder answers on the per-term context, so a standby
-// holding a LIVE context would tell the purge coordinator "no work here" while the
-// real leader still holds that tenant's keyed state — a clean answer that is a lie.
-// Awaiting the first term means the context between terms is always CANCELLED,
-// which makes that responder ERROR instead, and an error fails a purge safely. The
-// Ready-standby posture lands with the term-scoped purge responder, not before it.
+// 🔴 THE FIRST TERM USED TO BE AWAITED, AND THE THING THAT MADE THAT NECESSARY WAS THE
+// PURGE RESPONDER, NOT READINESS. Its answer was gated on the per-term context, and
+// awaiting the first term is what kept that context CANCELLED between terms — which
+// made an eviction reaching a term-less replica fail rather than answer "no work here"
+// to the tenant-purge coordinator. That is a correctness property resting on a startup
+// ordering, and it is now stated directly instead: the eviction answer is gated on the
+// term (errNoTermHeld). With that in place a standby can be Ready, which is
+// what turns the second replica from dead weight into a takeover that skips a cold
+// start.
 //
-// It costs nothing on the deploy shape event-processing actually uses: replicas:1
-// with strategy Recreate, so the departing pod RELEASED the partition and this one
-// both acquires immediately and skips termSlack. The wait materialises on an
-// eviction or node-drain overlap, where it is bounded by the lease TTL plus
-// termSlack, ~50s.
+// WHAT THE STANDBY DOES AND DOES NOT DO. It holds no lease, so its readers park at the
+// term gate and it fetches nothing from the shared durables; it has no engine, no
+// restored snapshot and no fact-projection catch-up, so its takeover still pays the
+// full term build. "Warm" here means the pod is scheduled and running, the broker and
+// database connections are open, and the rule registry is loaded — not that the engine is
+// pre-restored. Pre-restoring on a standby would mean reading a snapshot another replica
+// is actively writing.
 //
-// 🔴 THAT IS NOT MEASURED AGAINST THE STARTUP PROBE, WHICH NEVER SEES IT. The probe
-// polls /readyz, which reports the auth gate and is independent of this processor —
-// so a slow term build cannot fail the probe, and no probe budget bounds it.
+// 🔴 NOTHING HERE IS MEASURED AGAINST THE STARTUP PROBE, WHICH NEVER SEES IT. The probe
+// polls /readyz, which reports the auth gate and is independent of this processor — so
+// a slow term build cannot fail the probe, and no probe budget bounds it. That was true
+// when the start blocked and it is still true; what has changed is that a slow build no
+// longer delays the tenant-purge responder or the REACT dispatcher, both of which main()
+// starts after ResolvedEventsProcessor.Start returns.
 //
-// What it DOES delay is everything main() starts after the processor: the tenant-purge
-// responder and the REACT dispatcher, both of which are started after
-// ResolvedEventsProcessor.Start returns. Their work is durable and nothing is lost,
-// but REACT dispatch is deferred by the handover wait plus the build.
+// The other consequence of backgrounding: a first term that cannot be BUILT is no longer
+// a failed ExecuteStart. It is counted by the same fuse every later term is
+// (maxConsecutiveTermBuildFailures), and blowing it ends the process — the same outcome,
+// reached by the path that already existed rather than by a second one.
 func (rp *ResolvedEventsProcessor) runTerms() {
 	for {
 		if rp.supCtx.Err() != nil {

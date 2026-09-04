@@ -5,7 +5,9 @@ package processor
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -327,5 +329,71 @@ func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
 		t.Fatal("a processor that takes no lease ended its own process on a stale refusal; it holds no " +
 			"partition, so there is nothing for a replacement to take over")
 	default:
+	}
+}
+
+// heldLease is a partition that is permanently owned by SOMEBODY ELSE — the answer a warm
+// standby gets, and the one answer a single process cannot produce against a real broker
+// without a second process racing it for the same key.
+type heldLease struct{ acquires atomic.Int64 }
+
+func (l *heldLease) Acquire(string) (*messaging.Lease, error) {
+	l.acquires.Add(1)
+	return nil, messaging.ErrLeaseHeld
+}
+
+// Unclean, which is what an absent-but-unexplained key reads as. It is never reached here
+// (nothing is acquired) but it is the honest answer for a partition somebody holds.
+func (l *heldLease) PriorOwnerReleasedCleanly(string) bool { return false }
+
+// TestAStandbyIsReadyWithoutHoldingThePartition is the slice's headline behaviour: a
+// replica whose partition is taken reports STARTED and stands by, rather than blocking
+// its own startup until the partition frees up.
+//
+// 🔴 THE ASSERTION IS NOT MERELY "START RETURNED". A start that returned because it never
+// launched the supervisor would satisfy that, and would produce the worst possible pod:
+// Ready, serving, and permanently incapable of taking the partition — which no alert can
+// see, because detect_is_leader is read as a MAX across pods and the real leader keeps it
+// at 1. So this also asserts that the standby is still ASKING (more than one acquisition
+// attempt, i.e. the retry loop is alive) and that the term gate is still CLOSED, which is
+// what keeps its readers parked and its checkpoint refused meanwhile.
+func TestAStandbyIsReadyWithoutHoldingThePartition(t *testing.T) {
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	lease := &heldLease{}
+	rp.Lease = lease
+	rp.Gate = NewTermGate()
+	if err := rp.ExecuteInitialize(context.Background()); err != nil {
+		t.Fatalf("ExecuteInitialize: %v", err)
+	}
+	t.Cleanup(func() { _ = rp.ExecuteStop(context.Background()) })
+
+	started := time.Now()
+	if err := rp.ExecuteStart(context.Background()); err != nil {
+		t.Fatalf("ExecuteStart on a replica whose partition is held: %v", err)
+	}
+	startCost := time.Since(started)
+
+	// acquireBackoffMax is 5s and acquisition retries FOREVER, so a start that waits for
+	// the partition does not return at all. A second is generous room for a start that
+	// does not wait.
+	if startCost > time.Second {
+		t.Fatalf("ExecuteStart took %v on a replica whose partition is held by another; a "+
+			"warm standby must report started and take the partition when it frees up", startCost)
+	}
+	if rp.Gate.Held() {
+		t.Fatal("the term gate is OPEN on a replica that holds no lease; its readers would " +
+			"consume from the leader's durables and its checkpoints would be admitted")
+	}
+
+	// Still asking. One attempt would be a supervisor that gave up; zero would be one that
+	// never ran. acquireBackoffMin is 500ms, so a live loop reaches two well inside this.
+	deadline := time.Now().Add(3 * time.Second)
+	for lease.acquires.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := lease.acquires.Load(); got < 2 {
+		t.Fatalf("the standby made %d acquisition attempts in 3s; it is not standing by, it "+
+			"has stopped trying, and this pod will never take the partition no matter what "+
+			"happens to the leader", got)
 	}
 }

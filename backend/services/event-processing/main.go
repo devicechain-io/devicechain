@@ -542,12 +542,20 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
 		return err
 	}
-	// AFTER the processor, never before: the responder marshals every eviction onto the
-	// single-writer loop, and BOTH the loop and the context that bounds the wait for it are
-	// created by Start. A request arriving before that would not merely wait — EvictTenant
-	// selects on rp.procCtx.Done(), and procCtx is nil until Start, so the handler goroutine
-	// would panic on a nil context and take the process down. The ordering is what makes that
-	// unreachable; it is not a latency preference.
+	// AFTER the processor, never before, and the reason has changed shape now that Start no
+	// longer blocks on the first leadership term.
+	//
+	// It is no longer a claim that the loop is running when the responder appears — with a
+	// warm standby (ADR-070) it usually is not, and the responder answers that honestly
+	// (processor.errNoTermHeld). What the ordering still guarantees is that the processor's
+	// FIELDS are wired: EvictTenant reads rp.procCtx and sends on rp.tenantPurges, and a
+	// request that arrived before Initialize/Start had run would select on a nil context and
+	// take the process down. Initialize mints the context and the constructor makes the
+	// channel, both of which are done by here.
+	//
+	// It also still means a request cannot reach a replica whose GraphQL and NATS managers
+	// are not up, which is what makes the answer — refusal or eviction — a considered one
+	// rather than an artefact of half-built wiring.
 	TenantPurgeResponder = processor.NewTenantPurgeResponder(NatsManager.Conn(),
 		Microservice.InstanceId, ResolvedEventsProcessor)
 	if err := TenantPurgeResponder.Start(); err != nil {

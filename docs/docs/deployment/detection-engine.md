@@ -6,17 +6,18 @@ title: Running the Detection Engine
 # Running the Detection Engine
 
 [Detection rules](../concepts/event-processing.md) are evaluated by a service that behaves
-differently from the rest of the platform: it holds live state in memory, it runs as a **single
-instance**, and it evaluates on **event time** rather than on the clock. This page is the operator's
-contract — what that buys, what it costs, and how to tell a healthy engine from a stuck one.
+differently from the rest of the platform: it holds live state in memory, it detects from a
+**single active instance**, and it evaluates on **event time** rather than on the clock. This page
+is the operator's contract — what that buys, what it costs, and how to tell a healthy engine from
+a stuck one.
 
 If you are looking for what a rule can express or how to author one, start at
 [Event Processing & Alarms](../concepts/event-processing.md) instead.
 
-## One instance, on purpose
+## One active engine, on purpose
 
-The detection engine runs as **exactly one replica**, and the chart ships it that way with a
-recreate-style rollout.
+Exactly one engine detects at a time. The chart ships a single replica with a recreate-style
+rollout, which is the simplest way to arrange that.
 
 This is not a scaling limitation waiting to be lifted casually. The engine holds every open window,
 every running timer and every raised-edge latch in memory, and commits them as a single checkpoint.
@@ -27,21 +28,42 @@ Three things protect that invariant, and it is worth knowing that they are not e
 
 1. **The rollout strategy** stops a deploy from overlapping the old and new instances. It covers
    deploys only.
-2. **The chart refuses to render** a configuration that asks for more than one replica alongside
-   that strategy.
+2. **A partition lease** decides which replica may act. A replica fetches, acknowledges,
+   checkpoints and publishes only while it holds the lease, and stops the moment it does not.
 3. **The engine itself refuses to commit** a checkpoint that is behind one already stored. If two
    engines do briefly run — an eviction, a node drain, or a manually deleted pod all schedule a
    replacement immediately — the one that fell behind stops rather than overwriting.
 
-:::warning A drain can briefly run two engines
-Only the rollout path is fully covered. An eviction or node drain has the replacement scheduled
-before the original has stopped, so for a few seconds two engines can consume the same stream. The
-checkpoint fence contains it — the loser halts — but it is the reason to prefer a deliberate rollout
-over draining the node the engine happens to be on.
+:::warning A drain can briefly run two pods
+Only the rollout path is fully covered by the strategy. An eviction or node drain has the
+replacement scheduled before the original has stopped. The lease and the checkpoint fence contain
+it — the pod that does not hold the lease stops consuming, and a lagging checkpoint is refused —
+but it is the reason to prefer a deliberate rollout over draining the node the engine happens to
+be on.
 :::
 
-Because there is one replica, there is no pod disruption budget. Draining its node stops detection
-until the pod is rescheduled.
+### Running a warm standby
+
+You may run more than one replica, and the extra replicas are **standbys, not writers**. Set both:
+
+```yaml
+functionalAreas:
+  event-processing:
+    replicas: 2
+    strategy: RollingUpdate
+```
+
+Raising `replicas` without also moving off the recreate strategy fails the render, because that
+strategy stops every pod before starting any — the standby would be down exactly when it is needed.
+
+A standby is ready and serves the API, but holds no lease: it consumes nothing, commits nothing, and
+takes the partition when the leader releases it or its lease expires. What that buys is the pod
+start and, on an eviction, the wait for a replacement to be scheduled. What it does **not** skip is
+the restart cost described in the next section — a standby holds no pre-loaded engine state, because
+loading it would mean reading a checkpoint the leader is still writing.
+
+With a single replica there is no pod disruption budget, and draining its node stops detection until
+the pod is rescheduled. A standby is the way to avoid that.
 
 ## What a restart costs
 

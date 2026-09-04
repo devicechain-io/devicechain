@@ -6,18 +6,18 @@ title: Cómo operar el motor de detección
 # Cómo operar el motor de detección
 
 Las [reglas de detección](../concepts/event-processing.md) las evalúa un servicio que se comporta de
-forma distinta al resto de la plataforma: mantiene estado vivo en memoria, se ejecuta como una
-**única instancia** y evalúa sobre el **tiempo del evento** en lugar de sobre el reloj. Esta página
-es el contrato del operador: qué se gana con eso, qué cuesta y cómo distinguir un motor sano de uno
-atascado.
+forma distinta al resto de la plataforma: mantiene estado vivo en memoria, detecta desde
+una **única instancia activa** y evalúa sobre el **tiempo del evento** en lugar de sobre el reloj.
+Esta página es el contrato del operador: qué se gana con eso, qué cuesta y cómo distinguir un
+motor sano de uno atascado.
 
 Si lo que busca es qué puede expresar una regla o cómo autorarla, empiece por
 [Procesamiento de eventos y alarmas](../concepts/event-processing.md).
 
-## Una sola instancia, a propósito
+## Un solo motor activo, a propósito
 
-El motor de detección se ejecuta como **exactamente una réplica**, y el chart lo distribuye así, con
-una estrategia de despliegue de tipo *recreate*.
+Exactamente un motor detecta a la vez. El chart distribuye una sola réplica con una estrategia de
+despliegue de tipo *recreate*, que es la forma más simple de conseguirlo.
 
 Esto no es una limitación de escalado a la espera de que alguien la levante a la ligera. El motor
 mantiene en memoria cada ventana abierta, cada temporizador en marcha y cada enclavamiento de flanco
@@ -29,24 +29,47 @@ Tres cosas protegen ese invariante, y conviene saber que no son igual de fuertes
 
 1. **La estrategia de despliegue** impide que un despliegue solape la instancia antigua con la
    nueva. Solo cubre los despliegues.
-2. **El chart se niega a renderizar** una configuración que pida más de una réplica junto a esa
-   estrategia.
+2. **Un arrendamiento (lease) de partición** decide qué réplica puede actuar. Una réplica lee,
+   confirma mensajes, escribe puntos de control y publica únicamente mientras mantiene el
+   arrendamiento, y se detiene en el momento en que deja de tenerlo.
 3. **El propio motor se niega a confirmar** un punto de control que quede por detrás de uno ya
    almacenado. Si dos motores llegan a ejecutarse brevemente —una expulsión, el drenaje de un nodo o
    un pod eliminado a mano programan un reemplazo de inmediato—, el que se quedó atrás se detiene en
    lugar de sobrescribir.
 
-:::warning Un drenaje puede ejecutar dos motores durante unos segundos
-Solo la vía del despliegue está cubierta por completo. En una expulsión o un drenaje de nodo, el
-reemplazo se programa antes de que el original se haya detenido, así que durante unos segundos dos
-motores pueden consumir el mismo flujo. La valla del punto de control lo contiene —el que pierde se
-detiene—, pero es la razón para preferir un despliegue deliberado a drenar el nodo en el que
-casualmente está el motor.
+:::warning Un drenaje puede ejecutar dos pods durante unos segundos
+Solo la vía del despliegue está cubierta por completo por la estrategia. En una expulsión o un
+drenaje de nodo, el reemplazo se programa antes de que el original se haya detenido. El
+arrendamiento y la valla del punto de control lo contienen —el pod que no tiene el arrendamiento
+deja de consumir, y un punto de control atrasado se rechaza—, pero es la razón para preferir un
+despliegue deliberado a drenar el nodo en el que casualmente está el motor.
 :::
 
-Como hay una sola réplica, no hay presupuesto de interrupción de pods. Drenar su nodo detiene la
-detección hasta
-que el pod se reprograma.
+### Ejecutar un standby en caliente
+
+Puede ejecutar más de una réplica, y las réplicas adicionales son **standbys, no escritores**.
+Establezca ambos valores:
+
+```yaml
+functionalAreas:
+  event-processing:
+    replicas: 2
+    strategy: RollingUpdate
+```
+
+Subir `replicas` sin abandonar además la estrategia *recreate* hace fallar el renderizado, porque
+esa estrategia detiene todos los pods antes de arrancar ninguno: el standby estaría caído justo
+cuando hace falta.
+
+Un standby está listo y sirve la API, pero no tiene el arrendamiento: no consume nada, no confirma
+nada y toma la partición cuando el líder la libera o su arrendamiento expira. Lo que ahorra es el
+arranque del pod y, en una expulsión, la espera a que se programe un reemplazo. Lo que **no** evita
+es el coste de reinicio descrito en la siguiente sección: un standby no mantiene estado del motor
+precargado, porque cargarlo significaría leer un punto de control que el líder todavía está
+escribiendo.
+
+Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su nodo detiene la
+detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
 ## Qué cuesta un reinicio
 

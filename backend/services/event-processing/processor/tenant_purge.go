@@ -87,6 +87,11 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 	if err := core.ValidateToken(tenant); err != nil {
 		return 0, fmt.Errorf("refusing to evict %q from the DETECT engine: %w", tenant, err)
 	}
+	// 🔴 A REPLICA THAT HOLDS NO TERM MUST NOT ANSWER FOR THIS PARTITION, and this check
+	// is what says so rather than the shape of some other mechanism. See errNoTermHeld.
+	if err := rp.termHeldForEviction(); err != nil {
+		return 0, err
+	}
 	req := tenantPurgeRequest{tenant: tenant, reply: make(chan tenantPurgeResult, 1)}
 	select {
 	case rp.tenantPurges <- req:
@@ -105,6 +110,64 @@ func (rp *ResolvedEventsProcessor) EvictTenant(ctx context.Context, tenant strin
 	}
 }
 
+// errNoTermHeld is what a replica that owns no leadership term answers with, and it is
+// the piece of ADR-070's warm standby that had to land in the same change as the standby
+// itself rather than after it.
+//
+// 🔴 THE ANSWER IS AN ERROR, NOT SILENCE, AND NOT A CLEAN ZERO. Those three are not
+// interchangeable to the purge coordinator, and each maps to a different sentence in a
+// tenant's deletion record:
+//
+//   - a clean zero says "this partition's checkpoint holds none of this tenant". A standby
+//     is entitled to say nothing of the kind: it has no engine, no restored snapshot and no
+//     term, so it knows nothing about the row's contents — and a partition is satisfied if
+//     ANY reply erased and committed, so one clean zero from a standby completes the purge
+//     over a checkpoint that still holds the tenant. Nothing re-checks that record.
+//   - silence would be safer than a clean zero, but it costs the one distinction the
+//     coordinator's no-responders branch rests on: with a subscription in place the broker
+//     does not answer "no responders", and "no responder AND no checkpointed partition" is
+//     the one observation it records as CLEAN. So the standby stays SUBSCRIBED (the
+//     responder's lifetime is the process's, unchanged) and answers.
+//   - an error defers the pass, and a deferral is free when a leader exists: the leader's
+//     clean reply satisfies the same partition, and the coordinator weighs every reply from
+//     one partition together. When no leader exists the deferral is exactly right — the
+//     tenant's windows really are still in the checkpoint.
+//
+// 🔴 ONE CLEAN ZERO WAS ALREADY REACHABLE BEFORE THE STANDBY, and it is the reason this is
+// not merely tidiness. A replica whose loop is still running after its term ended — the
+// select below is racing the term cancel — asked to evict a tenant it holds nothing of,
+// sweeps nothing, dirties nothing, never reaches checkpoint() (where every other ownership
+// check lives) and answers CLEAN. That answer is about a durable snapshot the successor now
+// owns and may already have rebuilt the tenant into. Narrow, but a warm standby makes
+// handovers ordinary rather than exceptional.
+//
+// 🔴 AND WHAT GUARDED THE REST WAS AN ACCIDENT, WHICH IS WHY IT COULD NOT WAIT FOR A LATER
+// SLICE. Before the standby, a term-less replica could not answer at all — not because
+// anything said so, but because ExecuteStart awaited the first term (so the per-term context
+// between terms was always CANCELLED) and tenantPurges is unbuffered (so a request reaching a
+// processor with no running loop blocked until the caller's gather window expired). Neither
+// is a property anyone would preserve on purpose. A Ready standby holds a live context it has
+// not earned, which turns the first into a gather-window-long stall instead of a refusal; and
+// the day the channel gains a buffer, the stall becomes a wrong answer with nothing in the
+// file to say it moved.
+var errNoTermHeld = errors.New("this DETECT replica holds no leadership term for this " +
+	"partition, so it can say nothing about what the partition's checkpoint holds; a warm " +
+	"standby has no engine and no restored snapshot, and the replica that owns the term " +
+	"answers for it")
+
+// termHeldForEviction reports whether this replica may answer for its partition.
+//
+// The unleased path (the scaffold and every unit test that drives the loop directly) has no
+// term to hold and keeps its previous behaviour exactly, the same exemption checkpoint()
+// makes — single writership there is a deployment convention, not something this process can
+// check.
+func (rp *ResolvedEventsProcessor) termHeldForEviction() error {
+	if rp.leadershipEnabled() && !rp.heldNow() {
+		return errNoTermHeld
+	}
+	return nil
+}
+
 // applyTenantPurge evicts a tenant on the single-writer loop and commits the result.
 //
 // The ORDER below is not arbitrary. The registry is swept first so it can report which
@@ -120,6 +183,20 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		// partition and its checkpoint would be refused, so it must not answer for one.
 		return tenantPurgeResult{err: errors.New("this DETECT writer is halted as a stale " +
 			"split-brain loser; it cannot commit an eviction for this partition")}
+	}
+	// 🔴 ASKED AGAIN HERE, AND THE SECOND ASK IS NOT BELT-AND-BRACES. EvictTenant checks on
+	// the RESPONDER's goroutine; this runs on the loop, and the term can end in between. The
+	// window is not theoretical: run()'s select has both this case and the term context's
+	// Done() arm, and Go picks uniformly among ready cases — so a request already queued when
+	// the term is cancelled is serviced roughly half the time.
+	//
+	// It is also the only guard on the path that matters most. Below, an eviction that dirties
+	// nothing returns CLEAN without reaching checkpoint(), which is where every other
+	// ownership check in this loop lives — so a pass that finds the engine already empty is
+	// precisely the pass that would answer for a partition this replica no longer owns, and
+	// the answer would be the one the coordinator writes into the deletion record.
+	if err := rp.termHeldForEviction(); err != nil {
+		return tenantPurgeResult{err: err}
 	}
 
 	removed := rp.registry.RemoveTenant(tenant)
@@ -267,6 +344,15 @@ func (rp *ResolvedEventsProcessor) dropTenantBuffers(victim func(ruleID string) 
 // useless here — the coordinator purges the tenant's own subjects in the same pass, so a
 // per-tenant fact carrying the eviction request would be deleted by the very purge it was
 // driving.
+//
+// 🔴 ITS LIFETIME IS THE PROCESS'S, NOT THE LEADERSHIP TERM'S, AND THAT IS THE DELIBERATE
+// HALF OF "TERM-SCOPED" (ADR-070). What is scoped to the term is the ANSWER — see
+// errNoTermHeld — not the subscription. Unsubscribing on a warm standby looks like the
+// tighter design and is the more dangerous one: the coordinator's one CLEAN-without-evidence
+// branch is "the broker reported no responders AND no partition has checkpointed", and a
+// standby that drops its subscription is how an instance reaches that state while an engine
+// is running. Staying subscribed keeps the broker answering "there is interest here"; the
+// refusal below supplies the rest.
 type TenantPurgeResponder struct {
 	conn       *nats.Conn
 	instanceId string

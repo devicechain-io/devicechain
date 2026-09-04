@@ -154,7 +154,20 @@ type ResolvedEventsProcessor struct {
 	// otherwise. Nil disables leadership entirely and the processor behaves exactly
 	// as it did before — one process, one writer by deployment convention — which is
 	// the scaffold and unit-test path.
-	Lease *messaging.DistributedLease
+	//
+	// 🔴 IT IS AN INTERFACE FOR ONE REASON: THE STANDBY IS OTHERWISE UNTESTABLE. Standing
+	// by is what a replica does when Acquire answers ErrLeaseHeld, and with a concrete
+	// *messaging.DistributedLease there is no way to produce that answer without a second
+	// live process racing a real broker for the same key. The two methods here are the
+	// whole of what the supervisor asks BEFORE it owns anything; everything after — the
+	// watch, the renewal, the release — goes through the concrete *messaging.Lease that
+	// Acquire hands back, which is the object with the mechanics worth testing against a
+	// real broker (and core/messaging does).
+	//
+	// Nil means unleased. Note the usual interface hazard: a TYPED nil (a
+	// (*messaging.DistributedLease)(nil) assigned here) is not nil and would enable
+	// leadership with a lease that panics. Assign a real one or leave the field alone.
+	Lease PartitionLease
 
 	// Gate is the object the term-gated readers hold and this processor publishes
 	// each term's ownership signal into. It exists as a separate object purely for
@@ -401,6 +414,13 @@ type ResolvedEventsProcessor struct {
 	// fetched but the loop has not yet received is not missed by the backlog check.
 	lastLiveRead time.Time
 	dirty        bool
+	// restoredSeq is the StreamSeq of the checkpoint ROW this term restored from (0 when
+	// there was none). It is the compare half of Store.Reset's compare-and-swap: the only
+	// destructive write in a term build is conditioned on the row still being the one this
+	// replica read, so a replica that lost the partition mid-build cannot clear the
+	// checkpoint its successor has already committed to. Written by restore, read by
+	// replayToHead — both on the build path, before any loop starts.
+	restoredSeq int64
 	// idleUncommitted latches when idleAdvance moved the watermark off the wall clock but its
 	// checkpoint could NOT commit (broker/store outage). The wall-clock advance is not
 	// replayable, so a live event applied against the uncommitted inflated frontier would
@@ -591,11 +611,26 @@ func (rp *ResolvedEventsProcessor) Start(ctx context.Context) error {
 // process and run it until shutdown (the scaffold and unit-test path, where single
 // writership is a deployment convention rather than something enforced).
 //
-// With a lease it BLOCKS until this replica wins the partition and its first term
-// is live, then hands off to the supervisor for every term after that. Blocking is
-// deliberate — see runTerms for why a Ready standby cannot land before the
-// tenant-purge responder is term-scoped, and why this costs nothing on the deploy
-// shape event-processing actually uses.
+// With a lease it RETURNS IMMEDIATELY and leaves the supervisor to win the partition:
+// this replica reports Ready as a WARM STANDBY and takes its first term whenever the
+// partition becomes free (ADR-070 decision 4a).
+//
+// 🔴 IT USED TO BLOCK, AND WHAT UNBLOCKED IT IS THE TERM-SCOPED EVICTION ANSWER, NOT A
+// CHANGE OF MIND ABOUT READINESS. The tenant-purge responder answers the ADR-077 purge
+// coordinator, and a standby that answered "no work here" would have the coordinator
+// record a tenant's detection state as erased while the real leader still held it.
+// Blocking here was what made that unreachable — awaiting the first term meant the
+// per-term context between terms was always cancelled, and an eviction reaching a
+// processor with no loop could only fail. That is a guarantee made of a side effect.
+// The answer is now gated on the term itself (see errNoTermHeld), which is what a
+// standby can be Ready against.
+//
+// What Ready now means for this area is worth stating, because it is not "detection is
+// live": /readyz reports the auth gate and has never seen this processor. It means the
+// pod can serve its GraphQL — including the synchronous rule-validation call a device
+// profile publish makes, which fails closed on a transport error — and can answer for
+// the partition IF it holds it. detect_is_leader and detect_live are the signals that
+// say which replica is doing the work, and the chart's alerts read them across pods.
 func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// A lease with no gate would take the partition and then consume ungoverned —
 	// the fail-open shape this whole change exists to remove, arrived at by a wiring
@@ -609,14 +644,15 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if !rp.leadershipEnabled() {
 		return rp.buildTerm(ctx)
 	}
-	handle, err := rp.beginTermWithRetry()
-	if err != nil {
-		return err
-	}
+	// Deliberately not "standing by": at replicas:1 this replica normally acquires within
+	// milliseconds, and a log line claiming otherwise would send an operator looking for a
+	// leader that is right here. acquireWithBackoff logs the actual standby state, once,
+	// when the partition turns out to be held.
+	log.Info().Str("partition", rp.cfg.PartitionId).
+		Msg("DETECT leadership supervisor started; this replica is Ready and leads as soon as it holds the partition.")
 	rp.supWG.Add(1)
 	go func() {
 		defer rp.supWG.Done()
-		rp.awaitTermEnd(handle)
 		rp.runTerms()
 	}()
 	return nil
@@ -1246,6 +1282,7 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	}
 	if !ok {
 		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
+		rp.restoredSeq = 0
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
@@ -1255,6 +1292,10 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
 	rp.engine = engine
+	// The ROW's sequence, taken from the row rather than from the engine we just built out
+	// of it. They agree today, and the store's compare-and-swap is worth nothing if they
+	// ever stop: it has to compare what was actually read from the table.
+	rp.restoredSeq = snap.StreamSeq
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
 	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
@@ -1279,11 +1320,27 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 	if head < rp.engine.LastSeq() {
 		log.Warn().Uint64("snapshotSeq", rp.engine.LastSeq()).Uint64("streamHead", head).
 			Msg("Snapshot is ahead of the stream head (re-created/truncated stream); resetting DETECT engine to empty.")
+		// 🔴 THE OWNERSHIP CHECK COMES BEFORE THE DESTRUCTIVE WRITE, and this is the one
+		// place in the term BUILD that writes at all. Everything else the build does reads:
+		// restore, catch-up, the view builds. This deletes the partition's checkpoint, and
+		// the build is long enough (a restore, three view builds and a whole replay) that a
+		// lease can be lost inside it — so the replica issuing the delete may no longer own
+		// what it is deleting. checkpoint() makes the same check for the same reason.
+		if rp.leadershipEnabled() && !rp.heldNow() {
+			return fmt.Errorf("refusing to reset the DETECT snapshot for partition %q: this "+
+				"replica lost the partition during its term build, and the successor is "+
+				"leading from that checkpoint", rp.cfg.PartitionId)
+		}
+		observed := rp.restoredSeq
 		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 		rp.dirty = false
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
-		// refuses); live consumption then writes a fresh checkpoint from sequence 1.
-		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId); err != nil {
+		// refuses); live consumption then writes a fresh checkpoint from sequence 1. The
+		// sequence is the row we RESTORED from, captured before the engine above replaced
+		// it — the store refuses the delete if the row has moved since (see Reset), which
+		// is what stops a replica that lost its term mid-build from clearing the checkpoint
+		// its successor is already committing to.
+		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed); err != nil {
 			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 		}
 		return nil

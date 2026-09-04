@@ -358,3 +358,78 @@ func TestAGatherWithNoExpectedPartitionsStillEndsPromptly(t *testing.T) {
 		"against a responder that answered immediately — it waited out the whole window, which "+
 		"the coordinator pays on every pass while holding the advisory lock", elapsed)
 }
+
+// TestAFailedReplyDoesNotShortenTheGather is the other half of the test two above, and the
+// half that was missing.
+//
+// 🔴 THAT COMPANION TEST PASSES AGAINST THIS BUG. It fixes the `awaited` bookkeeping — an
+// error reply does not clear a partition — and then hands the same failure straight back
+// through the quiescence window, because ANY first reply used to switch the gather from
+// DetectPurgeWindow down to detectPurgeQuiesce. Its slow responder answers in 150ms, inside
+// the 300ms window, so the truncation never shows.
+//
+// The replica that answers fast is by construction the one that did NOT do the work: a warm
+// standby holding no term (ADR-070) refuses in microseconds, and so does a halted
+// split-brain writer. The replica that DID the work sweeps the whole instance's state,
+// serializes a snapshot and commits it to Postgres. Giving that replica 300ms measured from
+// the moment the standby speaks is not a bound anybody sized — it is whatever was left over.
+//
+// The consequence is not a slow purge but a WRONG deletion record: the coordinator writes
+// "this tenant's open detection windows and timers are still in its checkpoint" about a
+// partition that had just erased them, on every pass, and the purge never completes.
+//
+// So the delay below is deliberately LONGER than detectPurgeQuiesce and shorter than
+// DetectPurgeWindow: the only way to collect that reply is to have kept the full window
+// open, which is exactly the property under test.
+func TestAFailedReplyDoesNotShortenTheGather(t *testing.T) {
+	nc := detectRig(t)
+	// The warm standby: instant, and it erased nothing.
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1",
+		Error: "this DETECT replica holds no leadership term for this partition"})
+	// The leader: slower than the quiescence window, because a real eviction commits a
+	// snapshot to the database.
+	respondAsAfter(t, nc, 2*detectPurgeQuiesce, DetectPurgeReply{PartitionId: "p1", Evicted: 9})
+
+	// No expected partitions: the shape a quiet instance is in (a partition joins the
+	// expected set only once it has checkpointed), and the shape in which the gather has
+	// nothing but the window to end on.
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", nil)
+	require.NoError(t, err)
+
+	var cleanReplies int
+	for _, r := range res.Replies {
+		if r.Error == "" {
+			cleanReplies++
+		}
+	}
+	require.NotZerof(t, cleanReplies, "the standby's instant refusal collapsed the gather to "+
+		"the %s quiescence window, so the reply from the replica that actually evicted and "+
+		"committed was never read: %+v", detectPurgeQuiesce, res.Replies)
+}
+
+// The counterweight, and without it the test above is satisfied by deleting the quiescence
+// window altogether — which reinstates the five-second stall per pass, per purging tenant,
+// on the coordinator's goroutine under the instance-wide advisory lock.
+//
+// A CLEAN first reply must still shorten the gather. That is the property
+// TestAGatherWithNoExpectedPartitionsStillEndsPromptly asserts, restated here against a
+// SECOND responder that is subscribed and never answers — so an empty awaited set cannot be
+// what ends this gather early, and the quiescence window is the only thing left that can.
+func TestACleanReplyStillShortensTheGather(t *testing.T) {
+	nc := detectRig(t)
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1", Evicted: 3})
+	silent, err := nc.Subscribe(DetectPurgeSubject(detectInstance), func(*nats.Msg) {})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	t.Cleanup(func() { _ = silent.Unsubscribe() })
+
+	start := time.Now()
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", nil)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.Len(t, res.Replies, 1)
+	assert.Lessf(t, elapsed, DetectPurgeWindow/2, "a gather whose first reply erased and "+
+		"committed took %s — the quiescence window is gone, and the coordinator now pays the "+
+		"full %s on every pass", elapsed, DetectPurgeWindow)
+}

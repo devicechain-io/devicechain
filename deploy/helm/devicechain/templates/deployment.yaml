@@ -66,8 +66,35 @@ spec:
   covers the case the other two cannot see: an old pod's already-fetched batch redelivering
   after AckWait to a leader that has replayed past it.
 
-  Such an area MUST also stay at replicas:1 (a Recreate with 2 replicas runs 2 PERMANENT
-  writers — strictly worse than a rolling overlap); the guard below fails the render if not.
+  Two guards below, and the split between them is the point.
+
+  The first is keyed on the AREA, because "may this area run more than one replica" is a
+  property of what the area DOES, not of how it is rolled out. sparkplug-ingest owns a
+  Sparkplug Host's alias/seq/session state and publishes STATE on a broker; lwm2m-ingest
+  binds one inbound CoAP/UDP socket that a Service would spray datagrams across. Both take
+  a partition lease, and the lease makes REPLACEMENT safe for them — a successor cannot
+  serve until it holds the lease — but neither can usefully warm-standby: a second Host is
+  wrong, and a second UDP binder silently drops the share of datagrams the Service sent it.
+  So they are pinned at one serving replica whatever the strategy says.
+
+  That guard has to be keyed on the area because keying it on the strategy MISSES. Until
+  now the only replica check fired on Recreate, so those two areas were protected by their
+  strategy rather than by their nature: setting `strategy: RollingUpdate` alongside
+  `replicas: 2` rendered cleanly and produced two Hosts, or a UDP binder dropping half its
+  traffic, with nothing in the render to say so.
+
+  The second guard is the strategy one, and it stays: Recreate with more than one replica
+  stops EVERY pod before starting any, so the second replica buys nothing during a rollout
+  and the whole area is down for the gap — while during steady state it is two permanent
+  writers wherever no lease arbitrates. An area that wants a standby wants RollingUpdate.
+
+  event-processing is the one STATEFUL single-owner area that may now exceed replicas:1
+  (the stateless areas always could — they share a durable consumer and each message goes
+  to exactly one of them). Its extra replicas are warm standbys, not writers: DETECT takes
+  the partition lease before it reads any state and consults it on every message,
+  checkpoint and publish, and a replica that does not hold it parks its readers, refuses
+  its checkpoints, and refuses to answer for the partition's tenant state. It still needs
+  RollingUpdate, per the guard above. See values.yaml.
 
   event-sources is the INVERSE case, and the guard below refuses Recreate there (ADR-030 I5).
   It ingests device telemetry from a JetStream capture stream that it ensures at startup,
@@ -89,8 +116,17 @@ spec:
   MQTT-client path it replaces could never do.
   */}}
   {{- $strategy := get $areaCfg "strategy" | default "RollingUpdate" }}
-  {{- if and (eq $strategy "Recreate") (gt (int (get $areaCfg "replicas" | default $root.Values.replicas)) 1) }}
-  {{- fail (printf "functionalAreas.%s: strategy Recreate is a single-writer guarantee and requires replicas:1 (got %v)" $area (get $areaCfg "replicas" | default $root.Values.replicas)) }}
+  {{- $replicas := int (get $areaCfg "replicas" | default $root.Values.replicas) }}
+  {{/*
+  Areas that can only ever have ONE SERVING pod, whatever the rollout strategy. This is a
+  property of the workload, not of how it is deployed — see the strategy note above.
+  */}}
+  {{- $singleServingAreas := list "sparkplug-ingest" "lwm2m-ingest" }}
+  {{- if and (has $area $singleServingAreas) (gt $replicas 1) }}
+  {{- fail (printf "functionalAreas.%s: this area can only run ONE serving pod, so replicas must be 1 (got %v). It is not a rollout-strategy question: sparkplug-ingest owns one Sparkplug Host's session state and publishes STATE on the broker, so a second pod is a second Host; lwm2m-ingest binds one inbound CoAP/UDP socket, so a second pod silently drops the datagrams the Service sends it. The partition lease makes REPLACEMENT safe for both, but neither can warm-standby." $area $replicas) }}
+  {{- end }}
+  {{- if and (eq $strategy "Recreate") (gt $replicas 1) }}
+  {{- fail (printf "functionalAreas.%s: strategy Recreate stops every pod before starting any, so replicas above 1 buys nothing during a rollout and leaves the area down for the whole gap — and outside a rollout it is simply N permanent pods. Use replicas:1 with Recreate, or RollingUpdate if this area supports warm standbys (got replicas:%v)." $area $replicas) }}
   {{- end }}
   {{- if and (eq $strategy "Recreate") (eq $area "event-sources") }}
   {{- fail "functionalAreas.event-sources: strategy Recreate would silently DROP device telemetry. It terminates the old pod before the new one creates the ingest capture stream, so everything the broker PUBACKs in the gap is accepted and stored nowhere. event-sources is not a single writer and must stay on RollingUpdate." }}
