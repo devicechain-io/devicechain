@@ -50,11 +50,11 @@ package streams
 // CONSUMER tuning — different retry budgets or ack windows for hot and cold streams —
 // and that was considered and declined. Two reasons, both in the MaxDeliver comment in
 // core/messaging/nats.go: the server freezes a durable's config, so varying a field by
-// tier crash-loops any cluster that is not brand new; and the dead-letter arms in eight
-// services compare Message.NumDelivered against the package-level messaging.MaxDeliver,
-// so a per-tier limit would make them write their dead letter at the wrong attempt, or
-// never, with nothing in the test estate able to see it. Read that comment before
-// giving this type a second job.
+// tier crash-loops any cluster that is not brand new; and the dead-letter arms spread
+// across the service estate compare Message.NumDelivered against the package-level
+// messaging.MaxDeliver, so a per-tier limit would make them write their dead letter at
+// the wrong attempt, or never, with nothing in the test estate able to see it. Read
+// that comment before giving this type a second job.
 type Tier int
 
 const (
