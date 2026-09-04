@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -38,6 +39,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
 	require.NoError(t, db.AutoMigrate(
 		&AssetType{}, &Asset{}, &DeviceType{}, &Device{},
+		&CustomerType{}, &Customer{}, &DeviceClaim{},
 		&EntityRelationshipType{}, &EntityRelationship{},
 	), "migrate")
 
@@ -459,6 +461,119 @@ func TestAssetAncestorWalkRefusesACyclePlantedOutsideTheApi(t *testing.T) {
 	_, err = api.SetAssetParent(ctx, "c", "a")
 	require.ErrorIs(t, err, ErrAssetHierarchyTooDeep,
 		"a placement under a cyclic branch was accepted")
+}
+
+// An ASSET→ASSET edge of a CUSTOM relationship type is not containment.
+//
+// 🔴 THIS IS THE INPUT CLASS TestAssetRootsIgnoreOtherRelationshipTypes COULD NOT
+// REACH, and a surviving mutant is what named it. That test uses a device→asset
+// assignment, which containmentEdges already excludes on `source_type` alone — so
+// swapping the relationship-type predicate for a different token changed nothing and
+// the predicate went untested. Only an edge that passes the BOTH-ENDS-ASSETS filter
+// and must still be rejected can exercise it.
+//
+// A tenant modelling "feeds" or "adjacent-to" between assets is the ordinary case, not
+// a contrived one, and reading those as parenthood would silently restructure the tree.
+func TestCustomAssetToAssetEdgesAreNotContainment(t *testing.T) {
+	api, ctx := hierarchyTestApi(t)
+	seedAssets(t, api, ctx, "tank", "pump", "valve")
+
+	feeds, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
+		Token: "feeds",
+	})
+	require.NoError(t, err, "create custom relationship type")
+
+	// tank feeds pump: an asset→asset edge, which the containment predicate must not
+	// match. It is created through the generic API, so it also proves the admission
+	// gate leaves a non-containment type alone.
+	_, err = api.CreateEntityRelationship(ctx, &EntityRelationshipCreateRequest{
+		Token:            uuid.New().String(),
+		SourceType:       string(entity.TypeAsset),
+		Source:           "tank",
+		TargetType:       string(entity.TypeAsset),
+		Target:           "pump",
+		RelationshipType: feeds.Token,
+	})
+	require.NoError(t, err, "a custom asset-to-asset edge was refused")
+
+	// Neither end moved in the hierarchy.
+	parent, err := api.AssetParent(ctx, "pump")
+	require.NoError(t, err, "read parent")
+	require.Nil(t, parent, "a \"feeds\" edge was read as parenthood")
+
+	roots, err := api.AssetChildren(ctx, nil, rdb.Pagination{PageNumber: 1, PageSize: 10})
+	require.NoError(t, err, "read roots")
+	require.ElementsMatch(t, []string{"tank", "pump", "valve"}, tokensOf(assetPtrs(roots.Results)),
+		"a custom asset-to-asset edge removed an asset from the roots")
+
+	children, err := api.AssetChildren(ctx, strPtr("tank"), rdb.Pagination{PageNumber: 1, PageSize: 10})
+	require.NoError(t, err, "read children")
+	require.Empty(t, children.Results, "a \"feeds\" target was listed as a child")
+
+	// The counterweight: a real containment edge between the same two assets IS seen,
+	// so the predicate discriminates rather than matching nothing.
+	_, err = api.SetAssetParent(ctx, "pump", "tank")
+	require.NoError(t, err, "place pump under tank")
+	parent, err = api.AssetParent(ctx, "pump")
+	require.NoError(t, err, "read parent after placement")
+	require.NotNil(t, parent, "a real containment edge was not seen")
+	require.Equal(t, "tank", parent.Token, "wrong parent")
+}
+
+// Redeeming a device claim cannot smuggle a containment edge past the gate.
+//
+// 🔴 ClaimDevice IS THE THIRD WRITER OF RELATIONSHIP EDGES and it takes a
+// CALLER-CHOSEN relationship type, so before the gate was added there
+// claimDevice(relationshipType:"contains") wrote a device→customer containment edge
+// that had met none of the structural checks. It was harmless to the tree only because
+// the both-ends-assets predicate hides it on read — which is a second mechanism
+// covering for a missing first one, exactly the arrangement that stops being true
+// quietly.
+func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
+	api, ctx := hierarchyTestApi(t)
+	seedDeviceForHierarchy(t, api, ctx, "dozer-01")
+
+	customerType := &CustomerType{}
+	customerType.Token = "operator"
+	require.NoError(t, api.RDB.DB(ctx).Create(customerType).Error, "seed customer type")
+	customer, err := api.CreateCustomer(ctx, &CustomerCreateRequest{
+		Token:             "acme-mining",
+		CustomerTypeToken: customerType.Token,
+	})
+	require.NoError(t, err, "seed customer")
+	require.NotNil(t, customer, "no customer created")
+
+	_, err = api.EnsureContainmentType(ctx)
+	require.NoError(t, err, "ensure containment type")
+
+	secret := "s3cret"
+	_, err = api.InitiateDeviceClaim(ctx, &DeviceClaimInitiateRequest{
+		DeviceToken: "dozer-01",
+		ClaimSecret: secret,
+	})
+	require.NoError(t, err, "open claim")
+
+	_, err = api.ClaimDevice(ctx, &DeviceClaimRequest{
+		DeviceToken:      "dozer-01",
+		ClaimSecret:      secret,
+		CustomerToken:    "acme-mining",
+		RelationshipType: ContainmentRelationshipType,
+	}, time.Now())
+	require.ErrorIs(t, err, ErrContainmentEndsMustBeAssets,
+		"a claim redeemed as \"contains\" wrote a device-to-customer containment edge")
+
+	// The counterweight: the SAME claim redeemed with the assignment type succeeds, so
+	// the gate refuses one type rather than breaking claims.
+	assignment, err := api.EnsureAssignmentType(ctx)
+	require.NoError(t, err, "ensure assignment type")
+	edge, err := api.ClaimDevice(ctx, &DeviceClaimRequest{
+		DeviceToken:      "dozer-01",
+		ClaimSecret:      secret,
+		CustomerToken:    "acme-mining",
+		RelationshipType: assignment.Token,
+	}, time.Now())
+	require.NoError(t, err, "a legitimate claim was refused")
+	require.NotNil(t, edge, "no edge returned")
 }
 
 // seedDeviceForHierarchy creates one device, for the tests that need a non-asset

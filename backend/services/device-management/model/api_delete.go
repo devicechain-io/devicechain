@@ -260,12 +260,32 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 	return true, nil
 }
 
-// DeleteDevice deletes a device, cascade-removing its credentials (ADR-014) and
-// every relationship edge it participates in (its assignments, ADR-013).
+// DeleteDevice deletes a device, cascade-removing its credentials (ADR-014), its
+// replacement journal (ADR-074) and every relationship edge it participates in (its
+// assignments, ADR-013).
+//
+// 🔴 THE REPLACEMENT JOURNAL IS PART OF THE CASCADE, AND LEAVING IT OUT DID NOT LOOK
+// LIKE A BUG. device_replacements carries a foreign key to devices, so without this
+// a device that has ever been replaced could not be deleted at all: Postgres refuses
+// the parent delete with a raw `FOREIGN KEY constraint failed`, which surfaces to the
+// caller as a database error rather than as ErrEntityInUse — a device permanently
+// undeletable for a reason the API cannot explain.
+//
+// It went unnoticed because every fixture in this package ran sqlite with foreign
+// keys OFF, where the same sequence passes. That is the "fixture more permissive than
+// production" shape again; replacementTestApi now sets PRAGMA foreign_keys = ON so the
+// harness sees what Postgres enforces.
+//
+// The journal goes WITH the device rather than holding it back. It is a record ABOUT
+// this device — it names no other entity, and the tenant purge already erases it with
+// the tenant — so there is nothing for it to outlive.
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) error {
-			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceCredential{}).Error
+			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceCredential{}).Error; err != nil {
+				return err
+			}
+			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error
 		})
 }
 

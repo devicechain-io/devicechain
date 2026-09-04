@@ -41,15 +41,36 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, err, "open sqlite")
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
+	// Everything DeleteDevice's cascade touches, not only what a replacement writes.
+	// deleteEdgeEntity removes relationship edges, entity attributes, alarms and group
+	// memberships before the cascade closure runs, so a fixture missing any of them
+	// fails the delete for the wrong reason and hides the one under test.
 	require.NoError(t, db.AutoMigrate(
 		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{},
+		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{},
 	), "migrate")
 	require.NoError(t, db.Exec(
 		`CREATE UNIQUE INDEX idx_device_credential_lookup ON device_credentials `+
 			`(tenant_id, credential_type, credential_id) WHERE deleted_at IS NULL`).Error,
 		"create credential-resolve unique index")
+
+	// 🔴 FOREIGN KEYS ON, AND THIS ONE LINE IS THE DIFFERENCE BETWEEN THE HARNESS AND
+	// PRODUCTION. sqlite enforces no foreign key unless asked, and every fixture in
+	// this package leaves it off — so a cascade that forgets a child table passes here
+	// and fails on Postgres with a raw constraint error. That is exactly how the
+	// device_replacements FK escaped DeleteDevice's cascade: the delete "worked" in
+	// every test and would have made any replaced device permanently undeletable.
+	//
+	// It has to be set AFTER AutoMigrate: gorm creates the tables in dependency order,
+	// but turning enforcement on first would make any ordering slip a migrate failure
+	// rather than the thing under test.
+	require.NoError(t, db.Exec(`PRAGMA foreign_keys = ON`).Error, "enable foreign keys")
+	var fk int
+	require.NoError(t, db.Raw(`PRAGMA foreign_keys`).Scan(&fk).Error, "read foreign_keys pragma")
+	require.Equal(t, 1, fk,
+		"foreign keys are still off; this fixture would not see a missing cascade")
 
 	api := NewApi(&rdb.RdbManager{Database: db})
 	return api, core.WithTenant(context.Background(), "acme")
@@ -153,9 +174,17 @@ func TestReplaceDevicePreservesIdentity(t *testing.T) {
 	// telemetry its permanent attribution. It must survive the swap untouched.
 	assignment, err := api.EnsureAssignmentType(ctx)
 	require.NoError(t, err, "ensure assignment type")
-	asset := &Asset{}
-	asset.Token = "crusher-07"
-	require.NoError(t, api.RDB.DB(ctx).Create(asset).Error, "seed asset")
+	// Through the real API, with a real asset type: a bare Create leaves
+	// asset_type_id = 0, which is a dangling foreign key that only sqlite-with-FKs-off
+	// tolerates.
+	assetType := &AssetType{}
+	assetType.Token = "crusher-type"
+	require.NoError(t, api.RDB.DB(ctx).Create(assetType).Error, "seed asset type")
+	asset, err := api.CreateAsset(ctx, &AssetCreateRequest{
+		Token:          "crusher-07",
+		AssetTypeToken: assetType.Token,
+	})
+	require.NoError(t, err, "seed asset")
 	edge, err := api.CreateEntityRelationship(ctx, &EntityRelationshipCreateRequest{
 		Token:            "dozer-01-assigned",
 		SourceType:       "device",
@@ -254,6 +283,44 @@ func TestReplaceDeviceWithNoLiveCredentials(t *testing.T) {
 	require.Equal(t, []string{}, result.Replacement.RetiredCredentialTokenList(),
 		"empty retired list did not round-trip as an empty array")
 	require.NotNil(t, result.NewCredential, "no credential minted")
+}
+
+// A device that has been replaced can still be DELETED, and its journal goes with it.
+//
+// 🔴 THE REGRESSION THIS PINS WAS INVISIBLE TO EVERY OTHER TEST HERE. device_replacements
+// carries a foreign key to devices, so once a device has one row of history the parent
+// delete is refused by the database — the device becomes permanently undeletable, and the
+// caller sees a raw constraint error rather than ErrEntityInUse. It only shows up with
+// foreign keys enforced, which is why replacementTestApi turns them on.
+//
+// The control matters as much as the case: a NEVER-replaced device must delete too, or a
+// cascade that simply refused everything would satisfy the first half.
+func TestDeleteDeviceRemovesItsReplacementJournal(t *testing.T) {
+	api, ctx := replacementTestApi(t)
+	replaced := seedReplacementDevice(t, api, ctx, "dozer-01")
+	control := seedReplacementDevice(t, api, ctx, "dozer-02")
+	seedCredential(t, api, ctx, replaced.Token, "cred-old", "bearer-old", true, nil)
+
+	_, err := api.ReplaceDevice(ctx, &DeviceReplaceRequest{DeviceToken: replaced.Token},
+		"tech@acme.example", time.Now())
+	require.NoError(t, err, "replace device")
+
+	removed, err := api.DeleteDevice(ctx, replaced.Token)
+	require.NoError(t, err, "a replaced device could not be deleted")
+	require.True(t, removed, "delete reported no change")
+
+	// The journal went with it rather than being orphaned onto a device id that no
+	// longer resolves.
+	found, err := api.DeviceReplacements(ctx, DeviceReplacementSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10},
+	})
+	require.NoError(t, err, "query replacements")
+	require.Empty(t, found.Results, "the deleted device left its replacement journal behind")
+
+	// The control: an unreplaced device still deletes.
+	removed, err = api.DeleteDevice(ctx, control.Token)
+	require.NoError(t, err, "an unreplaced device could not be deleted")
+	require.True(t, removed, "control delete reported no change")
 }
 
 // RetiredCredentialTokenList answers an EMPTY SLICE for a row whose column holds

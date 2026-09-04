@@ -33,7 +33,7 @@ func newScopingTestApi(t *testing.T) (*Api, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &Area{}, &AreaType{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &Area{}, &AreaType{},
 		&EntityAttribute{}, &EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &EntityRelationship{}, &Alarm{},
 		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DetectionRuleScopeRef{}); err != nil {

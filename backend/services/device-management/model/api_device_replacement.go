@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrCredentialIdRequired is returned when a replacement asks for a credential type
@@ -60,9 +61,16 @@ var ErrCredentialIdRequired = errors.New("credentialId is required for this cred
 //
 // Credentials are DISABLED, not deleted. The row survives so the historical binding
 // stays readable and the replacement record's RetiredCredentialTokens resolve to
-// something. Disabled is sufficient for the security property:
-// DeviceCredentialByCredentialId — the resolve every transport authenticates
-// through — matches `enabled = true` only.
+// something. DeviceCredentialByCredentialId — the resolve every transport
+// authenticates through — matches `enabled = true` only, so a retired credential
+// authenticates nothing.
+//
+// 🔴 THAT STOPS RECONNECTION, NOT THE SESSION ALREADY IN FLIGHT, and the difference
+// matters to whoever is standing at the device. Nothing here evicts a connected
+// client: a retired unit that is still powered and still holding its session keeps
+// publishing until it drops or its device JWT expires (12h). What is guaranteed is
+// that it can never come back. An operator who needs the old unit silent NOW has to
+// power it down; the platform will not do it for them.
 //
 // # Consequences a caller should know
 //
@@ -78,22 +86,9 @@ var ErrCredentialIdRequired = errors.New("credentialId is required for this cred
 //   - now is supplied by the caller so the recorded instant is deterministic in
 //     tests. It is the SERVER's clock in production, never a request field.
 //
-// # 🔴 A KNOWN RACE, STATED RATHER THAN IMPLIED BY SILENCE
-//
-// TWO CONCURRENT REPLACEMENTS OF THE SAME DEVICE CAN LEAVE TWO LIVE CREDENTIALS.
-// Nothing here locks the device: both transactions read the same enabled set, both
-// disable it, and each then mints its own credential — so both incoming units can
-// authenticate, which is the outcome this operation exists to prevent. It is a
-// narrow window (two operators swapping one physical unit at the same instant) and
-// it is not silent: each replacement writes its own journal row, so the double swap
-// is visible in the history rather than inferred.
-//
-// It is left rather than half-fixed. The fix is a row lock on the device taken at
-// the top of the transaction, and the obvious cheap version — touching the device
-// row to acquire it — writes to the devices table, which is the one table this
-// operation promises not to write to. Closing it properly means a real
-// SELECT … FOR UPDATE, which the sqlite model harness cannot execute; that is a
-// harness change, not a one-line addition, and it has not been made.
+// Concurrent replacements of the same device are serialized by a FOR UPDATE lock on
+// the device row, taken at the top of the transaction — see the comment there for
+// what that buys and what the sqlite harness can and cannot show about it.
 func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest,
 	actor string, now time.Time) (*DeviceReplaceResult, error) {
 
@@ -135,6 +130,34 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 
 	var retired []*DeviceCredential
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// 🔴 SERIALIZE ON THE DEVICE ROW. This is what makes the operation's one
+		// security property hold under concurrency: without it, two replacements of the
+		// same device both read the same enabled set, both disable it, and each mints
+		// its own credential — leaving TWO live units answering as one device, which is
+		// precisely the outcome the whole operation exists to prevent.
+		//
+		// With the lock, the second transaction blocks here; under READ COMMITTED its
+		// subsequent `enabled = true` read then runs on a fresh statement snapshot and
+		// sees the credential the first one minted, so it retires that too. Exactly one
+		// live credential, both swaps journalled.
+		//
+		// It is a LOCK, not a write: the devices row is read FOR UPDATE and never
+		// modified, so this does not violate the promise that a replacement leaves the
+		// identity untouched.
+		//
+		// 🔴 THE SQLITE HARNESS CANNOT MEASURE THIS, and that is a property of locks
+		// rather than a gap to be closed here. glebarez/sqlite registers a "FOR" clause
+		// builder that silently DROPS clause.Locking — the statement renders as a plain
+		// SELECT and returns no error — so the model tests exercise the read and prove
+		// nothing about the exclusion. On Postgres the identical line renders FOR UPDATE.
+		// Stated so the next reader does not mistake a green test suite for evidence
+		// that the race is covered.
+		var locked Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", device.ID).First(&locked).Error; err != nil {
+			return err
+		}
+
 		// Every live, enabled credential this device holds — unbounded on purpose (the
 		// explicit internal unbounded path, ADR-029). A page bound here would leave
 		// whatever fell past the page still able to authenticate, which is precisely

@@ -29,12 +29,19 @@ import (
 // # The three invariants, and where they are ENFORCED
 //
 // A tree is a tree only if something keeps it one, so all three are checked in
-// admitContainmentEdge, and admitContainmentEdge is called from BOTH edge-creating
-// paths — CreateEntityRelationship and CreateEntityRelationships. That placement is
-// the point rather than a detail: SetAssetParent is a convenience door, and
-// createEntityRelationship is a generic mutation any device:write holder can call
-// with relationshipType "contains". An invariant enforced only in the convenience
-// door is an invariant with a public bypass.
+// admitContainmentEdge — and admitContainmentEdge is called from EVERY path that
+// writes a relationship edge, which is four: SetAssetParent, CreateEntityRelationship,
+// CreateEntityRelationships and ClaimDevice. That placement is the point rather than
+// a detail: SetAssetParent is a convenience door, while the other three take a
+// CALLER-CHOSEN relationship type, so each is a way to write a "contains" edge that
+// never met this contract. An invariant enforced only in the convenience door is an
+// invariant with a public bypass.
+//
+// 🔴 THIS LIST USED TO SAY "BOTH" AND NAME TWO, AND ClaimDevice WAS THE ONE IT MISSED
+// — a claim redeemed with relationshipType "contains" wrote a device→customer
+// containment edge past every check. Adding a writer without adding it here is the
+// failure mode; the count is spelled out so the next reader can check it against the
+// tree rather than trust it.
 //
 //  1. BOTH ENDS ARE ASSETS. A "contains" edge from an area to a device is not a
 //     shallow hierarchy, it is a different concept wearing this one's name, and the
@@ -153,15 +160,18 @@ func (api *Api) admitContainmentEdge(tx *gorm.DB, relationshipToken string,
 			return ErrAssetParentCycle
 		}
 	}
-	// +1 for the parent itself, +1 for the child about to be placed beneath it.
-	if len(ancestors)+2 > MaxAssetHierarchyDepth {
-		return ErrAssetHierarchyTooDeep
-	}
-
-	// The child's own subtree travels with it. Checking only the parent's chain
-	// would let a re-parent produce a tree deeper than the limit — the limit would
-	// then hold for every edge ever created and not for the tree they form, which is
-	// the kind of bound that reads as enforced and is not.
+	// The depth check counts the parent's chain, the parent itself, the child about to
+	// be placed, and the child's OWN SUBTREE — which travels with it. Checking only
+	// the parent's chain would let a re-parent produce a tree deeper than the limit:
+	// the limit would then hold for every edge ever created and not for the tree they
+	// form, which is the kind of bound that reads as enforced and is not.
+	//
+	// There is deliberately only ONE comparison. An earlier version tested the
+	// parent's chain first and then the chain-plus-height, and the first test could
+	// never fire: height is a count and so is >= 0, which makes the second condition
+	// strictly weaker. A check that cannot fail is worse than no check — it reads as
+	// coverage. (A surviving mutant is what pointed at it: deleting the first
+	// comparison changed nothing anywhere.)
 	height, err := api.assetSubtreeHeight(tx, childId, MaxAssetHierarchyDepth)
 	if err != nil {
 		return err
