@@ -31,17 +31,21 @@ const retryBackoffBase = 500 * time.Millisecond
 //
 // 🔴 THE PER-ATTEMPT TIMEOUT IS NOT A WHOLE-DISPATCH BOUND, AND READING IT AS ONE COST US
 // A DUPLICATE PAGE. The config's DeliverySeconds bounds a SINGLE adapter call; a channel
-// then gets DeliveryAttempts of them with a backoff between each (perChannelWorstCase),
-// and dispatch walks the planned channels SEQUENTIALLY. At the shipped defaults one
-// channel's worst case is ~36.5s, so two slow-but-alive channels on one alarm ran ~73s
-// against the consumer's 60s AckWait: JetStream redelivered a message a worker was still
+// then gets DeliveryAttempts of them with a backoff between each, and dispatch walks the
+// planned channels SEQUENTIALLY. At the shipped defaults that retry loop alone was
+// 3 × 10s + 1.5s of backoff = 31.5s per channel, so two slow-but-alive channels on one
+// alarm spent 63s against the consumer's 60s AckWait — and the secret lookup in front of
+// each of them was not bounded at all. JetStream redelivered a message a worker was still
 // working, a second worker re-sent every channel from the top, and a human was paged
-// twice. Nothing capped the walk — plan() emits as many deliveries as the tenant's
-// policies match.
+// twice. Nothing capped the walk: plan() emits as many deliveries as the tenant's policies
+// match.
 //
 // So the bound is enforced here, as a deadline on the dispatch, rather than asserted in
-// prose about the per-attempt number. dispatch and Escalate both derive their context
-// from dispatchBudget and deliverAll stops walking channels once it is spent.
+// prose about the per-attempt number. dispatch and Escalate both derive their context from
+// dispatchBudget and deliverAll stops walking channels once it is spent. perChannelWorstCase
+// is the post-fix unit the budget is SIZED against (36.5s at the defaults, the secret
+// lookup now included); the 31.5s above is what the defect actually cost, and the two are
+// different numbers on purpose.
 const (
 	// secretResolveTimeout bounds one channel's delivery-secret lookup (ADR-059). It is
 	// separate from the per-attempt delivery timeout because it is different work — a
