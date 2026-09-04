@@ -358,3 +358,141 @@ func TestAGatherWithNoExpectedPartitionsStillEndsPromptly(t *testing.T) {
 		"against a responder that answered immediately — it waited out the whole window, which "+
 		"the coordinator pays on every pass while holding the advisory lock", elapsed)
 }
+
+// TestAFailedReplyDoesNotShortenTheGather is the other half of the test two above, and the
+// half that was missing.
+//
+// 🔴 THAT COMPANION TEST PASSES AGAINST THIS BUG. It fixes the `awaited` bookkeeping — an
+// error reply does not clear a partition — and then hands the same failure straight back
+// through the quiescence window, because ANY first reply used to switch the gather from
+// DetectPurgeWindow down to detectPurgeQuiesce. Its slow responder answers in 150ms, inside
+// the 300ms window, so the truncation never shows.
+//
+// The replica that answers fast is by construction the one that did NOT do the work: a warm
+// standby holding no term (ADR-070) refuses in microseconds, and so does a halted
+// split-brain writer. The replica that DID the work sweeps the whole instance's state,
+// serializes a snapshot and commits it to Postgres. Giving that replica 300ms measured from
+// the moment the standby speaks is not a bound anybody sized — it is whatever was left over.
+//
+// The consequence is not a slow purge but a WRONG deletion record: the coordinator writes
+// "this tenant's open detection windows and timers are still in its checkpoint" about a
+// partition that had just erased them, on every pass, and the purge never completes.
+//
+// So the delay below is deliberately LONGER than detectPurgeQuiesce and shorter than
+// DetectPurgeWindow: the only way to collect that reply is to have kept the full window
+// open, which is exactly the property under test.
+func TestAFailedReplyDoesNotShortenTheGather(t *testing.T) {
+	// 🔴 THE PREMISE, ASSERTED RATHER THAN ASSUMED. The slow responder below answers at
+	// 2×detectPurgeQuiesce, and that delay only distinguishes the two behaviours while it
+	// still fits inside DetectPurgeWindow. Raise the quiescence constant past half the
+	// window and this test fails — correctly, but with a message blaming the quiescence
+	// window for dropping a reply the gather never had time to hear, which sends the next
+	// reader after the wrong thing. Fail here instead, saying what actually moved.
+	require.Lessf(t, 2*detectPurgeQuiesce, DetectPurgeWindow, "detectPurgeQuiesce (%s) has "+
+		"grown past half of DetectPurgeWindow (%s), so this test's slow reply no longer "+
+		"fits inside the gather at all and it can no longer tell the two behaviours apart. "+
+		"Re-derive the delay below, do not just widen it", detectPurgeQuiesce, DetectPurgeWindow)
+
+	nc := detectRig(t)
+	// The warm standby: instant, and it erased nothing.
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1",
+		Error: "this DETECT replica holds no leadership term for this partition"})
+	// The leader: slower than the quiescence window, because a real eviction commits a
+	// snapshot to the database.
+	respondAsAfter(t, nc, 2*detectPurgeQuiesce, DetectPurgeReply{PartitionId: "p1", Evicted: 9})
+
+	// No expected partitions: the shape a quiet instance is in (a partition joins the
+	// expected set only once it has checkpointed), and the shape in which the gather has
+	// nothing but the window to end on.
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", nil)
+	require.NoError(t, err)
+
+	var cleanReplies int
+	for _, r := range res.Replies {
+		if r.Error == "" {
+			cleanReplies++
+		}
+	}
+	require.NotZerof(t, cleanReplies, "the standby's instant refusal collapsed the gather to "+
+		"the %s quiescence window, so the reply from the replica that actually evicted and "+
+		"committed was never read: %+v", detectPurgeQuiesce, res.Replies)
+}
+
+// The counterweight, and without it the test above is satisfied by deleting the quiescence
+// window altogether — which reinstates the five-second stall per pass, per purging tenant,
+// on the coordinator's goroutine under the instance-wide advisory lock.
+//
+// A CLEAN first reply must still shorten the gather. That is the property
+// TestAGatherWithNoExpectedPartitionsStillEndsPromptly asserts, restated here against a
+// SECOND responder that is subscribed and never answers — so an empty awaited set cannot be
+// what ends this gather early, and the quiescence window is the only thing left that can.
+func TestACleanReplyStillShortensTheGather(t *testing.T) {
+	nc := detectRig(t)
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1", Evicted: 3})
+	silent, err := nc.Subscribe(DetectPurgeSubject(detectInstance), func(*nats.Msg) {})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	t.Cleanup(func() { _ = silent.Unsubscribe() })
+
+	start := time.Now()
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme", nil)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.Len(t, res.Replies, 1)
+	assert.Lessf(t, elapsed, DetectPurgeWindow/2, "a gather whose first reply erased and "+
+		"committed took %s — the quiescence window is gone, and the coordinator now pays the "+
+		"full %s on every pass", elapsed, DetectPurgeWindow)
+}
+
+// TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected is the same failure
+// as TestAFailedReplyDoesNotShortenTheGather, one level out — and it is the one a FLEET
+// reaches rather than a rollout.
+//
+// 🔴 TWO CLEAN REPLIES ARE NOT INTERCHANGEABLE, AND THE FAST ONE IS AGAIN THE ONE THAT DID
+// NOTHING. A partition holding nothing of this tenant sweeps nothing, never sets dirty,
+// never commits and answers in under a millisecond. A partition holding its open windows
+// does the whole sweep plus a snapshot serialization and a database commit. Both answer
+// cleanly, and the empty one is systematically first — so a quiescence clock keyed on "a
+// clean reply" hands the busy partition 300ms, deterministically, on every pass for as long
+// as that tenant is being purged. Missing it defers the purge with a sentence about the
+// partition still holding state it had just erased: the same self-repeating deferral, on a
+// ledger nothing re-checks.
+//
+// The `awaited` set is the partitions the caller KNOWS hold durable state, so while it is
+// non-empty there is a specific outstanding answer and no heuristic should displace the full
+// window. Both partitions here are expected, which is what makes p1's reply not a licence to
+// stop listening for p2's.
+//
+// 🔴 THIS IS UNREACHABLE ON GA, and that is stated so nobody reads a passing run as evidence
+// about production: one instance runs one `singleton` partition, so a second expected
+// partition cannot exist yet. It is pinned now because the sharded fleet is what makes it
+// live, and by then the symptom looks nothing like the line that causes it.
+func TestACleanReplyDoesNotShortenTheGatherWhileAPartitionIsStillExpected(t *testing.T) {
+	require.Lessf(t, 2*detectPurgeQuiesce, DetectPurgeWindow, "detectPurgeQuiesce (%s) has "+
+		"grown past half of DetectPurgeWindow (%s), so the slow partition below no longer "+
+		"fits inside the gather at all", detectPurgeQuiesce, DetectPurgeWindow)
+
+	nc := detectRig(t)
+	// p1 holds nothing of this tenant: an instant, clean, zero-eviction answer.
+	respondAs(t, nc, DetectPurgeReply{PartitionId: "p1", Evicted: 0})
+	// p2 holds the tenant: it sweeps and commits, so it answers later.
+	respondAsAfter(t, nc, 2*detectPurgeQuiesce, DetectPurgeReply{PartitionId: "p2", Evicted: 12})
+
+	// BOTH are expected — both have committed a checkpoint, which is what puts a partition
+	// in this set.
+	res, err := PurgeTenantDetect(context.Background(), nc, detectInstance, "acme",
+		[]string{"p1", "p2"})
+	require.NoError(t, err)
+
+	var heard []string
+	for _, r := range res.Replies {
+		if r.Error == "" {
+			heard = append(heard, r.PartitionId)
+		}
+	}
+	assert.Containsf(t, heard, "p2", "p1's instant empty answer collapsed the gather to the "+
+		"%s quiescence window, so the partition that actually held the tenant — and evicted "+
+		"and committed it — was never heard. The caller then records that partition as still "+
+		"holding this tenant's detection windows: %+v", detectPurgeQuiesce, res.Replies)
+}

@@ -43,10 +43,9 @@ porque un líder que ha perdido el arrendamiento se autoexpulsa solo cuando su s
 advierte, y aun entonces todavía tiene que deshacer su estado de broker o de DTLS. Está acotada, no
 eliminada, y **nada valla las escrituras de un líder obsoleto en estas dos vías**: el arrendamiento
 lleva su época, pero ninguna vía de ingesta rechaza en función de ella. El chart, por su parte, se
-niega a renderizar cualquiera de las dos áreas con más de una réplica **junto a su estrategia
-`Recreate` predeterminada**; pero `strategy` es un valor por área que se puede sobrescribir, así que
-cambiarlo a `RollingUpdate` desactiva esa comprobación y el área se renderizará con cualquier número
-de réplicas. No lo haga.
+niega a renderizar cualquiera de las dos áreas con más de una réplica, y ese rechazo está ligado
+**al área en sí**, no a la estrategia de despliegue con la que esté configurada: cambiar `strategy`
+a `RollingUpdate` no lo esquiva.
 
 :::warning Ningún servicio de ingesta recibe un presupuesto de interrupción de pods
 El chart omite el presupuesto de interrupción para cualquier área que se ejecute con una sola réplica,

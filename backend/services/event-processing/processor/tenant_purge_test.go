@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1123,5 +1124,134 @@ func TestEvictionSweepsTheArmerAndTheAttributeView(t *testing.T) {
 	if got := rp.attrView.For("globex", "d1"); got == nil {
 		t.Fatal("the eviction took the surviving tenant's attribute values too, so its dynamic " +
 			"thresholds silently stop resolving")
+	}
+}
+
+// The eviction answer under ADR-070 leadership, and the one distinction this whole seam
+// turns on: DID THIS REPLICA DO THE WORK, or did it merely find nothing to do?
+//
+// 🔑 THOSE TWO PRODUCE THE SAME REPLY unless something says otherwise, and the reply is
+// what the purge coordinator writes into a tenant's deletion record. A pass that sweeps an
+// engine already free of the tenant sets nothing dirty, reaches no checkpoint, and returns
+// `{evicted: 0}` with no error — a clean answer. On a leader that is the truth. On a replica
+// that has lost the partition (or never had it) it is a claim about a durable snapshot it
+// does not own and cannot read, and the coordinator treats ONE clean answer from ANY
+// responder as satisfying the whole partition. Nothing re-checks that record afterwards.
+//
+// The test drives both arms through the REAL loop against the SAME rig, so the second arm is
+// genuinely the "nothing to do" case — its emptiness was produced by the first arm rather
+// than arranged.
+func TestTheEvictionAnswerDistinguishesWorkDoneFromNothingToDo(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "acme", "globex")
+	rig.rp.Lease = &messaging.DistributedLease{}
+	rig.rp.Gate = NewTermGate()
+	rig.rp.Gate.Enter(func() bool { return true })
+	rig.start(t)
+
+	// The tenant is in the durable row to begin with; without this the arms below compare
+	// nothing to nothing.
+	if !strings.Contains(rig.before, "acme/") {
+		t.Fatalf("the pre-eviction snapshot does not name the tenant, so this test asserts "+
+			"nothing: %s", rig.before)
+	}
+
+	// Arm 1 — the leader, which DID the work.
+	evicted, err := rig.evict(t, "acme")
+	if err != nil {
+		t.Fatalf("the term holder's eviction failed: %v", err)
+	}
+	if evicted == 0 {
+		t.Fatal("the term holder evicted nothing, so arm 2 below is not the 'nothing to do' case")
+	}
+	if after := rig.payload(t); strings.Contains(after, "acme/") {
+		t.Fatalf("the committed snapshot still names the evicted tenant: %s", after)
+	}
+
+	// Arm 2 — the same request, on the same processor, after the term has ended. The engine
+	// holds nothing for this tenant now, so the sweep finds nothing and dirties nothing.
+	rig.rp.Gate.Exit()
+	evicted, err = rig.evict(t, "acme")
+	if !errors.Is(err, errNoTermHeld) {
+		t.Fatalf("a replica holding no term answered an eviction with (%d, %v). A clean zero "+
+			"here is recorded as this partition's DETECT state being erased — and this replica "+
+			"neither owns the checkpoint nor has read it", evicted, err)
+	}
+	if evicted != 0 {
+		t.Fatalf("a refused eviction reported %d entries evicted", evicted)
+	}
+	// The surviving tenant is still there: the refusal is about ownership, not a teardown.
+	if after := rig.payload(t); !strings.Contains(after, "globex/") {
+		t.Fatalf("the surviving tenant left the snapshot: %s", after)
+	}
+}
+
+// TestAStandbyRefusesBeforeTheRequestReACHESTheLoop measures the ENTRY check specifically,
+// and it uses the same instrument TestEvictTenantValidatesTheTenantBeforeItReachesTheLoop
+// uses: a rig that is NOT started, so tenantPurges (unbuffered) has no receiver at all.
+//
+// 🔴 THE ORACLE IS THE ELAPSED TIME, BECAUSE BOTH VERSIONS RETURN AN ERROR. Without the
+// entry check, EvictTenant blocks on the send until the caller's context expires and then
+// reports that the loop did not accept the request — an error, and therefore a deferral,
+// but one that costs a warm standby the caller's ENTIRE gather window on every purge pass.
+// That is not merely slow: the gather is bounded, so a standby that eats the window is a
+// standby that can crowd out the leader's answer.
+func TestAStandbyRefusesBeforeTheRequestReachesTheLoop(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "acme")
+	rig.rp.Lease = &messaging.DistributedLease{}
+	rig.rp.Gate = NewTermGate() // closed: no term has been entered
+	// Deliberately NOT started, exactly as the validation test does it.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	evicted, err := rig.rp.EvictTenant(ctx, "acme")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, errNoTermHeld) {
+		t.Fatalf("EvictTenant on a standby returned (%d, %v), want the no-term refusal", evicted, err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("the standby took %v to refuse — it was blocked on the single-writer channel "+
+			"rather than refusing up front, which spends the caller's whole gather window", elapsed)
+	}
+	// And it has not touched the durable row it does not own.
+	if got := rig.payload(t); !strings.Contains(got, "acme/") {
+		t.Fatalf("a standby that refused the eviction still altered the checkpoint: %s", got)
+	}
+}
+
+// The loop-side half, which the entry check cannot cover: a term can end between
+// EvictTenant's check (on the responder's goroutine) and the loop's receive. run()'s select
+// has both this case and the term context's Done arm, and Go picks uniformly among ready
+// cases, so a queued request is serviced roughly half the time after the cancel.
+//
+// applyTenantPurge is called directly here — the loop is not running, so nothing races the
+// read of its fields, which is the same discipline newEvictionRig documents for the
+// loop-owned fields it sets during setup.
+func TestTheLoopRefusesAnEvictionForATermItNoLongerHolds(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "acme")
+	rig.rp.Lease = &messaging.DistributedLease{}
+	rig.rp.Gate = NewTermGate()
+
+	res := rig.rp.applyTenantPurge("acme")
+	if !errors.Is(res.err, errNoTermHeld) {
+		t.Fatalf("the loop answered an eviction for a partition it no longer holds: %+v", res)
+	}
+	if got := rig.payload(t); !strings.Contains(got, "acme/") {
+		t.Fatalf("the refused eviction still rewrote the checkpoint: %s", got)
+	}
+
+	// The counterweight, and it is the one that stops this being satisfied by a loop that
+	// refuses everything: inside a held term the same call does the work and commits.
+	rig.rp.Gate.Enter(func() bool { return true })
+	res = rig.rp.applyTenantPurge("acme")
+	if res.err != nil {
+		t.Fatalf("the term holder's eviction was refused: %v", res.err)
+	}
+	if res.evicted == 0 {
+		t.Fatal("the term holder evicted nothing from an engine that holds the tenant")
+	}
+	if got := rig.payload(t); strings.Contains(got, "acme/") {
+		t.Fatalf("the committed snapshot still names the evicted tenant: %s", got)
 	}
 }

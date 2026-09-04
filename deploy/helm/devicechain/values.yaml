@@ -976,12 +976,31 @@ functionalAreas:
     # worst outcome — a lagging writer clobbering a newer checkpoint — but does NOT by
     # itself make split-brain safe.
     #
-    # So this area deploys with strategy Recreate (during a ROLLOUT all old pods stop before
-    # any new pod starts — no old+new overlap that a rolling update would otherwise cause) and
-    # stays at replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly
-    # runs two pods (the ReplicaSet replaces a deleted pod immediately). Do NOT raise replicas
-    # past 1 (a Recreate with 2 replicas runs 2 permanent writers; the template fails the render)
-    # until the intra-Instance tenant-sharded DETECT fleet lands (post-GA, ADR-052).
+    # So this area SHIPS with strategy Recreate (during a ROLLOUT all old pods stop before any
+    # new pod starts — no old+new overlap that a rolling update would otherwise cause) and
+    # replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly runs two
+    # pods (the ReplicaSet replaces a deleted pod immediately).
+    #
+    # A WARM STANDBY IS NOW SUPPORTED, and it is the one way to raise replicas here. Set BOTH:
+    #
+    #   replicas: 2
+    #   strategy: RollingUpdate
+    #
+    # The extra replicas are standbys, not writers. Exactly one replica holds the partition
+    # lease at a time; the others report Ready, serve GraphQL, park their stream readers, refuse
+    # their own checkpoints, and refuse to answer for the partition's tenant state — then take
+    # the partition when it frees up, without the pod cold start. Raising replicas WITHOUT
+    # moving off Recreate fails the render, because Recreate stops every pod before starting
+    # any: the standby would be down exactly when it was needed.
+    #
+    # What a standby does NOT save is the term build. It holds no engine and no restored
+    # snapshot (pre-restoring would mean reading a snapshot the leader is writing), so a
+    # takeover still pays the restore, the projection catch-up, the view builds and the replay.
+    # What it saves is the pod start, the connections and the rule-registry load — and, on an
+    # eviction or node drain, it removes the wait for a replacement pod to be SCHEDULED.
+    #
+    # This is not the tenant-sharded DETECT fleet (post-GA, ADR-052), which is about running
+    # several ACTIVE partitions. Here there is still exactly one partition and one writer.
     #
     # THAT EVICTION OVERLAP IS NOW HANDLED BY A PARTITION LEASE, not by the app-level fence
     # (ADR-070). The engine takes a lease before it reads any state and consults it on every
@@ -996,13 +1015,22 @@ functionalAreas:
     # rebuild costs a snapshot restore, three view builds and a replay; the logs say which
     # happened. This is the trade for the overlap being closed.
     #
-    # Operational note: during a Recreate rollout the event-processing Service has no ready
-    # endpoint (old-pod stop + new-pod snapshot replay + startupProbe). Publishing a device
-    # profile that has ENABLED detection rules calls event-processing's validateDetectionRules
-    # synchronously and fails CLOSED on transport error (ADR-044 sync gate), so such publishes
-    # error for the rollout window — expected; retry after the new pod is Ready. On an eviction
-    # OVERLAP the new pod additionally waits for the old pod's lease to expire before it starts
-    # its own term, which is bounded by the TTL and fits inside the startup probe's budget.
+    # Operational note: during a Recreate rollout at replicas:1 the event-processing Service
+    # has no ready endpoint between the old pod stopping and the new one passing its
+    # startupProbe. Publishing a device profile that has ENABLED detection rules calls
+    # event-processing's validateDetectionRules synchronously and fails CLOSED on transport
+    # error (ADR-044 sync gate), so such publishes error for that window — expected; retry once
+    # the new pod is Ready. A warm standby (above) removes this window: the standby is already
+    # Ready and serving GraphQL, so the Service keeps an endpoint throughout.
+    #
+    # 🔴 READY IS NOT "DETECTION IS LIVE", AND NEITHER IS THE STARTUP PROBE A BOUND ON IT. The
+    # probe polls /readyz, which reports the auth gate and never sees this processor — so
+    # neither a handover wait nor a term build is measured against any probe budget. Detection
+    # resumes when a replica has acquired the partition and rebuilt its term (a restore, a
+    # projection catch-up, three view builds and a replay), plus — when the previous owner's
+    # release cannot be proven — a handover wait bounded by the lease TTL. Watch
+    # devicechain_eventprocessing_detect_is_leader and detect_live, not readiness, and note
+    # both are read as a MAX across pods precisely because a standby reports 0 for each.
     replicas: 1
     strategy: Recreate
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
@@ -1130,9 +1158,13 @@ functionalAreas:
     # makes REPLACEMENT safe — a new pod cannot serve until it holds the lease, so
     # there is never a window with two Hosts on the broker — it does not make a warm
     # standby correct. Single ownership here is a correctness property of the
-    # Sparkplug Host, not a limitation waiting on a feature. Do NOT raise replicas
-    # past 1 (a Recreate with 2 replicas runs two permanent Hosts; the template fails
-    # the render), mirroring event-processing above.
+    # Sparkplug Host, not a limitation waiting on a feature. This is where this area
+    # DIVERGES from event-processing above, which now does support a warm standby.
+    #
+    # replicas MUST be 1 and the template fails the render otherwise, whatever the
+    # strategy says. That guard is keyed on the AREA, not on Recreate: before, this
+    # area was protected only by its strategy, so pairing RollingUpdate with
+    # replicas:2 rendered cleanly and produced two Sparkplug Hosts.
     replicas: 1
     strategy: Recreate
     config: {}
@@ -1174,8 +1206,12 @@ functionalAreas:
     # binder before the new one binds). The ADR-070 fenced lease HAS landed and gates
     # SERVING — only the leader binds the socket — which makes replacement safe but does
     # NOT make a second replica useful: a standby that also bound the socket would
-    # silently receive and drop the share of datagrams the Service sprayed at it. Do NOT
-    # raise replicas past 1 (the template fails the render).
+    # silently receive and drop the share of datagrams the Service sprayed at it.
+    #
+    # replicas MUST be 1 and the template fails the render otherwise, whatever the
+    # strategy says. That guard is keyed on the AREA, not on Recreate: before, this area
+    # was protected only by its strategy, so pairing RollingUpdate with replicas:2
+    # rendered cleanly and produced a second binder dropping the datagrams sent to it.
     replicas: 1
     strategy: Recreate
     # The device-facing CoAPS port is UDP (CoAP over DTLS), so it is declared with an

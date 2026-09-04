@@ -735,13 +735,36 @@ write this rule" and rewrite a description that was never the problem.
 
 ## 13. Operating it
 
-**Exactly one replica, and this is structural.** The partition key is the hardcoded string
-`singleton` (`backend/services/event-processing/main.go:33`). The chart pins one replica with the
-`Recreate` strategy and says why (`deploy/helm/devicechain/values.yaml:705-727`). Both the chart and
-the code are explicit that `Recreate` covers **rollouts only** — an eviction, node drain, or manual
-delete has the ReplicaSet schedule a replacement immediately, so two engines can briefly run
-(`deploy/helm/devicechain/templates/deployment.yaml:59-65`). The app-level fences described in §5 are
-what actually contain that.
+**Exactly one WRITER, which is not the same claim as exactly one replica.** The partition key is the
+hardcoded string `singleton` (`backend/services/event-processing/main.go`), so there is one partition
+and one leader for it. The chart still *ships* one replica with the `Recreate` strategy and says why
+(`deploy/helm/devicechain/values.yaml`), and both the chart and the code are explicit that `Recreate`
+covers **rollouts only** — an eviction, node drain, or manual delete has the ReplicaSet schedule a
+replacement immediately, so two pods can briefly run
+(`deploy/helm/devicechain/templates/deployment.yaml`). The app-level fences described in §5 are what
+contain that.
+
+**A warm standby is now supported, and it is `replicas: 2` plus `strategy: RollingUpdate`.** A
+replica that does not hold the partition lease is Ready and serving GraphQL, parks its stream readers
+at the term gate, has its checkpoints refused, and refuses to answer for the partition's tenant
+state — then takes the partition when it frees up. `ExecuteStart` returns without waiting for a term
+and hands the acquisition loop to `runTerms`
+(`backend/services/event-processing/processor/leadership.go`).
+
+Three things are worth knowing before turning it on:
+
+- **The standby is warm, not hot.** It holds no engine and no restored snapshot, so its takeover
+  still pays the whole term build: restore, projection catch-up, three view builds, replay. What it
+  saves is the pod start and, on an eviction, the wait for a replacement to be scheduled.
+  Pre-restoring would mean reading a snapshot the leader is actively writing.
+- **Ready has never meant "detection is live" for this area,** and the standby makes that visible
+  rather than changing it. `/readyz` reports the auth gate and does not consult this processor.
+  `devicechain_eventprocessing_detect_is_leader` and `detect_live` are the signals, and the chart's
+  alerts read both as a `max()` across pods precisely because a standby reports 0 for each.
+- **The purge responder had to change in the same breath.** See §5: the eviction answer is gated on
+  the term (`errNoTermHeld`), because a replica that finds nothing to evict and a replica
+  that evicted everything otherwise send the same reply, and the purge coordinator treats one clean
+  reply from any responder as satisfying the whole partition.
 
 **Metrics carry no per-tenant or per-rule label**, deliberately
 (`backend/services/event-processing/processor/metrics.go:15-16`, `:81-84`). The over-budget gauges are
@@ -849,9 +872,17 @@ Ordered by what they cost.
    Set it to 4 and a fetch batch takes sixteen waves instead of two, each up to the wait budget plus
    the 20s send ceiling — far past the 60s `AckWait` the bound was derived from, so messages
    redeliver underneath the workers still sending them.
-9. **The chart's replica guard has a hole** — the condition fires only on `Recreate` with more than
-   one replica (`deploy/helm/devicechain/templates/deployment.yaml:88`, failing at `:89`), so a
-   rolling-update strategy with three replicas renders and deploys cleanly.
+9. ~~**The chart's replica guard has a hole**~~ — **CLOSED.** The condition fired only on `Recreate`
+   with more than one replica, so a rolling-update strategy with three replicas rendered and
+   deployed cleanly. It is now two guards
+   (`deploy/helm/devicechain/templates/deployment.yaml`): one keyed on the AREA, which pins
+   `sparkplug-ingest` and `lwm2m-ingest` to one serving pod whatever the strategy says, and one on
+   the strategy, which still refuses `Recreate` above one replica. The area-keyed half is the part
+   that mattered — those two were protected only by the strategy they happened to be configured
+   with, so a `RollingUpdate` override produced two Sparkplug Hosts, or a second UDP binder
+   dropping the datagrams sent to it, with nothing in the render to say so. `event-processing` is
+   the one STATEFUL single-owner area that may now exceed one replica, and only on
+   `RollingUpdate` (see §13).
 10. **No dead-letter path for derived events** — a REACT event past the delivery cap is dropped, and a
     dropped resolve strands an alarm.
 11. **Nothing keeps the natural-language prompt's grammar in step with the compiler.** Four of its
