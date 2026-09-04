@@ -106,7 +106,7 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 		if err := migrateChain(ctx, a, host, port, user, password, db); err != nil {
 			return fmt.Errorf("running %s migrations: %w", a.name, err)
 		}
-		dump, err := dumpSchema(container, user, db, a.name)
+		dump, err := dumpSchema(container, user, db, a.schemas()...)
 		if err != nil {
 			return fmt.Errorf("dumping %s schema: %w", a.name, err)
 		}
@@ -207,15 +207,29 @@ func migrateSome(ctx context.Context, areaName string, migrations []*gormigrate.
 	return err
 }
 
-// dumpSchema returns the schema-only pg_dump of one area's Postgres schema, run inside
+// dumpSchema returns the schema-only pg_dump of one area's Postgres schemas, run inside
 // the server container so the pg_dump version always matches the server. --no-owner /
 // --no-privileges drop role noise that is irrelevant to structure.
-func dumpSchema(container, user, db, schema string) (string, error) {
-	cmd := exec.Command("docker", "exec", container,
+//
+// 🔴 --no-privileges IS A REAL BLIND SPOT, not just noise reduction, and it is worth
+// being precise about because one area's isolation now rests on a GRANT. An ACL is
+// stripped from the dump, so `REVOKE`ing the read surface's SELECT — or granting a read
+// role the run of the area schema — moves no golden and fails no diff. What covers that
+// is an integration test that connects AS a reader and asserts what it can and cannot
+// reach (event-management's analytics suite), never this comparison.
+//
+// More than one schema is passed when an area's chain builds objects outside its own
+// (see area.extraSchemas): pg_dump takes --schema repeatedly and unions them, and the
+// result normalizes and sorts into one golden like any other.
+func dumpSchema(container, user, db string, schemas ...string) (string, error) {
+	args := []string{"exec", container,
 		"pg_dump", "-U", user, "-d", db,
 		"--schema-only", "--no-owner", "--no-privileges",
-		"--schema", schema,
-	)
+	}
+	for _, s := range schemas {
+		args = append(args, "--schema", s)
+	}
+	cmd := exec.Command("docker", args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

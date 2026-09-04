@@ -159,6 +159,50 @@ variable "post_init_template_sql" {
   default     = []
 }
 
+variable "extra_roles" {
+  description = <<-EOT
+    CNPG-managed roles beyond the application owner -- today, the read-only SQL/BI
+    roles a Postgres-speaking tool connects as.
+
+    🔴 Declaring them HERE rather than creating them from the application is the
+    security decision, not a packaging one. The application role holds no
+    CREATEROLE and is not given it: a role that can mint logins is a role a
+    compromised pod can mint logins with, and the platform needs that exactly
+    once, at install. CloudNativePG creates these instead, and keeps each
+    password in step with a Kubernetes Secret the operator owns -- so the
+    credential never passes through OpenTofu state, dcctl, or any DeviceChain
+    process.
+
+    `connection_limit` is required for a login role and rejected at -1. The chart
+    refuses an unlimited one, and refuses a set whose total does not fit the
+    server, because these sessions come out of the same max_connections the
+    platform's own pools draw on.
+  EOT
+  type = list(object({
+    name                 = string
+    ensure               = optional(string, "present")
+    login                = optional(bool, false)
+    connection_limit     = optional(number, 0)
+    password_secret_name = optional(string, "")
+    in_roles             = optional(list(string), [])
+  }))
+  default = []
+
+  validation {
+    # Caught here as well as in the chart because a name is easier to fix in the
+    # file that names it, and because a tofu-level message reaches `plan` rather
+    # than waiting for the release to render.
+    condition     = alltrue([for r in var.extra_roles : !r.login || r.connection_limit > 0])
+    error_message = "Every login role in extra_roles needs a connection_limit above 0; an unlimited role can exhaust the connections the platform's own pools need."
+  }
+}
+
+variable "reserved_application_connections" {
+  description = "Connections the platform must still be able to open after every extra login role has taken its limit. The chart refuses to render an over-committed server. 0 disables the headroom check but not the refusal of an unlimited role."
+  type        = number
+  default     = 0
+}
+
 variable "shared_preload_libraries" {
   description = "🔴 A library named here and missing from the image makes Postgres refuse to start, and CNPG cannot self-heal out of that state."
   type        = list(string)
@@ -410,6 +454,18 @@ locals {
     sharedPreloadLibraries = var.shared_preload_libraries
 
     nodeLossTolerationSeconds = var.node_loss_toleration_seconds
+
+    # Camel-cased on the way in because the chart is the Cluster spec verbatim
+    # (see chart/templates/cluster.yaml); the snake_case ends at this boundary.
+    extraRoles = [for r in var.extra_roles : {
+      name               = r.name
+      ensure             = r.ensure
+      login              = r.login
+      connectionLimit    = r.connection_limit
+      passwordSecretName = r.password_secret_name
+      inRoles            = r.in_roles
+    }]
+    reservedApplicationConnections = var.reserved_application_connections
 
     storage = {
       size         = var.storage

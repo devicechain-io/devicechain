@@ -230,6 +230,24 @@ rendered+=("$(render_case restore-pitr "${base[@]}" --set instances=3 --set sync
   --set restore.recoveryTarget.targetTLI=latest \
   --set restore.recoveryTargetImmediate=true)")
 
+# The read-only SQL/BI roles (the event store's shape). Its own case because
+# `spec.managed.roles` grows entries no other render produces — connectionLimit,
+# passwordSecret, inRoles, disablePassword — and each of those is a field name this
+# chart types by hand. Misspell one and helm renders it happily, the API server
+# drops it, and the role arrives with no connection cap or, worse, with a password
+# nobody set. Both cases: a group role with no login, and a login role with a
+# password Secret; and a third with none, so the disablePassword branch renders too.
+rendered+=("$(render_case analytics-roles "${base[@]}" --set instances=1 \
+  --set reservedApplicationConnections=40 \
+  --set 'extraRoles[0].name=analytics_reader' --set 'extraRoles[0].login=false' \
+  --set 'extraRoles[1].name=analytics_acme' --set 'extraRoles[1].login=true' \
+  --set 'extraRoles[1].connectionLimit=5' \
+  --set 'extraRoles[1].passwordSecretName=analytics-acme-credentials' \
+  --set 'extraRoles[1].inRoles[0]=analytics_reader' \
+  --set 'extraRoles[2].name=analytics_bravo' --set 'extraRoles[2].login=true' \
+  --set 'extraRoles[2].connectionLimit=5' \
+  --set 'extraRoles[2].inRoles[0]=analytics_reader')")
+
 # --- the configurations the chart must REFUSE ---------------------------------
 say "checking the render-time guards"
 
@@ -277,6 +295,24 @@ refuses backup-without-destination "fails every archive attempt" \
 refuses five-field-schedule "CloudNativePG schedules take SIX" \
   "${base[@]}" --set instances=1 "${backup[@]}" --set backup.schedule='0 3 * * *'
 
+# The connection budget for the read-only SQL/BI roles. Both halves are refusals of
+# a configuration that applies cleanly and starves the platform at runtime, and the
+# starvation is silent: pools open lazily, so the Cluster keeps reporting Ready
+# while the application stops being able to reach it.
+refuses analytics-role-without-a-limit "declares no connection limit" \
+  "${base[@]}" --set instances=1 \
+  --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true'
+
+refuses analytics-role-name-too-long "PostgreSQL truncates identifiers longer than 63" \
+  "${base[@]}" --set instances=1 \
+  --set 'extraRoles[0].name=analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy' \
+  --set 'extraRoles[0].login=true' --set 'extraRoles[0].connectionLimit=5'
+
+refuses analytics-roles-over-budget "the extra roles ask for" \
+  "${base[@]}" --set instances=1 --set reservedApplicationConnections=40 \
+  --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true' \
+  --set 'extraRoles[0].connectionLimit=60'
+
 # COVERAGE: every `fail` in the templates must have been tripped by a case above.
 # A guard nothing exercises is indistinguishable from one that has stopped firing,
 # and this is the only thing in the repo that renders these templates at all.
@@ -298,6 +334,15 @@ for path in sorted(glob.glob(os.path.join(chart, "templates", "**", "*"), recurs
     # "fix" it by loosening the count, i.e. by removing the control.
     code = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", text, flags=re.S)  # Helm comments
     code = "\n".join(ln for ln in code.split("\n") if not ln.lstrip().startswith("#"))
+    # 🔴 And the guards' own MESSAGES, which is not the same exemption as the two
+    # above and was found the hard way. A guard message is prose too, and one of
+    # them explains that the condition it refuses "does not fail loudly" — so the
+    # word inside the string counted as a tenth template action against nine
+    # extracted messages, and this control fired on a chart whose guards were all
+    # present and all covered. Masking string literals is safe in the direction
+    # that matters: in the `fail "literal"` form this control exists to catch, the
+    # token is OUTSIDE the quotes and still counted.
+    code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)
     seen += len(re.findall(r"\bfail\b", code))
     # The message literal, with \" handled: several guards quote a cron example.
     for m in re.finditer(r'fail \(?printf?\s*"((?:[^"\\]|\\.)*)"', text):

@@ -49,5 +49,9 @@ var (
 		// The first migration appended after the baseline, and therefore the worked
 		// example for the next one — read its doc comment before adding another.
 		NewLocationFixFieldsSchema(),
+		// The read-only SQL/BI surface. It must run AFTER the location-fix columns:
+		// its views name those three columns in their frozen projections, so on a
+		// fresh install the table has to carry them by the time the views are built.
+		NewAnalyticsSurfaceSchema(),
 	}
 )
