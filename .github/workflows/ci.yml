@@ -741,6 +741,20 @@ jobs:
       - name: Feature drafts still match the tree
         run: hack/check-docs-drafts-rot.sh
 
+      # Third guard, same rule: prove it can go red before trusting it green. This
+      # one compares two file listings, and a listing built from the wrong path is
+      # empty — which compares equal to another empty listing and reports parity.
+      - name: Locale-parity guard self-test
+        run: hack/check-docs-locale-parity.sh --self-test
+
+      # Docusaurus falls back to the English page when a translation is missing, so
+      # an untranslated page ships as a clean build and a Spanish reader silently
+      # gets English — no broken link, no warning. The cost lands at the release
+      # tag, where `docs:version` freezes one snapshot per locale: drift at that
+      # moment is frozen into a shipped version rather than fixed by writing a page.
+      - name: Translated docs match English file-for-file
+        run: hack/check-docs-locale-parity.sh
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 26

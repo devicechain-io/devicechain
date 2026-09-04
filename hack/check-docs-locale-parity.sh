@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Guard: every translated docs tree holds exactly the same FILE SET as English.
+#
+# WHY THIS IS NOT TIDINESS. Docusaurus resolves a missing translation by falling
+# back to the English page, silently and by design. That is a reasonable runtime
+# behaviour and a terrible authoring signal: a page added to docs/docs and never
+# mirrored into docs/i18n/es renders in Spanish — in English — with no warning in
+# the build log and no broken link. The docs build already gates broken links and
+# broken anchors (`onBrokenLinks: 'throw'`), and neither of them can see this,
+# because nothing is broken. The page is simply not translated.
+#
+# 🔴 THE COST LANDS AT THE GA TAG. Cutting v1.0.0 runs Docusaurus `docs:version`,
+# which freezes a `1.0` snapshot — and with i18n configured it freezes ONE SNAPSHOT
+# PER LOCALE, each copied from that locale's current tree. A drifted file set is
+# copied faithfully: the English snapshot gets 40 pages, the Spanish snapshot gets
+# 38, and the two are then frozen and shipped. After the tag, the fix is no longer
+# "write the missing page" but "amend a released version". This guard is what makes
+# that step safe to run.
+#
+# The reverse direction is checked too, and it is not symmetric noise: a Spanish
+# page whose English original was deleted is a live route with no sidebar entry
+# pointing at it — reachable by URL, unreachable by navigation, and invisible to
+# every other check in the repo.
+#
+# 🔴 SCOPE, stated so a green run is not read as a broader claim than it is:
+# this compares FILE SETS, not content. It proves a translated page EXISTS. It
+# cannot prove the page was translated rather than copied, and it cannot prove a
+# translation still matches an English page that has since been rewritten. Nothing
+# cheap can. Read a green run as "no page is missing", never as "the Spanish docs
+# are current".
+#
+#   hack/check-docs-locale-parity.sh              # check
+#   hack/check-docs-locale-parity.sh --self-test  # prove the check can fail
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+DOCS_ROOT_DEFAULT="docs"
+
+usage() {
+  echo "usage: $0 [--self-test] [docs-root]" >&2
+  exit 2
+}
+
+# ---------------------------------------------------------------------------
+# doc_set <dir> — the sorted set of authored doc files under <dir>.
+#
+# Markdown only. Images, and everything else in `static/`, are served from the
+# English tree for every locale, so requiring a per-locale copy of them would
+# fail on a correct repository.
+# ---------------------------------------------------------------------------
+doc_set() {
+  local dir="$1"
+  [ -d "$dir" ] || return 0
+  ( cd "$dir" && find . -type f \( -name '*.md' -o -name '*.mdx' \) ) |
+    sed 's|^\./||' | LC_ALL=C sort
+}
+
+# ---------------------------------------------------------------------------
+# english_tree_for <docs-root> <instance>
+#
+# Docusaurus stores the two halves of a docs instance in directories that do not
+# resemble each other, which is the whole reason this needs a function rather
+# than a glob:
+#
+#   current      ->  docs/docs
+#   version-1.0  ->  docs/versioned_docs/version-1.0
+#
+# while BOTH translations live under one flat parent:
+#
+#   docs/i18n/<locale>/docusaurus-plugin-content-docs/{current,version-1.0}
+#
+# `version-*` resolves nothing today — the first snapshot is cut at the GA tag.
+# It is handled here anyway, because the moment it exists it is the tree this
+# guard most needs to cover, and a guard extended in the same commit as the thing
+# it must check is a guard written under deadline.
+# ---------------------------------------------------------------------------
+english_tree_for() {
+  local docs_root="$1" instance="$2"
+  if [ "$instance" = "current" ]; then
+    printf '%s\n' "$docs_root/docs"
+  else
+    printf '%s\n' "$docs_root/versioned_docs/$instance"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# check <docs-root>
+#
+# Locales are discovered from the tree rather than parsed out of
+# docusaurus.config.ts. A locale directory that exists is a locale readers can
+# select, and that is the thing being checked; a locale listed in the config with
+# no directory has nothing to compare. Discovering them also means the post-GA
+# locales enrol themselves on the day their directory lands, instead of waiting
+# for someone to remember this file.
+# ---------------------------------------------------------------------------
+check() {
+  local docs_root="${1:-$DOCS_ROOT_DEFAULT}"
+  local problems=0 compared=0 locale_dir locale plugin_dir instance_dir instance
+  local en_tree en_set loc_set only_en only_loc
+
+  if [ ! -d "$docs_root/docs" ]; then
+    echo "::error::no English docs tree at $docs_root/docs — the enumeration is broken, not the tree" >&2
+    return 1
+  fi
+
+  if [ ! -d "$docs_root/i18n" ]; then
+    echo "::error::no $docs_root/i18n directory — this repository ships a translated locale," >&2
+    echo "         so its absence is a broken checkout, not a repository with one locale" >&2
+    return 1
+  fi
+
+  for locale_dir in "$docs_root"/i18n/*/; do
+    [ -d "$locale_dir" ] || continue
+    locale="$(basename "$locale_dir")"
+    plugin_dir="${locale_dir}docusaurus-plugin-content-docs"
+
+    if [ ! -d "$plugin_dir" ]; then
+      echo "  $locale: has no docusaurus-plugin-content-docs/ directory, so NONE of its"
+      echo "      pages are translated — every one falls back to English at build time"
+      problems=$((problems + 1))
+      continue
+    fi
+
+    for instance_dir in "$plugin_dir"/*/; do
+      [ -d "$instance_dir" ] || continue
+      instance="$(basename "$instance_dir")"
+      en_tree="$(english_tree_for "$docs_root" "$instance")"
+
+      if [ ! -d "$en_tree" ]; then
+        echo "  $locale/$instance: translated tree exists but $en_tree does not."
+        echo "      Nothing renders from it. Delete it, or restore the English tree."
+        problems=$((problems + 1))
+        continue
+      fi
+
+      en_set="$(doc_set "$en_tree")"
+      loc_set="$(doc_set "${instance_dir%/}")"
+      compared=$((compared + 1))
+
+      only_en="$(LC_ALL=C comm -23 <(printf '%s\n' "$en_set") <(printf '%s\n' "$loc_set"))"
+      only_loc="$(LC_ALL=C comm -13 <(printf '%s\n' "$en_set") <(printf '%s\n' "$loc_set"))"
+
+      if [ -n "$only_en" ]; then
+        echo "  $locale/$instance: present in $en_tree, MISSING from the translation:"
+        printf '%s\n' "$only_en" | sed 's|^|      |'
+        problems=$((problems + 1))
+      fi
+      if [ -n "$only_loc" ]; then
+        echo "  $locale/$instance: present in the translation, MISSING from $en_tree:"
+        printf '%s\n' "$only_loc" | sed 's|^|      |'
+        problems=$((problems + 1))
+      fi
+    done
+  done
+
+  # 🔑 THE COUNTERWEIGHT TO THE DISCOVERY ABOVE. Every loop in this function
+  # `continue`s over a directory that is not there, so a docs root whose i18n
+  # tree is shaped differently than expected — a renamed plugin directory, a
+  # locale folder holding only theme JSON — walks the whole loop, finds nothing
+  # to compare, and reports success. "Clean" and "never looked" must not be the
+  # same output; that is the failure mode this repository has shipped before.
+  if [ "$compared" -eq 0 ]; then
+    echo "::error::compared no docs trees at all. A locale directory exists but no" >&2
+    echo "         docs instance under it could be paired with an English tree, so this" >&2
+    echo "         run proved nothing." >&2
+    return 1
+  fi
+
+  if [ "$problems" -gt 0 ]; then
+    return 1
+  fi
+
+  echo "==> Locale parity OK: $compared translated docs tree(s) match English file-for-file."
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Self-test. Fixtures only — never the real tree, so a repository that has
+# drifted still gets a truthful answer about whether the GUARD works.
+# ---------------------------------------------------------------------------
+self_test() {
+  local tmp root out
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  root="$tmp/docs"
+
+  # A clean fixture, rebuilt before each case so one case cannot leak into the
+  # next. Two files and a subdirectory, because a bug that only shows up for
+  # nested paths is exactly the bug a one-file fixture misses.
+  fixture() {
+    rm -rf "$root"
+    mkdir -p "$root/docs/guides" "$root/i18n/es/docusaurus-plugin-content-docs/current/guides"
+    printf 'intro\n' > "$root/docs/intro.md"
+    printf 'guide\n' > "$root/docs/guides/first.md"
+    printf 'intro\n' > "$root/i18n/es/docusaurus-plugin-content-docs/current/intro.md"
+    printf 'guia\n'  > "$root/i18n/es/docusaurus-plugin-content-docs/current/guides/first.md"
+  }
+
+  echo "==> Self-test: the guard must catch drift in both directions, and must not cry wolf"
+
+  # Case 1 — THE COUNTERWEIGHT, first on purpose. Without it every case below is
+  # satisfied by a guard that fails unconditionally.
+  fixture
+  if out="$(check "$root" 2>&1)"; then
+    case "$out" in
+      *"1 translated docs tree(s) match"*)
+        echo "  ok: a matching pair of trees passes, and exactly one pair was compared" ;;
+      *) echo "  FAIL: passed, but did not report comparing one tree: $out" >&2; return 1 ;;
+    esac
+  else
+    echo "  FAIL: a correctly mirrored tree was rejected — the guard cries wolf" >&2
+    echo "  got: $out" >&2
+    return 1
+  fi
+
+  # Case 2 — the everyday regression: an English page with no translation. This
+  # is the one that renders in English under /es/ with nothing in any log.
+  fixture
+  printf 'new\n' > "$root/docs/quickstart.md"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: an untranslated English page was accepted. That page renders in" >&2
+    echo "        English under /es/ and no other check in this repo can see it." >&2
+    return 1
+  fi
+  case "$out" in
+    *"MISSING from the translation"*quickstart.md*)
+      echo "  ok: an English page with no translation is reported" ;;
+    *) echo "  FAIL: wrong message for a missing translation: $out" >&2; return 1 ;;
+  esac
+
+  # Case 3 — the other direction. A guard written as a one-way subset test passes
+  # this, which is why it is a case and not an assumption.
+  fixture
+  printf 'huerfano\n' > "$root/i18n/es/docusaurus-plugin-content-docs/current/orphan.md"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: an orphaned translation was accepted — a one-way subset test would" >&2
+    echo "        pass this, which is exactly the bug this case exists to catch" >&2
+    return 1
+  fi
+  case "$out" in
+    *"MISSING from"*orphan.md*)
+      echo "  ok: a translation with no English original is reported" ;;
+    *) echo "  FAIL: wrong message for an orphaned translation: $out" >&2; return 1 ;;
+  esac
+
+  # Case 4 — drift inside a SUBDIRECTORY. A comparison built on `ls` rather than
+  # a recursive walk passes cases 2 and 3 and fails only here.
+  fixture
+  rm "$root/i18n/es/docusaurus-plugin-content-docs/current/guides/first.md"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: drift in a subdirectory was accepted — the walk is not recursive" >&2
+    return 1
+  fi
+  case "$out" in
+    *guides/first.md*) echo "  ok: drift in a subdirectory is reported, with its full path" ;;
+    *) echo "  FAIL: subdirectory drift reported without its path: $out" >&2; return 1 ;;
+  esac
+
+  # Case 5 — a VERSIONED instance, the tree that does not exist yet and is the
+  # whole reason this guard is landing before the GA tag rather than after it.
+  # `version-1.0` lives under versioned_docs/ on the English side and beside
+  # `current` on the translated side; a guard that assumed one flat layout would
+  # pass here by comparing nothing.
+  fixture
+  mkdir -p "$root/versioned_docs/version-1.0" \
+           "$root/i18n/es/docusaurus-plugin-content-docs/version-1.0"
+  printf 'intro\n' > "$root/versioned_docs/version-1.0/intro.md"
+  printf 'frozen\n' > "$root/versioned_docs/version-1.0/frozen.md"
+  printf 'intro\n' > "$root/i18n/es/docusaurus-plugin-content-docs/version-1.0/intro.md"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: a half-snapshotted version was accepted. Freezing 2 English pages" >&2
+    echo "        against 1 Spanish page is precisely the GA-tag failure this guards." >&2
+    return 1
+  fi
+  case "$out" in
+    *"es/version-1.0"*frozen.md*)
+      echo "  ok: a half-snapshotted version tree is reported, named by its version" ;;
+    *) echo "  FAIL: version drift not attributed to version-1.0: $out" >&2; return 1 ;;
+  esac
+
+  # And the counterweight for case 5: a COMPLETE snapshot must pass, and the run
+  # must report comparing TWO trees. Without the count, a guard that silently
+  # skipped every versioned tree would look identical to this.
+  printf 'frozen\n' > "$root/i18n/es/docusaurus-plugin-content-docs/version-1.0/frozen.md"
+  if out="$(check "$root" 2>&1)"; then
+    case "$out" in
+      *"2 translated docs tree(s) match"*)
+        echo "  ok: a complete snapshot passes, and BOTH trees were compared" ;;
+      *)
+        echo "  FAIL: passed without comparing two trees — the versioned tree was" >&2
+        echo "        skipped, not checked: $out" >&2
+        return 1 ;;
+    esac
+  else
+    echo "  FAIL: a complete snapshot was rejected: $out" >&2
+    return 1
+  fi
+
+  # Case 6 — a locale whose translations are entirely absent. Every loop in
+  # check() steps over a directory that is not there, so this shape would
+  # otherwise walk through and report success on a locale with zero pages.
+  fixture
+  mkdir -p "$root/i18n/de/docusaurus-theme-classic"
+  printf '{}\n' > "$root/i18n/de/docusaurus-theme-classic/navbar.json"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: a locale with no docs plugin directory was accepted — it has zero" >&2
+    echo "        translated pages and every one of them falls back to English" >&2
+    return 1
+  fi
+  case "$out" in
+    *"de: has no docusaurus-plugin-content-docs"*)
+      echo "  ok: a locale with no translated docs at all is reported" ;;
+    *) echo "  FAIL: wrong message for an untranslated locale: $out" >&2; return 1 ;;
+  esac
+
+  # Case 7 — THE CANNOT-FAIL SHAPE, asserted rather than assumed. If the plugin
+  # directory is renamed upstream, or a locale holds only theme JSON, every
+  # comparison is skipped and the guard has proved nothing. That must be a
+  # failure with its own message, not the same "OK" a clean tree produces.
+  fixture
+  rm -rf "$root/i18n/es/docusaurus-plugin-content-docs"
+  mkdir -p "$root/i18n/es/docusaurus-plugin-content-docs"
+  if out="$(check "$root" 2>&1)"; then
+    echo "  FAIL: a run that compared NOTHING reported success. 'Clean' and 'never" >&2
+    echo "        looked' must not produce the same output." >&2
+    return 1
+  fi
+  case "$out" in
+    *"compared no docs trees at all"*)
+      echo "  ok: comparing nothing is refused, with its own diagnosis" ;;
+    *) echo "  FAIL: an empty comparison failed for the wrong reason: $out" >&2; return 1 ;;
+  esac
+
+  echo "==> Self-test passed"
+}
+
+case "${1:-}" in
+  --self-test) self_test ;;
+  --*) usage ;;
+  *)
+    if ! check "${1:-$DOCS_ROOT_DEFAULT}"; then
+      cat >&2 <<'EOF'
+
+==> Translated docs have drifted from English
+
+Docusaurus falls back to the English page when a translation is missing, so the
+site builds clean and the Spanish reader silently gets English. Nothing else in
+CI can see this: there is no broken link and no broken anchor.
+
+To fix:
+  - a page missing from a translation  -> write the translation
+  - a page missing from English        -> delete the orphaned translation
+
+The translated tree for the current docs lives at
+docs/i18n/<locale>/docusaurus-plugin-content-docs/current/, mirroring docs/docs/
+path for path.
+
+This matters most at the release tag: `docs:version` freezes one snapshot per
+locale from these trees, so drift at that moment is frozen into a shipped
+version rather than fixed by writing a page.
+EOF
+      exit 1
+    fi
+    ;;
+esac
