@@ -107,7 +107,8 @@ vaciará por sí solo.
 Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
 
 ```bash
-dcctl dead-letters list --server <host> --email <usted> --password <secreto>   --tenant acme --since 2026-09-04T00:00:00Z
+dcctl dead-letters list --server <host> --email <usted> --password <secreto> \
+  --tenant acme --since 2026-09-04T00:00:00Z
 ```
 
 También están en el endpoint GraphQL de administración de la instancia como `deadLetters`,

@@ -178,6 +178,7 @@ CREATE TABLE "user-management".dead_letters (
  correlation character varying(128),
  reference character varying(256),
  stream_seq bigint NOT NULL,
+ append_time timestamp with time zone NOT NULL,
  payload bytea
 );
 CREATE TABLE "user-management".iam_identities (
@@ -330,7 +331,7 @@ CREATE TABLE "user-management".system_settings (
 CREATE TABLE "user-management".user_management_migrations (
  id character varying(255) NOT NULL
 );
-CREATE UNIQUE INDEX idx_dead_letters_stream_seq ON "user-management".dead_letters USING btree (stream_seq);
+CREATE UNIQUE INDEX idx_dead_letters_stream_seq ON "user-management".dead_letters USING btree (stream_seq, append_time);
 CREATE UNIQUE INDEX idx_iam_identities_email ON "user-management".iam_identities USING btree (email);
 CREATE UNIQUE INDEX idx_iam_membership_identity_tenant ON "user-management".iam_memberships USING btree (identity_id, tenant_id);
 CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oauth_clients USING btree (client_id);

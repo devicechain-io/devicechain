@@ -107,7 +107,12 @@ func Run(ctx context.Context, client Client, opts Options) (Summary, error) {
 		}
 		sum.Total = resp.DeadLetters.Pagination.TotalRecords
 		sum.Letters = append(sum.Letters, resp.DeadLetters.Results...)
-		if len(resp.DeadLetters.Results) < opts.PageSize {
+		// 🔴 "SHORTER THAN I ASKED FOR" IS NOT "THE END", because the SERVER CLAMPS the
+		// page size. Ask for 5000 and it returns its own maximum, which is shorter than
+		// the request on every page — so this test read as "no more results" after the
+		// first, and a truncated list printed itself as a complete one. What ends the walk
+		// is having collected everything the server says exists.
+		if int32(len(sum.Letters)) >= sum.Total {
 			return sum, nil
 		}
 	}

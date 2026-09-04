@@ -219,9 +219,12 @@ const (
 	// messaging.streamMaxAge — which is a per-manager constant with no per-stream
 	// override, so it cannot simply be read from the stream's declaration.
 	//
-	// 🔴 IF THAT CONSTANT MOVES, THIS ONE MUST TOO, and the floor check below is the only
-	// thing that would notice. It is stated as a number rather than imported because
-	// core/messaging is not importable from a service's config package without inverting
+	// 🔴 IF THAT CONSTANT MOVES, NOTHING HERE NOTICES — the floor below compares against
+	// this copy, not against the stream. An earlier version of this comment claimed the
+	// check would catch it, which is the reassuring reading and the wrong one: the two
+	// numbers agree today because someone wrote them to, and they will keep agreeing
+	// until someone changes the other one. It is a copy rather than an import because
+	// core/messaging is not reachable from a service's config package without inverting
 	// the dependency for one integer.
 	deadLetterStreamDays = 7
 

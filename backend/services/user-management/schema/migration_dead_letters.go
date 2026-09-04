@@ -53,7 +53,20 @@ type deadLetterSnapshot struct {
 
 	// StreamSeq is the dead-letter stream's own sequence, which is what makes the
 	// consumer idempotent: a redelivery re-stores the same row rather than a second one.
-	StreamSeq uint64 `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq"`
+	StreamSeq uint64 `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq,priority:1"`
+
+	// AppendTime is the broker's own write time for the message, and it is HALF THE
+	// IDENTITY rather than decoration.
+	//
+	// 🔴 A STREAM SEQUENCE IS UNIQUE WITHIN ONE INCARNATION OF A STREAM, NOT ACROSS
+	// STREAMS. Rebuild the broker — the ADR-028 restore drill, or a lost JetStream volume
+	// — and sequences restart at 1 while this table still holds 1..N from before. Keyed on
+	// the sequence alone, every letter after such a restore would collide with an older
+	// row, be discarded by ON CONFLICT, ACKED, and counted as stored: silence that reads
+	// exactly like success, on the one table whose job is to not lose things. The append
+	// time is assigned by the broker at publish and is stable across redeliveries of the
+	// same message, so it separates incarnations without separating a message from itself.
+	AppendTime time.Time `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq,priority:2"`
 
 	Payload []byte
 }

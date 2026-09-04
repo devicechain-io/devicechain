@@ -146,3 +146,37 @@ func TestTheOutputSaysNothingReplaysThem(t *testing.T) {
 		t.Fatalf("the output lets a list of failures read as a queue:\n%s", b.String())
 	}
 }
+
+// 🔴 THE SERVER CLAMPS THE PAGE SIZE, so "shorter than I asked for" is not "the end". A
+// walk that ended on that test printed a truncated list as a complete one, which is a
+// bounded read turning into a wrong answer.
+func TestAClampedPageDoesNotEndTheWalk(t *testing.T) {
+	// Asked for 5000, served 1000 a page, 2500 records exist.
+	c := &scriptedClient{pages: []page{full(1000, 2500), full(1000, 2500), full(500, 2500)}}
+	sum, err := Run(context.Background(), c, Options{PageSize: 5000, Pages: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.criteria) != 3 {
+		t.Fatalf("the walk stopped after %d request(s); the server clamped every page", len(c.criteria))
+	}
+	if len(sum.Letters) != 2500 || sum.Truncated {
+		t.Fatalf("got %d letters truncated=%v, want all 2500", len(sum.Letters), sum.Truncated)
+	}
+}
+
+// An exactly-full final page is not truncated: everything the server says exists has been
+// collected. This is the boundary the flag exists for and it was untested.
+func TestAnExactlyFullFinalPageIsNotTruncated(t *testing.T) {
+	c := &scriptedClient{pages: []page{full(50, 100), full(50, 100)}}
+	sum, err := Run(context.Background(), c, Options{PageSize: 50, Pages: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Truncated {
+		t.Fatal("a complete list reported itself truncated, which sends an operator looking for more")
+	}
+	if len(sum.Letters) != 100 {
+		t.Fatalf("got %d letters, want 100", len(sum.Letters))
+	}
+}

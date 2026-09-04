@@ -94,7 +94,8 @@ Treat a dead letter as something to investigate, not something that will drain o
 Read them with `dcctl dead-letters list`, which authenticates as an operator identity:
 
 ```bash
-dcctl dead-letters list --server <host> --email <you> --password <secret>   --tenant acme --since 2026-09-04T00:00:00Z
+dcctl dead-letters list --server <host> --email <you> --password <secret> \
+  --tenant acme --since 2026-09-04T00:00:00Z
 ```
 
 They are also on the instance's admin GraphQL endpoint as `deadLetters`, gated on the same

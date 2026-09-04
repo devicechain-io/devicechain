@@ -101,15 +101,13 @@ func runDeadLettersList(cmd *cobra.Command, args []string) error {
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
 	session := userclient.NewAdminSession(nil, endpoints.UserGraphQL, dlEmail, dlPassword)
 
+	// 🔴 NO SUPERUSER PRE-CHECK HERE, and an earlier version had one. The server gates
+	// this on audit:read, which is deliberately grantable on a non-superuser system role —
+	// "an operator who may read the instance audit journal" — so a superuser check would
+	// refuse people the server would authorize, with a message telling them something
+	// untrue about why. The server's own refusal is the right one; it is also the only one
+	// that stays correct when the authority is regranted.
 	ctx := context.Background()
-	// Fail fast on an identity that lacks the powers this plane needs, rather than
-	// letting the query come back as an authorization error the operator has to decode.
-	if ok, err := session.Superuser(ctx); err != nil {
-		return err
-	} else if !ok {
-		return fmt.Errorf("%s is not a superuser; the dead-letter store is on the operator plane", dlEmail)
-	}
-
 	sum, err := deadletters.Run(ctx, session, opts)
 	if err != nil {
 		return err

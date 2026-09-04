@@ -50,11 +50,6 @@ var (
 		// a fallback view. Moves the basemap off every browser's localStorage and onto
 		// the tenant that owns the provider credential.
 		NewTenantBasemapMigration(),
-		// ADR-024 the dead-letter store: the queryable record of work a consumer
-		// accepted and gave up on. It lives here, on the operator plane, so the read
-		// surface never has to answer whether a per-entry failure reason is safe to
-		// show a tenant.
-		NewDeadLettersMigration(),
 		// The per-tenant HELD-command ceiling: how many commands a tenant may have parked
 		// because the platform is deliberately withholding dispatch from an absent device.
 		// An offline fleet's backlog sits there for days and nothing drains it, so it is
@@ -67,5 +62,10 @@ var (
 		// fence set in a DETECT process serving every tenant. The costs are stated once, in
 		// core/governance; this comment deliberately does not retell them.
 		NewTenantGeoFenceCapsMigration(),
+		// ADR-024 the dead-letter store: the queryable record of work a consumer
+		// accepted and gave up on. It lives here, on the operator plane, so the read
+		// surface never has to answer whether a per-entry failure reason is safe to
+		// show a tenant.
+		NewDeadLettersMigration(),
 	}
 )

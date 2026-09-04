@@ -54,6 +54,17 @@ func TestAdminQueriesFailClosed(t *testing.T) {
 
 	_, err = r.OauthClients(ctx)
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// 🔴 EVERY READ RESOLVER, NOT THE THREE THAT EXISTED WHEN THIS WAS WRITTEN. A mutation
+	// removing the Authorize call from the dead-letter resolvers survived this test, which
+	// enumerates rather than sweeps — so a resolver added later is unguarded here by
+	// default, which is the wrong default for the file whose subject is defence in depth.
+	_, err = r.DeadLetters(ctx, struct{ Criteria deadLetterCriteriaInput }{
+		Criteria: deadLetterCriteriaInput{PageNumber: 1, PageSize: 10}})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.DeadLetter(ctx, struct{ Id gql.ID }{Id: gql.ID("1")})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 }
 
 // TestAdminQueriesForbidWithoutAuthority confirms an authenticated identity that

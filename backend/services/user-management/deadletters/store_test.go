@@ -42,15 +42,15 @@ func TestARedeliveredLetterIsStoredOnce(t *testing.T) {
 	ctx := context.Background()
 	e := envelope(deadletter.KindDetectionAction, "rule-1", time.Now().UTC())
 
-	require.NoError(t, s.Record(ctx, "acme", 7, e))
-	require.NoError(t, s.Record(ctx, "acme", 7, e))
+	require.NoError(t, s.Record(ctx, "acme", 7, appendAt(7), e))
+	require.NoError(t, s.Record(ctx, "acme", 7, appendAt(7), e))
 
 	page, err := s.List(ctx, SearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
 	require.NoError(t, err)
 	assert.Len(t, page.Results, 1, "a redelivery stored a second copy of one failure")
 
 	// The counterweight: a DIFFERENT sequence is a different failure and must be stored.
-	require.NoError(t, s.Record(ctx, "acme", 8, e))
+	require.NoError(t, s.Record(ctx, "acme", 8, appendAt(8), e))
 	page, err = s.List(ctx, SearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
 	require.NoError(t, err)
 	assert.Len(t, page.Results, 2, "two distinct failures collapsed into one")
@@ -63,11 +63,11 @@ func TestEveryFilterNarrows(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 
-	require.NoError(t, s.Record(ctx, "acme", 1, envelope(deadletter.KindDetectionAction, "r1", base)))
-	require.NoError(t, s.Record(ctx, "globex", 2, envelope(deadletter.KindNotification, "a1", base)))
+	require.NoError(t, s.Record(ctx, "acme", 1, appendAt(1), envelope(deadletter.KindDetectionAction, "r1", base)))
+	require.NoError(t, s.Record(ctx, "globex", 2, appendAt(2), envelope(deadletter.KindNotification, "a1", base)))
 	third := envelope(deadletter.KindNotification, "a2", base.Add(48*time.Hour))
 	third.Source = "notification-management"
-	require.NoError(t, s.Record(ctx, "acme", 3, third))
+	require.NoError(t, s.Record(ctx, "acme", 3, appendAt(3), third))
 
 	all := rdb.Pagination{PageNumber: 1, PageSize: 10}
 	for name, tc := range map[string]struct {
@@ -96,10 +96,10 @@ func TestTheOrderIsNewestFirstAndStableAcrossATie(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	for i := uint64(1); i <= 5; i++ {
-		require.NoError(t, s.Record(ctx, "acme", i, envelope(deadletter.KindNotification, "a", at)))
+		require.NoError(t, s.Record(ctx, "acme", i, appendAt(int(i)), envelope(deadletter.KindNotification, "a", at)))
 	}
 	newer := envelope(deadletter.KindNotification, "newest", at.Add(time.Hour))
-	require.NoError(t, s.Record(ctx, "acme", 99, newer))
+	require.NoError(t, s.Record(ctx, "acme", 99, appendAt(99), newer))
 
 	first, err := s.List(ctx, SearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 3}})
 	require.NoError(t, err)
@@ -125,8 +125,8 @@ func TestPruneRemovesOnlyWhatIsPastTheWindow(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	require.NoError(t, s.Record(ctx, "acme", 1, envelope(deadletter.KindNotification, "old", now.Add(-40*24*time.Hour))))
-	require.NoError(t, s.Record(ctx, "acme", 2, envelope(deadletter.KindNotification, "new", now.Add(-time.Hour))))
+	require.NoError(t, s.Record(ctx, "acme", 1, appendAt(1), envelope(deadletter.KindNotification, "old", now.Add(-40*24*time.Hour))))
+	require.NoError(t, s.Record(ctx, "acme", 2, appendAt(2), envelope(deadletter.KindNotification, "new", now.Add(-time.Hour))))
 
 	n, err := s.Prune(ctx, now.Add(-30*24*time.Hour))
 	require.NoError(t, err)
@@ -136,6 +136,27 @@ func TestPruneRemovesOnlyWhatIsPastTheWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	assert.Equal(t, "new", page.Results[0].Reference, "the sweep took the wrong row")
+}
+
+// The boundary the retention window turns on. A row EXACTLY at the cutoff is inside the
+// window — `<` not `<=` — and a mutation flipping that survived until this existed.
+func TestPruneKeepsARowExactlyAtTheCutoff(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	cut := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.Record(ctx, "acme", 1, appendAt(1),
+		envelope(deadletter.KindNotification, "at-the-cutoff", cut)))
+	require.NoError(t, s.Record(ctx, "acme", 2, appendAt(2),
+		envelope(deadletter.KindNotification, "one-nanosecond-older", cut.Add(-time.Nanosecond))))
+
+	n, err := s.Prune(ctx, cut)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "the sweep took the row sitting exactly on its cutoff")
+
+	page, err := s.List(ctx, SearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "at-the-cutoff", page.Results[0].Reference)
 }
 
 func TestByIdReturnsNilRatherThanAnErrorWhenThereIsNone(t *testing.T) {
@@ -152,7 +173,7 @@ func TestByIdReturnsNilRatherThanAnErrorWhenThereIsNone(t *testing.T) {
 func TestTheStoreWorksWithNoTenantInContext(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.Record(ctx, "acme", 1, envelope(deadletter.KindNotification, "a", time.Now().UTC())))
+	require.NoError(t, s.Record(ctx, "acme", 1, appendAt(1), envelope(deadletter.KindNotification, "a", time.Now().UTC())))
 	page, err := s.List(ctx, SearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
 	require.NoError(t, err)
 	assert.Len(t, page.Results, 1)
@@ -160,3 +181,10 @@ func TestTheStoreWorksWithNoTenantInContext(t *testing.T) {
 }
 
 func ptr(t time.Time) *time.Time { return &t }
+
+// appendAt gives each stream sequence a distinct broker write time, as a real stream does.
+// The pair is the dedup key: the same sequence with a DIFFERENT append time is a different
+// message, which is what a rebuilt broker produces.
+func appendAt(seq int) time.Time {
+	return time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second)
+}

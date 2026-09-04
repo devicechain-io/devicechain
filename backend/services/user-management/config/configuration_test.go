@@ -328,3 +328,41 @@ func TestTheSettleDefaultOutlastsTheBrokersRetainedCache(t *testing.T) {
 			settle, messaging.RetainedCacheWindow, messaging.PurgeTimeout)
 	}
 }
+
+// 🔴 A RETENTION AT OR BELOW THE STREAM'S BUYS NOTHING, and accepting one would leave an
+// operator with a table that costs disk, appears to be the durable record, and forgets
+// sooner than the thing it was built to outlast — which is worse than not having it,
+// because it looks like it works.
+func TestADeadLetterRetentionAtOrBelowTheStreamsIsRefused(t *testing.T) {
+	for _, days := range []int{1, 6, 7} {
+		cfg := NewUserManagementConfiguration()
+		cfg.DeadLetters.RetentionDays = days
+		err := cfg.Validate()
+		require.Errorf(t, err, "a %d-day retention was accepted; the stream itself keeps 7", days)
+		assert.Contains(t, err.Error(), "retentionDays")
+	}
+}
+
+// The counterweight: a retention that clears the stream is accepted, and the DEFAULT is
+// one of them — a default that failed its own floor would refuse every unset config.
+func TestTheDeadLetterDefaultClearsItsOwnFloor(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.DeadLetters.RetentionDays = 0
+	cfg.DeadLetters.SweepSeconds = 0
+	cfg.ApplyDefaults()
+
+	assert.Greater(t, cfg.DeadLetters.RetentionDays, deadLetterStreamDays,
+		"the default retention does not outlive the stream it drains")
+	require.NoError(t, cfg.Validate(), "an unset dead-letter config fails to load")
+	assert.Equal(t, 30*24*time.Hour, cfg.DeadLetterRetention())
+}
+
+// A negative sweep interval disables the sweep — the table then grows, which is visible,
+// rather than something being lost, which is not.
+func TestANegativeSweepIntervalDisablesTheSweepRatherThanFailing(t *testing.T) {
+	cfg := NewUserManagementConfiguration()
+	cfg.DeadLetters.RetentionDays = 30
+	cfg.DeadLetters.SweepSeconds = -1
+	require.NoError(t, cfg.Validate())
+	assert.Zero(t, cfg.DeadLetterSweepInterval())
+}

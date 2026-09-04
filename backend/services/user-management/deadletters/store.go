@@ -62,12 +62,35 @@ type DeadLetter struct {
 	// constraint — the ON CONFLICT below names it — and a model that did not declare it
 	// worked in production (where the migration made it) while quietly storing duplicates
 	// anywhere the table was derived from the model instead.
-	StreamSeq uint64 `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq"`
+	StreamSeq uint64 `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq,priority:1"`
+
+	// AppendTime is the broker's own write time for the message, and it is HALF THE
+	// IDENTITY rather than decoration.
+	//
+	// 🔴 A STREAM SEQUENCE IS UNIQUE WITHIN ONE INCARNATION OF A STREAM, NOT ACROSS
+	// STREAMS. Rebuild the broker — the ADR-028 restore drill, or a lost JetStream volume
+	// — and sequences restart at 1 while this table still holds 1..N from before. Keyed on
+	// the sequence alone, every letter after such a restore would collide with an older
+	// row, be discarded by ON CONFLICT, ACKED, and counted as stored: silence that reads
+	// exactly like success, on the one table whose job is to not lose things. The append
+	// time is assigned by the broker at publish and is stable across redeliveries of the
+	// same message, so it separates incarnations without separating a message from itself.
+	AppendTime time.Time `gorm:"not null;uniqueIndex:idx_dead_letters_stream_seq,priority:2"`
 
 	Payload []byte
 }
 
 func (DeadLetter) TableName() string { return "dead_letters" }
+
+// FenceExempt implements rdb.FenceExempt: a dead letter records that work did NOT happen,
+// so writing one for a purged tenant cannot resurrect anything a successor could inherit.
+//
+// 🔴 WITHOUT IT THE FENCE REFUSES THIS TABLE'S OWN WRITES DURING A PURGE. Deleting a tenant
+// refuses its upstream writes, those consumers dead-letter, and the letter's own row would
+// then be refused too — deleting the evidence that a tenant's last alarms went nowhere, and
+// reporting it to an operator as a database outage. The rows are still swept by the purge
+// like any other tenant-bearing table; only the write-time refusal is lifted.
+func (DeadLetter) FenceExempt() bool { return true }
 
 // SearchCriteria narrows a list. Every filter is optional; pagination is not.
 type SearchCriteria struct {
@@ -104,21 +127,23 @@ func (s *Store) db(ctx context.Context) *gorm.DB { return s.rdbm.DB(systemCtx(ct
 
 // Record stores one letter, keyed by the stream sequence it arrived on.
 //
-// 🔑 IDEMPOTENT BY THE STREAM'S OWN SEQUENCE, which is the only identifier that survives a
-// redelivery unchanged. Without it a consumer that stored a row and then failed to ack
-// would store it again on every redelivery — and the redelivery cap would then decide how
-// many copies of one failure an operator sees.
+// 🔑 IDEMPOTENT BY (SEQUENCE, APPEND TIME) — the pair that survives a redelivery unchanged
+// AND separates one incarnation of the stream from the next. Without any key, a consumer
+// that stored a row and then failed to ack would store it again on every redelivery, and
+// the redelivery cap would decide how many copies of one failure an operator sees. Without
+// the append time, a rebuilt broker would collide every new letter with an old row and
+// discard it silently — see the field.
 func (s *Store) Record(ctx context.Context, tenant string, streamSeq uint64,
-	e deadletter.Envelope) error {
+	appendTime time.Time, e deadletter.Envelope) error {
 	row := &DeadLetter{
-		TenantId: tenant, OccurredTime: e.OccurredAt,
+		TenantId: tenant, OccurredTime: e.OccurredAt, AppendTime: appendTime,
 		Kind: string(e.Kind), Reason: string(e.Reason), Source: e.Source,
 		Summary: e.Summary, Detail: e.Detail, Attempts: e.Attempts,
 		Subject: e.Subject, Sequence: e.Sequence, Correlation: e.Correlation,
 		Reference: e.Reference, StreamSeq: streamSeq, Payload: e.Payload,
 	}
 	return s.db(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "stream_seq"}},
+		Columns:   []clause.Column{{Name: "stream_seq"}, {Name: "append_time"}},
 		DoNothing: true,
 	}).Create(row).Error
 }

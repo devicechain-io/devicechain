@@ -25,14 +25,10 @@ func (r *recordingAck) Ack() error { r.acks++; return nil }
 func testConsumer(t *testing.T, s *Store) *Consumer {
 	t.Helper()
 	c := &Consumer{
-		store: s,
-		// Short, so the retry branch is reachable in a test. The production values are
-		// the constants NewConsumer defaults to.
-		retryBudget:   150 * time.Millisecond,
-		retryInterval: 20 * time.Millisecond,
-		stored:        prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
-		unstorable:    prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
-		unstored:      prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),
+		store:      s,
+		stored:     prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
+		unstorable: prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
+		unstored:   prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),
 	}
 	c.procCtx, c.procCancel = context.WithCancel(context.Background())
 	t.Cleanup(c.procCancel)
@@ -157,65 +153,65 @@ func TestAStorableLetterIsAcked(t *testing.T) {
 	assert.Equal(t, 1, ack.acks)
 }
 
-// 🔑 A BLIP COSTS NO DELIVERY ATTEMPTS. There are five and they cannot be extended, so
-// riding out a brief store failure in process is what makes the common case fully covered
-// rather than eating a fifth of the budget.
-func TestAStoreThatRecoversCostsNoDeliveryAttempt(t *testing.T) {
+// 🔴 A REBUILT BROKER RESTARTS ITS SEQUENCES AT 1, and keying dedup on the sequence alone
+// would collide every new letter with an old row — discarding it, acking it, and counting
+// it as stored. This is the restore-drill scenario, and silence there reads exactly like
+// success on the one table whose job is to not lose things.
+func TestALetterFromARebuiltStreamIsNotMistakenForADuplicate(t *testing.T) {
 	s := testStore(t)
 	c := testConsumer(t, s)
-	ack := &recordingAck{}
+	e := envelope(deadletter.KindNotification, "before", time.Now().UTC())
 
-	// The table is missing on the first attempt and present on the next.
-	require.NoError(t, s.db(context.Background()).Migrator().DropTable(&DeadLetter{}))
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		_ = s.db(context.Background()).AutoMigrate(&DeadLetter{})
-	}()
+	before := messaging.NewConsumedMessage("inst.acme.dead-letters", mustMarshal(t, e), 1,
+		nil, &recordingAck{})
+	c.handle(atStreamPosition(before, 1, appendAt(1)))
 
-	done := make(chan struct{})
-	go func() {
-		c.handle(letterMsg(t, "inst.acme.dead-letters",
-			envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, ack))
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the in-process retry never returned")
-	}
+	// The broker is rebuilt: a NEW message arrives on sequence 1 again, with the broker's
+	// own write time necessarily later.
+	after := envelope(deadletter.KindNotification, "after", time.Now().UTC())
+	c.handle(atStreamPosition(messaging.NewConsumedMessage("inst.acme.dead-letters",
+		mustMarshal(t, after), 1, nil, &recordingAck{}), 1, appendAt(1).Add(time.Hour)))
 
-	assert.Equal(t, float64(1), counterOf(t, c.stored),
-		"a store that came back within the window was not retried in process")
-	assert.Equal(t, 1, ack.acks)
+	page, err := s.List(context.Background(), SearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2,
+		"a letter from a rebuilt stream was discarded as a duplicate of an older one")
+
+	// 🔑 THE COUNTERWEIGHT: the SAME position redelivered is still deduplicated. Without
+	// it, a key that separated everything would satisfy the assertion above.
+	c.handle(atStreamPosition(messaging.NewConsumedMessage("inst.acme.dead-letters",
+		mustMarshal(t, e), 2, nil, &recordingAck{}), 1, appendAt(1)))
+	page, err = s.List(context.Background(), SearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
+	require.NoError(t, err)
+	assert.Len(t, page.Results, 2, "a redelivery of the same position stored a second copy")
 }
 
-// And the retry is BOUNDED: a store that never comes back must not hold the consumer past
-// the point the broker would redeliver anyway.
-func TestTheInProcessRetryIsBoundedByShutdown(t *testing.T) {
-	s := testStore(t)
-	require.NoError(t, s.db(context.Background()).Migrator().DropTable(&DeadLetter{}))
-	c := testConsumer(t, s)
-	c.procCancel()
+func mustMarshal(t *testing.T, e deadletter.Envelope) []byte {
+	t.Helper()
+	b, err := deadletter.Marshal(e)
+	require.NoError(t, err)
+	return b
+}
 
-	done := make(chan struct{})
-	go func() {
-		c.handle(letterMsg(t, "inst.acme.dead-letters",
-			envelope(deadletter.KindNotification, "a", time.Now().UTC()), 1, &recordingAck{}))
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a cancelled consumer kept retrying a store that will never answer")
-	}
+// atStreamPosition sets the two broker-assigned fields NewConsumedMessage does not take.
+//
+// 🔴 NewConsumedMessage's THIRD ARGUMENT IS numDelivered, NOT THE SEQUENCE, and conflating
+// them left every message in this file at StreamSeq 0 — which made the dedup key
+// effectively the append time alone and quietly hid what the key was really doing.
+func atStreamPosition(m messaging.Message, seq uint64, at time.Time) messaging.Message {
+	m.StreamSeq = seq
+	m.AppendTime = at
+	return m
 }
 
 func TestTheSweeperPrunesOnItsWindow(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	require.NoError(t, s.Record(ctx, "acme", 1, envelope(deadletter.KindNotification, "old", now.Add(-40*24*time.Hour))))
-	require.NoError(t, s.Record(ctx, "acme", 2, envelope(deadletter.KindNotification, "new", now)))
+	require.NoError(t, s.Record(ctx, "acme", 1, appendAt(1), envelope(deadletter.KindNotification, "old", now.Add(-40*24*time.Hour))))
+	require.NoError(t, s.Record(ctx, "acme", 2, appendAt(2), envelope(deadletter.KindNotification, "new", now)))
 
 	sw := &Sweeper{store: s, retention: 30 * 24 * time.Hour}
 	sw.RunOnce(ctx)

@@ -45,9 +45,6 @@ var (
 	// (ADR-077). nil when disabled by a negative interval.
 	PurgeCoordinator *purge.Coordinator
 
-	// DeadLetterReader drains the platform's dead-letter stream.
-	DeadLetterReader messaging.MessageReader
-
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
 	DeadLetterStore    *deadletters.Store
@@ -110,21 +107,30 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// The ADR-024 store. It is built HERE, before the admin handler is registered below,
+	// because that handler captures it — an earlier arrangement created it afterwards and
+	// handed the admin service a nil, which its own tolerate-nil path then rendered as
+	// "nothing has failed" on every query while the table filled.
+	DeadLetterStore = deadletters.NewStore(RdbManager)
+
 	// Create and initialize nats manager (the refresh-token KV store, and the ADR-024
-	// dead-letter reader).
+	// dead-letter consumer).
 	//
-	// 🔴 THE READER IS BUILT IN THE CALLBACK, WHICH IS WHERE STREAM CREATION HAPPENS. A
-	// reader created later would ask a manager that has already decided what streams it
-	// needs, and a deployment missing the stream would discover it at the first dead
-	// letter rather than at startup — the one moment the record has to work.
+	// 🔴 THE CONSUMER IS BUILT INSIDE THE CALLBACK, NOT MERELY ITS READER, and the
+	// distinction is a service-killer. This callback runs in NatsManager's ExecuteSTART,
+	// not Initialize — so anything constructed out here during afterMicroserviceInitialized
+	// captures a nil reader by value and panics on its first read, taking the identity
+	// service down. notification-management builds its processor inside the callback for
+	// exactly this reason; this now does the same.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		func(nmgr *messaging.NatsManager) error {
 			reader, err := nmgr.NewReader(streams.DeadLetters)
 			if err != nil {
 				return err
 			}
-			DeadLetterReader = reader
-			return nil
+			DeadLetterConsumer = deadletters.NewConsumer(Microservice, reader, DeadLetterStore,
+				core.NewNoOpLifecycleCallbacks())
+			return DeadLetterConsumer.Initialize(context.Background())
 		})
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
@@ -269,16 +275,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		log.Info().Msg("Tenant purge coordinator disabled by configuration; deleted tenants stay purging")
 	}
 
-	// The ADR-024 store, its consumer and its retention sweep. It lives here rather than
-	// in one of the four services that WRITE dead letters, because the read surface is the
-	// operator plane: a per-entry failure reason at full fidelity on a tenant-readable
-	// surface would hand back the status-class oracle the egress boundary closed.
-	DeadLetterStore = deadletters.NewStore(RdbManager)
-	DeadLetterConsumer = deadletters.NewConsumer(Microservice, DeadLetterReader, DeadLetterStore,
-		core.NewNoOpLifecycleCallbacks())
-	if err := DeadLetterConsumer.Initialize(ctx); err != nil {
-		return err
-	}
+	// The retention sweep. It needs only the store, so unlike the consumer it can be built
+	// here. The store itself lives in one of the four services' streams rather than in
+	// them, because the read surface is the operator plane: a per-entry failure reason at
+	// full fidelity on a tenant-readable surface would hand back the status-class oracle
+	// the egress boundary closed.
 	if sweep := Configuration.DeadLetterSweepInterval(); sweep > 0 {
 		DeadLetterSweeper = deadletters.NewSweeper(Microservice, DeadLetterStore,
 			Configuration.DeadLetterRetention(), sweep, core.NewNoOpLifecycleCallbacks())

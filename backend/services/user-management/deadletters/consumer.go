@@ -22,17 +22,19 @@ import (
 // does not spin this loop.
 const readErrorBackoff = time.Second
 
-// storeRetryBudget is how long one delivery attempt spends retrying the store in process.
+// 🔴 THERE IS DELIBERATELY NO IN-PROCESS RETRY HERE, and an earlier version of this file
+// had one. It looked like free insurance — ride out a database blip inside one delivery
+// attempt, spending none of the five — and it does not work at this seam, because the
+// reader FETCHES IN BATCHES whose AckWait timers all start at the fetch. A per-message
+// retry budget multiplies by the batch size: a 45-second budget across a batch of 64 is
+// three quarters of an hour, during which the broker has long since redelivered everything
+// after the first message and the buffered copies are carrying a stale NumDelivered — so
+// the final-attempt decision, which is the one that declares a loss, would be taken on a
+// count that no longer matches the broker's.
 //
-// 🔑 IT IS SHORTER THAN messaging.AckWait ON PURPOSE. Retrying past the ack deadline would
-// have the broker redeliver the same message to this same consumer while the first copy is
-// still working on it — spending a delivery attempt to duplicate work rather than to
-// extend it. Staying inside the window means the five attempts are five INDEPENDENT
-// windows rather than five overlapping ones.
-const storeRetryBudget = 45 * time.Second
-
-// storeRetryInterval paces those in-process attempts.
-const storeRetryInterval = 3 * time.Second
+// The delivery attempts are the retry. Five of them, AckWait apart, is about five minutes,
+// which is the real window; anything longer than that is an outage, and an outage is what
+// dead_letters_unstored_total and its alert exist to report.
 
 // Consumer drains the platform's dead-letter stream into the store.
 //
@@ -49,11 +51,9 @@ const storeRetryInterval = 3 * time.Second
 //
 // What is available is spending those five attempts well, and saying so when they run out:
 //
-//   - A store failure is retried IN PROCESS first (storeRetryBudget), so a blip costs no
-//     delivery attempts at all. That is the common case and it is fully covered.
-//   - Only if that budget is exhausted is the message left unacked, which buys the next
-//     delivery attempt — up to five, roughly five minutes of AckWait-paced retries on top
-//     of the in-process ones.
+//   - A store failure below the cap leaves the message unacked, which buys the next
+//     delivery attempt. Five of them, AckWait apart, is about five minutes — enough for
+//     an ordinary blip and not enough for an outage, which is the honest shape of it.
 //   - A message on its FINAL attempt that still cannot be stored is a LOSS. It is counted
 //     and logged as one rather than left to look like a retry, because after this no
 //     redelivery follows and nothing else will ever record that failure.
@@ -61,13 +61,6 @@ type Consumer struct {
 	Microservice *core.Microservice
 	reader       messaging.MessageReader
 	store        *Store
-
-	// retryBudget and retryInterval pace the in-process retry. They are FIELDS rather
-	// than the constants they default to because a 45-second budget in a struct with no
-	// override is a branch no test can reach in a reasonable time — and this is the
-	// branch that decides whether a store outage costs a delivery attempt.
-	retryBudget   time.Duration
-	retryInterval time.Duration
 
 	stored     prometheus.Counter
 	unstorable prometheus.Counter
@@ -87,11 +80,9 @@ type Consumer struct {
 func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *Store,
 	callbacks core.LifecycleCallbacks) *Consumer {
 	c := &Consumer{
-		Microservice:  ms,
-		reader:        reader,
-		store:         store,
-		retryBudget:   storeRetryBudget,
-		retryInterval: storeRetryInterval,
+		Microservice: ms,
+		reader:       reader,
+		store:        store,
 		stored: ms.NewCounter("dead_letters_stored_total",
 			"Dead letters written to the queryable store, so a failure a consumer gave up on "+
 				"outlives the stream's own seven-day window (ADR-024).", nil),
@@ -188,7 +179,7 @@ func (c *Consumer) handle(msg messaging.Message) {
 		c.ack(msg)
 		return
 	}
-	if err := c.recordWithRetry(tenant, msg.StreamSeq, e); err != nil {
+	if err := c.store.Record(c.procCtx, tenant, msg.StreamSeq, msg.AppendTime, e); err != nil {
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			// 🔴 NO REDELIVERY FOLLOWS. This is the loss, and it is said plainly rather
 			// than logged as something that will be retried. Acked so the message is not
@@ -209,29 +200,6 @@ func (c *Consumer) handle(msg messaging.Message) {
 	}
 	c.stored.Inc()
 	c.ack(msg)
-}
-
-// recordWithRetry writes one letter, retrying inside this delivery attempt's own window.
-//
-// The retry is what makes a database blip free: it costs no delivery attempts, which are
-// the scarce thing here (there are five, and they cannot be extended). It stops short of
-// AckWait so the broker does not redeliver on top of a call still in flight.
-func (c *Consumer) recordWithRetry(tenant string, streamSeq uint64, e deadletter.Envelope) error {
-	deadline := time.Now().Add(c.retryBudget)
-	var err error
-	for {
-		if err = c.store.Record(c.procCtx, tenant, streamSeq, e); err == nil {
-			return nil
-		}
-		if time.Now().Add(c.retryInterval).After(deadline) {
-			return err
-		}
-		select {
-		case <-time.After(c.retryInterval):
-		case <-c.procCtx.Done():
-			return err
-		}
-	}
 }
 
 func (c *Consumer) ack(msg messaging.Message) {
