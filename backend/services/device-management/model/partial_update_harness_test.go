@@ -51,7 +51,15 @@ import (
 //     preserves everything, which looks correct until someone needs to remove a
 //     value and finds the API cannot express it.
 //  4. an update naming nothing changes nothing.
-//  5. the row is addressed by the token ARGUMENT.
+//  5. the row is addressed by the token ARGUMENT — an argument naming nothing is a
+//     not-found, and it does not fall back to some other row.
+//  6. a null on a reference the family declares NOT nullable is REFUSED, totally.
+//  7. an unknown reference token refuses the WHOLE update, leaving nothing written.
+//
+// Properties 6 and 7 run over exactly the fields a family declares non-nullable, and
+// property 3 over exactly the ones it declares nullable — so every field is covered
+// by one or the other, and a family that declares a field wrongly FAILS rather than
+// falling through the gap between them.
 //
 // # What the harness deliberately does NOT cover
 //
