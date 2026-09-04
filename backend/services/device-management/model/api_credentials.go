@@ -159,6 +159,10 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	updated.ExpiresAt = expiresAt
 	if device != nil {
 		updated.Device = device
+		// Belt-and-braces, and said so rather than left to look load-bearing: gorm's Save
+		// syncs a belongs-to FK from the association it is given, so a mutant deleting this
+		// line is behaviour-equivalent and survives on purpose. It is set anyway so the
+		// in-memory value handed back to the caller agrees with the row.
 		updated.DeviceId = device.ID
 	}
 

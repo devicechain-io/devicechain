@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -374,14 +375,13 @@ func TestApplyTo(t *testing.T) {
 
 	t.Run("string", func(t *testing.T) {
 		cases := []struct {
-			name  string
-			opt   OptionalString
-			want  *string
-			wantV string
+			name string
+			opt  OptionalString
+			want *string
 		}{
-			{"absent leaves the stored value", OptionalString{}, &existing, "before"},
-			{"null clears", OptionalString{Set: true}, nil, ""},
-			{"value replaces", OptionalString{Set: true, Value: &replacement}, &replacement, "after"},
+			{"absent leaves the stored value", OptionalString{}, &existing},
+			{"null clears", OptionalString{Set: true}, nil},
+			{"value replaces", OptionalString{Set: true, Value: &replacement}, &replacement},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -394,33 +394,71 @@ func TestApplyTo(t *testing.T) {
 				case tc.want != nil && *got != *tc.want:
 					t.Fatalf("ApplyTo = %q, want %q", *got, *tc.want)
 				}
-				if v := tc.opt.ApplyToValue(existing); v != tc.wantV {
-					t.Fatalf("ApplyToValue = %q, want %q", v, tc.wantV)
-				}
 			})
 		}
 	})
 
-	t.Run("bool clears to false, not to the stored value", func(t *testing.T) {
-		if got := (OptionalBool{Set: true}).ApplyToValue(true); got != false {
-			t.Fatalf("ApplyToValue = %v, want false", got)
+	t.Run("the other scalars fold the same three states", func(t *testing.T) {
+		yes, no := true, false
+		if got := (OptionalBool{}).ApplyTo(&yes); got == nil || *got != true {
+			t.Fatalf("an absent Boolean changed the stored value to %v", got)
 		}
-		if got := (OptionalBool{}).ApplyToValue(true); got != true {
-			t.Fatalf("an absent bool changed the stored value to %v", got)
+		if got := (OptionalBool{Set: true}).ApplyTo(&yes); got != nil {
+			t.Fatalf("a null Boolean did not clear: %v", *got)
 		}
-	})
+		if got := (OptionalBool{Set: true, Value: &no}).ApplyTo(&yes); got == nil || *got != false {
+			t.Fatalf("a Boolean value did not replace: %v", got)
+		}
 
-	t.Run("numbers", func(t *testing.T) {
-		if got := (OptionalInt32{}).ApplyToValue(7); got != 7 {
-			t.Fatalf("an absent Int changed the stored value to %d", got)
+		seven, eight := int32(7), int32(8)
+		if got := (OptionalInt32{}).ApplyTo(&seven); got == nil || *got != 7 {
+			t.Fatalf("an absent Int changed the stored value to %v", got)
 		}
-		if got := (OptionalInt32{Set: true}).ApplyToValue(7); got != 0 {
-			t.Fatalf("a null Int did not clear: %d", got)
+		if got := (OptionalInt32{Set: true}).ApplyTo(&seven); got != nil {
+			t.Fatalf("a null Int did not clear: %d", *got)
 		}
-		if got := (OptionalFloat64{}).ApplyToValue(1.5); got != 1.5 {
+		if got := (OptionalInt32{Set: true, Value: &eight}).ApplyTo(&seven); got == nil || *got != 8 {
+			t.Fatalf("an Int value did not replace: %v", got)
+		}
+
+		half := 1.5
+		if got := (OptionalFloat64{}).ApplyTo(&half); got == nil || *got != 1.5 {
 			t.Fatalf("an absent Float changed the stored value to %v", got)
 		}
+		if got := (OptionalFloat64{Set: true}).ApplyTo(&half); got != nil {
+			t.Fatalf("a null Float did not clear: %v", *got)
+		}
 	})
+}
+
+// 🔴 ApplyToValue IS GONE, AND NOTHING MAY QUIETLY GROW IT BACK.
+//
+// It folded an explicit null to the zero value for a non-pointer column. Every call
+// site that reached for it was a NOT NULL column, where that fold ACCEPTS "clear this
+// required field" and writes a value the create path would have refused — invisibly on
+// a Boolean, where the false it writes is a value the caller could have sent.
+// ApplyToRequired refuses instead, and the method was deleted rather than documented,
+// because a fold nobody can reach cannot be reached by accident.
+//
+// This asks the TYPE rather than trusting the deletion to stay done: a method added
+// back under that name, on any of the four, fails here on the day it is added. The
+// method set is the thing being asserted, so a reflection check is the assertion —
+// there is no behaviour left to drive.
+func TestApplyToValueHasNotComeBack(t *testing.T) {
+	for _, v := range []any{OptionalString{}, OptionalBool{}, OptionalInt32{}, OptionalFloat64{}, OptionalID{}} {
+		rt := reflect.TypeOf(v)
+		if _, found := rt.MethodByName("ApplyToValue"); found {
+			t.Errorf("%s has an ApplyToValue again: folding a null to the zero value accepts "+
+				"\"clear this required field\" and writes a value the create path refuses. Use "+
+				"ApplyToRequired, which says no.", rt.Name())
+		}
+		// The counterweight. A reflection check over a type whose methods have all been
+		// renamed would report the absence above for the wrong reason.
+		if _, found := rt.MethodByName("ApplyTo"); !found {
+			t.Errorf("%s has no ApplyTo, so the absence of ApplyToValue proves nothing about "+
+				"this check", rt.Name())
+		}
+	}
 }
 
 // The counterweight, mirroring TestValidInputIsNotRejected: the optional types must

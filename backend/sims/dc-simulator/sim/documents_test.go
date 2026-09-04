@@ -130,10 +130,20 @@ func TestTheAuthoringUpdateDocumentsValidateAgainstTheServedSchema(t *testing.T)
 	}
 
 	// 🔴 THE NEGATIVE CONTROL, and the three cases above are worth nothing without it.
-	// A schema parsed from an empty string, or a Validate that stopped reading
-	// variables, would report every document fine whatever it said. A payload token is
-	// the defect asUpdateRequest exists to prevent, so it is what the control sends.
-	t.Run("control/a payload token is refused", func(t *testing.T) {
+	//
+	// 🔴 IT ASSERTS THE MESSAGE, NOT MERELY THAT AN ERROR CAME BACK, and the first
+	// version of this control did the latter — which made it the very fail-open it was
+	// written to guard against. Swapping ValidateWithVariables for Validate leaves the
+	// document rejected with `Variable "request" has invalid value null`: an error, so
+	// `len(errs) != 0` is satisfied, produced by a validator that never looked at the
+	// payload at all. The control's own comment claimed to catch that and did not.
+	//
+	// So it names what the rejection must be ABOUT. A payload token is the defect
+	// asUpdateRequest exists to prevent, the unknown-input-field guard is what refuses
+	// it, and its message names the offending field and the type that does not declare
+	// it. Anything else — a null variable, a syntax error, a missing argument — fails
+	// here rather than passing as a rejection that happens to be for another reason.
+	t.Run("control/a payload token is refused, and refused FOR BEING A TOKEN", func(t *testing.T) {
 		errs := schema.ValidateWithVariables(mutationUpdateMetricDefinition, map[string]any{
 			"token":   "prof-temperature",
 			"request": map[string]any{"token": "moved", "metricKey": "temperature"},
@@ -141,6 +151,19 @@ func TestTheAuthoringUpdateDocumentsValidateAgainstTheServedSchema(t *testing.T)
 		if len(errs) == 0 {
 			t.Fatal("a payload token validated against a dedicated update input — the validator " +
 				"is not reading what this test assumes, so the passes above mean nothing")
+		}
+		var joined strings.Builder
+		for _, e := range errs {
+			joined.WriteString(e.Error())
+			joined.WriteString("; ")
+		}
+		for _, want := range []string{"token", "not defined by type"} {
+			if !strings.Contains(joined.String(), want) {
+				t.Errorf("the rejection does not mention %q, so the validator refused this "+
+					"document for some reason other than the payload token — and a control that "+
+					"accepts any rejection is not reading the payload either: %s",
+					want, joined.String())
+			}
 		}
 	})
 }

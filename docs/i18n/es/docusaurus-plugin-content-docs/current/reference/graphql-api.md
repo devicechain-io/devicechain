@@ -330,14 +330,29 @@ mientras nada lo haya adoptado ni publicado —, y una entrada de actualización
 eliminaría esa capacidad en lugar de convertirla.
 
 Ninguna otra área se ha convertido todavía: notification-management, dashboard-management,
-outbound-connectors, ai-inference y user-management siguen siendo reemplazos completos. (Las cinco
-mutaciones `update*` del plano de administración de user-management ya toman un `*UpdateRequest`
-propio que omite el token, así que no plantean la cuestión del token en la petición — pero siguen
-siendo reemplazos completos en todos los campos que sí declaran.)
+outbound-connectors, ai-inference y user-management siguen siendo reemplazos completos.
 
-No hace falta que guardes esa lista: **lee la firma**. `request: FooUpdateRequest!` es parcial; un
-`FooCreateRequest` es un reemplazo completo, se escriba o no con un `!` final. El
-[esquema que descargaste](#descargar-los-esquemas) es la autoridad.
+:::caution[La firma es un NO fiable, y solo un SÍ parcialmente fiable]
+`request: FooCreateRequest` siempre significa reemplazo completo, y esa dirección nunca miente: una
+entrada de creación compartida no puede expresar la diferencia entre omitido y limpiado, sea cual
+sea la intención.
+
+La otra dirección tiene una excepción que conviene conocer. **Cuatro mutaciones `update*` del plano
+de administración de user-management toman un `*UpdateRequest` propio y siguen siendo reemplazos
+completos en todos los campos que declaran**: `AdminTenantUpdateRequest`, `AdminRoleUpdateRequest`,
+`AdminOAuthClientUpdateRequest` y `AdminTenantTierUpdateRequest`. Se les dio una entrada aparte para
+que la petición pudiera omitir el token — por eso no plantean la cuestión del token en la petición —,
+pero los campos de dentro nunca se convirtieron, así que omitir uno lo sigue dejando en blanco.
+
+Son solo esas cuatro, todas en el plano de administración, y se convertirán antes de la 1.0. En
+todos los demás sitios la firma es la respuesta completa, y el
+[esquema que descargaste](#descargar-los-esquemas) es la autoridad sobre en qué contrato está cada
+mutación.
+:::
+
+`updateProfile` no está entre ellas y no es un reemplazo completo: toma argumentos sueltos
+`firstName` / `lastName` en lugar de un `request`, escribe solo los que envías y limpia con `""` en
+lugar de `null` — consulta [la tabla de excepciones](#where-the-default-does-not-hold).
 
 #### Campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
 

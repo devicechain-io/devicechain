@@ -12,17 +12,15 @@ import (
 
 // THE THIRD FOLD: a field the caller may LEAVE ALONE or SET, but never CLEAR.
 //
-// ApplyTo and ApplyToValue on the Optional* types cover the two columns a partial
-// update usually meets — a nullable one, where an explicit null clears, and a
-// non-pointer one, where "clear" is spelled as the zero value. Neither is right for
-// a column that is NOT NULL and whose zero value is not a state the entity may be
-// in: a metric's data type, a credential's type, a group's member type, a
-// provisioning profile's strategy.
+// ApplyTo covers the column a partial update usually meets — a nullable one, where an
+// explicit null clears. It is not right for a column that is NOT NULL and whose zero
+// value is not a state the entity may be in: a metric's data type, a credential's
+// type, a group's member type, a provisioning profile's strategy.
 //
-// ApplyToValue is a FAIL-OPEN for those. `enabled: null` reads as false,
-// `dataType: null` reads as "", and both are written successfully — the caller is
-// told their update worked, and the row now holds a value the create path would
-// have refused. There is no reading of "clear this required field" that leaves a
+// Folding a null to the zero value is a FAIL-OPEN for those. `enabled: null` would
+// read as false, `dataType: null` as "", and both would be written successfully — the
+// caller told their update worked, and the row now holding a value the create path
+// would have refused. There is no reading of "clear this required field" that leaves a
 // valid row behind, so the answer is to refuse, and to say which field.
 //
 // # Why this and not "just validate afterwards"
@@ -33,19 +31,34 @@ import (
 // whose zero value happens to be legal. Validating after the fold can only see the
 // value, and the value has by then lost the distinction that made it wrong.
 //
-// # Blank strings
+// # 🔴 BLANK STRINGS ARE REFUSED. WHAT IS ACCEPTED IS STORED VERBATIM.
 //
-// The string fold refuses a whitespace-only value as well as an explicit null, and
-// TRIMS what it accepts. That mirrors resolveRequiredTypeRef in device-management,
-// which is the same decision for the reference case: "   " is a null spelled
-// differently, and accepting it stores a value nothing can match. Trimming is stated
-// rather than left to each caller because the alternative — some required strings
-// trimmed and some not — is how two rows end up holding "acme" and "acme " and being
-// the same value to a human and different to every query.
+// The string fold refuses a whitespace-only value as well as an explicit null: "   "
+// is a null spelled differently, and accepting it stores something nothing can match.
+//
+// It does NOT trim what it accepts, and that reversal is the whole point of this
+// paragraph. An earlier version did, on the reasoning that trimming keeps "acme" and
+// "acme " from being two values a human reads as one. The reasoning is fine and the
+// place is wrong: no create path on this platform trims, so an update that trimmed
+// made RESTATING A FIELD change it. That is not theoretical — a provisioning profile
+// created with " s3cret " (legal today) and then updated by any client that re-sends
+// the fields it read back is left holding "s3cret", the whole fleet stops
+// authenticating, and the edit that did it returned 200. Clients that restate exist:
+// the simulator's ensure* paths send a full restatement on every convergence pass.
+//
+// So the rule is: an update may not change a value the caller did not mean to change,
+// and "I sent you back exactly what you gave me" must be a no-op. Normalizing input is
+// a decision for the create path to make, once, for both paths — not for the fold that
+// exists to stop updates from silently rewriting what is stored.
+//
+// References are the deliberate exception and they are folded elsewhere:
+// resolveRequiredTypeRef in device-management DOES trim, because a token has a grammar
+// that forbids surrounding whitespace, so trimming there cannot change which record is
+// named. Nothing here has a grammar.
 
-// ApplyToRequired folds a String field onto a NOT NULL column: absent keeps the
-// stored value, a value sets it (trimmed), and an explicit null — or a whitespace-only
-// string, which is the same request spelled differently — is REFUSED.
+// ApplyToRequired folds a String field onto a NOT NULL column: absent keeps the stored
+// value, a value sets it VERBATIM, and an explicit null — or a whitespace-only string,
+// which is the same request spelled differently — is REFUSED.
 //
 // field is the name the SCHEMA gives the field, so the refusal names something the
 // caller can act on rather than a Go identifier they have never seen.
@@ -56,19 +69,20 @@ func (o OptionalString) ApplyToRequired(field string, current string) (string, e
 	if o.Value == nil {
 		return "", errRequiredFieldCleared(field)
 	}
-	trimmed := strings.TrimSpace(*o.Value)
-	if trimmed == "" {
+	// TrimSpace is used to DECIDE, never to transform: a value that is nothing but
+	// whitespace is refused, and anything else is stored exactly as it arrived.
+	if strings.TrimSpace(*o.Value) == "" {
 		return "", fmt.Errorf("%s cannot be blank: it is required, and a whitespace-only "+
 			"value would store something nothing can match", field)
 	}
-	return trimmed, nil
+	return *o.Value, nil
 }
 
 // ApplyToRequired folds a Boolean field onto a NOT NULL column.
 //
-// 🔴 A boolean is exactly where ApplyToValue is most dangerous and least visible: it
-// turns `enabled: null` into `enabled: false`, which disables a credential or a
-// provisioning profile and returns success. false is a legal value, so nothing
+// 🔴 A boolean is where folding a null to the zero value is most dangerous and least
+// visible: `enabled: null` would become `enabled: false`, which disables a credential
+// or a provisioning profile and returns success. false is a legal value, so nothing
 // downstream can tell it from a deliberate one.
 func (o OptionalBool) ApplyToRequired(field string, current bool) (bool, error) {
 	if !o.Set {

@@ -85,10 +85,17 @@ func authoringGraphJSON(graph *string) datatypes.JSON {
 // needs and a full replace did not: folding an absent field means handing ApplyTo the
 // value already stored.
 //
-// 🔴 The nil test is on LENGTH, not on the pointer. datatypes.JSON is a []byte, and a
-// column that was never written comes back as a non-nil, zero-length slice — so a
-// pointer test would report "the sidecar is present, and it is the empty document",
-// and every absent-field fold would write an unparseable "" back over a NULL column.
+// 🔴 The test is on LENGTH rather than on nil, and the reason is narrower than it
+// looks. Probed against this package's own fixtures, a NULL column reads back as a nil
+// slice — so `graph == nil` would in fact be correct today, and an earlier version of
+// this comment asserted the opposite (that NULL arrives non-nil and zero-length) to
+// justify the length test. The test is right and that justification was invented.
+//
+// What the length test actually buys is that BOTH readings of "no sidecar" map to the
+// same answer: nil, and the empty slice a driver or a future column default could hand
+// back instead. `len(x) == 0` covers both without depending on which one the storage
+// layer happens to produce, and the cost of being wrong here is a fold that writes an
+// unparseable "" over a NULL column on every update that leaves the field alone.
 func authoringGraphStr(graph datatypes.JSON) *string {
 	if len(graph) == 0 {
 		return nil

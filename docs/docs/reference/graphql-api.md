@@ -320,14 +320,27 @@ adopted or published it — and an update input that dropped the token would rem
 rather than convert it.
 
 No other area has converted yet: notification-management, dashboard-management,
-outbound-connectors, ai-inference and user-management are all still full replaces. (The five
-`update*` mutations on user-management's admin plane already take a dedicated `*UpdateRequest` that
-drops the token, so they carry no payload-token question — but they are still full replaces on
-every field they do declare.)
+outbound-connectors, ai-inference and user-management are all still full replaces.
 
-You do not have to keep that list: **read the signature**. `request: FooUpdateRequest!` is partial;
-a `FooCreateRequest` is a full replace, whether or not it is spelled with a trailing `!`. The
-[schema you downloaded](#download-the-schemas) is the authority.
+:::caution[The signature is a reliable NO, and only a partly reliable YES]
+`request: FooCreateRequest` always means a full replace, and that direction never lies — a shared
+create input cannot express the difference between omitted and cleared, whatever anyone intends.
+
+The other direction has one exception you have to know about. **Four `update*` mutations on
+user-management's admin plane take a dedicated `*UpdateRequest` and are still full replaces on every
+field they declare** — `AdminTenantUpdateRequest`, `AdminRoleUpdateRequest`,
+`AdminOAuthClientUpdateRequest` and `AdminTenantTierUpdateRequest`. They were given a separate input
+so the payload could drop the token, which is why they carry no payload-token question; the fields
+inside were never converted, so omitting one still blanks it.
+
+They are the only four, they are all on the admin plane, and they will be converted before 1.0.
+Everywhere else the signature is the whole answer, and the [schema you
+downloaded](#download-the-schemas) is the authority for which one a mutation is on.
+:::
+
+`updateProfile` is not among them and is not a full replace: it takes bare `firstName` / `lastName`
+arguments rather than a `request`, writes only the ones you send, and clears with `""` rather than
+`null` — see [the exceptions table](#where-the-default-does-not-hold).
 
 #### Fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}
 

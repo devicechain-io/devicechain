@@ -15,9 +15,9 @@ import (
 // Helpers shared by the partial-update path (the platform-wide three-state update
 // semantic: omitted leaves alone, null clears, a value sets).
 //
-// The scalar folds themselves live on the Optional* types in core — ApplyTo and
-// ApplyToValue. What needs saying here is the one case those cannot express: a
-// reference whose FK column is NOT NULL.
+// The scalar folds themselves live on the Optional* types in core — ApplyTo for a
+// nullable column, ApplyToRequired for one that cannot be cleared. What needs saying
+// here is the one case neither expresses: a reference whose FK column is NOT NULL.
 
 // resolveRequiredTypeRef decides what an update should do with an entity's
 // REQUIRED type reference — Asset.assetTypeToken, Device.deviceTypeToken and their

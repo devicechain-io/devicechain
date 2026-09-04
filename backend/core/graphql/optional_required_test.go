@@ -36,10 +36,6 @@ func TestApplyToRequired_AValueSetsIt(t *testing.T) {
 	if got, err := OptionalStringOf("INT64").ApplyToRequired("dataType", "DOUBLE"); err != nil || got != "INT64" {
 		t.Errorf("string: got %q, %v", got, err)
 	}
-	// Trimmed, so a padded value and a bare one are the same stored value.
-	if got, err := OptionalStringOf("  INT64\t").ApplyToRequired("dataType", "DOUBLE"); err != nil || got != "INT64" {
-		t.Errorf("string trim: got %q, %v", got, err)
-	}
 	if got, err := OptionalBoolOf(false).ApplyToRequired("enabled", true); err != nil || got {
 		t.Errorf("bool: got %v, %v; want false, nil", got, err)
 	}
@@ -76,6 +72,48 @@ func TestApplyToRequired_ABlankStringIsRefused(t *testing.T) {
 		if _, err := OptionalStringOf(blank).ApplyToRequired("dataType", "DOUBLE"); err == nil {
 			t.Errorf("the blank value %q was accepted for a required field", blank)
 		}
+	}
+}
+
+// 🔴 WHAT IS ACCEPTED IS STORED VERBATIM, AND THIS IS THE TEST THAT SAYS SO.
+//
+// An earlier version trimmed. No create path on this platform trims, so an update that
+// did made RESTATING A FIELD change it: a provisioning profile created with the legal
+// secret " s3cret " and then updated by a client re-sending what it read back was left
+// holding "s3cret", the whole fleet stopped authenticating, and the edit returned 200.
+// Clients that restate are not hypothetical — the simulator's convergence paths send a
+// full restatement on every pass.
+//
+// The property is stated as a ROUND TRIP rather than as "does not call TrimSpace",
+// because the round trip is what callers depend on and it stays true however the fold
+// is rewritten.
+func TestApplyToRequired_RestatingAStoredValueIsANoOp(t *testing.T) {
+	// Values a create path accepts today and stores exactly. The padded ones are the
+	// point; the bare one is the control that keeps this from passing vacuously.
+	for _, stored := range []string{" s3cret ", "s3cret", "key with spaces", "\ttabbed\t", "a b"} {
+		t.Run(stored, func(t *testing.T) {
+			got, err := OptionalStringOf(stored).ApplyToRequired("provisionSecret", stored)
+			if err != nil {
+				t.Fatalf("restating the stored value was refused: %v", err)
+			}
+			if got != stored {
+				t.Fatalf("restating %q stored %q — an update rewrote a value the caller did "+
+					"not mean to change, which for a credential means the fleet presenting the "+
+					"created one stops authenticating", stored, got)
+			}
+		})
+	}
+}
+
+// The counterweight to the round trip: a DIFFERENT value must still take, or the fold
+// above would satisfy its test by ignoring the request entirely.
+func TestApplyToRequired_ADifferentValueStillReplaces(t *testing.T) {
+	got, err := OptionalStringOf(" rotated ").ApplyToRequired("provisionSecret", " s3cret ")
+	if err != nil {
+		t.Fatalf("a replacement was refused: %v", err)
+	}
+	if got != " rotated " {
+		t.Fatalf("got %q, want the replacement stored verbatim", got)
 	}
 }
 
