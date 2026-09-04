@@ -111,9 +111,21 @@ on:
       - "**/go.sum"
       - "go.work"
       - "go.work.sum"
+      # The frontend, analyzed by the javascript-typescript job below. Listed by
+      # extension rather than by directory so a file living somewhere unexpected
+      # is still caught — the same exhaustive-by-construction argument as `**/*.go`.
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "**/*.vue"
+      - "**/package-lock.json"
       # A change to the analysis itself must re-run the analysis. Without this,
       # editing this file is the one change guaranteed not to be tested.
       - ".github/workflows/codeql.yml"
+      - ".github/codeql/**"
       # Negation LAST — order decides, and a later negative overrides an earlier
       # positive. `_legacy/` is the archived pre-migration tree that go.work does
       # not reference, so the build step never compiles it and the extractor never
@@ -198,3 +210,52 @@ jobs:
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
           category: "/language:go"
+
+  # ---------------------------------------------------------------------------
+  # The frontend. A SEPARATE JOB, not a matrix entry on the one above.
+  # ---------------------------------------------------------------------------
+  # The Go job is built around `build-mode: manual` and a traced full-workspace
+  # compile; javascript-typescript is analyzed with `build-mode: none` and needs
+  # none of that. Folding them into one matrix would mean every step carrying an
+  # `if: matrix.language == ...`, which is a matrix in name only and hides which
+  # steps belong to which analysis.
+  #
+  # WHY THIS LANGUAGE AND NOT `csharp` (Derek, 2026-09-04). The console holds
+  # auth tokens and `/dash` is a reference external embedder with its own login,
+  # so the frontend is real trust-boundary surface and CodeQL's JS rules — XSS,
+  # injection, prototype pollution — bite on exactly that. The C# SDK is a client
+  # library its consumers compile themselves; there is no server-side trust
+  # boundary in it for those rules to find, and a scanner whose output nobody
+  # triages is worse than none. That is a decision, not an oversight; revisit it
+  # if the SDK ever grows a server component.
+  #
+  # 🔴 This job is NOT in the required-checks set, for the same reason the Go one
+  # is not: a slow or flaky analysis in that set blocks merges for reasons that
+  # have nothing to do with the change under review.
+  analyze-frontend:
+    name: Analyze frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write # upload results — required for every CodeQL workflow
+      packages: read # fetch CodeQL packs
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # No dependency install. `build-mode: none` extracts from source, and
+      # `npm ci` would only add node_modules — which CodeQL excludes anyway — at
+      # the cost of several minutes and a network dependency that can fail.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          config-file: .github/codeql/frontend-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          category: "/language:javascript-typescript"
