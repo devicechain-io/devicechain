@@ -254,6 +254,13 @@ func TestDeviceCredentialIsReachableOnlyThroughTheGatedQueries(t *testing.T) {
 		"Mutation.createDeviceCredential":       "gated on device:write",
 		"Mutation.updateDeviceCredential":       "gated on device:write",
 		"DeviceCredentialSearchResults.results": "payload of the gated search query",
+		// replaceDevice (ADR-074) mints the credential the incoming physical unit is
+		// programmed with, and returning it is the whole point — this is the one
+		// moment that material is readable. It is admitted for the same reason the
+		// three queries are: the mutation is gated on device:write, the authority
+		// createDeviceCredential already requires, so the holder could mint the same
+		// bearer through that door anyway.
+		"DeviceReplaceResult.newCredential": "payload of replaceDevice, gated on device:write",
 	}
 
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})

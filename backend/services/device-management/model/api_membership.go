@@ -23,6 +23,8 @@ import (
 // tenants would be missed anyway).
 //
 //   - "member"  — group <-> member edges (untracked; organizational only).
+//   - "contains" — the built-in ASSET-HIERARCHY edge (untracked; parent contains
+//     child). Its structural contract is enforced in api_asset_hierarchy.go.
 //   - "assigned" — the built-in device-assignment edge (tracked). Being tracked,
 //     the primary assignment is denormalized onto a device's events as their
 //     anchor (ADR-013 addendum 2026-07-01), so assigning a device gives its
@@ -56,6 +58,8 @@ func (api *Api) ensureReservedTypeByToken(ctx context.Context, token string) (*E
 		return api.EnsureMembershipType(ctx)
 	case AssignmentRelationshipType:
 		return api.EnsureAssignmentType(ctx)
+	case ContainmentRelationshipType:
+		return api.EnsureContainmentType(ctx)
 	default:
 		return nil, nil
 	}
@@ -149,6 +153,15 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			targetId, err := api.ResolveEntityToken(ctx, request.TargetType, request.Target)
 			if err != nil {
 				return fmt.Errorf("target: %w", err)
+			}
+			// The asset hierarchy's structural contract (ADR-072), enforced on the bulk
+			// path too. It is checked INSIDE the loop and inside the transaction, so an
+			// earlier edge in this same batch is visible to a later one's single-parent
+			// and cycle checks — a batch that built a loop out of two edges would
+			// otherwise pass, each edge legal against the state before the batch.
+			if err := api.admitContainmentEdge(tx, request.RelationshipType,
+				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+				return fmt.Errorf("relationship %q: %w", request.Token, err)
 			}
 			// Named, for the same reason "source:"/"target:" above are: the batch is
 			// all-or-nothing, so a refusal that does not say which edge is a refusal the

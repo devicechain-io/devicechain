@@ -14,16 +14,24 @@ import (
 	"gorm.io/gorm"
 )
 
-// Create a new device credential.
-func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
-	matches, err := api.DevicesByToken(ctx, []string{request.DeviceToken})
-	if err != nil {
-		return nil, err
-	}
-	if len(matches) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-
+// buildDeviceCredential validates a credential create request against an ALREADY
+// RESOLVED owning device and renders the row to insert. It performs no I/O, so the
+// whole of a credential's admission policy — the type vocabulary, the RFC3339
+// expiry parse, the metadata JSON check — is decided before any transaction opens.
+//
+// It exists so ReplaceDevice (ADR-074) admits a credential by exactly the same
+// rules as CreateDeviceCredential rather than by a second, quietly diverging copy.
+// That mattered enough to refactor for: the replacement path has to insert its
+// credential INSIDE the transaction that retires the outgoing ones, so it cannot
+// simply call CreateDeviceCredential, and hand-inlining the four checks is how the
+// two paths end up disagreeing about (say) whether "access_token" is a type.
+//
+// The row carries BOTH Device and DeviceId. The association is what
+// CreateDeviceCredential has always written through; DeviceId is what a caller that
+// omits the association (`Omit("Device")`, as the replacement transaction does)
+// writes instead. Setting both means neither caller has to reach around this
+// function to get a correct row.
+func buildDeviceCredential(device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
 	// Validate credential type against the known vocabulary.
 	if !CredentialType(request.CredentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
@@ -43,19 +51,36 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 	if err != nil {
 		return nil, err
 	}
-	created := &DeviceCredential{
+	return &DeviceCredential{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
 		},
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		Device:          matches[0],
+		DeviceId:        device.ID,
+		Device:          device,
 		CredentialType:  request.CredentialType,
 		CredentialId:    request.CredentialId,
 		CredentialValue: rdb.NullStrOf(request.CredentialValue),
 		Enabled:         request.Enabled,
 		ExpiresAt:       expiresAt,
+	}, nil
+}
+
+// Create a new device credential.
+func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
+	matches, err := api.DevicesByToken(ctx, []string{request.DeviceToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	created, err := buildDeviceCredential(matches[0], request)
+	if err != nil {
+		return nil, err
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {

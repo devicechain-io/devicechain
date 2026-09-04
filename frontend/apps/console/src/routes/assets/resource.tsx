@@ -4,6 +4,8 @@
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
+import { AssetHierarchyPanel } from '@/routes/assets/AssetHierarchyPanel';
+import { AssetDevicesPanel } from '@/routes/assets/AssetDevicesPanel';
 import {
   listAssets,
   getAsset,
@@ -80,6 +82,22 @@ export const assetResource: RegistryResource<Asset> = {
       render: (a) => (
         <EntityAttributesPanel entityType="asset" entityToken={a.token} />
       ),
+    },
+    // The asset's place in the parent/child tree. It is a tab rather than a field
+    // on the form because the hierarchy is not a column on the asset: it is an
+    // edge of the reserved "contains" relationship type, and a form field would
+    // suggest a full-replace save could move it.
+    {
+      value: 'hierarchy',
+      label: 'entities:assetHierarchyTab',
+      render: (a) => <AssetHierarchyPanel assetToken={a.token} />,
+    },
+    // The reverse of the device's assignment panel: what is measuring this asset.
+    // Until this existed, assignment could only be seen from the device side.
+    {
+      value: 'devices',
+      label: 'entities:assetDevicesTab',
+      render: (a) => <AssetDevicesPanel assetToken={a.token} />,
     },
   ],
 };

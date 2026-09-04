@@ -31,6 +31,11 @@ const ENTITY_RELATIONSHIPS = graphql(`
       results {
         id
         token
+        sourceType
+        source {
+          id
+          token
+        }
         targetType
         target {
           id
@@ -152,4 +157,32 @@ export async function assignDevice(
 export async function unassignDevice(edgeToken: string): Promise<boolean> {
   const data = await gql('device-management', REMOVE_ENTITY_RELATIONSHIPS, { tokens: [edgeToken] });
   return data.removeEntityRelationships;
+}
+
+// List the devices attached to an asset — the REVERSE of listDeviceAssignments,
+// over exactly the same edges read from the other end.
+//
+// It exists because standing on an asset and asking "what is measuring this?" had
+// no answer in the console at all: assignment could only ever be seen from the
+// device side, so an operator holding an asset had to enumerate devices to find
+// the ones pointing at it. Nothing new is stored for this — the criteria simply
+// name the target instead of the source.
+//
+// The page is bounded like every other relationship read. An asset with more
+// attached devices than one page shows the first page; paging it is a later slice,
+// and the total is reported so the count is never misread as complete.
+export async function listAssetDevices(
+  assetToken: string,
+  opts: { pageNumber: number; pageSize: number },
+): Promise<EntityRelationshipSearchResults> {
+  const data = await gql('device-management', ENTITY_RELATIONSHIPS, {
+    criteria: {
+      sourceType: 'device',
+      targetType: 'asset',
+      target: assetToken,
+      relationshipType: ASSIGNED,
+      ...opts,
+    },
+  });
+  return data.entityRelationships;
 }

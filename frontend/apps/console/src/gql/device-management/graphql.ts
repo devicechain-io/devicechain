@@ -273,6 +273,23 @@ export type DeviceProfileSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceReplaceRequest = {
+  credentialId?: string | null | undefined;
+  credentialToken?: string | null | undefined;
+  credentialType?: string | null | undefined;
+  credentialValue?: string | null | undefined;
+  deviceToken: string;
+  expiresAt?: string | null | undefined;
+  reason?: string | null | undefined;
+  unitIdentifier?: string | null | undefined;
+};
+
+export type DeviceReplacementSearchCriteria = {
+  device?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type DeviceSearchCriteria = {
   deviceType?: string | null | undefined;
   pageNumber: number;
@@ -611,6 +628,43 @@ export type DeleteAssetTypeMutationVariables = Exact<{
 
 
 export type DeleteAssetTypeMutation = { deleteAssetType: boolean };
+
+export type AssetParentQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetParentQuery = { assetParent: { id: string, token: string, name: string | null } | null };
+
+export type AssetAncestorsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetAncestorsQuery = { assetAncestors: Array<{ id: string, token: string, name: string | null }> };
+
+export type AssetChildrenQueryVariables = Exact<{
+  parentToken?: string | null | undefined;
+  pagination: PaginationInput;
+}>;
+
+
+export type AssetChildrenQuery = { assetChildren: { results: Array<{ id: string, token: string, name: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type SetAssetParentMutationVariables = Exact<{
+  childToken: string;
+  parentToken: string;
+}>;
+
+
+export type SetAssetParentMutation = { setAssetParent: { id: string, token: string } };
+
+export type ClearAssetParentMutationVariables = Exact<{
+  childToken: string;
+}>;
+
+
+export type ClearAssetParentMutation = { clearAssetParent: boolean };
 
 export type AuditEventsQueryVariables = Exact<{
   criteria: AuditEventSearchCriteria;
@@ -1136,7 +1190,13 @@ export type EntityRelationshipsQueryVariables = Exact<{
 }>;
 
 
-export type EntityRelationshipsQuery = { entityRelationships: { results: Array<{ id: string, token: string, targetType: string, target:
+export type EntityRelationshipsQuery = { entityRelationships: { results: Array<{ id: string, token: string, sourceType: string, targetType: string, source:
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+      , target:
         | { id: string, token: string }
         | { id: string, token: string }
         | { id: string, token: string }
@@ -1157,6 +1217,20 @@ export type RemoveEntityRelationshipsMutationVariables = Exact<{
 
 
 export type RemoveEntityRelationshipsMutation = { removeEntityRelationships: boolean };
+
+export type DeviceReplacementsQueryVariables = Exact<{
+  criteria: DeviceReplacementSearchCriteria;
+}>;
+
+
+export type DeviceReplacementsQuery = { deviceReplacements: { results: Array<{ id: string, occurredTime: string, actor: string, reason: string | null, unitIdentifier: string | null, retiredCredentialTokens: Array<string>, newCredentialToken: string, newCredentialType: string, device: { id: string, token: string } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type ReplaceDeviceMutationVariables = Exact<{
+  request: DeviceReplaceRequest;
+}>;
+
+
+export type ReplaceDeviceMutation = { replaceDevice: { retiredCredentialTokens: Array<string>, device: { id: string, token: string }, replacement: { id: string, occurredTime: string, actor: string, reason: string | null, unitIdentifier: string | null }, newCredential: { id: string, token: string, credentialType: string, credentialId: string } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -1600,6 +1674,62 @@ export const DeleteAssetTypeDocument = new TypedDocumentString(`
   deleteAssetType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAssetTypeMutation, DeleteAssetTypeMutationVariables>;
+export const AssetParentDocument = new TypedDocumentString(`
+    query AssetParent($token: String!) {
+  assetParent(token: $token) {
+    id
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<AssetParentQuery, AssetParentQueryVariables>;
+export const AssetAncestorsDocument = new TypedDocumentString(`
+    query AssetAncestors($token: String!) {
+  assetAncestors(token: $token) {
+    id
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<AssetAncestorsQuery, AssetAncestorsQueryVariables>;
+export const AssetChildrenDocument = new TypedDocumentString(`
+    query AssetChildren($parentToken: String, $pagination: PaginationInput!) {
+  assetChildren(parentToken: $parentToken, pagination: $pagination) {
+    results {
+      id
+      token
+      name
+      assetType {
+        id
+        token
+        name
+        icon
+        backgroundColor
+        foregroundColor
+        borderColor
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AssetChildrenQuery, AssetChildrenQueryVariables>;
+export const SetAssetParentDocument = new TypedDocumentString(`
+    mutation SetAssetParent($childToken: String!, $parentToken: String!) {
+  setAssetParent(childToken: $childToken, parentToken: $parentToken) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetAssetParentMutation, SetAssetParentMutationVariables>;
+export const ClearAssetParentDocument = new TypedDocumentString(`
+    mutation ClearAssetParent($childToken: String!) {
+  clearAssetParent(childToken: $childToken)
+}
+    `) as unknown as TypedDocumentString<ClearAssetParentMutation, ClearAssetParentMutationVariables>;
 export const AuditEventsDocument = new TypedDocumentString(`
     query AuditEvents($criteria: AuditEventSearchCriteria!) {
   auditEvents(criteria: $criteria) {
@@ -2670,6 +2800,11 @@ export const EntityRelationshipsDocument = new TypedDocumentString(`
     results {
       id
       token
+      sourceType
+      source {
+        id
+        token
+      }
       targetType
       target {
         id
@@ -2697,3 +2832,52 @@ export const RemoveEntityRelationshipsDocument = new TypedDocumentString(`
   removeEntityRelationships(tokens: $tokens)
 }
     `) as unknown as TypedDocumentString<RemoveEntityRelationshipsMutation, RemoveEntityRelationshipsMutationVariables>;
+export const DeviceReplacementsDocument = new TypedDocumentString(`
+    query DeviceReplacements($criteria: DeviceReplacementSearchCriteria!) {
+  deviceReplacements(criteria: $criteria) {
+    results {
+      id
+      occurredTime
+      actor
+      reason
+      unitIdentifier
+      retiredCredentialTokens
+      newCredentialToken
+      newCredentialType
+      device {
+        id
+        token
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceReplacementsQuery, DeviceReplacementsQueryVariables>;
+export const ReplaceDeviceDocument = new TypedDocumentString(`
+    mutation ReplaceDevice($request: DeviceReplaceRequest!) {
+  replaceDevice(request: $request) {
+    device {
+      id
+      token
+    }
+    replacement {
+      id
+      occurredTime
+      actor
+      reason
+      unitIdentifier
+    }
+    newCredential {
+      id
+      token
+      credentialType
+      credentialId
+    }
+    retiredCredentialTokens
+  }
+}
+    `) as unknown as TypedDocumentString<ReplaceDeviceMutation, ReplaceDeviceMutationVariables>;

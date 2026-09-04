@@ -36,6 +36,7 @@ import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
+import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
@@ -130,6 +131,14 @@ export default function DeviceDetailPage() {
           {canManageCredentials && (
             <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
           )}
+          {/* Replacement rides the same gate as credentials, and for the same
+              reason rather than by association: the mutation returns the credential
+              minted for the incoming unit, whose id is the bearer for an
+              ACCESS_TOKEN. Showing the tab to a viewer would present a form whose
+              every submission 403s. */}
+          {canManageCredentials && (
+            <TabsTrigger value="replacement">{t('tabReplacement')}</TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="basic">
           <SectionPanel>
@@ -182,6 +191,13 @@ export default function DeviceDetailPage() {
           <TabsContent value="credentials">
             <SectionPanel>
               <DeviceCredentialsPanel deviceToken={device.token} />
+            </SectionPanel>
+          </TabsContent>
+        )}
+        {canManageCredentials && (
+          <TabsContent value="replacement">
+            <SectionPanel>
+              <DeviceReplacementPanel deviceToken={device.token} />
             </SectionPanel>
           </TabsContent>
         )}

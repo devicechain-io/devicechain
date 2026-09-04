@@ -39,6 +39,11 @@ type Documents = {
     "\n  mutation CreateAssetType($request: AssetTypeCreateRequest) {\n    createAssetType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n    }\n  }\n": typeof types.CreateAssetTypeDocument,
     "\n  mutation UpdateAssetType($token: String!, $request: AssetTypeUpdateRequest!) {\n    updateAssetType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n    }\n  }\n": typeof types.UpdateAssetTypeDocument,
     "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n": typeof types.DeleteAssetTypeDocument,
+    "\n  query AssetParent($token: String!) {\n    assetParent(token: $token) {\n      id\n      token\n      name\n    }\n  }\n": typeof types.AssetParentDocument,
+    "\n  query AssetAncestors($token: String!) {\n    assetAncestors(token: $token) {\n      id\n      token\n      name\n    }\n  }\n": typeof types.AssetAncestorsDocument,
+    "\n  query AssetChildren($parentToken: String, $pagination: PaginationInput!) {\n    assetChildren(parentToken: $parentToken, pagination: $pagination) {\n      results {\n        id\n        token\n        name\n        assetType {\n          id\n          token\n          name\n          icon\n          backgroundColor\n          foregroundColor\n          borderColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AssetChildrenDocument,
+    "\n  mutation SetAssetParent($childToken: String!, $parentToken: String!) {\n    setAssetParent(childToken: $childToken, parentToken: $parentToken) {\n      id\n      token\n    }\n  }\n": typeof types.SetAssetParentDocument,
+    "\n  mutation ClearAssetParent($childToken: String!) {\n    clearAssetParent(childToken: $childToken)\n  }\n": typeof types.ClearAssetParentDocument,
     "\n  query AuditEvents($criteria: AuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AuditEventsDocument,
     "\n  query PreviewSelector($memberType: String!, $selector: String!, $pagination: PaginationInput!) {\n    previewSelector(memberType: $memberType, selector: $selector, pagination: $pagination) {\n      valid\n      error\n      members {\n        results {\n          id\n          token\n        }\n        pagination {\n          pageStart\n          pageEnd\n          totalRecords\n        }\n      }\n    }\n  }\n": typeof types.PreviewSelectorDocument,
     "\n  query DynamicGroups($memberType: String!) {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: \"dynamic\" }) {\n      results {\n        id\n        token\n        name\n        memberType\n        membershipMode\n        selector\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.DynamicGroupsDocument,
@@ -111,9 +116,11 @@ type Documents = {
     "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": typeof types.DeleteGeoFenceDocument,
     "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": typeof types.CurrentFenceSetVersionDocument,
     "\n  query GeoFenceSetSnapshot($version: Int!, $pagination: PaginationInput!) {\n    geoFenceSetSnapshot(version: $version) {\n      version\n      fences(pagination: $pagination) {\n        results {\n          token\n          geometry\n        }\n        pagination {\n          totalRecords\n        }\n      }\n    }\n  }\n": typeof types.GeoFenceSetSnapshotDocument,
-    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
+    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        sourceType\n        source {\n          id\n          token\n        }\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": typeof types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": typeof types.RemoveEntityRelationshipsDocument,
+    "\n  query DeviceReplacements($criteria: DeviceReplacementSearchCriteria!) {\n    deviceReplacements(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n        retiredCredentialTokens\n        newCredentialToken\n        newCredentialType\n        device {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DeviceReplacementsDocument,
+    "\n  mutation ReplaceDevice($request: DeviceReplaceRequest!) {\n    replaceDevice(request: $request) {\n      device {\n        id\n        token\n      }\n      replacement {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n      }\n      newCredential {\n        id\n        token\n        credentialType\n        credentialId\n      }\n      retiredCredentialTokens\n    }\n  }\n": typeof types.ReplaceDeviceDocument,
 };
 const documents: Documents = {
     "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n        message\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AlarmsDocument,
@@ -140,6 +147,11 @@ const documents: Documents = {
     "\n  mutation CreateAssetType($request: AssetTypeCreateRequest) {\n    createAssetType(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n    }\n  }\n": types.CreateAssetTypeDocument,
     "\n  mutation UpdateAssetType($token: String!, $request: AssetTypeUpdateRequest!) {\n    updateAssetType(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n    }\n  }\n": types.UpdateAssetTypeDocument,
     "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n": types.DeleteAssetTypeDocument,
+    "\n  query AssetParent($token: String!) {\n    assetParent(token: $token) {\n      id\n      token\n      name\n    }\n  }\n": types.AssetParentDocument,
+    "\n  query AssetAncestors($token: String!) {\n    assetAncestors(token: $token) {\n      id\n      token\n      name\n    }\n  }\n": types.AssetAncestorsDocument,
+    "\n  query AssetChildren($parentToken: String, $pagination: PaginationInput!) {\n    assetChildren(parentToken: $parentToken, pagination: $pagination) {\n      results {\n        id\n        token\n        name\n        assetType {\n          id\n          token\n          name\n          icon\n          backgroundColor\n          foregroundColor\n          borderColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AssetChildrenDocument,
+    "\n  mutation SetAssetParent($childToken: String!, $parentToken: String!) {\n    setAssetParent(childToken: $childToken, parentToken: $parentToken) {\n      id\n      token\n    }\n  }\n": types.SetAssetParentDocument,
+    "\n  mutation ClearAssetParent($childToken: String!) {\n    clearAssetParent(childToken: $childToken)\n  }\n": types.ClearAssetParentDocument,
     "\n  query AuditEvents($criteria: AuditEventSearchCriteria!) {\n    auditEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        category\n        actor\n        operation\n        tableName\n        entityPk\n        entityLabel\n        rowsAffected\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AuditEventsDocument,
     "\n  query PreviewSelector($memberType: String!, $selector: String!, $pagination: PaginationInput!) {\n    previewSelector(memberType: $memberType, selector: $selector, pagination: $pagination) {\n      valid\n      error\n      members {\n        results {\n          id\n          token\n        }\n        pagination {\n          pageStart\n          pageEnd\n          totalRecords\n        }\n      }\n    }\n  }\n": types.PreviewSelectorDocument,
     "\n  query DynamicGroups($memberType: String!) {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: \"dynamic\" }) {\n      results {\n        id\n        token\n        name\n        memberType\n        membershipMode\n        selector\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.DynamicGroupsDocument,
@@ -212,9 +224,11 @@ const documents: Documents = {
     "\n  mutation DeleteGeoFence($token: String!) {\n    deleteGeoFence(token: $token)\n  }\n": types.DeleteGeoFenceDocument,
     "\n  query CurrentFenceSetVersion {\n    currentFenceSetVersion\n  }\n": types.CurrentFenceSetVersionDocument,
     "\n  query GeoFenceSetSnapshot($version: Int!, $pagination: PaginationInput!) {\n    geoFenceSetSnapshot(version: $version) {\n      version\n      fences(pagination: $pagination) {\n        results {\n          token\n          geometry\n        }\n        pagination {\n          totalRecords\n        }\n      }\n    }\n  }\n": types.GeoFenceSetSnapshotDocument,
-    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
+    "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        sourceType\n        source {\n          id\n          token\n        }\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.EntityRelationshipsDocument,
     "\n  mutation CreateEntityRelationships($requests: [EntityRelationshipCreateRequest!]!) {\n    createEntityRelationships(requests: $requests) {\n      id\n      token\n    }\n  }\n": types.CreateEntityRelationshipsDocument,
     "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n": types.RemoveEntityRelationshipsDocument,
+    "\n  query DeviceReplacements($criteria: DeviceReplacementSearchCriteria!) {\n    deviceReplacements(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n        retiredCredentialTokens\n        newCredentialToken\n        newCredentialType\n        device {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DeviceReplacementsDocument,
+    "\n  mutation ReplaceDevice($request: DeviceReplaceRequest!) {\n    replaceDevice(request: $request) {\n      device {\n        id\n        token\n      }\n      replacement {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n      }\n      newCredential {\n        id\n        token\n        credentialType\n        credentialId\n      }\n      retiredCredentialTokens\n    }\n  }\n": types.ReplaceDeviceDocument,
 };
 
 /**
@@ -313,6 +327,26 @@ export function graphql(source: "\n  mutation UpdateAssetType($token: String!, $
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteAssetType($token: String!) {\n    deleteAssetType(token: $token)\n  }\n"): typeof import('./graphql').DeleteAssetTypeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AssetParent($token: String!) {\n    assetParent(token: $token) {\n      id\n      token\n      name\n    }\n  }\n"): typeof import('./graphql').AssetParentDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AssetAncestors($token: String!) {\n    assetAncestors(token: $token) {\n      id\n      token\n      name\n    }\n  }\n"): typeof import('./graphql').AssetAncestorsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AssetChildren($parentToken: String, $pagination: PaginationInput!) {\n    assetChildren(parentToken: $parentToken, pagination: $pagination) {\n      results {\n        id\n        token\n        name\n        assetType {\n          id\n          token\n          name\n          icon\n          backgroundColor\n          foregroundColor\n          borderColor\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').AssetChildrenDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetAssetParent($childToken: String!, $parentToken: String!) {\n    setAssetParent(childToken: $childToken, parentToken: $parentToken) {\n      id\n      token\n    }\n  }\n"): typeof import('./graphql').SetAssetParentDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ClearAssetParent($childToken: String!) {\n    clearAssetParent(childToken: $childToken)\n  }\n"): typeof import('./graphql').ClearAssetParentDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -604,7 +638,7 @@ export function graphql(source: "\n  query GeoFenceSetSnapshot($version: Int!, $
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EntityRelationshipsDocument;
+export function graphql(source: "\n  query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {\n    entityRelationships(criteria: $criteria) {\n      results {\n        id\n        token\n        sourceType\n        source {\n          id\n          token\n        }\n        targetType\n        target {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EntityRelationshipsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -613,6 +647,14 @@ export function graphql(source: "\n  mutation CreateEntityRelationships($request
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation RemoveEntityRelationships($tokens: [String!]!) {\n    removeEntityRelationships(tokens: $tokens)\n  }\n"): typeof import('./graphql').RemoveEntityRelationshipsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceReplacements($criteria: DeviceReplacementSearchCriteria!) {\n    deviceReplacements(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n        retiredCredentialTokens\n        newCredentialToken\n        newCredentialType\n        device {\n          id\n          token\n        }\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DeviceReplacementsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ReplaceDevice($request: DeviceReplaceRequest!) {\n    replaceDevice(request: $request) {\n      device {\n        id\n        token\n      }\n      replacement {\n        id\n        occurredTime\n        actor\n        reason\n        unitIdentifier\n      }\n      newCredential {\n        id\n        token\n        credentialType\n        credentialId\n      }\n      retiredCredentialTokens\n    }\n  }\n"): typeof import('./graphql').ReplaceDeviceDocument;
 
 
 export function graphql(source: string) {

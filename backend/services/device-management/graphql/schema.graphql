@@ -1111,6 +1111,92 @@ type DeviceCredentialSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# One append-only record of a physical unit swap: the failed hardware was retired
+# and a new unit bound to the SAME logical device identity, so the device's events,
+# alarms, relationships, group membership and command vocabulary carry forward
+# unbroken. Written only by replaceDevice; there is no update or delete for it, and
+# it carries no token, so it cannot be re-pointed.
+type DeviceReplacement {
+    id: ID!
+    createdAt: String
+    # The logical identity that survived the swap - unchanged by the operation.
+    device: Device!
+    # When the replacement was applied, from the server's clock. Never caller-supplied.
+    occurredTime: String!
+    # The authenticated subject that performed the replacement, from the caller's
+    # token rather than the request body.
+    actor: String!
+    # The operator's free-text note ("water ingress", "RMA 41822").
+    reason: String
+    # The incoming physical unit's own identifier - a manufacturer serial or IMEI.
+    # Recorded here and deliberately NOT written onto the device's externalId, which
+    # is the stable business key of the logical thing and must survive a swap.
+    unitIdentifier: String
+    # Entity tokens of the credentials this replacement disabled. Tokens, never
+    # credential ids: for an ACCESS_TOKEN the credential id is the device's bearer.
+    retiredCredentialTokens: [String!]!
+    # Entity token of the credential minted for the incoming unit.
+    newCredentialToken: String!
+    newCredentialType: String!
+}
+
+# Criteria used when searching the device-replacement journal.
+input DeviceReplacementSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    # Narrow to one device by its token.
+    device: String
+}
+
+# Search results returned from a device-replacement query, newest first.
+type DeviceReplacementSearchResults {
+    results: [DeviceReplacement!]!
+    pagination: SearchResultsPagination!
+}
+
+# What a caller sends to swap the physical unit behind a device identity.
+#
+# It carries NO device identity fields, and that is the contract rather than an
+# omission: there is no token, externalId, device type or name here, so a
+# replacement cannot move the identity, the business key or the profile binding.
+# "Rotate credentials, not identity" is unrepresentable to violate, not merely
+# refused.
+input DeviceReplaceRequest {
+    # The surviving logical identity.
+    deviceToken: String!
+    # Credential type minted for the incoming unit. Defaults to ACCESS_TOKEN.
+    credentialType: String
+    # The identifier the new unit presents at connect time. Optional only for
+    # ACCESS_TOKEN, where the id is itself the bearer and a fresh random one is
+    # minted; required for every other type, since the server cannot invent a
+    # certificate thumbprint or an MQTT username.
+    credentialId: String
+    # Secret material for types that carry one separately (an MQTT password, a
+    # certificate PEM). Write-only, as on any credential.
+    credentialValue: String
+    # Entity token for the new credential row. A UUID is minted when absent.
+    credentialToken: String
+    # Optional expiry for the new credential (RFC3339).
+    expiresAt: String
+    reason: String
+    unitIdentifier: String
+}
+
+# What replaceDevice returns.
+type DeviceReplaceResult {
+    # The surviving identity, unchanged.
+    device: Device!
+    # The append-only record this call wrote.
+    replacement: DeviceReplacement!
+    # The credential minted for the incoming unit. This is the one moment the
+    # material the new unit must be programmed with is readable, which is why the
+    # mutation is gated on device:write like every other credential door.
+    newCredential: DeviceCredential!
+    # Entity tokens of the credentials this call disabled. Tokens only: the
+    # credential rows themselves stay behind the gated credential queries.
+    retiredCredentialTokens: [String!]!
+}
+
 # A device provisioning profile (ADR-012): the shared key+secret a fleet presents
 # to self-register, the strategy governing whether unknown devices may be created,
 # and the device type stamped onto auto-created devices. The provision secret is
@@ -1834,6 +1920,19 @@ type Query {
     deviceCredentialsByToken(tokens: [String!]!): [DeviceCredential!]!
     # List device credentials that meet criteria.
     deviceCredentials(criteria: DeviceCredentialSearchCriteria!): DeviceCredentialSearchResults!
+    # List device-replacement records, newest first, optionally narrowed to one
+    # device. There is no by-id or by-token door: a replacement is never addressed
+    # on its own, only read as part of a device's history.
+    deviceReplacements(criteria: DeviceReplacementSearchCriteria!): DeviceReplacementSearchResults!
+    # The asset directly above this one in the hierarchy, or null when it is a
+    # root. A root is a normal state, not an error.
+    assetParent(token: String!): Asset
+    # The path from an asset to its root, NEAREST ANCESTOR FIRST - the order a
+    # breadcrumb is built from.
+    assetAncestors(token: String!): [Asset!]!
+    # A page of the assets directly below a parent. Omit parentToken to page the
+    # ROOTS of the tree; a tree browser asks the same question at every level.
+    assetChildren(parentToken: String, pagination: PaginationInput!): AssetSearchResults!
     # Find provisioning profiles by unique id.
     provisioningProfilesById(ids: [ID!]!): [ProvisioningProfile!]!
     # Find provisioning profiles by unique token.
@@ -2020,6 +2119,20 @@ type Mutation {
     updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
     # Delete a single device credential.
     deleteDeviceCredential(token: String!): Boolean!
+    # Bind a NEW physical unit to an EXISTING logical device identity: retire every
+    # credential the outgoing unit could authenticate with, mint one for the
+    # incoming unit, and write an append-only record of the swap - all in one
+    # transaction. The device's history, alarms, relationships, group membership and
+    # command vocabulary carry forward because none of them are touched.
+    replaceDevice(request: DeviceReplaceRequest!): DeviceReplaceResult!
+    # Place an asset under a parent, replacing whatever parent it had. Refused when
+    # it would make an asset its own ancestor, give it a second parent, or push the
+    # tree past its depth limit. The asset's own children travel with it.
+    setAssetParent(childToken: String!, parentToken: String!): EntityRelationship!
+    # Detach an asset from its parent, making it a root. Its children travel with
+    # it. Reports whether an edge was removed, so "already a root" is
+    # distinguishable from "done".
+    clearAssetParent(childToken: String!): Boolean!
     # Create a new provisioning profile.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
     # Update an existing provisioning profile.
