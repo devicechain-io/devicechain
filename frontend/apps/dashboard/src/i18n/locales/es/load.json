@@ -8,6 +8,7 @@
   "errorManifestInvalid": "Manifiesto de vinculación: {{detail}}",
   "errorManifestNotObject": "El manifiesto de vinculación debe ser un objeto JSON de ranura → vinculación.",
   "manifestLabel": "Manifiesto de vinculación (JSON, opcional)",
+  "manifestSampleJoiner": "o",
   "render": "Renderizar",
   "title": "Cargar un panel"
 }

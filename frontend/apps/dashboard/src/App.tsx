@@ -190,16 +190,23 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
 // advance. Parse errors show inline; nothing throws to a white screen. The parsing
 // itself is loadDashboard, in load.ts, so a test can drive it.
 
-// A JSON template, not prose: every token in it (`kind`, `deviceToken`, `anchor`,
-// `targetToken`) is a field name the parser matches literally, so translating it would
-// produce a manifest the parser refuses. It stays a module const for that reason, and
-// so the i18n lint reads it as the code sample it is.
-const MANIFEST_HELP =
-  '{ "slotName": { "kind": "device", "deviceToken": "..." } }  or  ' +
-  '{ "slotName": { "kind": "anchor", "anchor": { "relationship": "...", "targetType": "area", "targetToken": "..." } } }';
+// The two manifest shapes, as JSON templates. Every token in them (`kind`,
+// `deviceToken`, `anchor`, `targetToken`) is a field name the parser matches literally,
+// so translating one would produce a manifest the parser refuses — they stay module
+// consts, and the i18n lint reads them as the code samples they are.
+//
+// 🔴 SPLIT INTO AN ARRAY BECAUSE THE JOINER IS THE ONE PART THAT IS PROSE. This was a
+// single string reading `…} }  or  { {…`, and that "or" is an English word sitting in
+// the middle of what looks like code — the kind of literal an enumeration finds and a
+// glance does not, because the line as a whole reads as a sample. The samples are data;
+// the conjunction between them is copy, and it comes from the catalog below.
+const MANIFEST_SAMPLES = [
+  '{ "slotName": { "kind": "device", "deviceToken": "..." } }',
+  '{ "slotName": { "kind": "anchor", "anchor": { "relationship": "...", "targetType": "area", "targetToken": "..." } } }',
+];
 
 // The manifest box's placeholder: an empty JSON object, i.e. "no overrides". A code
-// sample like MANIFEST_HELP above, never translated.
+// sample like MANIFEST_SAMPLES above, never translated.
 const EMPTY_OBJECT = '{ }';
 
 function Load({
@@ -264,7 +271,10 @@ function Load({
           />
         </Field>
 
-        <Field label={t('load:manifestLabel')} hint={MANIFEST_HELP}>
+        <Field
+          label={t('load:manifestLabel')}
+          hint={MANIFEST_SAMPLES.join(`  ${t('load:manifestSampleJoiner')}  `)}
+        >
           <TextArea
             value={manifestText}
             onChange={setManifestText}

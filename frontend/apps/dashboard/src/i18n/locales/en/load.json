@@ -8,6 +8,7 @@
   "errorManifestInvalid": "Binding manifest: {{detail}}",
   "errorManifestNotObject": "Binding manifest must be a JSON object of slot → binding.",
   "manifestLabel": "Binding manifest (JSON, optional)",
+  "manifestSampleJoiner": "or",
   "render": "Render",
   "title": "Load a dashboard"
 }
