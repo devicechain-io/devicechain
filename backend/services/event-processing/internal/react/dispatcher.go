@@ -356,6 +356,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 	resolved := ev.Edge == runtime.EdgeResolved
 	switch a.Type {
 	case rules.ActionSendCommand:
+		// Same defensive nil-guard as the raiseAlarm branch below, and for exactly the same reason: the
+		// publish gate's populatedVariants check is NOT re-run when a rule is decoded from the durable
+		// projection, so a hand-edited row declaring type sendCommand with no sendCommand payload
+		// reaches the bare dereference in the CommandRequest literal and nil-panics the shared consumer
+		// loop into a redelivery crash-loop. Guarding one variant and not its sibling leaves the class
+		// open, which is what happened here.
+		if a.SendCommand == nil {
+			log.Error().Str("rule", ev.RuleID).
+				Msg("REACT: dropping a sendCommand action whose payload variant is missing (malformed/forged rule).")
+			return Done
+		}
 		if resolved {
 			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
 			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
@@ -792,10 +803,24 @@ func actionContentKey(a rules.Action) string {
 	if a.Guard != "" {
 		guardSeg = "\x00" + a.Guard
 	}
+	// 🔴 EVERY branch below nil-guards its variant, and that is a property of this function rather
+	// than of its callers. Two of the four did not, while the httpCall branch carried a comment
+	// claiming the helper "can never nil-panic regardless of caller" — an invariant asserted in a
+	// switch that did not hold it. A nil variant degenerates to the type string; that token is never
+	// used (dispatchAction drops the malformed action before minting one), so the collision between
+	// two differently-malformed actions of one type is harmless. TestActionContentKeyIsTotal pins
+	// this for every variant field declared on rules.Action, so a fifth action type cannot be added
+	// with a bare dereference.
 	switch a.Type {
 	case rules.ActionSendCommand:
+		if a.SendCommand == nil {
+			return string(a.Type)
+		}
 		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + guardSeg
 	case rules.ActionRaiseAlarm:
+		if a.RaiseAlarm == nil {
+			return string(a.Type)
+		}
 		// A rendered key is discriminated by the SAME exported prefix rules.ActionDedupKey uses, so the
 		// gate's duplicate identity and this content key induce the one equivalence relation (the
 		// lockstep the dedup-key comment describes) rather than two mirrored copies that can drift. The
@@ -806,10 +831,6 @@ func actionContentKey(a rules.Action) string {
 		}
 		return "raiseAlarm\x00" + key + guardSeg
 	case rules.ActionHTTPCall:
-		// Defensive nil-guard: a malformed action with no variant is dropped upstream (dispatchAction)
-		// before its token is minted, so this is belt-and-braces — but keeping the helper TOTAL means it
-		// can never nil-panic regardless of caller. A nil variant degenerates to the type string; that
-		// token is never used (the action was dropped), so the collision is harmless.
 		if a.HTTPCall == nil {
 			return string(a.Type)
 		}
