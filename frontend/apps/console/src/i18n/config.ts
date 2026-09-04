@@ -6,10 +6,12 @@
 // Importing this module for its side effect (see main.tsx) initializes the shared
 // i18next instance; components consume it through react-i18next's useTranslation.
 //
-// Slice scope (ADR-066 sub-workstream a): English only, two namespaces, one
-// converted reference screen (Login). The one-time string-externalization sweep
-// (b), the Spanish catalog (c), and the tenant-default locale (d) are separate
-// workstreams; the seams for each are marked below.
+// The framework wiring landed as ADR-066 sub-workstream (a) — English only, two
+// namespaces, one converted reference screen (Login) — and the string-externalization
+// sweep (b), the Spanish catalog (c) and the tenant-default locale (d) followed as
+// their own workstreams. All four are in. What is still marked below is the seam each
+// one left: NAMESPACES for lazy per-namespace loading, and applyTenantDefaultLocale
+// for the tenant rung, which TenantProvider now calls.
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
@@ -268,13 +270,23 @@ export function setUserLocale(code: string): void {
 }
 
 /**
- * The seam for ADR-066 sub-workstream (d): a tenant-default locale delivered on
- * the ADR-038 white-label cascade. The tenant provider will call this once it
- * knows the tenant's default locale; wiring that call is (d), but the precedence
- * contract lives here so (a) fixes it and a later slice cannot get it subtly
- * wrong. It is a NO-OP when the user has already made an explicit choice (rung 1
- * beats rung 2) and ignores a locale we do not ship — so a tenant default only
- * ever fills in for a user who has not chosen, and only with a shipped locale.
+ * Precedence rung 2 (ADR-066 sub-workstream d): the tenant's default locale,
+ * delivered on the ADR-038 white-label cascade.
+ *
+ * TenantProvider calls this once, from a single effect keyed on the tenant's
+ * EFFECTIVE locale — it is the only caller, and it must stay the only one. It is a
+ * NO-OP when the user has already made an explicit choice (rung 1 beats rung 2) and
+ * ignores a locale we do not ship, so a tenant default only ever fills in for a user
+ * who has not chosen, and only with a shipped locale.
+ *
+ * 🔴 IT BEATS RUNG 3 BY OVERWRITING IT, which is why this is a function rather than
+ * an entry in `detection.order` above. Detection has already run and resolved the
+ * browser's language by the time a tenant is known, so applying a tenant default
+ * means calling changeLanguage on a language that is already in effect. Anything
+ * added here that skips when a language is resolved (an `if (i18n.resolvedLanguage)
+ * return`, an "only run once" flag) silently demotes rung 2 below rung 3 while
+ * leaving every rung-1 test green — see the browser-rung tests in config.test.ts,
+ * which exist for that mutation specifically.
  */
 export function applyTenantDefaultLocale(locale: string | null | undefined): void {
   if (!locale) return;
