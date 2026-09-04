@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -140,11 +141,19 @@ func TestProcessMessageDoesNotRetryARefusedResponse(t *testing.T) {
 }
 
 // deadRecorder captures what the arm writes so a test can read the letter back.
+// 🔴 IT RECORDS THE CONTEXT'S TENANT. The real writer scopes the subject from the context
+// and is fail-closed without one, so an arm handed the wrong context writes nothing and
+// counts a loss — indistinguishable from success to a fake that ignores its context.
 type deadRecorder struct {
-	msgs []messaging.Message
+	msgs    []messaging.Message
+	tenants []string
 }
 
-func (d *deadRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
+	tenant, _ := core.TenantFromContext(ctx)
+	for range msgs {
+		d.tenants = append(d.tenants, tenant)
+	}
 	d.msgs = append(d.msgs, msgs...)
 	return nil
 }
@@ -169,7 +178,7 @@ func responseProcessorAtCap(t *testing.T, api *fakeApi, dead *deadRecorder, numD
 func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
 	api := &fakeApi{responseErr: errors.New("the database is away")}
 	dead := &deadRecorder{}
-	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver)
+	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver+3)
 
 	p.ProcessMessage(context.Background())
 
@@ -186,8 +195,13 @@ func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
 	if e.Reference != "cmd-1" {
 		t.Fatalf("the letter must name the command that still looks unanswered: %q", e.Reference)
 	}
-	if e.Attempts != messaging.MaxDeliver || e.Subject == "" || len(e.Payload) == 0 {
+	// A value ABOVE the cap, so a hard-coded messaging.MaxDeliver would be visible here.
+	if e.Attempts != messaging.MaxDeliver+3 || e.Subject == "" || len(e.Payload) == 0 {
 		t.Fatalf("the letter cannot be located or understood: %+v", e)
+	}
+	if d := dead.tenants[0]; d != "acme" {
+		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on "+
+			"the context's tenant, so a wrong one loses every letter silently", d)
 	}
 }
 

@@ -265,10 +265,12 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8448 MiB
-// (7 Hot x 1 GiB + 8 Cold x 128 MiB + this capped capture stream), the MQTT
-// gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache x 64)
-// — 9.5 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields. Every
+// The arithmetic, at the shipped defaults: the declared streams reserve 8704 MiB
+// (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB), the
+// MQTT gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache
+// x 64) — 9.75 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields.
+// (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
+// tree held nine, and it is the sentence anyone weighing a new stream reads.) Every
 // ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
 // overcommit, it crashloops every stream-creating service at upgrade with
 // "insufficient storage resources available".
@@ -468,8 +470,9 @@ var All = []Stream{
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
-	{Suffix: DeadLetters, Areas: []string{"event-processing", "notification-management", "command-delivery"},
-		Tier: Cold, Why: "ADR-024 dead-letter sink for the three consumers that gave up silently"},
+	{Suffix: DeadLetters,
+		Areas: []string{"event-processing", "notification-management", "command-delivery", "device-management"},
+		Tier:  Cold, Why: "ADR-024 dead-letter sink for the four consumers that gave up silently"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

@@ -248,7 +248,7 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	}
 
 	if dead != nil {
-		cproc.dead = deadletter.NewSink(dead, func(error) {})
+		cproc.dead = deadletter.NewSink(dead, func(error) { incr(cproc.ResponsesDeadLetterLost, 1) })
 	}
 
 	// Create lifecycle manager.
@@ -873,9 +873,9 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		Payload:     msg.Value,
 	})
 	if err != nil {
+		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
 		log.Error().Err(err).Str("command", command).
 			Msg("LOST command response: it could be neither recorded nor dead-lettered.")
-		incr(cproc.ResponsesDeadLetterLost, 1)
 		return
 	}
 	incr(cproc.ResponsesDeadLettered, 1)

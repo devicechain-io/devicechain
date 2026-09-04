@@ -13,8 +13,11 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // reactFakeResolver returns a canned rule / not-found / error for the dispatcher under test.
@@ -188,14 +191,25 @@ func TestReactHandleLeavesResolverErrorUnacked(t *testing.T) {
 
 // deadRecorder captures what an arm writes, so the test can assert on the letter rather
 // than only on the fact that something was written.
+//
+// 🔴 IT RECORDS THE CONTEXT'S TENANT, AND THAT IS NOT DECORATION. The real writer scopes
+// the subject from the context and is FAIL-CLOSED on a context without one — so an arm
+// handed the wrong context writes nothing, counts a loss, and acks. A fake that ignores
+// its context makes that outcome indistinguishable from success, and a mutation passing
+// context.Background() survived every one of these tests until this field existed.
 type deadRecorder struct {
-	msgs []messaging.Message
-	err  error
+	msgs    []messaging.Message
+	tenants []string
+	err     error
 }
 
-func (d *deadRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
 	if d.err != nil {
 		return d.err
+	}
+	tenant, _ := core.TenantFromContext(ctx)
+	for range msgs {
+		d.tenants = append(d.tenants, tenant)
 	}
 	d.msgs = append(d.msgs, msgs...)
 	return nil
@@ -230,7 +244,7 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 		&reactFakeSink{fail: true}, dead)
 	ack := &fakeAck{}
 
-	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, ack))
+	rd.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver+2, ack))
 
 	letters := dead.letters(t)
 	if len(letters) != 1 {
@@ -243,11 +257,16 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 	if e.Reference != "acme/p@1/r1" {
 		t.Fatalf("the letter does not name the rule that fired: %q", e.Reference)
 	}
-	if e.Attempts != messaging.MaxDeliver {
-		t.Fatalf("attempts = %d, want %d", e.Attempts, messaging.MaxDeliver)
+	// A value ABOVE the cap, so a hard-coded messaging.MaxDeliver would be visible here.
+	if e.Attempts != messaging.MaxDeliver+2 {
+		t.Fatalf("attempts = %d, want the message's own count %d", e.Attempts, messaging.MaxDeliver+2)
 	}
 	if e.Subject == "" || e.OccurredAt.IsZero() || len(e.Payload) == 0 {
 		t.Fatalf("the letter cannot be located or understood: %+v", e)
+	}
+	if dead.tenants[0] != "acme" {
+		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on "+
+			"the context's tenant, so a wrong one loses every letter silently", dead.tenants[0])
 	}
 	// 🔑 THE ACK STILL HAPPENS. This runs at the cap, so no redelivery follows whatever
 	// the consumer does — leaving it unacked would strand the message, not retry it.
@@ -291,9 +310,13 @@ func TestReactDoesNotDeadLetterWhatItCannotAttribute(t *testing.T) {
 		})
 	}
 
-	// The payload-tenant mismatch, which needs a well-formed event to reach.
+	// The payload-tenant mismatch, which needs a well-formed event to reach. 🔴 THE SINK
+	// MUST FAIL HERE: with a working sink the event dispatches successfully and nothing
+	// would be dead-lettered whatever the guard did, which is how the first version of
+	// this half passed with the guard deleted.
 	dead := &deadRecorder{}
-	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true}, &reactFakeSink{}, dead)
+	rd := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, dead)
 	ev := sendCmdEvent()
 	ev.Tenant = "globex"
 	rd.handle(derivedMsg(t, "acme", ev, messaging.MaxDeliver, &fakeAck{}))
@@ -312,6 +335,58 @@ func TestReactWithNoDeadLetterSinkStillDrops(t *testing.T) {
 	if ack.acks != 1 {
 		t.Fatalf("acks=%d", ack.acks)
 	}
+}
+
+// 🔴 THE COUNTERS ARE WHAT THE ALERT RESTS ON, so swapping them has to fail here. Nothing
+// read them until this test existed, and the pair is exactly the kind that reads the same
+// either way round: one says "recorded", the other says "gone".
+func TestTheDeadLetterCountersAreNotSwapped(t *testing.T) {
+	written := &deadRecorder{}
+	ok := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, written)
+	ok.metrics = newTestReactMetrics()
+	ok.dead = deadletter.NewSink(written, func(error) { ok.metrics.recordDeadLetterLost() })
+	ok.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, &fakeAck{}))
+
+	if got := counterOf(t, ok.metrics.deadLettered); got != 1 {
+		t.Fatalf("a written letter counted %v on deadLettered, want 1", got)
+	}
+	if got := counterOf(t, ok.metrics.deadLetterLost); got != 0 {
+		t.Fatalf("a written letter counted %v as LOST", got)
+	}
+
+	broken := &deadRecorder{err: errors.New("broker is away")}
+	bad := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+		&reactFakeSink{fail: true}, broken)
+	bad.metrics = newTestReactMetrics()
+	bad.dead = deadletter.NewSink(broken, func(error) { bad.metrics.recordDeadLetterLost() })
+	bad.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, &fakeAck{}))
+
+	if got := counterOf(t, bad.metrics.deadLetterLost); got != 1 {
+		t.Fatalf("a LOST letter counted %v on deadLetterLost, want 1", got)
+	}
+	if got := counterOf(t, bad.metrics.deadLettered); got != 0 {
+		t.Fatalf("a LOST letter counted %v as written — the alert would never fire", got)
+	}
+}
+
+// newTestReactMetrics builds the two counters this file asserts on, off the global
+// registry so repeated construction cannot collide.
+func newTestReactMetrics() *reactMetrics {
+	return &reactMetrics{
+		poisonDropped:  prometheus.NewCounter(prometheus.CounterOpts{Name: "poison_total"}),
+		deadLettered:   prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_total"}),
+		deadLetterLost: prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_lost_total"}),
+	}
+}
+
+func counterOf(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("reading a counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
 }
 
 // A write that never succeeds must not stop the event being acked: no redelivery follows,

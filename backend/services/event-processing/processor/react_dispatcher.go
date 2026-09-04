@@ -69,7 +69,7 @@ func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 		rd.area = ms.FunctionalArea
 	}
 	if dead != nil {
-		rd.dead = deadletter.NewSink(dead, func(error) {})
+		rd.dead = deadletter.NewSink(dead, func(error) { rd.metrics.recordDeadLetterLost() })
 	}
 	return rd
 }
@@ -192,8 +192,10 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 // write that still fails is counted as a LOSS rather than logged as something that will
 // be retried.
 //
-// A nil sink means the deployment has no dead-letter writer wired, which is the shape unit
-// tests build. The event is dropped as it always was, and the counter above still moves.
+// A nil sink is a TEST shape, not a deployment one: main fails startup if it cannot create
+// the stream, so no running service reaches here with one. It is tolerated because every
+// other test in this package builds a dispatcher without it, and a nil check is cheaper
+// than making them all care about a sink they are not testing.
 func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Message, ev runtime.DerivedEvent) {
 	if rd.dead == nil {
 		return
@@ -213,9 +215,9 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 		Payload:     msg.Value,
 	})
 	if err != nil {
+		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
 		log.Error().Err(err).Str("rule", ev.RuleID).
 			Msg("LOST derived event: it could be neither dispatched nor dead-lettered.")
-		rd.metrics.recordDeadLetterLost()
 		return
 	}
 	rd.metrics.recordDeadLettered()

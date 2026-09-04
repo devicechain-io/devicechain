@@ -11,7 +11,10 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // fakeAlarmApi implements DeviceManagementApi by embedding a (nil) MockApi to satisfy the whole
@@ -223,5 +226,94 @@ func TestRaiseAlarmConsumerResolveErrorRetries(t *testing.T) {
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 0, ack))
 	if ack.acks != 0 || api.edgeCalls != 0 {
 		t.Fatalf("a resolve error must be left unacked (retry): acks=%d edgeCalls=%d", ack.acks, api.edgeCalls)
+	}
+}
+
+// deadRecorder captures what the arm writes, and records the context's tenant — the real
+// writer scopes the subject from it and is fail-closed without one, so an arm handed the
+// wrong context writes nothing and looks identical to one that succeeded.
+type deadRecorder struct {
+	msgs    []messaging.Message
+	tenants []string
+}
+
+func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
+	tenant, _ := core.TenantFromContext(ctx)
+	for range msgs {
+		d.tenants = append(d.tenants, tenant)
+	}
+	d.msgs = append(d.msgs, msgs...)
+	return nil
+}
+
+func consumerWithDeadLetters(api model.DeviceManagementApi, dead *deadRecorder) *RaiseAlarmConsumer {
+	rc := newTestConsumer(api)
+	rc.area = "device-management"
+	rc.deadLettered = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_total"})
+	rc.deadLetterLost = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_lost_total"})
+	rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })
+	return rc
+}
+
+// 🔴 THIS CONSUMER IS THE HOP AFTER REACT, which is why it needed an arm as much as REACT
+// did. REACT dead-lettering a detection it could not dispatch covers one hop; an edge REACT
+// dispatched successfully could still die here, with the same consequence — a raise that
+// does not re-emit until the condition re-breaches, a resolve that strands its alarm.
+func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("the database is away")}
+	dead := &deadRecorder{}
+	rc := consumerWithDeadLetters(api, dead)
+	ack := &fakeAck{}
+
+	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), messaging.MaxDeliver+1, ack))
+
+	if len(dead.msgs) != 1 {
+		t.Fatalf("wrote %d dead letters at the cap, want 1", len(dead.msgs))
+	}
+	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	if err != nil {
+		t.Fatalf("the written letter does not read back: %v", err)
+	}
+	if e.Kind != deadletter.KindDetectionAction || e.Source != "device-management" {
+		t.Fatalf("the letter does not say what it is or who wrote it: %+v", e)
+	}
+	if e.Attempts != messaging.MaxDeliver+1 {
+		t.Fatalf("attempts = %d, want the message's own count", e.Attempts)
+	}
+	if dead.tenants[0] != "acme" {
+		t.Fatalf("the letter was written under tenant %q", dead.tenants[0])
+	}
+	if ack.acks != 1 {
+		t.Fatalf("a dead-lettered edge must still be acked: acks=%d", ack.acks)
+	}
+}
+
+// 🔴 AND NOT BELOW THE CAP — an edge still being retried has not been given up on.
+func TestARaiseAlarmEdgeBelowTheCapIsNotDeadLettered(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("the database is away")}
+	dead := &deadRecorder{}
+	rc := consumerWithDeadLetters(api, dead)
+
+	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 1, &fakeAck{}))
+
+	if len(dead.msgs) != 0 {
+		t.Fatalf("wrote %d dead letters below the cap, want 0", len(dead.msgs))
+	}
+}
+
+// 🔴 A POISON REQUEST STAYS A DROP. It is not work that failed to finish — it is a request
+// the consumer can never apply, and recording it would fill the operator's list of things
+// to investigate with things there is nothing to do about.
+func TestAPoisonRaiseAlarmRequestIsNotDeadLettered(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}}
+	dead := &deadRecorder{}
+	rc := consumerWithDeadLetters(api, dead)
+	req := validReq()
+	req.AlarmKey = ""
+
+	rc.handle(context.Background(), raiseMsg(t, "acme", req, messaging.MaxDeliver, &fakeAck{}))
+
+	if len(dead.msgs) != 0 {
+		t.Fatal("a request that can never be applied was filed as one that failed to finish")
 	}
 }

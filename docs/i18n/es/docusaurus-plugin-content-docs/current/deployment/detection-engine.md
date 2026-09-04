@@ -109,8 +109,9 @@ La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse
 :::caution Una acción que falla se lleva por delante a las que van después
 Las acciones de una regla se ejecutan en el orden en que están listadas, y una acción que falla
 detiene al resto. En cada reintento, las acciones *anteriores* a ella se vuelven a ejecutar, y las
-*posteriores* siguen sin haberse ejecutado nunca; así que, si el evento acaba descartándose, esas
-acciones posteriores se pierden sin haber llegado a intentarse ni una sola vez.
+*posteriores* siguen sin haberse ejecutado nunca; así que, si el evento acaba abandonándose, esas
+acciones posteriores no llegaron a ocurrir en absoluto. El mensaje de la cola registra que la
+detección se disparó y que sus acciones no; no las lleva a cabo.
 
 **Ordene las acciones de una regla de modo que la importante vaya primero.** Si una regla levanta
 una alarma y además llama a un webhook, poner la alarma primero significa que un endpoint inestable
@@ -382,7 +383,8 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
-| `ReactPoisonDropping` | Se están descartando acciones tras agotar sus reintentos: se están perdiendo alarmas o comandos. Trátelo como urgente. |
+| `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo registrar. Es el único caso aquí que no deja ninguna evidencia; revise el bróker. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 

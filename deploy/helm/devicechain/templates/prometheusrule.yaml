@@ -125,10 +125,17 @@ spec:
             summary: "REACT is giving up on un-dispatchable derived events"
             description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
         - alert: DeadLetterWriteLost
+          # 🔴 EVERY TERM IS `or vector(0)`, AND WITHOUT IT THIS ALERT CANNOT FIRE WHEN IT
+          # MATTERS MOST. sum() over no series is the EMPTY vector, and empty + x is empty
+          # — so one service not being scraped makes the whole expression absent rather
+          # than false. The cause this alert names is the broker being unreachable, and a
+          # service that cannot create its streams CRASHLOOPS: exactly then, its series
+          # disappears and the losses of the services still running go unreported.
           expr: |
-            sum(rate(devicechain_eventprocessing_react_events_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
-              + sum(rate(devicechain_notificationmanagement_notifications_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
-              + sum(rate(devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total{namespace="{{ $ns }}"}[5m]))
+            (sum(rate(devicechain_eventprocessing_react_events_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
+              + (sum(rate(devicechain_notificationmanagement_notifications_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
+              + (sum(rate(devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
+              + (sum(rate(devicechain_devicemanagement_raise_alarm_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
               > 0
           for: 5m
           labels:
@@ -136,7 +143,7 @@ spec:
             devicechain_instance: {{ $ns }}
           annotations:
             summary: "work is being lost with no record of it"
-            description: "A consumer gave up on a message AND could not write it to the dead-letter stream, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. The dead-letter stream is the thing to look at: JetStream unreachable, or the stream at its byte ceiling."
+            description: "A consumer gave up on a message AND could not write it to the dead-letter stream, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. Look at JetStream itself: this is a failed publish, so the broker is unreachable, refusing, or the account is out of storage. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
         - alert: ReactConnectorEgressShedding
           expr: sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

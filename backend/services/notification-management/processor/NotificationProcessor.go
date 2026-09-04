@@ -97,11 +97,9 @@ func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageRea
 			"Alarms that reached nobody AND could not be dead-lettered — the write failed on a "+
 				"delivery that will not repeat. An alarm in this state is invisible everywhere.", nil),
 	}
-	if ms != nil {
-		np.area = ms.FunctionalArea
-	}
+	np.area = ms.FunctionalArea
 	if dead != nil {
-		np.dead = deadletter.NewSink(dead, func(error) {})
+		np.dead = deadletter.NewSink(dead, func(error) { np.deadLetterLost.Inc() })
 	}
 	npname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "notify-proc")
 	np.lifecycle = core.NewLifecycleManager(npname, np, callbacks)
@@ -312,11 +310,9 @@ func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.M
 		Payload:     msg.Value,
 	})
 	if err != nil {
+		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
 		log.Error().Err(err).Str("alarm", alarm).
 			Msg("LOST notification: the alarm reached nobody and could not be dead-lettered.")
-		if np.deadLetterLost != nil {
-			np.deadLetterLost.Inc()
-		}
 		return
 	}
 	if np.deadLettered != nil {

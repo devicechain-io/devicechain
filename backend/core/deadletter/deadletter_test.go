@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -126,21 +127,51 @@ func TestAWriteThatNeverSucceedsIsReportedAsALoss(t *testing.T) {
 	if w.calls != writeAttempts {
 		t.Fatalf("the sink made %d attempts, want %d", w.calls, writeAttempts)
 	}
+	// The message must name the attempts actually MADE. It used to name the constant,
+	// which was a lie in the one case the constant is not what happened.
+	if !strings.Contains(err.Error(), "3 attempt") {
+		t.Fatalf("the error does not say how many attempts were made: %v", err)
+	}
 }
 
-// A letter abandoned at shutdown is as lost as one abandoned at the cap, and must be
-// counted the same way — otherwise a rolling restart quietly erases work.
-func TestAWriteAbandonedAtShutdownIsStillALoss(t *testing.T) {
-	w := &fakeWriter{failures: 99, err: errors.New("broker is away")}
+// 🔴 A CANCELLED CALLER MUST NOT CUT THE RETRIES. The context reaching a sink is the
+// consumer's, and a rolling restart cancels it — at the moment the consumer is most likely
+// to be mid-failure, on a message that has exhausted its redelivery cap and will not come
+// back. Honouring cancellation here would lose exactly the letters most worth having.
+func TestAShuttingDownConsumerStillGetsEveryAttempt(t *testing.T) {
+	w := &fakeWriter{failures: 2, err: errors.New("broker is away")}
 	lost := 0
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := NewSink(w, func(error) { lost++ }).Write(ctx, good()); err == nil {
-		t.Fatal("a letter abandoned at shutdown was reported as written")
+	if err := NewSink(w, func(error) { lost++ }).Write(ctx, good()); err != nil {
+		t.Fatalf("a cancelled caller cut the retries: %v", err)
 	}
-	if lost != 1 {
-		t.Fatalf("the loss hook fired %d times at shutdown, want 1", lost)
+	if w.calls != 3 {
+		t.Fatalf("made %d attempts under a cancelled context, want 3", w.calls)
+	}
+	if lost != 0 {
+		t.Fatalf("a write that succeeded was reported as a loss")
+	}
+}
+
+// 🔑 AND THE TENANT SURVIVES THE DETACH. It is carried on the context and is what scopes
+// the subject, fail-closed — a detach that dropped values would send every letter to a
+// writer that refuses it, and the arm would report a loss for a broker that was fine.
+func TestTheTenantSurvivesTheDetach(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "acme")
+	detached, cancel := detach(ctx)
+	defer cancel()
+
+	tenant, ok := core.TenantFromContext(detached)
+	if !ok || tenant != "acme" {
+		t.Fatalf("the tenant did not survive the detach: %q ok=%v", tenant, ok)
+	}
+	if detached.Err() != nil {
+		t.Fatalf("the detached context is already done: %v", detached.Err())
+	}
+	if _, hasDeadline := detached.Deadline(); !hasDeadline {
+		t.Fatal("the detached context has no deadline, so a stalled broker holds the consumer forever")
 	}
 }
 

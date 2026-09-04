@@ -192,6 +192,10 @@ const writeAttempts = 3
 // goroutine while it runs and the failure it is retrying is a broker write.
 const writeBackoff = 100 * time.Millisecond
 
+// writeDeadline bounds the whole write, retries included, so a broker that accepts a
+// connection and then stops answering cannot hold a consumer goroutine forever.
+const writeDeadline = 30 * time.Second
+
 // Sink writes dead letters to the platform's dead-letter subject for a tenant.
 //
 // 🔑 IT EXISTS SO THE WRITE-FAILURE HANDLING IS WRITTEN ONCE. The handling is the
@@ -200,14 +204,29 @@ const writeBackoff = 100 * time.Millisecond
 // reads as "we will try again" and means "this message is now lost, silently".
 type Sink struct {
 	writer Writer
-	// onLoss is called when the letter could not be written at all. It is a hook rather
-	// than a log line because a loss is the one outcome an operator has to be able to
-	// alert on, and only the caller knows which counter names it.
+	// onLoss is called exactly once when the letter could not be written at all. It is a
+	// hook rather than a log line because a loss is the one outcome an operator has to be
+	// able to alert on, and only the caller knows which counter names it. Callers count
+	// HERE rather than off the returned error, so the counter cannot drift away from the
+	// condition it claims to measure.
 	onLoss func(err error)
 }
 
 // NewSink builds a sink over a writer scoped to the dead-letter subject. onLoss may be nil.
 func NewSink(w Writer, onLoss func(err error)) *Sink { return &Sink{writer: w, onLoss: onLoss} }
+
+// detach returns a context carrying ctx's values — the TENANT, which is what scopes the
+// subject — but not its cancellation, bounded instead by writeDeadline.
+//
+// 🔴 THE CALLER'S CONTEXT IS THE CONSUMER'S, AND IT IS CANCELLED AT SHUTDOWN. Writing the
+// letter under it means a rolling restart arriving mid-arm cuts the retries — on a message
+// that has exhausted its redelivery cap, so nothing will bring it back. The very moment a
+// consumer is being stopped is when it is most likely to be mid-failure, so honouring
+// cancellation here loses exactly the letters most worth having. The deadline is what
+// keeps that from becoming "block shutdown forever" instead.
+func detach(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), writeDeadline)
+}
 
 // Write records one dead letter. ctx must carry the tenant, which is what scopes the
 // subject; a context without one is refused by the writer, fail-closed.
@@ -227,23 +246,27 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 	if e.Correlation != "" {
 		msg = msg.WithCorrelationID(e.Correlation)
 	}
-	for i := 0; i < writeAttempts; i++ {
-		if err = s.writer.WriteMessages(ctx, msg); err == nil {
+	wctx, cancel := detach(ctx)
+	defer cancel()
+
+	attempts := 0
+	for attempts < writeAttempts {
+		attempts++
+		if err = s.writer.WriteMessages(wctx, msg); err == nil {
 			return nil
 		}
-		if i < writeAttempts-1 {
+		if attempts < writeAttempts {
 			select {
 			case <-time.After(writeBackoff):
-			case <-ctx.Done():
-				// The service is shutting down. Stop retrying, but still report the loss:
-				// a letter abandoned at shutdown is as lost as one abandoned at the cap.
-				i = writeAttempts
+			case <-wctx.Done():
+				// The deadline, not the caller's shutdown — see detach.
+				attempts = writeAttempts
 			}
 		}
 	}
 	if s.onLoss != nil {
 		s.onLoss(err)
 	}
-	return fmt.Errorf("dead letter LOST — %s could not be written after %d attempts and its "+
-		"source message will not redeliver: %w", e.Kind, writeAttempts, err)
+	return fmt.Errorf("dead letter LOST — %s could not be written in %d attempt(s) and its "+
+		"source message will not redeliver: %w", e.Kind, attempts, err)
 }
