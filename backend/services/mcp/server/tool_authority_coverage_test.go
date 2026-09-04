@@ -189,6 +189,13 @@ func TestPositionIsNotBundledIntoTheGeneralReadScope(t *testing.T) {
 // arrives ALONGSIDE it (like `location`) must not be the one a client presents by
 // itself expecting the server to answer. Pinned so the day a write scope appears,
 // whoever adds it sees that this requirement is the floor for reaching ANY tool.
+//
+// 🔑 THE "EVERY TOOL EXCEPT THE POSITION ONE" HALF OF THIS HAS MOVED, and deliberately.
+// It used to be spelled `if name == "query_locations" { continue }`, which pinned today's
+// catalog rather than the rule: a SECOND position tool would have been silently required
+// to fit under read-only, which is the exact opposite of what the exclusion means. It now
+// keys on the tool's DECLARED exposure — see TestAPositionToolIsNotReachableOnTheGeneral
+// ReadScope in risk_test.go, which asserts both directions of the rule.
 func TestReadOnlyIsTheFloorForReachingTheServer(t *testing.T) {
 	if !coreauth.IsSupportedScope(coreauth.ScopeReadOnly) {
 		t.Fatalf("%q is not a supported scope", coreauth.ScopeReadOnly)
@@ -196,24 +203,5 @@ func TestReadOnlyIsTheFloorForReachingTheServer(t *testing.T) {
 	if !coreauth.IsSupportedScope(coreauth.ScopeLocation) {
 		t.Fatalf("%q is not a supported scope, so query_locations can never be authorized",
 			coreauth.ScopeLocation)
-	}
-	// Every tool except the position one is satisfied by read-only on its own — which
-	// is what makes requiring it as the floor correct rather than arbitrary.
-	readOnly, _ := coreauth.ScopeAllowance(coreauth.ScopeReadOnly)
-	inReadOnly := map[string]bool{}
-	for _, a := range readOnly {
-		inReadOnly[a] = true
-	}
-	for _, name := range registeredToolNames(t) {
-		if name == "query_locations" {
-			continue
-		}
-		for _, needed := range toolAuthorities[name] {
-			if !inReadOnly[string(needed)] {
-				t.Errorf("tool %q needs %q, which read-only does not admit. Either it needs "+
-					"its own scope like query_locations does — in which case exclude it here "+
-					"deliberately — or read-only's ceiling is wrong", name, needed)
-			}
-		}
 	}
 }
