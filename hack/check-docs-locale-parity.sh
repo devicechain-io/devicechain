@@ -12,6 +12,24 @@
 # broken anchors (`onBrokenLinks: 'throw'`), and neither of them can see this,
 # because nothing is broken. The page is simply not translated.
 #
+# 🔑 THE BUILD CATCHES *SOME* OF THIS, AND THE PART IT CATCHES IT REPORTS AS
+# SOMETHING ELSE ENTIRELY. Measured, after this guard's first draft asserted the
+# opposite: an untranslated page that contains a **relative markdown link** fails
+# the `es` build outright, because the fallback copy has no position in the
+# translated tree from which `../foo.md` can be resolved. What you get is
+# "Markdown link with URL `../deployment/bootstrap.md` couldn't be resolved" —
+# pointing at a link that is perfectly correct, in a file whose real problem is
+# that its translation does not exist. Only the FIRST such link in each file is
+# reported, so the message also understates its own scope.
+#
+# So the build is neither a substitute for this guard nor irrelevant to it:
+#   - a missing translation whose page has no relative links: builds clean and
+#     silently serves English — invisible, which is the case this guard exists for;
+#   - a missing translation whose page has one: fails the build with a diagnosis
+#     that sends you to fix a link that is not broken;
+#   - an orphaned translation whose English original was deleted: builds clean.
+# This guard turns all three into one accurate sentence, before the build runs.
+#
 # 🔴 THE COST LANDS AT THE GA TAG. Cutting v1.0.0 runs Docusaurus `docs:version`,
 # which freezes a `1.0` snapshot — and with i18n configured it freezes ONE SNAPSHOT
 # PER LOCALE, each copied from that locale's current tree. A drifted file set is
@@ -350,9 +368,14 @@ case "${1:-}" in
 
 ==> Translated docs have drifted from English
 
-Docusaurus falls back to the English page when a translation is missing, so the
-site builds clean and the Spanish reader silently gets English. Nothing else in
-CI can see this: there is no broken link and no broken anchor.
+Docusaurus falls back to the English page when a translation is missing, so a
+Spanish reader silently gets English. How that shows up depends on the page:
+
+  - a page with no relative markdown links builds clean, and nothing anywhere
+    reports it — this is the case this guard exists for;
+  - a page that HAS one fails the `es` build with "Markdown link ... couldn't be
+    resolved", naming a link that is not actually broken. If you were sent here
+    by that error, the missing translation below is the real cause.
 
 To fix:
   - a page missing from a translation  -> write the translation
