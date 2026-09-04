@@ -30,6 +30,7 @@ import enConnectors from './locales/en/connectors.json';
 import enCommandBatches from './locales/en/commandBatches.json';
 import enBranding from './locales/en/branding.json';
 import enBasemap from './locales/en/basemap.json';
+import enLocale from './locales/en/locale.json';
 import enBrowse from './locales/en/browse.json';
 import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
@@ -56,6 +57,7 @@ import esConnectors from './locales/es/connectors.json';
 import esCommandBatches from './locales/es/commandBatches.json';
 import esBranding from './locales/es/branding.json';
 import esBasemap from './locales/es/basemap.json';
+import esLocale from './locales/es/locale.json';
 import esBrowse from './locales/es/browse.json';
 import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
@@ -127,6 +129,10 @@ export const NAMESPACES = [
   'commandBatches',
   'branding',
   'basemap',
+  // The tenant's own DEFAULT-language editor (rung 2 of the precedence below), not
+  // the machinery in this file. Named for the screen it backs, like every other
+  // namespace here.
+  'locale',
   'browse',
   'facets',
   'audit',
@@ -163,6 +169,7 @@ const resources = {
     commandBatches: enCommandBatches,
     branding: enBranding,
     basemap: enBasemap,
+    locale: enLocale,
     browse: enBrowse,
     facets: enFacets,
     audit: enAudit,
@@ -190,6 +197,7 @@ const resources = {
     commandBatches: esCommandBatches,
     branding: esBranding,
     basemap: esBasemap,
+    locale: esLocale,
     browse: esBrowse,
     facets: esFacets,
     audit: esAudit,

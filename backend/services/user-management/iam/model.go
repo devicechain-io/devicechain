@@ -336,6 +336,24 @@ type Tenant struct {
 	BasemapCenterLon   *float64
 	BasemapZoom        *float64
 
+	// The tenant's DEFAULT LOCALE (ADR-066 sub-workstream d): the language its console
+	// opens in for a user who has not picked one. Same cascading-column pattern as the
+	// branding and basemap blocks above — nil means "inherit the operator's
+	// `locale.default` setting" — and resolved onto the same self-scoped `tenant` query.
+	//
+	// 🔴 It is a DEFAULT, not a setting, and the console's precedence is where that
+	// distinction lives: an explicit user choice beats it, it beats the browser's
+	// advertised languages, and `en` catches whatever falls through. So this never
+	// takes a language away from a user who has chosen one — it only answers the
+	// question for the user who has not, which used to be answered by whatever their
+	// browser happened to advertise.
+	//
+	// A BCP-47 tag ("en", "es", "pt-BR"), validated by the locale package at the mint
+	// point. It is deliberately NOT checked against the console's shipped catalogs —
+	// that list lives with the catalogs; see the locale package for why mirroring it
+	// here would be the wrong direction to fail in.
+	Locale *string
+
 	// Per-tenant external-AI consent (ADR-056 §6, an ADR-023 governance flag). Gates
 	// whether THIS tenant's data — NL rule-authoring prompts + the device schema they
 	// carry — may be routed to an EXTERNAL frontier model by the ai-inference service.

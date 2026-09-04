@@ -1,0 +1,14 @@
+{
+  "title": "Language",
+  "description": "The language this tenant's console opens in for members who have not chosen one for themselves.",
+  "loading": "Loading language settings…",
+  "noPermissionPrefix": "You need the",
+  "noPermissionSuffix": "authority to change this tenant's default language.",
+  "defaultLanguage": "Default language",
+  "defaultLanguageHelp": "Choose Inherit to follow the instance-wide default your operator has set.",
+  "inheritOption": "Inherit",
+  "inheriting": "Inheriting the instance default: {{locale}}",
+  "precedenceNote": "This is a default, not a setting that overrides people. Anyone who has picked a language from the switcher keeps it. Anyone who has not sees this language — and if this is set to Inherit and your operator has set no default either, they see whichever of our languages their browser asks for, or English.",
+  "save": "Save language",
+  "savedToast": "Default language saved."
+}

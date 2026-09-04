@@ -304,7 +304,8 @@ CREATE TABLE "user-management".iam_tenants (
  held_command_ceiling bigint,
  geo_fence_position_ceiling bigint,
  geo_fence_ceiling bigint,
- geo_fence_position_budget bigint
+ geo_fence_position_budget bigint,
+ locale text
 );
 CREATE TABLE "user-management".purged_tenants (
  token character varying(128) NOT NULL,

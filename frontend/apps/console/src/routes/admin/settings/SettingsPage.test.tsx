@@ -54,6 +54,7 @@ function setting(key: string, value: string, extra: Partial<Row> = {}): Row {
 const MASKS = 'entity.token_masks';
 const BASEMAP = 'basemap.default';
 const BRANDING = 'branding.default';
+const LOCALE = 'locale.default';
 
 async function renderWith(rows: Row[]) {
   listSettingsMock.mockResolvedValue(rows);
@@ -467,4 +468,88 @@ describe('what is validated is what would be sent', () => {
   //
   // The reachable branding equivalent is a non-hex colour, which is a text input
   // and is covered above.
+});
+
+// 🔴 locale.default is the only setting whose stored value is a BARE JSON STRING
+// rather than an object, so it exercises a codec path none of the other three do:
+// `onlyKnownKeys` never runs, and "is this the shape my editor models?" is a
+// typeof check. Both directions are pinned here — a string loads into the field, a
+// non-string falls back to raw JSON — because the failure mode of getting it wrong
+// is the full-replace field loss the registry exists to prevent.
+describe('locale default editor', () => {
+  const tagField = () => screen.getByLabelText(/language tag/i) as HTMLInputElement;
+
+  it('loads the stored tag into the field', async () => {
+    await renderWith([setting(LOCALE, '"es"')]);
+    expect(tagField().value).toBe('es');
+  });
+
+  it('saves the tag as a bare JSON string, not as an object', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'pt-BR' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledTimes(1));
+    expect(setSettingMock.mock.calls[0]).toEqual([LOCALE, '"pt-BR"']);
+  });
+
+  it('offers the shipped locales as one-click shortcuts', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.click(screen.getByRole('button', { name: /es\s*Español/i }));
+    expect(tagField().value).toBe('es');
+  });
+
+  it('blocks a value that is not a language tag, and says so', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'en_US' } });
+
+    expect(await screen.findByText(/is not a language tag/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+    expect(setSettingMock).not.toHaveBeenCalled();
+  });
+
+  // Clearing the field is refused rather than read as "no default": Reset is how an
+  // operator reverts to the shipped value, and admitting a second spelling would
+  // give this page two states that look the same and behave differently on Reset.
+  it('blocks an emptied field and points at Reset instead', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: '' } });
+
+    expect(await screen.findByText(/reset this setting/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  // 🔴 The counterweight to every block above: a well-formed tag with no catalog in
+  // this build must still SAVE. The server accepts it — the shipped set lives with
+  // the catalogs, not in the backend — so refusing it here would be stricter than
+  // the platform and would leave the operator no way through. It gets a warning, not
+  // an error.
+  it('warns about a tag this build ships no catalog for, but still allows the save', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'fr' } });
+
+    expect(await screen.findByText(/no catalog for/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, '"fr"'));
+  });
+
+  // A value that is not a string at all cannot be modelled by this editor, so it
+  // must fall back to raw JSON rather than load as blank and then be saved over.
+  // `null` is the case worth naming: the server refuses it now, but an override
+  // stored before that gate existed could still hold one.
+  it('falls back to the raw editor for a value that is not a string', async () => {
+    await renderWith([setting(LOCALE, 'null')]);
+
+    expect(rawJson().value).toContain('null');
+    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
+  });
+
+  it('falls back to the raw editor for an object-shaped value', async () => {
+    await renderWith([setting(LOCALE, '{"locale":"es"}')]);
+
+    expect(rawJson().value).toContain('locale');
+    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
+  });
 });

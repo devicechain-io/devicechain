@@ -26,6 +26,7 @@ import (
 
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
+	"github.com/devicechain-io/dc-user-management/locale"
 	"github.com/devicechain-io/dc-user-management/settings"
 	"github.com/devicechain-io/dc-user-management/tokenmask"
 )
@@ -81,6 +82,32 @@ const KeyBasemapDefault = "basemap.default"
 // pins the host and the copyright link against each other for that reason.
 const DefaultBasemapJSON = `{"tileUrl":"https://tile.openstreetmap.org/{z}/{x}/{y}.png","attribution":"© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"}`
 
+// KeyLocaleDefault is the instance-wide default console language (ADR-066
+// sub-workstream d): a BCP-47 language tag an operator can set platform-wide,
+// sitting below any per-tenant override. Same cascade shape as the branding and
+// basemap defaults above; the value shape and its rules are owned by the locale
+// package.
+//
+// 🔴 The VALUE IS A BARE JSON STRING (`"es"`), not an object, and that is the one
+// thing about this key worth knowing before editing it. The other three settings are
+// objects because they carry several fields; a locale is one scalar, and wrapping it
+// in `{"locale":"es"}` would buy a field name nobody reads at the cost of an extra
+// shape for every client to unwrap. The settings page's raw-JSON editor handles it
+// unchanged — but note the consequence: an operator typing `es` without the quotes is
+// not valid JSON and is refused by the store before this validator ever runs.
+//
+// The code default is "en", which is the same value the console's own fallbackLng
+// carries. That duplication is deliberate rather than a seam worth removing: the two
+// answer different questions — this one is "what does an unconfigured INSTANCE mean by
+// no locale", the console's is "what do I render when the resolved catalog is missing
+// a key" — and a console that could not fall back without asking the server would fail
+// to render at all when the server is unreachable.
+const KeyLocaleDefault = "locale.default"
+
+// DefaultLocaleJSON is the shipped instance default language: English, as a bare JSON
+// string.
+const DefaultLocaleJSON = `"en"`
+
 // Registry returns the registry of every known system setting.
 //
 // It is a function rather than a package-level var so that a construction failure
@@ -106,6 +133,12 @@ func Registry() *settings.Registry {
 			json.RawMessage(DefaultBasemapJSON),
 			`Instance-wide basemap default: tileUrl, attribution, and a fallback view (centerLat/centerLon/zoom). Sits below any per-tenant override. tileUrl and attribution resolve TOGETHER — a tenant that sets its own tile URL never inherits this attribution — and neither may be set without the other. Defaults to the OpenStreetMap standard tile layer, which needs no credentials; change it to point at your own provider.`,
 			validateBasemapDefault,
+		),
+		settings.Define(
+			KeyLocaleDefault,
+			json.RawMessage(DefaultLocaleJSON),
+			`Instance-wide default console language, as a BCP-47 language tag in a JSON string (for example "en" or "es"). Sits below any per-tenant default, and both sit below a user's own explicit choice — setting this changes the language only for users who have not picked one. A tag whose catalog this console build does not ship has no effect until it does.`,
+			validateLocaleDefault,
 		),
 	)
 }
@@ -165,6 +198,46 @@ func validateBrandingDefault(value json.RawMessage) error {
 // so `tileURL` is not an unknown field — it binds to TileURL and works. Only a
 // genuinely different key (`tile_url`) is refused. Pinned by
 // TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive.
+// validateLocaleDefault rejects a locale.default value that is not a JSON string
+// holding a well-formed language tag (ADR-066 sub-workstream d).
+//
+// 🔴 JSON `null` is REFUSED rather than read as "no default". The store already has a
+// way to say that — Clear removes the override row and reverts to the code default —
+// and admitting a second spelling would give the settings page two states that look
+// identical (an override badge over a value the cascade treats as absent) and behave
+// differently on Reset. Decoding into *string is what makes null distinguishable from
+// an absent key here at all, which is why it is decoded that way and then rejected.
+//
+// The tag itself is checked for SHAPE, not for membership in the console's shipped
+// catalogs — see the locale package for why that list stays where the catalogs are.
+func validateLocaleDefault(value json.RawMessage) error {
+	var l *string
+	dec := json.NewDecoder(strings.NewReader(string(value)))
+	if err := dec.Decode(&l); err != nil {
+		return fmt.Errorf("%s must be a JSON string holding a language tag: %w", KeyLocaleDefault, err)
+	}
+	// Normalize before validating so a tag that only needs trimming or re-casing is
+	// accepted rather than refused for a difference the cascade erases anyway.
+	//
+	// 🔴 That normalization is why the emptiness check sits AFTER it and covers nil,
+	// `""` and `"   "` together. locale.Validate ACCEPTS nil — at the tenant tier nil
+	// is "inherit", which is a real intent — and Normalize collapses a blank to nil,
+	// so validating the normalized value alone would let `""` through as though the
+	// operator had chosen to inherit. There is nothing to inherit at this tier: the
+	// way to say "no instance default" is to CLEAR the key, which reverts to the
+	// shipped code default. Admitting a second spelling would give the settings page
+	// two states that look the same (an override badge over a value the cascade treats
+	// as absent) and behave differently on Reset.
+	normalized := locale.Normalize(l)
+	if normalized == nil {
+		return fmt.Errorf("%s must be a language tag; clear the setting to revert to the shipped default", KeyLocaleDefault)
+	}
+	if err := locale.Validate(normalized); err != nil {
+		return fmt.Errorf("%s: %w", KeyLocaleDefault, err)
+	}
+	return nil
+}
+
 func validateBasemapDefault(value json.RawMessage) error {
 	dec := json.NewDecoder(strings.NewReader(string(value)))
 	dec.DisallowUnknownFields()

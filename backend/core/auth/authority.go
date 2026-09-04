@@ -303,6 +303,27 @@ const (
 	// restyle the console. Separating them costs one constant and one vocabulary entry.
 	BasemapWrite Authority = "basemap:write"
 
+	// Tenant default-locale self-service (user-management, ADR-066 sub-workstream d).
+	// Gates the self-scoped setTenantLocale mutation — a tenant declaring the language
+	// its console opens in for members who have not chosen one. Reads need no
+	// authority, exactly as for branding and basemap: the resolved locale rides the
+	// self-scoped `tenant` query and is applied to every member's shell, so gating the
+	// read would leave the console in the wrong language for precisely the people the
+	// default exists for.
+	//
+	// 🔴 Its own authority rather than a fold into branding:write, following the
+	// basemap precedent above — but the reason is DIFFERENT and weaker, and that is
+	// worth stating rather than borrowing. basemap:write is separate because the tile
+	// URL carries a CREDENTIAL, so sharing a grant would leak a secret. Nothing here is
+	// secret. What is here is BLAST RADIUS: this one value re-languages the console for
+	// every member of the tenant who has not made an explicit choice, which is a
+	// different kind of act from restyling a logo and plausibly belongs to different
+	// people (an ops admin owns the brand; whoever runs the regional team owns the
+	// language). Folding it into branding:write would make each grant imply the other
+	// and delete that choice for every operator; separating them costs one constant and
+	// one vocabulary entry, and an instance that wants them together grants both.
+	LocaleWrite Authority = "locale:write"
+
 	// AI inference provider administration (ai-inference, ADR-056). Gates the
 	// INSTANCE-scoped, operator-managed AIProvider CRUD — the registered inference
 	// providers (kind, endpoint, model, write-only API key) NL→rule authoring routes
@@ -406,6 +427,7 @@ var vocabulary = map[Authority]Tiers{
 	ConnectorWrite:    tenant,
 	BrandingWrite:     tenant,
 	BasemapWrite:      tenant,
+	LocaleWrite:       tenant,
 	// audit:read is the one DUAL-tier authority, and it has to be: two different
 	// resolvers on two different planes gate on it. A tenant reads its own journal on
 	// device-management's data plane (tenant-tier), and an operator reads the instance

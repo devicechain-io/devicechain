@@ -163,6 +163,8 @@ graphql(`
       centerLon
       zoom
     }
+    locale
+    localeOverride
   }
 `);
 
@@ -274,6 +276,34 @@ export async function setTenantBasemap(
 ): Promise<CurrentTenant> {
   const data = await gql('user-management', SET_TENANT_BASEMAP, { input });
   return data.setTenantBasemap;
+}
+
+// The tenant's DEFAULT language: its own override folded over the operator's
+// `locale.default`. A BCP-47 tag, or null when neither tier sets one.
+//
+// 🔴 A DEFAULT, not the language in effect. It is rung 2 of four — an explicit user
+// choice beats it, it beats the browser's advertised languages, and English catches
+// the rest — and the only thing that applies it is applyTenantDefaultLocale, called
+// once from TenantProvider. Reading this value anywhere else to decide what language
+// something is in would skip rung 1 and re-language a user who has chosen.
+export type TenantLocale = CurrentTenant['locale'];
+
+// Self-service default language for the caller's OWN tenant (requires locale:write —
+// NOT branding:write, because this re-languages the console for every member who has
+// not chosen otherwise). Passing null clears the override, re-inheriting the operator
+// default. Returns the tenant with a freshly-resolved locale for an immediate cache
+// write.
+const SET_TENANT_LOCALE = graphql(`
+  mutation SetTenantLocale($locale: String) {
+    setTenantLocale(locale: $locale) {
+      ...TenantFields
+    }
+  }
+`);
+
+export async function setTenantLocale(locale: string | null): Promise<CurrentTenant> {
+  const data = await gql('user-management', SET_TENANT_LOCALE, { locale });
+  return data.setTenantLocale;
 }
 
 // uploadTenantLogo uploads a raster logo file to the object store (ADR-058 Tier-1)

@@ -11,6 +11,7 @@ import {
 } from '@/lib/api/user-management';
 import { useCachedResource } from '@/lib/hooks/use-cached-resource';
 import { applyBranding } from '@/lib/branding';
+import { applyTenantDefaultLocale } from '@/i18n/config';
 import { MapRuntimeProvider, TenantBasemapProvider } from '@devicechain/widgets';
 
 import { MAP_RUNTIME } from '../map-runtime';
@@ -37,6 +38,14 @@ export interface TenantInfo {
   basemap: TenantBasemap | null;
   // The RAW basemap override, for the editor's set-vs-inherited display.
   basemapOverride: TenantBasemap | null;
+  // The tenant's EFFECTIVE default language (its own override folded over the
+  // operator's instance default), or null when neither tier sets one. Null is also
+  // what the pre-fetch fallback carries, and the two are indistinguishable here — the
+  // effect below treats both as "nothing to apply", which is correct for the first
+  // and a brief English shell for the second.
+  locale: string | null;
+  // The RAW locale override, for the editor's set-vs-inherited display.
+  localeOverride: string | null;
 }
 
 // The context exposes the tenant plus a write-through setter, so the branding
@@ -58,6 +67,8 @@ function toInfo(t: CurrentTenant): TenantInfo {
     brandingOverride: t.brandingOverride,
     basemap: t.basemap,
     basemapOverride: t.basemapOverride,
+    locale: t.locale ?? null,
+    localeOverride: t.localeOverride ?? null,
   };
 }
 
@@ -70,8 +81,19 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   // so every map surface would render blank for as long as that entry lived, on
   // exactly the instances that had just configured one. Orphan the old shape rather
   // than trust it.
+  //
+  // v4 adds the default locale, and it is bumped for CONSISTENCY rather than because
+  // this field needs it — worth saying plainly, because the version above is the kind
+  // of thing a later reader assumes is load-bearing everywhere. A stale v3 entry
+  // deserializes with locale undefined, which reads as null, which is exactly what an
+  // unset locale means: the seam no-ops and the browser rung answers, until the
+  // background refetch lands a moment later. That is the same outcome as not reading
+  // the entry at all, so a mutation that reverts this to v3 changes nothing a test can
+  // see (measured — it is the one survivor of this slice's mutation run). Bump it
+  // anyway: the rule is that the version tracks the SHAPE, and a version that is only
+  // bumped when someone can prove it matters is a version nobody trusts.
   const [cached, setCached] = useCachedResource<TenantInfo>(
-    token ? `dc-tenant:v3:${token}` : null,
+    token ? `dc-tenant:v4:${token}` : null,
     () => getCurrentTenant().then(toInfo),
   );
   // Fall back to the bare token so the chip paints before the first fetch lands.
@@ -86,6 +108,8 @@ export function TenantProvider({ children }: { children: ReactNode }) {
           brandingOverride: null,
           basemap: null,
           basemapOverride: null,
+          locale: null,
+          localeOverride: null,
         }
       : null);
 
@@ -99,6 +123,24 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     applyBranding(branding);
     return () => applyBranding(null);
   }, [branding]);
+
+  // Apply the tenant's DEFAULT language whenever the resolved locale changes. This is
+  // the one call site: TenantProvider is installed once at the top of the tree, so
+  // there is no render site to forget, and the same argument that put both map
+  // providers here applies unchanged.
+  //
+  // 🔴 THERE IS NO CLEANUP, and that asymmetry with applyBranding above is deliberate
+  // rather than an omission. Branding is shell CHROME that must be reverted on unmount
+  // or a tenant's palette leaks onto the login and admin screens. A language is not
+  // chrome: reverting it on unmount would flip the user back to English mid-logout and,
+  // worse, on any remount — and there is nothing to revert TO, since rungs 1, 3 and 4
+  // are exactly where i18next already is. applyTenantDefaultLocale is idempotent and
+  // refuses to override an explicit user choice, so leaving the language in place is
+  // both the correct behaviour and the safe one.
+  const locale = info?.locale ?? null;
+  useEffect(() => {
+    applyTenantDefaultLocale(locale);
+  }, [locale]);
 
   // 🔴 BOTH map providers are installed HERE, once, rather than at each place the
   // console renders widgets — the dashboard workspace, the canvas editor, the
@@ -140,6 +182,23 @@ export function useCurrentTenant(): TenantInfo | null {
 // it.
 export function useTenantBasemap(): TenantBasemap | null {
   return useContext(TenantContext).tenant?.basemap ?? null;
+}
+
+// useTenantLocale returns the tenant's EFFECTIVE default language, or null before the
+// first fetch lands.
+//
+// 🔴 It is NOT "the language the console is in" and no consumer should treat it that
+// way — an explicit user choice outranks it and is not visible here. Use
+// i18n.resolvedLanguage for the language actually in effect. This exists for the
+// EDITOR, which needs to show what the tenant's default currently resolves to.
+export function useTenantLocale(): string | null {
+  return useContext(TenantContext).tenant?.locale ?? null;
+}
+
+// useTenantLocaleOverride returns the RAW stored override — null means "this tenant
+// inherits the operator default" — which is what the editor seeds its select from.
+export function useTenantLocaleOverride(): string | null {
+  return useContext(TenantContext).tenant?.localeOverride ?? null;
 }
 
 // useSetCurrentTenant returns the write-through cache setter — used by the

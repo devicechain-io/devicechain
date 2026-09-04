@@ -27,7 +27,7 @@ func def(t *testing.T, key string) settings.Definition {
 // path, so it gets its own test.
 func TestRegistryBuildsAndEveryShippedDefaultPassesItsOwnValidator(t *testing.T) {
 	r := Registry()
-	require.Len(t, r.All(), 3)
+	require.Len(t, r.All(), 4)
 	for _, d := range r.All() {
 		assert.NoErrorf(t, d.Validate(d.Default), "the shipped default for %s is refused by its own validator", d.Key)
 	}
@@ -165,4 +165,42 @@ func TestKeyCasingIsAcceptedBecauseTheJsonDecoderIsCaseInsensitive(t *testing.T)
 	v := `{"tileURL":"https://t.example.invalid/{z}/{x}/{y}.png","attribution":"© E"}`
 	assert.NoError(t, def(t, KeyBasemapDefault).Validate(json.RawMessage(v)),
 		"case variation binds to the right field, so it is accepted rather than silently ignored")
+}
+
+// ---- locale.default ---------------------------------------------------------
+
+func TestValidateLocaleDefault(t *testing.T) {
+	d := def(t, KeyLocaleDefault)
+
+	valid := []string{`"en"`, `"es"`, `"pt-BR"`, `"zh-Hans-CN"`, `"es-419"`, `"  es-mx "`}
+	for _, v := range valid {
+		assert.NoErrorf(t, d.Validate(json.RawMessage(v)), "valid locale.default rejected: %s", v)
+	}
+
+	invalid := map[string]string{
+		// 🔴 The null case. The store already expresses "no override" by CLEARING the
+		// key, so admitting null would give the settings page two states that look the
+		// same in the UI and behave differently on Reset.
+		"null":                          `null`,
+		"an object rather than a tag":   `{"locale":"en"}`,
+		"an array":                      `["en"]`,
+		"a number":                      `5`,
+		"a bare token that is not JSON": `en`,
+		"prose":                         `"English please"`,
+		"the POSIX spelling":            `"en_US"`,
+		"an empty string":               `""`,
+		"whitespace only":               `"   "`,
+	}
+	for name, v := range invalid {
+		assert.Errorf(t, d.Validate(json.RawMessage(v)), "%s must be refused: %s", name, v)
+	}
+}
+
+// 🔴 The shipped default is the value the console's own fallbackLng carries. This pins
+// the actual tag rather than just "it validates": a default that drifted to a locale
+// the console does not ship would leave an unconfigured instance resolving to a
+// catalog that is not there, and every other test in this file would still pass.
+func TestShippedLocaleDefaultIsEnglish(t *testing.T) {
+	assert.Equal(t, `"en"`, DefaultLocaleJSON)
+	assert.JSONEq(t, DefaultLocaleJSON, string(def(t, KeyLocaleDefault).Default))
 }

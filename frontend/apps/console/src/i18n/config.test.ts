@@ -119,6 +119,79 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
     applyTenantDefaultLocale('en');
     expect(spy).toHaveBeenCalledWith('en');
   });
+
+  // 🔴 RUNG 2 MUST BEAT RUNG 3. This is the assertion the seam exists for, and the one
+  // the tests above cannot make: everything else here checks rung 2 against rung 1, and
+  // a `applyTenantDefaultLocale` that bailed out whenever a language was already
+  // resolved would pass all of them.
+  //
+  // The browser rung produces a resolved language before this ever runs (detection
+  // happens at init, and `caches: []` means nothing is stored), so a language in effect
+  // with an empty LOCALE_STORAGE_KEY is exactly the state rung 3 leaves behind. The
+  // tenant default has to overwrite it.
+  it('beats a language the browser rung already resolved', async () => {
+    await i18n.changeLanguage('es');
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBeNull(); // nothing was CHOSEN
+
+    applyTenantDefaultLocale('en');
+
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('en'));
+  });
+});
+
+// Rungs 3 and 4, exercised through the LIVE detector this module configured — not
+// through a re-declaration of its options, which would only prove the fixture matches
+// itself. `i18n.services.languageDetector` IS the configured instance, so a change to
+// `detection.order` or to `supportedLngs` moves these.
+describe('browser + fallback rungs (ADR-066 rungs 3 and 4)', () => {
+  function withNavigatorLanguages(langs: string[]) {
+    // jsdom exposes navigator.languages as a prototype getter, so it is spy-able;
+    // defineProperty is the fallback for a runtime where it is a own-value property.
+    try {
+      vi.spyOn(window.navigator, 'languages', 'get').mockReturnValue(langs);
+    } catch {
+      Object.defineProperty(window.navigator, 'languages', {
+        value: langs,
+        configurable: true,
+      });
+    }
+  }
+
+  function detected(): string[] {
+    const raw = i18n.services.languageDetector?.detect();
+    if (!raw) return [];
+    return Array.isArray(raw) ? raw : [raw];
+  }
+
+  // Rung 3: with no explicit choice stored, the browser's advertised languages decide.
+  // Delete 'navigator' from detection.order and this reddens.
+  it('detects the browser language when no explicit choice is stored', async () => {
+    withNavigatorLanguages(['es-MX', 'es']);
+    expect(detected().some((l) => l.startsWith('es'))).toBe(true);
+
+    await i18n.changeLanguage(detected()[0]);
+    // nonExplicitSupportedLngs folds the region variant onto the shipped base catalog
+    // rather than dropping straight to English.
+    expect(i18n.resolvedLanguage).toBe('es');
+  });
+
+  // Rung 1 still outranks rung 3 at the DETECTOR, not just in the seam: the stored
+  // choice must be found first in detection.order.
+  it('puts an explicit stored choice ahead of the browser', () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
+    withNavigatorLanguages(['es-MX', 'es']);
+    expect(detected()[0]).toBe('en');
+  });
+
+  // Rung 4: a browser language whose catalog the console does not ship must land on
+  // English, never on a missing catalog. supportedLngs + fallbackLng is what does it;
+  // widening supportedLngs past the shipped registry would break this.
+  it('falls back to English for a language the console does not ship', async () => {
+    withNavigatorLanguages(['fr-FR', 'fr']);
+    await i18n.changeLanguage(detected()[0]);
+    expect(i18n.resolvedLanguage).toBe(DEFAULT_LOCALE);
+    expect(DEFAULT_LOCALE).toBe('en');
+  });
 });
 
 // Spanish is ADR-066's proof locale (sub-workstream c). These pin that the broad
