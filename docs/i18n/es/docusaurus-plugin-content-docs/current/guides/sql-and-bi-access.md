@@ -58,6 +58,11 @@ Llame a un lector `analytics_acme` y leerá `acme`. Llámelo `analytics_acmecorp
 inquilino es `acme` y no leerá absolutamente nada — cada consulta devuelve cero filas, sin error.
 No hay un segundo sitio donde corregir el error, ni ningún mensaje que lo señale. Compruebe el id
 del inquilino en la consola antes de crear el rol.
+
+**El id del inquilino debe tener 53 caracteres o menos.** PostgreSQL limita el nombre de un rol a
+63 bytes y *trunca* los más largos en lugar de rechazarlos, lo que produciría en silencio un lector
+para otro inquilino. Su despliegue rechaza un nombre que se truncaría, así que esto es un apply
+rechazado y no una sorpresa — pero es la razón por la que existe el límite.
 :::
 
 **1. Cree un Secret de Kubernetes con la contraseña.** La plataforma nunca genera ni almacena esta
@@ -126,12 +131,13 @@ ellas necesita un complemento de DeviceChain.
 Conviene entenderlo, porque determina qué puede hacer con seguridad con las credenciales de un
 lector.
 
-**El filtro de inquilino está compilado dentro de las vistas y se basa en el rol conectado.** Cada
-vista lleva `WHERE tenant_id = <el inquilino del rol conectado>`. Esa identidad es el rol de
-PostgreSQL con el que se autenticó la sesión, que un cliente no puede cambiar: cambiar de rol exige
-una pertenencia que un lector no tiene, y no existe ningún ajuste de sesión que lo sobreescriba. Un
-rol cuyo nombre no lleva un inquilino reconocido no resuelve a nada y lee cero filas — la dirección
-del fallo es siempre «no ve nada», nunca «lo ve todo».
+**El filtro de inquilino está compilado dentro de las vistas y se basa en el rol autenticado.**
+Cada vista lleva `WHERE tenant_id = <el inquilino del rol autenticado>`. Esa identidad es el rol con
+el que inició sesión — el `session_user` de PostgreSQL — y un lector no puede cambiarla: `SET ROLE`
+cambia el rol *actual* pero nunca el de la sesión, y la única sentencia que sí lo haría (`SET
+SESSION AUTHORIZATION`) se rechaza a quien no sea superusuario. Tampoco existe ningún ajuste de
+sesión que lo sobreescriba. Un rol cuyo nombre no lleva un inquilino reconocido no resuelve a nada y
+lee cero filas — la dirección del fallo es siempre «no ve nada», nunca «lo ve todo».
 
 **Un lector no tiene ningún privilegio sobre las tablas subyacentes.** No puede alcanzar las
 hipertablas en bruto ni siquiera por su nombre, que es también la razón por la que es de solo
@@ -149,6 +155,20 @@ agote el pool de conexiones de la propia plataforma — un fallo que de otro mod
 porque los pools se abren de forma perezosa y la base de datos sigue reportando buena salud mientras
 la aplicación ya no puede alcanzarla. Su despliegue se niega a generar un lector sin límite, y se
 niega a generar un conjunto de lectores cuyos límites no caben en el servidor.
+
+:::caution El límite acota conexiones, no carga
+Un límite de conexiones impide que un consumidor analítico se quede con las *conexiones* que la
+plataforma necesita. No impide que las consultas sobre esas conexiones compitan por CPU, disco y el
+pool compartido de workers paralelos de PostgreSQL — el mismo del que tiran la compresión, la
+retención y el refresco de la agregación. Así que «la analítica no puede interferir con la ingesta»
+es **parcialmente** cierto: la vía del agotamiento de conexiones está cerrada y la de la contención
+de recursos no.
+
+Si eso importa para su carga de trabajo, ejecute BI contra una **réplica de lectura**. Un despliegue
+replicado ya expone un servicio de solo lectura junto al primario; apuntar los lectores allí sitúa
+la contención en un nodo cuyo único trabajo es atenderlos, y PostgreSQL resuelve allí un conflicto
+cancelando la consulta analítica larga en lugar de retrasando la réplica.
+:::
 
 :::caution Lo que *no* está limitado: el coste de la consulta
 No hay ningún límite de tiempo de consulta sobre un lector, y añadir uno no sería el control que
@@ -176,6 +196,13 @@ suponiendo que cada una de esas conexiones puede estar ejecutando una consulta l
 - **Un lector sobrevive a un cambio de esquema pero no gana nada de él automáticamente.** Las vistas
   exponen un conjunto fijo de columnas; una columna añadida a la plataforma más tarde aparece en la
   superficie analítica cuando se añade allí deliberadamente, no antes.
+- **Un lector ve algunos metadatos más allá de su propio inquilino.** Los catálogos de PostgreSQL
+  son legibles por cualquier rol conectado, así que un lector puede enumerar los nombres de los
+  demás roles del servidor (y por tanto qué inquilinos tienen acceso BI), ver cuándo están activas
+  esas sesiones y ver nombres internos de tablas y chunks. No puede leer ni una fila de todo eso. Si
+  eso importa, dé a cada cliente su propia instancia.
 - **Eliminar un inquilino no elimina su rol de lector.** Quite el rol de las variables de su
-  despliegue como parte del desmantelamiento — la telemetría se borra, así que el rol no leería
-  nada, pero un inicio de sesión que sigue existiendo es un inicio de sesión que alguien conserva.
+  despliegue como parte del desmantelamiento. La telemetría se borra, así que el rol no lee nada —
+  pero un inicio de sesión que sigue existiendo es un inicio de sesión que alguien conserva, **y un
+  id de inquilino puede reutilizarse, en cuyo caso ese rol leería los datos de su sucesor.** Quitar
+  el rol es el paso que cierra ambas cosas.

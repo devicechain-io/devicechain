@@ -41,20 +41,34 @@ BI tool ──psql/JDBC──▶ analytics.measurement_rollups
 
 Two arrows carry the whole design and neither is obvious.
 
-**`current_user`, not a session setting.** A custom GUC (`SET analytics.tenant = …`) is USERSET in
-PostgreSQL: the reader sets it to any tenant it likes, in its own session. `current_user` is the one
-identity in a session a client cannot choose — changing it needs `SET ROLE`, which needs a
-membership the reader does not have. The whole boundary rests on that.
+**`session_user`, not `current_user`, and not a session setting.** A custom GUC (`SET
+analytics.tenant = …`) is USERSET: the reader sets it to any tenant it likes. `current_user` looks
+safe and is not — 🔴 **this design hands every reader membership in `analytics_reader`, so `SET ROLE`
+succeeds**, and the group role's own name matches the reader prefix, so it resolved to the tenant
+`reader`. Measured, before the fix:
+
+```
+analytics_acme=> SET ROLE analytics_reader;
+analytics_acme=> SELECT tenant_id, count(*) FROM analytics.measurement_events GROUP BY 1;
+ reader | 1
+```
+
+`session_user` is the authenticated identity: `SET ROLE` cannot move it and `SET SESSION
+AUTHORIZATION` is refused to a non-superuser. The group role is ALSO excluded by name, as a second
+layer for the day somebody gives it LOGIN.
 [`backend/services/event-management/model/analytics.go`]
 
-**Every boot, not once.** Both the views and the grants are converged at startup, from
-`afterMicroserviceStarted`. [`backend/services/event-management/main.go`]
+**Every boot, not once.** The identity function is re-created unconditionally (it takes no relation
+lock, so there is no readiness cost); the views are checked and rebuilt only if wrong (`CREATE OR
+REPLACE VIEW` takes ACCESS EXCLUSIVE, so an unconditional rebuild would let a long BI query delay
+readiness); and the grants — including PUBLIC's — are converged unconditionally.
+[`backend/services/event-management/main.go`]
 
 ## Why not row-level security
 
 This is the part worth keeping, because RLS is what everybody reaches for first and it cannot be
-built here. Measured on the pinned operand (TimescaleDB 2.28.3 / PostgreSQL 16), both directions
-refuse:
+built here. Measured on BOTH supported majors — PostgreSQL 16 (the image the goldens are captured
+against, TimescaleDB 2.28.3) and PostgreSQL 17 (the deployed operand) — both directions refuse:
 
 ```
 ALTER TABLE <hypertable> SET (timescaledb.compress, …)   -- on an RLS table
@@ -82,7 +96,7 @@ view body, which then becomes the uniform mechanism for all seven rather than a 
 | --- | --- | --- |
 | Tenant isolation | `WHERE tenant_id = analytics.reader_tenant()` compiled into each view, keyed on `current_user` | yes |
 | Qual ordering | `security_barrier` on every view | yes — see below |
-| Reachability of the raw tables | the reader holds **no** privilege on `"event-management"`, not even USAGE; re-revoked every boot | yes |
+| Reachability of the raw tables | the reader holds **no** privilege on `"event-management"`, not even USAGE; re-revoked every boot, **from PUBLIC as well as from every named role** | yes |
 | Read-only | only `SELECT` is granted; there is no write privilege to exercise | yes |
 | Connection cap | `CONNECTION LIMIT` on the role, refused at authentication | yes |
 | Query cost | `statement_timeout` — USERSET, so a reader raises it in one statement | **no**, and the guide says so |
@@ -123,7 +137,7 @@ into a checked property.
 | | Visible to `hack/migration-diff.sh verify`? |
 | --- | --- |
 | the `analytics` schema, function and views | **yes**, but only because `area.extraSchemas` was added — the dump is scoped `--schema <area>`, so a schema built under another name was invisible to the only gate that exercises migrations |
-| `SET search_path` on the function | no — `normalizeDump` strips `SET ` lines (they are pg_dump's own preamble) |
+| `SET search_path` on the function | **no** — `normalizeDump` strips `SET ` lines (they are pg_dump's own preamble), so the pin is absent from the committed golden. Look at `golden/event-management.sql`: the function is dumped as `LANGUAGE sql STABLE` straight into `AS $$`, with no `SET` clause between them. A re-creation that drops the pin moves nothing. `pg_proc.proconfig` is checked at boot for exactly this reason |
 | roles | no — `pg_dump` emits none; that is `pg_dumpall --roles-only` |
 | grants | no — the dump passes `--no-privileges`, so no ACL can move a golden |
 
@@ -144,10 +158,55 @@ pool of 20, doubled for a RollingUpdate.
 Both refusals are exercised by name in `hack/check-cnpg-chart-schema.sh`, whose coverage control
 requires every `fail` in the templates to have been tripped by a case.
 
+## Three holes review found, all in the perimeter
+
+Recorded because each was invisible to a different gate, and because two of them were closed by
+tests that already existed and were asking the wrong question.
+
+1. **`SET ROLE analytics_reader`** — see above. The comment asserting it was impossible was written
+   by the same change that granted the membership making it possible. A test pinned `current_user`
+   and passed.
+2. **The identity function was built once.** The view reconciler existed precisely because "the one
+   thing enforcing isolation was the one thing built once" — and that argument then applied, one
+   level down, to `reader_tenant()` itself, which no check re-asserted. Three re-creations leak and
+   pass a view-only check: a replaced body, a body with the `search_path` pin dropped, and a
+   `SECURITY DEFINER` one. 🔴 The pin is doubly invisible: `normalizeDump` strips `SET ` lines, so it
+   never reached the golden either. The check now reads `pg_proc.prosrc/proconfig/prosecdef/
+   provolatile`, and the function is rebuilt every boot regardless.
+3. **`WHERE … reader_tenant() OR true`** satisfied a `strings.Contains` check while showing every
+   tenant. The comparison is now against the exact predicate as `pg_get_viewdef` reconstructs it,
+   anchored at the END of the definition so nothing can be appended. Measured identical on both
+   majors: `WHERE ((tenant_id)::text = analytics.reader_tenant());`.
+
+Plus two smaller ones: **PUBLIC is not a role**, so revoking from everything in `pg_roles` missed
+it entirely and a `GRANT … TO PUBLIC` on the area schema survived every boot; and the
+least-privilege test **ran the reconciler with zero roles present**, so the GRANT/REVOKE path it
+claimed to measure as the unprivileged owner never executed.
+
+## The two governance rulings
+
+**"An analytics consumer cannot starve ingest" is PARTIALLY met.** The connection cap binds and
+closes the connection-exhaustion path. It does not bound CPU, IO, or the shared parallel-worker
+pool that compression, retention and cagg refresh draw on — and `max_parallel_workers_per_gather`
+is USERSET, so a reader can raise its own. Documented as partial rather than claimed. The cheap
+improvement, not taken here: CloudNativePG already creates a `-ro` service, so under `--ha` BI can
+point at a standby, where `max_standby_streaming_delay` cancels the conflicting long query — the
+reader loses rather than ingest.
+
+**BI access is operator-declared, not tier-governed.** Not merely "no consumer for the value": the
+application role holds no `CREATEROLE`, so it **cannot** `ALTER ROLE … CONNECTION LIMIT` at all. A
+tier cascade could resolve a number and would have nothing able to act on it. Recorded here so this
+does not become two governance stories by accident.
+
 ## Loose ends
 
-- **Deleting a tenant does not delete its reader role.** The tenant purge erases the telemetry, so
-  the role reads nothing, but the login still exists. Removing it is an operator step.
+- **Deleting a tenant does not delete its reader role, and a token can be REUSED.** The purge
+  erases the telemetry, so the role reads nothing — until a successor tenant is created at the same
+  token, which the token-release step permits. The predecessor's `analytics_<token>` login then
+  reads the successor's data. The docs now say so; nothing enforces it and the platform cannot,
+  because it can neither drop the role nor see that one exists. The real answer is a
+  platform-owned `analytics.readers(tenant_id)` allow-list that `reader_tenant()` consults and the
+  purge clears, which is filed rather than built here.
 - **The reader can enumerate chunk names.** `_timescaledb_internal` carries `USAGE` for PUBLIC, so
   a reader can see relation names in the catalog. It cannot read any of them — measured — but the
   names are visible.

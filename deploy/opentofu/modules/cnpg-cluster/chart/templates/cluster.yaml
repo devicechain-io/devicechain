@@ -126,6 +126,15 @@ but not the unlimited-role half.
 {{- end -}}
 {{- $extraTotal := 0 -}}
 {{- range $role := .Values.extraRoles -}}
+  {{- /*
+  PostgreSQL truncates an identifier longer than 63 bytes rather than refusing it, and
+  says so only in a NOTICE nobody reads. For a read role whose NAME carries the tenant,
+  that turns a too-long name into a role for a DIFFERENT tenant -- silently, and
+  correctly as far as everything downstream can tell.
+  */ -}}
+  {{- if gt (len $role.name) 63 -}}
+    {{- fail (printf "cnpg-cluster %q: role name %q is %d characters, and PostgreSQL truncates identifiers longer than 63 rather than rejecting them. A truncated name is a different role -- for a read role whose name carries the tenant, it is a different tenant's." $name $role.name (len $role.name)) -}}
+  {{- end -}}
   {{- if $role.login -}}
     {{- if or (not (hasKey $role "connectionLimit")) (lt ($role.connectionLimit | int) 0) -}}
       {{- fail (printf "cnpg-cluster %q: login role %q declares no connection limit, so it may open as many sessions as it likes against the same pool the platform uses. An analytics consumer that exhausts it does not fail loudly -- the application's pools simply stop refilling while the database keeps reporting healthy. Give it a connectionLimit." $name $role.name) -}}

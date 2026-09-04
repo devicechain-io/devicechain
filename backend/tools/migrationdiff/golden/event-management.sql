@@ -12,8 +12,9 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  LANGUAGE sql STABLE
  AS $$
  SELECT CASE
- WHEN current_user::text LIKE 'analytics=_%' ESCAPE '='
- THEN substring(current_user::text from 11)
+ WHEN session_user::text <> 'analytics_reader'
+ AND session_user::text LIKE 'analytics=_%' ESCAPE '='
+ THEN substring(session_user::text from 11)
  END
  $$;
 CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management".alert_events USING btree (tenant_id);

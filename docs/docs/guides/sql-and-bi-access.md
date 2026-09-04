@@ -52,6 +52,11 @@ Name a reader `analytics_acme` and it reads `acme`. Name it `analytics_acmecorp`
 id is `acme` and it reads nothing at all — every query returns zero rows, with no error. There is
 no second place to correct the mistake, and no message that names it. Check the tenant id in the
 console before you create the role.
+
+**The tenant id must be 53 characters or shorter.** PostgreSQL caps a role name at 63 bytes and
+*truncates* a longer one instead of rejecting it, which would silently produce a reader for a
+different tenant. Your deployment refuses a name that would be truncated, so this is a rejected
+apply rather than a surprise — but it is why the limit exists.
 :::
 
 **1. Create a Kubernetes Secret with the password.** The platform never mints or stores this
@@ -117,12 +122,13 @@ plugin.
 
 Worth understanding, because it decides what you can safely do with a reader's credentials.
 
-**The tenant filter is compiled into the views, and it keys on the connected role.** Each view
-carries `WHERE tenant_id = <the tenant of the connected role>`. That identity is the PostgreSQL
-role the session authenticated as, which a client cannot change: switching roles requires a
-membership a reader does not have, and there is no session setting to override. A role whose name
-carries no recognised tenant resolves to nothing and reads zero rows — the failure direction is
-always "sees nothing", never "sees everything".
+**The tenant filter is compiled into the views, and it keys on the authenticated role.** Each view
+carries `WHERE tenant_id = <the tenant of the authenticated role>`. That identity is the role the
+session logged in as — PostgreSQL's `session_user` — and a reader cannot change it: `SET ROLE`
+moves the *current* role but never the session's, and the one statement that would (`SET SESSION
+AUTHORIZATION`) is refused to anyone who is not a superuser. There is no session setting to
+override either. A role whose name carries no recognised tenant resolves to nothing and reads zero
+rows — the failure direction is always "sees nothing", never "sees everything".
 
 **A reader holds no privilege on the underlying tables.** It cannot reach the raw hypertables by
 name at all, which is also why it is read-only: it has `SELECT` on seven views and nothing else, so
@@ -135,10 +141,23 @@ nor a view edited during one quietly outlives it. A restart is a repair.
 
 **Connections are capped per role, and the cap binds.** `connection_limit` is enforced at
 authentication: past it, the connection is refused. This is what stops an analytics consumer from
-starving the platform's own connection pool — a failure that would otherwise be silent, because
+exhausting the platform's own connection pool — a failure that would otherwise be silent, because
 pools open lazily and the database keeps reporting healthy while the application can no longer
 reach it. Your deployment refuses to render a reader with no limit, and refuses a set of readers
 whose limits do not fit the server.
+
+:::caution The cap bounds connections, not load
+A connection limit stops an analytics consumer from taking *connections* the platform needs. It
+does not stop the queries on those connections from competing for CPU, disk and PostgreSQL's shared
+parallel-worker pool — the same pool compression, retention and rollup refresh draw on. So
+"analytics cannot interfere with ingest" is **partially** true: the connection-exhaustion path is
+closed and the resource-contention path is not.
+
+If that matters for your workload, run BI against a **read replica**. A replicated deployment
+already exposes a read-only service alongside the primary; pointing readers at it puts the
+contention on a node whose only job is serving them, and PostgreSQL resolves a conflict there by
+cancelling the long analytics query rather than by delaying replay.
+:::
 
 :::caution What is *not* capped: query cost
 There is no query-time limit on a reader, and adding one would not be the control it looks like.
@@ -165,6 +184,12 @@ assumption that every one of those connections may be running a long query.
 - **A reader survives a schema change but does not automatically gain from one.** The views expose
   a fixed set of columns; a column added to the platform later appears on the analytics surface
   when it is deliberately added there, not before.
+- **A reader sees some metadata beyond its own tenant.** PostgreSQL's catalogs are readable by any
+  connected role, so a reader can list the other role names on the server (and therefore which
+  tenants have BI access), see when those sessions are active, and see internal table and chunk
+  names. It cannot read a row of any of it. If that matters, give each customer its own instance.
 - **Deleting a tenant does not delete its reader role.** Remove the role from your deployment
-  variables as part of decommissioning it — the telemetry is erased, so the role would read
-  nothing, but a login that still exists is a login somebody still holds.
+  variables as part of decommissioning it. The telemetry is erased, so the role reads nothing — but
+  a login that still exists is a login somebody still holds, **and a tenant id can be reused, in
+  which case that role would read its successor's data.** Removing the role is the step that closes
+  both.

@@ -32,6 +32,10 @@ import (
 // Isolation for this surface is therefore enforced INSIDE the database, and it is
 // made of two things, neither of which is the gorm callback:
 //
+// (Both are converged on every boot, and "both directions" for the grants means PUBLIC
+// as well as every named role — PUBLIC is not in pg_roles, so a reconciler that walks
+// that catalog misses the one grantee every login on the instance inherits from.)
+//
 //  1. **Grants.** The read role holds no privilege whatsoever on the
 //     "event-management" schema — not even USAGE — so the hypertables and the
 //     continuous aggregate are unreachable by name. It holds SELECT on the views
@@ -39,18 +43,25 @@ import (
 //     INSERT/UPDATE/DELETE privilege to exercise. ReconcileAnalyticsSurface converges
 //     this on every boot, in both directions.
 //
-//  2. **A tenant predicate compiled into each view**, keyed on `current_user`. A
-//     client cannot forge `current_user`: changing it needs SET ROLE, which needs
-//     membership the reader does not have. The predicate is `tenant_id =
-//     analytics.reader_tenant()`, and reader_tenant() returns NULL for any role that
-//     is not an analytics reader — so a role with no analytics identity reads zero
-//     rows rather than everything.
+//  2. **A tenant predicate compiled into each view**, keyed on `session_user` — the
+//     identity the session AUTHENTICATED as. `SET ROLE` cannot move it, and the one
+//     statement that could, `SET SESSION AUTHORIZATION`, is refused to a
+//     non-superuser. The predicate is `tenant_id = analytics.reader_tenant()`, and
+//     reader_tenant() returns NULL for any role that is not an analytics reader — so
+//     a role with no analytics identity reads zero rows rather than everything.
+//
+//     🔴 IT SAID `current_user` HERE, AND THAT SENTENCE WAS FALSE FOR A REASON THIS
+//     FILE CREATED. It claimed SET ROLE "needs membership the reader does not have" —
+//     but every per-tenant reader is provisioned `IN ROLE analytics_reader`, and
+//     membership carries the SET option by default. See createReaderTenantFnStmt for
+//     the measurement.
 //
 // # 🔴 WHY THERE IS NO ROW-LEVEL SECURITY HERE, WHICH IS NOT THE OBVIOUS ANSWER
 //
 // The obvious design is RLS on the six hypertables, with the views as ergonomics.
-// It cannot be built. Measured on the pinned TimescaleDB (2.28.3 / PG16), both
-// directions refuse:
+// It cannot be built. Measured on BOTH supported majors — PostgreSQL 16, the image the
+// goldens are captured against, and PostgreSQL 17, which the deployed operand runs —
+// both directions refuse:
 //
 //	ALTER TABLE <hypertable> SET (timescaledb.compress, ...)   -- on an RLS table
 //	  ERROR: columnstore cannot be used on table with row security
@@ -71,11 +82,17 @@ import (
 //
 // # WHY security_barrier IS ON EVERY VIEW, ALSO MEASURED
 //
-// Without it, a reader's own WHERE clause can be pushed BELOW the tenant predicate.
-// Measured on the same server: `SELECT tenant_id FROM analytics.measurement_events
-// WHERE 1/(value-20) > 0` returns zero rows through a security_barrier view and
-// raises `ERROR: division by zero` through one without — an existence oracle over
-// another tenant's readings, from a role holding nothing but SELECT on a view.
+// Without it, a reader's own WHERE clause can be pushed BELOW the tenant predicate, so
+// a non-leakproof expression is applied to rows the reader may not see and its ERROR
+// becomes an existence oracle over another tenant's data.
+//
+// 🔴 The default plan HIDES this, which is why the test forces the plan the attacker
+// would. On this schema the tenant predicate normally becomes an index condition, and a
+// leak probe against that plan is really testing the index. The planner GUCs are USERSET:
+// a reader runs `SET enable_indexscan = off` for itself and gets the sequential scan
+// where cost ordering applies. Measured there — a cheap probe predicate was handed
+// another tenant's rows through a barrierless clone of the same view, and was not
+// through the real one.
 
 const (
 	// AnalyticsSchema is the Postgres schema holding the read surface. It is
@@ -102,8 +119,13 @@ const (
 	// setting, and that is the security property. A custom GUC (`SET
 	// analytics.tenant = '...'`) is USERSET in PostgreSQL: the reader could set it
 	// to another tenant's id in its own session, which turns the whole surface into
-	// a cross-tenant read with extra steps. `current_user` is the one identity in
-	// the session a client cannot choose.
+	// a cross-tenant read with extra steps. `session_user` is the one identity in
+	// the session a client cannot choose — not `current_user`, which SET ROLE moves.
+	//
+	// 🔴 THE GROUP ROLE'S OWN NAME MATCHES THIS PREFIX, which is why the derivation
+	// excludes it explicitly: without that, `analytics_reader` resolves to the tenant
+	// `reader`, and `reader` is a legal tenant token under core.ValidateToken. The
+	// deployment refuses it as a reader name for the same reason.
 	AnalyticsRolePrefix = "analytics_"
 
 	// AnalyticsAreaSchema is the schema the read role must never hold a privilege on.
@@ -220,11 +242,62 @@ func createAnalyticsSchemaStmt() string {
 	return fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %q;", AnalyticsSchema)
 }
 
+// readerTenantSearchPath is the value pinned on the function, and the value the
+// integrity check requires to still be there.
+//
+// 🔴 THE GOLDEN CANNOT SEE THIS PIN. normalizeDump strips every line beginning `SET `
+// — they are pg_dump's own preamble — so the `SET search_path` clause never reaches
+// backend/tools/migrationdiff/golden/event-management.sql. A function re-created
+// without it therefore moves no golden and fails no diff. That is why it is checked
+// here, from pg_proc.proconfig, rather than left to the schema comparison.
+const readerTenantSearchPath = "search_path=pg_catalog"
+
+// readerTenantBody is the function's body, as it is written and as pg_proc.prosrc
+// stores it. Shared by the DDL and the integrity check so the two cannot drift: a
+// check that compares against its own idea of the body is checking itself.
+func readerTenantBody() string {
+	// The group-role name is compared as a SQL string LITERAL, so it is single-quoted.
+	// %q would render Go's double quotes, which PostgreSQL reads as an IDENTIFIER — the
+	// statement then fails with `column "analytics_reader" does not exist`, at migration
+	// time, on a fresh install only.
+	return fmt.Sprintf(`
+		SELECT CASE
+			WHEN session_user::text <> '%s'
+			 AND session_user::text LIKE '%s=_%%' ESCAPE '='
+			THEN substring(session_user::text from %d)
+		END
+	`,
+		strings.ReplaceAll(AnalyticsReaderRole, "'", "''"),
+		strings.TrimSuffix(AnalyticsRolePrefix, "_"),
+		len(AnalyticsRolePrefix)+1)
+}
+
 // createReaderTenantFnStmt defines the function every view's predicate calls.
 //
-// STABLE rather than IMMUTABLE: it reads current_user, which is fixed within a
-// statement but not across sessions. `SET search_path = pg_catalog` pins resolution
+// STABLE rather than IMMUTABLE: it reads the session's identity, which is fixed within
+// a statement but not across sessions. `SET search_path = pg_catalog` pins resolution
 // so the body cannot be redirected by a caller's search_path.
+//
+// # 🔴 session_user, NOT current_user, AND THAT WAS A MEASURED CROSS-TENANT READ
+//
+// This used to key on current_user, with a comment claiming a reader could not change
+// it because `SET ROLE` needs a membership it does not have. The design's own
+// construction grants exactly that membership: every per-tenant login is created
+// `IN ROLE analytics_reader`, and role membership carries the SET option by default.
+// So a reader could become the group role — whose name matches the prefix — and read
+// the tenant `reader`, which is a legal tenant token. Measured on a live server:
+//
+//	analytics_acme=> SET ROLE analytics_reader;
+//	analytics_acme=> SELECT tenant_id, count(*) FROM analytics.measurement_events GROUP BY 1;
+//	 reader | 1
+//
+// session_user is the AUTHENTICATED identity. `SET ROLE` cannot change it, and the one
+// thing that can — `SET SESSION AUTHORIZATION` — is refused to a non-superuser. That
+// closes the class rather than the instance.
+//
+// The explicit exclusion of the group role is kept anyway, as the second layer: it
+// means the surface still fails closed if that role is ever given LOGIN, which is one
+// checkbox away in any cluster's role management.
 //
 // The LIKE pattern escapes the underscore with ESCAPE '=' rather than a backslash,
 // because a backslash inside a Go string inside a SQL literal is two escapes deep and
@@ -232,16 +305,11 @@ func createAnalyticsSchemaStmt() string {
 func createReaderTenantFnStmt() string {
 	return fmt.Sprintf(`CREATE OR REPLACE FUNCTION %q.reader_tenant() RETURNS text
 	LANGUAGE sql STABLE
-	SET search_path = pg_catalog
-	AS $reader_tenant$
-		SELECT CASE
-			WHEN current_user::text LIKE '%s=_%%' ESCAPE '='
-			THEN substring(current_user::text from %d)
-		END
-	$reader_tenant$;`,
+	SET %s
+	AS $reader_tenant$%s$reader_tenant$;`,
 		AnalyticsSchema,
-		strings.TrimSuffix(AnalyticsRolePrefix, "_"),
-		len(AnalyticsRolePrefix)+1)
+		strings.Replace(readerTenantSearchPath, "=", " = ", 1),
+		readerTenantBody())
 }
 
 // createViewStmt renders one tenant-filtered view.
@@ -291,13 +359,25 @@ func grantStatements(role string) []string {
 // TABLES` — reads every tenant, because the tenant predicate lives in the views it
 // would then be bypassing. So the privilege is not merely never granted, it is
 // actively removed on every boot.
+//
+// 🔴 PUBLIC IS ONE OF THE GRANTEES, and leaving it out made the sentence above false in
+// the one case that survives everything. Measured: `GRANT USAGE ON SCHEMA
+// "event-management" TO PUBLIC` plus `GRANT SELECT ON … TO PUBLIC` gives every reader
+// the raw hypertables — and because the reconciler only ever named the roles it found
+// in pg_roles, that grant survived every boot forever. PUBLIC is not a role and does
+// not appear in pg_roles; it has to be revoked by name. Doing so is safe here because
+// the application role OWNS these relations, and an owner's access does not come from
+// a grant.
+//
+// It takes the grantee as a rendered SQL token rather than a bare identifier because
+// PUBLIC is a keyword rather than something that can be quoted — see analyticsGrantees.
 func revokeAreaStatements(role string) []string {
 	return []string{
-		fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %q FROM %q;",
+		fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %q FROM %s;",
 			AnalyticsAreaSchema, role),
-		fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %q FROM %q;",
+		fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %q FROM %s;",
 			AnalyticsAreaSchema, role),
-		fmt.Sprintf("REVOKE ALL PRIVILEGES ON SCHEMA %q FROM %q;",
+		fmt.Sprintf("REVOKE ALL PRIVILEGES ON SCHEMA %q FROM %s;",
 			AnalyticsAreaSchema, role),
 	}
 }
@@ -349,7 +429,25 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 	return mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(analyticsLockName), func() error {
 		db := mgr.DB(core.WithSystemContext(ctx))
 
-		// The views first, before any role is granted anything: a boot that is going
+		// 🔴 THE FUNCTION IS REBUILT UNCONDITIONALLY, THE VIEWS ARE NOT, AND THE
+		// ASYMMETRY IS THE POINT RATHER THAN AN INCONSISTENCY.
+		//
+		// The readiness argument that justifies checking-before-writing the views does
+		// not apply here: CREATE OR REPLACE FUNCTION takes no lock on any relation, so
+		// re-issuing it cannot contend with a reader's in-flight scan. And the function
+		// is the single thing that decides which tenant a session is — a view's
+		// predicate only calls it. Leaving THAT to a check is the same mistake as
+		// leaving the views to a migration, one level down.
+		//
+		// Measured, before this ran every boot: replacing the body with
+		// `SELECT 'bravo'` left every view's definition and options untouched, so the
+		// integrity check passed, the golden did not move — and every reader read
+		// bravo's rows.
+		if err := execAnalyticsFunction(db); err != nil {
+			return err
+		}
+
+		// The views next, before any role is granted anything: a boot that is going
 		// to fail must fail with the tenant predicate in place, never after handing
 		// out SELECT on a view whose filter could not be rebuilt.
 		//
@@ -365,12 +463,35 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 			if err := execAnalyticsSurface(db); err != nil {
 				return err
 			}
+			// 🔴 And it must be intact AFTERWARDS. Without this, a check that no
+			// longer recognises a correct surface — a future PostgreSQL rendering its
+			// view definitions differently, say — would rebuild on every boot and take
+			// the exclusive lock this design exists to avoid, silently and forever.
+			// Re-asking turns that into one loud failure instead.
+			if intact, reason, err = analyticsSurfaceIntact(db); err != nil {
+				return err
+			} else if !intact {
+				return fmt.Errorf("the SQL/BI read surface is still wrong after being rebuilt (%s); "+
+					"either the rebuild does not produce what the check expects, or something is "+
+					"changing it concurrently", reason)
+			}
 		}
 
 		var roles []string
 		if err := db.Raw(analyticsRolesQuery, AnalyticsReaderRole, analyticsRolePattern()).
 			Scan(&roles).Error; err != nil {
 			return fmt.Errorf("listing the analytics reader roles: %w", err)
+		}
+
+		// 🔴 PUBLIC IS ALWAYS CONVERGED, EVEN WITH NO READERS, and that is not
+		// symmetry for its own sake. A grant to PUBLIC on the area schema is readable
+		// by every login on the instance, present or future, so its removal cannot be
+		// conditional on this surface happening to have a reader today.
+		for _, stmt := range revokeAreaStatements(publicGrantee) {
+			if err := db.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("revoking PUBLIC's privileges on the %q schema: %w",
+					AnalyticsAreaSchema, err)
+			}
 		}
 
 		if len(roles) == 0 {
@@ -386,7 +507,7 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 		for _, role := range roles {
 			// Revoke FIRST. If the boot is going to fail, it must fail with the
 			// dangerous privilege already gone rather than still in place.
-			for _, stmt := range revokeAreaStatements(role) {
+			for _, stmt := range revokeAreaStatements(quoteIdent(role)) {
 				if err := db.Exec(stmt).Error; err != nil {
 					return fmt.Errorf("revoking %q's privileges on the %q schema: %w",
 						role, AnalyticsAreaSchema, err)
@@ -448,10 +569,11 @@ const surfaceIntegrityQuery = `
 // trade: the tenant boundary is broken, and finishing the repair matters more than
 // finishing the boot quickly.
 //
-// It checks the properties that carry the boundary rather than comparing text.
-// pg_get_viewdef reconstructs its own formatting, so a byte comparison against generated
-// SQL would report a difference on every boot and rebuild unconditionally — the exact
-// behaviour this avoids.
+// It checks the properties that carry the boundary rather than comparing the whole
+// definition byte for byte: pg_get_viewdef reconstructs its own formatting for the
+// SELECT list, so a full comparison against generated SQL would differ on every boot and
+// rebuild unconditionally — the exact behaviour this avoids. The PREDICATE, though, is
+// compared exactly, for the reason below.
 func analyticsSurfaceIntact(db *gorm.DB) (bool, string, error) {
 	for _, v := range analyticsViews {
 		var row struct {
@@ -468,15 +590,117 @@ func analyticsSurfaceIntact(db *gorm.DB) (bool, string, error) {
 		case row.Cols != strings.Join(v.columns, ","):
 			return false, fmt.Sprintf("the %s view exposes %q, not its declared columns",
 				v.name, row.Cols), nil
-		case !strings.Contains(row.Def, "reader_tenant()"):
+		case !strings.HasSuffix(collapseSpace(row.Def), expectedViewPredicate()):
 			// The one that matters: a view that still exists, still has the right
 			// columns, still returns rows — and returns every tenant's.
+			//
+			// 🔴 A SUFFIX, NOT A SUBSTRING, AND THAT DISTINCTION WAS A MEASURED LEAK.
+			// This used to ask whether the definition CONTAINED "reader_tenant()",
+			// which `WHERE tenant_id = analytics.reader_tenant() OR true` satisfies
+			// while showing every tenant. Anything appended to the predicate moves the
+			// end of the definition, so the end is what is compared.
 			return false, fmt.Sprintf("the %s view no longer filters on the reader's tenant", v.name), nil
 		case !strings.Contains(row.Opts, "security_barrier=true"):
 			return false, fmt.Sprintf("the %s view is not a security barrier", v.name), nil
 		}
 	}
+	return functionIntact(db)
+}
+
+// expectedViewPredicate is the WHERE clause as PostgreSQL reconstructs it, whitespace
+// collapsed.
+//
+// 🔴 It is the SERVER's rendering, not ours: pg_get_viewdef casts the varchar column and
+// parenthesises for itself, so `WHERE "tenant_id" = analytics.reader_tenant()` goes in
+// and `WHERE ((tenant_id)::text = analytics.reader_tenant());` comes back. Measured
+// identical for all seven views on both supported majors — PostgreSQL 16 (the image the
+// goldens are captured against) and PostgreSQL 17 (the deployed operand) — which is what
+// makes an exact comparison safe here rather than a source of per-boot rebuilds. If a
+// future major renders it differently the reconciler says so loudly rather than
+// rebuilding forever; see ReconcileAnalyticsSurface.
+func expectedViewPredicate() string {
+	return fmt.Sprintf("WHERE ((tenant_id)::text = %s.reader_tenant());", AnalyticsSchema)
+}
+
+// collapseSpace reduces every run of whitespace to one space and trims the ends, so a
+// comparison is against the SQL rather than against pg_get_viewdef's line breaks.
+func collapseSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// functionIntactQuery reads back what reader_tenant() actually IS — not merely that
+// something of that name exists.
+const functionIntactQuery = `
+	SELECT p.prosrc AS src,
+	       coalesce(array_to_string(p.proconfig, ','), '') AS cfg,
+	       p.prosecdef AS secdef,
+	       p.provolatile::text AS vol
+	  FROM pg_proc p
+	  JOIN pg_namespace n ON n.oid = p.pronamespace
+	 WHERE n.nspname = ? AND p.proname = 'reader_tenant' AND p.pronargs = 0`
+
+// functionIntact reports whether the identity function is still the one this code wrote.
+//
+// 🔴 EVERY PROPERTY HERE HAS BEEN MEASURED TO LEAK WHEN IT IS ABSENT, and none of them
+// is visible to any other gate in the repo:
+//
+//	prosrc      replaced with `SELECT 'bravo'` — every view's definition and options
+//	            unchanged, so a view-only check passes and every reader reads bravo.
+//	proconfig   the search_path pin is dropped by any CREATE OR REPLACE that omits it,
+//	            and normalizeDump strips `SET ` lines, so the golden never carried it.
+//	prosecdef   a SECURITY DEFINER re-creation runs the body as the OWNER, which is the
+//	            one identity for which the whole derivation is meaningless.
+//	provolatile IMMUTABLE lets the planner fold one session's answer into a cached plan.
+//
+// The function is also rebuilt unconditionally on every boot, so in practice this check
+// reports rather than repairs. Both are kept: the rebuild fixes it, and this says so.
+func functionIntact(db *gorm.DB) (bool, string, error) {
+	var row struct {
+		Src    string
+		Cfg    string
+		Secdef bool
+		Vol    string
+	}
+	if err := db.Raw(functionIntactQuery, AnalyticsSchema).Scan(&row).Error; err != nil {
+		return false, "", fmt.Errorf("reading the reader_tenant function: %w", err)
+	}
+	switch {
+	case row.Src == "":
+		return false, "the reader_tenant() function is missing", nil
+	case row.Src != readerTenantBody():
+		return false, "the reader_tenant() function does not have the body this build wrote", nil
+	case !strings.Contains(row.Cfg, readerTenantSearchPath):
+		return false, "the reader_tenant() function has lost its pinned search_path", nil
+	case row.Secdef:
+		return false, "the reader_tenant() function is SECURITY DEFINER", nil
+	case row.Vol != "s":
+		return false, fmt.Sprintf("the reader_tenant() function is %q, not STABLE", row.Vol), nil
+	}
 	return true, "", nil
+}
+
+// publicGrantee is PUBLIC rendered as a grantee. It is a keyword rather than an
+// identifier, so it cannot be quoted — `REVOKE … FROM "public"` names a ROLE called
+// public, which is not the same thing and normally does not exist.
+const publicGrantee = "PUBLIC"
+
+// quoteIdent renders a role name as a quoted SQL identifier, doubling any embedded
+// quote. Role names here come from pg_roles rather than from user input, so this is
+// belt-and-braces — but it is the difference between a helper that is safe wherever it
+// is reused and one that is safe only where it happens to be called today.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// execAnalyticsFunction creates the schema and the reader_tenant() function — the part
+// of the surface that takes no relation lock and is therefore re-issued on every boot.
+func execAnalyticsFunction(tx *gorm.DB) error {
+	for _, stmt := range []string{createAnalyticsSchemaStmt(), createReaderTenantFnStmt()} {
+		if err := tx.Exec(stmt).Error; err != nil {
+			return fmt.Errorf("building the analytics reader identity: %w", err)
+		}
+	}
+	return nil
 }
 
 // execAnalyticsSurface runs the surface's DDL against tx.

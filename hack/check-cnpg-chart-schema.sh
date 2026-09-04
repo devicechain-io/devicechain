@@ -303,6 +303,11 @@ refuses analytics-role-without-a-limit "declares no connection limit" \
   "${base[@]}" --set instances=1 \
   --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true'
 
+refuses analytics-role-name-too-long "PostgreSQL truncates identifiers longer than 63" \
+  "${base[@]}" --set instances=1 \
+  --set 'extraRoles[0].name=analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy' \
+  --set 'extraRoles[0].login=true' --set 'extraRoles[0].connectionLimit=5'
+
 refuses analytics-roles-over-budget "the extra roles ask for" \
   "${base[@]}" --set instances=1 --set reservedApplicationConnections=40 \
   --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true' \

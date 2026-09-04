@@ -37,6 +37,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -248,6 +249,91 @@ func TestIntegrationAnalyticsReaderSeesOnlyItsOwnTenant(t *testing.T) {
 	require.Len(t, restored, 1, "the surface did not recover: %v", restored)
 }
 
+// TestIntegrationAnalyticsReaderCannotBecomeAnotherIdentity closes the hole this design
+// created for itself, and it is the one that was actually exploitable.
+//
+// 🔴 EVERY READER IS `IN ROLE analytics_reader`, WHICH IS EXACTLY THE MEMBERSHIP THE OLD
+// COMMENT SAID IT DID NOT HAVE. Role membership carries the SET option by default, so
+// `SET ROLE analytics_reader` succeeds — and the group role's own name matches the reader
+// prefix, so the old current_user derivation returned the tenant `reader`, which is a
+// legal tenant token. Measured before the fix:
+//
+//	analytics_acme=> SET ROLE analytics_reader;
+//	analytics_acme=> SELECT tenant_id, count(*) FROM analytics.measurement_events GROUP BY 1;
+//	 reader | 1
+//
+// The test asserts the whole class rather than that one instance: after any identity
+// change a reader can actually perform, it must read no more than it could before.
+func TestIntegrationAnalyticsReaderCannotBecomeAnotherIdentity(t *testing.T) {
+	_, sys := analyticsHarness(t)
+	ctx := context.Background()
+
+	// A tenant literally named "reader" — the token the group role's name yields. Seeded
+	// so that a regression is a POSITIVE result (rows appear) rather than an absence.
+	require.NoError(t, sys.Exec(`INSERT INTO "event-management"."measurement_events"
+		(tenant_id, event_id, payload_id, device_token, event_type, occurred_time, name, value)
+		VALUES (?, ?, ?, ?, 1, now(), 'temp', 99)`,
+		strings.TrimPrefix(AnalyticsReaderRole, AnalyticsRolePrefix),
+		[]byte("group-role-event"), []byte("group-role-payload"), "d").Error)
+
+	conn := connectAs(t, AnalyticsRolePrefix+tenantA)
+
+	// SET ROLE to the group role SUCCEEDS — that is the point. What must not follow is a
+	// change in what the session can read.
+	_, err := conn.Exec(ctx, fmt.Sprintf("SET ROLE %q", AnalyticsReaderRole))
+	require.NoError(t, err, "if this now fails the membership model changed; the assertion "+
+		"below would then be vacuous, so fix the test rather than deleting it")
+
+	var current, session string
+	var tenant *string
+	require.NoError(t, conn.QueryRow(ctx, fmt.Sprintf(
+		"SELECT current_user, session_user, %q.reader_tenant()", AnalyticsSchema)).
+		Scan(&current, &session, &tenant))
+	require.Equal(t, AnalyticsReaderRole, current, "SET ROLE did not take effect")
+	require.Equal(t, AnalyticsRolePrefix+tenantA, session, "session_user moved, which it must not")
+	require.NotNil(t, tenant)
+	require.Equalf(t, tenantA, *tenant,
+		"becoming the group role changed which tenant the session resolves to (%q)", *tenant)
+
+	// What it reads must be unchanged too — its own tenant, no more and no less.
+	for _, view := range AnalyticsViewNames() {
+		visible := tenantsVisible(t, conn, view)
+		require.Lenf(t, visible, 1, "%s widened after SET ROLE: %v", view, visible)
+		require.Containsf(t, visible, tenantA, "%s narrowed after SET ROLE: %v", view, visible)
+	}
+	_, err = conn.Exec(ctx, "RESET ROLE")
+	require.NoError(t, err)
+
+	// The other two identity doors — both must be refused outright.
+	_, err = conn.Exec(ctx, fmt.Sprintf("SET ROLE %q", AnalyticsRolePrefix+tenantB))
+	require.Error(t, err, "a reader could become another tenant's reader")
+	_, err = conn.Exec(ctx, fmt.Sprintf("SET SESSION AUTHORIZATION %q", AnalyticsRolePrefix+tenantB))
+	require.Error(t, err, "a reader could change session_user, which the whole design rests on")
+
+	// 🔴 AND THE SECOND LAYER, MEASURED RATHER THAN ARGUED. session_user closes the SET
+	// ROLE route on its own; the explicit exclusion of the group role only matters if that
+	// role can ever START a session. It is NOLOGIN today — one ALTER away from not being,
+	// in any cluster's role management — so the test gives it LOGIN, connects as it, and
+	// requires it to resolve to nothing.
+	require.NoError(t, sys.Exec(fmt.Sprintf("ALTER ROLE %q LOGIN PASSWORD '%s'",
+		AnalyticsReaderRole, analyticsITPassword)).Error)
+	t.Cleanup(func() {
+		_ = sys.Exec(fmt.Sprintf("ALTER ROLE %q NOLOGIN", AnalyticsReaderRole)).Error
+	})
+
+	group := connectAs(t, AnalyticsReaderRole)
+	var groupTenant *string
+	require.NoError(t, group.QueryRow(ctx, fmt.Sprintf("SELECT %q.reader_tenant()", AnalyticsSchema)).
+		Scan(&groupTenant))
+	require.Nilf(t, groupTenant,
+		"the group role resolves to a tenant of its own (%v), which every reader is a member of",
+		groupTenant)
+	for _, view := range AnalyticsViewNames() {
+		require.Emptyf(t, tenantsVisible(t, group, view),
+			"%s returned rows to the group role itself", view)
+	}
+}
+
 // TestIntegrationAnalyticsReaderWithNoTenantReadsNothing pins the fail-closed direction.
 //
 // A role that is a member of the reader group but whose name carries no tenant resolves
@@ -350,6 +436,47 @@ func TestIntegrationAnalyticsGrantsConvergeOnEveryBoot(t *testing.T) {
 
 	// And the surface itself must still work afterwards — a revoke that also took the
 	// views away would pass the lines above while breaking the feature.
+	require.Len(t, tenantsVisible(t, conn, "measurement_events"), 1)
+}
+
+// TestIntegrationAnalyticsPublicGrantsAreConvergedToo covers the grantee that is not a
+// role, and therefore was not converged at all.
+//
+// 🔴 PUBLIC DOES NOT APPEAR IN pg_roles. The reconciler listed the roles it found there
+// and revoked from each, which reads as exhaustive and is not: a grant to PUBLIC on the
+// area schema gives every login on the instance the raw hypertables, and it survived
+// every boot forever. Measured before the fix — three tenants readable through
+// "event-management".measurement_events by a reader holding nothing of its own.
+//
+// The convergence is also unconditional on there being any reader, because a PUBLIC grant
+// is dangerous whether or not this surface has one.
+func TestIntegrationAnalyticsPublicGrantsAreConvergedToo(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	conn := connectAs(t, AnalyticsRolePrefix+tenantA)
+	ctx := context.Background()
+
+	crossTenant := fmt.Sprintf(`SELECT count(DISTINCT tenant_id) FROM %q."measurement_events"`,
+		AnalyticsAreaSchema)
+	var n int
+	require.Error(t, conn.QueryRow(ctx, crossTenant).Scan(&n), "the area schema was already reachable")
+
+	// 🔴 THE CONTROL.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO PUBLIC`,
+		AnalyticsAreaSchema)).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON ALL TABLES IN SCHEMA %q TO PUBLIC`,
+		AnalyticsAreaSchema)).Error)
+	require.NoError(t, conn.QueryRow(ctx, crossTenant).Scan(&n))
+	require.Equalf(t, 2, n, "the control did not leak (saw %d tenants), so the boot below proves nothing", n)
+
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.Error(t, conn.QueryRow(ctx, crossTenant).Scan(&n),
+		"a boot left PUBLIC holding privileges on the area schema")
+
+	var usage bool
+	require.NoError(t, sys.Raw(`SELECT has_schema_privilege('public', ?, 'USAGE')`,
+		AnalyticsAreaSchema).Scan(&usage).Error)
+	require.False(t, usage, "PUBLIC still holds USAGE on the area schema")
+
 	require.Len(t, tenantsVisible(t, conn, "measurement_events"), 1)
 }
 
@@ -532,6 +659,52 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 	intact, reason, err = analyticsSurfaceIntact(sys)
 	require.NoError(t, err)
 	require.Truef(t, intact, "a boot did not restore the security barrier: %s", reason)
+
+	// 🔴 THE THIRD SHAPE, AND THE ONE THE CHECK ORIGINALLY MISSED ENTIRELY. `OR true`
+	// leaves the definition still CONTAINING reader_tenant(), which is all the check used
+	// to ask for. Both tenants become visible through a view that reads as correct.
+	require.NoError(t, sys.Exec(fmt.Sprintf(
+		`CREATE OR REPLACE VIEW %q.%q WITH (security_barrier = true) AS
+		 SELECT tenant_id, event_id, payload_id, device_token, event_type, occurred_time,
+		        name, value, classifier, unit, data_type
+		 FROM %q.%q WHERE tenant_id = %q.reader_tenant() OR true`,
+		AnalyticsSchema, probe, AnalyticsAreaSchema, probe, AnalyticsSchema)).Error)
+	require.Lenf(t, tenantsVisible(t, conn, probe), 2, "the OR-true damage did not take")
+	intact, _, err = analyticsSurfaceIntact(sys)
+	require.NoError(t, err)
+	require.False(t, intact, "a view whose predicate is disjoined with `true` was reported intact")
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.Len(t, tenantsVisible(t, conn, probe), 1, "a boot did not restore the predicate")
+
+	// 🔴 THE FOURTH: the identity FUNCTION, which no view-level check can see. Every
+	// view's definition and options stay exactly as they should be; the tenant they
+	// resolve to does not.
+	for _, damage := range []struct{ name, ddl string }{
+		{"a replaced body", fmt.Sprintf(
+			`CREATE OR REPLACE FUNCTION %q.reader_tenant() RETURNS text LANGUAGE sql STABLE
+			 AS $x$ SELECT '%s' $x$`, AnalyticsSchema, tenantB)},
+		{"a dropped search_path pin", fmt.Sprintf(
+			`CREATE OR REPLACE FUNCTION %q.reader_tenant() RETURNS text LANGUAGE sql STABLE
+			 AS $x$ SELECT substring(session_user::text from %d) $x$`,
+			AnalyticsSchema, len(AnalyticsRolePrefix)+1)},
+		{"a SECURITY DEFINER re-creation", fmt.Sprintf(
+			`CREATE OR REPLACE FUNCTION %q.reader_tenant() RETURNS text LANGUAGE sql STABLE
+			 SECURITY DEFINER SET search_path = pg_catalog
+			 AS $x$ SELECT substring(session_user::text from %d) $x$`,
+			AnalyticsSchema, len(AnalyticsRolePrefix)+1)},
+	} {
+		require.NoErrorf(t, sys.Exec(damage.ddl).Error, "apply %s", damage.name)
+
+		viewsStillFine, _, err := analyticsSurfaceIntact(sys)
+		require.NoError(t, err)
+		require.Falsef(t, viewsStillFine, "%s was reported intact", damage.name)
+
+		require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+		ok, why, err := analyticsSurfaceIntact(sys)
+		require.NoError(t, err)
+		require.Truef(t, ok, "a boot did not repair %s: %s", damage.name, why)
+		require.Lenf(t, tenantsVisible(t, conn, probe), 1, "after repairing %s", damage.name)
+	}
 }
 
 // TestIntegrationChainRunsAsTheLeastPrivilegeRole closes a gap that predates this change
@@ -604,7 +777,22 @@ func TestIntegrationChainRunsAsTheLeastPrivilegeRole(t *testing.T) {
 	// The grant reconciler must also survive being run by that role. It grants on objects
 	// the role owns and revokes from roles it does not administer, neither of which needs
 	// a privilege it holds — but that is an argument, and this is the measurement.
+	//
+	// 🔴 THE ROLES ARE CREATED HERE, AND THAT IS THE WHOLE VALUE OF THIS SECOND HALF.
+	// Without them the reconciler finds nothing in pg_roles, logs "No analytics reader
+	// role exists", and returns before executing a single GRANT or REVOKE — so the call
+	// below would pass while measuring nothing at all, which is exactly the vacuous shape
+	// this file exists to avoid. The assertion after it is what says the path ran.
+	createAnalyticsITRoles(t, sys)
 	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+
+	var granted bool
+	require.NoError(t, own.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
+		AnalyticsReaderRole, fmt.Sprintf("%s.%s", AnalyticsSchema, "measurement_events")).
+		Scan(&granted).Error)
+	require.True(t, granted,
+		"the unprivileged owner did not manage to grant the read surface, so the run above "+
+			"measured nothing")
 }
 
 // TestIntegrationAnalyticsSurfaceIsReRunnable exercises the property the replay gate
