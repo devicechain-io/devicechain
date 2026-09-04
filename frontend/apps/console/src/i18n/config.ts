@@ -263,6 +263,37 @@ void i18n
   });
 
 /**
+ * Keep `<html lang>` in step with the language actually in effect.
+ *
+ * 🔴 NOT DECORATION. The document language is what a screen reader picks its voice
+ * and pronunciation rules from, and what a browser offers "translate this page"
+ * against; a Spanish page still declaring `lang="en"` is read aloud in an English
+ * voice, word by word, for the whole session. index.html ships `lang="en"` as the
+ * static default, so without this the attribute is a lie for every user whose locale
+ * resolved to anything else — and nothing in the app or the build would notice.
+ *
+ * 🔴 TWO OBLIGATIONS, NOT ONE, and they are separate on purpose. The listener covers
+ * every LATER change (the switcher, the tenant default, the revert on leaving a tenant).
+ * The direct call covers the language i18next resolved INSIDE `init()` — with catalogs
+ * bundled that resolution is synchronous and its `languageChanged` fires on the line
+ * above, BEFORE this listener exists, so a user who lands on Spanish from their browser
+ * and never touches the switcher is served entirely by the direct call. Deleting either
+ * one leaves the other looking sufficient; documentLanguage.test.ts exists because a
+ * test that only ever asserts after a `changeLanguage` cannot tell them apart.
+ */
+function syncDocumentLanguage(): void {
+  // `document` is absent in a non-DOM context (an SSR/node import of this module for
+  // its catalogs). The language sync is the only thing that has nothing to do there.
+  if (typeof document === 'undefined') return;
+  // The RESOLVED language, never the raw request: `es-MX` renders the `es` catalog
+  // (nonExplicitSupportedLngs), so announcing `es-MX` would name a catalog that does
+  // not exist.
+  document.documentElement.lang = i18n.resolvedLanguage ?? DEFAULT_LOCALE;
+}
+i18n.on('languageChanged', syncDocumentLanguage);
+syncDocumentLanguage();
+
+/**
  * Persist an explicit user locale choice and switch to it. The switcher calls
  * this; it is the ONLY writer of LOCALE_STORAGE_KEY, which is what lets
  * `applyTenantDefaultLocale` treat that key as an unambiguous "user has chosen"

@@ -63,6 +63,54 @@ describe('i18n config', () => {
     await i18n.changeLanguage('en');
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBeNull();
   });
+
+  // 🔴 THE LITERAL, PINNED. Two other places write this exact string out rather than
+  // importing it, and both are forced to: documentLanguage.test.ts must seed the key
+  // BEFORE config.ts is evaluated (an import would hoist the evaluation above the write
+  // and defeat the test), and /dash carries its own copy because the two apps share a
+  // localStorage origin behind the shared ingress and a viewer who picked Spanish in the
+  // console should not have to pick it again there. A rename that only touched this file
+  // would silently strand both. It reddens here instead, naming the string to change.
+  it('is keyed on the exact string /dash and the init-time test also write out', () => {
+    expect(LOCALE_STORAGE_KEY).toBe('dc.locale');
+  });
+});
+
+// 🔴 The document language is what a screen reader picks its voice from. index.html
+// ships a static lang="en", so nothing but this sync makes it true for a Spanish user —
+// and nothing else in the app or the build would notice it staying wrong.
+//
+// This describe covers the LISTENER half only. Every assertion here runs after a
+// changeLanguage, so it passes with the init-time call deleted; documentLanguage.test.ts
+// is the other half, and it has to be its own file to be one.
+describe('document language', () => {
+  it('follows the language actually in effect', async () => {
+    await i18n.changeLanguage('es');
+    expect(document.documentElement.lang).toBe('es');
+    await i18n.changeLanguage('en');
+    expect(document.documentElement.lang).toBe('en');
+  });
+
+  it('reports the RESOLVED language, not the raw request', async () => {
+    // A regional variant falls back to its base catalog (nonExplicitSupportedLngs), so
+    // the page is rendering Spanish and must say so. Announcing 'es-MX' here would be
+    // announcing a catalog that does not exist.
+    await i18n.changeLanguage('es-MX');
+    expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('follows the tenant default and the revert that ends it', async () => {
+    // The two seams that change the language without anyone touching the switcher. A
+    // listener wired to the switcher alone would leave both of these announcing the
+    // previous language.
+    applyTenantDefaultLocale('es');
+    await Promise.resolve();
+    expect(document.documentElement.lang).toBe('es');
+
+    resetToDetectedLocale();
+    await Promise.resolve();
+    expect(document.documentElement.lang).toBe(DEFAULT_LOCALE);
+  });
 });
 
 describe('setUserLocale', () => {
@@ -182,6 +230,18 @@ describe('isShippedLocale agrees with what i18next actually resolves', () => {
 
   it('loses to an explicit user choice already in localStorage', () => {
     localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('en');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE STORED SIDE OF THE SAME QUESTION. The guard asks isShippedLocale about the
+  // stored value too, so it has to get the same answer there: `es-MX` DOES render
+  // Spanish, so it is an effective rung-1 and must block rung 2. An exact match against
+  // SUPPORTED_LOCALES calls it neither shipped nor stale, and the viewer is moved off a
+  // language they had picked.
+  it('is blocked by a stored regional variant, which is an effective choice', () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'es-MX');
     const spy = vi.spyOn(i18n, 'changeLanguage');
     applyTenantDefaultLocale('en');
     expect(spy).not.toHaveBeenCalled();

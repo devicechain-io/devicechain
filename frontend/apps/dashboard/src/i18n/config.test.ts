@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import i18n, {
   applyTenantDefaultLocale,
   DEFAULT_LOCALE,
+  isShippedLocale,
   LOCALE_STORAGE_KEY,
   NAMESPACES,
   setUserLocale,
@@ -139,6 +140,18 @@ describe('applyTenantDefaultLocale (the tenant-default seam)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  // 🔴 THE SAME WIDENING, ON THE OTHER SIDE OF THE GUARD. A stored choice is checked with
+  // the same question, so it has to get the same answer: `es-MX` DOES render Spanish, so
+  // it is an effective rung-1 and must block rung 2. Under an exact match it was neither
+  // — refused as a tenant default AND ignored as a choice — so the viewer would be moved
+  // off a language they had picked.
+  it('is blocked by a stored regional variant, which is an effective choice', () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'es-MX');
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('en');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('is NOT blocked by a stored choice that no longer resolves to a shipped locale', () => {
     // A stale/unshipped stored value has no runtime effect, so an effective tenant
     // default must still apply — an ineffective rung-1 must not suppress an effective
@@ -153,6 +166,67 @@ describe('applyTenantDefaultLocale (the tenant-default seam)', () => {
     const spy = vi.spyOn(i18n, 'changeLanguage');
     applyTenantDefaultLocale('es');
     expect(spy).toHaveBeenCalledWith('es');
+  });
+
+  // 🔴 THE TAG THE OLD EXACT-MATCH GUARD DROPPED. `nonExplicitSupportedLngs` is on, so a
+  // BROWSER advertising es-MX renders Spanish; an exact match against SUPPORTED_LOCALES
+  // declared the same tag unshipped when a TENANT sent it and left the viewer on English.
+  // One tag, two answers, decided by which rung supplied it.
+  it('accepts a regional variant of a shipped locale, because i18next resolves one', async () => {
+    applyTenantDefaultLocale('es-MX');
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+
+  // 🔴 THE OTHER DIRECTION, and the reason the fold is not simply widened to a
+  // case-insensitive compare. i18next case-normalizes the REGION half of a tag and not
+  // the language half, so `ES` resolves to `en` — declaring it shipped would have the
+  // seam SELECTING a language that renders the English catalog while claiming Spanish.
+  it('refuses a mis-cased language subtag, because i18next would render English', () => {
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('ES');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same measurement: i18next DOES case-normalize the region.
+  it('accepts a lower-cased region, because i18next does', async () => {
+    applyTenantDefaultLocale('es-mx');
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+});
+
+// 🔴 isShippedLocale must agree with changeLanguage on EVERY tag, because disagreement IS
+// the defect class: the guard says "this renders" and the renderer says otherwise, or the
+// guard refuses a tag the renderer would have handled. Asserted as a property over a table
+// rather than case by case, so a future i18next option change (lowerCaseLng,
+// load:'languageOnly', a new supportedLng) moves both sides together or reddens.
+describe('isShippedLocale agrees with what i18next actually resolves', () => {
+  // 🔴 NO TAG WHOSE BASE LANGUAGE IS `en` AND WHICH IS UNSUPPORTED CAN APPEAR HERE, and
+  // that is a limit of the ORACLE rather than a gap in the guard. Every unsupported tag
+  // lands on `en` through fallbackLng, so for `En` the two outcomes this test
+  // distinguishes — "matched its own catalog" and "fell back to English" — are the same
+  // observation. `ES` is the same misspelling shape and IS observable, because its base is
+  // `es`, so the case property stays covered.
+  const TAGS = [
+    'en', 'es', 'ES',
+    'es-MX', 'es-mx', 'es-419', 'es-Latn-MX',
+    'pt-BR', 'fr', 'fr-CA', 'zh-Hans-CN',
+  ];
+
+  it('reports shipped exactly when the tag renders its own language', async () => {
+    for (const tag of TAGS) {
+      const claimed = isShippedLocale(tag);
+      await i18n.changeLanguage(tag);
+      const rendered = i18n.resolvedLanguage;
+      // "Renders its own language" means the catalog i18next landed on is the tag's own
+      // primary subtag — not merely that it landed somewhere. Every unsupported tag lands
+      // on `en` via fallbackLng, so comparing against "did it resolve?" would call `fr` a
+      // success.
+      const base = tag.split(/[-_]/)[0].toLowerCase();
+      const renderedOwnLanguage = rendered?.toLowerCase() === base;
+      expect(claimed, `${tag}: guard said ${claimed}, i18next rendered ${rendered}`).toBe(
+        renderedOwnLanguage,
+      );
+    }
   });
 });
 

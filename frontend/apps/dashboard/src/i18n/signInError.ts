@@ -30,8 +30,9 @@ import { GraphQLRequestError } from '@devicechain/client';
  *
  *   - `err instanceof GraphQLRequestError` alone: the transport throws that same class
  *     with `status: 0` when `fetch` itself fails, so an unplugged network reads as a
- *     bad password. (The console's Login.tsx has exactly this bug today; see the
- *     residual on this app's PR. It is not inherited here.)
+ *     bad password. (This was live in the console's Login.tsx, which is where it was
+ *     found; that screen now asks the same question through its own copy of this file,
+ *     apps/console/src/i18n/signInError.ts.)
  *   - `… && err.status !== 0`: fixes the network case and keeps the class of bug. A 503
  *     from the ingress, or a 502 from a service that is down, carries a real HTTP status
  *     and no `errors` array — so it is `!== 0`, and it still reports as a bad password.
