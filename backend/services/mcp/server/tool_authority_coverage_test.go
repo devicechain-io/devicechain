@@ -4,12 +4,9 @@
 package server
 
 import (
-	"context"
-	"sort"
 	"testing"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // 🔴 THE GATE FOR A WHOLE DEFECT CLASS, NOT ONE BUG.
@@ -57,35 +54,13 @@ var toolAuthorities = map[string][]coreauth.Authority{
 	"list_commands": {coreauth.CommandRead},
 }
 
-// registeredToolNames asks the real server what it exposes, over a real MCP session.
-// Reading registerTools' source, or the map above, would prove nothing about the
-// catalog a client actually sees.
+// registeredToolNames asks the server THIS SERVICE SERVES what it exposes, over a real
+// MCP session against the handler New returns. Reading registerTools' source, or the map
+// above, would prove nothing about the catalog a client actually sees — and neither would
+// listing a server the test built for itself, which is what this used to do.
 func registeredToolNames(t *testing.T) []string {
 	t.Helper()
-	ctx := context.Background()
-	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	registerTools(s, NewTools(NewGraphQLClient()))
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	if _, err := s.Connect(ctx, serverTransport, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).
-		Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer cs.Close()
-
-	res, err := cs.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	names := make([]string, 0, len(res.Tools))
-	for _, tool := range res.Tools {
-		names = append(names, tool.Name)
-	}
-	sort.Strings(names)
+	names, _ := listServedTools(t)
 	return names
 }
 

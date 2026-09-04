@@ -36,12 +36,11 @@ const sessionTimeout = 30 * time.Minute
 // It returns (mcpHandler, metadataHandler) for the caller to mount at /mcp and the
 // RFC 9728 well-known path.
 func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHandler, metadataHandler http.Handler) {
-	mcpServer := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	// The returned catalog of risk declarations is not needed here: it is published on
-	// each tool's own listing at registration, and the ratchet builds its own server to
-	// read it. Nothing at runtime consults it, so it is deliberately dropped rather than
-	// stashed on a field nobody reads.
-	registerTools(mcpServer, NewTools(NewGraphQLClient()))
+	// The catalog of risk declarations is not needed here: it is published on each tool's
+	// own listing at registration, so nothing at runtime consults it, and it is dropped
+	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
+	// newServer itself, and gets the tool NAMES from the handler built below.
+	mcpServer, _ := newServer()
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
@@ -62,14 +61,32 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHa
 	return protected, ProtectedResourceMetadataHandler(resourceID, issuer)
 }
 
+// newServer builds the MCP server this process serves, together with the catalog of the
+// risk declarations made while registering its tools.
+//
+// 🔴 IT EXISTS SO THE SERVER UNDER TEST IS THE SERVER THAT GETS SERVED. New used to
+// construct its own mcp.Server inline and every ratchet in this package constructed a
+// SECOND one, which made "register is the only registration path" a property of
+// registerTools' SOURCE rather than of anything served: an mcp.AddTool call placed in New,
+// one line after the registration, compiled, served an undeclared tool, and left every
+// test green. Construction lives here now, New only wires HTTP in front of it, and the
+// ratchet lists what New's own handler offers a real session — so the gap has to be
+// visible from the outside to exist at all.
+func newServer() (*mcp.Server, *Catalog) {
+	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
+	return s, registerTools(s, NewTools(NewGraphQLClient()))
+}
+
 // registerTools wires every read tool onto the server, each with its declared risk
 // metadata, and returns the catalog of those declarations.
 //
 // 🔴 EVERY TOOL GOES THROUGH register, NOT mcp.AddTool. That is what makes the risk
 // declaration impossible to forget: it is an argument to the only registration path, not
-// an entry in a second list that has to be kept in step. A tool added the long way round
-// compiles and serves, so the ratchet in risk_test.go closes that last gap — and its
-// negative control adds exactly such a tool to prove the ratchet goes red.
+// an entry in a second list that has to be kept in step. A tool added the long way round —
+// here, or anywhere else that can reach the served server — compiles and serves, so the
+// ratchet in risk_test.go closes that last gap by listing the tools New's OWN handler
+// offers a real session. Its negative control adds exactly such a tool to prove the
+// ratchet goes red.
 func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	c := NewCatalog()
 	register(s, c, &mcp.Tool{

@@ -6,6 +6,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"testing"
 
@@ -13,21 +15,82 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// liveCatalog builds a real server through the real registration path and asks it, over a
-// real MCP session, what it exposes — returning the tool names, the declarations made at
-// registration, and the listed tools themselves.
+// servedCatalog asks the server THIS SERVICE SERVES what it exposes — over the HTTP
+// surface New builds, through the bearer middleware, with a token this server accepts —
+// and pairs those names with the declarations register() made while building it.
 //
-// 🔑 IT ASKS THE SERVER RATHER THAN READING registerTools' SOURCE. The catalog a client
-// sees is the only thing any of these assertions are about.
-func liveCatalog(t *testing.T) ([]string, *Catalog, []*mcp.Tool) {
+// 🔴 IT LISTS THE SERVED SERVER, NOT ONE THE TEST BUILT, AND THAT DISTINCTION IS THE WHOLE
+// VALUE OF THE RATCHET. These helpers used to construct their own mcp.Server and call
+// registerTools on it, so "register is the only registration path" was only ever asserted
+// about registerTools' source: an mcp.AddTool call added to New — one line after the
+// registration, compiling, serving — was invisible to every test in this package. The
+// names below come from New's own handler, so a tool added anywhere New can reach it is
+// reported by the completeness check like any other undeclared tool.
+//
+// The catalog comes from newServer, which is the same construction New performs: it can
+// only ever hold what register declared, so an extra SERVED tool has no entry in it.
+func servedCatalog(t *testing.T) ([]string, *Catalog, []*mcp.Tool) {
 	t.Helper()
-	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	c := registerTools(s, NewTools(NewGraphQLClient()))
-	names, tools := listTools(t, s)
+	_, c := newServer()
+	names, tools := listServedTools(t)
 	return names, c, tools
 }
 
-// listTools connects a client to s and returns the catalog it is offered.
+// listServedTools drives a real MCP session against the handler New returns and returns
+// the catalog that session is offered.
+func listServedTools(t *testing.T) ([]string, []*mcp.Tool) {
+	t.Helper()
+	ctx := context.Background()
+	iss, validator := mustIssuerValidator(t)
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator)
+	ts := httptest.NewServer(mcpHandler)
+	t.Cleanup(ts.Close)
+
+	// The middleware requires a token bound to THIS resource and carrying the read-only
+	// scope; anything else is refused before a session is established, so listing the
+	// tools at all exercises the wiring New does around the server as well as the server.
+	tok, err := iss.IssueOAuthAccess("acme", "a@b.c", nil, []string{"device:read"},
+		coreauth.ScopeReadOnly, []string{testResource}, false, "mcp", "j-list")
+	if err != nil {
+		t.Fatalf("issuing a read-only token: %v", err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{
+			Endpoint:   ts.URL,
+			HTTPClient: &http.Client{Transport: bearerTransport{token: tok.Token}},
+			// Nothing here is worth reconnecting for: a failure is the answer.
+			MaxRetries:           -1,
+			DisableStandaloneSSE: true,
+		}, nil)
+	if err != nil {
+		t.Fatalf("client connect through the served handler: %v", err)
+	}
+	defer cs.Close()
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools over the served handler: %v", err)
+	}
+	names := make([]string, 0, len(res.Tools))
+	for _, tool := range res.Tools {
+		names = append(names, tool.Name)
+	}
+	sort.Strings(names)
+	return names, res.Tools
+}
+
+// bearerTransport presents the caller's token on every request the MCP client makes.
+type bearerTransport struct{ token string }
+
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	clone.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+// listTools connects a client to a server the CALLER built and returns the catalog it is
+// offered. It exists for the negative control below, which needs a throwaway server it can
+// deliberately corrupt; every assertion about the real catalog goes through
+// listServedTools instead, because a server a test built is not the one that gets served.
 func listTools(t *testing.T, s *mcp.Server) ([]string, []*mcp.Tool) {
 	t.Helper()
 	ctx := context.Background()
@@ -53,11 +116,13 @@ func listTools(t *testing.T, s *mcp.Server) ([]string, []*mcp.Tool) {
 	return names, res.Tools
 }
 
-// The ratchet: every tool the server exposes carries a declaration. It passes today by
-// CONSTRUCTION — register is the only registration path and it takes the declaration as
-// an argument — and this asserts that construction actually holds end to end.
+// The ratchet: every tool the SERVED server exposes carries a declaration. It passes today
+// by CONSTRUCTION — register is the only registration path and it takes the declaration as
+// an argument — and this asserts that construction actually holds end to end, on the
+// catalog New's own handler offers rather than on one this test assembled. Those were the
+// same thing only by convention until they were made the same call.
 func TestEveryRegisteredToolDeclaresItsRisk(t *testing.T) {
-	names, catalog, _ := liveCatalog(t)
+	names, catalog, _ := servedCatalog(t)
 	if len(names) == 0 {
 		t.Fatal("the catalog is empty, so this test is measuring nothing")
 	}
@@ -79,6 +144,12 @@ func TestEveryRegisteredToolDeclaresItsRisk(t *testing.T) {
 // is worth nothing. This registers a tool THE LONG WAY ROUND — straight through
 // mcp.AddTool, bypassing register, which is exactly the mistake a future author can make
 // because it compiles and serves — and asserts the ratchet reports it.
+//
+// 🔑 IT IS THE ONE TEST HERE THAT BUILDS ITS OWN SERVER, AND IT HAS TO: the corruption is
+// the point, and putting it on the served surface would be inflicting it on every other
+// test in the package. What it proves is that UndeclaredTools goes red for an undeclared
+// name; what feeds that function the SERVED names is TestEveryRegisteredToolDeclaresItsRisk
+// above.
 func TestTheRatchetGoesRedForAToolRegisteredWithoutADeclaration(t *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
 	c := registerTools(s, NewTools(NewGraphQLClient()))
@@ -161,7 +232,7 @@ func TestRegisteringTheSameToolTwiceIsRefused(t *testing.T) {
 // is the difference between pinning today's catalog and pinning the rule: the next
 // position tool is covered the moment it declares what it is.
 func TestAPositionToolIsNotReachableOnTheGeneralReadScope(t *testing.T) {
-	names, catalog, _ := liveCatalog(t)
+	names, catalog, _ := servedCatalog(t)
 	readOnly, ok := coreauth.ScopeAllowance(coreauth.ScopeReadOnly)
 	if !ok {
 		t.Fatal("read-only is not a defined scope")
@@ -207,7 +278,7 @@ func TestAPositionToolIsNotReachableOnTheGeneralReadScope(t *testing.T) {
 // The declaration is published in the tool listing, which is what keeps it honest: a
 // statement only a test reads drifts into whatever makes the test pass.
 func TestTheDeclarationIsPublishedOnTheToolListing(t *testing.T) {
-	_, catalog, tools := liveCatalog(t)
+	_, catalog, tools := servedCatalog(t)
 	for _, tool := range tools {
 		risk, declared := catalog.Risk(tool.Name)
 		if !declared {
