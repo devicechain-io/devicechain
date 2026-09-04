@@ -102,7 +102,7 @@ type AssetUpdateRequest struct {
 	Description dcgraphql.OptionalString
 	// AssetTypeToken re-points the AssetType this asset belongs to. Omitted keeps the
 	// current type. Unlike DeviceType's profileToken, an explicit NULL IS REFUSED: the
-	// asset_type_id column is NOT NULL, so "no type" is not a state a asset can be in,
+	// asset_type_id column is NOT NULL, so "no type" is not a state an asset can be in,
 	// and accepting a null here would either write a dangling zero FK or silently
 	// ignore what the caller asked for. An unknown token is refused too, and the
 	// refusal is total — nothing is written.

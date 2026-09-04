@@ -46,7 +46,7 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 // Update an existing asset type, applying only the fields the caller actually
 // sent. The entity is looked up by the `token` ARGUMENT — the request payload no
 // longer carries one, which closes two defects at once: an update can no longer
-// move a asset type's token, and the mandatory `token` argument is no longer dead.
+// move an asset type's token, and the mandatory `token` argument is no longer dead.
 // It used to be ignored entirely in favour of request.Token, so a caller naming one
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.

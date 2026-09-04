@@ -46,7 +46,7 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 // Update an existing area type, applying only the fields the caller actually
 // sent. The entity is looked up by the `token` ARGUMENT — the request payload no
 // longer carries one, which closes two defects at once: an update can no longer
-// move a area type's token, and the mandatory `token` argument is no longer dead.
+// move an area type's token, and the mandatory `token` argument is no longer dead.
 // It used to be ignored entirely in favour of request.Token, so a caller naming one
 // type in the argument and another in the payload silently updated the second and
 // got a 200 back for it.
