@@ -76,8 +76,12 @@ function validate(json: string): SettingIssue | null {
 
 function LocaleDefaultEditor({ value, onChange }: SettingEditorProps<string>) {
   const { t } = useTranslation('adminSettings');
-  const shipped = SUPPORTED_LOCALES.map((l) => l.code);
-  const isShipped = shipped.includes(value.trim());
+  // Matches applyTenantDefaultLocale's own resolvability test: a regional tag folds
+  // onto its base catalog through i18next's nonExplicitSupportedLngs, so `es-MX`
+  // renders Spanish and must NOT be warned about as though it rendered nothing.
+  const tag = value.trim();
+  const base = tag.split('-')[0].toLowerCase();
+  const isShipped = SUPPORTED_LOCALES.some((l) => l.code === tag || l.code.toLowerCase() === base);
 
   return (
     <div className="max-w-xl space-y-3">
@@ -120,8 +124,8 @@ function LocaleDefaultEditor({ value, onChange }: SettingEditorProps<string>) {
           in this build is legal and inert until the catalog ships, so refusing it
           would be stricter than the server; saying nothing would leave an operator
           who typed "fr" wondering why nothing changed. */}
-      {value.trim() !== '' && !isShipped && (
-        <HintText size="md">{t('localeNotShippedWarning', { tag: value.trim() })}</HintText>
+      {tag !== '' && !isShipped && (
+        <HintText size="md">{t('localeNotShippedWarning', { tag })}</HintText>
       )}
     </div>
   );

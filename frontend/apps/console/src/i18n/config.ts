@@ -276,8 +276,8 @@ export function setUserLocale(code: string): void {
  * TenantProvider calls this once, from a single effect keyed on the tenant's
  * EFFECTIVE locale — it is the only caller, and it must stay the only one. It is a
  * NO-OP when the user has already made an explicit choice (rung 1 beats rung 2) and
- * ignores a locale we do not ship, so a tenant default only ever fills in for a user
- * who has not chosen, and only with a shipped locale.
+ * ignores a locale that resolves to no shipped catalog, so a tenant default only ever
+ * fills in for a user who has not chosen, and only with a locale that can render.
  *
  * 🔴 IT BEATS RUNG 3 BY OVERWRITING IT, which is why this is a function rather than
  * an entry in `detection.order` above. Detection has already run and resolved the
@@ -296,9 +296,32 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
   // NOT block an effective tenant default; treating any string as "chosen" would
   // let an ineffective rung-1 suppress an effective rung-2.
   const chosen = localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (chosen && SUPPORTED_LOCALES.some((l) => l.code === chosen)) return;
-  if (!SUPPORTED_LOCALES.some((l) => l.code === locale)) return; // never select an unshipped catalog
+  if (chosen && isResolvable(chosen)) return;
+  if (!isResolvable(locale)) return; // never select a locale that would render raw keys
   void i18n.changeLanguage(locale);
+}
+
+/**
+ * Whether a language tag resolves to a catalog this build actually ships — by exact
+ * code, or by its primary language subtag.
+ *
+ * 🔴 THE SUBTAG FOLD IS NOT LENIENCY, IT IS AGREEMENT WITH RUNG 3. `es-MX` resolves
+ * to the `es` catalog through i18next's own `nonExplicitSupportedLngs`, which is set
+ * above precisely so a regional browser language does not fall past Spanish to
+ * English. An exact-match test here made the tenant rung the ONE rung that refused a
+ * regional tag: a browser advertising `es-MX` got Spanish, while a tenant default of
+ * `es-MX` was silently dropped and the same user got English. Two surfaces resolving
+ * the same tag differently is the defect this cascade exists to prevent, and the
+ * server stores regional tags happily (the operator's `locale.default` editor is free
+ * text and offers `pt-BR` as an example), so the tag really does arrive.
+ *
+ * The full tag is still what gets passed to changeLanguage, never the folded base:
+ * i18next does the folding, so the day an `es-MX` catalog ships it is picked up with
+ * no change here.
+ */
+function isResolvable(tag: string): boolean {
+  const base = tag.split('-')[0].toLowerCase();
+  return SUPPORTED_LOCALES.some((l) => l.code === tag || l.code.toLowerCase() === base);
 }
 
 export default i18n;

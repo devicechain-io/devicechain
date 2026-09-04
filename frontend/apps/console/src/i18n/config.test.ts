@@ -96,6 +96,32 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  // 🔴 A REGIONAL TAG MUST RESOLVE, because rung 3 already does. i18next's
+  // nonExplicitSupportedLngs folds `es-MX` onto the `es` catalog, so a browser
+  // advertising it gets Spanish; an exact-match guard here would make the tenant rung
+  // the one rung that refused it, and the same user would get English from a tenant
+  // default of `es-MX` while getting Spanish from their browser.
+  it('accepts a regional tag whose base language is shipped', async () => {
+    applyTenantDefaultLocale('es-MX');
+    await vi.waitFor(() => expect(i18n.resolvedLanguage).toBe('es'));
+  });
+
+  // The full tag is what reaches i18next, not the folded base — so the day an es-MX
+  // catalog ships it is selected without a change here.
+  it('hands i18next the full tag rather than the folded base language', () => {
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('es-MX');
+    expect(spy).toHaveBeenCalledWith('es-MX');
+  });
+
+  // The counterweight: folding must not turn into "accept anything". A regional tag
+  // on an UNSHIPPED base language is still refused.
+  it('still refuses a regional tag whose base language is not shipped', () => {
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('fr-CA');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('loses to an explicit user choice already in localStorage', () => {
     localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
     const spy = vi.spyOn(i18n, 'changeLanguage');
