@@ -1,0 +1,9 @@
+{
+  "chooseTenant": "Choose a tenant",
+  "emailLabel": "Email",
+  "noTenants": "This account has no tenants.",
+  "passwordLabel": "Password",
+  "submit": "Sign in",
+  "submitting": "Signing in…",
+  "title": "Sign in"
+}
