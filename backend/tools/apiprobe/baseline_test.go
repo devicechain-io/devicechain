@@ -27,7 +27,13 @@ func TestTheCurrentTreeSupportsEveryEntity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load the current tree as a baseline: %v", err)
 	}
-	for _, e := range entities {
+	// 🔑 allEntities(), NOT entities. The publish ops and the after-publish rows are
+	// seeded by the same loop and filtered by the same supports(), so a row that only
+	// the wider list contains is one this counterweight would never have looked at —
+	// and since Requires arrived, a TYPO in one ("propertySchemaX") would make that row
+	// skip against the CURRENT release, silently, which is the fail-open this test
+	// exists to prevent one level up.
+	for _, e := range allEntities() {
 		if ok, why := b.supports(e); !ok {
 			t.Errorf("the current tree does not support %q: %s", e.Name, why)
 		}
