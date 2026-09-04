@@ -420,6 +420,65 @@ var entities = []entity{
 		},
 	},
 	{
+		// Depends on: device. One physical-unit swap, so the append-only replacement
+		// journal has a row the drill can watch across an upgrade — a lifecycle record
+		// nobody can re-derive is exactly the kind of row whose survival is worth
+		// proving.
+		//
+		// 🔴 IT SITS BEFORE device-credential, AND THE ORDER IS LOAD-BEARING RATHER THAN
+		// INCIDENTAL. Replacing a device DISABLES every enabled credential it holds. Put
+		// this entry after device-credential and the swap flips that credential's
+		// `enabled` from true to false — but its receipt was already written from its own
+		// create response, which recorded true. Verify would then read false after a
+		// perfectly healthy upgrade and report MISMATCH, the most alarming verdict this
+		// drill has, on every run. Seeding first means the device holds nothing to
+		// retire, so retiredCredentialTokens is the empty array and the credential
+		// created next is left alone.
+		//
+		// The cost of that ordering is stated rather than hidden: this row exercises the
+		// jsonb column EMPTY. Proving a populated one survives would need a second device
+		// and a second credential seeded purely to be retired, which buys one array
+		// element for two more entities in a table whose whole value is that a reader can
+		// hold it in their head.
+		//
+		// occurredTime is not selected, for the reason timestampFieldsThatRoundTrip
+		// documents: the create response prints nanoseconds and the row stores
+		// microseconds, so comparing it reports a healthy instance as MISMATCH.
+		// newCredentialToken IS selected — it is a server-minted uuid, but it is STORED,
+		// so it is precisely the kind of value this drill exists to watch.
+		Name:     "device-replacement",
+		Area:     "device-management",
+		Mutation: "replaceDevice",
+		Input:    "DeviceReplaceRequest!",
+		// replaceDevice returns a result envelope; the journal row is under
+		// `replacement`. No Reject sibling: a refusal here is a hard error, not a
+		// structured outcome the way a command rejection is.
+		Wrap:      "replacement",
+		Read:      "deviceReplacements",
+		ReadInput: "DeviceReplacementSearchCriteria!",
+		// Criteria that DO pin the row: one device, one replacement. Literals rather
+		// than state, because verify runs in another process holding only the receipt.
+		ReadVars: map[string]any{
+			"pageNumber": 1, "pageSize": 10, "device": "apiprobe-device",
+		},
+		Fields: "actor reason unitIdentifier retiredCredentialTokens " +
+			"newCredentialToken newCredentialType device{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"deviceToken": s.tokens["device"],
+				// No credentialType or credentialId: ACCESS_TOKEN is the default and the
+				// only type the server can mint an id for, which is what makes this a
+				// one-field request rather than one carrying material the probe invented.
+				"reason":         "apiprobe replacement",
+				"unitIdentifier": "apiprobe-unit-002",
+			}}
+		},
+		// The journal row carries no token of its own — it is an event, addressed only
+		// as part of one device's history — so the receipt keys on the device, as the
+		// device-claim entry does for the same reason.
+		TokenFrom: func(s *state) string { return s.tokens["device"] },
+	},
+	{
 		// Depends on: device. credentialValue is NOT selected: it is write-only
 		// and read back as null by design, so comparing it would assert the
 		// platform's secret-hiding rather than the upgrade's data fidelity.

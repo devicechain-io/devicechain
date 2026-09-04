@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 )
 
 // Every document this tool sends is a STRING. The compiler does not read it, the
@@ -161,6 +163,105 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 
 		if e.Record != nil {
 			e.Record(st, map[string]any{"token": st.tok(e.Name)})
+		}
+	}
+}
+
+// An entity that unwraps a result envelope must select the envelope's rejection —
+// WHEN THE ENVELOPE HAS ONE.
+//
+// 🔴 THIS REPLACES A RULE THAT ASSUMED EVERY ENVELOPE CARRIES A REJECTION. Two
+// different shapes wear the same Wrap:
+//
+//   - enqueueCommand returns {command, rejection}: a STRUCTURED refusal, where a
+//     declined create arrives as a null object with a reason beside it. Not selecting
+//     the rejection there loses the reason, which is the defect the old rule caught.
+//   - replaceDevice returns a result with no rejection field at all: a refusal is a
+//     GraphQL error, and there is nothing beside the object to ask for. Demanding a
+//     Reject there demands a selection the schema cannot serve.
+//
+// So the question is answered by the schema rather than by a rule about envelopes,
+// which is also what stops this drifting: an envelope that GAINS a rejection field
+// starts being required to select it, with no list here to remember to update.
+func TestAnEnvelopeWithARejectionSelectsIt(t *testing.T) {
+	byArea := map[string]*graphql.Schema{}
+	checked := 0
+
+	for _, e := range allEntities() {
+		if e.Wrap == "" {
+			continue
+		}
+		schema, ok := byArea[e.Area]
+		if !ok {
+			schema = servedSchema(t, e.Area, tenantPlane)
+			byArea[e.Area] = schema
+		}
+		fields, err := mutationReturnFields(schema, e.Mutation)
+		if err != nil {
+			t.Errorf("entity %q: %v", e.Name, err)
+			continue
+		}
+		checked++
+		if fields["rejection"] && e.Reject == "" {
+			t.Errorf("entity %q unwraps %q from a result that DOES declare a rejection, "+
+				"and selects none; a refusal would arrive as a bare absent object with no reason",
+				e.Name, e.Wrap)
+		}
+		if !fields["rejection"] && e.Reject != "" {
+			t.Errorf("entity %q selects a rejection its result type does not declare; "+
+				"the document will not validate", e.Name)
+		}
+		if !fields[e.Wrap] {
+			t.Errorf("entity %q unwraps %q, which its result type does not declare", e.Name, e.Wrap)
+		}
+	}
+
+	// A vacuous pass reads exactly like a thorough one: if nothing set Wrap, or the
+	// schema could not be read, every entity trivially passes.
+	if checked == 0 {
+		t.Fatal("no entity with a result envelope was examined; the check is inspecting nothing")
+	}
+}
+
+// mutationReturnFields names the fields of the type a mutation returns, unwrapping
+// NON_NULL and LIST to reach it.
+//
+// It reads the parsed AST rather than running introspection: servedSchema parses with
+// a NIL RESOLVER — enough for validation, which is all it was ever for — and Exec on a
+// resolverless schema panics. The AST is the same schema the validator reads, and it
+// is available without pretending there is a server behind it.
+func mutationReturnFields(schema *graphql.Schema, mutation string) (map[string]bool, error) {
+	doc := schema.AST()
+	root, ok := doc.RootOperationTypes["mutation"].(*ast.ObjectTypeDefinition)
+	if !ok {
+		return nil, fmt.Errorf("the schema declares no mutation type")
+	}
+	field := root.Fields.Get(mutation)
+	if field == nil {
+		return nil, fmt.Errorf("the schema serves no mutation %q", mutation)
+	}
+	returned := namedTypeOf(field.Type)
+	object, ok := doc.Types[returned].(*ast.ObjectTypeDefinition)
+	if !ok {
+		return nil, fmt.Errorf("%q returns %q, which is not an object type", mutation, returned)
+	}
+	names := map[string]bool{}
+	for _, f := range object.Fields {
+		names[f.Name] = true
+	}
+	return names, nil
+}
+
+// namedTypeOf strips the NonNull/List wrappers around a named type.
+func namedTypeOf(t ast.Type) string {
+	for {
+		switch inner := t.(type) {
+		case *ast.NonNull:
+			t = inner.OfType
+		case *ast.List:
+			t = inner.OfType
+		default:
+			return t.String()
 		}
 	}
 }
