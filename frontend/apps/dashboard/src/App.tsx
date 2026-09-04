@@ -40,7 +40,8 @@ import type { Basemap } from '@devicechain/client';
 
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
-import { errorDetail, loadDashboard, type Loaded } from './load';
+import { signInErrorKey } from './i18n/signInError';
+import { loadDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 
@@ -90,13 +91,17 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 🔴 The two `rejectedKey`s differ because the two failures are different facts. At
+  // this point the identity is already proven — the tenant is what did not work — so
+  // reporting "invalid email or password" here would send the viewer to re-type
+  // credentials the server has just accepted.
   const selectTenant = (idToken: string, tenant: string) => {
     setBusy(true);
     setError(null);
     gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
       .then((r) => onAuthed(r.selectTenant.accessToken))
       .catch((err: unknown) => {
-        setError(errorDetail(err) ?? t('common:unexpectedError'));
+        setError(t(signInErrorKey(err, 'signIn:enterTenantFailed')));
         setBusy(false);
       });
   };
@@ -123,7 +128,9 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
         setBusy(false);
       })
       .catch((err: unknown) => {
-        setError(errorDetail(err) ?? t('common:unexpectedError'));
+        // The backend deliberately does not distinguish a bad email from a bad
+        // password, so neither does this.
+        setError(t(signInErrorKey(err, 'signIn:invalidCredentials')));
         setBusy(false);
       });
   };

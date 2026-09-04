@@ -2,7 +2,7 @@
   "definitionLabel": "Definición (JSON)",
   "definitionPlaceholder": "Pega una definición de panel exportada…",
   "errorDefinitionInvalid": "Definición: {{detail}}",
-  "errorDefinitionTooLarge": "La definición es demasiado grande (más de 1 MiB).",
+  "errorDefinitionTooLarge": "La definición es demasiado grande (más de {{limit}} MiB).",
   "errorManifestDropped_one": "Manifiesto de vinculación: se ignoró {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestDropped_other": "Manifiesto de vinculación: se ignoraron {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestInvalid": "Manifiesto de vinculación: {{detail}}",

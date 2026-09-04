@@ -219,7 +219,11 @@ describe('loadDashboard', () => {
   it('accepts an empty manifest as no overrides', () => {
     for (const text of ['', '   ', '{}']) {
       const result = loadDashboard(board, text);
-      if ('error' in result) throw new Error(`manifest ${JSON.stringify(text)}: ${result.error}`);
+      // JSON.stringify, like the samples gate above — `${result.error}` renders
+      // "[object Object]", which reports nothing about why the manifest was refused.
+      if ('error' in result) {
+        throw new Error(`manifest ${JSON.stringify(text)}: ${JSON.stringify(result.error)}`);
+      }
       expect(result.loaded.manifest).toEqual({});
     }
   });

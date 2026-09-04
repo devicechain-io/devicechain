@@ -10,7 +10,7 @@
 // LoadError variant is a TYPE ERROR here until it has a key — the compiler, not a
 // reviewer, is what stops a new failure mode from rendering as a blank line.
 
-import type { LoadError } from '../load';
+import { MAX_PASTE_BYTES, type LoadError } from '../load';
 
 /** A catalog key plus the values it interpolates. Never prose. */
 export interface LoadErrorKey {
@@ -28,10 +28,25 @@ function quoteSlots(slots: string[]): string {
   return slots.map((slot) => `"${slot}"`).join(', ');
 }
 
+/**
+ * The paste cap in MiB, DERIVED from the constant that enforces it.
+ *
+ * Both catalogs used to spell "1 MiB" into the sentence, which made the message a
+ * second, unenforced copy of `MAX_PASTE_BYTES` — change the cap and every locale
+ * confidently quotes the old number, in the one message whose entire job is to say what
+ * the number is.
+ *
+ * Stated limit: this renders with a JavaScript decimal point, not a locale-aware
+ * separator, so a future FRACTIONAL cap would read "1.5" in Spanish where "1,5" is
+ * correct. Left alone deliberately rather than pulling in Intl for it — the cap is a
+ * whole number of MiB today and a fractional one is not a thing anyone sets.
+ */
+const MAX_PASTE_MIB = MAX_PASTE_BYTES / (1 << 20);
+
 export function loadErrorKey(error: LoadError): LoadErrorKey {
   switch (error.code) {
     case 'definitionTooLarge':
-      return { key: 'load:errorDefinitionTooLarge', params: {} };
+      return { key: 'load:errorDefinitionTooLarge', params: { limit: MAX_PASTE_MIB } };
     case 'definitionInvalid':
       return { key: 'load:errorDefinitionInvalid', params: { detail: error.detail } };
     case 'manifestInvalid':

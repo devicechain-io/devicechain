@@ -11,43 +11,61 @@
 // RENDERING — that every code reaches a key, and that every key resolves to real text
 // in every shipped locale.
 //
-// Deleting an entry from en/load.json reddens the resolution test here; deleting it
-// from es/load.json reddens the parity test next door. Neither is visible to the lint.
+// What enforces "every code": the SAMPLES mapped type below, which the compiler checks
+// against LoadError itself — not a list anyone maintains. Deleting an entry from
+// en/load.json reddens the resolution test here; deleting it from es/load.json reddens
+// the parity test next door. None of the three is visible to the lint.
 
 import { describe, expect, it } from 'vitest';
 
-import type { LoadError } from '../load';
+import { MAX_PASTE_BYTES, type LoadError } from '../load';
 import i18n, { SUPPORTED_LOCALES } from './config';
 import { loadErrorKey, loadErrorMessage } from './loadError';
 
-// One sample per LoadError variant. 🔴 The list is checked against the union below
-// rather than trusted: a new variant added to load.ts and forgotten here would leave
-// this file testing a subset while reporting green.
-const SAMPLES: LoadError[] = [
-  { code: 'definitionTooLarge' },
-  { code: 'definitionInvalid', detail: 'Unexpected token' },
-  { code: 'manifestInvalid', detail: 'Unexpected token' },
-  { code: 'manifestNotObject' },
-  { code: 'manifestDropped', slots: ['zone'] },
-  { code: 'manifestDropped', slots: ['zone', 'sensor'] },
-];
+// One or more samples per LoadError variant, KEYED BY THE VARIANT'S OWN CODE so the
+// compiler owns the enumeration.
+//
+// 🔴 THIS WAS A PLAIN ARRAY, AND THE COMMENT ABOVE IT CLAIMED IT WAS "checked against
+// the union" WHILE THE CHECK COMPARED IT TO A SECOND HAND-TYPED LIST OF THE SAME FIVE
+// STRINGS. Two hand-written lists agreeing with each other is not a derivation from
+// the type, and the gap was live: adding a variant to LoadError with a `case` in
+// loadErrorKey and its key in NO catalog left `tsc` at rc=0 and the suite at 65/65,
+// while the viewer read the raw key. Measured, not reasoned about.
+//
+// The mapped type closes it. A new variant makes this object literal MISSING A
+// PROPERTY, which is an error here at compile time — before any test runs, and without
+// anyone remembering that this file exists.
+const SAMPLES: { [K in LoadError['code']]: Extract<LoadError, { code: K }>[] } = {
+  definitionTooLarge: [{ code: 'definitionTooLarge' }],
+  definitionInvalid: [
+    { code: 'definitionInvalid', detail: 'Unexpected token' },
+    // detail: null is a real input, not a curiosity — loadDashboard produces it
+    // whenever the thrown value was not an Error.
+    { code: 'definitionInvalid', detail: null },
+  ],
+  manifestInvalid: [{ code: 'manifestInvalid', detail: 'Unexpected token' }],
+  manifestNotObject: [{ code: 'manifestNotObject' }],
+  manifestDropped: [
+    { code: 'manifestDropped', slots: ['zone'] },
+    { code: 'manifestDropped', slots: ['zone', 'sensor'] },
+  ],
+};
+
+const ALL_SAMPLES: LoadError[] = Object.values(SAMPLES).flat();
 
 describe('loadErrorKey', () => {
-  it('covers every LoadError variant', () => {
-    // The type-level half is the exhaustive switch in loadErrorKey — a new variant is a
-    // compile error there. This is the value-level half: that the SAMPLES above, which
-    // every test in this file iterates, actually reach each of those branches.
-    const codes = new Set(SAMPLES.map((s) => s.code));
-    expect([...codes].sort()).toEqual([
-      'definitionInvalid',
-      'definitionTooLarge',
-      'manifestDropped',
-      'manifestInvalid',
-      'manifestNotObject',
-    ]);
+  // 🔴 The control the mapped type CANNOT give: `definitionInvalid: []` type-checks
+  // perfectly and iterates nothing, so every assertion below would agree about a
+  // variant it never touched. Exhaustiveness is now the compiler's job; non-emptiness
+  // is still this test's.
+  it('has at least one sample for every variant', () => {
+    for (const [code, samples] of Object.entries(SAMPLES)) {
+      expect(samples.length, `${code} has no samples, so nothing below exercises it`)
+        .toBeGreaterThan(0);
+    }
   });
 
-  it.each(SAMPLES)('maps $code to a namespaced load key', (error) => {
+  it.each(ALL_SAMPLES)('maps $code to a namespaced load key', (error) => {
     const { key } = loadErrorKey(error);
     expect(key).toMatch(/^load:error[A-Z]/);
   });
@@ -55,7 +73,7 @@ describe('loadErrorKey', () => {
 
 describe('every load failure has real text in every shipped locale', () => {
   for (const { code } of SUPPORTED_LOCALES) {
-    it.each(SAMPLES)(`${code}: $code renders as prose, not as its key`, async (error) => {
+    it.each(ALL_SAMPLES)(`${code}: $code renders as prose, not as its key`, async (error) => {
       await i18n.changeLanguage(code);
       const { key } = loadErrorKey(error);
       const text = loadErrorMessage(error, (k, p) => i18n.t(k, p));
@@ -99,6 +117,19 @@ describe('loadErrorMessage', () => {
       expect(text).toContain(i18n.t('common:unexpectedError'));
     }
   });
+
+  // 🔴 The cap message's whole job is to say what the cap IS, so a hardcoded number in
+  // the catalogs made every locale a second, unenforced copy of MAX_PASTE_BYTES — one
+  // that would go on confidently quoting the old figure after the constant moved. This
+  // asserts the DERIVED value, so it follows the constant instead of pinning today's.
+  it.each(SUPPORTED_LOCALES.map((l) => l.code))(
+    '%s: states the cap the code actually enforces',
+    async (code) => {
+      await i18n.changeLanguage(code);
+      const text = loadErrorMessage({ code: 'definitionTooLarge' }, (k, p) => i18n.t(k, p));
+      expect(text).toContain(`${MAX_PASTE_BYTES / (1 << 20)} MiB`);
+    },
+  );
 
   it('quotes each dropped slot so the viewer can find it in what they pasted', async () => {
     await i18n.changeLanguage('en');
