@@ -95,20 +95,33 @@ Because the registry is public, no credentials are required to pull released ima
 
 Pin the image tag to the release you want:
 
+`DC_ROOT_KEY` below is the instance's secret-store root key — required by the `default`
+profile, generated once with `openssl rand -base64 32`, and passed unchanged on every
+install and upgrade. See
+[Deploying with Helm](./kubernetes-operator.md#deploying-with-helm) for why.
+
+Substitute a real released tag for `<version>` — the
+[releases page](https://github.com/devicechain-io/devicechain/releases) lists them, and an
+unreleased value fails at the pull rather than at install time.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 The Helm chart itself is also published as an OCI artifact, so you can install it without a
-checkout of the repository:
+checkout of the repository. The chart is versioned separately from the images and carries no
+leading `v`; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the
+latest, and `--version` refuses anything that was never published:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 \
+  --version <chart-version> \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 The chart is also listed on
@@ -131,12 +144,12 @@ helm get values dc -n default -o yaml > dc-values.yaml
 helm upgrade dc deploy/helm/devicechain \
   -n default \
   -f dc-values.yaml \
-  --set image.tag=v1.3.0
+  --set image.tag=<new-version>
 
 rm dc-values.yaml
 
 # 2. The operator. Not part of the chart, so `helm upgrade` cannot move it.
-dcctl upgrade local devicechain --version v1.3.0
+dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::warning Both steps, every time — the second one is not optional
