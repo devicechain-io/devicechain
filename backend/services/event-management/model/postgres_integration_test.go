@@ -258,10 +258,19 @@ func TestIntegrationCompressionEnablesWithTheIdentityKey(t *testing.T) {
 			EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 	require.NoError(t, err)
 
+	// 🔴 EVERY GOVERNED HYPERTABLE, not a sample of three. The segment keys are now
+	// per-table (compressSegmentBy), so "it worked on measurement_events" no longer
+	// carries the others: a column named in one table's list and absent from another,
+	// or one that collides with compress_orderby, is rejected by Timescale per table.
+	// The reconciler's exec is best-effort, so such a rejection ships as a single ERROR
+	// log line and a hypertable that silently never compresses — invisible until a disk
+	// fills. Driving LifecycleHypertables means a table added to the set is covered the
+	// day it joins, with no list here to fall out of step.
 	sys := api.RDB.DB(core.WithSystemContext(ctx))
-	for _, table := range []string{"events", "measurement_events", "event_anchors"} {
+	for _, table := range LifecycleHypertables {
 		require.NoErrorf(t, sys.Exec(enableCompressionStmt(table)).Error,
-			"compression must enable on %s with the identity primary key", table)
+			"compression must enable on %s with segmentby %q and the identity primary key",
+			table, segmentByFor(table))
 	}
 
 	// Enabling is necessary but not sufficient — compress a real chunk and read back

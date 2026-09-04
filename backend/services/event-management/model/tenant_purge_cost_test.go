@@ -7,11 +7,18 @@
 //
 // The decision this settles. ADR-077 puts tenant erasure on the GA cut line and keeps
 // the shared-hypertable topology, on the strength of one property: compression segments
-// by tenant_id (see enableCompressionStmt), so a tenant's rows are grouped into their own
-// compressed batches and `DELETE ... WHERE tenant_id` should be the CHEAP case for
+// LEADING ON tenant_id (see compressSegmentBy), so a tenant's rows are grouped into their
+// own compressed batches and `DELETE ... WHERE tenant_id` should be the CHEAP case for
 // compressed DML rather than the worst. That is a reading of a setting, not a fact. If it
 // is wrong, the ADR's rejected schema-per-tenant alternative reopens — and it must reopen
 // on this evidence rather than on preference, which is why this file exists at all.
+//
+// 🔴 "LEADING ON" rather than "by", and the distinction became real when the segment
+// keys were widened past tenant_id to the column each hypertable is actually read by. A
+// tenant delete still matches whole compressed rows — a predicate over segmentby columns
+// alone never decompresses, and it does not have to name all of them — so the property
+// this file measures is unchanged. What WOULD invalidate it is tenant_id leaving a
+// segment key altogether, which is why lifecycle_test.go pins that separately from here.
 //
 // It runs against a REAL operand image (PG 17.10 / TimescaleDB 2.28.3), through the REAL
 // migration chain and the REAL lifecycle policies, because every question here is about
@@ -330,9 +337,15 @@ func TestIntegrationTenantPurgeCostDropSchemaComparison(t *testing.T) {
 		`CREATE TABLE "event-management".%q (LIKE "event-management".measurement_events INCLUDING ALL)`, probe)).Error)
 	require.NoError(t, db.Exec(fmt.Sprintf(
 		`SELECT create_hypertable('"event-management".%q', 'occurred_time', chunk_time_interval => interval '24 hours')`, probe)).Error)
+	// The segment/order keys are taken FROM THE PRODUCTION SETTING for the table this
+	// probe copies, not written out again here. A second literal copy of them looked
+	// identical to this one and silently stopped matching the platform the moment the
+	// real segment keys were widened — at which point the probe would be measuring a
+	// layout nothing deploys while still claiming to be "the same segmentby".
 	require.NoError(t, db.Exec(fmt.Sprintf(
 		`ALTER TABLE "event-management".%q SET (timescaledb.compress, `+
-			`timescaledb.compress_segmentby = 'tenant_id', timescaledb.compress_orderby = 'occurred_time DESC')`, probe)).Error)
+			`timescaledb.compress_segmentby = '%s', timescaledb.compress_orderby = '%s')`,
+		probe, segmentByFor("measurement_events"), compressOrderBy)).Error)
 
 	seedMeasurements(t, db, probe, 1, rowsPerTenant)
 	compressAllChunks(t, db, probe)

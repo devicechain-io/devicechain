@@ -39,11 +39,94 @@ func TestSetChunkIntervalStmt(t *testing.T) {
 
 func TestEnableCompressionStmt(t *testing.T) {
 	stmt := enableCompressionStmt("measurement_events")
-	// Segment by tenant (every read is tenant-scoped), order by time DESC (range scans).
 	assert.Contains(t, stmt, `ALTER TABLE "event-management"."measurement_events"`)
 	assert.Contains(t, stmt, "timescaledb.compress")
-	assert.Contains(t, stmt, "compress_segmentby = 'tenant_id'")
+	// 🔴 THE WHOLE SETTING, NOT A PREFIX OF IT. `Contains(stmt, "= 'tenant_id'")` is
+	// what this assertion used to say, and it is satisfied by a segmentby of
+	// 'tenant_id' AND by 'tenant_id, device_token' — the substring is a prefix of the
+	// wider list plus a quote, so the test cannot tell the two apart in either
+	// direction. Closing the quote inside the expected string is what makes it an
+	// assertion about the value rather than about its first column.
+	assert.Contains(t, stmt, "compress_segmentby = 'tenant_id, device_token'")
 	assert.Contains(t, stmt, "compress_orderby = 'occurred_time DESC'")
+}
+
+// The per-hypertable segment keys, asserted whole and one table at a time. This is the
+// statement-shape assertion the reconciler's behaviour rests on: it is the ONLY place
+// the choice per table is checked, because applyOne just calls the builder.
+func TestEnableCompressionStmtSegmentsPerHypertable(t *testing.T) {
+	for table, want := range map[string]string{
+		// Device-keyed: every read of these filters device_token.
+		"events":              "tenant_id, device_token",
+		"location_events":     "tenant_id, device_token",
+		"measurement_events":  "tenant_id, device_token",
+		"alert_events":        "tenant_id, device_token",
+		"state_change_events": "tenant_id, device_token",
+		// Anchor-keyed: read by the entity an event is anchored TO, not by device.
+		"event_anchors": "tenant_id, anchor_type, anchor_token",
+	} {
+		assert.Contains(t, enableCompressionStmt(table),
+			"timescaledb.compress_segmentby = '"+want+"'",
+			"%s must be segmented by the columns it is actually read by", table)
+	}
+}
+
+// A hypertable that joins the lifecycle set must have its segment key CHOSEN, not
+// inherited. The fallback in segmentByFor is deliberately silent and always valid, so
+// nothing at runtime would report a table that quietly kept the tenant-only setting;
+// this is what reports it.
+func TestEverySegmentByIsDeclared(t *testing.T) {
+	for _, table := range LifecycleHypertables {
+		assert.Containsf(t, compressSegmentBy, table,
+			"hypertable %q is governed by the lifecycle policies but has no declared "+
+				"compress_segmentby, so it silently falls back to tenant_id alone — decide "+
+				"how it is read and add it to compressSegmentBy", table)
+	}
+	// The counterweight: an entry for a table nothing governs is dead configuration
+	// that reads as coverage.
+	for table := range compressSegmentBy {
+		assert.Containsf(t, LifecycleHypertables, table,
+			"compressSegmentBy declares %q, which is not a governed hypertable", table)
+	}
+}
+
+// 🔴 Timescale REJECTS an ALTER whose compress_segmentby and compress_orderby share a
+// column ("cannot use column X in both..."), and applyOne's exec is best-effort — so
+// the failure would be one ERROR log line at startup and a hypertable that silently
+// never compresses. Every segment key is checked against the shared orderby column
+// here, where it costs nothing, rather than at 3am in a log.
+func TestSegmentByNeverCollidesWithOrderBy(t *testing.T) {
+	orderCol := strings.TrimSuffix(compressOrderBy, " DESC")
+	require.NotEqual(t, compressOrderBy, orderCol, "compressOrderBy must carry a direction")
+	for _, table := range LifecycleHypertables {
+		for _, col := range strings.Split(segmentByFor(table), ",") {
+			assert.NotEqualf(t, orderCol, strings.TrimSpace(col),
+				"%s segments by %q, which is also its compress_orderby column — "+
+					"Timescale rejects the ALTER", table, orderCol)
+		}
+	}
+}
+
+// tenant_id must LEAD every segment key. ADR-077 accepted the shared-hypertable
+// topology on the measured strength of `DELETE ... WHERE tenant_id` matching whole
+// compressed rows, which holds only while tenant_id is itself a segmentby column.
+// Widening a list is safe; dropping tenant_id out of one is the change that would
+// invalidate that measurement without failing anything else.
+func TestTenantIdLeadsEverySegmentBy(t *testing.T) {
+	for _, table := range LifecycleHypertables {
+		cols := strings.Split(segmentByFor(table), ",")
+		require.NotEmpty(t, cols)
+		assert.Equalf(t, "tenant_id", strings.TrimSpace(cols[0]),
+			"%s must segment on tenant_id first — the tenant-erasure cost measurement "+
+				"depends on a tenant delete never having to decompress", table)
+	}
+}
+
+// The fallback is the pre-existing setting, so an undeclared table degrades to the old
+// behaviour rather than to something invalid. Without this, TestEverySegmentByIsDeclared
+// could be satisfied by a fallback that returned nonsense.
+func TestSegmentByFallsBackToTenantOnly(t *testing.T) {
+	assert.Equal(t, "tenant_id", segmentByFor("a_hypertable_nobody_declared"))
 }
 
 func TestCompressionPolicyStmts(t *testing.T) {

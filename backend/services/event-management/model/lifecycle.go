@@ -62,15 +62,110 @@ func setChunkIntervalStmt(table string) string {
 		qualifiedHypertable(table))
 }
 
-// enableCompressionStmt turns on columnar compression and sets the segment/order
-// keys. Segmenting by tenant_id keeps a tenant's rows grouped in a compressed batch
-// (every read is tenant-scoped), and ordering by occurred_time DESC matches the
-// time-range scans. Re-running with identical settings is a no-op.
+// compressSegmentBy is the compress_segmentby column list for one hypertable.
+//
+// WHAT SEGMENTBY BUYS AND WHAT IT COSTS. In a compressed chunk a segmentby column
+// stays a PLAIN, indexed column on the compressed row; every other column is packed
+// inside the compressed blob. So a predicate on a segmentby column selects which
+// batches to decompress, and a predicate on any other column can only be applied
+// AFTER decompressing. Segmenting by tenant_id alone therefore made every read
+// decompress the whole tenant's chunk and then discard all but one device's rows —
+// read amplification that grows with the fleet, on exactly the query the product is
+// for ("this device, this window"). The cost of widening is compression ratio: rows
+// are packed into batches of up to 1000 WITHIN a segment, so a segment holding far
+// fewer rows than that per chunk compresses worse. Per-device segmentation is
+// Timescale's own canonical shape for device telemetry, and the chunk interval
+// (DataLifecyclePolicy.ChunkIntervalHours) is the lever if a deployment's devices
+// report too sparsely for it.
+//
+// 🔴 tenant_id LEADS EVERY LIST, AND THAT IS LOAD-BEARING RATHER THAN TIDY. The
+// tenant-erasure cost measurement (ADR-077, tenant_purge_cost_test.go) rests on
+// `DELETE ... WHERE tenant_id` matching WHOLE compressed rows, which holds only while
+// tenant_id is a segmentby column — a predicate over segmentby columns alone never
+// has to decompress. Widening a list keeps that property; DROPPING tenant_id from one
+// would silently turn the cheap case into the worst one and reopen the
+// schema-per-tenant alternative ADR-077 rejected on exactly that evidence.
+//
+// 🔴 A SEGMENTBY COLUMN MUST NOT ALSO APPEAR IN compress_orderby. Measured on
+// TimescaleDB 2.28.3, not inferred: the ALTER fails with `cannot use column
+// "occurred_time" for both ordering and segmenting`. The orderby is occurred_time
+// alone, which appears in no list below, and TestSegmentByNeverCollidesWithOrderBy
+// pins that it never starts to.
+//
+// A table absent from this map falls back to tenant_id, the setting every hypertable
+// carried before the map existed: never wrong, merely not widened.
+// TestEverySegmentByIsDeclared makes a newly governed hypertable fail a test rather
+// than quietly inherit the fallback.
+var compressSegmentBy = map[string]string{
+	// The base events table and two of the three payload hypertables are read through
+	// commonEventFilters, whose only non-time predicate is device_token (event_type is
+	// a coarse IN-list, too low-cardinality to be worth a segment of its own). events
+	// additionally carries an index leading with exactly these two columns.
+	"events":          "tenant_id, device_token",
+	"location_events": "tenant_id, device_token",
+	"alert_events":    "tenant_id, device_token",
+	// measurement_events is read both directly and, for bucketed aggregation, on the
+	// (tenant_id, device_token, name, occurred_time DESC) index; the
+	// measurement_rollups continuous aggregate groups by the same device key. `name`
+	// is deliberately NOT segmented on: it would multiply the segment count by the
+	// metric vocabulary, and it is a predicate only on the aggregation path, which
+	// reads the rollup rather than the raw hypertable whenever it can.
+	"measurement_events": "tenant_id, device_token",
+	// state_change_events has NO reader today — it is the write-only presence history.
+	// Its one declared index is (tenant_id, device_token, occurred_time DESC), i.e.
+	// the presence-timeline read it was built for, so it is segmented for that rather
+	// than left on the fallback: the rows being written now are the ones that reader
+	// will eventually have to decompress, and by then the setting is frozen.
+	"state_change_events": "tenant_id, device_token",
+	// 🔴 event_anchors is the one table NOT keyed by device, and segmenting it by
+	// device_token would have been the wrong answer reached by pattern-matching. Its
+	// reason to exist is the anchor lookup — "every event anchored to this customer /
+	// area / asset" — which filters (anchor_type, anchor_token) and projects event_id.
+	// device_token is on the table but is read only by the periodic reconciliation
+	// sweep's `SELECT DISTINCT device_token`; that sweep now decompresses where the
+	// user-facing lookup no longer does, which is the trade taken deliberately.
+	"event_anchors": "tenant_id, anchor_type, anchor_token",
+}
+
+// compressOrderBy is the compress_orderby setting shared by every hypertable: all six
+// are partitioned on occurred_time and all are read as descending time ranges.
+const compressOrderBy = "occurred_time DESC"
+
+// segmentByFor resolves a hypertable's segmentby list, falling back to the tenant-only
+// setting for anything undeclared (see compressSegmentBy).
+func segmentByFor(table string) string {
+	if cols, ok := compressSegmentBy[table]; ok {
+		return cols
+	}
+	return "tenant_id"
+}
+
+// enableCompressionStmt turns on columnar compression and sets the segment/order keys.
+// Ordering by occurred_time DESC matches the time-range scans; the segment key is
+// per-table (see compressSegmentBy). Re-running with identical settings is a no-op.
+//
+// 🔴 HOW A CHANGED SEGMENT KEY ACTUALLY LANDS, MEASURED ON TimescaleDB 2.28.3 RATHER
+// THAN ASSUMED. The widely-repeated version of this is "you must decompress the chunks
+// first, so the ALTER fails". That is NOT what 2.28.3 does. With compressed chunks
+// present the ALTER SUCCEEDS and reports:
+//
+//	NOTICE: updated compression settings will only apply to future compressions
+//	DETAIL: Existing compressed chunks will not be recompressed.
+//	HINT:   Use compress_chunk(chunk, recompress => true) to recompress.
+//
+// So applyOne, which runs this on every startup, converges NEW chunks on any instance —
+// there is no "already enabled, skip" branch to defeat it, and no error to swallow. What
+// does not converge is history: chunks compressed under the old key keep the old layout
+// until they are recompressed by hand or dropped by retention, and the compression
+// POLICY does not relayout an already-compressed chunk. An instance therefore reads fast
+// for new data and at the old amplification for old data, silently and with nothing
+// broken — which is exactly why moving these lists is cheapest before there is any
+// history, and why after GA it is a planned recompression rather than a config edit.
 func enableCompressionStmt(table string) string {
 	return fmt.Sprintf("ALTER TABLE %s SET (timescaledb.compress, "+
-		"timescaledb.compress_segmentby = 'tenant_id', "+
-		"timescaledb.compress_orderby = 'occurred_time DESC')",
-		qualifiedHypertable(table))
+		"timescaledb.compress_segmentby = '%s', "+
+		"timescaledb.compress_orderby = '%s')",
+		qualifiedHypertable(table), segmentByFor(table), compressOrderBy)
 }
 
 // removeCompressionPolicyStmt drops the compression policy if present (if_exists =>
