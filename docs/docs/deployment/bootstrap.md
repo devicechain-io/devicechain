@@ -12,15 +12,21 @@ operator, and all the service workloads — with a single command:
 dcctl bootstrap local my-instance
 ```
 
-`dcctl` is a **self-contained binary**. The OpenTofu infrastructure config, the
-Helm chart, and the operator manifests are all embedded inside it, so you do not
-need a checkout of the source tree, `git`, `kubectl`, `kustomize`, or `helm` on
-your machine — just `dcctl` and a cluster to deploy to.
+`dcctl` carries its own **content**: the OpenTofu infrastructure config, the Helm
+chart, and the operator manifests are all embedded inside it, so you never need a
+checkout of the source tree or `git` to deploy.
+
+It does not carry its own **tools**. `bootstrap` drives `docker`, `kubectl`,
+`helm` and `tofu` (or `terraform`) as binaries on your `PATH`, and on the `local`
+provider `kind` as well. It checks for all of them before it starts and stops if
+one is missing, so install them first — the full list, and what each is used for,
+is under [Prerequisites](#prerequisites).
 
 :::note Status
 DeviceChain is pre-release. `dcctl bootstrap local` is implemented and validated
-end-to-end on local Kubernetes (kind). The `gcp` provider and automatic local
-cluster creation are planned follow-ups — see [Prerequisites](#prerequisites).
+end-to-end on local Kubernetes (kind), and it creates the kind cluster for you if
+none is running — it asks first, unless you pass `--yes`. The `gcp` provider is a
+planned follow-up.
 :::
 
 ## What it does
