@@ -130,6 +130,41 @@ func (l *DistributedLease) Acquire(partition string) (*Lease, error) {
 	return &Lease{kv: l.kv, key: key, holder: holder, epoch: rev, ttl: l.ttl, rev: rev, lastRenew: time.Now()}, nil
 }
 
+// PriorOwnerReleasedCleanly reports whether the partition's most recent state is an
+// EXPLICIT release rather than an entry that expired underneath a running owner.
+//
+// 🔴 CALL IT BEFORE Acquire, NOT AFTER. The lease bucket does not set History, so it
+// keeps a depth of one: our own Create replaces the delete marker we would be looking
+// for, and after acquiring there is nothing left to read. (Measured — the first
+// version of this asked afterwards and could never see a clean release.)
+//
+// 🔴 WHY THE QUESTION MATTERS. An absent key has THREE causes, not two: nothing ever
+// held the partition, the previous owner released it, or the previous owner's entry
+// TTL-EXPIRED WHILE IT WAS STILL RUNNING. Only the middle one proves there is no
+// zombie, because a release happens last — after that owner has stopped every loop
+// and flushed. The third is the dangerous case and it is invisible to Acquire, which
+// succeeds first try in all three: a replica partitioned from NATS but still
+// processing holds its own validity window past the moment the server forgot it, so
+// a successor that skipped its handover wait would read state that owner is still
+// writing.
+//
+// Get cannot separate them either — it answers ErrKeyNotFound for a released key and
+// an expired one alike (measured). The history can: a Release leaves a DELETE
+// operation, an expiry leaves nothing.
+//
+// It fails toward WAITING. A never-held partition, a delete marker that has itself
+// aged out (it expires on the same TTL), and any error reaching the history all read
+// as unclean — each costing a handover wait that was not strictly needed, which is
+// the safe direction.
+func (l *DistributedLease) PriorOwnerReleasedCleanly(partition string) bool {
+	entries, err := l.kv.History(kvKey(partition))
+	if err != nil || len(entries) == 0 {
+		return false
+	}
+	op := entries[len(entries)-1].Operation()
+	return op == nats.KeyValueDelete || op == nats.KeyValuePurge
+}
+
 // Lease is one acquired ownership of a partition. It is safe for concurrent use by
 // a single KeepAlive renewer goroutine alongside a processing loop calling
 // AmITheHolder — do NOT call Renew from more than one goroutine (KeepAlive is that

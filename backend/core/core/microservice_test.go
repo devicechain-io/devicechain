@@ -272,3 +272,64 @@ func TestAStartedServiceIsTornDownInFull(t *testing.T) {
 // against a sender stranded forever on an undrained slot, a hazard the cap-1 buffer and
 // Run's waiting receive already make impossible; it only failed at all because it sent
 // three times with no receiver, a shape the process never has.
+
+// 🔴 A COMPONENT THAT FAILS AFTER STARTUP HAD NO WAY TO SAY SO, AND THAT IS WHAT
+// FailNow FIXES.
+//
+// A failure inside InitializeAndStart is returned, reported and exits 1. A failure a
+// minute later had only ShutDownNow, which reports an ORDERLY stop — so a component
+// that had irrecoverably stopped doing its job could either keep a Ready pod alive
+// doing nothing, or exit 0, which is indistinguishable from a rollout to
+// `kubectl get pods`, to a container-exit alert, and to anyone reading events.
+//
+// The exit code is the production-observable assertion; the returned error is visible
+// only because captureExit's stub returns where os.Exit would not.
+func TestFailNowExitsNonZeroAfterStartup(t *testing.T) {
+	codes := captureExit(t)
+	ms := runnable(t, NewNoOpLifecycleCallbacks())
+
+	go ms.FailNow(errors.New("the leadership supervisor stopped"))
+	err := ms.reportOutcome(ms.waitForShutdown())
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the leadership supervisor stopped",
+		"FailNow reported some other outcome than the caller's; the reason a pod died is the whole value of it")
+	require.Equal(t, []int{1}, *codes,
+		"FailNow exited zero, which reads as an orderly stop — the exact ambiguity it exists to remove")
+}
+
+// 🔴 A CLEAN TEARDOWN DOES NOT MAKE A FailNow ORDERLY. The reason the process is
+// going away is the caller's error, not how well it packed up — and the terminal
+// send at the end of the teardown is the easiest place to lose it, because on the
+// ShutDownNow path that same send is what reports success.
+//
+// Without this, moving FailNow's error into a variable that the teardown's final
+// finished() ignores would leave every earlier assertion green and every real
+// leadership failure exiting 0.
+func TestFailNowKeepsItsErrorThroughAFullyCleanTeardown(t *testing.T) {
+	captureExit(t)
+	// A fully clean teardown: every callback succeeds, so the terminal outcome send is
+	// the only thing that could carry the failure — and on the ShutDownNow path that
+	// same send reports success.
+	ms := runnable(t, NewNoOpLifecycleCallbacks())
+
+	go ms.FailNow(errors.New("irrecoverable"))
+	err := ms.waitForShutdown()
+
+	require.Error(t, err, "a clean Stop/Terminate swallowed the failure that caused the shutdown")
+	require.Contains(t, err.Error(), "irrecoverable")
+}
+
+// The counterweight to both: ShutDownNow still exits 0. They share a teardown, so a
+// change that made failure reporting unconditional would paint every rolling update
+// red — and TestAnOrderlyShutdownExitsZero above is the other half of this pair.
+func TestFailNowDoesNotChangeAnOrderlyShutdown(t *testing.T) {
+	codes := captureExit(t)
+	ms := runnable(t, NewNoOpLifecycleCallbacks())
+
+	go ms.ShutDownNow()
+	err := ms.reportOutcome(ms.waitForShutdown())
+
+	require.NoError(t, err)
+	require.Empty(t, *codes, "an orderly shutdown set a non-zero exit status")
+}

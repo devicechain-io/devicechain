@@ -1765,8 +1765,7 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 		log.Error().Str("partition", rp.cfg.PartitionId).Int64("committedSeq", seq).
 			Uint64("appliedSeq", rp.engine.LastSeq()).
 			Msg("Idle-advance fenced: another writer owns a higher checkpoint (split brain); halting this writer.")
-		rp.stale = true
-		rp.pcancel()
+		rp.haltStaleWriter()
 		return true
 	}
 	return false
@@ -2171,18 +2170,7 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 				// singleton deploy, of which this is the runtime safety net.
 				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
 					Msg("DETECT checkpoint refused as stale (split-brain); halting this writer.")
-				rp.stale = true
-				// 🔴 STALE IS PERMANENT FOR THIS PROCESS, SO IT MUST END LEADERSHIP AND NOT
-				// JUST THE TERM. The flag is never cleared — a writer another has passed has
-				// no legitimate future — so a supervisor that merely lost the term would
-				// re-acquire the partition and run a term whose every checkpoint is refused
-				// before it starts: leader, live, and committing nothing, which is a worse
-				// state than not holding the partition at all. Ending the supervisor drops
-				// both gauges, so the leaderless alert fires and the pod is replaced.
-				if rp.leadershipEnabled() && rp.supCancel != nil {
-					rp.supCancel()
-				}
-				rp.pcancel()
+				rp.haltStaleWriter()
 				return false
 			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
@@ -2208,6 +2196,51 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.lastCheckpoint = rp.clock.Now()
 	return true
+}
+
+// haltStaleWriter stops this writer for good after a checkpoint has been refused as
+// stale — proof that another writer owns a higher checkpoint for our partition.
+//
+// 🔴 THERE ARE TWO PLACES THAT DISCOVER THIS AND THEY MUST DO THE SAME THING. Save
+// returning ErrStaleCheckpoint is one; detectStaleOwner's idle-advance fence, which
+// reads the committed sequence directly, is the other. The first version of the
+// leadership work fixed only the Save site, which left the fence site ending the
+// TERM but not leadership — and since the flag never clears, the supervisor would
+// re-acquire (uncontended, so without even the handover wait), pay a full rebuild
+// (six binds, restore, catch-up, three view builds, a whole replay), have replay's
+// own checkpoint refused on the flag, and count one term-build failure. Five of
+// those, with detect_is_leader reading 1 throughout, before anything gave up.
+//
+// 🔴 STALE IS PERMANENT FOR THIS PROCESS, so ending the term is never enough. A
+// writer another has passed has no legitimate future: every future checkpoint is
+// refused before it starts, which makes a re-acquired term a leader that commits
+// nothing while holding the partition against a healthy standby.
+//
+// So the process ends, non-zero, rather than lingering Ready. With replicas:1 there
+// is no standby waiting to take over — the pod has to be replaced. The chart's
+// DetectHasNoLeader rule covers the gap while it is gone, and its absent() half is
+// what makes it fire for a pod that is crash-looping rather than merely idle.
+func (rp *ResolvedEventsProcessor) haltStaleWriter() {
+	rp.stale = true
+	rp.pcancel()
+	if !rp.leadershipEnabled() {
+		// The unleased path keeps its original behaviour: halt the loop and leave the
+		// process alone. Nothing here took a partition, so nothing is being held from
+		// anyone.
+		return
+	}
+	if rp.supCancel != nil {
+		rp.supCancel()
+	}
+	err := fmt.Errorf("event-processing: the DETECT checkpoint for partition %q was refused as stale — "+
+		"another writer owns a higher checkpoint, so this replica can never commit again", rp.cfg.PartitionId)
+	if rp.Microservice != nil {
+		// Runs on its own goroutine: this is called from the single-writer loop, and
+		// FailNow's teardown calls ExecuteStop, which joins that very loop.
+		go rp.Microservice.FailNow(err)
+		return
+	}
+	log.Error().Err(err).Msg("DETECT is halted and cannot end the process; it has no microservice handle")
 }
 
 // stateBudgetStats is the bounded, tenant-label-free result of a per-tenant state-budget sample: the

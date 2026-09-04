@@ -259,3 +259,73 @@ func TestAStaleCheckpointEndsLeadershipRatherThanJustTheTerm(t *testing.T) {
 		t.Fatal("the term context survived a stale checkpoint")
 	}
 }
+
+// 🔴 THERE ARE TWO PLACES THAT DISCOVER A STALE CHECKPOINT AND THE FIRST VERSION OF
+// THIS WORK ONLY FIXED ONE.
+//
+// `Save` returning ErrStaleCheckpoint is one; `detectStaleOwner`'s idle-advance
+// fence, which reads the committed sequence directly, is the other. Fixing only the
+// first left the fence ending the TERM but not leadership — and because the flag
+// never clears, the supervisor would re-acquire the partition, pay a full rebuild
+// (binds, restore, catch-up, three views, a whole replay), have replay's own
+// checkpoint refused on the flag, and count one term-build failure. Five of those,
+// with detect_is_leader reading 1 throughout.
+//
+// This asserts the fence site ends leadership, which is what pins the two together.
+func TestTheIdleAdvanceFenceAlsoEndsLeadership(t *testing.T) {
+	ctx := context.Background()
+	rp := leasedProcessor(t)
+	rp.Gate.Enter(func() bool { return true })
+	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
+	rp.newTermContext()
+
+	// Another writer has committed further than this engine has applied — the exact
+	// condition the fence reads.
+	if err := rp.Store.Save(ctx, &model.DetectSnapshot{
+		PartitionId: rp.cfg.PartitionId, StreamSeq: 500, Watermark: testBase, Payload: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed the leading snapshot: %v", err)
+	}
+	rp.engine = detectcore.NewEngine(nil, 0)
+
+	if !rp.detectStaleOwner(ctx) {
+		t.Fatal("the idle-advance fence did not detect a writer ahead of this one")
+	}
+	if !rp.stale {
+		t.Fatal("the fence did not latch this writer as stale")
+	}
+	select {
+	case <-rp.supCtx.Done():
+	default:
+		t.Fatal("the idle-advance fence ended the term but not leadership; the supervisor would re-acquire " +
+			"and rebuild a term whose every checkpoint is refused before it starts")
+	}
+}
+
+// The unleased path keeps its original behaviour: a stale refusal halts the loop and
+// leaves the process alone. Nothing there took a partition, so nothing is being held
+// from anyone — and every unit test and the scaffold run this way.
+func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
+	ctx := context.Background()
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
+	rp.newTermContext()
+	if err := rp.Store.Save(ctx, &model.DetectSnapshot{
+		PartitionId: rp.cfg.PartitionId, StreamSeq: 500, Watermark: testBase, Payload: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rp.engine = detectcore.NewEngine(nil, 0)
+
+	rp.haltStaleWriter()
+
+	if !rp.stale {
+		t.Fatal("the unleased path did not latch stale")
+	}
+	select {
+	case <-rp.supCtx.Done():
+		t.Fatal("a processor that takes no lease ended its own process on a stale refusal; it holds no " +
+			"partition, so there is nothing for a replacement to take over")
+	default:
+	}
+}

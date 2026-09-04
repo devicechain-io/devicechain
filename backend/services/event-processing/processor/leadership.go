@@ -79,7 +79,8 @@ const renewInterval = time.Second
 
 // maxConsecutiveTermBuildFailures fuses a leader that holds the lease and cannot
 // build a term — a Ready pod that detects nothing, holding the partition against
-// every standby. Exiting lets the scheduler place a replacement.
+// every standby. Blowing the fuse ends the PROCESS (see failProcess), which is what
+// lets the scheduler place a replacement; returning would leave the pod up.
 //
 // 🔴 IT COUNTS TERM BUILDS, AND ONLY TERM BUILDS. It must never be applied to
 // Acquire: a failed Acquire is either the normal standby answer or a NATS outage,
@@ -239,12 +240,19 @@ func drain[T any](ch chan T) {
 // Ready-standby posture lands with the term-scoped purge responder, not before it.
 //
 // It costs nothing on the deploy shape event-processing actually uses: replicas:1
-// with strategy Recreate, so the old pod is gone before this one starts and the
-// first Acquire succeeds immediately — uncontended, so it also skips termSlack. The
-// wait only materialises on an eviction or node-drain overlap, and is then bounded
-// by the lease TTL plus termSlack, i.e. ~50s of the startup probe's 150s (30 x 5s)
-// before the term build's own work begins. A replay long enough to overrun what is
-// left would have overrun it without the lease too.
+// with strategy Recreate, so the departing pod RELEASED the partition and this one
+// both acquires immediately and skips termSlack. The wait materialises on an
+// eviction or node-drain overlap, where it is bounded by the lease TTL plus
+// termSlack, ~50s.
+//
+// 🔴 THAT IS NOT MEASURED AGAINST THE STARTUP PROBE, WHICH NEVER SEES IT. The probe
+// polls /readyz, which reports the auth gate and is independent of this processor —
+// so a slow term build cannot fail the probe, and no probe budget bounds it.
+//
+// What it DOES delay is everything main() starts after the processor: the tenant-purge
+// responder and the REACT dispatcher, both of which are started after
+// ResolvedEventsProcessor.Start returns. Their work is durable and nothing is lost,
+// but REACT dispatch is deferred by the handover wait plus the build.
 func (rp *ResolvedEventsProcessor) runTerms() {
 	for {
 		if rp.supCtx.Err() != nil {
@@ -253,9 +261,17 @@ func (rp *ResolvedEventsProcessor) runTerms() {
 		handle, err := rp.beginTermWithRetry()
 		if err != nil {
 			if rp.supCtx.Err() == nil {
-				log.Error().Err(err).Str("partition", rp.cfg.PartitionId).
-					Msg("DETECT leadership has stopped; this pod detects nothing until it is replaced")
+				// 🔴 END THE PROCESS, DO NOT MERELY RETURN. Nothing else here can notice
+				// that leadership has stopped: /healthz is unconditional, /readyz reports
+				// the auth gate, and neither reads this supervisor — so a bare return
+				// leaves a pod that is Ready, live-healthy and detecting nothing, for
+				// every tenant, until a human looks at a gauge. That is precisely the
+				// silently-dead singleton that buildTerm refuses to START as, and it must
+				// not be reachable a minute later just because startup went well.
+				// DetectHasNoLeader then covers the window while the pod is being
+				// replaced; DetectLeaderIsNotConsuming covers the state this avoids.
 				rp.supCancel()
+				rp.failProcess(err)
 			}
 			return
 		}
@@ -310,20 +326,19 @@ var errTermBuildFailed = errors.New("event-processing: DETECT term build failed"
 func (rp *ResolvedEventsProcessor) acquireWithBackoff() (*messaging.Lease, bool, error) {
 	backoff := acquireBackoffMin
 	logged := false
-	contended := false
 	for {
 		if err := rp.supCtx.Err(); err != nil {
 			return nil, false, err
 		}
+		// Asked BEFORE the Create, because the Create is what destroys the answer: the
+		// lease bucket keeps one revision per key, so our own entry replaces the delete
+		// marker that distinguishes a clean release from an expiry.
+		clean := rp.Lease.PriorOwnerReleasedCleanly(rp.cfg.PartitionId)
 		lease, err := rp.Lease.Acquire(rp.cfg.PartitionId)
 		if err == nil {
-			return lease, contended, nil
+			return lease, clean, nil
 		}
 		if errors.Is(err, messaging.ErrLeaseHeld) {
-			// Someone else's entry is in the way. Whether they are alive or merely
-			// left it behind, this term is CONTENDED and must wait the previous owner
-			// out before it reads any state — see termSlack.
-			contended = true
 			if !logged {
 				log.Info().Str("partition", rp.cfg.PartitionId).
 					Msg("DETECT partition is held by another replica; standing by to take it over")
@@ -346,7 +361,7 @@ func (rp *ResolvedEventsProcessor) acquireWithBackoff() (*messaging.Lease, bool,
 
 // beginTerm acquires the partition, waits out the previous owner, and builds a term.
 func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
-	lease, contended, err := rp.acquireWithBackoff()
+	lease, priorReleasedCleanly, err := rp.acquireWithBackoff()
 	if err != nil {
 		return nil, err
 	}
@@ -384,20 +399,23 @@ func (rp *ResolvedEventsProcessor) beginTerm() (*termHandle, error) {
 	}()
 	handle.keepAliveDone = keepAliveDone
 
-	// 🔴 WAIT OUT THE PREVIOUS OWNER BEFORE READING ANY STATE — but only when there
-	// WAS one. Acquire proves the SERVER forgot the old entry, not that the old OWNER
-	// noticed; see termSlack for what the wait is made of.
+	// 🔴 WAIT OUT THE PREVIOUS OWNER BEFORE READING ANY STATE — unless it is PROVEN
+	// there is nothing to wait for. Acquire proves the SERVER forgot the old entry,
+	// not that the old OWNER noticed; see termSlack for what the wait is made of.
 	//
-	// A FIRST-TRY acquisition means the key did not exist, and there are only two ways
-	// for that to be true: nothing held the partition, or the previous owner RELEASED
-	// it — which endTerm does last, after it has stopped every loop and flushed. Either
-	// way there is no zombie to wait for. A previous owner that crashed or was killed
-	// leaves its entry to age out instead, so we meet ErrLeaseHeld first and the wait
-	// applies. Without this distinction every ordinary restart would pay the slack for
-	// a hazard that a clean shutdown has already ruled out.
-	if contended {
+	// 🔴 "MY ACQUIRE SUCCEEDED FIRST TRY" IS NOT THAT PROOF, and an earlier version of
+	// this used it. An absent key has three causes and that test only rules out one:
+	// the previous entry may have EXPIRED under an owner that is still running, which
+	// is exactly the case a partitioned-but-alive replica produces and exactly the one
+	// this wait exists for. Only an explicit release proves the predecessor stopped —
+	// endTerm releases last, after joining every loop and flushing — and that is what
+	// PriorOwnerReleasedCleanly reads.
+	//
+	// So an ordinary rollout, where the departing pod released, skips the wait; a fresh
+	// install pays it once for want of evidence; and every ambiguous case pays it.
+	if !priorReleasedCleanly {
 		log.Info().Str("partition", rp.cfg.PartitionId).Dur("slack", termSlack).
-			Msg("DETECT took a contended partition; waiting out the previous owner before reading any state")
+			Msg("DETECT cannot prove the previous owner released this partition; waiting it out before reading any state")
 		select {
 		case <-handle.ctx.Done():
 			rp.endTerm(handle)
@@ -516,4 +534,19 @@ func (rp *ResolvedEventsProcessor) termReaders() []messaging.TermBoundReader {
 		}
 	}
 	return bound
+}
+
+// failProcess ends the process with a non-zero status, off this goroutine.
+//
+// Off this goroutine because FailNow tears the microservice down, which calls
+// ExecuteStop, which waits on supWG — the very group this goroutine belongs to.
+// Calling it inline would deadlock the shutdown it is asking for.
+func (rp *ResolvedEventsProcessor) failProcess(err error) {
+	wrapped := fmt.Errorf("event-processing: DETECT leadership has stopped for partition %q and cannot resume; "+
+		"this pod holds no partition and detects nothing, so it exits to be replaced: %w", rp.cfg.PartitionId, err)
+	if rp.Microservice == nil {
+		log.Error().Err(wrapped).Msg("DETECT cannot end the process; it has no microservice handle")
+		return
+	}
+	go rp.Microservice.FailNow(wrapped)
 }

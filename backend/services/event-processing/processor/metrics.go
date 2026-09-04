@@ -499,7 +499,9 @@ func (m *detectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader
 // setDetectLive publishes whether this replica is actually CONSUMING. Paired with
 // setLeader it names the one state neither gauge can express alone — leader, but
 // wedged in a term build — which is otherwise a silent stall on a pod whose every
-// health signal is green.
+// health signal is green. The chart's DetectLeaderIsNotConsuming rule is the pair's
+// consumer, and it ANDs a checkpoint term so a long replay (which checkpoints as it
+// goes) does not trip it.
 func (m *detectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
 
 func boolGauge(b bool) float64 {

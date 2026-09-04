@@ -183,3 +183,68 @@ func TestHolderKeepsOwnershipAcrossRenewals(t *testing.T) {
 	default:
 	}
 }
+
+// 🔴 AN ABSENT KEY HAS THREE CAUSES AND ONLY TWO OF THEM ARE SAFE.
+//
+// A fresh leader skips its handover wait when the previous owner gave the partition
+// up explicitly, because a release happens last — after that owner has stopped every
+// loop and flushed. It must NOT skip it when the previous entry merely EXPIRED,
+// because an owner partitioned from NATS keeps its own validity window past the
+// moment the server forgot it, and may still be writing.
+//
+// The two are indistinguishable to Acquire (both give a first-try success) and to
+// Get (both answer ErrKeyNotFound — measured). This pins that they are distinguished
+// anyway, and in the safe direction.
+func TestAReleasedPartitionIsDistinguishedFromAnExpiredOne(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	dl, err := nmgr.NewDistributedLease(2 * time.Second)
+	if err != nil {
+		t.Fatalf("NewDistributedLease: %v", err)
+	}
+
+	// Arm 1 — the previous owner RELEASED. The successor may skip the wait.
+	first, err := dl.Acquire("detect:released")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	// Asked BEFORE acquiring: the bucket keeps one revision per key, so a Create
+	// would replace the very marker this reads.
+	clean := dl.PriorOwnerReleasedCleanly("detect:released")
+	if _, err := dl.Acquire("detect:released"); err != nil {
+		t.Fatalf("Acquire after Release: %v", err)
+	}
+	if !clean {
+		t.Fatal("a partition given up by an explicit Release was not recognised as cleanly released; " +
+			"every ordinary restart would pay a handover wait it does not need")
+	}
+
+	// Arm 2 — the previous owner EXPIRED. The successor must wait.
+	if _, err := dl.Acquire("detect:expired"); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	var cleanAfterExpiry bool
+	waitFor(t, "the expired partition to become acquirable", func() bool {
+		c := dl.PriorOwnerReleasedCleanly("detect:expired")
+		if _, aerr := dl.Acquire("detect:expired"); aerr != nil {
+			return false
+		}
+		cleanAfterExpiry = c
+		return true
+	})
+	if cleanAfterExpiry {
+		t.Fatal("a partition whose previous entry EXPIRED was reported as cleanly released; a successor " +
+			"would skip its handover wait and read state an owner partitioned from NATS is still writing")
+	}
+
+	// Arm 3 — a partition nobody has ever held reads as unclean too. It costs one
+	// unnecessary wait on a fresh install, which is the safe direction and cheaper
+	// than a special case that could be wrong.
+	if dl.PriorOwnerReleasedCleanly("detect:never-held") {
+		t.Fatal("a never-held partition claimed a clean predecessor; there was none")
+	}
+}
