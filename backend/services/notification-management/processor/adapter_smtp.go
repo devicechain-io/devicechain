@@ -73,15 +73,8 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 	if len(recipients) == 0 {
 		return fmt.Errorf("smtp channel %q has no recipients", channel.Token)
 	}
-	// Reject CR/LF in the envelope so a crafted from/recipient (tenant-authored config)
-	// cannot inject additional SMTP headers (e.g. a hidden Bcc).
-	if err := ensureNoCRLF("from", cfg.From); err != nil {
+	if err := ensureHeaderSafe(cfg.From, recipients, msg); err != nil {
 		return err
-	}
-	for _, rcpt := range recipients {
-		if err := ensureNoCRLF("recipient", rcpt); err != nil {
-			return err
-		}
 	}
 
 	client, err := a.dial(ctx, cfg)
@@ -169,8 +162,34 @@ func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, 
 	return client, nil
 }
 
+// ensureHeaderSafe rejects a CR/LF in ANY value this adapter interpolates into the
+// message's headers — the envelope from, every recipient, and the subject — because a
+// line break in any of them opens the same hole: the remainder of the value is parsed as
+// a new header, so a hidden Bcc rides out with the alarm.
+//
+// 🔴 THE SUBJECT IS IN THIS LIST BECAUSE IT IS THE ONE THAT WAS MISSING, and it was
+// missing for the most dangerous reason: it looked safe from somewhere else. The subject
+// is rendered from the alarm's key and severity, and an alarm key is grammar-checked in
+// event-processing, two services away, at the moment a rule renders it. That check is
+// real and it is why no crafted subject can reach here today — but it is enforced in a
+// different binary by a different team's code, and nothing in THIS service would notice
+// if it were relaxed, moved, or routed around by a future producer of alarm events. The
+// local check costs a string scan on a path that already dials a network socket; the
+// distant invariant it duplicates costs nothing to lose silently.
+func ensureHeaderSafe(from string, recipients []string, msg *RenderedNotification) error {
+	if err := ensureNoCRLF("from", from); err != nil {
+		return err
+	}
+	for _, rcpt := range recipients {
+		if err := ensureNoCRLF("recipient", rcpt); err != nil {
+			return err
+		}
+	}
+	return ensureNoCRLF("subject", msg.Subject)
+}
+
 // ensureNoCRLF rejects a value containing a carriage return or line feed, which in an
-// SMTP envelope field would let tenant-authored config inject extra headers.
+// SMTP header would let the remainder of the value be parsed as an extra header.
 func ensureNoCRLF(field, value string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("smtp %s %q contains a line break", field, value)

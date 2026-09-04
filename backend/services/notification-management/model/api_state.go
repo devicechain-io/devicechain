@@ -233,14 +233,43 @@ func (api *Api) DistinctStateTenants(ctx context.Context) ([]string, error) {
 	return tenants, err
 }
 
-// PruneClearedStates hard-deletes the caller tenant's cleared state rows whose
-// ClearedAt is older than before, bounding the table so per-alarm state never grows
-// into an alarm index in the wrong service (ADR-041 history-home concern). It runs
-// under a tenant context, so the rdb tenant-scope predicate keeps the delete to that
-// tenant; Unscoped bypasses only the soft-delete filter so the rows are truly removed.
-func (api *Api) PruneClearedStates(ctx context.Context, before time.Time) (int64, error) {
+// PruneResolvedStates hard-deletes the caller tenant's RESOLVED state rows — acknowledged,
+// cleared, or both — whose terminal stamps are all older than before. It bounds the table
+// so per-alarm state never grows into an alarm index in the wrong service (ADR-041
+// history-home concern). It runs under a tenant context, so the rdb tenant-scope predicate
+// keeps the delete to that tenant; Unscoped bypasses only the soft-delete filter so the
+// rows are truly removed.
+//
+// 🔴 IT USED TO FILTER ON cleared_at ALONE, AND THAT LEFT AN IMMORTAL CLASS. markTerminal
+// writes a tombstone row for EVERY acknowledged or cleared alarm, in every tenant,
+// including a tenant with no notification policies at all — because the tombstone is what
+// closes the unordered-delivery race, not a record of a page (see markTerminal). So an
+// alarm that a human acknowledged and that then stopped on its own, with no CLEARED ever
+// arriving, left a row with acknowledged_at set and cleared_at null: settled forever,
+// invisible to escalation (OpenNotificationStates excludes it), and matched by no prune
+// predicate. One row per acknowledged-and-never-cleared alarm, kept for the life of the
+// instance, is exactly the unbounded alarm index the sweep exists to prevent.
+//
+// 🔑 THE FIX IS TO WIDEN THE PRUNE, NOT TO STOP WRITING THE ROWS — and that was the real
+// decision here, because "only write a tombstone for a tenant that has a policy" looks
+// cheaper. It is wrong twice over. The tombstone's job is the RACE, not the page: a
+// tenant that adds its first policy between an alarm's CLEARED and its late-arriving
+// RAISED would, without the row, open a fresh state row for an alarm that is already
+// resolved and escalate it forever. And deciding whether to write would mean a policy
+// query on every lifecycle event, which is new latency and a new failure mode on the
+// cheapest path this service has. A resolved row is bounded data with a retention window;
+// a missing one is a correctness hole.
+//
+// The predicate is "terminal, and every stamp it does carry is older than the cutoff", so
+// a row acknowledged long ago but cleared a minute ago still survives its full grace
+// window. Pruning is safe for the same reason the cleared prune was: a resolved row's only
+// remaining reader is a human, and the retention window (7d by default) outlives the alarm
+// stream's own retention, so no redelivery can arrive to find the tombstone gone.
+func (api *Api) PruneResolvedStates(ctx context.Context, before time.Time) (int64, error) {
 	result := api.RDB.DB(ctx).Unscoped().
-		Where("cleared_at IS NOT NULL AND cleared_at < ?", before).
+		Where("(cleared_at IS NOT NULL OR acknowledged_at IS NOT NULL)").
+		Where("(cleared_at IS NULL OR cleared_at < ?)", before).
+		Where("(acknowledged_at IS NULL OR acknowledged_at < ?)", before).
 		Delete(&NotificationState{})
 	return result.RowsAffected, result.Error
 }

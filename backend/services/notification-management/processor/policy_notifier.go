@@ -14,6 +14,8 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -24,6 +26,72 @@ import (
 // retry waits n × base, so the dispatcher's own retry is bounded and short (the
 // durable consumer, not this loop, is the reliability backstop for a longer outage).
 const retryBackoffBase = 500 * time.Millisecond
+
+// The budgets one alarm's dispatch is spent against.
+//
+// 🔴 THE PER-ATTEMPT TIMEOUT IS NOT A WHOLE-DISPATCH BOUND, AND READING IT AS ONE COST US
+// A DUPLICATE PAGE. The config's DeliverySeconds bounds a SINGLE adapter call; a channel
+// then gets DeliveryAttempts of them with a backoff between each (perChannelWorstCase),
+// and dispatch walks the planned channels SEQUENTIALLY. At the shipped defaults one
+// channel's worst case is ~36.5s, so two slow-but-alive channels on one alarm ran ~73s
+// against the consumer's 60s AckWait: JetStream redelivered a message a worker was still
+// working, a second worker re-sent every channel from the top, and a human was paged
+// twice. Nothing capped the walk — plan() emits as many deliveries as the tenant's
+// policies match.
+//
+// So the bound is enforced here, as a deadline on the dispatch, rather than asserted in
+// prose about the per-attempt number. dispatch and Escalate both derive their context
+// from dispatchBudget and deliverAll stops walking channels once it is spent.
+const (
+	// secretResolveTimeout bounds one channel's delivery-secret lookup (ADR-059). It is
+	// separate from the per-attempt delivery timeout because it is different work — a
+	// local envelope decrypt against this service's own database, not a call to a
+	// tenant-supplied endpoint — and because the whole-dispatch budget has to afford BOTH
+	// for every channel it plans.
+	secretResolveTimeout = 5 * time.Second
+
+	// dispatchMargin is the headroom deliberately left between the whole-dispatch budget
+	// and messaging.AckWait. It has to cover everything that happens to a message OUTSIDE
+	// the budgeted section and still leave the broker's ack window unspent: the ADR-077
+	// lifecycle gate's cold-cache fetch to user-management (bounded by governance's own
+	// fetch timeout), the post-delivery bookkeeping write (recordTimeout, which is
+	// deliberately smaller than this margin), and the ack round trip.
+	dispatchMargin = 20 * time.Second
+
+	// dispatchBudget bounds ONE alarm's whole dispatch — policy load, state load, and
+	// every planned channel's secret resolve and delivery attempts together. It is
+	// DERIVED from messaging.AckWait rather than copied from it, because AckWait is
+	// exported precisely so callers stop copying the number (see its comment): if the
+	// platform's ack window ever moves, this budget moves with it.
+	dispatchBudget = messaging.AckWait - dispatchMargin
+
+	// recordTimeout bounds a state write that is NOT part of the delivery budget: the
+	// post-delivery RecordNotification, and the three lifecycle stamps in applyLifecycle.
+	// The first is run off the PARENT context on purpose — a dispatch that spent its whole
+	// budget delivering must still be able to record that it delivered, or the alarm never
+	// enters the escalation substrate at all.
+	recordTimeout = 5 * time.Second
+)
+
+// perChannelWorstCase is the longest ONE channel's delivery can take: its secret resolve,
+// then every attempt at the full per-attempt timeout, plus the linear backoffs between
+// them.
+//
+// It is a function rather than a sentence in a comment because the sentence was there,
+// and it was wrong — it described this quantity as if it bounded the whole dispatch. The
+// relation between it, dispatchBudget and messaging.AckWait is pinned in
+// TestDispatchBudgetFitsUnderAckWait so a change to any of the three constants fails for
+// the stated reason instead of silently re-opening the duplicate-page path.
+func perChannelWorstCase(attempts int, timeout time.Duration) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	total := secretResolveTimeout + time.Duration(attempts)*timeout
+	for i := 1; i < attempts; i++ {
+		total += time.Duration(i) * retryBackoffBase
+	}
+	return total
+}
 
 // PolicyNotifier is the real dispatch Notifier (ADR-017 N.C) that replaces the
 // first-slice LogNotifier: for each alarm transition it evaluates the tenant's
@@ -40,6 +108,15 @@ type PolicyNotifier struct {
 	adapters map[string]ChannelAdapter
 	attempts int
 	timeout  time.Duration
+
+	// budget is the whole-dispatch deadline one alarm is worth, defaulted from
+	// dispatchBudget by the constructor. It is a FIELD rather than the constant read
+	// directly because a mutation run showed the constant made an entire input class
+	// unreachable: with a 40-second budget, nothing can exercise "the budget is already
+	// spent when the deliveries finish", which is the exact state the post-delivery
+	// bookkeeping has to survive. Zero means the constant (this struct is also built by
+	// literal in tests) — read it through wholeDispatchBudget, never directly.
+	budget time.Duration
 
 	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// A closure rather than the governance resolver type so this package needs no live
@@ -59,14 +136,34 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 	if attempts < 1 {
 		attempts = 1
 	}
+	// An operator can configure a retry policy a single channel cannot finish inside the
+	// whole-dispatch budget. That is not unsafe — the budget still stops the overlap — but
+	// it means the configured attempts are not all reachable, which is worth saying once at
+	// startup rather than leaving as a silent truncation at 3am.
+	if worst := perChannelWorstCase(attempts, timeout); worst > dispatchBudget {
+		log.Warn().Dur("perChannelWorstCase", worst).Dur("dispatchBudget", dispatchBudget).
+			Msg("The configured delivery attempts and timeout cannot all be spent on one channel " +
+				"inside the whole-dispatch budget; a channel's last retries will be cut short.")
+	}
 	return &PolicyNotifier{
 		api:           api,
 		store:         store,
 		adapters:      newAdapterRegistry(guard),
 		attempts:      attempts,
 		timeout:       timeout,
+		budget:        dispatchBudget,
 		TenantDeleted: tenantDeleted,
 	}
+}
+
+// wholeDispatchBudget is the deadline one alarm's dispatch runs under, falling back to
+// the platform-derived constant when the field is unset — which is how every struct-literal
+// construction in this package's tests comes into existence.
+func (n *PolicyNotifier) wholeDispatchBudget() time.Duration {
+	if n.budget > 0 {
+		return n.budget
+	}
+	return dispatchBudget
 }
 
 // tenantDeleted reads the ADR-077 lifecycle gate, treating an unconfigured gate as "not
@@ -92,15 +189,27 @@ func (n *PolicyNotifier) tenantDeleted(ctx context.Context) bool {
 // error means the transition was not applied and is safe to redeliver (no delivery
 // was attempted); a delivery failure is handled inside dispatch and never surfaced,
 // so the processor acks.
+//
+// Every branch goes through a guarded helper — dispatch for the two that page,
+// applyLifecycle for the three that only write. That symmetry is the fix for a real gap:
+// the three write-only branches used to call straight through to the api, so they were
+// the one door into this service that neither consulted the ADR-077 lifecycle gate nor
+// recognized the erasure fence's refusal.
 func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	switch event.EventType {
 	case dmmodel.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
-		return n.api.MarkAcknowledged(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
+			return n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+		})
 	case dmmodel.AlarmEventCleared:
-		return n.api.MarkCleared(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
+			return n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+		})
 	case dmmodel.AlarmEventDeescalated:
-		return n.api.TouchSeverity(ctx, event.AlarmToken, event.Severity)
+		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
+			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)
+		})
 	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated:
 		return n.dispatch(ctx, event)
 	default:
@@ -108,6 +217,49 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			Msg("Ignoring unknown alarm event type")
 		return nil
 	}
+}
+
+// applyLifecycle runs one of the three state-only transitions (acknowledge, clear,
+// de-escalate) under the two guards the paging path already had. Neither guard is about
+// paging, which is why "these branches do not notify anyone" was never a reason to skip
+// them: both are about WRITING for a tenant.
+//
+// 🔴 THE ADR-077 GATE BELONGS HERE. Each of these transitions is an upsert on this
+// service's own tenant-scoped table — markTerminal CREATES a row when none exists — so a
+// deleted tenant's late CLEARED wrote a fresh row into a schema the purge sweep was in
+// the middle of erasing. That is the same failure Escalate refuses above ClaimEscalation
+// (a store that erases rows loses its clean-since, so the settle window restarts and the
+// purge cannot complete), reached through a different door.
+//
+// 🔴 AND ErrTenantPurged IS PERMANENT, NOT TRANSIENT. The gate above fails open by design
+// — 60s TTL, and it goes blind the moment completion removes the tenant row — so the
+// erasure FENCE is what actually refuses the write. That refusal used to reach the
+// processor as an ordinary error, which the processor reads as retryable: five
+// redeliveries, AckWait apart, refused identically every time, and then a dead letter
+// claiming an alarm reached nobody — for a tenant there is nobody left to page for. Ack
+// and drop instead. The row this write would have stamped is one the sweep is erasing.
+//
+// The write also gets a bounded context. It had none: the consumer's workers run on
+// context.Background(), so a stalled database held a worker on a state stamp with nothing
+// to stop it, which the Notifier contract's "bound its own duration" clause forbids.
+func (n *PolicyNotifier) applyLifecycle(ctx context.Context, alarm, transition string,
+	write func(context.Context) error) error {
+	if n.tenantDeleted(ctx) {
+		log.Debug().Str("alarm", alarm).Str("transition", transition).
+			Msg("Not recording an alarm transition: the tenant has been deleted.")
+		return nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, recordTimeout)
+	defer cancel()
+	err := write(wctx)
+	if errors.Is(err, rdb.ErrTenantPurged) {
+		log.Info().Str("alarm", alarm).Str("transition", transition).
+			Msg("Dropping an alarm transition for a deleted tenant; this area's notification " +
+				"state has been erased, so there is nothing left to stamp and no attempt that " +
+				"could succeed.")
+		return nil
+	}
+	return err
 }
 
 // dispatch evaluates policies and delivers a RAISED/ESCALATED transition.
@@ -125,7 +277,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		return nil
 	}
 
-	policies, err := n.api.EnabledNotificationPolicies(ctx)
+	// 🔴 THE WHOLE-DISPATCH DEADLINE, and it starts HERE rather than around the delivery
+	// loop alone: the policy and state queries are work this dispatch does on the same
+	// message, so they belong inside the same budget the broker is timing. See
+	// dispatchBudget — this is the mechanism that makes "the dispatch finishes inside
+	// AckWait" true, instead of a claim about the per-attempt timeout that never was.
+	dctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
+	defer cancel()
+
+	policies, err := n.api.EnabledNotificationPolicies(dctx)
 	if err != nil {
 		// Nothing attempted yet: safe to leave unacked for redelivery.
 		return fmt.Errorf("loading notification policies: %w", err)
@@ -135,7 +295,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	}
 
 	// Load the current per-alarm state once as the throttle basis.
-	states, err := n.api.NotificationStatesByAlarmToken(ctx, []string{event.AlarmToken})
+	states, err := n.api.NotificationStatesByAlarmToken(dctx, []string{event.AlarmToken})
 	if err != nil {
 		return fmt.Errorf("loading notification state: %w", err)
 	}
@@ -149,31 +309,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		return nil
 	}
 
-	rendered := renderNotification(event)
-	delivered, refused, failed := 0, 0, 0
-	for _, d := range deliveries {
-		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
-		if err != nil {
-			// A store error (not "no secret") is transient infra: skip this channel, so
-			// it counts as not-delivered. If EVERY delivery is skipped/fails the event is
-			// left unacked for redelivery (delivered == 0 below); if another channel already
-			// delivered, the event is acked and this channel's page is dropped — matching
-			// the Notifier at-least-once contract (a partial failure is not redelivered,
-			// to avoid double-sending the channels that succeeded).
-			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).
-				Msg("Skipping channel: failed to resolve delivery secret")
-			continue
-		}
-		d.secret = secret
-		switch n.deliverWithRetry(ctx, d, rendered) {
-		case deliveryOK:
-			delivered++
-		case deliveryRefused:
-			refused++
-		default:
-			failed++
-		}
-	}
+	tally := n.deliverAll(dctx, deliveries, renderNotification(event), event.AlarmToken)
 
 	// Nothing delivered though targets existed: return an error so the durable consumer
 	// redelivers (its own retry is the reliability backstop for an outage longer than
@@ -187,10 +323,11 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// dead-letter it as an ordinary exhausted delivery — which tells an operator the
 	// endpoint is unreachable when the truth is that the channel is pointed somewhere
 	// this platform will not go. A mix still redelivers, because the failed ones deserve
-	// the retry the refused ones do not.
-	if delivered == 0 {
-		if failed == 0 && refused > 0 {
-			log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("channels", refused).
+	// the retry the refused ones do not — and so does a channel the budget never let us
+	// try, which is why unattempted counts against the ack too.
+	if tally.delivered == 0 {
+		if tally.retryable() == 0 && tally.refused > 0 {
+			log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("channels", tally.refused).
 				Msg("Every channel for this alarm points at an address outbound traffic is not " +
 					"permitted to reach; acking rather than redelivering, because redelivery cannot change that.")
 			return nil
@@ -201,11 +338,90 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// At least one channel delivered: record the notification so the throttle/escalation
 	// state reflects it. A failure here is logged, not left for redelivery — the sends
 	// already happened, and redelivery would double-send them.
-	if err := n.api.RecordNotification(ctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+	//
+	// 🔑 IT RUNS OFF THE PARENT CONTEXT, NOT dctx, ON PURPOSE. A dispatch that spent its
+	// whole budget delivering would otherwise find its own budget already expired at the
+	// one write that has to happen: with no state row the alarm never enters the
+	// escalation substrate, so the page that just went out would never be followed up.
+	// recordTimeout is smaller than dispatchMargin so this still lands inside AckWait.
+	rctx, rcancel := context.WithTimeout(ctx, recordTimeout)
+	defer rcancel()
+	if err := n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state")
 	}
 	return nil
+}
+
+// dispatchTally counts how one alarm's planned deliveries ended. delivered/refused/failed
+// mirror deliveryResult; unattempted is the channels the whole-dispatch budget ran out
+// before reaching.
+//
+// unattempted is kept APART from failed rather than folded into it because the two say
+// different things to an operator reading the log: "we tried and the endpoint would not
+// take it" versus "we never got to this channel". They agree on disposition — both want
+// the redelivery — which is what retryable() expresses, and the fold is written once
+// there so a later reader cannot accidentally make only one of them count.
+type dispatchTally struct {
+	delivered   int
+	refused     int
+	failed      int
+	unattempted int
+}
+
+// retryable is the count of outcomes a redelivery could still turn into a page. A refusal
+// is not one of them: no number of retries makes an address the egress boundary blocks
+// reachable.
+func (t dispatchTally) retryable() int { return t.failed + t.unattempted }
+
+// deliverAll sends one rendered notification to every planned delivery, in order, under
+// ONE shared budget — the caller's ctx, which both entry points derive from
+// dispatchBudget.
+//
+// 🔴 THE BUDGET CHECK AT THE TOP OF THE LOOP IS THE FIX, not a tidy-up. This walk is
+// sequential and used to be uncapped, so N slow-but-alive channels cost N times one
+// channel's worst case; at the shipped defaults two of them exceeded the consumer's
+// AckWait, the broker handed the message to a second worker while the first was still
+// sending, and that worker started again at channel one. Someone got paged twice. Stopping
+// here means the dispatch gives up BEFORE the broker decides it has, so a redelivery is
+// something we asked for rather than something that happened underneath us.
+func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
+	rendered *RenderedNotification, alarm string) dispatchTally {
+	tenant, _ := core.TenantFromContext(ctx)
+	var tally dispatchTally
+	for i, d := range deliveries {
+		if ctx.Err() != nil {
+			tally.unattempted = len(deliveries) - i
+			log.Error().Str("tenant", tenant).Str("alarm", alarm).
+				Int("channels", tally.unattempted).Dur("budget", n.wholeDispatchBudget()).
+				Msg("The whole-dispatch budget was spent before every channel had been tried; " +
+					"the rest were not attempted. They are counted as owed a retry, so unless " +
+					"another channel already delivered this alarm is left for redelivery.")
+			break
+		}
+		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
+		if err != nil {
+			// A store error (not "no secret") is transient infra: this channel FAILED. It is
+			// counted, and counting it is the point — it used to `continue` without being
+			// counted anywhere, so a plan of one secret-error channel plus one refused channel
+			// looked like "every target was refused" and got acked, silently dropping the
+			// retry the store error had earned.
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).
+				Msg("Skipping channel: failed to resolve delivery secret")
+			tally.failed++
+			continue
+		}
+		d.secret = secret
+		switch n.deliverWithRetry(ctx, d, rendered) {
+		case deliveryOK:
+			tally.delivered++
+		case deliveryRefused:
+			tally.refused++
+		default:
+			tally.failed++
+		}
+	}
+	return tally
 }
 
 // delivery is one deduplicated (channel, recipients) target the dispatcher will send
@@ -307,8 +523,30 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	if len(deliveries) == 0 {
 		return nil
 	}
-	claimed, err := n.api.ClaimEscalation(ctx, state.AlarmToken, state.EscalationLevel, now)
+	// The same whole-dispatch budget the event-driven path uses, for a different reason.
+	// There is no AckWait here — the scheduler is a timer, not a consumer — but its tick
+	// walks EVERY tenant and every open alarm on ONE goroutine, so an unbounded
+	// re-notification is an outage for every tenant behind it in the loop, not just for
+	// this alarm. Bounding both paths identically also means a channel cannot be slow
+	// enough to matter on one and not the other.
+	ectx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
+	defer cancel()
+
+	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, now)
 	if err != nil {
+		// 🔴 A PURGED TENANT IS TERMINAL HERE TOO. ClaimEscalation is an UPDATE, so the
+		// ADR-077 erasure fence refuses it — and this is the path the gate above is least
+		// able to catch, because the gate goes blind exactly when the purge completes. The
+		// scheduler retries a returned error on every tick, so surfacing the refusal would
+		// log a failure once a minute, per open alarm, until the sweep removed the rows.
+		// There is nothing to claim and no tier worth advancing: report success and let
+		// the sweep finish.
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			log.Info().Str("alarm", state.AlarmToken).
+				Msg("Not escalating: the tenant has been deleted and this area's notification " +
+					"state has been erased.")
+			return nil
+		}
 		return fmt.Errorf("claiming escalation tier for alarm %q: %w", state.AlarmToken, err)
 	}
 	if !claimed {
@@ -316,30 +554,12 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		// scheduler's read and here. Either way we must not deliver.
 		return nil
 	}
-	rendered := renderEscalation(state, state.EscalationLevel+1)
-	delivered, refused, failed := 0, 0, 0
-	for _, d := range deliveries {
-		secret, err := n.resolveChannelSecret(ctx, d.channel.ID)
-		if err != nil {
-			log.Error().Err(err).Str("alarm", state.AlarmToken).Str("channel", d.channel.Token).
-				Msg("Skipping escalation channel: failed to resolve delivery secret")
-			continue
-		}
-		d.secret = secret
-		switch n.deliverWithRetry(ctx, d, rendered) {
-		case deliveryOK:
-			delivered++
-		case deliveryRefused:
-			refused++
-		default:
-			failed++
-		}
-	}
-	if delivered == 0 {
+	tally := n.deliverAll(ectx, deliveries, renderEscalation(state, state.EscalationLevel+1), state.AlarmToken)
+	if tally.delivered == 0 {
 		// Same reasoning as dispatch: a refusal is not an outage, so redelivering it only
 		// delays the same answer. The tier has already been claimed either way.
-		if failed == 0 && refused > 0 {
-			log.Error().Str("alarm", state.AlarmToken).Int("channels", refused).
+		if tally.retryable() == 0 && tally.refused > 0 {
+			log.Error().Str("alarm", state.AlarmToken).Int("channels", tally.refused).
 				Msg("Every escalation channel points at an address outbound traffic is not " +
 					"permitted to reach; acking rather than redelivering.")
 			return nil
@@ -525,16 +745,27 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 }
 
 // resolveChannelSecret returns the channel's delivery secret from the store, keyed
-// by the tenant-scoped channel handle (ADR-059). A ref for which no secret is stored
-// yields an empty string (the channel simply has no secret) rather than an error, so
-// a secretless channel delivers normally; a genuine store error is returned so the
-// caller can treat it as a transient delivery failure and let redelivery retry.
+// by the tenant-scoped channel handle (ADR-059), under its OWN bounded timeout. A ref for
+// which no secret is stored yields an empty string (the channel simply has no secret)
+// rather than an error, so a secretless channel delivers normally; a genuine store error
+// is returned so the caller can treat it as a transient delivery failure and let
+// redelivery retry.
+//
+// 🔴 THE TIMEOUT IS LOAD-BEARING. This ran on whatever context the caller held, and for
+// the durable consumer that is a worker's context.Background(), which never fires — while
+// the adapter call one line later was deadline-wrapped. So the ONE step in a delivery that
+// had no deadline was the one that talks to the database: a hung secret store stalled a
+// dispatch worker indefinitely, one of five, and graceful shutdown behind it. It is
+// bounded here rather than left to the whole-dispatch budget so that one wedged lookup
+// costs its own channel and not every channel after it.
 func (n *PolicyNotifier) resolveChannelSecret(ctx context.Context, channelID uint) (string, error) {
 	ref, err := model.ChannelSecretRef(ctx, channelID)
 	if err != nil {
 		return "", err
 	}
-	value, err := n.store.Resolve(ctx, ref)
+	sctx, cancel := context.WithTimeout(ctx, secretResolveTimeout)
+	defer cancel()
+	value, err := n.store.Resolve(sctx, ref)
 	if errors.Is(err, secrets.ErrSecretNotFound) {
 		return "", nil
 	}
