@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 )
@@ -220,11 +221,8 @@ func TestEditingTheDraftDoesNotChangeWhatABatchTargets(t *testing.T) {
 	assert.Equal(t, []string{"d-arid"}, before, "the published selector matches the arid device")
 
 	// Someone edits the draft to mean something else entirely, and does not publish.
-	dynamic := string(MembershipDynamic)
 	edited := `attr["climate"] == "humid"`
-	if _, err := api.UpdateEntityGroup(ctx, "target", &EntityGroupCreateRequest{
-		Token: "target", MemberType: "device", MembershipMode: &dynamic, Selector: &edited,
-	}); err != nil {
+	if _, err := api.UpdateEntityGroup(ctx, "target", &EntityGroupUpdateRequest{Selector: dcgraphql.OptionalStringOf(edited)}); err != nil {
 		t.Fatalf("edit draft: %v", err)
 	}
 

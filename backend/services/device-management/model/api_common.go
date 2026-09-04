@@ -38,12 +38,11 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 	return created, nil
 }
 
-// UpdateEntityRelationshipType updates an existing relationship type by token.
+// UpdateEntityRelationshipType applies a PARTIAL update to a relationship type: a
+// field the caller did not name keeps its stored value, an explicit null clears a
+// nullable one, and `tracked` — which has no nullable reading — refuses a null.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
-	request *EntityRelationshipTypeCreateRequest) (*EntityRelationshipType, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("entity relationship type", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *EntityRelationshipTypeUpdateRequest) (*EntityRelationshipType, error) {
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -52,14 +51,20 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	// Tracked resolves BEFORE anything is written, so a refused `tracked: null` refuses
+	// the whole update rather than applying the other fields first.
+	tracked, err := request.Tracked.ApplyToRequired("tracked", updated.Tracked)
+	if err != nil {
+		return nil, err
+	}
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-	updated.Tracked = request.Tracked
+	updated.Tracked = tracked
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
 	}

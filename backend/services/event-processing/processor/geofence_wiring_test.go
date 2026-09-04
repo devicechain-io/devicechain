@@ -518,8 +518,8 @@ func TestFenceEditsAreFiledByVersionNotReplaced(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	// Move the yard far away — version 2.
-	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceCreateRequest{
-		Token: "yard", Geometry: fenceBox(10, 10, 11, 11)}); err != nil {
+	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceUpdateRequest{
+		Geometry: gqlcore.OptionalStringOf(fenceBox(10, 10, 11, 11))}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if len(factWriter.payloads) != 2 {
@@ -806,8 +806,8 @@ func TestPreviewResolvesAVersionTheProjectionDoesNotHold(t *testing.T) {
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceCreateRequest{
-		Token: "yard", Geometry: fenceBox(10, 10, 11, 11)}); err != nil {
+	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceUpdateRequest{
+		Geometry: gqlcore.OptionalStringOf(fenceBox(10, 10, 11, 11))}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 

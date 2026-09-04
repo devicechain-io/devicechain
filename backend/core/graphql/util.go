@@ -49,6 +49,20 @@ func NullStr(value sql.NullString) *string {
 	return nil
 }
 
+// Converts a sql nullfloat64 to a float64 pointer.
+//
+// The read half of a partial update on a nullable numeric column: ApplyTo needs the
+// stored value in the same shape the request carries it, and without this every
+// caller writes the three-line conversion again — which is where one of them
+// eventually reads .Float64 without checking .Valid and folds a cleared column back
+// in as a genuine 0.
+func NullFloat64(value sql.NullFloat64) *float64 {
+	if value.Valid {
+		return &value.Float64
+	}
+	return nil
+}
+
 // Converts a sql nullbool to a bool pointer.
 func NullBool(value sql.NullBool) *bool {
 	if value.Valid {

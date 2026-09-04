@@ -7,6 +7,7 @@ import (
 	"database/sql"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -98,6 +99,47 @@ type EntityGroupCreateRequest struct {
 	ForegroundColor *string
 	BorderColor     *string
 	Metadata        *string
+}
+
+// A PARTIAL update to an entity group: omit a field to leave the stored value alone,
+// send null to clear a nullable one, send a value to set it.
+//
+// # 🔴 THREE FIELDS ARE ABSENT ON PURPOSE, AND THAT IS THE RULING ON THIS FAMILY
+//
+// Token, MemberType and MembershipMode are all IMMUTABLE, and the full-replace input
+// carried all three with a guard refusing any change. Under three-state semantics such
+// a field can only ever be a no-op or an error — there is no request that names it
+// usefully — which is the case for removing it from the input rather than for teaching
+// the guard a third state. The immutability is then enforced by unrepresentability,
+// which is strictly stronger than a refusal: a caller cannot write the request at all,
+// and the wire test that says so cannot pass vacuously the way a guard's test can.
+//
+// The reasons the three are immutable are unchanged. A rename would strand every
+// reference held by token. Changing MemberType would leave a group collecting a family
+// its members do not belong to. Converting a static group to dynamic (or back) would
+// orphan its members, since the two modes store membership in entirely different places.
+//
+// # The selector is the one field whose three states needed deciding
+//
+// A dynamic group's selector is live-editable, and it is the ONLY thing that makes the
+// group mean anything — so it is REQUIRED rather than nullable. Omit it and the stored
+// predicate stands; send a new one and it is re-compiled and cost-gated before it
+// replaces the old; send null and it is refused, because a dynamic group with no
+// selector matches nothing and there is no way back to a valid group from there. A
+// static group must never carry one at all, so a value on a static group is refused too.
+type EntityGroupUpdateRequest struct {
+	// Selector is the CEL membership predicate, required (and only permitted) for a
+	// dynamic group. A provided selector is re-compiled and cost-gated before it
+	// replaces the stored one.
+	Selector        dcgraphql.OptionalString
+	Name            dcgraphql.OptionalString
+	Description     dcgraphql.OptionalString
+	ImageUrl        dcgraphql.OptionalString
+	Icon            dcgraphql.OptionalString
+	BackgroundColor dcgraphql.OptionalString
+	ForegroundColor dcgraphql.OptionalString
+	BorderColor     dcgraphql.OptionalString
+	Metadata        dcgraphql.OptionalString
 }
 
 // Search criteria for locating entity groups. MemberType and MembershipMode are

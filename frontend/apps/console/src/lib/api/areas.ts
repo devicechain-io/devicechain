@@ -20,6 +20,7 @@ import {
   deleteEntityGroup,
   type EntityGroup,
   type GroupFormRequest,
+  type EntityGroupUpdateRequest,
 } from './device-management';
 
 // Public types are derived from the generated operation results so they always
@@ -324,6 +325,6 @@ export const listAreaGroups = (opts: { pageNumber: number; pageSize: number }) =
 export const getAreaGroup = (token: string) => getEntityGroupOfType(token, 'area');
 export const createAreaGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'area' });
-export const updateAreaGroup = (token: string, request: Required<GroupFormRequest>) =>
-  updateEntityGroup(token, { ...request, memberType: 'area' });
+export const updateAreaGroup = (token: string, request: EntityGroupUpdateRequest) =>
+  updateEntityGroup(token, request);
 export const deleteAreaGroup = deleteEntityGroup;

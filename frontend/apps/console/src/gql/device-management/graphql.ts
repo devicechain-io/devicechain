@@ -146,6 +146,15 @@ export type CommandDefinitionSearchCriteria = {
   pageSize: number;
 };
 
+export type CommandDefinitionUpdateRequest = {
+  commandKey?: string | null | undefined;
+  description?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  parameterSchema?: string | null | undefined;
+};
+
 export type CustomerCreateRequest = {
   customerTypeToken: string;
   description?: string | null | undefined;
@@ -212,6 +221,18 @@ export type DetectionRuleSearchCriteria = {
   deviceProfile?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type DetectionRuleUpdateRequest = {
+  authoringGraph?: string | null | undefined;
+  definition?: string | null | undefined;
+  description?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  entityGroupToken?: string | null | undefined;
+  entityGroupVersion?: number | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
 };
 
 export type DeviceBulkCreateRequest = {
@@ -382,6 +403,18 @@ export type EntityGroupSearchCriteria = {
   pageSize: number;
 };
 
+export type EntityGroupUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  selector?: string | null | undefined;
+};
+
 export type EntityRelationshipCreateRequest = {
   metadata?: string | null | undefined;
   relationshipType: string;
@@ -430,6 +463,13 @@ export type GeoFenceSearchCriteria = {
   pageSize: number;
 };
 
+export type GeoFenceUpdateRequest = {
+  description?: string | null | undefined;
+  geometry?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type MetricDefinitionCreateRequest = {
   dataType: string;
   description?: string | null | undefined;
@@ -450,6 +490,20 @@ export type MetricDefinitionSearchCriteria = {
   metricKey?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type MetricDefinitionUpdateRequest = {
+  dataType?: string | null | undefined;
+  description?: string | null | undefined;
+  descriptor?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  enum?: string | null | undefined;
+  maxValue?: number | null | undefined;
+  metadata?: string | null | undefined;
+  metricKey?: string | null | undefined;
+  minValue?: number | null | undefined;
+  name?: string | null | undefined;
+  unit?: string | null | undefined;
 };
 
 export type PaginationInput = {
@@ -927,7 +981,7 @@ export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
-  request?: EntityGroupCreateRequest | null | undefined;
+  request: EntityGroupUpdateRequest;
 }>;
 
 
@@ -1028,7 +1082,7 @@ export type CreateMetricDefinitionMutation = { createMetricDefinition: { id: str
 
 export type UpdateMetricDefinitionMutationVariables = Exact<{
   token: string;
-  request?: MetricDefinitionCreateRequest | null | undefined;
+  request: MetricDefinitionUpdateRequest;
 }>;
 
 
@@ -1071,7 +1125,7 @@ export type CreateCommandDefinitionMutation = { createCommandDefinition: { id: s
 
 export type UpdateCommandDefinitionMutationVariables = Exact<{
   token: string;
-  request?: CommandDefinitionCreateRequest | null | undefined;
+  request: CommandDefinitionUpdateRequest;
 }>;
 
 
@@ -1112,7 +1166,7 @@ export type CreateDetectionRuleMutation = { createDetectionRule: { id: string, t
 
 export type UpdateDetectionRuleMutationVariables = Exact<{
   token: string;
-  request: DetectionRuleCreateRequest;
+  request: DetectionRuleUpdateRequest;
 }>;
 
 
@@ -1194,7 +1248,7 @@ export type CreateGeoFenceMutation = { createGeoFence: { id: string, token: stri
 
 export type UpdateGeoFenceMutationVariables = Exact<{
   token: string;
-  request: GeoFenceCreateRequest;
+  request: GeoFenceUpdateRequest;
 }>;
 
 
@@ -2385,7 +2439,7 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateEntityGroupMutation, CreateEntityGroupMutationVariables>;
 export const UpdateEntityGroupDocument = new TypedDocumentString(`
-    mutation UpdateEntityGroup($token: String!, $request: EntityGroupCreateRequest) {
+    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
   updateEntityGroup(token: $token, request: $request) {
     id
     token
@@ -2572,7 +2626,7 @@ export const CreateMetricDefinitionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateMetricDefinitionMutation, CreateMetricDefinitionMutationVariables>;
 export const UpdateMetricDefinitionDocument = new TypedDocumentString(`
-    mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionCreateRequest) {
+    mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionUpdateRequest!) {
   updateMetricDefinition(token: $token, request: $request) {
     id
     token
@@ -2637,7 +2691,7 @@ export const CreateCommandDefinitionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCommandDefinitionMutation, CreateCommandDefinitionMutationVariables>;
 export const UpdateCommandDefinitionDocument = new TypedDocumentString(`
-    mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {
+    mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionUpdateRequest!) {
   updateCommandDefinition(token: $token, request: $request) {
     id
     token
@@ -2705,7 +2759,7 @@ export const CreateDetectionRuleDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDetectionRuleMutation, CreateDetectionRuleMutationVariables>;
 export const UpdateDetectionRuleDocument = new TypedDocumentString(`
-    mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+    mutation UpdateDetectionRule($token: String!, $request: DetectionRuleUpdateRequest!) {
   updateDetectionRule(token: $token, request: $request) {
     id
     token
@@ -2839,7 +2893,7 @@ export const CreateGeoFenceDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateGeoFenceMutation, CreateGeoFenceMutationVariables>;
 export const UpdateGeoFenceDocument = new TypedDocumentString(`
-    mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {
+    mutation UpdateGeoFence($token: String!, $request: GeoFenceUpdateRequest!) {
   updateGeoFence(token: $token, request: $request) {
     id
     token

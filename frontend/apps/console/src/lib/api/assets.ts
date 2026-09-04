@@ -22,6 +22,7 @@ import {
   deleteEntityGroup,
   type EntityGroup,
   type GroupFormRequest,
+  type EntityGroupUpdateRequest,
 } from './device-management';
 
 // Public types are derived from the generated operation results so they always
@@ -338,8 +339,8 @@ export const listAssetGroups = (opts: { pageNumber: number; pageSize: number }) 
 export const getAssetGroup = (token: string) => getEntityGroupOfType(token, 'asset');
 export const createAssetGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'asset' });
-export const updateAssetGroup = (token: string, request: Required<GroupFormRequest>) =>
-  updateEntityGroup(token, { ...request, memberType: 'asset' });
+export const updateAssetGroup = (token: string, request: EntityGroupUpdateRequest) =>
+  updateEntityGroup(token, request);
 export const deleteAssetGroup = deleteEntityGroup;
 
 // ── Asset hierarchy (parent/child over the relationship graph) ──────────────

@@ -109,12 +109,11 @@ func (api *Api) CreateProvisioningProfile(ctx context.Context, request *Provisio
 	return created, nil
 }
 
-// Update an existing provisioning profile.
+// UpdateProvisioningProfile applies a PARTIAL update: a field the caller did not name
+// keeps its stored value — including the shared SECRET the fleet presents, which the
+// full-replace shape blanked on every edit that failed to restate it.
 func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
-	request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("provisioning profile", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *ProvisioningProfileUpdateRequest) (*ProvisioningProfile, error) {
 	matches, err := api.ProvisioningProfilesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -122,50 +121,69 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	if !ProvisioningStrategy(request.Strategy).Valid() {
-		return nil, fmt.Errorf("invalid provisioning strategy: %s", request.Strategy)
-	}
-
-	credentialType := string(CredentialAccessToken)
-	if request.CredentialType != nil {
-		credentialType = *request.CredentialType
-	}
-	if !provisionableCredentialType(credentialType) {
-		return nil, fmt.Errorf("provisioning cannot mint credential type %q (only %s)",
-			credentialType, CredentialAccessToken)
-	}
-
-	expiresAt, err := parseOptionalTime(request.ExpiresAt)
-	if err != nil {
-		return nil, err
-	}
-
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// Everything that can refuse resolves before anything is written.
+	currentTypeToken := ""
+	if updated.DeviceType != nil {
+		currentTypeToken = updated.DeviceType.Token
+	}
+	retypeTo, retype, err := resolveRequiredTypeRef(request.DeviceTypeToken, currentTypeToken, "deviceTypeToken")
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
-	updated.ProvisionKey = request.ProvisionKey
-	updated.ProvisionSecret = request.ProvisionSecret
-	updated.Strategy = request.Strategy
-	updated.CredentialType = credentialType
-	updated.Enabled = request.Enabled
-	updated.ExpiresAt = expiresAt
-
-	// Re-resolve the target device type if it changed.
-	if updated.DeviceType == nil || request.DeviceTypeToken != updated.DeviceType.Token {
-		deviceTypes, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
+	var deviceType *DeviceType
+	if retype {
+		deviceTypes, err := api.DeviceTypesByToken(ctx, []string{retypeTo})
 		if err != nil {
 			return nil, err
 		}
 		if len(deviceTypes) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.DeviceType = deviceTypes[0]
+		deviceType = deviceTypes[0]
+	}
+	strategy, err := request.Strategy.ApplyToRequired("strategy", updated.Strategy)
+	if err != nil {
+		return nil, err
+	}
+	if request.Strategy.Set && !ProvisioningStrategy(strategy).Valid() {
+		return nil, fmt.Errorf("invalid provisioning strategy: %s", strategy)
+	}
+	provisionKey, err := request.ProvisionKey.ApplyToRequired("provisionKey", updated.ProvisionKey)
+	if err != nil {
+		return nil, err
+	}
+	provisionSecret, err := request.ProvisionSecret.ApplyToRequired("provisionSecret", updated.ProvisionSecret)
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := request.Enabled.ApplyToRequired("enabled", updated.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt, err := request.ExpiresAt.ApplyToNullTime("expiresAt", updated.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Metadata = metadataJSON
+	updated.ProvisionKey = provisionKey
+	updated.ProvisionSecret = provisionSecret
+	updated.Strategy = strategy
+	// CredentialType is deliberately NOT assigned: it is not in the input (see
+	// ProvisioningProfileUpdateRequest), so an update leaves what creation chose.
+	updated.Enabled = enabled
+	updated.ExpiresAt = expiresAt
+	if deviceType != nil {
+		updated.DeviceType = deviceType
+		updated.DeviceTypeId = deviceType.ID
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)

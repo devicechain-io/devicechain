@@ -81,6 +81,22 @@ func authoringGraphJSON(graph *string) datatypes.JSON {
 	return datatypes.JSON(*graph)
 }
 
+// authoringGraphStr is the READ half of authoringGraphJSON, which a partial update
+// needs and a full replace did not: folding an absent field means handing ApplyTo the
+// value already stored.
+//
+// 🔴 The nil test is on LENGTH, not on the pointer. datatypes.JSON is a []byte, and a
+// column that was never written comes back as a non-nil, zero-length slice — so a
+// pointer test would report "the sidecar is present, and it is the empty document",
+// and every absent-field fold would write an unparseable "" back over a NULL column.
+func authoringGraphStr(graph datatypes.JSON) *string {
+	if len(graph) == 0 {
+		return nil
+	}
+	s := string(graph)
+	return &s
+}
+
 // Create a new detection rule (ADR-051 slice 4b).
 func (api *Api) CreateDetectionRule(ctx context.Context,
 	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
@@ -101,7 +117,7 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
 		return nil, err
 	}
-	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
+	if err := api.validateDetectionRuleScope(ctx, request.EntityGroupToken, request.EntityGroupVersion); err != nil {
 		return nil, err
 	}
 
@@ -134,12 +150,15 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 	return created, nil
 }
 
-// Update an existing detection rule.
+// UpdateDetectionRule applies a PARTIAL update: a field the caller did not name keeps
+// its stored value, an explicit null clears a nullable one, and the required fields
+// (deviceProfileToken, definition, enabled) refuse a null.
+//
+// The rule's OWN token is not in the input and cannot be moved, so it is not
+// grammar-checked here; CreateDetectionRule is where it is set and therefore the only
+// place that check can apply.
 func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
-	request *DetectionRuleCreateRequest) (*DetectionRule, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("detection rule", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *DetectionRuleUpdateRequest) (*DetectionRule, error) {
 	matches, err := api.DetectionRulesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -147,54 +166,66 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	// The payload token is NOT validated here, and its absence is deliberate. Under the
-	// reconcile above it is either empty ("unspecified") or equal to the argument, and it
-	// is never WRITTEN — so validating it could only refuse the empty case, which is a
-	// caller declining to restate an identity it cannot change. The rule's token is
-	// grammar-checked where it is actually set, in CreateDetectionRule; since an update
-	// cannot move it, that is the only check that can apply.
-	if err := validateDetectionRuleDefinition(request.Definition); err != nil {
-		return nil, err
-	}
-	if err := validateAuthoringGraph(request.AuthoringGraph); err != nil {
-		return nil, err
-	}
-	if err := api.validateDetectionRuleScope(ctx, request); err != nil {
-		return nil, err
-	}
-
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// Everything that can refuse resolves before anything is written.
+	reparent, err := api.resolveProfileRef(ctx, request.DeviceProfileToken, updated.DeviceProfile)
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
-	updated.Definition = datatypes.JSON(request.Definition)
-	// Re-set the sidecar from the request (nil clears it): an edit is a full replace, no
-	// partial-update semantics (pre-GA decisive cutover). A form-authored edit of a
-	// canvas-authored rule thus drops the now-stale graph, which is correct.
-	updated.AuthoringGraph = authoringGraphJSON(request.AuthoringGraph)
-	updated.Enabled = request.Enabled
-	// Re-set the scope (nil clears it): a full replace, same as the sidecar. Enrollment is
-	// NOT reconciled here — a draft edit is inert until published (see CreateDetectionRule).
-	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
-	updated.EntityGroupToken = scopeToken
-	updated.EntityGroupVersion = scopeVersion
-
-	// Re-parent if the profile token changed.
-	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
-		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
-		if err != nil {
+	definition, err := request.Definition.ApplyToRequired("definition", string(updated.Definition))
+	if err != nil {
+		return nil, err
+	}
+	if request.Definition.Set {
+		if err := validateDetectionRuleDefinition(definition); err != nil {
 			return nil, err
 		}
-		if len(matches) == 0 {
-			return nil, gorm.ErrRecordNotFound
+	}
+	enabled, err := request.Enabled.ApplyToRequired("enabled", updated.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	// The canvas sidecar is nullable — a form-authored rule has none — so an explicit
+	// null drops the now-stale graph, which is the operation a form edit of a
+	// canvas-authored rule needs. Omitting it now KEEPS it, where the full-replace
+	// shape dropped it on every edit that failed to restate it.
+	authoringGraph := request.AuthoringGraph.ApplyTo(authoringGraphStr(updated.AuthoringGraph))
+	if request.AuthoringGraph.Set {
+		if err := validateAuthoringGraph(authoringGraph); err != nil {
+			return nil, err
 		}
-		updated.DeviceProfile = matches[0]
-		updated.DeviceProfileId = matches[0].ID
+	}
+
+	// THE SCOPE IS VALIDATED AS THE EFFECTIVE PAIR (ADR-062 S4). Either half may be
+	// absent from the request, so the pairing rule has to be asked of what the rule will
+	// END UP with: naming only a version on an unscoped rule is a half-set scope, and
+	// normalizedRuleScope would otherwise discard it in silence.
+	scopeToken := request.EntityGroupToken.ApplyTo(updated.EntityGroupToken)
+	scopeVersion := request.EntityGroupVersion.ApplyTo(updated.EntityGroupVersion)
+	if err := api.validateDetectionRuleScope(ctx, scopeToken, scopeVersion); err != nil {
+		return nil, err
+	}
+	scopeToken, scopeVersion = normalizedRuleScope(scopeToken, scopeVersion)
+
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Metadata = metadataJSON
+	updated.Definition = datatypes.JSON(definition)
+	updated.AuthoringGraph = authoringGraphJSON(authoringGraph)
+	updated.Enabled = enabled
+	// Enrollment is NOT reconciled here — a draft edit is inert until published (see
+	// CreateDetectionRule).
+	updated.EntityGroupToken = scopeToken
+	updated.EntityGroupVersion = scopeVersion
+	if reparent != nil {
+		updated.DeviceProfile = reparent
+		updated.DeviceProfileId = reparent.ID
 	}
 
 	// Save clears the scope columns to NULL when the edit un-scopes the rule (gorm Save

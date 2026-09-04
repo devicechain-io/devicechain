@@ -261,6 +261,37 @@ type DeviceCredentialCreateRequest struct {
 	Metadata        *string
 }
 
+// A PARTIAL update to a device credential: omit a field to leave the stored value
+// alone, send null to clear a nullable one, send a value to set it. There is no Token —
+// the credential is identified by the mutation's `token` argument.
+//
+// 🔴 THE THREE STATES MATTER MORE HERE THAN ANYWHERE ELSE IN THIS AREA, because the
+// full-replace shape made every edit a re-authentication event. Renaming nothing but the
+// metadata sent a request with no credentialValue, which BLANKED the secret the device
+// presents at connect time; a request with no expiresAt removed the expiry; a request
+// that failed to restate `enabled: true` disabled the credential. All three returned 200
+// and took the device offline at its next reconnect.
+type DeviceCredentialUpdateRequest struct {
+	// DeviceToken re-points the credential at another device. The FK is NOT NULL, so a
+	// null is refused and an unknown token refuses the whole update.
+	DeviceToken dcgraphql.OptionalString
+	// CredentialType and CredentialId are NOT NULL: a credential with no type has no
+	// vocabulary and one with no id resolves to no device, so both refuse a null.
+	CredentialType dcgraphql.OptionalString
+	CredentialId   dcgraphql.OptionalString
+	// CredentialValue is the secret material and IS nullable — a credential type that
+	// carries no secret is a real state — so an explicit null clears it. Omitting it
+	// leaves the secret in place, which is what makes a metadata edit safe.
+	CredentialValue dcgraphql.OptionalString
+	// Enabled sits on a NOT NULL column; a null is refused rather than folded to false,
+	// which would silently disable the credential.
+	Enabled dcgraphql.OptionalBool
+	// ExpiresAt is an RFC3339 timestamp on a nullable column: null (or an empty string,
+	// which is what a cleared form field sends) means "never expires".
+	ExpiresAt dcgraphql.OptionalString
+	Metadata  dcgraphql.OptionalString
+}
+
 // DeviceCredential holds authentication material for a device (ADR-014).
 // Identity (Device) is stable and never rotates; credentials are rotatable and
 // a device may hold several. CredentialId is the identifier a device presents

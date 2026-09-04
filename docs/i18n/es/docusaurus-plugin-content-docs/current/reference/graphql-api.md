@@ -187,8 +187,9 @@ proxy de desarrollo de la consola).
 firma.** Una mutación que toma un `*UpdateRequest` propio es una **actualización parcial**; una que
 toma la entrada de su hermana `create*` es un **reemplazo completo**. Esos son los dos únicos
 contratos — pero encima hay dos salvedades y ambas muerden en la práctica. Unos pocos campos
-concretos de las mutaciones de reemplazo completo se comportan de forma distinta a la mutación en la
-que están, y uno se comporta exactamente al revés; están enumerados
+concretos se comportan de forma distinta a la mutación en la que están — un campo obligatorio de una
+actualización parcial que no se puede limpiar, un secreto de un reemplazo completo que se conserva
+en lugar de borrarse, y uno que se comporta exactamente al revés; están enumerados
 [más abajo](#where-the-default-does-not-hold). Y el **token** dentro de una petición de reemplazo
 completo tiene reglas propias, que difieren según la mutación — consulta
 [el argumento token](#the-token-argument-names-the-record). Lee ambas tablas antes de automatizar
@@ -246,18 +247,24 @@ disimularse.
 | El token de la petición | Qué mutaciones | Un token que **no coincide** | Un token **vacío** |
 | --- | --- | --- | --- |
 | **No existe** | toda [actualización parcial](#which-mutations-are-partial-updates) | *no representable* — la entrada no tiene campo `token`, así que el esquema lo rechaza | — |
-| **Debe coincidir** | `updateMetricDefinition`, `updateCommandDefinition`, `updateDetectionRule`, `updateEntityGroup`, `updateDeviceCredential`, `updateProvisioningProfile`, `updateEntityRelationshipType`, `updateNotificationPolicy`, `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
+| **Debe coincidir** | `updateNotificationPolicy`, `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
 | **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
-| **Debe coincidir, exactamente** | `updateGeoFence` | **rechazado** | **rechazado** — el token de un geocerco también debe cumplir la [gramática de tokens](#what-a-token-may-contain) |
 
 La fila del renombrado no es un resto del pasado. Cada una de esas cuatro vincula lo que depende del
 registro por su id interno y no por su token — el secreto de entrega de un canal, la credencial de
 un conector, el manejador de clave de un proveedor —, así que renombrar uno no deja nada huérfano.
-Dos llevan además una salvaguarda propia: `updateDeviceProfile` rechaza el renombrado una vez que el
+Una lleva además una salvaguarda propia: `updateDeviceProfile` rechaza el renombrado una vez que el
 perfil ha sido **publicado o adoptado** por un tipo de dispositivo, porque a partir de ahí las
-reglas publicadas y los inventarios de dispositivos *sí* lo nombran por token; y `updateGeoFence`
-rechaza el renombrado sin más, porque las reglas de detección nombran los geocercos por token dentro
-de expresiones compiladas que este servicio no puede reescribir.
+reglas publicadas y los inventarios de dispositivos *sí* lo nombran por token.
+
+**El token de un geocerco es inmutable, y ahora la regla vive en la primera fila.**
+`updateGeoFence` reconciliaba dos tokens y rechazaba una discrepancia; su entrada ya no lleva
+ninguno, así que no existe petición que pida un renombrado. El motivo no ha cambiado: las reglas de
+detección nombran los geocercos por token dentro de expresiones compiladas que este servicio no
+puede reescribir, así que un renombrado dejaría a todas ellas nombrando nada mientras la mutación
+devuelve éxito. Si necesitas un geocerco con otro token, **crea primero el nuevo y borra después el
+antiguo** — hacerlo al revés puede hacerte perder el margen de posiciones que tienes heredado y
+dejar el geocerco sin poder recrearse.
 
 En lo que coinciden todas las filas es en que un token de petición ya no puede **dejar en blanco** un
 registro, y nunca puede hacer que la mutación escriba un registro distinto del que nombra `token:`.
@@ -288,11 +295,11 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 | --- | --- |
 | `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *limpia*. Lo contrario del `null` de una actualización parcial; consulta la advertencia de abajo |
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `{}` para limpiarlo |
-| `selector` en `updateEntityGroup` | **Se conserva.** Un selector omitido *o vacío* deja en su sitio el ya compilado |
+| `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `firstName` / `lastName` en `updateProfile` | **Se conservan.** La única `update*` que toma argumentos sueltos en lugar de un `request`; una cadena vacía sí limpia |
-| `credentialType` en `updateProvisioningProfile` | **Se restablece a `ACCESS_TOKEN`** — ni se conserva ni se limpia |
+| `credentialType` en `updateProvisioningProfile` | **No está en la entrada de actualización.** Hoy el aprovisionamiento solo puede emitir un tipo de credencial, así que el campo únicamente repetiría lo almacenado. Antes cualquier actualización que lo omitiera lo *restablecía* a `ACCESS_TOKEN` |
 | `activeVersion` en un perfil de dispositivo o un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve con publicar y revertir |
-| `memberType` / `membershipMode` en `updateEntityGroup` | Nada al omitirlos, pero *enviar un valor distinto* se rechaza — ambos son inmutables |
+| `memberType` / `membershipMode` en `updateEntityGroup` | **No están en la entrada de actualización.** Ambos son identidad, así que un cambio no es representable en lugar de rechazarse |
 | Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | Se borran — y borrar aquí significa **heredar el valor por defecto de la plataforma**, nunca «sin límite» |
 
 :::danger Una cadena vacía no es una forma segura de decir «deja esto como está»
@@ -309,11 +316,18 @@ credencial empieza a fallar la autenticación en cada envío saliente. **Deja el
 ### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
 
 Las actualizaciones parciales van llegando por áreas en lugar de todas a la vez, y la intención es
-convertir el resto antes de la 1.0. En device-management, en esta versión, estas toman un
-`*UpdateRequest` propio:
+convertir el resto antes de la 1.0. En device-management, **todas las `update*` menos una** toman
+ya un `*UpdateRequest` propio:
 
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
-`updateCustomer` · `updateAreaType` · `updateArea`
+`updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
+`updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
+`updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType`
+
+`updateDeviceProfile` es la excepción, y sigue siendo un reemplazo completo por un motivo y no por
+descuido: el token de su petición es un **canal de renombrado** — un perfil puede renombrarse
+mientras nada lo haya adoptado ni publicado —, y una entrada de actualización que omitiera el token
+eliminaría esa capacidad en lugar de convertirla.
 
 Ninguna otra área se ha convertido todavía: notification-management, dashboard-management,
 outbound-connectors, ai-inference y user-management siguen siendo reemplazos completos. (Las cinco
@@ -325,7 +339,7 @@ No hace falta que guardes esa lista: **lee la firma**. `request: FooUpdateReques
 `FooCreateRequest` es un reemplazo completo, se escriba o no con un `!` final. El
 [esquema que descargaste](#descargar-los-esquemas) es la autoridad.
 
-#### Dos campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
+#### Campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
 
 - **Una referencia obligatoria no se puede limpiar.** El `assetTypeToken` de `updateAsset`, y sus
   equivalentes en dispositivos, clientes y áreas, reapuntan la entidad cuando envías uno y la dejan
@@ -337,6 +351,19 @@ No hace falta que guardes esa lista: **lee la firma**. `request: FooUpdateReques
   real. Bajo la antigua forma de reemplazo completo, omitirlo al renombrar un tipo **desvinculaba el
   perfil** — lo que dejaba sin declarar la posición de cada dispositivo construido sobre ese tipo,
   con éxito. Omitirlo ahora conserva el perfil actual; `null`, o un token vacío, lo desvincula.
+
+- **Un campo obligatorio tampoco se puede limpiar, aunque no sea una referencia.** El `dataType` de
+  una métrica, el `credentialType` y el `enabled` de una credencial, la `definition` y el `enabled`
+  de una regla, la `geometry` de un geocerco, la `provisionKey` y el `provisionSecret` de un perfil
+  de aprovisionamiento: envía un valor para cambiarlo, omítelo para dejarlo tal cual, y un `null`
+  explícito se **rechaza**. Merece mencionarse aparte del caso de las referencias porque el fallo
+  que evita es invisible: convertir `enabled: null` en `false` desactivaría una credencial o
+  aparcaría una regla y devolvería éxito, y `false` es un valor que podrías haber enviado a
+  propósito.
+- **Omitir un secreto ahora lo conserva.** El `credentialValue` de `updateDeviceCredential` y el
+  `provisionSecret` de `updateProvisioningProfile` quedaban en blanco con cualquier actualización
+  que no los repitiera — lo que dejaba sin conexión a un dispositivo, o a toda una flota que se
+  autorregistra, en su siguiente conexión, con un `200` en la edición que lo rompió.
 
 `metadata` se reemplaza por completo en ambos contratos cuando lo envías, y se limpia con `null` en
 una actualización parcial. Es una cadena JSON opaca en el esquema, no un mapa, así que no hay

@@ -299,29 +299,36 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
     setBusy(true);
     try {
       const meta = conditionMeta(nodes);
-      const request: Required<DetectionRuleCreateRequest> = {
-        token: editing ? entity.token : token.trim(),
+      const edited = {
         deviceProfileToken: profileToken,
         name: meta.name ?? null,
         description: meta.description ?? null,
         definition: result.definition,
         authoringGraph: JSON.stringify(fromReactFlow(nodes, edges)),
         enabled,
-        metadata: entity?.metadata ?? null,
-        // Preserve the rule's group scope (ADR-062 S4) verbatim across a canvas save. The scope
-        // lives in columns, not the canvas graph, and an update is a full replace — so omitting
-        // it here would silently clear the scope and turn a group-scoped rule profile-wide. The
-        // scope is authored in the Form tab; the canvas passes it through, mirroring how the
-        // form passes a canvas-authored guard/raw action through verbatim.
-        entityGroupToken: entity?.entityGroupToken ?? null,
-        entityGroupVersion: entity?.entityGroupVersion ?? null,
       };
       if (editing) {
-        await updateDetectionRule(entity.token, request);
-        onDone(t('canvasRuleUpdated', { token: request.token }));
+        // 🔴 THE GROUP SCOPE IS PRESERVED BY NOT BEING NAMED. It lives in columns rather
+        // than in the canvas graph, and this editor has no control that edits it — the
+        // Form tab authors it. Under the full replace this save had to echo the stored
+        // scope back verbatim or a canvas save would silently turn a group-scoped rule
+        // profile-wide; under the partial update the safe thing and the simple thing are
+        // the same, and the echo is the version with a stale-read race in it. metadata is
+        // left alone for the same reason.
+        await updateDetectionRule(entity.token, edited);
+        onDone(t('canvasRuleUpdated', { token: entity.token }));
       } else {
-        await createDetectionRule(request);
-        onDone(t('canvasRuleCreated', { token: request.token }));
+        // A create names everything, because there is nothing yet to leave alone. A rule
+        // authored on the canvas starts unscoped; the Form tab is where a scope is added.
+        const created: Required<DetectionRuleCreateRequest> = {
+          token: token.trim(),
+          ...edited,
+          metadata: null,
+          entityGroupToken: null,
+          entityGroupVersion: null,
+        };
+        await createDetectionRule(created);
+        onDone(t('canvasRuleCreated', { token: created.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));

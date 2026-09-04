@@ -14,7 +14,6 @@ import {
 } from '@/lib/api/customers';
 // Groups of every family are the one uniform EntityGroup, so the projection
 // that keeps an edit from erasing its unedited fields is shared too.
-import { groupPreserved } from '@/lib/api/device-management';
 
 export const customerGroupResource: RegistryResource<CustomerGroup> = {
   basePath: '/customer-groups',
@@ -33,13 +32,14 @@ export const customerGroupResource: RegistryResource<CustomerGroup> = {
       i18nKey="customerGroup"
       entityType="customer-group"
       create={(req) => createCustomerGroup(req)}
-      // RegistryTypeForm calls update only when editing, so g is set. A group
-      // update replaces every field it names, so an edit that sent only the name
-      // erased the group's appearance and its metadata. (Its membership mode and
-      // selector survive — the server never takes those from a request that omits
-      // them — so a dynamic group kept working while its metadata did not.)
+      // 🔴 THE REQUEST NAMES ONLY WHAT THIS FORM EDITS, which is now the whole rule
+      // rather than a hazard to work around. An edit used to have to re-send the
+      // group's appearance and metadata (through groupPreserved) because a group
+      // update replaced every field it named and omitting one erased it. The update
+      // is partial now, so an unnamed field is left alone — and re-sending a value
+      // the operator never saw would be a write over whatever it has become since.
       update={(token, req) =>
-        updateCustomerGroup(token, { ...groupPreserved(g!), name: req.name, description: req.description })
+        updateCustomerGroup(token, { name: req.name, description: req.description })
       }
       onDone={onDone}
     />

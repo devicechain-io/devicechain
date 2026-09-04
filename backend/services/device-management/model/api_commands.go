@@ -93,12 +93,13 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 	return created, nil
 }
 
-// Update an existing command definition.
+// UpdateCommandDefinition applies a PARTIAL update: a field the caller did not name
+// keeps its stored value, an explicit null clears a nullable one, and the required
+// fields (deviceProfileToken, commandKey) refuse a null. The key-uniqueness check is
+// asked of the EFFECTIVE (profile, key) pair rather than of the request, since under
+// three states either half may be absent.
 func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
-	request *CommandDefinitionCreateRequest) (*CommandDefinition, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("command definition", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *CommandDefinitionUpdateRequest) (*CommandDefinition, error) {
 	matches, err := api.CommandDefinitionsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -106,61 +107,65 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	if err := validateCommandKey(request.CommandKey); err != nil {
-		return nil, err
-	}
-	if err := validateRequestSchema(request.ParameterSchema); err != nil {
-		return nil, err
-	}
-
-	// The profile the definition will belong to AFTER this update — the key must be
-	// unique there, not in the profile it is moving away from.
-	targetProfileId := uint(0)
-	if matches[0].DeviceProfile != nil {
-		targetProfileId = matches[0].DeviceProfile.ID
-	}
-	if request.DeviceProfileToken != "" &&
-		(matches[0].DeviceProfile == nil || request.DeviceProfileToken != matches[0].DeviceProfile.Token) {
-		profiles, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
-		if err != nil {
-			return nil, err
-		}
-		if len(profiles) == 0 {
-			return nil, gorm.ErrRecordNotFound
-		}
-		targetProfileId = profiles[0].ID
-	}
-	if err := api.assertCommandKeyUnused(ctx, targetProfileId, request.CommandKey, matches[0].ID); err != nil {
-		return nil, err
-	}
-
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
-	if err != nil {
-		return nil, err
-	}
-	updated.Metadata = metadataJSON
-	updated.CommandKey = request.CommandKey
-	parameterSchemaJSON, err := rdb.JSONInputOf("parameterSchema", request.ParameterSchema)
-	if err != nil {
-		return nil, err
-	}
-	updated.ParameterSchema = parameterSchemaJSON
 
-	// Update device profile if changed.
-	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
-		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
-		if err != nil {
+	// Everything that can refuse resolves before anything is written.
+	reparent, err := api.resolveProfileRef(ctx, request.DeviceProfileToken, updated.DeviceProfile)
+	if err != nil {
+		return nil, err
+	}
+	commandKey, err := request.CommandKey.ApplyToRequired("commandKey", updated.CommandKey)
+	if err != nil {
+		return nil, err
+	}
+	if request.CommandKey.Set {
+		if err := validateCommandKey(commandKey); err != nil {
 			return nil, err
 		}
-		if len(matches) == 0 {
-			return nil, gorm.ErrRecordNotFound
+	}
+	parameterSchema := request.ParameterSchema.ApplyTo(dcgraphql.MetadataStr(updated.ParameterSchema))
+	if request.ParameterSchema.Set {
+		if err := validateRequestSchema(parameterSchema); err != nil {
+			return nil, err
 		}
-		updated.DeviceProfile = matches[0]
+	}
+
+	// 🔴 THE UNIQUENESS CHECK RUNS AGAINST THE EFFECTIVE PAIR, not against the request.
+	// Under three states either half of (profile, key) may be absent, so "the key is
+	// unused on this profile" has to be asked of the profile the definition ends up IN
+	// and the key it ends up WITH — a move that changes only the profile can collide
+	// just as surely as one that changes only the key, and a request-shaped check would
+	// see neither. targetProfileId is 0 for a dangling FK, which is a value no profile
+	// has and therefore collides with nothing; the re-point above is how such a row is
+	// repaired.
+	targetProfileId := uint(0)
+	if updated.DeviceProfile != nil {
+		targetProfileId = updated.DeviceProfile.ID
+	}
+	if reparent != nil {
+		targetProfileId = reparent.ID
+	}
+	if err := api.assertCommandKeyUnused(ctx, targetProfileId, commandKey, updated.ID); err != nil {
+		return nil, err
+	}
+
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+	parameterSchemaJSON, err := rdb.JSONInputOf("parameterSchema", parameterSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	updated.CommandKey = commandKey
+	updated.Metadata = metadataJSON
+	updated.ParameterSchema = parameterSchemaJSON
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	if reparent != nil {
+		updated.DeviceProfile = reparent
+		updated.DeviceProfileId = reparent.ID
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)

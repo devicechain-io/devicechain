@@ -17,7 +17,6 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   createGeoFence,
   updateGeoFence,
-  geoFencePreserved,
   type GeoFence,
   type GeoFenceCreateRequest,
 } from '@/lib/api/geofences';
@@ -110,9 +109,11 @@ export function GeoFenceForm({
   const [busy, setBusy] = useState(false);
 
   // 🔴 A fence whose geometry this editor cannot represent (a reserved kind, a
-  // ring with holes) must NOT open as an empty map. updateGeoFence is a full
-  // replace, so saving from a blank canvas would overwrite the real geometry
-  // with nothing. Refusing to edit is the only safe reading of "cannot parse".
+  // ring with holes) must NOT open as an empty map. This form always SENDS a
+  // geometry — it is one of the three fields an edit names — so saving from a blank
+  // canvas would overwrite the real shape with nothing. Refusing to edit is the only
+  // safe reading of "cannot parse", and the partial update does not soften it: the
+  // danger was never the fields the request omits, it is the one it names wrongly.
   const unreadable = editing && entity.geometry !== '' && fromGeometryDocument(entity.geometry) === null;
 
   /**
@@ -143,25 +144,29 @@ export function GeoFenceForm({
     setFormError(null);
     setBusy(true);
     try {
-      // 🔴 An edit starts from what the fence ALREADY is. updateGeoFence replaces
-      // the whole record, so a request that leaves a field out does not leave it
-      // alone — it deletes it. geoFencePreserved is that starting point, and it
-      // returns `Required<…>`, which is what makes a field added to the schema
-      // later a compile error here rather than a silent deletion.
+      // 🔴 AN EDIT SENDS EXACTLY WHAT THIS EDITOR EDITS, AND NOTHING ELSE. It used to
+      // send the fence's whole stored state — metadata included — because the update was
+      // a full replace and an omitted field was a deleted one. Under the partial update
+      // an omitted field is left alone, so re-sending metadata would mean writing back a
+      // value nobody looked at, over whatever it has become since this form opened.
+      //
+      // A CREATE still names everything, because a create has nothing to leave alone.
       const edited = {
         name: name.trim() || null,
         description: description.trim() || null,
         geometry: toGeometryDocument(vertices),
       };
-      const request: Required<GeoFenceCreateRequest> = editing
-        ? { ...geoFencePreserved(entity), ...edited }
-        : { token: token.trim(), metadata: null, ...edited };
       if (editing) {
-        await updateGeoFence(entity.token, request);
+        await updateGeoFence(entity.token, edited);
         onDone(t('entities:geofenceUpdatedToast', { token: entity.token }));
       } else {
-        await createGeoFence(request);
-        onDone(t('entities:geofenceCreatedToast', { token: request.token }));
+        const created: Required<GeoFenceCreateRequest> = {
+          token: token.trim(),
+          metadata: null,
+          ...edited,
+        };
+        await createGeoFence(created);
+        onDone(t('entities:geofenceCreatedToast', { token: created.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));

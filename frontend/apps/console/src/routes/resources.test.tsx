@@ -278,7 +278,12 @@ async function saveEdit(node: React.ReactNode, rename = true): Promise<Write[]> 
 // has to come back exactly as the entity had it — which is the whole property, and
 // a far stronger one than "metadata survived": it fails on any field a projection
 // crosses, drops or invents, including ones added to a family later.
-const EDITED = new Set(['name', 'description']);
+//
+// `geometry` is here because the geofence editor OWNS the boundary: it is the field
+// that form exists to change, and it goes out on every save whether or not the
+// operator moved a corner. Reading it as a carry-forward would demand the one form
+// that draws a shape stop sending the shape.
+const EDITED = new Set(['name', 'description', 'geometry']);
 
 function assertOnlyTheEditsChanged(
   path: string,
@@ -303,15 +308,9 @@ function assertOnlyTheEditsChanged(
   }
 
   for (const key of carried) {
-    const value = request[key];
-    if (key === 'geometry') {
-      // Re-serialized by the editor, so equal documents differ as strings.
-      expect(JSON.parse(value as string), `${path} changed the geometry`).toEqual(
-        JSON.parse(source[key] as string),
-      );
-      continue;
-    }
-    expect(value, `${path} changed ${key}, which no form on this page edits`).toEqual(source[key]);
+    expect(request[key], `${path} changed ${key}, which no form on this page edits`).toEqual(
+      source[key],
+    );
   }
   // A loop that compared nothing would pass. Every family carries at least a
   // token and its metadata.

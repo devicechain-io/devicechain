@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // A profile may declare a given command key exactly once. Two definitions of one
@@ -83,8 +84,10 @@ func TestCommandKeyUniquePerProfile(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 		desc := "now with a description"
-		if _, err := api.UpdateCommandDefinition(ctx, "cd-self", &CommandDefinitionCreateRequest{
-			Token: "cd-self", DeviceProfileToken: p.Token, CommandKey: "drive", Description: &desc,
+		if _, err := api.UpdateCommandDefinition(ctx, "cd-self", &CommandDefinitionUpdateRequest{
+			DeviceProfileToken: dcgraphql.OptionalStringOf(p.Token),
+			CommandKey:         dcgraphql.OptionalStringOf("drive"),
+			Description:        dcgraphql.OptionalStringOf(desc),
 		}); err != nil {
 			t.Fatalf("updating a definition without changing its key must succeed: %v", err)
 		}

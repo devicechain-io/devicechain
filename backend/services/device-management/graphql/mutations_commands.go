@@ -36,14 +36,14 @@ func (r *SchemaResolver) CreateCommandDefinition(ctx context.Context, args struc
 // Update an existing command definition.
 func (r *SchemaResolver) UpdateCommandDefinition(ctx context.Context, args struct {
 	Token   string
-	Request *model.CommandDefinitionCreateRequest
+	Request model.CommandDefinitionUpdateRequest
 }) (*CommandDefinitionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateCommandDefinition(ctx, args.Token, args.Request)
+	updated, err := api.UpdateCommandDefinition(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

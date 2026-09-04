@@ -74,8 +74,7 @@ func TestManifestSizeIsAFunctionOfFenceCountAlone(t *testing.T) {
 	small := marshalUnderPinnedHeader(t, mustManifest(t, api, ctx))
 
 	// Same fence count, same token, vastly more geometry: a 400-position polygon for a box.
-	if _, err := api.UpdateGeoFence(ctx, "tiny", &GeoFenceCreateRequest{
-		Token: "tiny", Geometry: manyPointGeometry(400)}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "tiny", geoFenceEdit(manyPointGeometry(400))); err != nil {
 		t.Fatalf("update tiny: %v", err)
 	}
 	large := marshalUnderPinnedHeader(t, mustManifest(t, api, ctx))
@@ -308,8 +307,7 @@ func TestCurrentManifestIsTheLatestVersion(t *testing.T) {
 	}
 	first := manifestFences(t, api, ctx)[0].Hash
 
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: boxGeometry(5, 5, 6, 6)}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(boxGeometry(5, 5, 6, 6))); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	current, err := api.CurrentGeoFenceSetManifest(ctx)

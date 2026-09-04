@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/geo"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -513,6 +514,68 @@ type GeoFenceCreateRequest struct {
 	Description *string
 	Geometry    string
 	Metadata    *string
+}
+
+// A PARTIAL update to a geofence: omit a field to leave the stored value alone, send
+// null to clear a nullable one, send a value to set it.
+//
+// # 🔴 THERE IS NO TOKEN HERE, AND THAT ABSENCE IS THE IMMUTABILITY RULE
+//
+// This input replaces a shared create input that carried the token TWICE — once in the
+// mutation argument to say which fence, once in the payload — and a guard that refused
+// the two disagreeing. The guard is gone because the disagreement is now
+// unrepresentable, which is strictly stronger: there is no request a caller can write
+// that asks for a rename.
+//
+// A RENAME HAS NO SAFE OUTCOME, WHICH IS WHY IT WAS REFUSED RATHER THAN CASCADED. A
+// rule names a fence by its token, inside compiled CEL text that this service cannot
+// see and event-processing cannot be asked to rewrite. So a rename would leave every
+// `geo.inFence("old")` naming nothing: containment answers ErrUnknownFence, which the
+// runtime turns into a SKIPPED sample rather than a `false` — deliberately, so the
+// breakage lands on the eval-error counter instead of silently reading as "outside".
+// That is the loudest a downstream service can be about it, and it is still only
+// visible to someone already looking at the counter. The rename itself, meanwhile,
+// would succeed with a 200 and mint a fence-set version freezing the NEW token into the
+// snapshot, so nothing downstream could even reconstruct what the rules used to name.
+//
+// The other two surfaces already assume immutability — the console renders the token as
+// a disabled input when editing, and the concept docs say the token is fixed once
+// created — so this is the API agreeing with everything written about it.
+//
+// 🔴 THE RECIPE IS CREATE-THEN-DELETE, IN THAT ORDER, AND THE ORDER IS NOT STYLE. A
+// caller who genuinely wants a different token creates the second fence FIRST and
+// deletes the old one after, which is also the operation that makes them confront the
+// rules naming the old token. Doing it the other way round is a data-loss trap for
+// exactly the tenants this service grandfathers: the whole-set position budget refuses
+// growth relative to what is STORED, so deleting first lowers the stored sum and the
+// recreate is then refused on its way back up. The fence is gone and cannot be put back.
+// Create-then-delete never crosses that line — the create is the growth, and it is
+// checked while the old fence still exists.
+//
+// It does mean the recipe needs one spare fence slot under the tenant's geoFenceCeiling
+// for the moment both exist. A tenant exactly at its fence ceiling has to have the
+// ceiling raised to rename anything, which is a refusal with a route out rather than an
+// operation that destroys a fence.
+//
+// 🔴 AND THE RECIPE DOES NOT WORK AT ALL FOR A FENCE GRANDFATHERED OVER THE PER-FENCE
+// CEILING, IN EITHER ORDER. A create has no stored baseline to be measured against, so
+// CreateGeoFence checks the incoming count against geoFencePositionCeiling
+// unconditionally — the growth comparison that lets an oversized fence be EDITED has
+// nothing to compare to when the fence is new. So a fence larger than its tenant's
+// current ceiling can be edited and deleted but never re-created under any token. The
+// failure is benign in order (the create refuses before anything is deleted, so nothing
+// is lost), but the recipe above is narrower than it reads: renaming such a fence needs
+// the ceiling raised, not a different order.
+type GeoFenceUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Geometry sits on a NOT NULL column: a fence with no shape is not a fence, so a
+	// null is refused. Omitting it leaves the shape alone, which is what makes a rename
+	// or a metadata edit provably not GROWTH and so exempt from the tenant's position
+	// ceiling — the grandfathering rule the full-replace shape had to reconstruct by
+	// re-canonicalizing and re-counting an unchanged document on every edit.
+	Geometry dcgraphql.OptionalString
+	Metadata dcgraphql.OptionalString
 }
 
 // Search criteria for locating geofences.

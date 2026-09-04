@@ -87,7 +87,7 @@ func TestGeoFenceMutationsEmitTheFrozenFenceSet(t *testing.T) {
 	}
 
 	// An edit mints the NEXT version and announces the MOVED geometry.
-	_, err = api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{Token: "yard", Geometry: boxGeometry(10, 10, 11, 11)})
+	_, err = api.UpdateGeoFence(ctx, "yard", geoFenceEdit(boxGeometry(10, 10, 11, 11)))
 	assert.NoError(t, err)
 	if assert.Len(t, cap.events, 2, "an update emits a second fence-set fact") {
 		ev := cap.events[1]
@@ -189,8 +189,7 @@ func TestCurrentGeoFenceSetSnapshotIsTheLatestVersion(t *testing.T) {
 		Token: "yard", Geometry: boxGeometry(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: boxGeometry(10, 10, 11, 11)}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(boxGeometry(10, 10, 11, 11))); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 

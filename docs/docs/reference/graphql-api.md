@@ -180,10 +180,11 @@ so it works on all three routes (ingress, port-forward, and the console's dev pr
 **Two update contracts are in service at once, and which one a mutation is on is visible in its
 signature.** A mutation taking a dedicated `*UpdateRequest` is a **partial update**; one taking its
 `create*` sibling's input is a **full replace**. Those are the only two contracts — but two caveats
-sit on top of them and both bite in practice. A handful of individual fields on the full-replace
-mutations behave differently from the mutation they are on, and one behaves in exactly the opposite
-way; those are enumerated [below](#where-the-default-does-not-hold). And the **token** inside a
-full-replace payload has its own rules, which differ by mutation — see
+sit on top of them and both bite in practice. A handful of individual fields behave differently from
+the mutation they are on — a required field on a partial update that cannot be cleared, a secret on
+a full replace that is kept rather than erased, one that behaves in exactly the opposite way; those
+are enumerated [below](#where-the-default-does-not-hold). And the **token** inside a full-replace
+payload has its own rules, which differ by mutation — see
 [the token argument](#the-token-argument-names-the-record). Read both tables before you automate
 anything.
 
@@ -239,17 +240,22 @@ smoothed over.
 | The payload token | Which mutations | A token that **disagrees** | A token that is **empty** |
 | --- | --- | --- | --- |
 | **Is not there at all** | every [partial update](#which-mutations-are-partial-updates) | *unrepresentable* — the input has no `token` field, so the schema rejects it | — |
-| **Must agree** | `updateMetricDefinition`, `updateCommandDefinition`, `updateDetectionRule`, `updateEntityGroup`, `updateDeviceCredential`, `updateProvisioningProfile`, `updateEntityRelationshipType`, `updateNotificationPolicy`, `updateDashboard` | **refused** | ignored — read as "unspecified" |
+| **Must agree** | `updateNotificationPolicy`, `updateDashboard` | **refused** | ignored — read as "unspecified" |
 | **Names the new token** (a rename) | `updateDeviceProfile`, `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **renames the record** | **refused** |
-| **Must agree, exactly** | `updateGeoFence` | **refused** | **refused** — a fence token must also satisfy the [token grammar](#what-a-token-may-contain) |
 
 The rename row is not a leftover. Each of those four keys the things that depend on the record by
 its internal id rather than by its token — a channel's delivery secret, a connector's credential, a
-provider's key handle — so renaming one orphans nothing. Two carry an extra guard of their own:
+provider's key handle — so renaming one orphans nothing. One carries an extra guard of its own:
 `updateDeviceProfile` refuses a rename once the profile has been **published or adopted** by a
-device type, because from that point published rules and device rosters *do* name it by token; and
-`updateGeoFence` refuses a rename outright, because detection rules name fences by token inside
-compiled expressions this service cannot rewrite.
+device type, because from that point published rules and device rosters *do* name it by token.
+
+**A geofence's token is immutable, and the rule now lives in the top row.** `updateGeoFence` used
+to reconcile two tokens and refuse a disagreement; its input carries none at all, so there is no
+request that asks for a rename. The reason is unchanged: detection rules name fences by token
+inside compiled expressions this service cannot rewrite, so a rename would leave every one of them
+naming nothing while the mutation returned success. If you need a fence under a different token,
+**create the new one first and delete the old one after** — doing it the other way round can
+forfeit position headroom you are grandfathered on and leave the fence unrecreatable.
 
 What every row agrees on is that a payload token can no longer **blank** a record, and can never
 make the mutation write a record other than the one `token:` names.
@@ -278,11 +284,11 @@ Anything not named here follows its mutation's contract.
 | --- | --- |
 | `secret` on `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Kept** — and an empty string *clears* it. The inverse of a partial update's `null`; see the warning below |
 | `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `{}` to clear |
-| `selector` on `updateEntityGroup` | **Kept.** An omitted *or empty* selector leaves the compiled one in place |
+| `selector` on `updateEntityGroup` | **Kept** when omitted. Unlike most partial-update fields it cannot be *cleared*: `null` is refused, because a dynamic group with no selector matches nothing and cannot be repaired. A static group is refused a selector outright |
 | `firstName` / `lastName` on `updateProfile` | **Kept.** The one `update*` taking bare arguments rather than a `request`; an empty string still clears |
-| `credentialType` on `updateProvisioningProfile` | **Reset to `ACCESS_TOKEN`** — neither kept nor cleared |
+| `credentialType` on `updateProvisioningProfile` | **Not in the update input.** Provisioning can mint exactly one credential type today, so the field would only ever restate what is stored. It used to be *reset* to `ACCESS_TOKEN` by any update that omitted it |
 | `activeVersion` on a device profile or an entity group | Nothing: it is not writable here at all, and moves only by publish and rollback |
-| `memberType` / `membershipMode` on `updateEntityGroup` | Nothing on omission, but *sending a different value* is refused — both are immutable |
+| `memberType` / `membershipMode` on `updateEntityGroup` | **Not in the update input.** Both are identity, so a change is unrepresentable rather than refused |
 | A tenant's [governance overrides](../concepts/governance.md) on `updateTenant` | Erased — and erased here means **inherit the platform default**, never "unlimited" |
 
 :::danger An empty string is not a safe way to say "leave this alone"
@@ -300,11 +306,18 @@ field out.**
 ### Which mutations are partial updates {#which-mutations-are-partial-updates}
 
 Partial updates are arriving one area at a time rather than all at once, and the intent is to
-convert the rest before 1.0. In device-management this release, these take a dedicated
-`*UpdateRequest`:
+convert the rest before 1.0. In device-management, **every `update*` but one** now takes a
+dedicated `*UpdateRequest`:
 
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
-`updateCustomer` · `updateAreaType` · `updateArea`
+`updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
+`updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
+`updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType`
+
+`updateDeviceProfile` is the exception, and stays a full replace for a reason rather than by
+oversight: its payload token is a **rename channel** — a profile may be renamed while nothing has
+adopted or published it — and an update input that dropped the token would remove that capability
+rather than convert it.
 
 No other area has converted yet: notification-management, dashboard-management,
 outbound-connectors, ai-inference and user-management are all still full replaces. (The five
@@ -316,7 +329,7 @@ You do not have to keep that list: **read the signature**. `request: FooUpdateRe
 a `FooCreateRequest` is a full replace, whether or not it is spelled with a trailing `!`. The
 [schema you downloaded](#download-the-schemas) is the authority.
 
-#### Two fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}
+#### Fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}
 
 - **A required reference cannot be cleared.** `updateAsset`'s `assetTypeToken`, and its peers on
   devices, customers and areas, re-point the entity when you send one and leave it alone when you
@@ -327,6 +340,18 @@ a `FooCreateRequest` is a full replace, whether or not it is spelled with a trai
   full-replace shape, omitting it while renaming a type **detached the profile** — which silently
   un-declared position for every device built on the type, successfully. Omitting it now keeps the
   current profile; `null`, or an empty token, detaches it.
+
+- **A required field cannot be cleared either, even when it is not a reference.** A metric's
+  `dataType`, a credential's `credentialType` and `enabled`, a rule's `definition` and `enabled`, a
+  fence's `geometry`, a provisioning profile's `provisionKey` and `provisionSecret`: send a value to
+  change one, omit it to leave it alone, and an explicit `null` is **refused**. This is worth
+  stating separately from the reference case because the failure it prevents is invisible: folding
+  `enabled: null` to `false` would disable a credential or park a rule and return success, and
+  `false` is a value you could legitimately have sent.
+- **Omitting a secret now keeps it.** `credentialValue` on `updateDeviceCredential` and
+  `provisionSecret` on `updateProvisioningProfile` used to be blanked by any update that failed to
+  restate them — which took a device, or a whole self-registering fleet, offline at its next
+  connection, with a `200` on the edit that broke it.
 
 `metadata` is replaced wholesale on both contracts when you send it, and cleared by `null` on a
 partial update. It is an opaque JSON string in the schema rather than a map, so there is no per-key
