@@ -290,6 +290,14 @@ type Dispatcher struct {
 	// practice by the distinct guards a tenant set authors, not the event rate. sync.Map for lock-free
 	// reads on the concurrent (queue-group) dispatch path.
 	guards sync.Map // guard source string → *rules.CompiledGuard
+
+	// alarmKeys caches a compiled alarm-key template per distinct source, on exactly the same terms as
+	// templates/guards above (publish-gated, monotonic, no eviction, lock-free reads). It is a separate
+	// cache rather than a shared one with templates because the two compile against DIFFERENT
+	// environments — an alarm key sees `series` alone (rules/alarmkey.go) — so one source string could
+	// legitimately mean two different programs, and sharing the map would hand an alarm key a program
+	// built against the wider guard env.
+	alarmKeys sync.Map // alarm-key template source string → *rules.CompiledAlarmKeyTemplate
 }
 
 // NewDispatcher builds a REACT dispatcher over a rule resolver and its action sinks. Any sink may be
@@ -348,6 +356,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 	resolved := ev.Edge == runtime.EdgeResolved
 	switch a.Type {
 	case rules.ActionSendCommand:
+		// Same defensive nil-guard as the raiseAlarm branch below, and for exactly the same reason: the
+		// publish gate's populatedVariants check is NOT re-run when a rule is decoded from the durable
+		// projection, so a hand-edited row declaring type sendCommand with no sendCommand payload
+		// reaches the bare dereference in the CommandRequest literal and nil-panics the shared consumer
+		// loop into a redelivery crash-loop. Guarding one variant and not its sibling leaves the class
+		// open, which is what happened here.
+		if a.SendCommand == nil {
+			log.Error().Str("rule", ev.RuleID).
+				Msg("REACT: dropping a sendCommand action whose payload variant is missing (malformed/forged rule).")
+			return Done
+		}
 		if resolved {
 			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
 			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
@@ -426,11 +445,33 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// even while starved of events — those are dropped upstream at publish by the version gate
 		// (processor.dropSupersededDetections / VersionSuperseded) so they can't contribute a false edge
 		// (e.g. a stale unsatisfied pane-close resolving the active version's raise at the same timestamp).
+
+		// Defensive nil-guard, mirroring the connector branch below and added for the same reason: the
+		// publish gate's populatedVariants check is NOT re-run when a rule is decoded from the durable
+		// projection, so a hand-edited row declaring type raiseAlarm with no raiseAlarm payload can
+		// reach here and would nil-panic the shared consumer loop into a redelivery crash-loop (there is
+		// no recover on it). Drop it fail-closed, exactly as the default case drops an unknown action.
+		if a.RaiseAlarm == nil {
+			log.Error().Str("rule", ev.RuleID).
+				Msg("REACT: dropping a raiseAlarm action whose payload variant is missing (malformed/forged rule).")
+			return Done
+		}
+
+		// Resolve the key BEFORE the sink call, on BOTH edges, from the same inputs. An alarm-key
+		// template reads only the series (rules/alarmkey.go), which is identical on a rule's rising and
+		// falling edge, so the raise and its structural clear are guaranteed to name the same alarm —
+		// the property the whole restricted vocabulary exists to buy. A resolution failure is therefore
+		// also identical on both edges: it means this rule never raised anything for this device, so
+		// skipping the clear too strands nothing.
+		alarmKey, ok := d.resolveAlarmKey(ev, a.RaiseAlarm)
+		if !ok {
+			return Done
+		}
 		contributorID := stableContributorID(ev.RuleID)
 		req := AlarmRequest{
 			Tenant:       ev.Tenant,
 			DeviceToken:  ev.Series,
-			AlarmKey:     defaultAlarmKey(a.RaiseAlarm.AlarmKey, ev.RuleID),
+			AlarmKey:     alarmKey,
 			MetricKey:    ruleMetric(rule),
 			Severity:     string(rule.Severity),
 			RuleID:       contributorID,
@@ -641,6 +682,61 @@ func stableContributorID(ruleID string) string {
 	return ruleID
 }
 
+// resolveAlarmKey returns the alarm key this raiseAlarm action files under, and ok=true. A literal
+// AlarmKey (or an absent one, which defaults to the rule's stable identity) resolves without
+// touching CEL — an already-published static key renders to ITSELF because nothing renders it, which
+// is what makes this change invisible to every rule authored before it. An AlarmKeyTemplate is
+// rendered against the detection's series and the RESULT is grammar-checked (CompiledAlarmKeyTemplate.Eval).
+//
+// It fails CLOSED (ok=false): a build error, an evaluation error, or a rendered key that is not a
+// valid ADR-042 token skips the action rather than filing an alarm under a key the platform cannot
+// store or trust. Fail-closed is the right direction here specifically because the failure is
+// DETERMINISTIC for this rule — the template is a pure function of the series — so a Retry would
+// loop the same event to the poison cap without ever succeeding, and a fallback to some other key
+// would file the alarm somewhere the author never named and the falling edge would not find it. The
+// same determinism is why skipping is safe on the falling edge: the rising edge failed identically,
+// so there is no contribution left un-cleared. It mirrors renderPayload / guardAllows, which log the
+// defect and skip for the same reasons.
+func (d *Dispatcher) resolveAlarmKey(ev runtime.DerivedEvent, a *rules.RaiseAlarmAction) (string, bool) {
+	if a.AlarmKeyTemplate == "" {
+		return defaultAlarmKey(a.AlarmKey, ev.RuleID), true
+	}
+	prog, err := d.alarmKeyProgram(a.AlarmKeyTemplate)
+	if err != nil {
+		log.Error().Err(err).Str("rule", ev.RuleID).
+			Msg("REACT: a published alarm-key template failed to build; skipping the action (fail closed).")
+		return "", false
+	}
+	key, err := prog.Eval(ev.Series)
+	if err != nil {
+		// Includes the grammar rejection of a rendered key, which is the expected shape of this
+		// failure: the device token is what varies, so a template can pass publish and still render an
+		// over-long or malformed key for some devices. Logged with the device so an operator can see
+		// WHICH devices the rule is inert on rather than only that it is.
+		log.Error().Err(err).Str("rule", ev.RuleID).Str("device", ev.Series).
+			Msg("REACT: an alarm-key template did not yield a usable key; skipping the action (fail closed).")
+		return "", false
+	}
+	return key, true
+}
+
+// alarmKeyProgram returns the compiled alarm-key template for a source string, building and caching
+// it on first use (d.alarmKeys), mirroring guardProgram / templateProgram. The cache is bounded by
+// the distinct alarm-key templates across published rules, so it needs no eviction. A build error is
+// a bug (the template passed the publish gate); it is returned to resolveAlarmKey, which fails closed.
+func (d *Dispatcher) alarmKeyProgram(source string) (*rules.CompiledAlarmKeyTemplate, error) {
+	if v, ok := d.alarmKeys.Load(source); ok {
+		return v.(*rules.CompiledAlarmKeyTemplate), nil
+	}
+	t, err := rules.BuildAlarmKeyTemplateProgram(source)
+	if err != nil {
+		return nil, err
+	}
+	// LoadOrStore so a concurrent build of the same source resolves to one shared program.
+	actual, _ := d.alarmKeys.LoadOrStore(source, t)
+	return actual.(*rules.CompiledAlarmKeyTemplate), nil
+}
+
 // defaultAlarmKey returns the authored alarm key, or the rule's version-free stable identity when
 // none was authored. It falls back to the raw rule id only if the id does not parse into the minted
 // shape (which the publish path guarantees, so the fallback is defensive) — an empty key would be
@@ -707,16 +803,34 @@ func actionContentKey(a rules.Action) string {
 	if a.Guard != "" {
 		guardSeg = "\x00" + a.Guard
 	}
+	// 🔴 EVERY branch below nil-guards its variant, and that is a property of this function rather
+	// than of its callers. Two of the four did not, while the httpCall branch carried a comment
+	// claiming the helper "can never nil-panic regardless of caller" — an invariant asserted in a
+	// switch that did not hold it. A nil variant degenerates to the type string; that token is never
+	// used (dispatchAction drops the malformed action before minting one), so the collision between
+	// two differently-malformed actions of one type is harmless. TestActionContentKeyIsTotal pins
+	// this for every variant field declared on rules.Action, so a fifth action type cannot be added
+	// with a bare dereference.
 	switch a.Type {
 	case rules.ActionSendCommand:
+		if a.SendCommand == nil {
+			return string(a.Type)
+		}
 		return "sendCommand\x00" + a.SendCommand.Command + "\x00" + a.SendCommand.Payload + guardSeg
 	case rules.ActionRaiseAlarm:
-		return "raiseAlarm\x00" + a.RaiseAlarm.AlarmKey + guardSeg
+		if a.RaiseAlarm == nil {
+			return string(a.Type)
+		}
+		// A rendered key is discriminated by the SAME exported prefix rules.ActionDedupKey uses, so the
+		// gate's duplicate identity and this content key induce the one equivalence relation (the
+		// lockstep the dedup-key comment describes) rather than two mirrored copies that can drift. The
+		// literal case is byte-for-byte what it was before alarm-key templates existed.
+		key := a.RaiseAlarm.AlarmKey
+		if a.RaiseAlarm.AlarmKeyTemplate != "" {
+			key = rules.AlarmKeyIdentitySeparator + a.RaiseAlarm.AlarmKeyTemplate
+		}
+		return "raiseAlarm\x00" + key + guardSeg
 	case rules.ActionHTTPCall:
-		// Defensive nil-guard: a malformed action with no variant is dropped upstream (dispatchAction)
-		// before its token is minted, so this is belt-and-braces — but keeping the helper TOTAL means it
-		// can never nil-panic regardless of caller. A nil variant degenerates to the type string; that
-		// token is never used (the action was dropped), so the collision is harmless.
 		if a.HTTPCall == nil {
 			return string(a.Type)
 		}
