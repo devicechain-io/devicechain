@@ -51,7 +51,7 @@ func toAuditEventSearchCriteria(in AuditEventSearchCriteriaInput) (rdb.AuditEven
 	return criteria, nil
 }
 
-// Query the append-only audit journal (ADR-019). Tenant-scoped and gated by the
+// Query the audit journal (ADR-019). Tenant-scoped and gated by the
 // audit:read authority; returns rows newest first. The read itself is the
 // core-owned RdbManager.AuditEvents helper — this resolver only adds the GraphQL
 // surface and the authority gate for device-management's journal.

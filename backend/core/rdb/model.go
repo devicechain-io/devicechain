@@ -30,10 +30,18 @@ type TokenReference struct {
 	Token string `gorm:"index;not null;size:128"`
 }
 
-// AuditLabel implements AuditLabeler: the token is the human-facing, non-sensitive
-// identifier for any token-referenced entity, so the audit journal records it
-// alongside the (table, pk) reference. Every entity that embeds TokenReference
-// (the registry families) inherits this via promotion.
+// AuditLabel implements AuditLabeler: the token is the human-facing identifier for
+// any token-referenced entity, so the audit journal records it alongside the
+// (table, pk) reference. Every entity that embeds TokenReference (the registry
+// families) inherits this via promotion.
+//
+// 🔴 THAT PROMOTION IS WHY THE JOURNAL'S LABELS ARE PERSONAL DATA, and the count is
+// the argument: this one method puts a customer-chosen token into entity_label for
+// every model that embeds TokenReference — devices, assets, areas, geofences,
+// commands, dashboards, connectors, and customers, whose tokens are routinely a
+// person's or a company's name. Nothing constrains them beyond the token grammar.
+// The column is emptied for a purged tenant (see rdb.AuditEvent); do not re-describe
+// it as non-sensitive on the strength of it not being a credential.
 func (t TokenReference) AuditLabel() string { return t.Token }
 
 // Entity that carries an optional customer-owned external/business identifier

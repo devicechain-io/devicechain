@@ -90,6 +90,47 @@ Algunos registros sobreviven a propósito, y ninguno contiene datos propios del 
   conserva el nombre ni los datos de contacto del inquilino: un registro que los guardara
   dejaría la propia evidencia del borrado como el último lugar donde vivieron los datos
   del cliente.
+- **El diario de auditoría, con las identidades que contiene destruidas.** Véase más abajo.
+
+### El diario de auditoría {#audit}
+
+Cada cambio en una entidad queda registrado en un diario de auditoría: cuándo ocurrió, qué
+tabla, qué operación, cuántas filas y quién lo hizo. Ese diario **se conserva** a través de
+una eliminación, porque es el registro de que la eliminación ocurrió: barrerlo destruiría
+la evidencia del propio borrado.
+
+Lo que no sobrevive es la identidad de nadie. Dos campos pueden nombrar a una persona: el
+usuario que actúa, que en un inicio de sesión humano es su dirección de correo, y la
+etiqueta de la fila afectada, que puede ser un correo o un nombre que usted mismo eligió
+para un cliente, dispositivo o activo. **Ambos se vacían para un inquilino eliminado, de
+forma permanente.** Se escriben en blanco en lugar de cifrarse o resumirse con un hash: una
+dirección de correo es corta y adivinable, así que un hash de una puede volver a
+emparejarse con cualquiera que tenga una lista de direcciones, lo que sería un borrado solo
+de nombre.
+
+Tras una eliminación, una entrada del diario de ese inquilino sigue mostrando la forma de
+lo que pasó —«tres dispositivos eliminados a las 14:02»— sin nombrar a nadie. Eso es la
+conservación funcionando, no datos que faltan.
+
+:::caution Los registros de inicio de sesión no pertenecen a ningún inquilino, y no se alcanzan
+Iniciar sesión ocurre en dos pasos: primero se autentica como persona y después elige un
+inquilino. El primer paso se registra —tanto los aciertos como los fallos— con la dirección
+de correo y **sin inquilino asociado**, porque en ese momento aún no se ha elegido ninguno.
+
+Los registros sin inquilino no puede alcanzarlos la eliminación de ningún inquilino, así
+que el historial de inicios de sesión de un antiguo miembro le sobrevive. Lo que sí cubre
+una eliminación es todo lo que esa persona hizo *dentro* del inquilino. Si sus obligaciones
+alcanzan a los registros de inicio de sesión, gestiónelos mediante la retención de la base
+de datos y de los registros, no mediante la eliminación de inquilinos.
+:::
+
+Dos límites menores, para que consten. Un antiguo miembro que intente iniciar sesión en el
+inquilino *después* de que la eliminación se complete crea un registro nuevo que lo nombra,
+bajo un identificador que para entonces puede pertenecer a otra persona. Y una entrada del
+diario sobre el perfil de alguien sigue registrando qué cuenta se modificó —las cuentas no
+pertenecen a un inquilino y no se eliminan con él—, de modo que un operador con acceso a
+ambos todavía puede relacionarlos. Lo que se destruye es el nombre en el diario, no la
+existencia de la cuenta a la que se refería.
 
 ## Qué puede dejar una eliminación abierta {#stalled}
 

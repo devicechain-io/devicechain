@@ -249,9 +249,15 @@ const (
 	NotificationRead  Authority = "notification:read"
 	NotificationWrite Authority = "notification:write"
 
-	// Audit journal read (ADR-019). Gates the read-side query over the append-only
-	// audit_events table; the journal is written by construction and is never
-	// mutated through the API, so there is no audit:write.
+	// Audit journal read (ADR-019). Gates the read-side query over the audit_events
+	// table; the journal is written by construction and is never mutated through the
+	// API, so there is no audit:write.
+	//
+	// "Never through the API" is the exact claim, and it is narrower than the
+	// "append-only" this used to say. The ADR-077 tenant purge UPDATEs the journal —
+	// it empties the two columns that name a person for a deleted tenant, keeping the
+	// row as the evidence of the erasure. That is the only writer, it runs under a
+	// system context inside the sweep's own transaction, and no authority reaches it.
 	AuditRead Authority = "audit:read"
 
 	// System settings (user-management settings API, ADR-042 P2). Instance-global,

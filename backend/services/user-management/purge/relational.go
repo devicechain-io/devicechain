@@ -119,7 +119,41 @@ func (r *Relational) Erase(ctx context.Context, tenant string, epoch time.Time) 
 			"something is still writing for a tenant whose access was cut",
 			residue.Rows, tenant, r.name, describe(residue))
 	}
+
+	// 🔴 A DIFFERENT FAILURE, WITH A DIFFERENT CAUSE, SO IT GETS ITS OWN SENTENCE. Rows
+	// coming back means a writer is still live and the next pass will collect them. Rows
+	// still carrying an identifier in a RETAINED table means the redaction did not do
+	// what the deletion record is about to certify — the tenant's people are still named
+	// in a journal kept past their erasure. Reporting that as "something is still
+	// writing" would send an operator looking for a service to stop.
+	if err := retainedError(r.name, tenant, residue); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// retainedError turns a residual scan's retained count into the store's refusal, or nil.
+//
+// It is a named function so the decision can be exercised without a database, and the
+// path through Erase is driven separately in the purge drill — where a trigger holds the
+// redaction off so the scan really does find a row still naming someone. An earlier
+// version of this comment claimed that condition could not be produced on demand; it can,
+// and a branch whose only test would have been a race is exactly the kind of thing that
+// claim protects.
+//
+// The sentence is deliberately not the residual one. Rows coming BACK means a writer is
+// still live and the next pass collects them. A retained row that still NAMES someone
+// means the redaction did not do what the deletion record is about to certify, and
+// telling an operator "something is still writing" sends them looking for a service to
+// stop.
+func retainedError(store, tenant string, res tenantpurge.Result) error {
+	kept := res.Retained()
+	if kept == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d retained row(s) in %s still name someone after %q was erased (%s) — "+
+		"the journal is kept as the evidence of the deletion, and it may not keep the identifiers "+
+		"the deletion was of", kept, store, tenant, describeRetained(res))
 }
 
 // LiftFence stamps this database's standing fence rows for a tenant as completed, in
@@ -165,6 +199,20 @@ func deferrals(res tenantpurge.Result) []string {
 		out = append(out, fmt.Sprintf("%s: %s", e.Describe(), e.Reason))
 	}
 	return out
+}
+
+// describeRetained renders the tables whose retained rows still carry an identifier. It
+// is separate from describe for the same reason the counts are: the two lists answer
+// different questions and a reader given one under the other's heading is misdirected.
+func describeRetained(res tenantpurge.Result) string {
+	parts := make([]string, 0, len(res.Redacted))
+	for _, t := range res.Redacted {
+		parts = append(parts, fmt.Sprintf("%s=%d", t.Describe(), t.Rows))
+	}
+	if len(parts) == 0 {
+		return "no table named them, which should be impossible"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // describe renders a residual scan's tables for an error message. A count alone tells an

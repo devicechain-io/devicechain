@@ -661,6 +661,92 @@ with reasons rather than assumed:
 - **operator-registered AI providers and their tier grants** — a tenant's *access* is the per-tenant
   grant row, which is swept.
 - **migration bookkeeping** — schema history, never tenant data.
+- **the audit journal** — retained, with its identifiers destroyed. See below.
+
+### The audit journal is retained, and redacted
+
+`backend/core/tenantpurge/exempt.go` (the registry entry) and `backend/core/tenantpurge/sweep.go`
+(the pass that performs it).
+
+The journal was being **swept**, and neither outcome had been chosen — `audit_events` carries
+`tenant_id` in all ten schemas, so the catalog classified it *direct* and the stronger behaviour just
+happened. Both readings are wrong on their own: sweeping it destroys the evidence that the deletion
+happened, and keeping it whole retains the tenant's people by name past the erasure that record
+certifies. So the row survives and the identifiers in it do not.
+
+**It is two columns, not one**, and a redaction covering one would read as the question having been
+settled:
+
+- `actor` is the acting JWT's username, and for every human token that IS the email — `IssueTenantAccess`,
+  `IssueOAuthAccess`, `IssueOAuthRefresh` and `IssueIdentity` all mint `username` and `email` from
+  the same value (`backend/core/auth/issuer.go`).
+- `entity_label` is documented as "a token, name, or email" and carries both by a different path.
+  `Identity.AuditLabel()` returns the email directly; `TokenReference.AuditLabel()` returns a
+  customer-chosen token and is promoted into some two dozen models
+  (`backend/core/rdb/model.go`) — a customer token is routinely a person's or a company's name.
+
+**The columns are written EMPTY, not hashed**, and that is not laziness. An email is a low-entropy,
+enumerable space, so `sha256(email)` is reversible by anyone holding a user list — redaction theatre.
+The alternative the design considered, an HMAC under a key destroyed with the tenant, **is not
+reachable**: `core/secrets` has exactly one key provider, holding a single instance-wide KEK
+delivered in a Kubernetes Secret, and that key is deliberately escrowed for disaster recovery. What a
+purge destroys is per-secret DEKs wrapped under a key that survives. Making "the key is gone" true
+would need a per-tenant key with its own lifecycle, which does not exist anywhere in the tree.
+
+**It needed a class of its own**, and the reason is a rule this package otherwise gets right.
+Exemptions are applied LAST, so a stale entry can never stop a tenant-bearing table being swept — but
+`audit_events` HAS a tenant column, so an exemption for it would be inert. A retention decision about
+a tenant-bearing table is exactly the case the last-wins ordering cannot express, so `ClassRedacted`
+is assigned **before** the column check, naming the columns it destroys.
+
+**The redaction runs in the sweep's own transaction**, so either the tenant's rows are gone and its
+identifiers are destroyed or nothing moved — a redaction that committed while the sweep rolled back
+would leave a journal that could no longer say who did what, over data still present.
+
+🔴 **And it is re-verified independently, because it is the one step that would otherwise grade
+itself.** The `UPDATE` reports a row count, and a row count is exactly what a `WHERE` clause
+selecting the wrong rows also produces. `Residue` asks a different question — how many retained rows
+still carry an identifier — and the relational store turns a non-zero answer into its own error with
+its own sentence, because "something is still writing" would send an operator looking for a service
+to stop.
+
+**What survives is the shape of the activity**: when, which table, which operation, how many rows,
+and (on the operator plane) which tenant. An auditor can still see that three deletes happened on
+`devices` at 14:02 during the purge. Nobody is named.
+
+🔴 **A LARGE CLASS OF ROW IS OUT OF REACH, and the first draft of this paragraph badly understated
+it.** It said "a failed sign-in against a tenant that does not exist". The truth is bigger and is
+worth stating exactly, because the redaction reads as complete without it.
+
+**Every identity-tier sign-in is recorded with no tenant at all.** The email/password step in
+`backend/services/user-management/identity/manager.go` records `login`, and both of its failure
+branches record `login_failed`, with the email as the actor and the tenant as the empty string — because at
+that point in the two-tier flow no tenant has been selected yet. Every human session starts there.
+So `"user-management".audit_events` holds every person's entire sign-in history keyed by their email,
+belonging to no tenant, and **no tenant's deletion can select it**: the purge's predicate is
+`tenant_id = ?`. Purging `acme` redacts the rows its members generated inside the tenant and leaves
+every row generated getting into it.
+
+That is a gap in the journal's own design rather than in the purge, and it predates the retention —
+but the retention is what makes it worth naming, because "we keep the journal and destroy the
+identifiers" is only true of the rows a tenant owns. Closing it means giving the tenant-less auth
+rows a retention of their own, or not recording the attempted address; both are decisions about
+security evidence, not about tenancy.
+
+🔴 **A second, narrower one: a former member signing in after the purge completes.** `SelectTenant`
+against a released token records `login_failed` WITH that tenant, and the token can by then belong to
+a successor — so the successor's own tenant-scoped audit read can show a third party's email. It is
+not reachable while the purge runs (the token is held), and it is not a row the purge left behind; it
+is a row written afterwards, under a name the platform has handed to someone else.
+
+🔴 **And `entity_pk` still points at a person who survives.** Editing a profile from inside a tenant
+writes an audit row stamped with that tenant, naming `iam_identities` and the identity's primary key
+— and identities are exempt from the sweep on purpose, because a person is instance-global. So a
+redacted row can still be joined back to a name by anyone who can read both. It is deliberately not
+redacted: the key is what makes the journal evidence of WHICH row changed, and destroying it would
+leave a record that something happened to something. The reach is an operator holding `audit:read`
+plus the admin plane, not a successor tenant, and the identity it resolves to is one the erasure was
+never going to remove.
 
 ## 11. Operating it
 
