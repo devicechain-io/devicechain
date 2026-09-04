@@ -50,7 +50,7 @@ func newWireTestService(t *testing.T) *admin.Service {
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&iam.TenantTier{}, &iam.Tenant{}))
-	return admin.NewService(iam.NewStore(&rdb.RdbManager{Database: db}), 300*time.Second, 12*time.Hour)
+	return admin.NewService(iam.NewStore(&rdb.RdbManager{Database: db}), 300*time.Second, 12*time.Hour, nil)
 }
 
 // distinctOverrides sets every field admin.GovernanceOverrides declares to a DISTINCT value on

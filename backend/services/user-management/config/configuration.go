@@ -103,6 +103,24 @@ type TenantPurgeConfiguration struct {
 	TokenHoldSeconds int
 }
 
+// DeadLettersConfiguration bounds the ADR-024 store.
+type DeadLettersConfiguration struct {
+	// RetentionDays is how long a dead letter is kept, measured from when the platform
+	// gave up on it.
+	//
+	// 🔑 IT IS DELIBERATELY LONGER THAN THE STREAM IT DRAINS. The dead-letter stream ages
+	// out in seven days, and the whole reason this store exists is that ADR-024 asks for
+	// a record that OUTLIVES the messages it describes — so a retention at or below the
+	// stream's would leave the table costing disk and buying nothing.
+	RetentionDays int
+
+	// SweepSeconds is how often the retention sweep runs. A NEGATIVE value disables it,
+	// which is a real operational lever (a maintenance window in which nothing should be
+	// deleting rows) and is safe: the table grows, which is visible, rather than
+	// something being lost, which is not.
+	SweepSeconds int
+}
+
 type UserManagementConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
 
@@ -116,6 +134,20 @@ type UserManagementConfiguration struct {
 
 	Auth        AuthConfiguration
 	TenantPurge TenantPurgeConfiguration
+	DeadLetters DeadLettersConfiguration
+}
+
+// DeadLetterRetention is how long a stored dead letter is kept.
+func (c *UserManagementConfiguration) DeadLetterRetention() time.Duration {
+	return time.Duration(c.DeadLetters.RetentionDays) * 24 * time.Hour
+}
+
+// DeadLetterSweepInterval is the retention sweep's period, or 0 when it is disabled.
+func (c *UserManagementConfiguration) DeadLetterSweepInterval() time.Duration {
+	if c.DeadLetters.SweepSeconds < 0 {
+		return 0
+	}
+	return time.Duration(c.DeadLetters.SweepSeconds) * time.Second
 }
 
 // TenantPurgeInterval is the coordinator's tick period, or 0 when the coordinator is
@@ -174,7 +206,36 @@ func (c *UserManagementConfiguration) ApplyDefaults() {
 	if c.TenantPurge.TokenHoldSeconds == 0 {
 		c.TenantPurge.TokenHoldSeconds = defaultTenantPurgeTokenHoldSeconds
 	}
+	if c.DeadLetters.RetentionDays == 0 {
+		c.DeadLetters.RetentionDays = defaultDeadLetterRetentionDays
+	}
+	if c.DeadLetters.SweepSeconds == 0 {
+		c.DeadLetters.SweepSeconds = defaultDeadLetterSweepSeconds
+	}
 }
+
+const (
+	// deadLetterStreamDays is the dead-letter stream's own age-out, mirrored from
+	// messaging.streamMaxAge — which is a per-manager constant with no per-stream
+	// override, so it cannot simply be read from the stream's declaration.
+	//
+	// 🔴 IF THAT CONSTANT MOVES, THIS ONE MUST TOO, and the floor check below is the only
+	// thing that would notice. It is stated as a number rather than imported because
+	// core/messaging is not importable from a service's config package without inverting
+	// the dependency for one integer.
+	deadLetterStreamDays = 7
+
+	// defaultDeadLetterRetentionDays keeps a month, which is four times the stream's own
+	// window. The number is chosen for the question these records answer: "what has been
+	// failing, and since when" is asked in a post-incident review, and a review that
+	// happens the week after an incident is an early one.
+	defaultDeadLetterRetentionDays = 30
+
+	// defaultDeadLetterSweepSeconds runs the retention sweep hourly. A dead letter is a
+	// rare row, so nothing is gained by pruning promptly and a pass over nothing is one
+	// indexed delete matching no rows.
+	defaultDeadLetterSweepSeconds = 3600
+)
 
 const (
 	// defaultTenantPurgeIntervalSeconds ticks the coordinator once a minute. A pass over
@@ -263,6 +324,16 @@ func (c *UserManagementConfiguration) Validate() error {
 		return fmt.Errorf("tenantPurge.tokenHoldSeconds must not be negative (got %d): it is what "+
 			"keeps a token reserved until no pre-deletion device session can still write under it",
 			c.TenantPurge.TokenHoldSeconds)
+	}
+	// 🔴 A RETENTION AT OR BELOW THE STREAM'S BUYS NOTHING. The stream ages out in seven
+	// days; the store exists to outlive it. Accepting a shorter retention would leave an
+	// operator with a table that costs disk, appears to be the durable record, and
+	// forgets sooner than the thing it was built to outlast — which is worse than not
+	// having it, because it looks like it works.
+	if c.DeadLetters.RetentionDays <= deadLetterStreamDays {
+		return fmt.Errorf("deadLetters.retentionDays must exceed %d (got %d): the dead-letter "+
+			"stream itself ages out at %d days, and the store exists to outlive it",
+			deadLetterStreamDays, c.DeadLetters.RetentionDays, deadLetterStreamDays)
 	}
 	if c.TenantPurge.SettleSeconds < 0 {
 		return fmt.Errorf("tenantPurge.settleSeconds must not be negative (got %d): the window is what "+

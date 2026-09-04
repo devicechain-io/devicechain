@@ -470,9 +470,14 @@ var All = []Stream{
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
+	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. Areas is
+	// the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
+	// NewWriter does — so a profile running the store but none of the four producers would
+	// otherwise have a stream the replication check believes should not be there.
 	{Suffix: DeadLetters,
-		Areas: []string{"event-processing", "notification-management", "command-delivery", "device-management"},
-		Tier:  Cold, Why: "ADR-024 dead-letter sink for the four consumers that gave up silently"},
+		Areas: []string{"event-processing", "notification-management", "command-delivery",
+			"device-management", "user-management"},
+		Tier: Cold, Why: "ADR-024 dead-letter sink: four consumers write it, user-management stores it"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

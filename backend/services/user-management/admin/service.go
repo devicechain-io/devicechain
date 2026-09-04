@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/deadletters"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
 )
@@ -39,12 +40,36 @@ type Service struct {
 	// not. The zero value is honest about not knowing: see TenantDeletionProgress.
 	settle    time.Duration
 	tokenHold time.Duration
+
+	// dead is the ADR-024 store. Nil is tolerated so a test can build a service without
+	// one; every reader answers with an empty page rather than an error, because "this
+	// deployment records nothing" and "nothing has failed" look the same to a caller and
+	// the honest one is the emptier answer.
+	dead *deadletters.Store
 }
 
 // NewService builds the admin Service over the iam store, carrying the purge coordinator's
 // two windows so deletion progress can be reported from the same values it decides on.
-func NewService(store *iam.Store, settle, tokenHold time.Duration) *Service {
-	return &Service{iam: store, settle: settle, tokenHold: tokenHold}
+func NewService(store *iam.Store, settle, tokenHold time.Duration,
+	dead *deadletters.Store) *Service {
+	return &Service{iam: store, settle: settle, tokenHold: tokenHold, dead: dead}
+}
+
+// DeadLetters returns a page of work the platform gave up on (ADR-024).
+func (s *Service) DeadLetters(ctx context.Context,
+	criteria deadletters.SearchCriteria) (*deadletters.SearchResults, error) {
+	if s.dead == nil {
+		return &deadletters.SearchResults{Results: []deadletters.DeadLetter{}}, nil
+	}
+	return s.dead.List(ctx, criteria)
+}
+
+// DeadLetter returns one record, or (nil, nil) when there is none.
+func (s *Service) DeadLetter(ctx context.Context, id uint) (*deadletters.DeadLetter, error) {
+	if s.dead == nil {
+		return nil, nil
+	}
+	return s.dead.ByID(ctx, id)
 }
 
 // ListIdentities returns the full identity directory (system roles + memberships

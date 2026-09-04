@@ -809,6 +809,25 @@ functionalAreas:
     #                             # lifetime (12h). Lowering it lets a deleted tenant's
     #                             # name be reused sooner and narrows the guarantee that
     #                             # its successor inherits nothing. Negative is rejected.
+    #
+    # Dead-letter store. Four consumers write to a shared stream when they accept a
+    # message and then give up on it — a detection whose actions could not be
+    # dispatched, an alarm that reached nobody, a device answer that could not be
+    # recorded, an alarm edge that could not be applied. This service drains that
+    # stream into a queryable table, readable on /admin/graphql.
+    #
+    # Nothing replays a dead letter. The record exists so a failure is visible and
+    # diagnosable; the consequences of the failure itself stand either way.
+    #   config:
+    #     deadLetters:
+    #       retentionDays: 30     # how long a record is kept, from when the platform
+    #                             # gave up. It MUST exceed 7 — the stream it drains
+    #                             # ages out at seven days, and the store exists to
+    #                             # outlive it, so a shorter retention is rejected at
+    #                             # load rather than silently buying nothing.
+    #       sweepSeconds: 3600    # how often the retention sweep runs. A negative value
+    #                             # disables it: the table then grows, which is visible,
+    #                             # rather than something being lost, which is not.
   device-management:
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)

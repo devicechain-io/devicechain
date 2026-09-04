@@ -15,8 +15,10 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/config"
+	"github.com/devicechain-io/dc-user-management/deadletters"
 	"github.com/devicechain-io/dc-user-management/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
@@ -42,6 +44,15 @@ var (
 	// PurgeCoordinator reclaims a deleted tenant's data and then releases its token
 	// (ADR-077). nil when disabled by a negative interval.
 	PurgeCoordinator *purge.Coordinator
+
+	// DeadLetterReader drains the platform's dead-letter stream.
+	DeadLetterReader messaging.MessageReader
+
+	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
+	// with the consumer that fills it and the sweep that bounds it.
+	DeadLetterStore    *deadletters.Store
+	DeadLetterConsumer *deadletters.Consumer
+	DeadLetterSweeper  *deadletters.Sweeper
 
 	// TsdbGuest is the purge's connection to the telemetry cluster, which
 	// event-management owns and this service only visits. Built alongside the
@@ -99,9 +110,22 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize nats manager (used for the refresh-token KV store).
+	// Create and initialize nats manager (the refresh-token KV store, and the ADR-024
+	// dead-letter reader).
+	//
+	// 🔴 THE READER IS BUILT IN THE CALLBACK, WHICH IS WHERE STREAM CREATION HAPPENS. A
+	// reader created later would ask a manager that has already decided what streams it
+	// needs, and a deployment missing the stream would discover it at the first dead
+	// letter rather than at startup — the one moment the record has to work.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		func(*messaging.NatsManager) error { return nil })
+		func(nmgr *messaging.NatsManager) error {
+			reader, err := nmgr.NewReader(streams.DeadLetters)
+			if err != nil {
+				return err
+			}
+			DeadLetterReader = reader
+			return nil
+		})
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
@@ -245,6 +269,26 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		log.Info().Msg("Tenant purge coordinator disabled by configuration; deleted tenants stay purging")
 	}
 
+	// The ADR-024 store, its consumer and its retention sweep. It lives here rather than
+	// in one of the four services that WRITE dead letters, because the read surface is the
+	// operator plane: a per-entry failure reason at full fidelity on a tenant-readable
+	// surface would hand back the status-class oracle the egress boundary closed.
+	DeadLetterStore = deadletters.NewStore(RdbManager)
+	DeadLetterConsumer = deadletters.NewConsumer(Microservice, DeadLetterReader, DeadLetterStore,
+		core.NewNoOpLifecycleCallbacks())
+	if err := DeadLetterConsumer.Initialize(ctx); err != nil {
+		return err
+	}
+	if sweep := Configuration.DeadLetterSweepInterval(); sweep > 0 {
+		DeadLetterSweeper = deadletters.NewSweeper(Microservice, DeadLetterStore,
+			Configuration.DeadLetterRetention(), sweep, core.NewNoOpLifecycleCallbacks())
+		if err := DeadLetterSweeper.Initialize(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Info().Msg("Dead-letter retention sweep disabled by configuration; the store grows unbounded")
+	}
+
 	return nil
 }
 
@@ -293,7 +337,7 @@ func buildBlobStore(ctx context.Context) (blob.Store, error) {
 // RdbManager via its own iam store wrapper.
 func registerAdminHandler() {
 	adminSvc := admin.NewService(iam.NewStore(RdbManager),
-		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold())
+		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	adminProviders := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextAdminKey: adminSvc,
 	}
@@ -416,6 +460,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Start(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return GraphQLManager.Start(ctx)
 }
 
@@ -428,6 +482,18 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// order: its pass holds an advisory lock on a pooled connection.
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	// Before the broker it reads from and the database it writes to, in the reverse of
+	// the start order.
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -444,6 +510,16 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Terminate(ctx); err != nil {
 			return err
 		}
 	}

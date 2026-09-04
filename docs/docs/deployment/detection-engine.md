@@ -91,6 +91,17 @@ and a *resolve* that was not dispatched leaves an alarm active that should have 
 Treat a dead letter as something to investigate, not something that will drain on its own.
 :::
 
+Read them with `dcctl dead-letters list`, which authenticates as an operator identity:
+
+```bash
+dcctl dead-letters list --server <host> --email <you> --password <secret>   --tenant acme --since 2026-09-04T00:00:00Z
+```
+
+They are also on the instance's admin GraphQL endpoint as `deadLetters`, gated on the same
+authority as the audit journal. Records are kept for 30 days by default — longer than the
+underlying message stream, which is the point of storing them — and the retention is
+configurable per deployment.
+
 The `ReactPoisonDropping` alert exists for exactly that case and should be treated as urgent.
 
 :::caution An action that fails takes its later siblings with it

@@ -104,6 +104,17 @@ haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no com
 vaciará por sí solo.
 :::
 
+Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
+
+```bash
+dcctl dead-letters list --server <host> --email <usted> --password <secreto>   --tenant acme --since 2026-09-04T00:00:00Z
+```
+
+También están en el endpoint GraphQL de administración de la instancia como `deadLetters`,
+protegido por la misma autoridad que el diario de auditoría. Los registros se conservan 30 días
+de forma predeterminada —más que el flujo de mensajes subyacente, que es la razón de
+almacenarlos— y la retención es configurable por despliegue.
+
 La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse como urgente.
 
 :::caution Una acción que falla se lleva por delante a las que van después
