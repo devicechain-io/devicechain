@@ -17,6 +17,12 @@ export type DashboardSearchCriteria = {
   pageSize: number;
 };
 
+export type DashboardUpdateRequest = {
+  definition?: string | null | undefined;
+  description?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type DashboardsQueryVariables = Exact<{
   criteria: DashboardSearchCriteria;
 }>;
@@ -40,7 +46,7 @@ export type CreateDashboardMutation = { createDashboard: { token: string } };
 
 export type UpdateDashboardMutationVariables = Exact<{
   token: string;
-  request: DashboardCreateRequest;
+  request: DashboardUpdateRequest;
   expectedUpdatedAt?: string | null | undefined;
 }>;
 
@@ -135,7 +141,7 @@ export const CreateDashboardDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDashboardMutation, CreateDashboardMutationVariables>;
 export const UpdateDashboardDocument = new TypedDocumentString(`
-    mutation UpdateDashboard($token: String!, $request: DashboardCreateRequest!, $expectedUpdatedAt: String) {
+    mutation UpdateDashboard($token: String!, $request: DashboardUpdateRequest!, $expectedUpdatedAt: String) {
   updateDashboard(
     token: $token
     request: $request

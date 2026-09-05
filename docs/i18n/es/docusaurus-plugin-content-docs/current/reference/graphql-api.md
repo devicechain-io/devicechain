@@ -232,22 +232,25 @@ query {
 
 Dos consecuencias del reemplazo completo que conviene prever. Como la escritura cubre todos los
 campos, **dos personas editando una entidad se pisan en todos ellos**, no solo donde coinciden —
-salvo en `updateDashboard`, `updateConnector` y `updateAiProvider`, que aceptan un
-`expectedUpdatedAt` opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido
-desde que la leíste. Y como la entrada de actualización es la de creación, lleva un **token**, que
-es donde más se diferencian ambos contratos.
+salvo en `updateConnector` y `updateAiProvider`, que aceptan un `expectedUpdatedAt` opcional y
+rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
+(`updateDashboard` acepta la misma precondición y es una actualización parcial, así que no está
+entre ellas.) Y como la entrada de actualización es la de creación, lleva un **token**, que es
+donde más se diferencian ambos contratos.
 
 #### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
 Toda `update*` declara `token: String!`, y **ese argumento es lo que decide qué registro se
 escribe.** Lo que hace el token de la *petición* — donde todavía existe uno — depende de la
-mutación, y hay tres respuestas, no una. Las diferencias son reales, así que se enumeran en lugar de
-disimularse.
+mutación, y la diferencia es real, así que se enumera en lugar de disimularse.
+
+Antes había una tercera respuesta: un token de la petición que debía **coincidir** con el argumento,
+rechazado cuando no coincidía y leído como «sin especificar» cuando venía vacío. Sus dos últimas
+mutaciones se han convertido, así que la fila que la nombraba desaparece en lugar de quedarse vacía.
 
 | El token de la petición | Qué mutaciones | Un token que **no coincide** | Un token **vacío** |
 | --- | --- | --- | --- |
 | **No existe** | toda [actualización parcial](#which-mutations-are-partial-updates) | *no representable* — la entrada no tiene campo `token`, así que el esquema lo rechaza | — |
-| **Debe coincidir** | `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
 | **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
 
 La fila del renombrado no es un resto del pasado. Cada una de ellas vincula lo que depende del
@@ -300,8 +303,10 @@ forma de direccionarla.
 
 Si tienes un cliente que dependía de que la petición nombrase el registro, ahora recibe un error en
 lugar de escribir la fila equivocada. Si tienes uno que envía `token: ""` en una actualización, ahora
-recibe un error en las mutaciones de renombrado y se ignora en las demás — donde antes destruía la
-identidad del registro.
+recibe un error en ambos casos — rechazado por las mutaciones de renombrado, y rechazado por el
+esquema en una actualización parcial, cuya entrada no tiene campo `token` donde enviarlo — donde
+antes destruía la identidad del registro. Antes se *ignoraba* en un tercer grupo de mutaciones, que
+es lo que la regla «debe coincidir» hacía con un token vacío; todas se han convertido.
 :::
 
 ### Dónde no rige el comportamiento por defecto {#where-the-default-does-not-hold}
@@ -315,6 +320,7 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 | `secret` en `updateNotificationChannel` | **Se conserva**, y `null` lo *limpia*, como cualquier otro campo de una actualización parcial. Una cadena vacía también lo limpia, así que un cliente que ya lo escriba así sigue funcionando. Es el único secreto de solo escritura sin la inversión de abajo |
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
+| `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no puede *limpiarse*: un `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
 | `firstName` / `lastName` en `updateProfile` | **Se conservan.** La única `update*` que toma argumentos sueltos en lugar de un `request`; una cadena vacía sí limpia |
 | `credentialType` en `updateProvisioningProfile` | **No está en la entrada de actualización.** Hoy el aprovisionamiento solo puede emitir un tipo de credencial, así que el campo únicamente repetiría lo almacenado. Antes cualquier actualización que lo omitiera lo *restablecía* a `ACCESS_TOKEN` |
 | `activeVersion` en un perfil de dispositivo o un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve con publicar y revertir |
@@ -366,8 +372,19 @@ antes de enviar una:
   petición aceptable más allá de una operación nula. Sigue en la entrada de creación, donde el
   rechazo se explica solo.
 
-Las áreas restantes no se han convertido: dashboard-management, outbound-connectors, ai-inference y
-user-management siguen siendo reemplazos completos.
+En dashboard-management, **`updateDashboard`** toma un `DashboardUpdateRequest` y no lleva token
+alguno. Su única particularidad es `definition`: el campo es anulable para poder *omitirse* — así se
+renombra un panel sin reenviar su documento entero —, pero un `null` explícito sobre él se
+**rechaza**, porque un panel sin definición no es nada. Conserva su precondición opcional
+`expectedUpdatedAt`, y una actualización que no nombre ningún campo no escribe nada (ni siquiera
+`updatedAt`), aunque una precondición obsoleta sobre ella sigue siendo un conflicto.
+
+**Todo lo que no se nombre arriba sigue siendo un reemplazo completo, y la forma de saberlo es la
+firma de la propia mutación, no una lista aquí.** Esta página llevaba una segunda lista con las
+áreas que aún no se habían convertido, y se equivocaba cada vez que aterrizaba una: decía tres y
+nombraba cuatro. La firma no puede desviarse así del código: `request: FooCreateRequest` es un
+reemplazo completo y `request: FooUpdateRequest` es una actualización parcial. La advertencia justo
+debajo es donde esa lectura requiere cuidado.
 
 :::caution[La firma es un NO fiable, y solo un SÍ parcialmente fiable]
 `request: FooCreateRequest` siempre significa reemplazo completo, y esa dirección nunca miente: una
