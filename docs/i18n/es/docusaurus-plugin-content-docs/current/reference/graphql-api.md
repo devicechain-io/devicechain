@@ -183,19 +183,14 @@ proxy de desarrollo de la consola).
 
 ### Cuánto del registro escribe una actualización {#an-update-replaces-the-whole-record}
 
-**Hay dos contratos de actualización en servicio a la vez, y cuál rige para una mutación se ve en su
-firma.** Una mutación que toma un `*UpdateRequest` propio es una **actualización parcial**; una que
-toma la entrada de su hermana `create*` es un **reemplazo completo**. Esos son los dos únicos
-contratos — pero encima hay dos salvedades y ambas muerden en la práctica. Unos pocos campos
-concretos se comportan de forma distinta a la mutación en la que están — un campo obligatorio de una
-actualización parcial que no se puede limpiar, un secreto de un reemplazo completo que se conserva
-en lugar de borrarse, y uno que se comporta exactamente al revés; están enumerados
-[más abajo](#where-the-default-does-not-hold). Y el **token** dentro de una petición de reemplazo
-completo tiene reglas propias, que difieren según la mutación — consulta
-[el argumento token](#the-token-argument-names-the-record). Lee ambas tablas antes de automatizar
-nada.
+**Toda mutación `update*` es una actualización parcial, y solo hay un contrato.** Cada una toma un
+`*UpdateRequest` propio — nunca la entrada de su hermana `create*` — y cada una distingue tres
+estados en lugar de dos. Los **campos** concretos sí pueden desviarse: una referencia obligatoria
+que se niega a limpiarse, un secreto de solo escritura, un campo que no está en la entrada de
+actualización en absoluto. Están enumerados [más abajo](#where-the-default-does-not-hold), y esa
+tabla es la lista completa. Léela antes de automatizar nada.
 
-Una **actualización parcial** distingue tres estados en lugar de dos:
+Los tres estados:
 
 | Qué envías para un campo | Qué le ocurre al valor almacenado |
 | --- | --- |
@@ -216,31 +211,16 @@ mutation {
 }
 ```
 
-Un **reemplazo completo** reconstruye el registro almacenado a partir de la petición: cada campo que
-envías se escribe, y **cada campo que omites se borra**. La mutación devuelve la entidad y tiene
-éxito, así que un campo que no querías limpiar desaparece sin nada que lo indique. El remedio es
-leer la entidad primero, cambiar lo que quieras cambiar y reenviarla entera:
+**Envía solo lo que quieras cambiar.** Leer el registro primero y reenviarlo entero es el hábito que
+enseña una API de reemplazo completo, y aquí es el equivocado: da más trabajo, amplía la ventana en
+la que pisas una edición concurrente y, en un campo `secret` de solo escritura, es directamente
+destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-hold).
 
-```graphql
-query {
-  metricDefinitionsByToken(tokens: ["inlet-temp"]) {
-    token name description unit minValue maxValue metadata
-    deviceProfile { token }
-  }
-}
-```
-
-Dos consecuencias del reemplazo completo que conviene prever. Como la escritura cubre todos los
-campos, **dos personas editando una entidad se pisan en todos ellos**, no solo donde coinciden. Y
-como la entrada de actualización es la de creación, lleva un **token**, que es donde más se
-diferencian ambos contratos.
-
-Tres mutaciones se protegen de lo primero, y las tres son actualizaciones parciales y no reemplazos
-completos: `updateDashboard`, `updateConnector` y `updateAiProvider` aceptan un `expectedUpdatedAt`
-opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
-Envía el `updatedAt` que leíste por última vez; omítelo para que gane la última escritura. Una
-actualización parcial reduce el solape que pueden tener dos escritores, pero no lo elimina: dos
-personas editando el mismo campo siguen necesitándolo.
+La concurrencia es lo único que una actualización parcial reduce sin eliminar: dos escritores que
+tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
+`updateConnector` y `updateAiProvider` aceptan un `expectedUpdatedAt` opcional y rechazan la
+escritura si la marca de tiempo almacenada se ha movido desde que la leíste. Envía el `updatedAt`
+que leíste por última vez; omítelo para que gane la última escritura.
 
 #### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
@@ -330,8 +310,8 @@ es lo que la regla «debe coincidir» hacía con un token vacío; todas se han c
 
 ### Dónde no rige el comportamiento por defecto {#where-the-default-does-not-hold}
 
-Todas las excepciones de la API que sirve esta versión, además de la división parcial/reemplazo
-completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
+Todas las excepciones a nivel de campo que sirve esta versión. Lo que no se nombre aquí sigue los
+tres estados de arriba: ausente lo deja tal cual, `null` lo limpia, un valor lo establece.
 
 | Campo | Qué ocurre al omitirlo |
 | --- | --- |
@@ -350,22 +330,23 @@ En todos los campos `secret` de solo escritura, **`""` borra la credencial almac
 leer un secreto de vuelta, así que no hay nada que reenviar; la respuesta de la API es que omitirlo
 lo conserva.
 
-Esto importa porque el consejo de arriba para el reemplazo completo — leer la entidad y reenviarla
-entera — te empuja a rellenar todos los campos. Hacerlo con un secreto que no querías tocar,
-enviando `secret: ""`, borra la credencial almacenada y la mutación devuelve éxito. Un conector sin
-credencial empieza a fallar la autenticación en cada envío saliente. **Deja el campo fuera.**
+Esto importa porque «leer el registro, cambiar una cosa y reenviarlo todo» es el hábito que enseña
+una API de reemplazo completo, y los clientes escritos contra una lo siguen haciendo. Rellenar todos
+los campos significa enviar `secret: ""` para una credencial que nunca quisiste tocar — lo que la
+borra, y la mutación devuelve éxito. Un conector sin credencial empieza a fallar la autenticación en
+cada envío saliente. **Deja el campo fuera.**
 
-Los tres viven ya en actualizaciones parciales, así que `null` también borra la credencial. Eso no
-es una excepción sino el significado habitual de un null en la plataforma: un null limpia el campo
-que nombra. La **inversión** que estos campos llevaban — donde null conservaba y solo `""` borraba —
-ha desaparecido.
+`null` también borra la credencial. Eso no es una excepción sino el significado habitual de un null
+en la plataforma: un null limpia el campo que nombra. La **inversión** que estos campos llevaban —
+donde null conservaba y solo `""` borraba — ha desaparecido.
 :::
 
 ### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
 
-Las actualizaciones parciales van llegando por áreas en lugar de todas a la vez, y la intención es
-convertir el resto antes de la 1.0. En device-management, **todas las `update*`** toman ya un
-`*UpdateRequest` propio:
+**Todas.** La conversión llegó por áreas y ya está completa, así que esta sección deja de ser un
+listado de qué mutaciones son seguras: es el registro de lo que cambió en cada área, conservado
+porque un cliente escrito contra el comportamiento antiguo necesita saberlo. En device-management,
+**todas las `update*`** toman un `*UpdateRequest` propio:
 
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
@@ -412,24 +393,26 @@ valores que el registro va a tener — así que nombrar uno del par vuelve a com
 almacenado, y un cambio que dejaría el registro inutilizable se rechaza al escribir y no en el
 primer uso.
 
-**Todo lo que no se nombre arriba sigue siendo un reemplazo completo, y la forma de saberlo es la
-firma de la propia mutación, no una lista aquí.** Esta página llevaba una segunda lista con las
-áreas que aún no se habían convertido, y se equivocaba cada vez que aterrizaba una: decía tres y
-nombraba cuatro. La firma no puede desviarse así del código: `request: FooCreateRequest` es un
-reemplazo completo y `request: FooUpdateRequest` es una actualización parcial. La advertencia justo
-debajo es donde esa lectura requiere cuidado.
+**Esa es toda la superficie de actualización.** Ninguna mutación `update*` toma en ningún sitio la
+entrada de su hermana `create*`, así que no queda ninguna que el lector deba contrastar con una
+lista — y esta página ya no lleva ninguna. Versiones anteriores sí, dos veces: primero un listado de
+las áreas sin convertir (equivocado cada vez que aterrizaba una) y después una regla que decía que
+la firma era la autoridad porque coexistían dos contratos. Ambas se escribieron para no desviarse y
+ambas se desviaron, del mismo modo: su premisa caducó. Lo que las sustituye son los
+[tres estados](#an-update-replaces-the-whole-record) y las
+[excepciones a nivel de campo](#where-the-default-does-not-hold), que son una afirmación sobre toda
+la API en lugar de una partición de ella.
 
-:::caution[La firma es un NO fiable, y solo un SÍ parcialmente fiable]
-`request: FooCreateRequest` siempre significa reemplazo completo, y esa dirección nunca miente: una
-entrada de creación compartida no puede expresar la diferencia entre omitido y limpiado, sea cual
-sea la intención.
+:::caution[Consulta el esquema para saber qué declara cada entrada]
+Un solo contrato no significa que toda entrada acepte todo campo. Lo que una actualización *puede*
+expresar es lo que declara su `*UpdateRequest`, y algunos campos están ausentes a propósito —
+`deviceTypeToken` en `updateNotificationPolicy`, `memberType` en `updateEntityGroup`,
+`credentialType` en `updateProvisioningProfile` — porque ninguna petición para ellos se aceptaría.
+Otros aceptan un valor pero rechazan un `null`.
 
-La otra dirección no es prueba por sí sola. Un `*UpdateRequest` propio es lo que una actualización
-parcial necesita, no lo que la convierte en una: una entrada puede tener su propio tipo y aun así
-escribir todos los campos que declara con lo que le hayas enviado. Cuatro mutaciones del plano de
-administración de user-management eran exactamente eso hasta esta versión — entradas aparte, para que
-la petición pudiera omitir el token, con campos de reemplazo completo dentro —, y por eso el
-[esquema que descargaste](#descargar-los-esquemas) es la autoridad y no la firma.
+El [esquema que descargaste](#descargar-los-esquemas) es la autoridad para lo primero; la
+[tabla de excepciones](#where-the-default-does-not-hold) lo es para lo segundo. Ninguna de las dos
+es una pregunta sobre qué contrato rige la mutación, porque solo hay uno.
 :::
 
 :::note[Esto cambió en user-management]

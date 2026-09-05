@@ -63,15 +63,41 @@ The tenant, tier, and AI-provider detail pages share one shape. Copy it for the 
   [`multi-select.tsx`](src/components/ui/multi-select.tsx). There is no shadcn `select`
   primitive in this repo — don't add one.
 
-- **Full-replace update APIs → one state, one submit.** Several backend updates
-  (`updateTenant`, `updateTenantTier`, `updateAiProvider`) are **full replacements**: every
-  field is written unconditionally, so a `null`/omitted field clears the stored value. A
-  form split across tabs must therefore keep **one shared state object and one `save()`**,
-  with the Save button rendered on each editing tab — all of them persist the whole entity.
-  A per-tab split-submit would let one tab silently blank a field another tab owns. This is
-  why the tenant/tier/provider detail tabs are views over a single editor, not independent
-  forms. See [`TenantForm.tsx`](src/routes/admin/tenants/TenantForm.tsx) and
-  [`AiProviderDetailPage.tsx`](src/routes/admin/ai-providers/AiProviderDetailPage.tsx).
+- **A tab-split form keeps one state and one `save()` until its own reason to is gone —
+  and the reasons are not interchangeable.** Every backend update is now a **partial
+  update**: an omitted field is left alone, an explicit `null` clears it, a value sets it.
+  The tenant, tier and provider detail tabs are still views over a single editor with the
+  Save button on each editing tab, but *why* has changed per page, and the difference is
+  the thing to preserve.
+
+  🔴 **This bullet used to say those three updates were full replacements**, so any per-tab
+  submit would silently blank a field another tab owned. That hazard is gone — no update on
+  the platform writes a field the caller did not name. What replaced it is weaker and page-
+  specific, and treating the two alike is how a convention outlives its reason:
+
+  - **Silent data loss** — a value disappears, the mutation returns success, nobody is told.
+    This is what the old rule was for, and nothing produces it any more.
+  - **A visible refusal** — the server rejects the request and the operator sees an error.
+    Worth designing around, but it is a usability cost, not a correctness one, and it must
+    never be described in the language of the first.
+
+  So, per page:
+
+  - [`AiProviderDetailPage.tsx`](src/routes/admin/ai-providers/AiProviderDetailPage.tsx) is
+    undivided for a **refusal** reason. `kind` (basic tab) and `endpoint` (connection tab)
+    are validated by the server **as a pair**: a kind defined by its address
+    (`openai-compatible`) has no built-in base URL, so a basic-tab-only submit switching to
+    it on a provider with no stored endpoint is refused. It may be split once **both** hold
+    — `kind` and `endpoint` sit on one tab, **and** each tab re-baselines its own
+    `expectedUpdatedAt` from the response it gets back, since that precondition is per-save
+    and two independent submits would otherwise conflict.
+  - [`TenantForm.tsx`](src/routes/admin/tenants/TenantForm.tsx) and
+    [`TierForm.tsx`](src/routes/admin/tiers/TierForm.tsx) no longer need a shared submit for
+    correctness, but are **not safe to split as written**: they spell a blank field as an
+    explicit `null` (`name.trim() || null`), which under the three-state semantic still
+    CLEARS. Splitting them means first moving the payload from explicit-null to **omission**
+    for every key the submitting tab does not own — a deliberate piece of work, not a
+    consequence of the conversion.
 
 - **Write-only secrets (ADR-059) are never displayed.** The read side exposes only
   `hasSecret`. Show "configured" with Replace / Clear affordances; the input is only ever

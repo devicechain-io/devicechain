@@ -21,17 +21,18 @@ import (
 // # 🔴 THE DISAGREEMENT IS NOW UNREPRESENTABLE, AND THE TWO POLICY TESTS ARE GONE
 //
 // Both inputs are dedicated *UpdateRequests carrying no token at all. The policy's
-// reconcile rule (dcgraphql.ErrPayloadTokenDisagrees) therefore has nothing left to
-// govern in this service, and the two tests that drove it — a disagreeing payload token
-// refused, an empty one read as "unspecified" — would now be asserting the behaviour of a
-// field that does not exist. Deleting them rather than rewriting them against the new
-// shape is deliberate: there is no request they could send.
+// reconcile rule therefore had nothing left to govern in this service, and the two tests
+// that drove it — a disagreeing payload token refused, an empty one read as "unspecified"
+// — would now be asserting the behaviour of a field that does not exist. Deleting them
+// rather than rewriting them against the new shape is deliberate: there is no request they
+// could send. updateDashboard was the rule's only other caller, so
+// dcgraphql.ErrPayloadTokenDisagrees was deleted outright once it too was converted.
 //
 // What replaces the claim structurally is the guard in
 // partial_update_guard_test.go, which asks the request TYPE whether it carries a Token
-// field, so a token reintroduced into either input fails on the day it is added. The rule
-// itself is still exercised exhaustively in core (graphql.TestErrPayloadTokenDisagrees,
-// TestErrRenameTokenUnusable).
+// field, so a token reintroduced into either input fails on the day it is added. What is
+// still exercised in core is the RENAME floor alone (graphql.TestErrRenameTokenUnusable),
+// which RenameNotificationChannel below is its one caller for.
 //
 // # What stays here is the CHANNEL rename, which survived rather than being deleted
 //
@@ -40,9 +41,20 @@ import (
 // String!` admits "", and the blank used to be written straight onto the row, leaving a
 // live channel addressable by nothing and returning success.
 
-// A blank new token is refused. `newToken: String!` admits "", and the token GRAMMAR does
-// not catch a whitespace-only one — that is the hole the original defect went through, so
-// whitespace is driven alongside the empty string rather than assumed to be covered.
+// A blank new token is refused, for BOTH spellings of blank, and the two reach the write
+// through opposite holes — which is why both are driven rather than one standing in for
+// the other.
+//
+// 🔴 THE STATEMENT THAT USED TO BE HERE WAS BACKWARDS. It said the token grammar does not
+// catch a whitespace-only token. It does: on an update, core/rdb's row callback validates
+// any NON-ZERO token, and core.ValidateToken refuses "   " on the grammar. What it does
+// not catch is the EMPTY one — "" is the zero value, so the callback reads it as "an
+// update not touching the token" and lets it through, which is exactly the hole the
+// original defect went through and exactly why `newToken: String!` admitting "" was
+// enough to blank a live channel.
+//
+// So the API-level refusal is load-bearing for "" and belt-and-braces for "   ", and the
+// case that matters is the one the grammar cannot see.
 func TestRenameChannel_ABlankNewTokenIsRefused(t *testing.T) {
 	for _, blank := range []string{"", "   ", "\t"} {
 		t.Run("blank="+blank, func(t *testing.T) {

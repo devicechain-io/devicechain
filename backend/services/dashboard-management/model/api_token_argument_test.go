@@ -21,8 +21,9 @@ import (
 // argument saying which dashboard, once inside the payload. The payload one used to be
 // written onto the row, so an empty token — legal, since `token: String!` admits "" —
 // blanked the dashboard's token and left it addressable by nothing, successfully. That
-// was fixed by RECONCILING the two (dcgraphql.ErrPayloadTokenDisagrees): the argument
-// named the record and a disagreeing payload was refused.
+// was fixed by RECONCILING the two: the argument named the record and a disagreeing
+// payload was refused. updateDashboard was that rule's last caller, so the rule itself
+// was deleted from core once this conversion landed.
 //
 // The conversion to DashboardUpdateRequest removes the field instead. There is no
 // second token to disagree, so a request naming another dashboard is UNREPRESENTABLE

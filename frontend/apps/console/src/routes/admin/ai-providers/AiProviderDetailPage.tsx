@@ -51,15 +51,14 @@ import {
   type SecretState,
 } from './AiProviderForm';
 
-// 🔴 WHY THIS PAGE IS STILL ONE STATE AND ONE save(), AND WHY THE REASON IN
-// CONVENTIONS.md IS NO LONGER IT.
+// 🔴 WHY THIS PAGE IS STILL ONE STATE AND ONE save(), AND WHY IT IS NOT THE OLD REASON.
 //
-// The convention says a tab-split form must share one state object and one save() because
-// several backend updates are full replacements, so a per-tab submit would let one tab
-// silently blank a field another tab owns. For `updateAiProvider` that reason is GONE: it
-// is a partial update now, so a submit naming only the basic tab's fields leaves the
-// connection tab's alone. The convention's paragraph still stands for the tenant/tier
-// pages it also names, which is why it has not been rewritten here.
+// The convention used to say a tab-split form must share one state object and one save()
+// because several backend updates were full replacements, so a per-tab submit would let one
+// tab silently blank a field another tab owns. For `updateAiProvider` that reason is GONE:
+// it is a partial update now, so a submit naming only the basic tab's fields leaves the
+// connection tab's alone. CONVENTIONS.md has since been rewritten around what is left, and
+// this comment is where the provider half of it is stated in full.
 //
 // What keeps THIS page undivided is a different and much weaker constraint, and the
 // difference matters: it produces a VISIBLE ERROR rather than silent data loss.
