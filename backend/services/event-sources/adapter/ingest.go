@@ -398,7 +398,23 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		// This sample's OWN instant, which is the whole reason a batch is emitted as a
 		// batch: a store-and-forward upload spanning a minute of history must be stored
 		// as a minute of history, not flattened onto the envelope's single time.
-		occurred := time.UnixMilli(s.Time).UTC()
+		//
+		// 🔴 THE GUARD BELOW IS PER SAMPLE, BECAUSE THE ENVELOPE'S IS NOT ENOUGH. The
+		// envelope falls back to now only when NO sample carried a positive time, and
+		// `latest` cannot be raised by a zero or negative one — so a batch where every
+		// time was negative produced an envelope stamped "now" over entries every one of
+		// which was dated before 1970, and a MIXED batch produced pre-1970 entries under a
+		// perfectly ordinary envelope, which nothing anywhere would have looked at twice.
+		//
+		// The substitution is the receipt clock, matching the envelope's own fallback and
+		// the LwM2M decoder's discipline for a device-relative time. It deliberately does
+		// NOT feed `latest`: the envelope time and the dedup id are both derived from the
+		// RAW times, so a retry of the identical batch must still hash to the same id.
+		ms := s.Time
+		if ms <= 0 {
+			ms = e.now().UnixMilli()
+		}
+		occurred := time.UnixMilli(ms).UTC()
 		entries = append(entries, esmodel.UnresolvedMeasurementsEntry{
 			// Format 'f', not 'g': 'g' switches to exponent notation for large
 			// magnitudes (1e6 → "1e+06"), which the resolver's Int-declared metric
@@ -509,7 +525,29 @@ type stateChange struct {
 }
 
 func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceToken string, sc stateChange) error {
-	occurred := sc.occurredAt.UTC()
+	// 🔴 NEVER EMIT THE ZERO INSTANT, AND FOR A DEMOTION THAT IS NOT A TIDINESS RULE. The
+	// resolver refuses a demotion carrying no occurred time outright ("a demotion is applied
+	// only when it is newer than the row it releases"), so an unstamped one is dead-lettered
+	// every time — and the row it was releasing stays frozen, which is the exact failure the
+	// demotion existed to repair. Every producer stamps a clock today; this makes the
+	// invariant belong to the emitter rather than to its callers, which is the only place it
+	// can hold for a caller added later.
+	//
+	// It substitutes rather than returning an error deliberately: a caller counts a failure
+	// and retries, and a retry of the same unstamped event fails identically forever. The
+	// receipt clock is also the RIGHT answer — a demotion means "as of now, this source no
+	// longer knows" — so the substitution repairs the event rather than masking it, and the
+	// warning is what makes the producer defect visible.
+	occurredAt := sc.occurredAt
+	if occurredAt.IsZero() {
+		occurredAt = e.now()
+		log.Warn().Str("tenant", tenant).Str("source", source).Str("device", deviceToken).
+			Str("state", string(sc.state)).
+			Msg("A presence state change was produced with no occurred time; stamping the receipt clock. " +
+				"The resolver refuses an unstamped demotion outright, so this would otherwise have been " +
+				"dead-lettered and left the device's row asserted.")
+	}
+	occurred := occurredAt.UTC()
 	occStr := occurred.Format(time.RFC3339Nano)
 	uev := &esmodel.UnresolvedEvent{
 		Source:                 source,

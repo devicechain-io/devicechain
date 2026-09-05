@@ -186,22 +186,43 @@ There are two ways it happens.
 
 #### A source releases its own devices when it is switched off
 
-When broker-asserted MQTT presence declines to start because it was **deliberately disabled** or
-because the **NATS system-account credential is missing**, `event-sources` walks the devices it still
-has asserted and releases them.
+When broker-asserted MQTT presence declines to start because it was **deliberately disabled**,
+because the **NATS system-account credential is missing**, or because **the broker cannot be
+reached**, `event-sources` walks the devices it still has asserted and releases them.
 
-Those are two of the six reasons the tap can fail to start, and the line is deliberate: both are
-configuration, so every replica of the instance reads the same values and reaches the same
-conclusion — the release is the instance speaking rather than one replica guessing. A failed dial or
-a failed subscription is that replica's own bad luck, its peers may be reading advisories perfectly
-well, and releasing a fleet on that evidence would undo something that was never broken. All six set
-`presence_tap_off{reason}` regardless, which is how you tell which one you have.
+Those are three of the six reasons the tap can fail to start, and the line is deliberate. The first
+two are configuration, so every replica of the instance reads the same values and reaches the same
+conclusion — the release is the instance speaking rather than one replica guessing.
+
+The third is evidence of a different kind, and it is worth stating what it actually means. The tap
+gives its connection thirty seconds to reach the broker before reporting it unreachable, so this
+reason is half a minute with no system-account connection rather than one failed attempt: a broker
+that is down, or a credential it refuses. The MQTT gateway lives in that same broker, so while it is
+unreachable no device is connected through it either — the release is not a guess about the fleet,
+it is the only reading consistent with the broker being gone.
+
+It is also the only one of the three whose truth can change while the pod is running, so it is the
+only one that keeps asking. **Every release pass re-dials the system account first, the first pass
+included. If the broker answers, nothing is released — the service exits and the pod restarts**, and
+the replacement dials the broker normally and runs its tap. A returning broker therefore shows up as
+a pod restart, not as a fleet of released devices. Without that, the release would simply continue:
+the pass walks whatever is asserted *now* on the reconcile interval, so with peers still asserting,
+the two would take turns on every row indefinitely, and in the gap between them the inactivity sweep
+would mark connected-but-quiet devices offline.
+
+What does **not** release is a failed subscription on a connection that did reach the broker — that
+one really is this replica's own bad luck, its peers may be reading advisories perfectly well — and
+the two reasons that mean this instance has no tap to run at all: no source pointed at the platform
+broker, and no service-to-service configuration. All six set `presence_tap_off{reason}` regardless,
+which is how you tell which one you have.
 
 Three properties of the automatic release are worth knowing before relying on it:
 
-- **A missing credential waits two minutes first.** A bring-up mints that credential in the same run
-  that starts the services, so an absent value can simply be a race with the run that is creating it.
-  A written `enabled: false` is unambiguous, and acts immediately.
+- **A missing credential and an unreachable broker wait two minutes first.** A bring-up mints that
+  credential and rolls the broker in the same run that starts the services, so either can simply be a
+  race with the run rather than a standing condition. A written `enabled: false` is unambiguous, and
+  acts immediately. For the broker the wait is also a **re-check** — see above; for the credential it
+  cannot be, because configuration is read once at startup and a change rolls the pod.
 - **It needs a gateway source and service-to-service configuration of its own** — something to emit
   under, and a way to enumerate tenants and read the projection. Without them it does not run at all.
   It logs that it did not, and points at the manual door, which is then the only one.
@@ -521,6 +542,7 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `observe_establish_refused_total` | An Observe the device refused or that otherwise failed. **The 1.0-only client symptom** — such a client answers the SenML Observe with `4.06` and never notifies. |
 | `notify_unknown_content_format_total` | Telemetry arriving in a format that is not decoded — a device that *does* notify, undecodably. Zero for a 1.0-only client. |
 | `notify_decode_failures_total` / `notify_samples_truncated_total` | Malformed or oversized payloads. |
+| `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Readings a Notify carried that produced no measurement. **Non-numeric is normal** — a boolean or string IPSO reading is a device working correctly, and this counter is what tells that apart from a device that has gone quiet, which otherwise looks identical from here. The other two are firmware faults: a value that resolved to infinity or NaN, and a reading with no resource path. |
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |

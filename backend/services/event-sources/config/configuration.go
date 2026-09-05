@@ -90,17 +90,17 @@ type EventDecoder struct {
 }
 
 // Source that reads events from a protocol and decodes them.
+//
+// It carried a `Debug` flag that nothing ever read — the transports log at debug level
+// through the process-wide zerolog level, which is where a per-source flag would have had
+// to be consulted and never was. It is gone rather than wired up: a per-source log level
+// is a real feature and this was not it, and a field that accepts a value and ignores it
+// is worse than one that does not exist.
 type EventSource struct {
 	Id            string
 	Type          string
 	Configuration map[string]string
 	Decoder       EventDecoder
-	Debug         bool
-}
-
-type KafkaEventBatching struct {
-	MaxBatchSize   int
-	BatchTimeoutMs int
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling. Every
@@ -206,9 +206,8 @@ func secondsOr(v, fallback int) time.Duration {
 }
 
 type EventSourcesConfiguration struct {
-	EventSources         []EventSource
-	InboundEventBatching KafkaEventBatching
-	IngestRateLimit      IngestRateLimit
+	EventSources    []EventSource
+	IngestRateLimit IngestRateLimit
 	// MaxReadingsPerMessage caps the readings one inbound message may carry on the JSON
 	// transports. Like the rate ceiling it is fail-safe: a non-positive value falls back
 	// to the platform default, never to unlimited.
@@ -259,7 +258,6 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 					Type:          "json",
 					Configuration: map[string]string{},
 				},
-				Debug: false,
 			},
 			{
 				// HTTP ingest is on by default alongside MQTT (TB §2.9, the most
@@ -275,15 +273,8 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 					Type:          "json",
 					Configuration: map[string]string{},
 				},
-				Debug: false,
 			},
 		}
-	}
-	if c.InboundEventBatching.MaxBatchSize == 0 {
-		c.InboundEventBatching.MaxBatchSize = 100
-	}
-	if c.InboundEventBatching.BatchTimeoutMs == 0 {
-		c.InboundEventBatching.BatchTimeoutMs = 100
 	}
 	// Fail-safe defaulting: a non-positive rate or burst falls back to the
 	// platform ceiling, never to unlimited, so an omitted or zeroed limit still
@@ -299,20 +290,35 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 	}
 }
 
+// RetiredConfigKeys names the keys this service accepted in an earlier release and has
+// since removed, so a document still carrying one is reported rather than refused.
+//
+// inboundEventBatching (a `KafkaEventBatching`, on a platform that has never had Kafka in
+// it) named a producer batch size and a flush timeout for a producer that does not exist:
+// nothing in this service ever read either value. It stayed harmless right up to its
+// Validate clause, which REFUSED THE LOAD on a non-positive value — so an operator who
+// wrote `maxBatchSize: 0` took down every event source and the presence tap on the
+// instance over a number nothing would have consulted.
+//
+// It is listed here rather than simply deleted because the load is a strict decode: a
+// document still carrying the key would otherwise be called unknown and fail closed, which
+// is the same outage in a different sentence.
+func (c *EventSourcesConfiguration) RetiredConfigKeys() map[string]string {
+	return map[string]string{
+		"inboundEventBatching": "Inbound events are not batched by this service and never were — " +
+			"the key configured a Kafka producer this platform does not have, and no code read it. " +
+			"Remove it; there is no replacement setting.",
+	}
+}
+
 // Validate enforces semantic constraints after decoding and defaulting, failing
-// the load closed on an invalid configuration (ADR-022 decision 1). Batching
-// bounds must be positive, and a source id must be usable AS the value it becomes.
+// the load closed on an invalid configuration (ADR-022 decision 1): a shed floor must
+// name a level, and a source id must be usable AS the value it becomes.
 //
 // It used to say the source list was "left to the source loaders", and the loaders
 // check only that a Type is known and that no source points at the platform broker
 // — an Id was accepted whatever it said. That is what validateSourceIds closes.
 func (c *EventSourcesConfiguration) Validate() error {
-	if c.InboundEventBatching.MaxBatchSize <= 0 {
-		return fmt.Errorf("inboundEventBatching.maxBatchSize must be positive (got %d)", c.InboundEventBatching.MaxBatchSize)
-	}
-	if c.InboundEventBatching.BatchTimeoutMs <= 0 {
-		return fmt.Errorf("inboundEventBatching.batchTimeoutMs must be positive (got %d)", c.InboundEventBatching.BatchTimeoutMs)
-	}
 	// The shed floor names a level on the ADR-063 ladder (0..3); a value outside it
 	// names no level. Fail the load closed rather than clamp — a floor of 7 is a
 	// misconfiguration the operator must see, not one to silently reinterpret.

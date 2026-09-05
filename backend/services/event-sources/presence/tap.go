@@ -98,11 +98,19 @@ func incr(c prometheus.Counter) {
 
 // Tap turns the broker's connection advisories into presence events.
 //
-// It holds no per-device state, and that is a constraint rather than a simplification:
-// the advisories are consumed through a queue group, so one device's connect and
+// It holds no per-device state that any DECISION reads, and the qualifier is the whole
+// point: the advisories are consumed through a queue group, so one device's connect and
 // disconnect routinely land on different replicas. Anything the tap remembers is
 // therefore a partial view, which is why the ordering rules live in presence.Decide
 // against the projection's stored session and not here.
+//
+// 🔴 IT DOES HOLD PER-DEVICE STATE, AND SAYING OTHERWISE HID A BOUNDED HEAP. The embedded
+// Publisher carries sessionWatermarks, a map keyed by (tenant, device) with a hard
+// 50,000-entry ceiling — device-controlled keys, which is exactly why it has a ceiling.
+// It is read ONLY to count a backwards session id (Metrics.RegressedSessions) and never
+// to accept or reject a transition, so the constraint above holds as stated once it is
+// stated accurately. An unqualified "holds no per-device state" reads as a licence to
+// skip the ceiling the next time something per-device is added here.
 type Tap struct {
 	// Publisher is embedded rather than held in a named field so Tap.Apply, and every
 	// caller that already had one, keep working unchanged. Tap is the BROKER-FACING half

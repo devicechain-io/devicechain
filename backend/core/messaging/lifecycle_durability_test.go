@@ -88,8 +88,9 @@ func testMicroservice(t *testing.T, srv *natsserver.Server, area string) *core.M
 	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = addr.IP.String()
 	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(addr.Port)
 	// Readers gate reads on auth being live; nothing here exercises auth, so open the
-	// gate rather than let every read block on a validator this test never installs.
-	ms.Readiness.MarkReady(nil)
+	// gate rather than let every read block on a validator this test never installs. The
+	// gate REFUSES a bare nil validator, so this states the intent instead of passing one.
+	ms.Readiness.MarkReadyWithoutAuthSurface()
 	return ms
 }
 

@@ -370,7 +370,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	} else {
 		Manager.Start()
 	}
-	Microservice.MarkReady(nil)
+	// NO VALIDATOR, DELIBERATELY. This service's HTTP surface is /healthz, /readyz and
+	// /metrics; edge nodes authenticate at the MQTT gateway and nothing here verifies a
+	// JWT, so there is no token for a validator to check. See lwm2m-ingest, which says the
+	// same thing for the same reason.
+	Microservice.MarkReadyWithoutAuthSurface()
 
 	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
 	go func() {

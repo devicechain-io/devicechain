@@ -348,6 +348,15 @@ func buildMetrics() {
 			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted).", nil),
 		SamplesTruncated: Microservice.NewCounter("notify_samples_truncated_total",
 			"Samples dropped from a single Notify past the per-message cap (decode.MaxSamplesPerNotify).", nil),
+		RecordsNonNumeric: Microservice.NewCounter("notify_records_non_numeric_total",
+			"SenML records skipped for carrying no numeric value (boolean/string/opaque readings, or sum-only). "+
+				"Expected for a fleet whose objects are not measurements; it is what tells that apart from silence.", nil),
+		RecordsNonFinite: Microservice.NewCounter("notify_records_non_finite_total",
+			"SenML records skipped because the value resolved to NaN or infinity. Always a device fault: "+
+				"a non-finite value would otherwise be accepted by the resolver and stored.", nil),
+		RecordsUnnamed: Microservice.NewCounter("notify_records_unnamed_total",
+			"SenML records skipped because the resolved name was empty. Always a device fault: "+
+				"a sample with no resource path has no series to belong to.", nil),
 		IngestDropped: Microservice.NewCounter("notify_ingest_dropped_total",
 			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes).", nil),
 		ActiveObservations: Microservice.NewGauge("active_observations",
@@ -823,7 +832,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
 		})
 	}
-	Microservice.MarkReady(nil)
+	// NO VALIDATOR, DELIBERATELY. This service's HTTP surface is /healthz, /readyz and
+	// /metrics; devices authenticate at DTLS-PSK and nothing here verifies a JWT, so there
+	// is no token for a validator to check. Saying so is what keeps it distinguishable
+	// from a service that simply lost its validator — the gate refuses a bare nil.
+	Microservice.MarkReadyWithoutAuthSurface()
 
 	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
 	go func() {

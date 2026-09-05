@@ -891,11 +891,25 @@ functionalAreas:
     # freeze them (ADR-067 demotion). Every device this source has ASSERTED is walked
     # back to INFERRED at 25/s, asserting nothing about connectivity — which is what
     # hands them back to the inactivity sweep and to their own data events. The same
-    # happens when the system-account credential goes missing, after a 120s settle
-    # window (a bring-up mints it in the run that starts the services, so an absent
-    # value can be a race). The other bail paths do NOT release: a failed dial or
-    # subscription is one replica's bad luck, not the instance's configuration. Release
-    # those by hand with `dcctl presence demote`.
+    # happens when the system-account credential goes missing, and when the broker
+    # itself cannot be reached, each after a 120s settle window — a bring-up mints the
+    # credential and rolls the broker in the same run that starts the services, so
+    # either can be a race with that run rather than a standing condition. An
+    # unreachable broker is the instance's condition rather than one replica's: the
+    # MQTT gateway lives in that same broker, so while it is unreachable no device is
+    # connected through it either.
+    #
+    # 🔑 FOR THE BROKER CASE THE WINDOW IS A RE-CHECK, NOT JUST A WAIT, and that is what
+    # keeps the release from outliving the outage. Every pass first re-dials the system
+    # account; if it answers, this pod does not release anything — it EXITS so the
+    # kubelet restarts it and the tap comes up normally. Expect a pod restart, not a
+    # release, when a broker comes back. The other two release paths cannot re-check:
+    # both are configuration read once at startup, so the pod is replaced rather than
+    # repaired, which is what their window waits for.
+    #
+    # The remaining bail paths do NOT release: no gateway source, no service-to-service
+    # calls, and a subscription that fails on a connection that DID reach the broker.
+    # Release those by hand with `dcctl presence demote`.
     #
     # reconcileSeconds is not a backstop knob. A graceful broker restart emits NO
     # disconnect notices for the connections it was holding, so this pass is the only
