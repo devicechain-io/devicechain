@@ -73,19 +73,23 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 	return created, nil
 }
 
-// UpdateNotificationPolicy updates a policy header and replaces its rule set
-// atomically.
+// UpdateNotificationPolicy applies a PARTIAL update to the policy named by the token
+// argument: a field the request omits is left alone, an explicit null clears it, and a
+// value sets it. The input carries no token, so a policy's identity cannot move.
+//
+// 🔴 AN ABSENT `rules` LEAVES THE RULE SET EXACTLY AS IT IS — rows, ids and all. This is
+// the substantive change. The previous shape ran the delete-and-reinsert unconditionally,
+// so ANY edit — a name, a throttle, a metadata key — destroyed every rule and recreated
+// it, and an edit that simply did not mention rules emptied the policy and returned
+// success. For the service that carries alarms to humans, that is an alerting outage
+// spelled as a metadata edit.
+//
+// 🔴 EVERYTHING THAT CAN REFUSE RESOLVES BEFORE ANYTHING IS WRITTEN. Malformed metadata,
+// a cleared `enabled`, an unknown channel token or a mistyped severity inside a rule all
+// fail the WHOLE update. The rule-set half is inside the transaction with the header
+// write, so a rule that buildRules refuses rolls the header back with it.
 func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
-	request *NotificationPolicyCreateRequest) (*NotificationPolicy, error) {
-	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
-		return nil, err
-	}
-	if err := validateDeviceTypeScoping(request.DeviceTypeToken); err != nil {
-		return nil, err
-	}
-	if err := dcgraphql.ErrPayloadTokenDisagrees("notification policy", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *NotificationPolicyUpdateRequest) (*NotificationPolicy, error) {
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -93,30 +97,55 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
+	policy := matches[0]
+
+	enabled, err := request.Enabled.ApplyToRequired("enabled", policy.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	metadata := request.Metadata.ApplyTo(dcgraphql.MetadataStr(policy.Metadata))
+	if err := validateJSONObject(metadata, "metadata"); err != nil {
+		return nil, err
+	}
+	// Converted out here, beside the validation it duplicates, rather than inside the
+	// transaction. validateJSONObject above is strictly stronger — it requires an OBJECT,
+	// not merely valid JSON — so this can never be the thing that fails; opening a
+	// transaction to discover that would be work for an outcome already decided.
+	metadataJSON, err := rdb.JSONInputOf("metadata", metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	requestedRules, replaceRules := request.Rules.Requested()
 
 	var updated *NotificationPolicy
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		policy := matches[0]
-		policy.Name = rdb.NullStrOf(request.Name)
-		policy.Description = rdb.NullStrOf(request.Description)
-		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
-		if err != nil {
-			return err
-		}
+		policy.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(policy.Name)))
+		policy.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(policy.Description)))
 		policy.Metadata = metadataJSON
-		policy.DeviceTypeToken = rdb.NullStrOf(request.DeviceTypeToken)
-		policy.ThrottleSeconds = nullInt64OfInt32(request.ThrottleSeconds)
-		policy.EscalateAfterSeconds = nullInt64OfInt32(request.EscalateAfterSeconds)
-		policy.MaxEscalations = nullInt64OfInt32(request.MaxEscalations)
-		policy.Enabled = request.Enabled
+		policy.ThrottleSeconds = nullInt64OfInt32(
+			request.ThrottleSeconds.ApplyTo(int32OfNullInt64(policy.ThrottleSeconds)))
+		policy.EscalateAfterSeconds = nullInt64OfInt32(
+			request.EscalateAfterSeconds.ApplyTo(int32OfNullInt64(policy.EscalateAfterSeconds)))
+		policy.MaxEscalations = nullInt64OfInt32(
+			request.MaxEscalations.ApplyTo(int32OfNullInt64(policy.MaxEscalations)))
+		policy.Enabled = enabled
 		if err := tx.Omit("Rules").Save(policy).Error; err != nil {
 			return err
+		}
+		if !replaceRules {
+			// The caller said nothing about rules, so the stored rows stay as they are.
+			// policy.Rules already holds them: NotificationPoliciesByToken preloaded them
+			// above, so the response renders the rule set the policy still has rather
+			// than an empty one.
+			updated = policy
+			return nil
 		}
 		// Replace the rule set: drop the old rows, insert the new ones.
 		if err := tx.Unscoped().Where("policy_id = ?", policy.ID).Delete(&NotificationRule{}).Error; err != nil {
 			return err
 		}
-		rules, err := api.buildRules(tx, policy.ID, request.Rules)
+		rules, err := api.buildRules(tx, policy.ID, requestedRules)
 		if err != nil {
 			return err
 		}
@@ -145,9 +174,10 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 // so the channel lookup is tenant-isolated.
 //
 // It is the single choke point for rule validation because BOTH policy create and
-// policy update build their rules here — an update replaces the rule set wholesale,
-// so a check placed on the create path alone would let an edit reintroduce exactly
-// what the create refused.
+// policy update build their rules here — an update that NAMES a rule set replaces the
+// stored one wholesale, so a check placed on the create path alone would let an edit
+// reintroduce exactly what the create refused. Making `rules` optional did not add a
+// second path: an absent rule set builds nothing rather than building it somewhere else.
 func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 	requests []*NotificationRuleCreateRequest) ([]*NotificationRule, error) {
 	rules := make([]*NotificationRule, 0, len(requests))

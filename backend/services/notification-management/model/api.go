@@ -24,6 +24,21 @@ func nullInt64OfInt32(v *int32) sql.NullInt64 {
 	return sql.NullInt64{Int64: int64(*v), Valid: true}
 }
 
+// int32OfNullInt64 is its inverse: the READ half a partial update needs, since
+// OptionalInt32.ApplyTo has to be handed the stored value in the same shape the request
+// carries it. Core's graphql package has NullStr, NullFloat64 and NullBool for exactly
+// this and no integer counterpart, so the conversion lives here — written once rather than
+// inline at each of this file's three call sites, which is where one of them eventually
+// reads .Int64 without checking .Valid and folds a cleared throttle back in as a genuine 0
+// (an unthrottled policy that re-notifies on every alarm, reported as success).
+func int32OfNullInt64(v sql.NullInt64) *int32 {
+	if !v.Valid {
+		return nil
+	}
+	n := int32(v.Int64)
+	return &n
+}
+
 // Api is the persistence-facing surface of the notification service (ADR-017): the
 // per-tenant delivery channels (SMTP/webhook, with their write-only secrets), the
 // routing policies that map alarm severities to channels + recipients, and the
