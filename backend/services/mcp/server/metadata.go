@@ -10,10 +10,25 @@ import (
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 )
 
-// ProtectedResourceMetadataPath is the RFC 9728 well-known location a client
-// probes (also named in the 401 WWW-Authenticate challenge) to discover which
-// Authorization Server issues tokens for this resource.
-const ProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
+// ProtectedResourceMetadataPath is the RFC 9728 well-known location for a resource
+// identifier that carries NO path — and the suffix every other location is built
+// from. Aliased from core so this package names it once and the routing, the chart
+// and the Authorization Server's equivalent all draw on one definition.
+const ProtectedResourceMetadataPath = coreauth.ProtectedResourceMetadataSuffix
+
+// ProtectedResourceMetadataPathFor is the local path RFC 9728 §3.1 requires the
+// document to be served at for a given resource identifier: the suffix INSERTED
+// between the host and the identifier's path, never appended after it and never
+// substituted for it. coreauth.WellKnownPath is the one implementation of that
+// construction in this repository — see its comment for why it is not three.
+//
+// The origin-only form (the path discarded) is what this server used to advertise,
+// and it is not merely unreachable through the ingress: for an instance that ever
+// hosts a second resource on the same origin it names the wrong document. The path
+// is what distinguishes them.
+func ProtectedResourceMetadataPathFor(resourceID string) string {
+	return coreauth.WellKnownPath(ProtectedResourceMetadataPath, resourceID)
+}
 
 // protectedResourceMetadata is the RFC 9728 document (ADR-047): it names this
 // resource's identifier, the Authorization Server(s) that issue tokens for it, and

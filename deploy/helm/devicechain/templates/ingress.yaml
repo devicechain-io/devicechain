@@ -94,6 +94,110 @@ spec:
                   name: graphql
           {{- end }}
           {{- end }}
+{{- $mcpEnabled := has "mcp" (splitList "," (include "devicechain.enabledAreas" $root)) }}
+{{- $asIssuer := include "devicechain.userManagementIssuerUrl" $root }}
+{{- if or $mcpEnabled $asIssuer }}
+---
+{{/*
+The OAuth metadata documents, at the locations a conformant client asks for.
+
+WHY THIS IS A THIRD INGRESS OBJECT
+
+Discovery is a three-request walk and it starts at a 401. The client POSTs the MCP
+endpoint, reads the metadata URL out of the WWW-Authenticate challenge, fetches it, and
+then fetches the AUTHORIZATION SERVER's metadata at a location it derives from the
+`authorization_servers` entry in the first document. All three are required steps, and
+the reference client aborts the whole walk on the first error rather than falling
+through to a later candidate — so any one of them landing on the console is the end of
+discovery, not a degraded path.
+
+Requests two and three both start with /.well-known/, because both specifications build
+their location by INSERTING the well-known suffix between the host and the identifier's
+path. Neither therefore starts with /api/<area>, so the API ingress above does not match
+either and the console's "/" does — and the console answers 200 with index.html, which a
+client reports as a decode failure rather than as a routing problem.
+
+They cannot be paths on the API ingress: its rewrite-target is /$2, built for paths
+shaped /api/<area>/<rest>, and there is no way to write these in that shape such that
+the rewrite produces the pod-local path. So they get their own object with NO rewrite,
+which is also the better arrangement: the path a client asks for is the path the pod is
+asked for, with nothing in between to keep in step.
+
+🔴 THE PATHS HERE ARE THE CONSTANT SUFFIXES, ROUTED AS PREFIXES — the chart does NOT
+compute the insertion. It could: it has both identifiers. But that would be a second
+implementation of a construction rule that already exists in Go, written in another
+language, exercised against its own expectations, and compared with the first by
+nothing. The two would agree until the day they did not, and the symptom would be a
+document reachable only at a path no client asks for. Routing the suffix instead hands
+the whole namespace to the service that owns the identifier, and that service decides
+which exact path is correct — one implementation, in core's WellKnownPath. Anything else
+under a suffix is refused by that service, with a message naming the right location.
+
+Handing over a whole /.well-known/ subtree is safe because each suffix is registered by
+its own RFC for exactly one purpose, and in this instance exactly one service serves it:
+protected-resource metadata is the MCP server's, authorization-server metadata is the
+AS's. A test in core pins that neither suffix is a prefix of the other, since one
+swallowing the other would route a client to the wrong service.
+
+The AS rule renders only when an issuer is configured. The Authorization Server is a
+separate switch from the mcp area, and with no issuer there is no AS to route to — mcp
+then still serves its own metadata and no client can obtain a token, which is the
+documented state rather than a routing gap.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain-wellknown
+  namespace: {{ .Values.instance.id }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    # No rewrite, deliberately: each service serves its document at the exact path the
+    # client asks for. No cert-manager annotation either — the API ingress owns the
+    # Certificate for this host's secret and a second issuer annotation would race a
+    # competing Certificate onto it.
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{- /* pathType Prefix rather than Exact, and the distinction is smaller than
+                 it looks: the API ingress above sets a rewrite-target, and ingress-nginx
+                 turns EVERY path for a host into a case-insensitive regex location as
+                 soon as any ingress for that host rewrites, ordering them by descending
+                 length. "Exact" would therefore not be exact here either. Prefix is what
+                 is meant in any case — the subtree belongs to the service — and the
+                 service 404s the paths within it that are not its document. Both are
+                 longer than the console's "/", so both win against it. */}}
+          {{- if $mcpEnabled }}
+          - path: /.well-known/oauth-protected-resource
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp
+                port:
+                  name: graphql
+          {{- end }}
+          {{- if $asIssuer }}
+          - path: /.well-known/oauth-authorization-server
+            pathType: Prefix
+            backend:
+              service:
+                name: user-management
+                port:
+                  name: graphql
+          {{- end }}
+{{- end }}
 {{- if .Values.frontend.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

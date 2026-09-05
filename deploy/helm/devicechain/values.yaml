@@ -1067,6 +1067,37 @@ functionalAreas:
     # still starts and serves its metadata (it fetches JWKS in the background), but no
     # client can obtain a token until the AS is enabled — a separate, deliberate
     # switch, since setting the issuer changes the `iss` claim of EVERY minted token.
+    #
+    # ONE SERVING POD, and the render refuses more. mcp holds each connected client's
+    # protocol session in memory on the pod that created it; sessions are not shared and
+    # the Service does no affinity, so a second replica answers roughly half of every
+    # client's requests "session not found" rather than sharing the load. It is not a
+    # lease case — the state is per-client, not per-partition — so scaling it out means
+    # moving sessions off the pod, not adding a lock.
+    #
+    # resourceUrl doubles as the ENDPOINT a client posts to, not just an identifier: the
+    # /api/<area> ingress rule strips its prefix and the service mounts the MCP handler
+    # at its root, so <origin>/api/mcp is both the audience tokens are bound to and the
+    # URL that answers. The protected-resource metadata for it is served at
+    # <origin>/.well-known/oauth-protected-resource/api/mcp — the well-known segment goes
+    # BETWEEN the host and the path, which is the location a client builds for itself —
+    # and the chart renders a dedicated, rewrite-free Ingress for that whole well-known
+    # namespace.
+    #
+    # 🔴 UNDER AN INGRESS, THE OVERRIDE IS NOT A FREE CHOICE, AND THE RENDER NOW SAYS SO.
+    # Every route is keyed on ingress.host, and the endpoint route is keyed on the area
+    # name, so the only identifier this chart actually routes is the derived one. An
+    # override pointing anywhere else used to render cleanly and produce an instance
+    # whose tokens are bound to an address that answers nothing. It is refused now,
+    # with one exception: a LOOPBACK address, which is the shape that made the override
+    # worth having — mcp reached by port-forward rather than through the ingress, where
+    # no rule applies and none is needed.
+    #
+    # Discovery does not finish here. The document above names user-management as the
+    # authorization server, and a client then fetches THAT server's metadata at
+    # <origin>/.well-known/oauth-authorization-server/api/user-management. The chart
+    # routes it — but only once auth.issuerUrl is set on user-management (see below),
+    # because until then there is no authorization server to route to.
     config: {}
       # resourceUrl: https://<host>/api/mcp
       # issuerUrl: https://<host>/api/user-management

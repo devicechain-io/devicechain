@@ -165,8 +165,7 @@ exact same source. Takes the root context.
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{- $cfg := get $areaCfg "config" | default dict }}
 {{- if eq $area "mcp" }}
-{{- /* merge into a FRESH dict: the explicit config wins, and .Values is never mutated. */ -}}
-{{- $cfg = merge (dict) $cfg (include "devicechain.mcpDerivedConfig" $root | fromJson) }}
+{{- $cfg = include "devicechain.mcpMergedConfig" $root | fromJson }}
 {{- include "devicechain.validateMcpConfig" (dict "root" $root "cfg" $cfg) }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
@@ -219,20 +218,103 @@ reason is a log line away. Takes a dict {root, cfg} of the FINAL merged config.
 The http case is the sharp one: mcp accepts http only for a loopback host, so a
 no-TLS ingress on a real hostname derives a URL it will reject at startup. dcctl
 guards the same combination for Grafana SSO; this is the chart-side equivalent.
+
+🔴 The loopback test reads the host out of THE URL BEING VALIDATED, not out of
+ingress.host, and that is the whole point of the check. It used to read ingress.host,
+which is only the same string while the URL was derived from the ingress. An operator
+who set functionalAreas.mcp.config.resourceUrl explicitly — the documented escape hatch,
+and the only way to point mcp at a host the chart does not own — had it validated
+against a completely different host: http://localhost:8080 on an instance whose ingress
+host is iot.example.com failed the render for "not a loopback host" while being exactly
+what the service accepts (its own check parses the URL and compares its hostname). It
+errs toward refusing, so nothing shipped broken, but the reason it gave was about a
+host that had nothing to do with the value.
+
+Port included or not makes no difference here: urlParse's `hostname` drops it, which is
+also what the service's own url.Hostname() comparison does.
 */}}
 {{- define "devicechain.validateMcpConfig" -}}
 {{- $cfg := .cfg -}}
-{{- $host := .root.Values.ingress.host | default "" | lower -}}
-{{- $loopback := or (eq $host "localhost") (eq $host "127.0.0.1") (eq $host "::1") -}}
 {{- range $field := list "resourceUrl" "issuerUrl" -}}
   {{- $v := get $cfg $field | default "" -}}
   {{- if not $v -}}
     {{- fail (printf "mcp: %s is required and could not be derived — the area is enabled (profile \"full\" ships it) but no ingress is configured to derive it from. Set ingress.enabled + ingress.host, or set functionalAreas.mcp.config.%s explicitly." $field $field) -}}
   {{- end -}}
+  {{- $host := (urlParse $v).hostname | default "" | lower -}}
+  {{- $loopback := or (eq $host "localhost") (eq $host "127.0.0.1") (eq $host "::1") -}}
   {{- if and (hasPrefix "http://" $v) (not $loopback) -}}
-    {{- fail (printf "mcp: %s would be %q, which mcp rejects at startup — it allows http only for a loopback host. Set ingress.tls.enabled=true, use ingress.host=localhost, or set functionalAreas.mcp.config.%s to an https URL." $field $v $field) -}}
+    {{- fail (printf "mcp: %s would be %q, whose host %q is not a loopback address — mcp rejects that at startup, because it allows http only for localhost, 127.0.0.1 or ::1. Set ingress.tls.enabled=true, use ingress.host=localhost, or set functionalAreas.mcp.config.%s to an https URL." $field $v $host $field) -}}
+  {{- end -}}
+  {{- if hasSuffix "/" $v -}}
+    {{- fail (printf "mcp: %s is %q, which ends with a trailing slash. mcp refuses that at startup: the identifier is compared byte-for-byte as the token audience and as the `resource` field of its metadata document, so it must have exactly one spelling. Drop the trailing slash." $field $v) -}}
   {{- end -}}
 {{- end -}}
+
+{{/*
+🔴 AN OVERRIDE THE INGRESS CANNOT ROUTE IS REFUSED, RATHER THAN RENDERED AND LEFT TO
+FAIL AS A CLIENT PROBLEM. The identifier is not only a name: it is the URL a client
+POSTs to, and the origin it derives the metadata location from. Under an ingress, the
+only identifier this chart actually routes is the derived one — the /api/mcp rule is
+keyed on the area name and every rule is keyed on ingress.host. An override pointing
+anywhere else rendered cleanly and produced an instance whose tokens are bound to an
+identifier no route delivers and whose metadata document sits on a different host. The
+chart could see that and said nothing.
+
+The loopback exception is the reason the override exists at all: a port-forwarded or
+locally-run mcp is reached at http://localhost:<port>, which no ingress rule serves and
+none needs to.
+*/}}
+{{- if .root.Values.ingress.enabled -}}
+  {{- $v := get $cfg "resourceUrl" | default "" -}}
+  {{- $host := (urlParse $v).hostname | default "" | lower -}}
+  {{- $loopback := or (eq $host "localhost") (eq $host "127.0.0.1") (eq $host "::1") -}}
+  {{- $derived := get (include "devicechain.mcpDerivedConfig" .root | fromJson) "resourceUrl" | default "" -}}
+  {{- if and (not $loopback) (ne $v $derived) -}}
+    {{- fail (printf "mcp: resourceUrl is %q, but this instance's ingress only routes %q. That identifier is the URL a client POSTs to as well as the name its token is bound to, so an unrouted one yields tokens for an address that answers nothing and a metadata document on the wrong host. Either leave it unset (it is derived from the ingress), set it to %q, or point it at a loopback address if you are reaching mcp by port-forward rather than through the ingress." $v $derived $derived) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.mcpMergedConfig is the config mcp actually receives, as JSON: the explicit
+functionalAreas.mcp.config merged over the ingress-derived defaults. Merged into a FRESH
+dict, so the explicit config wins and .Values is never mutated.
+
+🔴 It is ONE definition because two templates now depend on it and they must not
+disagree. microserviceConfig hands resourceUrl to the service as its token audience and
+as the `resource` field of its metadata document; ingress.yaml routes the path that
+document is fetched at, which is derived from the same identifier. Two derivations would
+let the routed path drift away from the identifier with nothing to notice — and a
+metadata document reachable at a path that does not match its own `resource` field is
+rejected by the client rather than used.
+*/}}
+{{- define "devicechain.mcpMergedConfig" -}}
+{{- $explicit := get (get (.Values.functionalAreas | default dict) "mcp" | default dict) "config" | default dict -}}
+{{- merge (dict) $explicit (include "devicechain.mcpDerivedConfig" . | fromJson) | toJson -}}
+{{- end -}}
+
+{{/*
+devicechain.mcpResourceUrl is mcp's FINAL resource identifier. Empty when there is
+neither an explicit value nor an ingress to derive one from, which is the state
+validateMcpConfig fails the render on.
+*/}}
+{{- define "devicechain.mcpResourceUrl" -}}
+{{- get (include "devicechain.mcpMergedConfig" . | fromJson) "resourceUrl" | default "" -}}
+{{- end -}}
+
+{{/*
+devicechain.userManagementIssuerUrl is the OAuth 2.1 Authorization Server's issuer, or
+empty when the AS is off.
+
+It is operator-set (functionalAreas.user-management.config.auth.issuerUrl) and NOT
+derived from the ingress, deliberately: setting an issuer changes the `iss` claim of
+every token the instance mints, not only the ones MCP uses, so it is its own switch.
+The ingress uses it to decide whether to route the AS metadata document — with no
+issuer there is no AS, and a route to one would be a route to a 404.
+*/}}
+{{- define "devicechain.userManagementIssuerUrl" -}}
+{{- $cfg := get (get (.Values.functionalAreas | default dict) "user-management" | default dict) "config" | default dict -}}
+{{- get (get $cfg "auth" | default dict) "issuerUrl" | default "" -}}
 {{- end -}}
 
 {{/*

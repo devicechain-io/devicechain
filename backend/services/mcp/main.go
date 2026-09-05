@@ -73,10 +73,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The RS token verifier reads the live validator through the readiness gate
 	// (nil until the gate opens → fail closed at the middleware).
 	validator := func() *coreauth.Validator { return Microservice.Readiness.Validator() }
-	mcpHandler, metadataHandler := server.New(Configuration.ResourceUrl, Configuration.IssuerUrl, validator)
 
-	http.Handle("/mcp", mcpHandler)
-	http.Handle(server.ProtectedResourceMetadataPath, metadataHandler)
+	// The MCP endpoint and every protected-resource metadata location, registered by
+	// the server package rather than spelled out here: which paths those are is a
+	// routing decision with a test behind it, and nothing tests this file.
+	server.Routes(http.DefaultServeMux, Configuration.ResourceUrl, Configuration.IssuerUrl, validator)
+
 	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {

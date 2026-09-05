@@ -4,6 +4,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -122,10 +123,22 @@ const riskMetaKey = "io.devicechain/risk"
 // property the ratchet has to check and the negative control proves it does check.
 type Catalog struct {
 	risks map[string]ToolRisk
+	// decls is the LISTING each tool was declared with — the description, annotations
+	// and risk metadata as register stamped them, before the SDK filled in schemas.
+	// It is what closes the last gap in the name-based ratchet; see AlteredTools.
+	decls map[string]*mcp.Tool
 }
 
 // NewCatalog builds an empty catalog.
-func NewCatalog() *Catalog { return &Catalog{risks: map[string]ToolRisk{}} }
+func NewCatalog() *Catalog {
+	return &Catalog{risks: map[string]ToolRisk{}, decls: map[string]*mcp.Tool{}}
+}
+
+// Declared returns the listing a tool was registered with.
+func (c *Catalog) Declared(name string) (*mcp.Tool, bool) {
+	d, ok := c.decls[name]
+	return d, ok
+}
 
 // Risk returns a tool's declaration.
 func (c *Catalog) Risk(name string) (ToolRisk, bool) {
@@ -168,10 +181,32 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 
 	// Every tool on this server is a read, and both hints are true of all of them: nothing
 	// here modifies anything, and calling one twice returns the same answer rather than
-	// doing anything twice. They are stamped here rather than per tool so a new tool
-	// cannot arrive without them — and so the day a tool that is NOT a read is proposed,
-	// the person adding it has to change this line, which is the conversation that should
-	// happen before this server gains a write.
+	// doing anything twice.
+	//
+	// 🔴 THIS LINE IS A STATEMENT TO CLIENTS, NOT A CHECK. It used to claim that "the day
+	// a tool that is NOT a read is proposed, the person adding it has to change this
+	// line" — which nothing makes true. A write handler passed to register is stamped
+	// ReadOnlyHint:true exactly like every other, validate() only checks that the two
+	// enums are members of their vocabularies, and no test could tell the difference: an
+	// MCP tool annotation is advisory metadata for the client, not an authorization
+	// decision, so the server would happily serve a write behind it. The one thing that
+	// is enforced here is upstream of the stamp — Exposure is a closed READ vocabulary
+	// (configuration / operational / telemetry / position) with no write class in it, so
+	// a write tool has nothing honest to declare and validate() refuses whatever it
+	// invents.
+	//
+	// 🔑 WHAT ACTUALLY MAKES THIS SERVER READ-ONLY LIVES IN core/auth (scopeAllowances
+	// and IntersectAuthorities), AND IT IS STRONGER THAN THIS COMMENT EVER CLAIMED. The
+	// `read-only` scope carries an authority CEILING — device/event/state/command/alarm
+	// and dashboard reads — and every OAuth token is minted through it by intersecting
+	// what the subject holds against that ceiling. A superuser holding the `*`
+	// super-authority is capped by the same intersection: `*` is skipped rather than
+	// expanded, so the token that reaches this server carries reads and nothing else.
+	// The middleware in New requires that scope on every request. So a write tool added
+	// here would not become dangerous by being mis-annotated; it would be REFUSED
+	// downstream, by the caller's own token, because no token this server accepts carries
+	// a write authority to run it with. Changing that takes a new scope with a new
+	// ceiling and a new consent string, which is the conversation this comment wanted.
 	tool.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	if tool.Meta == nil {
 		tool.Meta = mcp.Meta{}
@@ -181,6 +216,24 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 		"scale":     string(risk.Scale),
 		"discloses": risk.Discloses,
 	}
+
+	// Keep the listing as declared, so AlteredTools can compare it against what the
+	// server ends up serving. Schemas are deliberately not kept: mcp.AddTool derives
+	// them from the handler's types, so a declared copy would differ from the served
+	// one for a reason that is not a defect.
+	meta := mcp.Meta{}
+	for k, v := range tool.Meta {
+		meta[k] = v
+	}
+	annotations := *tool.Annotations
+	c.decls[tool.Name] = &mcp.Tool{
+		Name:        tool.Name,
+		Title:       tool.Title,
+		Description: tool.Description,
+		Annotations: &annotations,
+		Meta:        meta,
+	}
+
 	mcp.AddTool(s, tool, h)
 }
 
@@ -203,4 +256,75 @@ func UndeclaredTools(catalogNames []string, c *Catalog) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// AlteredTools reports every served tool whose listing is not the one register declared
+// for that name.
+//
+// 🔴 IT CLOSES THE HOLE THE NAME-BASED RATCHET STRUCTURALLY CANNOT SEE. Server.AddTool
+// REPLACES a tool of the same name rather than refusing it ("add replaces existing
+// tools", in the SDK's own words), so a bare mcp.AddTool reusing a name this package
+// already declared swaps the HANDLER while leaving everything the other checks look at
+// identical: register's duplicate panic never runs, because register was not called;
+// the catalog still holds one entry per name; and the served name list is unchanged, so
+// UndeclaredTools has nothing to report. The one place a swap shows is the listing
+// itself — a replacement carries its own description, its own annotations and no risk
+// metadata — so that is what this compares, field for field, against the declaration.
+//
+// 🔑 ITS RESIDUAL, STATED PRECISELY BECAUSE IT IS LARGER THAN IT FIRST LOOKS.
+// listingFingerprint compares the title, description, annotations and `_meta` — and
+// NOTHING ELSE that reaches the wire. It deliberately excludes InputSchema and
+// OutputSchema (mcp.AddTool derives those from the handler's own types, so a declared
+// copy would differ for a reason that is not a defect), and it does not reach Icons or
+// any field a future SDK release adds. So an invisible replacement does not have to be
+// a careful forgery: it has to copy four public strings, all of which are readable in
+// this file.
+//
+// Worse, the most LIKELY replacement shape is invisible by construction rather than by
+// difficulty. A handler taking a different input type is exactly what someone
+// substituting behaviour would write, and its schema is the field this comparison
+// cannot use — so the served tool advertises different arguments under a declared
+// name, and this reports nothing.
+//
+// What bounds that is not here and could not be: no token this server accepts carries a
+// write authority, so a swapped-in handler has nothing to act with (see register). This
+// function closes the ACCIDENT — someone reaching for mcp.AddTool because it is the API
+// the SDK documents — and says plainly that it does not close the substitution.
+//
+// It takes the SERVED listings, not names, for the same reason UndeclaredTools takes
+// served names: the catalog a client is offered is the only one that matters.
+func AlteredTools(served []*mcp.Tool, c *Catalog) []string {
+	altered := []string{}
+	for _, tool := range served {
+		declared, ok := c.Declared(tool.Name)
+		if !ok {
+			continue // an undeclared tool is UndeclaredTools' report to make
+		}
+		if listingFingerprint(tool) != listingFingerprint(declared) {
+			altered = append(altered, tool.Name)
+		}
+	}
+	sort.Strings(altered)
+	return altered
+}
+
+// listingFingerprint reduces a tool to the parts a client is shown and register
+// controls. Schemas are excluded deliberately (see register); everything else that
+// reaches the wire is compared. JSON is the comparison medium because the served
+// listing has been through it, so a declared map[string]any and a decoded one compare
+// equal instead of differing by their Go types.
+func listingFingerprint(t *mcp.Tool) string {
+	b, err := json.Marshal(struct {
+		Title       string               `json:"title"`
+		Description string               `json:"description"`
+		Annotations *mcp.ToolAnnotations `json:"annotations"`
+		Meta        mcp.Meta             `json:"_meta"`
+	}{t.Title, t.Description, t.Annotations, t.Meta})
+	if err != nil {
+		// Unreachable for these field types, and a panic would take the process down
+		// for a comparison. An error string cannot equal a marshalled listing, so the
+		// tool is reported as altered — which fails closed.
+		return "unmarshalable: " + err.Error()
+	}
+	return string(b)
 }

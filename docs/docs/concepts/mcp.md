@@ -60,12 +60,47 @@ The result: connect an assistant, and it can *read devices, state, measurements,
 
 The MCP server is an **OAuth 2.1 resource server**, and `user-management` is its **authorization server** — so connecting a client is a standard OAuth flow, not a bespoke key exchange:
 
-1. The client discovers the server's requirements from its protected-resource metadata (RFC 9728) and finds the authorization server from its metadata (RFC 8414, at `/.well-known/oauth-authorization-server`).
+1. The client discovers the server's requirements from its protected-resource metadata (RFC 9728), then finds the authorization server from *its* metadata (RFC 8414). Both documents live at a well-known path built by inserting the well-known segment **between** the host and the identifier's path — so on an instance at `iot.example.com` they are `/.well-known/oauth-protected-resource/api/mcp` and `/.well-known/oauth-authorization-server/api/user-management`.
 2. The user is sent through the **authorization-code flow with PKCE** (`/oauth/authorize`): they sign in, choose the tenant to grant, and consent — all server-rendered, no shared secret.
 3. The client exchanges the code for a tenant-scoped access token at `/oauth/token`, and refreshes it as needed (refresh tokens are single-use and rotated).
 4. The client calls MCP tools with that token; each call runs under the user's own permissions.
 
 Clients are **registered by an administrator** (through the admin API) rather than self-registering, so an operator controls which applications may request access and with what redirect URIs.
+
+### Where to point a client {#where-to-point-a-client}
+
+There is one URL to configure, and it is the instance's public host plus `/api/mcp`:
+
+```
+https://<your-instance-host>/api/mcp
+```
+
+That single string is three things at once, which is why it is the only one you need:
+
+- the **endpoint** the client POSTs its MCP requests to;
+- the **resource identifier** the client sends as the `resource` parameter when it asks for a token, and that the token is stamped with as its audience;
+- the **starting point for discovery** — everything else is derived from it.
+
+Nothing else needs to be entered by hand. A client that receives the `401` from that endpoint reads the metadata location out of the response's `WWW-Authenticate` header, follows it, and from that document learns where the authorization server is and asks *it* for its own metadata. Discovery is those three requests, and you can walk them by hand before pointing a client at anything:
+
+```bash
+# 1. The endpoint answers 401 and names its metadata document.
+curl -i -X POST https://<your-instance-host>/api/mcp
+
+# 2. That document names the authorization server.
+curl https://<your-instance-host>/.well-known/oauth-protected-resource/api/mcp
+
+# 3. The authorization server describes where to log in and get a token.
+curl https://<your-instance-host>/.well-known/oauth-authorization-server/api/user-management
+```
+
+The well-known paths look odd the first time you see them: the well-known segment goes **between** the host and the rest of the path rather than after it. That is the location the standards define for an identifier that carries a path, so it is what a client builds on its own. For the second document, the more intuitive-looking `https://<host>/api/mcp/.well-known/oauth-protected-resource` serves the same thing, for clients that construct it that way instead.
+
+All three requests are unauthenticated — discovery is public by design and returns no secrets. Request 3 only answers once the authorization server is switched on; see [below](#limits-and-boundaries) for why that is a separate step.
+
+:::caution Run exactly one replica
+The MCP server keeps each client's protocol session in memory, on the pod that created it. Sessions are not shared between pods and there is no session affinity, so a second replica means roughly half of every client's requests arrive at a pod that has never heard of its session and are refused. The failure is intermittent and its message does not mention scaling, so it reads as a client bug. Installing with more than one replica for this area is refused outright rather than left to be discovered.
+:::
 
 ## Limits and boundaries {#limits-and-boundaries}
 

@@ -77,11 +77,20 @@ spec:
   wrong, and a second UDP binder silently drops the share of datagrams the Service sent it.
   So they are pinned at one serving replica whatever the strategy says.
 
-  That guard has to be keyed on the area because keying it on the strategy MISSES. Until
-  now the only replica check fired on Recreate, so those two areas were protected by their
+  mcp joins them for a third reason, and it is worth stating because it is NOT a lease
+  case: it holds each connected client's protocol session in memory, on the pod that
+  created it. Nothing shares those sessions and the Service does no session affinity, so a
+  second pod does not split work — it answers roughly half of every client's requests
+  "session not found", intermittently, to a client that connected successfully a moment
+  earlier. There is no lease to take, because there is nothing to arbitrate: the state is
+  per-client, not per-partition. Making mcp scale out means moving sessions off the pod,
+  not adding a lock.
+
+  That guard has to be keyed on the area because keying it on the strategy MISSES. The
+  only replica check used to fire on Recreate, so these areas were protected by their
   strategy rather than by their nature: setting `strategy: RollingUpdate` alongside
   `replicas: 2` rendered cleanly and produced two Hosts, or a UDP binder dropping half its
-  traffic, with nothing in the render to say so.
+  traffic, or an MCP server losing sessions, with nothing in the render to say so.
 
   The second guard is the strategy one, and it stays: Recreate with more than one replica
   stops EVERY pod before starting any, so the second replica buys nothing during a rollout
@@ -120,10 +129,21 @@ spec:
   {{/*
   Areas that can only ever have ONE SERVING pod, whatever the rollout strategy. This is a
   property of the workload, not of how it is deployed — see the strategy note above.
+
+  🔴 It is a dict of area → the reason for THAT area, not a list sharing one message. It
+  was a list, and the single message it shared spelled out both ingest areas' reasons and
+  ended "the partition lease makes REPLACEMENT safe for both" — a sentence that is true of
+  those two and false of anything else. So the third member could not be added without
+  either mis-stating its cause or diluting the message for the first two. An operator who
+  set replicas reads exactly one of these, and it has to be about the area they named.
   */}}
-  {{- $singleServingAreas := list "sparkplug-ingest" "lwm2m-ingest" }}
-  {{- if and (has $area $singleServingAreas) (gt $replicas 1) }}
-  {{- fail (printf "functionalAreas.%s: this area can only run ONE serving pod, so replicas must be 1 (got %v). It is not a rollout-strategy question: sparkplug-ingest owns one Sparkplug Host's session state and publishes STATE on the broker, so a second pod is a second Host; lwm2m-ingest binds one inbound CoAP/UDP socket, so a second pod silently drops the datagrams the Service sends it. The partition lease makes REPLACEMENT safe for both, but neither can warm-standby." $area $replicas) }}
+  {{- $singleServingAreas := dict
+      "sparkplug-ingest" `sparkplug-ingest owns one Sparkplug Host's session state and publishes STATE on the broker, so a second pod is a second Host. The partition lease makes REPLACEMENT safe, so a rollout is fine — but it cannot warm-standby.`
+      "lwm2m-ingest" `lwm2m-ingest binds one inbound CoAP/UDP socket, so a second pod silently drops the datagrams the Service sends it. The partition lease makes REPLACEMENT safe, so a rollout is fine — but it cannot warm-standby.`
+      "mcp" `mcp keeps each client's protocol session in memory on the pod that created it. Sessions are not shared between pods and the Service does no session affinity, so with two pods roughly half of every client's requests land on a pod that has never heard of its session id and are answered "session not found" (HTTP 404) — a client that connected successfully then fails partway through, intermittently, with an error that does not mention scaling.`
+  }}
+  {{- if and (hasKey $singleServingAreas $area) (gt $replicas 1) }}
+  {{- fail (printf "functionalAreas.%s: this area can only run ONE serving pod, so replicas must be 1 (got %v). It is not a rollout-strategy question: %s" $area $replicas (get $singleServingAreas $area)) }}
   {{- end }}
   {{- if and (eq $strategy "Recreate") (gt $replicas 1) }}
   {{- fail (printf "functionalAreas.%s: strategy Recreate stops every pod before starting any, so replicas above 1 buys nothing during a rollout and leaves the area down for the whole gap — and outside a rollout it is simply N permanent pods. Use replicas:1 with Recreate, or RollingUpdate if this area supports warm standbys (got replicas:%v)." $area $replicas) }}

@@ -379,19 +379,26 @@ func registerKeyHandlers() {
 // 8414 metadata + a public JWKS mirror); the /oauth/authorize and /oauth/token
 // endpoints it advertises land in the following slices.
 //
-// Deployment companion (tracked for the slice that enables OAuth in a cluster):
-// external discovery needs two ingress adjustments this in-code slice does not
-// make. (1) The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught
-// by the ingress rule that 404s external /api/<area>/auth/* — no ingress change
-// needed for it. (2) A strict RFC 8414 client of an issuer WITH a path
-// (https://host/api/user-management) fetches the metadata at the path-INSERTED
-// location (https://host/.well-known/oauth-authorization-server/api/user-management),
-// which the current /api/<area> ingress rule does not route; the widely-used
-// path-APPENDED form (<issuer>/.well-known/...) does route through it. Supporting
-// strict clients needs an added ingress rule (or a dedicated path-less issuer
-// host). Inert until an operator sets IssuerUrl.
+// The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught by the
+// ingress rule that 404s external /api/<area>/auth/* — no ingress change is needed
+// for it.
+//
+// 🔴 THE METADATA DOCUMENT IS SERVED AT TWO PATHS, AND THE SECOND IS THE ONE CLIENTS
+// USE. A note here used to describe the path-INSERTED location as an unsupported
+// nicety for "strict" clients and closed with "inert until an operator sets
+// IssuerUrl". Both halves were wrong by the time they were read. It is not strictness:
+// RFC 8414 §3.1 specifies insertion, the MCP specification requires clients to try it
+// FIRST for a path-carrying issuer, and the reference client aborts the whole walk on
+// the first error rather than falling through to the appended form — so the appended
+// form routing was no consolation, because nothing reached it. And it was not inert:
+// the Helm chart derives mcp's issuerUrl from the ingress automatically, so every
+// ingress install that enables mcp is pointed at a path-carrying issuer here.
+//
+// The insertion is computed from the configured issuer rather than hardcoded, so an
+// operator who sets a path-less issuer (a dedicated AS host) gets one registration
+// and no duplicate.
 func registerOAuthHandlers() {
-	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
+	identity.RegisterMetadataHandlers(http.DefaultServeMux, Configuration.Auth.IssuerUrl)
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
 	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and
