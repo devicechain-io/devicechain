@@ -445,7 +445,8 @@ func TestApplyTo(t *testing.T) {
 // method set is the thing being asserted, so a reflection check is the assertion —
 // there is no behaviour left to drive.
 func TestApplyToValueHasNotComeBack(t *testing.T) {
-	for _, v := range []any{OptionalString{}, OptionalBool{}, OptionalInt32{}, OptionalFloat64{}, OptionalID{}} {
+	for _, v := range []any{OptionalString{}, OptionalBool{}, OptionalInt32{}, OptionalFloat64{},
+		OptionalID{}, OptionalStringList{}} {
 		rt := reflect.TypeOf(v)
 		if _, found := rt.MethodByName("ApplyToValue"); found {
 			t.Errorf("%s has an ApplyToValue again: folding a null to the zero value accepts "+

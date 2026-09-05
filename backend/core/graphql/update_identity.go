@@ -59,10 +59,9 @@ func ErrPayloadTokenDisagrees(entity, token, requested string) error {
 }
 
 // ErrRenameTokenUnusable is the rule for the updates where a differing payload token
-// IS meant: it names the record's NEW token. Only three mutations are in this class,
-// and each earned it the same way — a test pins the rename as intended, and the
-// things that depend on the record hold its immutable id rather than its token, so a
-// rename cannot orphan them:
+// IS meant: it names the record's NEW token. Each mutation in this class earned it the
+// same way — a test pins the rename as intended, and the things that depend on the
+// record hold its immutable id rather than its token, so a rename cannot orphan them:
 //
 //   - updateDeviceProfile — additionally refused once the profile is published or
 //     adopted, because published rules and dead-man rosters DO key on the token from
@@ -71,6 +70,11 @@ func ErrPayloadTokenDisagrees(entity, token, requested string) error {
 //   - updateNotificationChannel — the delivery secret is keyed by the channel's id,
 //     and a policy's rules store ChannelId, resolving the token only at write time.
 //   - updateConnector — the credential is keyed by the connector's id.
+//   - updateAIProvider — the write-only key handle is keyed by the provider's id.
+//
+// The list is not headed by a count. It said "only three" while there were four, which
+// is what a number frozen in prose does: `grep -l ErrRenameTokenUnusable` is the
+// authority, and it costs one command.
 //
 // What it refuses is a BLANK new token, which is not a rename anyone can have meant:
 // it leaves the record addressable by nothing. Whitespace IS trimmed here, because
