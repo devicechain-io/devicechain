@@ -228,12 +228,15 @@ type adminRoleCreateInput struct {
 	Authorities []string
 }
 
-// adminRoleUpdateInput mirrors AdminRoleUpdateRequest.
-type adminRoleUpdateInput struct {
-	Name        *string
-	Description *string
-	Authorities []string
-}
+// 🔴 THERE IS NO adminRoleUpdateInput ANY MORE, AND ITS ABSENCE IS THE POINT.
+//
+// Each update mutation used to declare a resolver-local mirror of its SDL input and
+// flatten it into an admin.*MutableInput, which is two hops for the three states to
+// survive and one place for them to be lost — a mirror of plain *string fields fed into
+// a full-replace struct is precisely the "converted in name only" shape core's
+// exhaustiveness guard was rewritten to catch. The resolver now takes the service's own
+// *UpdateRequest directly, so graphql-go packs the wire request straight into the type
+// the service applies and there is no intermediate representation to drop a state in.
 
 // CreateRole creates a role (requires role:write).
 func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
@@ -252,20 +255,21 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 	return wrapRole(role, err)
 }
 
-// UpdateRole updates a role by scope + token (requires role:write).
+// UpdateRole applies a partial update to the role named by scope + token (requires
+// role:write). Omitted fields are left alone, an explicit null clears, a value sets.
+//
+// Both scope and token stay mutation ARGUMENTS: a role's identity is the pair, and the
+// request carries neither, so addressing a second role through the payload is
+// unrepresentable.
 func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
 	Scope   string
 	Token   string
-	Request adminRoleUpdateInput
+	Request admin.RoleUpdateRequest
 }) (*AdminRoleResolver, error) {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
 	}
-	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, admin.RoleMutableInput{
-		Name:        strOrEmpty(args.Request.Name),
-		Description: strOrEmpty(args.Request.Description),
-		Authorities: args.Request.Authorities,
-	})
+	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request)
 	return wrapRole(role, err)
 }
 
@@ -301,27 +305,10 @@ type adminTenantCreateInput struct {
 	GeoFencePositionBudget       *int32
 }
 
-// adminTenantUpdateInput mirrors AdminTenantUpdateRequest.
-type adminTenantUpdateInput struct {
-	Name                         *string
-	TierToken                    string
-	Config                       *string
-	IngestMessagesPerSecond      *float64
-	IngestBurst                  *int32
-	OutboundMessagesPerSecond    *float64
-	OutboundBurst                *int32
-	AiExternalEnabled            *bool
-	AiInferenceRequestsPerMinute *float64
-	AiInferenceBurst             *int32
-	ShedPriority                 *int32
-	HeldCommandCeiling           *int32
-	GeoFencePositionCeiling      *int32
-	GeoFenceCeiling              *int32
-	GeoFencePositionBudget       *int32
-}
-
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
-// nil (inherit-the-default) rather than coercing it to zero.
+// nil (inherit-the-default) rather than coercing it to zero. Used by the CREATE
+// resolvers, which have nothing to preserve and so still take plain pointers; the
+// update path's counterpart is patch.IntPtr, which folds three states rather than two.
 func intPtr(v *int32) *int {
 	if v == nil {
 		return nil
@@ -362,35 +349,22 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 	return wrapTenant(tenant, err)
 }
 
-// UpdateTenant updates a tenant's name + config (requires tenant:write).
+// UpdateTenant applies a partial update to a tenant (requires tenant:write): an omitted
+// field leaves the stored value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 The governance overrides are the reason this matters most. Under the full-replace
+// shape every omitted override was written as NULL, so a rename silently removed a
+// tenant's ingest ceiling, its shed priority and its geofence caps — which is why the
+// AdminTenant type exposes each raw column, so the console could round-trip them. Those
+// read-backs are still useful; they are no longer load-bearing.
 func (r *AdminResolver) UpdateTenant(ctx context.Context, args struct {
 	Token   string
-	Request adminTenantUpdateInput
+	Request admin.TenantUpdateRequest
 }) (*AdminTenantResolver, error) {
 	if err := auth.Authorize(ctx, auth.TenantWrite); err != nil {
 		return nil, err
 	}
-	cfg, err := parseConfig(args.Request.Config)
-	if err != nil {
-		return nil, err
-	}
-	tenant, err := r.getAdminService(ctx).UpdateTenant(ctx, args.Token, admin.TenantMutableInput{
-		Name: strOrEmpty(args.Request.Name), TierToken: args.Request.TierToken, Config: cfg,
-		GovernanceOverrides: admin.GovernanceOverrides{
-			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
-			IngestBurst:                  intPtr(args.Request.IngestBurst),
-			OutboundMessagesPerSecond:    args.Request.OutboundMessagesPerSecond,
-			OutboundBurst:                intPtr(args.Request.OutboundBurst),
-			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
-			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),
-			ShedPriority:                 intPtr(args.Request.ShedPriority),
-			HeldCommandCeiling:           intPtr(args.Request.HeldCommandCeiling),
-			GeoFencePositionCeiling:      intPtr(args.Request.GeoFencePositionCeiling),
-			GeoFenceCeiling:              intPtr(args.Request.GeoFenceCeiling),
-			GeoFencePositionBudget:       intPtr(args.Request.GeoFencePositionBudget),
-		},
-		AiExternalEnabled: args.Request.AiExternalEnabled,
-	})
+	tenant, err := r.getAdminService(ctx).UpdateTenant(ctx, args.Token, &args.Request)
 	return wrapTenant(tenant, err)
 }
 
@@ -432,16 +406,9 @@ func wrapTenant(tenant *iam.Tenant, err error) (*AdminTenantResolver, error) {
 	return &AdminTenantResolver{M: *tenant}, nil
 }
 
-// parseConfig decodes an optional JSON object string into a config map. A null or
-// empty argument yields a nil map (no config); a non-object or malformed JSON is
-// an error.
-func parseConfig(s *string) (map[string]any, error) {
-	if s == nil || *s == "" {
-		return nil, nil
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal([]byte(*s), &cfg); err != nil {
-		return nil, fmt.Errorf("config must be a JSON object: %w", err)
-	}
-	return cfg, nil
-}
+// parseConfig decodes an optional JSON object string into a config map for the CREATE
+// resolvers. It delegates to admin.ParseConfigJSON, which the update path also uses, so
+// the two doors cannot come to disagree about what an empty config is: a second copy
+// here is how "{}" would end up meaning NULL on one path and an empty document on the
+// other, for the same tenant.
+func parseConfig(s *string) (map[string]any, error) { return admin.ParseConfigJSON(s) }

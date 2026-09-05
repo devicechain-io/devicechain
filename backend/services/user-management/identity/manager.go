@@ -19,12 +19,14 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
+	"github.com/devicechain-io/dc-user-management/patch"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -526,25 +528,53 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 	return m.iam.IdentityByEmail(ctx, email)
 }
 
-// UpdateProfile updates the signed-in identity's display name (first/last),
+// ProfileUpdateRequest is the self-service profile edit: the signed-in identity's
+// display name, and nothing else. Its email and credentials are immutable here, and the
+// identity itself is named by the caller's own token rather than by anything in the
+// payload — so editing someone else's profile is unrepresentable, not merely refused.
+//
+// This mutation was ALREADY effectively three-state before the conversion, through two
+// nullable inline arguments: a nil pointer left a field alone and a "" pointer cleared
+// it. What it was not was built on the shared mechanism — so nothing certified it, and
+// the exhaustiveness guard could not see it at all. The behaviour is preserved exactly:
+//
+//	omitted        leave the stored name alone
+//	""             set it to the empty string, which is how it has always been cleared
+//	explicit null  the same as "" — see below
+//	a value        set it
+//
+// 🔴 NULL AND "" AGREE HERE, AND THAT IS THE DECISION. first_name / last_name are NOT
+// NULL columns whose empty value is a state a person may legitimately be in, so there is
+// no third stored outcome for null to map onto (patch.EmptiableString carries the
+// reasoning, and why ApplyToRequired — which would REFUSE both — is the wrong fold for
+// exactly these columns). Under the old inline arguments, `firstName: null` was
+// indistinguishable from omitting it; it now clears, which is the only reading that
+// leaves "" and null meaning one thing.
+type ProfileUpdateRequest struct {
+	FirstName dcgraphql.OptionalString
+	LastName  dcgraphql.OptionalString
+}
+
+// UpdateProfile applies a partial update to the signed-in identity's display name,
 // keyed by the email carried as the token subject. Email and credentials are not
 // affected — this is the self-service profile edit for a tenant user.
-func (m *Manager) UpdateProfile(ctx context.Context, email string, firstName, lastName *string) (*iam.Identity, error) {
+//
+// Only the columns the caller actually mentioned are written: the field map carries a
+// key per SET field, so an update naming neither name touches no column at all rather
+// than rewriting both from what it happened to load.
+func (m *Manager) UpdateProfile(ctx context.Context, email string, request *ProfileUpdateRequest) (*iam.Identity, error) {
 	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	// Only update the fields actually supplied: a nil pointer means "leave
-	// unchanged", so omitting lastName doesn't clear it (a "" pointer still
-	// clears it explicitly).
 	fields := map[string]any{}
-	if firstName != nil {
-		id.FirstName = *firstName
-		fields["first_name"] = *firstName
+	if request.FirstName.Set {
+		id.FirstName = patch.EmptiableString(request.FirstName, id.FirstName)
+		fields["first_name"] = id.FirstName
 	}
-	if lastName != nil {
-		id.LastName = *lastName
-		fields["last_name"] = *lastName
+	if request.LastName.Set {
+		id.LastName = patch.EmptiableString(request.LastName, id.LastName)
+		fields["last_name"] = id.LastName
 	}
 	if err := m.iam.UpdateIdentityFields(ctx, id, fields); err != nil {
 		return nil, err

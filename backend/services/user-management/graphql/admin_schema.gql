@@ -76,20 +76,22 @@ input AdminTenantTierCreateRequest {
     color: String
 }
 
-# Data to update a tier (its token is fixed). Editing a tier changes behavior for
-# every tenant at it, live.
+# Data to update a tier (its token is fixed and named by the mutation's own argument).
+# Editing a tier changes behavior for every tenant at it, live.
 #
-# name and description are a full replace: omitting one CLEARS it. config is not —
-# omitting it leaves the tier's settings untouched, and passing "{}" clears them.
-# The asymmetry is deliberate: clearing a name is cosmetic, while clearing config
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. name and description used to be a full replace — omitting
+# one CLEARED it — while config alone had a bespoke absent state, because clearing config
 # silently re-prices every tenant at the tier (they fall back to the platform default
-# within a minute), which is too destructive to reach by omission.
+# within a minute) and that was too destructive to reach by omission. Every field has the
+# absent state now, so the asymmetry is gone rather than generalized.
 input AdminTenantTierUpdateRequest {
     name: String
     description: String
+    # The tier's settings, as a JSON object string. Null, "" and "{}" all clear them.
     config: String
-    # A palette token or "" for no pill. A full replace like name (presentation, so
-    # clearing it is cosmetic), not a patch like config.
+    # A palette token or "" for no pill. Null clears it to "" — the column is NOT NULL
+    # with an empty default, so "no pill" is a value it holds rather than an absence.
     color: String
 }
 
@@ -140,22 +142,23 @@ type AdminTenant {
     aiInferenceBurst: Int
     # Per-tenant ADR-063 shed-priority override (1–100), a contention preference (who
     # degrades last). Null means the tenant inherits its tier's shedPriority, then the
-    # platform fail-safe. Readable here — like every override above — so the console can
-    # round-trip it on an unrelated edit rather than nulling it (updateTenant is a full
-    # replace of these fields).
+    # platform fail-safe. Readable here, like every override above, so an operator can see
+    # what a tenant actually declares. It used to be load-bearing for a different reason —
+    # updateTenant was a full replace, so a console that could not read the value back
+    # nulled it on any unrelated edit — which the partial update has now removed.
     shedPriority: Int
     # Per-tenant ceiling on how many commands may sit in the HELD state (the platform
     # deliberately withholding dispatch because the device is known absent). Null means
     # the tenant inherits its tier's heldCommandCeiling, then the enforcing service's
-    # default — never unlimited. Readable here, like every override above, so the
-    # console can round-trip it on an unrelated edit rather than nulling it (updateTenant
-    # is a full replace of these fields).
+    # default — never unlimited. Readable here, like every override above, so an operator
+    # can see what a tenant actually declares; omitting it from an update now leaves it
+    # alone, so reading it back is no longer what keeps it from being nulled.
     heldCommandCeiling: Int
     # Per-tenant geofence cap overrides. Null means the tenant inherits its tier's key, then
-    # the platform default — never unlimited. Readable here, like every override above, so the
-    # console can round-trip them on an unrelated edit rather than nulling them (updateTenant is
-    # a full replace of these fields); nulling one here would RAISE a cap an operator had
-    # deliberately tightened.
+    # the platform default — never unlimited. Readable here, like every override above, so an
+    # operator can see what a tenant actually declares. Omitting one from an update now leaves it
+    # alone; only an explicit null clears it, which for these three would RAISE a cap an operator
+    # had deliberately tightened.
     #
     # Each bounds a different cost: geoFencePositionCeiling one fence's position count (a
     # quadratic compile), geoFenceCeiling the tenant's fence count (a manifest that must fit one
@@ -257,11 +260,23 @@ input AdminRoleCreateRequest {
     authorities: [String!]!
 }
 
-# Data to update a role (its scope + token identity is fixed).
+# Data to update a role (its scope + token identity is fixed and named by the
+# mutation's own arguments).
+#
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. It used to be a full replace, so `updateRole(scope:…,
+# token:…, request:{name:"Ops"})` erased the role's description AND every authority it
+# granted, and returned the emptied role with a success.
 input AdminRoleUpdateRequest {
     name: String
     description: String
-    authorities: [String!]!
+    # The role's authority set, REPLACED wholesale when sent. Nullable so the absent
+    # state exists: a non-null list would be required by validation and there would be no
+    # way to leave the authorities alone. Null and [] both mean the empty set — for a
+    # list those are one request spelled two ways — and emptying it IS allowed, because
+    # createRole allows it: a role that grants nothing is a real thing an operator builds,
+    # and refusing it here only would make such a role creatable and uncorrectable.
+    authorities: [String!]
 }
 
 # Data to create a tenant. config is an optional JSON object string. The ingest* /
@@ -314,15 +329,28 @@ input AdminTenantCreateRequest {
     geoFencePositionBudget: Int
 }
 
-# Data to update a tenant (its token is fixed). A null ingest* / outbound* override
-# clears it, reverting the tenant to the platform default. A null aiExternalEnabled
-# likewise clears consent (the tenant reverts to not-opted-in).
+# Data to update a tenant (its token is fixed and named by the mutation's own argument).
+#
+# A PARTIAL update: OMITTING a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. That distinction matters most for the governance
+# overrides, where nil already means something load-bearing — "this tenant declares no
+# override, so it falls back to its tier and then to the platform default, and NEVER to
+# unlimited". Under the full-replace shape this replaces, an omitted override was written
+# as NULL, so renaming a tenant removed its ingest ceiling, its shed priority and its
+# geofence caps in the same request, and returned success.
+#
+#   omitted        leave the override exactly as it is, whether set or absent
+#   null           REMOVE the override, so the tenant inherits its tier then the platform
+#                  default — never zero, and never unlimited
+#   a value        set the override to it
 input AdminTenantUpdateRequest {
     name: String
-    # The tier to package this tenant at, by token (ADR-065). Required, like on
-    # create: this request is a full replace of the mutable fields, and a tenant is
-    # never un-tiered. Re-tiering is a live, settings-only change.
-    tierToken: String!
+    # The tier to package this tenant at, by token (ADR-065). OPTIONAL: omitting it keeps
+    # the tenant at its current tier, and an explicit null is REFUSED, because the tier is
+    # a NOT NULL foreign key and there is no un-tiered tenant. It used to be required, on
+    # the reasoning that an omitted tier could not be told from "clear it" — true only of
+    # the full replace this replaces. Re-tiering is a live, settings-only change.
+    tierToken: String
     config: String
     ingestMessagesPerSecond: Float
     ingestBurst: Int
@@ -525,12 +553,25 @@ input AdminOAuthClientCreateRequest {
     confidential: Boolean
 }
 
-# Data to update a client (its clientId is fixed).
+# Data to update a client (its clientId is fixed and named by the mutation's own
+# argument).
+#
+# A PARTIAL update: omitting a field leaves the stored value alone, sending null clears
+# it, sending a value sets it. It used to be a full replace, so renaming a client also
+# rewrote both of its allowlists from whatever the caller happened to send.
 input AdminOAuthClientUpdateRequest {
     name: String
     description: String
-    redirectUris: [String!]!
-    scopes: [String!]!
+    # The exact-match redirect allowlist and the scopes the client may request, each
+    # REPLACED wholesale when sent. Nullable so the absent state exists — a non-null list
+    # would be required by validation, leaving no way to say "leave these alone".
+    #
+    # EMPTYING EITHER IS REFUSED, by the same rules the create path applies: a client with
+    # no redirect URI can never complete an authorization, and one registered for no scope
+    # describes a permission set nobody can read. Null and [] are the same request here,
+    # and both are rejected rather than one being quietly read as "leave it alone".
+    redirectUris: [String!]
+    scopes: [String!]
 }
 
 # One storage system's line in a deletion's ledger (ADR-077).
@@ -708,7 +749,8 @@ type Mutation {
 
     # Create a role granting a set of authorities (requires role:write).
     createRole(request: AdminRoleCreateRequest!): AdminRole!
-    # Update a role by scope + token (requires role:write).
+    # Apply a partial update to a role by scope + token: an omitted field is left
+    # alone, a null clears it, a value sets it (requires role:write).
     updateRole(scope: String!, token: String!, request: AdminRoleUpdateRequest!): AdminRole!
     # Delete a role by scope + token; returns whether one was removed. The
     # superuser system role is protected (requires role:write).
@@ -716,8 +758,9 @@ type Mutation {
 
     # Create a tenant tier (requires tenant:write).
     createTenantTier(request: AdminTenantTierCreateRequest!): AdminTenantTier!
-    # Update a tier by token. This changes behavior for every tenant at the tier,
-    # live and with no deploy (requires tenant:write).
+    # Apply a partial update to a tier by token: an omitted field is left alone, a
+    # null clears it, a value sets it. This changes behavior for every tenant at the
+    # tier, live and with no deploy (requires tenant:write).
     updateTenantTier(token: String!, request: AdminTenantTierUpdateRequest!): AdminTenantTier!
     # Delete a tier by token; returns whether one was removed. Refused while any
     # tenant is still packaged at it (requires tenant:write).
@@ -731,8 +774,10 @@ type Mutation {
 
     # Create a tenant, enabled by default, at the requested tier (requires tenant:write).
     createTenant(request: AdminTenantCreateRequest!): AdminTenant!
-    # Replace a tenant's name, tier, config, and ingest overrides by token; omitting an
-    # ingest override clears it back to the platform default (requires tenant:write).
+    # Apply a partial update to a tenant by token: an omitted field is left alone, a
+    # null clears it, a value sets it. Omitting a governance override no longer clears
+    # it — a null does, reverting the tenant to its tier and then to the platform
+    # default, never to unlimited (requires tenant:write).
     updateTenant(token: String!, request: AdminTenantUpdateRequest!): AdminTenant!
     # Enable or disable a tenant (requires tenant:write).
     setTenantEnabled(token: String!, enabled: Boolean!): AdminTenant!
@@ -747,7 +792,8 @@ type Mutation {
     # Register an OAuth client, enabled by default (requires client:write). Returns
     # the client plus, for a confidential client, its one-time cleartext secret.
     createOauthClient(request: AdminOAuthClientCreateRequest!): AdminOAuthClientSecret!
-    # Replace a client's name, redirect URIs, and scopes by clientId (requires
+    # Apply a partial update to a client by clientId: an omitted field is left alone, a
+    # null clears it, a value sets it. Neither allowlist may be emptied (requires
     # client:write).
     updateOauthClient(clientId: String!, request: AdminOAuthClientUpdateRequest!): AdminOAuthClient!
     # Enable or disable a client; a disabled client is rejected at the authorize /
