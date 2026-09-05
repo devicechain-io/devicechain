@@ -58,11 +58,11 @@ func TestDashboardCrud(t *testing.T) {
 	require.Len(t, found, 1)
 	assert.JSONEq(t, `{"schemaVersion":1,"widgets":[]}`, string(found[0].Definition))
 
-	// Update: rename + new definition.
-	updated, err := api.UpdateDashboard(ctx, "fleet", &DashboardCreateRequest{
-		Token:      "fleet",
-		Name:       strp("Fleet v2"),
-		Definition: `{"schemaVersion":1,"widgets":[{"id":"w1"}]}`,
+	// Update: rename + new definition. The update input carries no token — the
+	// argument is the only thing that names the row.
+	updated, err := api.UpdateDashboard(ctx, "fleet", &DashboardUpdateRequest{
+		Name:       util.OptionalStringOf("Fleet v2"),
+		Definition: util.OptionalStringOf(`{"schemaVersion":1,"widgets":[{"id":"w1"}]}`),
 	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Fleet v2", updated.Name.String)
@@ -129,9 +129,8 @@ func TestInvalidDefinitionRejected(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = api.UpdateDashboard(ctx, "ok", &DashboardCreateRequest{
-		Token:      "ok",
-		Definition: "}{",
+	_, err = api.UpdateDashboard(ctx, "ok", &DashboardUpdateRequest{
+		Definition: util.OptionalStringOf("}{"),
 	}, nil)
 	assert.ErrorIs(t, err, ErrInvalidDefinition)
 }
@@ -192,8 +191,10 @@ func TestUpdateOptimisticConcurrency(t *testing.T) {
 	// on UpdateDashboard: the read formatter and this compare are one contract.
 	current := *util.FormatTime(created.UpdatedAt)
 
-	req := func() *DashboardCreateRequest {
-		return &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1,"widgets":[]}`}
+	req := func() *DashboardUpdateRequest {
+		return &DashboardUpdateRequest{
+			Definition: util.OptionalStringOf(`{"schemaVersion":1,"widgets":[]}`),
+		}
 	}
 
 	// A wrong expected timestamp is a conflict (stands in for a concurrent writer
@@ -231,7 +232,9 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	assert.Equal(t, "alice", v1.PublishedBy)
 
 	// Move the draft to B, publish as v2.
-	_, err = api.UpdateDashboard(ctx, "d", &DashboardCreateRequest{Token: "d", Definition: defB}, nil)
+	_, err = api.UpdateDashboard(ctx, "d", &DashboardUpdateRequest{
+		Definition: util.OptionalStringOf(defB),
+	}, nil)
 	require.NoError(t, err)
 	v2, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob", nil)
 	require.NoError(t, err)
@@ -247,7 +250,9 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	assert.JSONEq(t, defA, string(versions[1].Definition))
 
 	// Move the draft to C (unpublished), then roll back to v1 (defA).
-	_, err = api.UpdateDashboard(ctx, "d", &DashboardCreateRequest{Token: "d", Definition: defC}, nil)
+	_, err = api.UpdateDashboard(ctx, "d", &DashboardUpdateRequest{
+		Definition: util.OptionalStringOf(defC),
+	}, nil)
 	require.NoError(t, err)
 	rolled, err := api.RollbackDashboard(ctx, "d", 1)
 	require.NoError(t, err)

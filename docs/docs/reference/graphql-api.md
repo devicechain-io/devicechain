@@ -225,22 +225,25 @@ query {
 
 Two consequences of a full replace worth planning around. Because the write covers every field,
 **two people editing one entity overwrite each other across all of it**, not only where they
-overlap — except on `updateDashboard`, `updateConnector` and `updateAiProvider`, which take an
-optional `expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you
-read it. And because the update input is the create input, it carries a **token**, which is where
-the two contracts differ most.
+overlap — except on `updateConnector` and `updateAiProvider`, which take an optional
+`expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read it.
+(`updateDashboard` takes the same precondition and is a partial update, so it is not one of these.)
+And because the update input is the create input, it carries a **token**, which is where the two
+contracts differ most.
 
 #### The `token` argument names the record {#the-token-argument-names-the-record}
 
 Every `update*` declares `token: String!`, and **that argument is what decides which record is
-written.** What the *payload* token does — where one still exists — depends on the mutation, and
-there are three answers rather than one. The differences are real, so they are listed rather than
-smoothed over.
+written.** What the *payload* token does — where one still exists — depends on the mutation, and the
+difference is real, so it is listed rather than smoothed over.
+
+There used to be a third answer: a payload token that had to **agree** with the argument, refused
+when it disagreed and read as "unspecified" when empty. Its last two mutations have converted, so
+the row naming it is gone rather than left standing empty.
 
 | The payload token | Which mutations | A token that **disagrees** | A token that is **empty** |
 | --- | --- | --- | --- |
 | **Is not there at all** | every [partial update](#which-mutations-are-partial-updates) | *unrepresentable* — the input has no `token` field, so the schema rejects it | — |
-| **Must agree** | `updateDashboard` | **refused** | ignored — read as "unspecified" |
 | **Names the new token** (a rename) | `updateDeviceProfile`, `updateConnector`, `updateAiProvider` | **renames the record** | **refused** |
 
 The rename row is not a leftover. Each of those keys the things that depend on the record by its
@@ -288,8 +291,11 @@ stored one — so the payload still moved the record, and an **empty** payload t
 left a live row addressable by nothing.
 
 If you have a client that relied on the payload naming the record, it now gets an error rather than
-writing the wrong row. If you have one that sends `token: ""` on an update, it now gets an error on
-the rename mutations and is ignored on the rest — where before it destroyed the record's identity.
+writing the wrong row. If you have one that sends `token: ""` on an update, it now gets an error
+either way — refused by the rename mutations, and rejected by the schema on a partial update, whose
+input has no `token` field to send it in — where before it destroyed the record's identity. It used
+to be *ignored* on a third set of mutations, which is what the "must agree" rule did with an empty
+token; those have all converted.
 :::
 
 ### Where the default does not hold {#where-the-default-does-not-hold}
@@ -303,6 +309,7 @@ Anything not named here follows its mutation's contract.
 | `secret` on `updateNotificationChannel` | **Kept**, and `null` *clears* it, like every other field on a partial update. An empty string also clears, so a client already spelling it that way keeps working. This is the only write-only secret without the inversion below |
 | `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `{}` to clear |
 | `selector` on `updateEntityGroup` | **Kept** when omitted. Unlike most partial-update fields it cannot be *cleared*: `null` is refused, because a dynamic group with no selector matches nothing and cannot be repaired. A static group is refused a selector outright |
+| `definition` on `updateDashboard` | **Kept** when omitted, which is how you rename a dashboard without resending its document. Like `selector` above it cannot be *cleared*: `null` is refused, because a dashboard with no definition is not a thing. A malformed one refuses the whole update, so a rename sent with it is not applied either |
 | `firstName` / `lastName` on `updateProfile` | **Kept.** The one `update*` taking bare arguments rather than a `request`; an empty string still clears |
 | `credentialType` on `updateProvisioningProfile` | **Not in the update input.** Provisioning can mint exactly one credential type today, so the field would only ever restate what is stored. It used to be *reset* to `ACCESS_TOKEN` by any update that omitted it |
 | `activeVersion` on a device profile or an entity group | Nothing: it is not writable here at all, and moves only by publish and rollback |
@@ -352,8 +359,19 @@ and `updateNotificationPolicy`. Two things about the policy are worth knowing be
   policy that delivers nothing), which left the field with no request it could accept beyond a
   no-op. It stays on the create input, where the refusal explains itself.
 
-The remaining areas have not converted: dashboard-management, outbound-connectors, ai-inference and
-user-management are still full replaces.
+In dashboard-management, **`updateDashboard`** takes a `DashboardUpdateRequest` and carries no
+token at all. Its one wrinkle is `definition`: the field is nullable so it can be *omitted* — that
+is how you rename a dashboard without resending its whole document — but an explicit `null` on it
+is **refused**, because a dashboard with no definition is not a thing. It keeps its optional
+`expectedUpdatedAt` precondition, and an update that names no field at all writes nothing (not even
+`updatedAt`) while a stale precondition on it is still a conflict.
+
+**Anything not named above is still a full replace, and the way to tell is the mutation's own
+signature rather than a list here.** This page used to carry a second list of the areas that had
+not converted yet, and it was wrong every time an area landed — it named four while saying three.
+The signature cannot drift from the code that way: `request: FooCreateRequest` is a full replace and
+`request: FooUpdateRequest` is a partial update. The caution immediately below is where that reading
+needs care.
 
 :::caution[The signature is a reliable NO, and only a partly reliable YES]
 `request: FooCreateRequest` always means a full replace, and that direction never lies — a shared
