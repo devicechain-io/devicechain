@@ -4,7 +4,10 @@
 package processor
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/model"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // tenantScoped is a live tenant's context, as both entry points build before calling in.
@@ -99,15 +104,30 @@ func TestDispatchBudgetFitsUnderAckWait(t *testing.T) {
 			worst, dispatchBudget)
 	}
 
-	// 4. 🔑 THE NEGATIVE CONTROL. The budget only does anything if a realistic plan can
-	//    actually reach it. If two channels at the defaults fit inside the budget, then
-	//    nothing here is measuring an enforcement — the clamp would be unreachable and
-	//    TestDeliverAllStopsWhenTheBudgetIsSpent would be exercising a branch production
-	//    never takes.
+	// 4. 🔑 THE DESIGN STATEMENT: the budget is sized for ONE channel, and a second slow
+	//    channel is cut BY DESIGN. This is the number that says so.
+	//
+	//    An earlier version of this comment called it a negative control and claimed that
+	//    if two channels fit, the clamp becomes unreachable and the enforcement tests stop
+	//    measuring production. Both halves are false, and worth writing down so nobody
+	//    restores the reasoning: plan() caps nothing, so a THREE-channel plan still reaches
+	//    the clamp at 2*worst <= budget; and TestDeliverAllStopsWhenTheBudgetIsSpent drives
+	//    a 150ms budget against three channels, so it does not depend on the production
+	//    constants at all.
+	//
+	//    What this actually forbids is lowering the per-attempt defaults far enough that
+	//    two full channels fit — around defaultDeliverySeconds < 4.5s at three attempts.
+	//    That is a deliberate ceiling, not an accident to be corrected: a tenant routing one
+	//    alarm to two slow channels gets the first one's full retry policy and the second
+	//    one cut, because finishing inside AckWait matters more than reaching every channel.
+	//    🔴 So if this fires, the fix is NOT to raise the timeout back — it is to decide
+	//    whether that trade still holds at the new defaults, and to re-derive the budget if
+	//    it does not.
 	if 2*worst <= dispatchBudget {
-		t.Fatalf("two channels at the shipped defaults (%v) fit inside dispatchBudget (%v), so "+
-			"the budget can no longer be reached by the plan that caused the defect; the "+
-			"enforcement tests below no longer measure production behaviour", 2*worst, dispatchBudget)
+		t.Fatalf("two channels at the shipped defaults (2 x %v) now fit inside dispatchBudget "+
+			"(%v). The budget is deliberately sized so the SECOND slow channel is cut; if the "+
+			"defaults have dropped this far, re-derive the budget on purpose rather than "+
+			"raising the timeout to silence this", worst, dispatchBudget)
 	}
 }
 
@@ -499,5 +519,149 @@ func TestTheConstructorSetsTheBudgetFromTheConstant(t *testing.T) {
 	// And a literal-built notifier still gets the platform budget rather than no budget.
 	if (&PolicyNotifier{}).wholeDispatchBudget() != dispatchBudget {
 		t.Fatal("an unset budget must fall back to dispatchBudget, not to zero (no deadline at all)")
+	}
+}
+
+// captureLogs redirects the package-level zerolog writer for the duration of one test and
+// returns a reader for what was written. The log line is the ONLY runtime signal a
+// budget-cut channel produces, so it is the thing under test here, not a side effect of it.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prev })
+	return &buf
+}
+
+// lineContaining returns the single captured log line whose message contains want, failing
+// the test if there is not exactly one.
+//
+// 🔑 IT EXISTS BECAUSE ASSERTING ON THE WHOLE BUFFER MEASURED THE WRONG LINE. A delivery
+// emits a per-attempt warn that carries its own "attempt" field, so a substring check for
+// `"attempt":1` across the buffer passed whether or not the budget line carried the field
+// at all — a mutation dropping it from the budget line survived. Fields belong to a LINE,
+// so the line has to be selected before its fields are read.
+func lineContaining(t *testing.T, buf *bytes.Buffer, want string) string {
+	t.Helper()
+	var found []string
+	for _, ln := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(ln, want) {
+			found = append(found, ln)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected exactly one log line containing %q, got %d:\n%s",
+			want, len(found), buf.String())
+	}
+	return found[0]
+}
+
+// alwaysFailingAdapter fails every attempt with an ordinary transient error.
+type alwaysFailingAdapter struct{ calls int }
+
+func (a *alwaysFailingAdapter) Deliver(context.Context, *model.NotificationChannel, string,
+	[]string, *RenderedNotification) error {
+	a.calls++
+	return errors.New("connection refused")
+}
+
+// 🔴 A BUDGET CUT AND AN EXHAUSTED RETRY POLICY ARE DIFFERENT FACTS AND MUST NOT READ ALIKE.
+//
+// Both surface from the adapter as the same error — a per-attempt timeout and the whole
+// dispatch budget are both context.DeadlineExceeded — so the error text cannot separate
+// them and only ctx.Err() can. Reporting a budget cut as "after exhausting attempts" tells
+// an operator at 3am that their endpoint is slow, when the truth is that the platform
+// stopped the dispatch before their configured retries were spent. The startup warning
+// does not cover it: that fires only for a single channel that statically cannot fit, so a
+// multi-channel plan cut at runtime has no other signal at all.
+func TestABudgetCutIsNotReportedAsExhaustedAttempts(t *testing.T) {
+	buf := captureLogs(t)
+	fa := &alwaysFailingAdapter{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
+	n.attempts = 1
+	n.timeout = time.Minute
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"x@x.com"}}
+
+	// An already-spent budget, which is exactly what the second channel of a slow plan sees.
+	ctx, cancel := context.WithTimeout(tenantScoped(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+
+	if got := n.deliverWithRetry(ctx, d, &RenderedNotification{}); got != deliveryFailed {
+		t.Fatalf("deliverWithRetry = %v, want deliveryFailed", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "whole-dispatch budget was spent") {
+		t.Fatalf("a channel cut by the budget produced no line saying so; the only signal an "+
+			"operator gets is:\n%s", out)
+	}
+	if strings.Contains(out, "after exhausting attempts") {
+		t.Fatalf("a budget cut was reported as an exhausted retry policy, which sends an "+
+			"operator to look at their endpoint instead of at the dispatch:\n%s", out)
+	}
+}
+
+// The counterweight, and the one that stops the fix from relabelling every failure as a
+// budget cut: a channel that genuinely spent its own attempts, with budget to spare, must
+// still say so. Without this, "always log the budget line" would pass the test above while
+// hiding a real endpoint outage.
+func TestAnExhaustedRetryPolicyStillSaysSo(t *testing.T) {
+	buf := captureLogs(t)
+	fa := &alwaysFailingAdapter{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
+	n.attempts = 2
+	n.timeout = 50 * time.Millisecond
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"x@x.com"}}
+
+	if got := n.deliverWithRetry(tenantScoped(), d, &RenderedNotification{}); got != deliveryFailed {
+		t.Fatalf("deliverWithRetry = %v, want deliveryFailed", got)
+	}
+	if fa.calls != 2 {
+		t.Fatalf("adapter called %d time(s), want both attempts", fa.calls)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "after exhausting attempts") {
+		t.Fatalf("a genuinely exhausted retry policy did not say so:\n%s", out)
+	}
+	if strings.Contains(out, "whole-dispatch budget was spent") {
+		t.Fatalf("an endpoint outage was blamed on the dispatch budget, which hides a real "+
+			"failure an operator needs to see:\n%s", out)
+	}
+}
+
+// The mid-backoff exit is the same fact through a different door, and it used to be the
+// only exit in deliverWithRetry that logged NOTHING — a channel dropped there left no
+// trace at all. It also carries the attempt it reached, which is the number that separates
+// "the platform cut a 3-attempt policy at 1" from "this channel spent the whole budget".
+func TestABudgetCutMidBackoffIsReported(t *testing.T) {
+	buf := captureLogs(t)
+	fa := &alwaysFailingAdapter{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
+	n.attempts = 3
+	n.timeout = time.Minute
+	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"x@x.com"}}
+
+	// Enough budget for the first attempt to run, not enough to survive the backoff before
+	// the second — so the loop exits through the select, not through its own condition.
+	ctx, cancel := context.WithTimeout(tenantScoped(), 50*time.Millisecond)
+	defer cancel()
+
+	if got := n.deliverWithRetry(ctx, d, &RenderedNotification{}); got != deliveryFailed {
+		t.Fatalf("deliverWithRetry = %v, want deliveryFailed", got)
+	}
+	if fa.calls != 1 {
+		t.Fatalf("adapter called %d time(s), want 1: the budget must have cut it during the "+
+			"backoff, or this test is exercising the loop-condition exit instead", fa.calls)
+	}
+	if !strings.Contains(buf.String(), "whole-dispatch budget was spent") {
+		t.Fatalf("a channel cut mid-backoff was dropped with no log line at all:\n%s", buf.String())
+	}
+	// Read the fields OFF THE BUDGET LINE, not off the buffer: the per-attempt warn carries
+	// an "attempt" field of its own and would satisfy a buffer-wide check by itself.
+	line := lineContaining(t, buf, "whole-dispatch budget was spent")
+	if !strings.Contains(line, `"attempt":1`) || !strings.Contains(line, `"attempts":3`) {
+		t.Fatalf("the budget line must name the attempt reached out of those configured, which "+
+			"is what tells an operator the platform cut a 3-attempt policy at 1:\n%s", line)
 	}
 }

@@ -262,9 +262,36 @@ func (api *Api) DistinctStateTenants(ctx context.Context) ([]string, error) {
 //
 // The predicate is "terminal, and every stamp it does carry is older than the cutoff", so
 // a row acknowledged long ago but cleared a minute ago still survives its full grace
-// window. Pruning is safe for the same reason the cleared prune was: a resolved row's only
-// remaining reader is a human, and the retention window (7d by default) outlives the alarm
-// stream's own retention, so no redelivery can arrive to find the tombstone gone.
+// window.
+//
+// 🔴 WHAT PRUNING COSTS, SAID PLAINLY, BECAUSE THE ROW HAS A MACHINE READER. An earlier
+// draft of this comment claimed a resolved row's only remaining reader is a human. It is
+// not: RecordNotification reads the row on every RAISED/ESCALATED for that token and
+// PRESERVES the terminal stamp, which is the whole mechanism keeping the scheduler
+// suppressed after an acknowledgement (OpenNotificationStates excludes any row with either
+// stamp set). Deleting the row is what re-arms it.
+//
+// And the reader is not hypothetical, because an alarm token OUTLIVES a clear.
+// device-management reactivates the SAME alarm row on a fresh cycle — same token, state
+// back to ACTIVE, Acknowledged reset — so the tombstone for token T is read by T's own
+// next cycle. The concrete case: an operator acknowledges a known-bad sensor whose alarm
+// stays ACTIVE. Past the retention window the sweep removes the acked-only row; a later
+// transition for that token then finds no state, opens a fresh row, and re-pages up to the
+// escalation cap while device-management still shows the alarm acknowledged.
+//
+// That window is accepted rather than closed, and the trade is deliberate: before the
+// widening the row was IMMORTAL, so the re-page could not happen — and neither could the
+// table ever stop growing. An unbounded table is the worse of the two. What follows from
+// it is a CONTRACT, not a footnote: an acknowledgement suppresses escalation for the
+// RETENTION WINDOW, not forever. StateRetentionSeconds is therefore the knob that decides
+// how long an ack is honoured, which is why lowering it is not purely a storage decision.
+//
+// 🔑 DO NOT RE-DERIVE SAFETY FROM THE STREAM'S RETENTION. The same earlier draft argued the
+// 7d window "outlives the alarm stream's own retention, so no redelivery can arrive to find
+// the tombstone gone". Those two numbers are EQUAL, not ordered, and only one of them is a
+// knob: messaging's stream max age is an unexported 7d constant, while StateRetentionSeconds
+// is operator-configurable and nothing pins the relation. Set it to a day and the sentence
+// is false with no test noticing.
 func (api *Api) PruneResolvedStates(ctx context.Context, before time.Time) (int64, error) {
 	result := api.RDB.DB(ctx).Unscoped().
 		Where("(cleared_at IS NOT NULL OR acknowledged_at IS NOT NULL)").

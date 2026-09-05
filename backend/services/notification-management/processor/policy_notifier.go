@@ -470,9 +470,18 @@ func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
 // throttled reports whether the policy's minimum-gap throttle suppresses this
 // notification. An ESCALATED transition always passes (a worsening alarm is a new
 // fact worth paging); otherwise a notification within ThrottleSeconds of the last one
-// for this alarm is suppressed. In event-driven N.C this is effectively inert for a
-// first RAISED (a re-raise is a new alarm token with no prior state); it is the
-// substrate the scheduled re-notification in N.D enforces.
+// for this alarm is suppressed. It is the substrate the scheduled re-notification in
+// N.D enforces.
+//
+// 🔴 AN ALARM TOKEN OUTLIVES A CLEAR, so this is NOT inert for a re-raise — an earlier
+// version of this comment said it was, on the premise that "a re-raise is a new alarm
+// token with no prior state". device-management reactivates the SAME alarm row on a fresh
+// cycle (same token, state back to ACTIVE, Acknowledged reset), so a re-raise arrives
+// carrying whatever state its previous cycle left behind, and the throttle window is
+// measured against the LAST cycle's notification. That is the behaviour a minimum gap is
+// for — a flapping sensor re-raising inside the window is exactly what it suppresses —
+// but it is behaviour, not a no-op, and the state it reads is the same row
+// Api.PruneResolvedStates eventually removes.
 func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 	p *model.NotificationPolicy, state *model.NotificationState) bool {
 	if event.EventType == dmmodel.AlarmEventEscalated {
@@ -738,14 +747,43 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		if attempt < n.attempts {
 			select {
 			case <-ctx.Done():
+				// Cut mid-backoff. Said out loud rather than returned silently: this exit
+				// used to be the only one in the function that logged NOTHING, so a
+				// channel dropped here left no trace at all.
+				logBudgetCut(d, attempt, n.attempts)
 				return deliveryFailed
 			case <-time.After(time.Duration(attempt) * retryBackoffBase):
 			}
 		}
 	}
+	// 🔴 TWO DIFFERENT FAILURES REACH THIS LINE, AND SAYING "exhausted attempts" FOR BOTH
+	// IS THE ONE THING AN OPERATOR CANNOT AFFORD HERE. The loop also ends when the
+	// whole-dispatch budget expired underneath it: every remaining attempt then fails
+	// instantly, so a 1-attempt channel logs "attempt 1/1, context deadline exceeded" and
+	// then this line — which reads as "your endpoint is slow" when the truth is "the
+	// platform stopped this dispatch". Both surface as context.DeadlineExceeded from the
+	// adapter, so the error text cannot separate them; only ctx.Err() can. The startup
+	// warning does not cover this either: it fires only for a SINGLE channel that
+	// statically cannot fit, so a two-channel plan cut at runtime has no other signal.
+	if ctx.Err() != nil {
+		logBudgetCut(d, n.attempts, n.attempts)
+		return deliveryFailed
+	}
 	log.Error().Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 		Int("attempts", n.attempts).Msg("Notification permanently dropped for channel after exhausting attempts")
 	return deliveryFailed
+}
+
+// logBudgetCut reports a channel abandoned because the whole-dispatch budget ran out
+// rather than because its own attempts did. It names the attempt it reached out of the
+// attempts it was configured for, which is the distinction an operator is trying to read:
+// "1 of 3" says the platform cut a retry policy short, "3 of 3" says this channel spent
+// the budget itself.
+func logBudgetCut(d delivery, attempt, attempts int) {
+	log.Error().Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+		Int("attempt", attempt).Int("attempts", attempts).
+		Msg("Notification dropped for channel because the whole-dispatch budget was spent, " +
+			"not because its own attempts were: the remaining retries were not made.")
 }
 
 // resolveChannelSecret returns the channel's delivery secret from the store, keyed
