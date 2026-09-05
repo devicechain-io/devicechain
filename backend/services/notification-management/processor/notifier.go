@@ -33,16 +33,27 @@ import (
 //     arrive out of order, and a redelivered RAISED can land after a later CLEARED.
 //     An implementation that must not e.g. mail "cleared" before "raised" must order
 //     on the event's OccurredTime/RaisedTime itself.
-//   - Bounded execution. Notify runs on a background context (drain-on-shutdown), so
-//     it must bound its own duration; a hung channel call stalls graceful shutdown.
+//   - Bounded execution, and the bound is the implementation's job. Notify runs on the
+//     worker's background context (drain-on-shutdown), so it has NO inherited deadline:
+//     every step it takes — the store reads, the secret lookup, each adapter call, the
+//     state write — must carry its own. It must also bound the WHOLE call against
+//     messaging.AckWait, not just each step: a Notify that outlives AckWait is handed to
+//     a second worker while the first is still sending, and whatever the first had
+//     already delivered is delivered again. PolicyNotifier does this with
+//     processor.dispatchBudget; anything else implementing this interface owns the same
+//     obligation.
 //
 // Error contract: a returned error is treated as TRANSIENT by the processor and the
-// message is left unacked for AckWait-paced redelivery — but redelivery today has a
-// finite MaxDeliver cap, after which the notification is DROPPED (there is no dead-letter
-// path yet). Return an error only for a genuinely retryable failure; log-and-swallow
-// a permanent one (a malformed policy) so a poison notification does not loop. A real
-// channel adapter should own its own retry/backoff/durability rather than rely on
-// processor redelivery for reliability.
+// message is left unacked for AckWait-paced redelivery, up to the finite MaxDeliver cap.
+// On the attempt that reaches the cap the processor DEAD-LETTERS the alarm (ADR-024) and
+// acks — an alarm that reached nobody leaves a record an operator can find, rather than
+// vanishing — so the disposition to pick here is about whether a retry could ever work,
+// not about whether the failure will be seen. Return an error only for a genuinely
+// retryable failure; log-and-swallow a permanent one (a malformed policy, a tenant whose
+// data this area has already erased) so a poison notification neither loops nor arrives
+// at the dead-letter stream dressed as an undelivered page. A real channel adapter should
+// own its own retry/backoff/durability rather than rely on processor redelivery for
+// reliability.
 type Notifier interface {
 	Notify(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error
 }

@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
@@ -277,4 +279,47 @@ func TestANotificationDropsWithNoDeadLetterSink(t *testing.T) {
 	np.dispatchOne(context.Background(),
 		msgWith(testAlarmSubject, validEventBytes(t), messaging.MaxDeliver, ack))
 	assert.Equal(t, 1, ack.acked)
+}
+
+// 🔴 A PURGED TENANT'S REFUSAL IS PERMANENT, AND THE PROCESSOR IS THE FUNNEL THAT SAYS SO.
+//
+// The ADR-077 erasure fence refuses this area's writes for a deleted tenant. That refusal
+// arrives here as an ordinary error, which everything else on this path reads as
+// transient: five redeliveries an AckWait apart, refused identically each time, and then a
+// dead letter announcing an alarm that reached nobody — for a tenant there is nobody left
+// to reach, and a fresh row about a tenant being erased.
+//
+// PolicyNotifier classifies this on the two paths where it knows the write it attempted.
+// This check is what makes the disposition hold for whatever Notifier is behind the seam,
+// and it is asserted BELOW the cap on purpose: at the cap the message is acked either way,
+// so a test at NumDelivered == MaxDeliver could not tell the classification from the
+// give-up branch.
+func TestAPurgedTenantsNotificationIsDroppedNotRetried(t *testing.T) {
+	dead := &deadRecorder{}
+	np := processorWithDeadLetters(
+		&fakeNotifier{err: fmt.Errorf("stamping cleared_at: %w (tenant %q)", rdb.ErrTenantPurged, "tenant1")},
+		dead)
+	ack := &recordingAck{}
+
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, validEventBytes(t), 1, ack))
+
+	assert.Equal(t, 1, ack.acked,
+		"a write the erasure fence refuses can never succeed on a later attempt; leaving it "+
+			"unacked spends the whole redelivery budget to be refused identically five times")
+	assert.Empty(t, dead.msgs,
+		"a deleted tenant's alarm must not be dead-lettered: the letter would report a page "+
+			"nobody could have received, and would write a new row about a tenant being erased")
+}
+
+// The counterweight, and the one that keeps the check above from being "ack everything":
+// an ordinary transient failure at the same delivery count must still be left unacked.
+func TestAnOrdinaryFailureIsStillLeftForRedelivery(t *testing.T) {
+	dead := &deadRecorder{}
+	np := processorWithDeadLetters(&fakeNotifier{err: errors.New("smtp is down")}, dead)
+	ack := &recordingAck{}
+
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, validEventBytes(t), 1, ack))
+
+	assert.Equal(t, 0, ack.acked, "a transient failure must be left unacked for AckWait-paced redelivery")
+	assert.Empty(t, dead.msgs)
 }

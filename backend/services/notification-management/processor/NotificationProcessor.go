@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -226,6 +227,25 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// primary reliability window and redelivery rides AckWait (~5 min across MaxDeliver,
 	// ADR-030); the sink is what survives an outage longer than that. See notifier.go.
 	if err := np.Notifier.Notify(msgctx, event); err != nil {
+		// 🔴 ONE ERROR IS PERMANENT AND MUST NOT SPEND THE RETRY BUDGET: the tenant has been
+		// deleted and this area's ADR-077 erasure fence refuses its writes. It reaches here
+		// as an ordinary error, which everything below would read as transient — five
+		// redeliveries an AckWait apart, refused identically every time, ending in a dead
+		// letter that says an alarm reached nobody. For a deleted tenant there is nobody to
+		// reach, and the dead letter would be a new row about a tenant being erased. Drop it.
+		//
+		// PolicyNotifier already classifies this on the two paths where it knows the write it
+		// attempted (applyLifecycle, Escalate). This is the funnel: it holds for whatever
+		// Notifier is behind the seam and for any future write the dispatcher grows, which is
+		// the only reason to spend a check on a case a caller usually handles first.
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			log.Info().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
+				Msg("Dropping an alarm notification for a deleted tenant; this area's data has " +
+					"been erased, so no redelivery could ever be applied.")
+			msg.Ack()
+			done(core.ResultInvalid)
+			return
+		}
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
