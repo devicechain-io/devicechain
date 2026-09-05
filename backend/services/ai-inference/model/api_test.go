@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-ai-inference/schema"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
@@ -98,6 +99,18 @@ func claudeReq(token string, secret *string) *AIProviderCreateRequest {
 	}
 }
 
+// disableProvider builds an update that takes a model out of service and says NOTHING
+// about anything else.
+//
+// 🔴 IT EXISTS TO KEEP WHAT A TEST LEAVES ABSENT VISIBLE. Under the full-replace input
+// these call sites built a whole create request and flipped one flag, which restated
+// every other field — including the write-only key, whose nil happened to mean
+// "preserve". Under three states an absent field is left alone, so what the test is
+// actually exercising is now the only thing in the literal.
+func disableProvider() *AIProviderUpdateRequest {
+	return &AIProviderUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}
+}
+
 // TestProviderCrud exercises create -> read -> update -> delete, including the
 // write-only API-key round-trip.
 func TestProviderCrud(t *testing.T) {
@@ -115,24 +128,43 @@ func TestProviderCrud(t *testing.T) {
 	require.Len(t, found, 1)
 	assert.Equal(t, "claude-opus-4-8", found[0].ModelID)
 
-	// Update the model; omit the secret (nil) → key preserved.
-	upd := claudeReq("primary", nil)
-	upd.Model = "claude-haiku-4-5-20251001"
-	_, err = api.UpdateAIProvider(ctx, "primary", upd, nil)
+	// A partial update naming the model and NOTHING else. The secret is absent, which
+	// preserves the stored key — and so is every other field, which is the half the
+	// full-replace shape could not express.
+	_, err = api.UpdateAIProvider(ctx, "primary", &AIProviderUpdateRequest{
+		Model: dcgraphql.OptionalStringOf("claude-haiku-4-5-20251001"),
+	}, nil)
 	require.NoError(t, err)
 	found, _ = api.AIProvidersByToken(ctx, []string{"primary"})
 	assert.Equal(t, "claude-haiku-4-5-20251001", found[0].ModelID)
-	assert.Equal(t, "sk-test-123", secretValue(t, api, ctx, "primary"), "nil secret preserves the stored key")
+	assert.Equal(t, "sk-test-123", secretValue(t, api, ctx, "primary"), "an absent secret preserves the stored key")
 
-	// Replace the key.
-	repl := claudeReq("primary", strp("sk-test-999"))
-	_, err = api.UpdateAIProvider(ctx, "primary", repl, nil)
+	// A value ROTATES the key.
+	_, err = api.UpdateAIProvider(ctx, "primary", &AIProviderUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("sk-test-999"),
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "sk-test-999", secretValue(t, api, ctx, "primary"))
 
-	// Clear the key (explicit empty string).
-	clr := claudeReq("primary", strp(""))
-	_, err = api.UpdateAIProvider(ctx, "primary", clr, nil)
+	// 🔴 AN EXPLICIT NULL DELETES IT, and that spelling is NEW. Under the old pointer the
+	// clear was the empty STRING, because a pointer had no third state to give it.
+	_, err = api.UpdateAIProvider(ctx, "primary", &AIProviderUpdateRequest{
+		Secret: dcgraphql.ClearedString(),
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "", secretValue(t, api, ctx, "primary"))
+
+	// …and the empty string still clears, so a caller spelling it the old way is not
+	// silently left with a live key. Re-seal first, or this asserts nothing.
+	_, err = api.UpdateAIProvider(ctx, "primary", &AIProviderUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("sk-test-re-sealed"),
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "sk-test-re-sealed", secretValue(t, api, ctx, "primary"),
+		"precondition: the empty-string clear below proves nothing against an absent key")
+	_, err = api.UpdateAIProvider(ctx, "primary", &AIProviderUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf(""),
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "", secretValue(t, api, ctx, "primary"))
 
@@ -201,6 +233,8 @@ func TestUpdateConflict(t *testing.T) {
 	ctx := context.Background()
 	_, err := api.CreateAIProvider(ctx, claudeReq("p", nil))
 	require.NoError(t, err)
-	_, err = api.UpdateAIProvider(ctx, "p", claudeReq("p", nil), strp("1999-01-01T00:00:00Z"))
+	_, err = api.UpdateAIProvider(ctx, "p", &AIProviderUpdateRequest{
+		Model: dcgraphql.OptionalStringOf("claude-haiku-4-5-20251001"),
+	}, strp("1999-01-01T00:00:00Z"))
 	assert.ErrorIs(t, err, ErrConflict)
 }

@@ -458,6 +458,15 @@ reason — renaming it, editing its description — silently un-declares positio
 device on it. The only symptom is that map surfaces go quiet. Send the field, or set the
 declaration again after any update from an older client.
 
+:::note[This no longer applies]
+`updateDeviceProfile` has since become a [partial
+update](../reference/graphql-api.md#which-mutations-are-partial-updates): a request that says
+nothing about the declaration now leaves it alone, and clearing one takes an explicit `null`.
+The advice above is what to do on a `v0.12.x` or `v0.13.x` instance; on a current one there is
+nothing to carry forward. Renaming a profile is a [mutation of its
+own](../reference/graphql-api.md#renaming-a-record).
+:::
+
 **Windowed detection rules no longer count buffered readings from outside their window.**
 Repeating, sliding-aggregate and correlation rules used to fold in a reading from any point
 in the past, which let a rule reading "three readings within ten seconds" fire on readings an

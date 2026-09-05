@@ -116,6 +116,15 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
       const secret = editorSecretArg(editor, 'edit');
       const trimmedName = name.trim();
       const trimmedDescription = description.trim();
+      // The update is a PARTIAL one now, and `secret` is the field that depends on it:
+      // editorSecretArg returns undefined for "keep", which travels as ABSENT and
+      // preserves the stored credential. It used to be folded to null by the api
+      // wrapper, which the old full-replace backend read as "preserve" — the same
+      // outcome by a different route. Under three states a null CLEARS, so the
+      // undefined has to survive; src/lib/api/partial-update.test.ts is what pins that.
+      //
+      // name/description/type/config are all named because this editor owns all four:
+      // it is one form over one state, so there is no field it could leave unstated.
       const res = await updateConnector(loaded.token, {
         name: trimmedName || null,
         description: trimmedDescription || null,

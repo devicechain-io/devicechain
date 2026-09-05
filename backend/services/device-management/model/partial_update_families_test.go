@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -28,17 +29,16 @@ import (
 // if the two disagree, because a fixture that does not hold what the table claims
 // makes "the update preserved it" unobservable.
 //
-// ONE family in this service is still on the FULL-REPLACE shape and is deliberately
-// absent: deviceProfile. Its payload token is a RENAME channel rather than a duplicate
-// identity — a profile may be renamed while it is unused — so a dedicated update input
-// carrying no token would delete a capability rather than convert one. It needs a rename
-// channel designed, which is a different piece of work from this conversion.
+// EVERY family in this service is now converted, deviceProfile included — it was the
+// last, and it was last because its payload token was a RENAME channel rather than a
+// duplicate identity. That capability moved to renameDeviceProfile rather than being
+// dropped, which is what made the conversion legitimate.
 //
-// That absence is not left to this comment to enforce.
+// The completeness of this list is not left to this comment to enforce.
 // TestEveryUpdateTakesADedicatedUpdateRequest reflects over *Api's Update* methods and
-// requires each to take a dedicated *UpdateRequest, with deviceProfile named as the one
-// exemption — so a family added tomorrow on the full-replace shape fails there whether or
-// not anyone remembers to write it down here.
+// requires each to take a dedicated *UpdateRequest that IS registered here — so a family
+// added tomorrow on the full-replace shape, or one quietly deleted from this list, fails
+// there whether or not anyone remembers to write it down.
 func partialUpdateFamilies() []putest.Family[*Api] {
 	return []putest.Family[*Api]{
 		deviceTypeFamily(),
@@ -57,6 +57,7 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 		deviceCredentialFamily(),
 		provisioningProfileFamily(),
 		entityRelationshipTypeFamily(),
+		deviceProfileFamily(),
 	}
 }
 
@@ -1210,6 +1211,114 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 			putest.RequiredBoolField("tracked", true,
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalBool { return &r.Tracked }),
+		},
+	}
+}
+
+// ─── the device profile, and its one non-scalar field ──────────────────────
+//
+// deviceProfile was the LAST family in this service on the full-replace shape, and it
+// was last because its payload token was a RENAME CHANNEL rather than a duplicate
+// identity — dropping the field would have deleted a capability rather than converted
+// one. The rename moved to renameDeviceProfile (pinned in api_profiles_rename_test.go)
+// and the update input then converted like every other.
+
+// deviceProfileSeed is the single source for what the profile fixture writes; the seed
+// and the field table both read it, so the "seeded" column cannot drift away from the
+// row.
+var deviceProfileSeed = struct{ Name, Description, Category, Metadata string }{
+	Name:        "Original name",
+	Description: "Original description",
+	Category:    "tracker",
+	Metadata:    `{"fleet":"north"}`,
+}
+
+// The two renderings of the position declaration the family drives. They are the
+// literal JSON the column holds, because that is what the harness compares — the
+// encoder marshals LocationDeclaration with omitempty, so a field left nil is absent
+// from the document rather than present as null.
+const (
+	seededLocation   = `{"expectedAccuracyMeters":7.25,"expectedUpdateIntervalSeconds":60}`
+	replacedLocation = `{"expectedAccuracyMeters":1.5}`
+)
+
+// locationField declares the profile's position declaration for the harness.
+//
+// 🔴 IT IS HAND-BUILT RATHER THAN COMING FROM ONE OF core's FIELD CONSTRUCTORS, and the
+// reason is the type: this is the platform's only INPUT-OBJECT field carrying the three
+// states, so there is no shared constructor to reach for. What it must still satisfy is
+// the contract every other field does — Seeded, Replace and Cleared pairwise distinct,
+// Set and SetNull both present — and the harness's anti-vacuity control checks that
+// rather than trusting it.
+//
+// The value is carried as the rendered JSON in both directions: Set parses it back into
+// a declaration, so the "sent with a value" state and the reading the harness compares
+// against cannot be two different spellings of one document.
+func locationField() putest.Field {
+	return putest.Field{
+		Name: "location", Seeded: seededLocation, Replace: replacedLocation,
+		Cleared: nullMarker,
+		Kind:    putest.Clearable,
+		Set: func(req any, v string) {
+			var decl LocationDeclaration
+			if err := json.Unmarshal([]byte(v), &decl); err != nil {
+				panic("the location field was declared with a value that is not a rendered " +
+					"declaration: " + v)
+			}
+			req.(*DeviceProfileUpdateRequest).Location = OptionalLocationDeclarationOf(decl)
+		},
+		SetNull: func(req any) {
+			req.(*DeviceProfileUpdateRequest).Location = ClearedLocationDeclaration()
+		},
+	}
+}
+
+func deviceProfileFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "deviceProfile",
+		Token:   "dp-1",
+		Migrate: deviceProfileTables,
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			var decl LocationDeclaration
+			if err := json.Unmarshal([]byte(seededLocation), &decl); err != nil {
+				t.Fatalf("the seeded location is not a rendered declaration: %v", err)
+			}
+			if _, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{
+				Token: "dp-1", Name: strp(deviceProfileSeed.Name),
+				Description: strp(deviceProfileSeed.Description),
+				Category:    strp(deviceProfileSeed.Category),
+				Metadata:    strp(deviceProfileSeed.Metadata),
+				Location:    &decl,
+			}); err != nil {
+				t.Fatalf("seed device profile: %v", err)
+			}
+		},
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+			rows, err := api.DeviceProfilesByToken(ctx, []string{"dp-1"})
+			e := requireOne(t, "device profile", rows, err)
+			return map[string]string{
+				"name":        nullStr(e.Name),
+				"description": nullStr(e.Description),
+				"category":    nullStr(e.Category),
+				"metadata":    jsonStr(e.Metadata),
+				"location":    jsonStr(e.LocationDeclaration),
+			}
+		},
+		NewRequest: func() any { return new(DeviceProfileUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
+			_, err := api.UpdateDeviceProfile(ctx, token, req.(*DeviceProfileUpdateRequest))
+			return err
+		},
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", deviceProfileSeed.Name, "Renamed",
+				func(r *DeviceProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
+			putest.OptionalStringField("description", deviceProfileSeed.Description, "Rewritten",
+				func(r *DeviceProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
+			putest.OptionalStringField("category", deviceProfileSeed.Category, "gateway",
+				func(r *DeviceProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Category }),
+			putest.OptionalStringField("metadata", deviceProfileSeed.Metadata, `{"fleet":"south"}`,
+				func(r *DeviceProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+			locationField(),
 		},
 	}
 }

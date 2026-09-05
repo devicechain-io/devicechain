@@ -75,8 +75,18 @@ The tenant, tier, and AI-provider detail pages share one shape. Copy it for the 
 
 - **Write-only secrets (ADR-059) are never displayed.** The read side exposes only
   `hasSecret`. Show "configured" with Replace / Clear affordances; the input is only ever
-  for a *new* value, and "no change" must send `null` (preserve), not `""` (clear). See
-  [`ProviderApiKeyControl`](src/routes/admin/ai-providers/AiProviderForm.tsx).
+  for a *new* value. On an update, **"no change" must OMIT the field** — leave it
+  `undefined` so it never reaches the wire. **`null` and `""` both CLEAR** the stored
+  credential. On a create, `null` or `""` means "no credential yet". See
+  [`ProviderApiKeyControl`](src/routes/admin/ai-providers/AiProviderForm.tsx), and
+  `editorSecretArg` / `providerSecretArg`, which return `undefined` for "keep".
+
+  🔴 This sentence used to say the opposite — that "no change" must send `null` (preserve)
+  rather than `""` (clear). That was true while these updates were full replaces, and it
+  became an instruction to destroy a credential the moment they became partial updates:
+  `null` now means "clear the field you name", the same as everywhere else on the
+  platform. Do not reintroduce a `?? null` in an update wrapper; it turns "unchanged" into
+  "delete this", and the mutation returns success.
 
 ## Navigation (admin sidebar)
 

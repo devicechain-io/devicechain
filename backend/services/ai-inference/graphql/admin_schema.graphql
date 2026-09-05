@@ -136,6 +136,38 @@ input AiProviderCreateRequest {
     secret: String
 }
 
+# Fields to change on an existing provider. Every field is three-state: OMIT it to
+# leave the stored value alone, send NULL to clear it, or send a value to set it.
+#
+# It carries no token. The mutation's own `token` argument names the provider, and a
+# provider is renamed through renameAiProvider — where the new token can mean only one
+# thing.
+input AiProviderUpdateRequest {
+    name: String
+    description: String
+    # The provider kind. It cannot be cleared: a null is refused rather than stored as
+    # a kind nothing can serve.
+    kind: String
+    # The provider API base URL. Null clears the override, returning the provider to
+    # its kind's built-in default — REFUSED for a kind that has no default and is
+    # defined by its address, such as `openai-compatible`. Changing `kind` alone is
+    # checked against the STORED endpoint for the same reason.
+    endpoint: String
+    # The provider model id. It cannot be cleared — a provider with no model can serve
+    # nothing.
+    model: String
+    # The opaque per-kind inference params (a JSON object). Null clears them.
+    params: String
+    # Whether the provider may be resolved and used. It cannot be cleared: folding a
+    # null to `false` would take a model out of service and report success, and false
+    # is a value the caller could legitimately have sent.
+    enabled: Boolean
+    # The write-only API key. Omit it to PRESERVE the stored one (it can never be read
+    # back to resend), send a value to ROTATE it, or send null — or an empty string —
+    # to DELETE it.
+    secret: String
+}
+
 # Criteria used when searching for providers.
 input AiProviderSearchCriteria {
     pageNumber: Int!
@@ -190,10 +222,16 @@ type Query {
 type Mutation {
     # Create a new provider. It is offered to nobody until granted to a tier.
     createAiProvider(request: AiProviderCreateRequest!): AiProvider!
-    # Update the provider with the given (current) token. When expectedUpdatedAt is
-    # supplied it is an optimistic-concurrency precondition: the update fails (CONFLICT)
-    # if the provider's updatedAt has changed since. Grants are not changed here.
-    updateAiProvider(token: String!, request: AiProviderCreateRequest!, expectedUpdatedAt: String): AiProvider!
+    # Partially update the provider with the given (current) token: an omitted field is
+    # left alone, an explicit null clears it. When expectedUpdatedAt is supplied it is
+    # an optimistic-concurrency precondition: the update fails (CONFLICT) if the
+    # provider's updatedAt has changed since. Grants are not changed here.
+    updateAiProvider(token: String!, request: AiProviderUpdateRequest!, expectedUpdatedAt: String): AiProvider!
+    # Rename a provider. A blank newToken is refused; renaming to the token the provider
+    # already has is an idempotent success; a token another provider holds is refused by
+    # name. The API key is keyed by the provider's immutable id, and so are its grants
+    # and every tenant's function assignment, so a rename orphans none of them.
+    renameAiProvider(token: String!, newToken: String!): AiProvider!
     # Delete the provider with the given token (and its key). Returns whether a row was
     # deleted. REFUSED while anything still points at the provider — a tier or tenant
     # grant, or a tenant's function assignment — so an operator cannot silently strip a

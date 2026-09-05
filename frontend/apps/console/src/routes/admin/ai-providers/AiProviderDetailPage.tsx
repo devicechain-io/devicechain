@@ -51,6 +51,32 @@ import {
   type SecretState,
 } from './AiProviderForm';
 
+// 🔴 WHY THIS PAGE IS STILL ONE STATE AND ONE save(), AND WHY THE REASON IN
+// CONVENTIONS.md IS NO LONGER IT.
+//
+// The convention says a tab-split form must share one state object and one save() because
+// several backend updates are full replacements, so a per-tab submit would let one tab
+// silently blank a field another tab owns. For `updateAiProvider` that reason is GONE: it
+// is a partial update now, so a submit naming only the basic tab's fields leaves the
+// connection tab's alone. The convention's paragraph still stands for the tenant/tier
+// pages it also names, which is why it has not been rewritten here.
+//
+// What keeps THIS page undivided is a different and much weaker constraint, and the
+// difference matters: it produces a VISIBLE ERROR rather than silent data loss.
+//
+//   - `kind` lives on the BASIC tab and `endpoint` on the CONNECTION tab, and the server
+//     validates them as a PAIR — a kind defined by its address (`openai-compatible`) has
+//     no built-in base URL, so it is refused without one. A basic-tab-only submit
+//     switching to that kind on a provider with no stored endpoint is therefore REFUSED,
+//     and the operator would have to visit the other tab first to make a legal request.
+//   - `expectedUpdatedAt` is a per-save precondition. Two independent submits would have
+//     the second fail with CONFLICT unless each re-baselined from the previous response.
+//
+// So the page may be split into independent per-tab forms once BOTH hold: `kind` and
+// `endpoint` sit on the same tab, and each tab advances its own `expectedUpdatedAt`
+// baseline from the response it gets back. Neither is done here, and neither is a
+// data-loss risk — which is the whole point of writing it down rather than leaving the
+// next reader to infer a hazard that no longer exists.
 export default function AiProviderDetailPage() {
   const { t } = useTranslation('aiProviders');
   const { token: rawToken } = useParams<{ token: string }>();
@@ -144,6 +170,15 @@ function AiProviderEditor({ loaded, kinds }: { loaded: AiProvider; kinds: string
     }
     setSaving(true);
     try {
+      // The update is a PARTIAL one now, and `secret` is the field that depends on it:
+      // providerSecretArg returns undefined for "keep", which travels as ABSENT and
+      // preserves the stored key. It used to be folded to null by the api wrapper,
+      // which the old full-replace backend read as "preserve" — the same outcome by a
+      // different route. Under three states a null CLEARS, so the undefined has to
+      // survive; src/lib/api/partial-update.test.ts is what pins that.
+      //
+      // Every other field is named because this editor owns all of them: it is one form
+      // over one state, so there is no field it could leave unstated.
       const res = await updateAiProvider(loaded.token, {
         name: editor.name.trim() || null,
         description: editor.description.trim() || null,

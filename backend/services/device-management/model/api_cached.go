@@ -432,24 +432,25 @@ func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, 
 	return profile, nil
 }
 
-// UpdateDeviceProfile forwards to the DB then, on a profile-TOKEN rename, evicts
-// the cached scope of every device type adopting the profile. The denormalized
-// ProfileVersionToken is "{profileToken}@{version}" (ADR-051), so a rename changes
-// what resolution stamps onto events even though the version and the metric/command/
-// alarm definitions are unchanged — a dependency the metric-def cache does not have.
-// evictProfileResolution drops both caches; the metric-def eviction is a harmless
-// over-eviction (it simply repopulates). Bounded further by the cache TTL.
-func (capi *CachedApi) UpdateDeviceProfile(ctx context.Context, token string,
-	request *DeviceProfileCreateRequest) (*DeviceProfile, error) {
-	updated, err := capi.Api.UpdateDeviceProfile(ctx, token, request)
-	if err != nil {
-		return nil, err
-	}
-	if updated != nil && token != request.Token {
-		capi.evictProfileResolution(ctx, updated.ID)
-	}
-	return updated, nil
-}
+// 🔴 THERE IS DELIBERATELY NO UpdateDeviceProfile OR RenameDeviceProfile OVERRIDE HERE,
+// AND ITS ABSENCE IS AN INVARIANT RATHER THAN AN OMISSION.
+//
+// One used to sit here: updateDeviceProfile carried the rename in its payload token, and
+// a rename changes the denormalized ProfileVersionToken "{profileToken}@{version}"
+// (ADR-051) that resolution stamps onto every event — a dependency the metric-def cache
+// does not have — so the override dropped the cached scope of every device type adopting
+// the profile.
+//
+// Two things ended that. The rename moved to its own mutation (Api.RenameDeviceProfile),
+// so an update can no longer move a token at all; and a rename is REFUSED once the
+// profile has any published version or any adopting device type. evictProfileResolution
+// fans out across the ADOPTING TYPES, so on the only path that can still move a token
+// there are provably none to evict.
+//
+// If that guard is ever relaxed — if a published or adopted profile becomes renameable —
+// this override has to come back, because the stamped scope token would then be stale in
+// every ingest cache. The guard and this absence are one decision, and the guard's
+// comment in api_profiles.go is where it is argued.
 
 // evictProfileResolution drops the cached definitions of every device type adopting
 // the profile whose active version changed. The ingest cache is keyed by device

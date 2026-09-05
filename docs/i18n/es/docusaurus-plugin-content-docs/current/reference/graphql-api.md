@@ -231,12 +231,16 @@ query {
 ```
 
 Dos consecuencias del reemplazo completo que conviene prever. Como la escritura cubre todos los
-campos, **dos personas editando una entidad se pisan en todos ellos**, no solo donde coinciden —
-salvo en `updateConnector` y `updateAiProvider`, que aceptan un `expectedUpdatedAt` opcional y
-rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
-(`updateDashboard` acepta la misma precondición y es una actualización parcial, así que no está
-entre ellas.) Y como la entrada de actualización es la de creación, lleva un **token**, que es
-donde más se diferencian ambos contratos.
+campos, **dos personas editando una entidad se pisan en todos ellos**, no solo donde coinciden. Y
+como la entrada de actualización es la de creación, lleva un **token**, que es donde más se
+diferencian ambos contratos.
+
+Tres mutaciones se protegen de lo primero, y las tres son actualizaciones parciales y no reemplazos
+completos: `updateDashboard`, `updateConnector` y `updateAiProvider` aceptan un `expectedUpdatedAt`
+opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
+Envía el `updatedAt` que leíste por última vez; omítelo para que gane la última escritura. Una
+actualización parcial reduce el solape que pueden tener dos escritores, pero no lo elimina: dos
+personas editando el mismo campo siguen necesitándolo.
 
 #### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
@@ -251,32 +255,47 @@ mutaciones se han convertido, así que la fila que la nombraba desaparece en lug
 | El token de la petición | Qué mutaciones | Un token que **no coincide** | Un token **vacío** |
 | --- | --- | --- | --- |
 | **No existe** | toda [actualización parcial](#which-mutations-are-partial-updates) | *no representable* — la entrada no tiene campo `token`, así que el esquema lo rechaza | — |
-| **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
 
-La fila del renombrado no es un resto del pasado. Cada una de ellas vincula lo que depende del
-registro por su id interno y no por su token — la credencial de un conector, el manejador de clave
-de un proveedor —, así que renombrar uno no deja nada huérfano. Una lleva además una salvaguarda
-propia: `updateDeviceProfile` rechaza el renombrado una vez que el perfil ha sido **publicado o
-adoptado** por un tipo de dispositivo, porque a partir de ahí las reglas publicadas y los
-inventarios de dispositivos *sí* lo nombran por token.
+Había una segunda: un token de petición que **nombraba el nuevo token del registro**, que es como
+se renombraba un perfil, un conector, un proveedor y un canal de notificación. Las cuatro tienen ya
+una [mutación de renombrado propia](#renaming-a-record), así que esa fila también ha desaparecido —
+y con ella la última entrada de actualización de la plataforma que llevaba un token. La única fila
+de arriba es ahora la respuesta completa.
 
-**Un canal de notificación se renombra con su propia mutación, no con el token de la petición.** Su
-renombrado siempre fue intencionado — el secreto de entrega está indexado por el id interno del
-canal, y las reglas de una política guardan ese id y no el token —, así que cuando
-`updateNotificationChannel` pasó a ser una actualización parcial, la capacidad se movió en lugar de
-desaparecer:
+#### Renombrar un registro {#renaming-a-record}
+
+Cuatro registros se renombraban de la misma manera: enviando un token distinto dentro de la
+petición de una actualización de reemplazo completo. Cada uno tiene ahora **su propia mutación**,
+donde el nuevo token solo puede significar una cosa:
 
 ```graphql
-mutation {
-  renameNotificationChannel(token: "smtp-old", newToken: "smtp-primary") { token }
-}
+renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
+renameConnector(token: String!, newToken: String!): Connector!
+renameAiProvider(token: String!, newToken: String!): AiProvider!
+renameNotificationChannel(token: String!, newToken: String!): NotificationChannel!
 ```
 
-Un `newToken` en blanco se rechaza (dejaría un canal vivo al que no se puede llegar por ningún
-nombre), pasar el token actual del canal es una operación idempotente que devuelve el canal, y un
-`newToken` que ya tenga otro de tus canales se rechaza por su nombre en lugar de aflorar como una
-violación de restricción. `updateNotificationPolicy` no necesitó tal mutación: nada se indexa por el
-token de una política, así que una política se mueve creando la nueva y borrando la antigua.
+Las cuatro siguen un mismo contrato. Un `newToken` **en blanco** — vacío o solo espacios — se
+rechaza, porque dejaría un registro vivo sin nada que lo nombre. Renombrar un registro al token que
+**ya tiene** es un éxito idempotente que devuelve el registro, así que reintentar tras un fallo
+parcial es seguro. Un token que **ya tiene otro registro de esa clase** se rechaza por su nombre,
+en lugar de aflorar como una violación de restricción. Y la autoridad es la misma que exige la
+actualización correspondiente: renombrar es editar el registro, no un acto de otra naturaleza.
+
+Cada uno de estos renombrados siempre fue intencionado, porque lo que depende del registro se
+indexa por su id interno y no por su token: el secreto de entrega de un canal y el id de canal que
+guardan las reglas de una política, la credencial de un conector, la clave de API de un proveedor
+junto con sus concesiones por nivel y la asignación de modelo de cada inquilino. Un renombrado no
+deja huérfano a ninguno.
+
+Dos cosas sí se mueven con un renombrado, y conviene revisarlas antes de lanzar uno. Una regla
+REACT nombra su conector **por token**, así que las reglas que apunten a un conector renombrado hay
+que reapuntarlas. Y `renameDeviceProfile` rechaza el renombrado por completo una vez que el perfil
+ha sido **publicado o adoptado** por un tipo de dispositivo, porque a partir de ahí las reglas
+publicadas y los inventarios de dispositivos lo nombran por token.
+
+`updateNotificationPolicy` no necesitó tal mutación: nada se indexa por el token de una política,
+así que una política se mueve creando la nueva y borrando la antigua.
 
 **El token de un geocerco es inmutable, y ahora la regla vive en la primera fila.**
 `updateGeoFence` reconciliaba dos tokens y rechazaba una discrepancia; su entrada ya no lleva
@@ -316,8 +335,7 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 
 | Campo | Qué ocurre al omitirlo |
 | --- | --- |
-| `secret` en `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *limpia*. Lo contrario del `null` de una actualización parcial; consulta la advertencia de abajo |
-| `secret` en `updateNotificationChannel` | **Se conserva**, y `null` lo *limpia*, como cualquier otro campo de una actualización parcial. Una cadena vacía también lo limpia, así que un cliente que ya lo escriba así sigue funcionando. Es el único secreto de solo escritura sin la inversión de abajo |
+| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva.** Un valor lo rota; `null` — o una cadena vacía — lo borra. No puedes leer un secreto de vuelta, así que omitirlo es como se dice «deja la credencial como está» |
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `null` o `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no puede *limpiarse*: un `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
@@ -328,33 +346,37 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 | Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | **Se conservan.** Enviar `null` elimina la anulación, lo que significa **heredar el nivel y luego el valor por defecto de la plataforma**: nunca cero, y nunca «ilimitado» |
 
 :::danger Una cadena vacía no es una forma segura de decir «deja esto como está»
-Para el `secret` de solo escritura de `updateConnector` y `updateAiProvider`, **null conserva y `""`
-borra** — exactamente lo contrario de una actualización parcial, donde null limpia. No puedes leer
-un secreto de vuelta, así que no hay nada que reenviar; la respuesta de la API es que omitirlo lo
-conserva. (`updateNotificationChannel` ya no tiene esa inversión: allí omitirlo lo conserva y
-**tanto** `null` como `""` lo limpian.)
+En todos los campos `secret` de solo escritura, **`""` borra la credencial almacenada.** No puedes
+leer un secreto de vuelta, así que no hay nada que reenviar; la respuesta de la API es que omitirlo
+lo conserva.
 
 Esto importa porque el consejo de arriba para el reemplazo completo — leer la entidad y reenviarla
 entera — te empuja a rellenar todos los campos. Hacerlo con un secreto que no querías tocar,
 enviando `secret: ""`, borra la credencial almacenada y la mutación devuelve éxito. Un conector sin
 credencial empieza a fallar la autenticación en cada envío saliente. **Deja el campo fuera.**
+
+Los tres viven ya en actualizaciones parciales, así que `null` también borra la credencial. Eso no
+es una excepción sino el significado habitual de un null en la plataforma: un null limpia el campo
+que nombra. La **inversión** que estos campos llevaban — donde null conservaba y solo `""` borraba —
+ha desaparecido.
 :::
 
 ### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
 
 Las actualizaciones parciales van llegando por áreas en lugar de todas a la vez, y la intención es
-convertir el resto antes de la 1.0. En device-management, **todas las `update*` menos una** toman
-ya un `*UpdateRequest` propio:
+convertir el resto antes de la 1.0. En device-management, **todas las `update*`** toman ya un
+`*UpdateRequest` propio:
 
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
 `updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
-`updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType`
+`updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType` ·
+`updateDeviceProfile`
 
-`updateDeviceProfile` es la excepción, y sigue siendo un reemplazo completo por un motivo y no por
-descuido: el token de su petición es un **canal de renombrado** — un perfil puede renombrarse
-mientras nada lo haya adoptado ni publicado —, y una entrada de actualización que omitiera el token
-eliminaría esa capacidad en lugar de convertirla.
+Los conectores salientes y la inferencia de IA han convertido su única actualización cada uno:
+`updateConnector` y `updateAiProvider`. Todos los canales de renombrado que llevaban los tokens de
+petición de esas áreas se han trasladado a una [mutación de renombrado
+propia](#renaming-a-record) en lugar de eliminarse.
 
 En notification-management se han convertido **ambas** mutaciones `update*`:
 `updateNotificationChannel` y `updateNotificationPolicy`. Dos cosas de la política conviene saberlas
@@ -382,6 +404,13 @@ renombra un panel sin reenviar su documento entero —, pero un `null` explícit
 En user-management, **todas las `update*`** toman ya una petición propia:
 
 `updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+
+Los conectores salientes y la inferencia de IA han convertido su única actualización cada uno:
+**`updateConnector`** y **`updateAiProvider`**. Ambas conservan un `expectedUpdatedAt` opcional, y
+en ellas `type`/`config` y `kind`/`endpoint` respectivamente se validan como un **par** contra los
+valores que el registro va a tener — así que nombrar uno del par vuelve a comprobar el otro
+almacenado, y un cambio que dejaría el registro inutilizable se rechaza al escribir y no en el
+primer uso.
 
 **Todo lo que no se nombre arriba sigue siendo un reemplazo completo, y la forma de saberlo es la
 firma de la propia mutación, no una lista aquí.** Esta página llevaba una segunda lista con las

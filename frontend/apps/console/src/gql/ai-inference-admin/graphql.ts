@@ -22,6 +22,17 @@ export type AiProviderSearchCriteria = {
   pageSize: number;
 };
 
+export type AiProviderUpdateRequest = {
+  description?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  endpoint?: string | null | undefined;
+  kind?: string | null | undefined;
+  model?: string | null | undefined;
+  name?: string | null | undefined;
+  params?: string | null | undefined;
+  secret?: string | null | undefined;
+};
+
 export type InferenceRequest = {
   prompt: string;
   system?: string | null | undefined;
@@ -79,12 +90,20 @@ export type CreateAiProviderMutation = { createAiProvider: { token: string } };
 
 export type UpdateAiProviderMutationVariables = Exact<{
   token: string;
-  request: AiProviderCreateRequest;
+  request: AiProviderUpdateRequest;
   expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
 export type UpdateAiProviderMutation = { updateAiProvider: { token: string, updatedAt: string | null } };
+
+export type RenameAiProviderMutationVariables = Exact<{
+  token: string;
+  newToken: string;
+}>;
+
+
+export type RenameAiProviderMutation = { renameAiProvider: { token: string, updatedAt: string | null } };
 
 export type DeleteAiProviderMutationVariables = Exact<{
   token: string;
@@ -263,7 +282,7 @@ export const CreateAiProviderDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAiProviderMutation, CreateAiProviderMutationVariables>;
 export const UpdateAiProviderDocument = new TypedDocumentString(`
-    mutation UpdateAiProvider($token: String!, $request: AiProviderCreateRequest!, $expectedUpdatedAt: String) {
+    mutation UpdateAiProvider($token: String!, $request: AiProviderUpdateRequest!, $expectedUpdatedAt: String) {
   updateAiProvider(
     token: $token
     request: $request
@@ -274,6 +293,14 @@ export const UpdateAiProviderDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateAiProviderMutation, UpdateAiProviderMutationVariables>;
+export const RenameAiProviderDocument = new TypedDocumentString(`
+    mutation RenameAiProvider($token: String!, $newToken: String!) {
+  renameAiProvider(token: $token, newToken: $newToken) {
+    token
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<RenameAiProviderMutation, RenameAiProviderMutationVariables>;
 export const DeleteAiProviderDocument = new TypedDocumentString(`
     mutation DeleteAiProvider($token: String!) {
   deleteAiProvider(token: $token)

@@ -191,9 +191,7 @@ func TestDisabledProvidersNeverReachAMenu(t *testing.T) {
 	mustProvider(t, api, "sonnet")
 	require.NoError(t, api.GrantProviderToTier(adminCtx(), "gold", "sonnet"))
 
-	req := claudeReq("sonnet", nil)
-	req.Enabled = false
-	_, err := api.UpdateAIProvider(adminCtx(), "sonnet", req, nil)
+	_, err := api.UpdateAIProvider(adminCtx(), "sonnet", disableProvider(), nil)
 	require.NoError(t, err)
 
 	menu, err := api.MenuForTenant(tenantCtx("acme"), "gold")

@@ -298,6 +298,14 @@ export type DeviceProfileSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceProfileUpdateRequest = {
+  category?: string | null | undefined;
+  description?: string | null | undefined;
+  location?: DeviceLocationDeclarationInput | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type DeviceReplaceRequest = {
   credentialId?: string | null | undefined;
   credentialToken?: string | null | undefined;
@@ -1022,11 +1030,19 @@ export type CreateDeviceProfileMutation = { createDeviceProfile: { id: string, t
 
 export type UpdateDeviceProfileMutationVariables = Exact<{
   token: string;
-  request?: DeviceProfileCreateRequest | null | undefined;
+  request: DeviceProfileUpdateRequest;
 }>;
 
 
 export type UpdateDeviceProfileMutation = { updateDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } };
+
+export type RenameDeviceProfileMutationVariables = Exact<{
+  token: string;
+  newToken: string;
+}>;
+
+
+export type RenameDeviceProfileMutation = { renameDeviceProfile: { id: string, token: string } };
 
 export type DeleteDeviceProfileMutationVariables = Exact<{
   token: string;
@@ -2538,7 +2554,7 @@ export const CreateDeviceProfileDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDeviceProfileMutation, CreateDeviceProfileMutationVariables>;
 export const UpdateDeviceProfileDocument = new TypedDocumentString(`
-    mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {
+    mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileUpdateRequest!) {
   updateDeviceProfile(token: $token, request: $request) {
     id
     token
@@ -2556,6 +2572,14 @@ export const UpdateDeviceProfileDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateDeviceProfileMutation, UpdateDeviceProfileMutationVariables>;
+export const RenameDeviceProfileDocument = new TypedDocumentString(`
+    mutation RenameDeviceProfile($token: String!, $newToken: String!) {
+  renameDeviceProfile(token: $token, newToken: $newToken) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RenameDeviceProfileMutation, RenameDeviceProfileMutationVariables>;
 export const DeleteDeviceProfileDocument = new TypedDocumentString(`
     mutation DeleteDeviceProfile($token: String!) {
   deleteDeviceProfile(token: $token)

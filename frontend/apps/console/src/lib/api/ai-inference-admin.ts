@@ -243,17 +243,26 @@ export async function createAiProvider(opts: {
   return data.createAiProvider;
 }
 
-// updateAiProvider is a full replacement of {name, description, kind, endpoint,
-// model, params, enabled}. `secret` follows the store's write-only contract: omit
-// (null) to PRESERVE the stored key, send a non-empty string to REPLACE it, or send
-// an empty string to CLEAR it — so a caller not touching the key must pass null,
-// never "". A provider's GRANTS are not changed here. expectedUpdatedAt
-// is the optimistic-concurrency precondition: pass the updatedAt the editor loaded so
-// a save fails (CONFLICT) if another writer changed the provider since.
+// updateAiProvider is a PARTIAL update. Every field is three-state: leave it
+// `undefined` to say nothing about it (the stored value is kept), pass `null` to clear
+// it, or pass a value to set it.
+//
+// 🔴 `undefined` AND `null` ARE NOW DIFFERENT REQUESTS, which is the whole point of the
+// conversion and the one thing to get right at a call site. Under the previous
+// full-replace shape every field was written unconditionally, so `?? null` was the
+// idiom everywhere and a field the caller had nothing to say about was cleared. Do NOT
+// reintroduce `?? null` here: it turns "unchanged" into "clear this".
+//
+// `kind`, `model` and `enabled` sit on NOT NULL columns and REFUSE a null — send a
+// value or say nothing. `secret` follows the store's write-only contract: omit it to
+// PRESERVE the stored key, send a value to ROTATE it, or send null (or "") to DELETE
+// it. A provider's GRANTS are not changed here. expectedUpdatedAt is the
+// optimistic-concurrency precondition: pass the updatedAt the editor loaded so a save
+// fails (CONFLICT) if another writer changed the provider since.
 const UPDATE_AI_PROVIDER = graphql(`
   mutation UpdateAiProvider(
     $token: String!
-    $request: AiProviderCreateRequest!
+    $request: AiProviderUpdateRequest!
     $expectedUpdatedAt: String
   ) {
     updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
@@ -266,34 +275,51 @@ const UPDATE_AI_PROVIDER = graphql(`
 export async function updateAiProvider(
   token: string,
   input: {
+    // undefined ⇒ leave alone, null ⇒ clear, value ⇒ set.
     name?: string | null;
     description?: string | null;
-    kind: string;
+    // Required columns: undefined ⇒ leave alone, value ⇒ set. A null is refused.
+    kind?: string;
     endpoint?: string | null;
-    model: string;
+    model?: string;
     params?: string | null;
-    enabled: boolean;
-    // null ⇒ preserve, "" ⇒ clear, value ⇒ replace.
+    enabled?: boolean;
+    // undefined ⇒ preserve, null ⇒ delete, value ⇒ rotate.
     secret?: string | null;
     expectedUpdatedAt?: string | null;
   },
 ): Promise<{ token: string; updatedAt: string | null }> {
+  const { expectedUpdatedAt, ...request } = input;
   const data = await gql('ai-inference/admin', UPDATE_AI_PROVIDER, {
     token,
-    request: {
-      token,
-      name: input.name ?? null,
-      description: input.description ?? null,
-      kind: input.kind,
-      endpoint: input.endpoint ?? null,
-      model: input.model,
-      params: input.params ?? null,
-      enabled: input.enabled,
-      secret: input.secret ?? null,
-    },
-    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
+    // The rest object is forwarded as-is so a key the caller never set stays ABSENT on
+    // the wire. Rebuilding it field by field is what would reintroduce `?? null`.
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
   });
   return data.updateAiProvider;
+}
+
+// renameAiProvider changes a provider's token and nothing else. It is the capability
+// updateAiProvider's payload token used to carry: a blank newToken is refused, renaming
+// to the current token is an idempotent success, and a token another provider holds is
+// refused by name. The API key, the tier grants and every tenant's function assignment
+// are keyed by the provider's immutable id, so none of them is orphaned.
+const RENAME_AI_PROVIDER = graphql(`
+  mutation RenameAiProvider($token: String!, $newToken: String!) {
+    renameAiProvider(token: $token, newToken: $newToken) {
+      token
+      updatedAt
+    }
+  }
+`);
+
+export async function renameAiProvider(
+  token: string,
+  newToken: string,
+): Promise<{ token: string; updatedAt: string | null }> {
+  const data = await gql('ai-inference/admin', RENAME_AI_PROVIDER, { token, newToken });
+  return data.renameAiProvider;
 }
 
 const DELETE_AI_PROVIDER = graphql(`

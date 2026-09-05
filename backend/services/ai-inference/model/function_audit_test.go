@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -185,4 +186,81 @@ func TestRevokingAGrantIsAttributableInTheJournal(t *testing.T) {
 	for _, e := range deletes {
 		assert.NotContains(t, e.EntityLabel, "provider#0", "provider#0 is a row that never existed")
 	}
+}
+
+// 🔴 A RENAME IS THE MOST IDENTITY-RELEVANT MUTATION THERE IS, AND IT MUST BE
+// ATTRIBUTABLE.
+//
+// The journal has no per-mutation vocabulary — it records "update" on the provider table
+// by construction, from the GORM callbacks — so what makes a rename readable afterwards
+// is the ENTITY LABEL, which is the provider's token. The label recorded is the NEW
+// token, because the row is what it now is rather than what it was; the old one is
+// recoverable from the entry before it, and the pair is what makes the rename legible.
+//
+// 🔴 WHAT THIS TEST PINS IS THE OUTCOME, NOT THE WRITE STYLE, AND THE DIFFERENCE WAS
+// MEASURED RATHER THAN ASSUMED. The assignment test above documents a real trap —
+// mutating through a zero-value model journals an entry naming nothing, because the
+// label is read off the struct handed to gorm and that struct's fields are still zero.
+// The obvious inference is that a one-column update would break this too. It does not:
+// a mutant replacing the write with `Model(&AIProvider{}).Update("token", …)` SURVIVES,
+// because gorm assigns the new value back onto the model it was given and `token` is
+// the only field this label reads. The trap needs a label built from fields the write
+// does NOT name, which a rename's never is.
+//
+// So this asserts what a reader of the journal gets, and nothing about how the row was
+// written. The write is narrow for an unrelated reason — see RenameAIProvider.
+func TestRenamingAProviderIsAttributableInTheJournal(t *testing.T) {
+	api, db := auditedTestApi(t)
+	created := mustProvider(t, api, "haiku")
+
+	before := providerAuditCount(t, db)
+	_, err := api.RenameAIProvider(adminCtx(), "haiku", "haiku-eu")
+	require.NoError(t, err)
+
+	var events []rdb.AuditEvent
+	require.NoError(t, db.WithContext(core.WithSystemContext(context.Background())).
+		Where("table_name LIKE ? AND operation = ?", "%ai_providers%", "update").
+		Order("id asc").Find(&events).Error)
+	require.Len(t, events, 1, "the rename is journalled exactly once")
+	assert.Equal(t, "haiku-eu", events[0].EntityLabel,
+		"the rename journalled an unusable label, which is the same as no entry at all")
+
+	// 🔴 THE PRIMARY KEY IS THE ONLY THING LINKING THE TWO LABELS, and it is the assertion
+	// this test did not make the first time. The journal records the NEW token here and the
+	// OLD one on the create before it; without a PK there is nothing to say they are the
+	// same row, and core/rdb/audit.go defines an empty EntityPK as "a bulk/condition
+	// update" — so a rename would be journalled as a bulk operation over an unnamed set.
+	//
+	// It is empty whenever the write passes a ZERO struct as its model
+	// (`Model(&AIProvider{}).Where("id = ?", …)`), which is exactly the shape a one-column
+	// update reaches for. Passing the loaded row keeps the narrow write AND the key.
+	assert.Equal(t, fmt.Sprint(created.ID), events[0].EntityPK,
+		"the rename journalled an EMPTY primary key, which the journal reads as a bulk update "+
+			"— and with the label being the token, nothing then ties `haiku` to `haiku-eu`")
+
+	// The counterweight: the create before it recorded the same key, so the two entries
+	// really do join. An assertion on the rename alone would be satisfied by a journal that
+	// stamped some constant.
+	var creates []rdb.AuditEvent
+	require.NoError(t, db.WithContext(core.WithSystemContext(context.Background())).
+		Where("table_name LIKE ? AND operation = ?", "%ai_providers%", "create").
+		Order("id asc").Find(&creates).Error)
+	require.Len(t, creates, 1)
+	assert.Equal(t, creates[0].EntityPK, events[0].EntityPK,
+		"the create and the rename name different rows, so the journal cannot be read as a history")
+	assert.Equal(t, "haiku", creates[0].EntityLabel,
+		"the create's label is not the old token, so the pair proves nothing about the rename")
+
+	assert.Greater(t, providerAuditCount(t, db), before,
+		"nothing at all was journalled for the rename")
+}
+
+// providerAuditCount is the anti-vacuity counterpart to the assertion above: a filter
+// that matched nothing would report an empty list as agreement.
+func providerAuditCount(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, db.WithContext(core.WithSystemContext(context.Background())).
+		Model(&rdb.AuditEvent{}).Where("table_name LIKE ?", "%ai_providers%").Count(&n).Error)
+	return n
 }
