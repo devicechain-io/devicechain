@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -61,13 +62,46 @@ type DashboardVersion struct {
 	PublishedBy string `gorm:"size:256"`
 }
 
-// DashboardCreateRequest is the data required to create or update a dashboard.
+// DashboardCreateRequest is the data required to create a dashboard.
 // Definition is the raw JSON definition document (validated by the API layer).
 type DashboardCreateRequest struct {
 	Token       string
 	Name        *string
 	Description *string
 	Definition  string
+}
+
+// DashboardUpdateRequest is the data an UPDATE carries, and it is a different type from
+// the create request rather than the same one reused — which is the whole conversion.
+//
+// Every field is three-state (dcgraphql.Optional*): absent leaves the stored value
+// alone, an explicit null clears it, a value sets it. A shared create input can express
+// only two of those, so every update through it was a full replace — a caller renaming a
+// dashboard erased its description, successfully.
+//
+// 🔴 THERE IS NO Token FIELD, and its absence is the point. The mutation's `token`
+// argument names the dashboard; the create input carried a second one, which could only
+// agree with the argument or name a different record. That disagreement used to be
+// REFUSED (dcgraphql.ErrPayloadTokenDisagrees) after the payload token had already been
+// written onto the row in an earlier incarnation, where an empty one — legal, since
+// `token: String!` admits "" — blanked the dashboard's token and left it addressable by
+// nothing. Dropping the field makes the whole class unrepresentable rather than caught.
+//
+// Nothing is lost by dropping it, because unlike a connector, a notification channel or
+// an AI provider, a dashboard has no rename channel: nothing keys a secret or a policy
+// by its token, and no test ever pinned a rename as intended.
+//
+// 🔴 Definition IS THREE-STATE ON THE WIRE AND UNCLEARABLE IN THE FOLD. The column is
+// NOT NULL — a dashboard definition is opaque versioned JSON and a dashboard with no
+// definition is not a thing — so UpdateDashboard folds it with ApplyToRequired, which
+// REFUSES an explicit null instead of writing an empty document. It is still an
+// OptionalString rather than a plain string because the ABSENT state is what "leave the
+// definition alone while I rename this" is spelled with, and a plain string cannot spell
+// it.
+type DashboardUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	Definition  dcgraphql.OptionalString
 }
 
 // DashboardSearchCriteria is the filter/pagination for a dashboard search.

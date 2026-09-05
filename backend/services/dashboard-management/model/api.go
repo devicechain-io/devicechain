@@ -87,29 +87,14 @@ func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateReq
 	return created, nil
 }
 
-// UpdateDashboard updates the dashboard (the mutable draft) with the given
-// (current) token. When expectedUpdatedAt is non-nil it is an optimistic-
-// concurrency precondition: the save is rejected with ErrConflict if the row's
-// current UpdatedAt no longer matches, i.e. another writer changed it since the
-// caller loaded it. The comparison uses RFC3339 (second precision) because that is
-// exactly the string the caller was handed by the `updatedAt` query field, so a
-// value that round-trips unchanged always matches.
-func (api *Api) UpdateDashboard(ctx context.Context, token string, request *DashboardCreateRequest, expectedUpdatedAt *string) (*Dashboard, error) {
-	def, err := definitionJSON(request.Definition)
-	if err != nil {
-		return nil, err
-	}
-
-	// The `token` argument names the dashboard; the payload token may only agree with
-	// it. It used to be written onto the row, so an empty one — legal, since
-	// `token: String!` admits "" — blanked the dashboard's token and left it
-	// addressable by nothing. Unlike a connector or a notification channel, nothing
-	// pins a dashboard rename as intended (the test named "rename" sends the same
-	// token), so this takes the reconcile rather than the rename rule.
-	if err := dcgraphql.ErrPayloadTokenDisagrees("dashboard", token, request.Token); err != nil {
-		return nil, err
-	}
-
+// UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with
+// the given token: a field the request omits is left alone, a field it sends is written,
+// and an explicit null clears it — except definition, which refuses one (see below).
+//
+// When expectedUpdatedAt is non-nil it is an optimistic-concurrency precondition: the
+// save is rejected with ErrConflict if the row's current UpdatedAt no longer matches,
+// i.e. another writer changed it since the caller loaded it.
+func (api *Api) UpdateDashboard(ctx context.Context, token string, request *DashboardUpdateRequest, expectedUpdatedAt *string) (*Dashboard, error) {
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -117,55 +102,108 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
 	current := matches[0]
 
-	// No precondition → unconditional last-write-wins (backward-compatible; used by
-	// non-interactive callers that don't track a version).
-	if expectedUpdatedAt == nil {
-		current.Name = rdb.NullStrOf(request.Name)
-		current.Description = rdb.NullStrOf(request.Description)
-		current.Definition = def
-		if err := api.RDB.DB(ctx).Save(current).Error; err != nil {
-			return nil, err
+	// 🔴 EVERY FOLD AND EVERY VALIDATION HAPPENS BEFORE THE FIRST WRITE, and that
+	// ordering is the contract rather than a tidiness preference. A request carrying a
+	// rename AND a malformed definition must be refused WHOLE: applying the name and
+	// then failing on the document would leave a caller who retries having already
+	// half-applied their first attempt, with nothing anywhere to say so.
+	//
+	// The assignment map is built from the fields the request actually NAMED, which is
+	// what makes this a partial update at the SQL level and not merely at the caller's:
+	// a column nobody mentioned is not in the statement at all, so it cannot be written
+	// from a stale read.
+	//
+	// The folds run BEFORE the precondition check on purpose. A malformed request is
+	// malformed whoever else is writing, so reporting it as a conflict would send the
+	// caller off to reload and retry a request that can never succeed.
+	assignments := map[string]any{}
+	if request.Name.Set {
+		current.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
+		assignments["name"] = current.Name
+	}
+	if request.Description.Set {
+		current.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+		assignments["description"] = current.Description
+	}
+	// 🔴 definition TAKES ApplyToRequired, SO AN EXPLICIT NULL IS REFUSED. The column is
+	// NOT NULL and the document is a dashboard's entire content (opaque versioned JSON),
+	// so there is no reading of "clear it" that leaves a dashboard behind — folding the
+	// null to "" would store a document nothing can render, and report success.
+	//
+	// Validation is gated on Set for the same reason the fold is: definitionJSON is a
+	// check on what the CALLER SENT. Re-running it over the stored document on every
+	// update would make a dashboard that predates a tightening of that check unsavable —
+	// its owner could no longer even rename it.
+	rawDefinition, err := request.Definition.ApplyToRequired("definition", string(current.Definition))
+	if err != nil {
+		return nil, err
+	}
+	if request.Definition.Set {
+		def, derr := definitionJSON(rawDefinition)
+		if derr != nil {
+			return nil, derr
 		}
+		current.Definition = def
+		assignments["definition"] = def
+	}
+
+	// 🔴 AN UPDATE THAT NAMES NOTHING WRITES NOTHING — INCLUDING updated_at.
+	//
+	// It is not a degenerate case to shrug at, because that timestamp is a SHARED
+	// precondition: bumping it here would invalidate every other editor's baseline on
+	// behalf of a caller who asked for no change at all, and the second tab would be
+	// told it had a conflict with a write that wrote nothing.
+	//
+	// Under a precondition the check below still runs first, so a STALE one is a
+	// conflict whether or not any field was named — an empty update is not a way to be
+	// told "success" about a row that has moved on. What is returned is the row AS READ,
+	// whose UpdatedAt equals the precondition the caller supplied; reloading instead
+	// would hand a caller who wrote nothing a baseline advanced past a concurrent
+	// writer's content they have never seen.
+	if expectedUpdatedAt != nil {
+		// The clean early-out against the caller's stated version — the exact string the
+		// caller was handed by core/graphql.FormatTime, so the layout must match it.
+		//
+		// 🔴 This used to say "RFC3339 second precision" as though the coarseness were
+		// part of the contract. It was not — the guarded write re-reads updated_at, so
+		// this comparison is the only enforcement of the CALLER's version, and
+		// truncating it to the second let a client whose view was stale by under a
+		// second publish over a change it had never seen.
+		if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
+			return nil, ErrConflict
+		}
+	}
+	if len(assignments) == 0 {
 		return current, nil
 	}
 
-	// Optimistic concurrency. A clean early-out against the caller's stated version
-	// (the exact string the caller was handed by core/graphql.FormatTime, so the layout
-	// must match it), then an ATOMIC guarded write: UPDATE ... WHERE updated_at = <the
-	// value just read>, so a concurrent save slipping in between the read and this write
-	// moves updated_at and matches zero rows (RowsAffected == 0) instead of being
-	// silently clobbered.
-	//
-	// 🔴 This used to say "RFC3339 second precision" as though the coarseness were part
-	// of the contract. It was not — the guarded write re-reads updated_at, so this
-	// comparison is the only enforcement of the CALLER's version, and truncating it to
-	// the second let a client whose view was stale by under a second publish over a
-	// change it had never seen.
-	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-		return nil, ErrConflict
+	// The write. With a precondition it is ATOMIC and guarded: UPDATE ... WHERE
+	// updated_at = <the value just read>, so a concurrent save slipping in between the
+	// read and this write moves updated_at and matches zero rows (RowsAffected == 0)
+	// instead of being silently clobbered. Without one it is unconditional
+	// last-write-wins (backward-compatible; used by non-interactive callers that don't
+	// track a version), and zero rows can then only mean the row was deleted since the
+	// read.
+	write := api.RDB.DB(ctx).Model(&Dashboard{}).Where("id = ?", current.ID)
+	if expectedUpdatedAt != nil {
+		write = write.Where("updated_at = ?", current.UpdatedAt)
 	}
-	res := api.RDB.DB(ctx).Model(&Dashboard{}).
-		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
-		Updates(map[string]any{
-			"name":        rdb.NullStrOf(request.Name),
-			"description": rdb.NullStrOf(request.Description),
-			"definition":  def,
-		})
+	res := write.Updates(assignments)
 	if res.Error != nil {
 		return nil, res.Error
 	}
 	if res.RowsAffected == 0 {
-		return nil, ErrConflict
+		if expectedUpdatedAt != nil {
+			return nil, ErrConflict
+		}
+		return nil, gorm.ErrRecordNotFound
 	}
 
 	// Reload for the freshly-bumped updated_at — the caller advances its precondition
-	// baseline from the returned value.
-	// Reloaded by the ARGUMENT, not by request.Token. The payload token is now either
-	// empty or equal to this, and reloading by an empty one would report the dashboard
-	// that was just written successfully as ErrRecordNotFound.
+	// baseline from the returned value. Reloaded by the ARGUMENT, which is the only
+	// thing that names the row: the update input carries no token at all.
 	reloaded, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err

@@ -26,11 +26,14 @@ func (r *SchemaResolver) CreateDashboard(ctx context.Context, args struct {
 	return &DashboardResolver{M: *created, S: r, C: ctx}, nil
 }
 
-// UpdateDashboard updates the dashboard (draft) with the given (current) token.
-// expectedUpdatedAt, when supplied, is an optimistic-concurrency precondition.
+// UpdateDashboard applies a partial update to the dashboard (draft) with the given
+// token: an omitted field is left alone, a sent one is written, an explicit null clears
+// it (definition refuses one). The token argument is the only thing that names the row —
+// DashboardUpdateRequest carries none. expectedUpdatedAt, when supplied, is an
+// optimistic-concurrency precondition.
 func (r *SchemaResolver) UpdateDashboard(ctx context.Context, args struct {
 	Token             string
-	Request           model.DashboardCreateRequest
+	Request           model.DashboardUpdateRequest
 	ExpectedUpdatedAt *string
 }) (*DashboardResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {

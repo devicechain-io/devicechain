@@ -996,7 +996,13 @@ const mutationCreateDashboard = `mutation($request:DashboardCreateRequest!){` +
 // expectedUpdatedAt is omitted, so the update is UNCONDITIONAL (no optimistic-
 // concurrency precondition) — the sim owns its dashboard and always writes the
 // current spec, it isn't reconciling against a concurrent human editor.
-const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardCreateRequest!){` +
+//
+// 🔴 THE UPDATE TAKES A DIFFERENT INPUT FROM THE CREATE, and it carries no `token`.
+// updateDashboard is a partial update: the mutation's own `token` argument names the
+// dashboard, and a second one in the payload would be an undeclared field the schema
+// REFUSES (the unknown-input-field guard), so reusing the create request map here
+// would fail every sync rather than silently doing the wrong thing.
+const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardUpdateRequest!){` +
 	`updateDashboard(token:$token,request:$request){token}}`
 
 const mutationPublishDashboard = `mutation($token:String!){publishDashboard(token:$token){version}}`
@@ -1027,6 +1033,15 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 		"description": ds.Description,
 		"definition":  ds.Definition,
 	}
+	// The update input is the create one WITHOUT the token. Every field is named on
+	// purpose: the sim converges a dashboard onto its spec, so "leave it alone" is
+	// never what it means — a field omitted here would keep whatever an earlier run or
+	// a human editor left behind, which is the drift ensureDashboard exists to end.
+	updateReq := map[string]any{
+		"name":        ds.Name,
+		"description": ds.Description,
+		"definition":  ds.Definition,
+	}
 	if existing.Dashboard == nil {
 		var created struct {
 			CreateDashboard struct {
@@ -1045,7 +1060,7 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 			} `json:"updateDashboard"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DashboardMgmtGraphQL, mutationUpdateDashboard,
-			map[string]any{"token": ds.Token, "request": req}, &updated); err != nil {
+			map[string]any{"token": ds.Token, "request": updateReq}, &updated); err != nil {
 			return fmt.Errorf("updateDashboard: %w", err)
 		}
 		log.Info().Str("token", ds.Token).Msg("updated dashboard")

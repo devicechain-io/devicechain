@@ -29,12 +29,33 @@ type Dashboard {
     definition: String!
 }
 
-# Data required to create or update a dashboard.
+# Data required to create a dashboard.
 input DashboardCreateRequest {
     token: String!
     name: String
     description: String
     definition: String!
+}
+
+# Data required to update a dashboard. Every field is THREE-STATE: omitting it leaves
+# the stored value alone, sending it with a value sets it, and sending an explicit null
+# clears it. That is why every field is declared nullable — `definition: String`, not
+# `String!` — even though the column behind it is NOT NULL: a non-null input field with
+# no default is REQUIRED by validation, which would make the absent state (the one that
+# means "leave it alone") unrepresentable.
+#
+# There is deliberately no `token`. The mutation's own `token` argument names the
+# dashboard; a second one in the payload could only agree with it or name a different
+# record, and this input makes the disagreement unrepresentable rather than refused.
+# Nothing here renames a dashboard — a dashboard has no rename channel today.
+#
+# `definition` is the exception to the clearing rule. The column is NOT NULL and a
+# dashboard with no definition is not a thing, so an explicit null on it is REFUSED
+# rather than folded to an empty document.
+input DashboardUpdateRequest {
+    name: String
+    description: String
+    definition: String
 }
 
 # Criteria used when searching for dashboards.
@@ -77,11 +98,15 @@ type Query {
 type Mutation {
     # Create a new dashboard.
     createDashboard(request: DashboardCreateRequest!): Dashboard!
-    # Update the dashboard (draft) with the given (current) token. When
+    # Update the dashboard (draft) with the given token. The request is a PARTIAL
+    # update: a field you omit is left alone, a field you send is written, and an
+    # explicit null clears it (except definition, which refuses one). When
     # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition:
     # the update fails if the dashboard's updatedAt has changed since (a concurrent
-    # edit). Pass the updatedAt the caller last read.
-    updateDashboard(token: String!, request: DashboardCreateRequest!, expectedUpdatedAt: String): Dashboard!
+    # edit). Pass the updatedAt the caller last read. An update that names no field
+    # writes nothing and does not move updatedAt, but a stale precondition on it is
+    # still a conflict.
+    updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!
     # Freeze the current draft into a new immutable version (N+1) and return it.
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
     # updateDashboard: publish fails (CONFLICT) if the draft changed since.
