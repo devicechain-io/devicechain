@@ -19,7 +19,8 @@ type Documents = {
     "\n  query Connector($token: String!) {\n    connector(token: $token) {\n      id\n      token\n      name\n      description\n      type\n      config\n      hasSecret\n      updatedAt\n    }\n  }\n": typeof types.ConnectorDocument,
     "\n  query ConnectorTypes {\n    connectorTypes\n  }\n": typeof types.ConnectorTypesDocument,
     "\n  mutation CreateConnector($request: ConnectorCreateRequest!) {\n    createConnector(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateConnectorDocument,
-    "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateConnectorDocument,
+    "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateConnectorDocument,
+    "\n  mutation RenameConnector($token: String!, $newToken: String!) {\n    renameConnector(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.RenameConnectorDocument,
     "\n  query ConnectorVersions($token: String!) {\n    connectorVersions(token: $token) {\n      version\n      type\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": typeof types.ConnectorVersionsDocument,
     "\n  mutation PublishConnector(\n    $token: String!\n    $label: String\n    $description: String\n    $expectedUpdatedAt: String\n  ) {\n    publishConnector(\n      token: $token\n      label: $label\n      description: $description\n      expectedUpdatedAt: $expectedUpdatedAt\n    ) {\n      version\n    }\n  }\n": typeof types.PublishConnectorDocument,
     "\n  mutation RollbackConnector($token: String!, $version: Int!) {\n    rollbackConnector(token: $token, version: $version) {\n      type\n      config\n      updatedAt\n    }\n  }\n": typeof types.RollbackConnectorDocument,
@@ -30,7 +31,8 @@ const documents: Documents = {
     "\n  query Connector($token: String!) {\n    connector(token: $token) {\n      id\n      token\n      name\n      description\n      type\n      config\n      hasSecret\n      updatedAt\n    }\n  }\n": types.ConnectorDocument,
     "\n  query ConnectorTypes {\n    connectorTypes\n  }\n": types.ConnectorTypesDocument,
     "\n  mutation CreateConnector($request: ConnectorCreateRequest!) {\n    createConnector(request: $request) {\n      token\n    }\n  }\n": types.CreateConnectorDocument,
-    "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateConnectorDocument,
+    "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateConnectorDocument,
+    "\n  mutation RenameConnector($token: String!, $newToken: String!) {\n    renameConnector(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n": types.RenameConnectorDocument,
     "\n  query ConnectorVersions($token: String!) {\n    connectorVersions(token: $token) {\n      version\n      type\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": types.ConnectorVersionsDocument,
     "\n  mutation PublishConnector(\n    $token: String!\n    $label: String\n    $description: String\n    $expectedUpdatedAt: String\n  ) {\n    publishConnector(\n      token: $token\n      label: $label\n      description: $description\n      expectedUpdatedAt: $expectedUpdatedAt\n    ) {\n      version\n    }\n  }\n": types.PublishConnectorDocument,
     "\n  mutation RollbackConnector($token: String!, $version: Int!) {\n    rollbackConnector(token: $token, version: $version) {\n      type\n      config\n      updatedAt\n    }\n  }\n": types.RollbackConnectorDocument,
@@ -56,7 +58,11 @@ export function graphql(source: "\n  mutation CreateConnector($request: Connecto
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateConnectorDocument;
+export function graphql(source: "\n  mutation UpdateConnector(\n    $token: String!\n    $request: ConnectorUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateConnectorDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RenameConnector($token: String!, $newToken: String!) {\n    renameConnector(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RenameConnectorDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

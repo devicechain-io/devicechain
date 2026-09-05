@@ -6,6 +6,7 @@ package model
 import (
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/datatypes"
@@ -101,11 +102,9 @@ func AIProviderSecretRef(id uint) secrets.SecretRef {
 	return secrets.SecretRef{Scope: secrets.ScopeInstance, Name: AIProviderSecretName(id)}
 }
 
-// AIProviderCreateRequest is the data to create or update a provider. Params is the
-// raw JSON params document (validated by the API layer). Secret (the API key) is
-// write-only: a nil value preserves the stored key on update (the caller cannot read
-// it back to resend it); a non-nil value replaces it, and an explicit empty string
-// clears it. On create, nil/empty means no key yet.
+// AIProviderCreateRequest is the data to create a provider. Params is the raw JSON
+// params document (validated by the API layer). Secret (the API key) is write-only;
+// nil or empty means no key yet.
 type AIProviderCreateRequest struct {
 	Token       string
 	Name        *string
@@ -116,6 +115,47 @@ type AIProviderCreateRequest struct {
 	Params      *string
 	Enabled     bool
 	Secret      *string
+}
+
+// AIProviderUpdateRequest is the three-state partial update of a provider: an omitted
+// field leaves the stored value alone, an explicit null clears it, and a value sets it.
+//
+// 🔴 IT CARRIES NO TOKEN, AND THE RENAME IT USED TO CARRY DID NOT EVAPORATE. The
+// payload token on the create input MEANT the provider's new name — the write-only key
+// handle is keyed by the provider's immutable id, so a rename keeps it bound — which is
+// why this family could not be converted mechanically. The rename moved to
+// renameAiProvider, where `newToken` can mean only one thing.
+type AIProviderUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Kind selects the Provider implementation. NOT NULL, and its zero value is not a
+	// member of the vocabulary, so an explicit null is REFUSED rather than folded to "".
+	Kind dcgraphql.OptionalString
+	// Endpoint is the provider API base URL. Nullable in the storage sense — "" means
+	// the kind's built-in default — so a null CLEARS the override.
+	//
+	// 🔴 IT IS COUPLED TO Kind, and clearing it is not always legal: a kind DEFINED by
+	// its address (openai-compatible) has no default to fall back to, so
+	// validateEndpointForKind refuses the pair. The refusal is about the pair the row
+	// will HOLD, which is why the fold below resolves both before validating either.
+	Endpoint dcgraphql.OptionalString
+	// Model is the provider model id (→ AIProvider.ModelID). NOT NULL and required
+	// non-blank, so a null is refused.
+	Model dcgraphql.OptionalString
+	// Params is the opaque per-kind inference config, a JSON object or null.
+	Params dcgraphql.OptionalString
+	// Enabled gates whether the provider may be resolved and used. NOT NULL, and a
+	// BOOLEAN is where folding a null to the zero value is most dangerous and least
+	// visible: `enabled: null` would read as false, taking a model out of service and
+	// returning success, with nothing anywhere to say what happened. So a null is
+	// refused — see ApplyToRequired.
+	Enabled dcgraphql.OptionalBool
+	// Secret is the write-only API key (never a column — see AIProviderSecretRef).
+	// Omitted PRESERVES the stored key (the caller cannot read it back to resend it), a
+	// value ROTATES it, and null — or an empty string — DELETES it. The null is the new
+	// spelling: under the old pointer the clear was the empty STRING, because a pointer
+	// had no third state to give it.
+	Secret dcgraphql.OptionalString
 }
 
 // AIProviderSearchCriteria is the filter/pagination for a provider search.

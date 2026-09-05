@@ -62,9 +62,7 @@ func TestAnAssignmentOffTheMenuResolvesToNoneNeverASubstitute(t *testing.T) {
 	}, {
 		name: "the assigned model is disabled",
 		takeItAway: func(t *testing.T, api *Api) {
-			req := claudeReq("fable", nil)
-			req.Enabled = false
-			_, err := api.UpdateAIProvider(adminCtx(), "fable", req, nil)
+			_, err := api.UpdateAIProvider(adminCtx(), "fable", disableProvider(), nil)
 			require.NoError(t, err)
 		},
 	}}
@@ -239,9 +237,7 @@ func TestTheTierDefaultIsFilteredThroughTheTenantsMenu(t *testing.T) {
 	require.NotNil(t, resolveFor(t, api, "acme", "gold"), "precondition: the default answers")
 
 	// The default goes out of service. `fable` stays granted and enabled — the bait.
-	req := claudeReq("sonnet", nil)
-	req.Enabled = false
-	_, err := api.UpdateAIProvider(adminCtx(), "sonnet", req, nil)
+	_, err := api.UpdateAIProvider(adminCtx(), "sonnet", disableProvider(), nil)
 	require.NoError(t, err)
 
 	assert.Nil(t, resolveFor(t, api, "acme", "gold"),

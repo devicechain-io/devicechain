@@ -283,7 +283,14 @@ async function saveEdit(node: React.ReactNode, rename = true): Promise<Write[]> 
 // that form exists to change, and it goes out on every save whether or not the
 // operator moved a corner. Reading it as a carry-forward would demand the one form
 // that draws a shape stop sending the shape.
-const EDITED = new Set(['name', 'description', 'geometry']);
+//
+// `category` is here for the same reason and only became visible when the device
+// profile converted: the profile's basic tab has a SuggestField for it, so it is a
+// field the operator edits and the form sends every save. Before the conversion the
+// profile was a full-replace family, where a sent field was compared against the
+// entity rather than read as a carry-forward — so a field this form owns looked like
+// one it had preserved, and the set never had to name it.
+const EDITED = new Set(['name', 'description', 'geometry', 'category']);
 
 function assertOnlyTheEditsChanged(
   path: string,
@@ -385,24 +392,39 @@ describe('a device profile keeps the position declaration no form edits', () => 
     expect(profile).toBeTruthy();
   });
 
-  // 🔴 The declaration says devices on this profile report their own position. It
-  // is replaced wholesale on update — the schema spells that out — and no console
-  // form edits it, so before this it was cleared by an operator renaming the
-  // profile. The visible symptom would have been a device's map surfaces going
-  // quiet, several steps away from anything anyone had touched.
-  it('sends the declaration back unchanged', async () => {
+  // 🔴 THE ASSERTION FLIPPED WITH THE CONVERSION, AND THAT IS THE POINT OF IT.
+  //
+  // The declaration says devices on this profile report their own position. No
+  // console form edits it. Under the full-replace input, OMITTING it cleared it — so
+  // this form had to reconstruct and re-send the whole declaration on every save, and
+  // these tests asserted that it did. That reconstruction was a workaround for a
+  // hazard, not a feature: it meant the form wrote back a snapshot it had read
+  // minutes ago, so a declaration edited over the API between load and save was
+  // silently reverted.
+  //
+  // Omission now PRESERVES, so the correct request says nothing about location at
+  // all. Sending it back would be the lost update this conversion exists to remove;
+  // sending null would CLEAR it.
+  it('says nothing about the declaration a profile has', async () => {
     const sent = await saveEdit(profile!.renderForm(DECLARED, vi.fn()));
-    expect(sent[sent.length - 1].request.location).toEqual({
-      expectedAccuracyMeters: 12.5,
-      expectedUpdateIntervalSeconds: 30,
-    });
+    expect(
+      'location' in sent[sent.length - 1].request,
+      'the profile form wrote the position declaration back from a stale snapshot — under ' +
+        'the partial-update contract an untouched field is one the request must not name',
+    ).toBe(false);
   });
 
-  // The counterweight: a profile that never declared one must still send null
-  // rather than start inventing a declaration to be safe.
-  it('sends null for a profile that never declared one', async () => {
+  // The counterweight, and it is a different claim from the one above rather than a
+  // restatement: for a profile that never declared one, an ABSENT field and a NULL
+  // both leave the column NULL, so absence alone would be satisfied either way. What
+  // this pins is that the form does not send `location: null` — which on a profile
+  // that DOES declare one would clear it, and is the request shape a `?? null`
+  // reintroduced in the api wrapper would produce.
+  it('does not send a null declaration for a profile that never declared one', async () => {
     const sent = await saveEdit(profile!.renderForm({ ...ENTITY, location: null }, vi.fn()));
-    expect(sent[sent.length - 1].request.location).toBeNull();
+    const request = sent[sent.length - 1].request;
+    expect('location' in request).toBe(false);
+    expect(request.location).toBeUndefined();
   });
 });
 

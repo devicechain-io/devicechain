@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -106,30 +107,40 @@ func endpointValue(raw *string) (string, error) {
 	return v, nil
 }
 
-// validateRequest validates a create/update request's kind, model, endpoint, and
-// params, returning the params as a column value and the endpoint string.
+// validateRequest validates a create request's kind, model, endpoint, and params,
+// returning the params as a column value and the endpoint string.
 func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSON, string, error) {
-	if err := validateProviderKind(request.Kind); err != nil {
+	return api.validateProviderFields(request.Kind, request.Model, request.Endpoint, request.Params)
+}
+
+// validateProviderFields is validateRequest's body, taking the fields directly so the
+// UPDATE path can validate what a partial request FOLDS ONTO rather than what it
+// carries. kind and endpoint are validated as a PAIR — a kind defined by its address
+// has no default to fall back to — so an update naming only one of them still has to be
+// checked against the stored other, or a provider could be left addressable by nothing
+// and refused only at the first call.
+func (api *Api) validateProviderFields(kind, model string, endpoint, params *string) (datatypes.JSON, string, error) {
+	if err := validateProviderKind(kind); err != nil {
 		return nil, "", err
 	}
-	if strings.TrimSpace(request.Model) == "" {
+	if strings.TrimSpace(model) == "" {
 		return nil, "", errors.New("provider model is required")
 	}
-	endpoint, err := endpointValue(request.Endpoint)
+	resolvedEndpoint, err := endpointValue(endpoint)
 	if err != nil {
 		return nil, "", err
 	}
 	// A kind with no built-in base URL is unusable without one, so it is refused at the
 	// write rather than at the first call — the same fail-closed reasoning that keeps an
 	// unregistered kind out of the store.
-	if err := validateEndpointForKind(AIProviderKind(request.Kind), endpoint); err != nil {
+	if err := validateEndpointForKind(AIProviderKind(kind), resolvedEndpoint); err != nil {
 		return nil, "", err
 	}
-	params, err := paramsJSON(request.Params)
+	paramsValue, err := paramsJSON(params)
 	if err != nil {
 		return nil, "", err
 	}
-	return params, endpoint, nil
+	return paramsValue, resolvedEndpoint, nil
 }
 
 // CreateAIProvider inserts a new provider. The kind must be registered and the model
@@ -173,27 +184,21 @@ func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateR
 	return created, nil
 }
 
-// UpdateAIProvider replaces the provider with the given (current) token. The secret
-// is write-only: a nil request.Secret preserves the stored key, a non-nil value
-// replaces it, and an explicit empty string clears it. A provider's GRANTS are not
-// touched here — editing a model and changing who is offered it are separate acts
-// with separate audit trails. When expectedUpdatedAt is non-nil it is an
-// optimistic-concurrency precondition (ErrConflict if the row moved on since).
-func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIProviderCreateRequest, expectedUpdatedAt *string) (*AIProvider, error) {
-	params, endpoint, err := api.validateRequest(request)
-	if err != nil {
-		return nil, err
-	}
-
-	// 🔴 A DIFFERING PAYLOAD TOKEN IS A RENAME HERE, AND THAT IS INTENDED — the write-only key handle is keyed by the provider's immutable id so a rename keeps it bound, which reloadWithSecret below says in as many words. So
-	// this takes the RENAME rule rather than the reconcile most updates take. What it
-	// refuses is a BLANK new token: `token: String!` admits "", and that used to be
-	// written straight onto the row, leaving a live record addressable by nothing and
-	// returning success.
-	if err := dcgraphql.ErrRenameTokenUnusable("ai provider", token, request.Token); err != nil {
-		return nil, err
-	}
-
+// UpdateAIProvider partially updates the provider with the given (current) token,
+// which is the ONLY thing that names the row — the request carries no token, so
+// retargeting a second provider is unrepresentable. Renaming is renameAiProvider's job.
+//
+// An omitted field leaves the stored value alone, an explicit null clears it, and a
+// value sets it. `kind`, `model` and `enabled` sit on NOT NULL columns and refuse a
+// null; `endpoint` and `params` clear on one. The secret is write-only, so omitting it
+// preserves the stored key, a value rotates it, and a null — or an empty string —
+// deletes it.
+//
+// A provider's GRANTS are not touched here — editing a model and changing who is
+// offered it are separate acts with separate audit trails. When expectedUpdatedAt is
+// non-nil it is an optimistic-concurrency precondition (ErrConflict if the row moved on
+// since).
+func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIProviderUpdateRequest, expectedUpdatedAt *string) (*AIProvider, error) {
 	matches, err := api.AIProvidersByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -203,32 +208,61 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	}
 	current := matches[0]
 
+	// 🔴 THE FOLD RUNS — AND VALIDATES — BEFORE ANYTHING IS WRITTEN, so a refused null
+	// on a required column, or a kind left without the endpoint it needs, rejects the
+	// WHOLE update. A caller who retries has not half-applied the first attempt.
+	//
+	// Every value below is what the row will HOLD, not what the request carried: an
+	// update naming only `kind` is validated against the STORED endpoint, and one
+	// clearing the endpoint against the STORED kind. Validating the request alone would
+	// let `kind: "openai-compatible"` land on a provider with no address.
+	kind, err := request.Kind.ApplyToRequired("kind", current.Kind)
+	if err != nil {
+		return nil, err
+	}
+	modelID, err := request.Model.ApplyToRequired("model", current.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := request.Enabled.ApplyToRequired("enabled", current.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	storedEndpoint := current.Endpoint
+	storedParams := providerParamsStr(current.Params)
+	params, endpoint, err := api.validateProviderFields(kind, modelID,
+		request.Endpoint.ApplyTo(&storedEndpoint), request.Params.ApplyTo(storedParams))
+	if err != nil {
+		return nil, err
+	}
+	name := rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
+	description := rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+	secret := updatedSecret(request.Secret)
+
 	fields := map[string]any{
-		"token":       request.Token,
-		"name":        rdb.NullStrOf(request.Name),
-		"description": rdb.NullStrOf(request.Description),
-		"kind":        request.Kind,
+		"name":        name,
+		"description": description,
+		"kind":        kind,
 		"endpoint":    endpoint,
-		"model":       request.Model,
+		"model":       modelID,
 		"params":      params,
-		"enabled":     request.Enabled,
+		"enabled":     enabled,
 	}
 
 	// No precondition → unconditional last-write-wins. Save the loaded row (its PK +
 	// AuditLabel reach the audit journal, unlike a map Updates) with the new fields.
 	if expectedUpdatedAt == nil {
-		current.Token = request.Token
-		current.Name = rdb.NullStrOf(request.Name)
-		current.Description = rdb.NullStrOf(request.Description)
-		current.Kind = request.Kind
+		current.Name = name
+		current.Description = description
+		current.Kind = kind
 		current.Endpoint = endpoint
-		current.ModelID = request.Model
+		current.ModelID = modelID
 		current.Params = params
-		current.Enabled = request.Enabled
+		current.Enabled = enabled
 		if err := api.sys(ctx).Save(current).Error; err != nil {
 			return nil, err
 		}
-		return api.reloadWithSecret(ctx, request.Token, current.ID, request.Secret)
+		return api.reloadWithSecret(ctx, token, current.ID, secret)
 	}
 
 	// Optimistic concurrency: a clean early-out, then an ATOMIC guarded write so a
@@ -251,12 +285,157 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	if res.RowsAffected == 0 {
 		return nil, ErrConflict
 	}
-	return api.reloadWithSecret(ctx, request.Token, current.ID, request.Secret)
+	// Reload by the token ARGUMENT, which is the only thing that ever named this row.
+	// The payload used to carry one, and reloading by IT is how a blank payload token
+	// made the caller's own success response read a row it could no longer name.
+	return api.reloadWithSecret(ctx, token, current.ID, secret)
+}
+
+// RenameAIProvider changes a provider's token, and changes nothing else.
+//
+// 🔴 IT EXISTS BECAUSE THE RENAME WAS A REAL CAPABILITY THE UPDATE PAYLOAD CARRIED. The
+// write-only key handle is keyed by the provider's IMMUTABLE ID (AIProviderSecretRef),
+// so a rename keeps it bound — which reloadWithSecret's comment has said in as many
+// words since the handle was designed. Grants and function assignments reference the
+// provider by its numeric id too, so a rename cannot orphan a tier's menu or a tenant's
+// choice either.
+//
+// The rules, in the order they are applied:
+//
+//  1. A BLANK new token — empty or WHITESPACE-ONLY — is refused. `token: String!`
+//     admits "", and it used to be written straight onto the row, leaving a provider
+//     tenants may still be assigned to addressable by nothing.
+//  2. newToken == token is an idempotent NO-OP SUCCESS returning the provider, so the
+//     retry of a rename that half-failed is safe.
+//  3. A token another provider already holds is refused BY NAME, from inside the
+//     transaction that does the write. The provider list is INSTANCE-global (no tenant
+//     column), so the uniqueness this counts is instance-wide, matching the
+//     uix_ai_providers_token index.
+//
+// The new token is stored VERBATIM, never trimmed: trimming would silently accept
+// " primary " as naming "primary", while the token grammar refuses it plainly.
+func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken string) (*AIProvider, error) {
+	if strings.TrimSpace(newToken) == "" {
+		return nil, fmt.Errorf("cannot rename ai provider %q: the new token is blank, and a "+
+			"provider named by nothing can never be granted or assigned again", token)
+	}
+
+	matches, err := api.AIProvidersByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	current := matches[0]
+
+	if newToken == current.Token {
+		return current, nil
+	}
+
+	// 🔴 THE LOOKUP IS THE FAST PATH; THE UNIQUE INDEX IS THE AUTHORITY. Both are made to
+	// say the same sentence, and the reason is that the transaction does NOT close the
+	// race. At READ COMMITTED a Count that matches nothing takes no lock — there is no
+	// row to lock — so two concurrent renames onto one free token both see it free and
+	// the loser is stopped by the index instead. Without the translation below it is
+	// handed `SQLSTATE 23505` and an index name, which is not what this API promises.
+	//
+	// The provider list is INSTANCE-global, so this counts across the whole instance,
+	// matching uix_ai_providers_token's own scope.
+	if err := api.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		var taken int64
+		if err := tx.Model(&AIProvider{}).Where("token = ?", newToken).Count(&taken).Error; err != nil {
+			return err
+		}
+		if taken > 0 {
+			return ErrAIProviderTokenTaken(token, newToken)
+		}
+		// 🔴 ONE COLUMN, NOT THE WHOLE ROW. Saving `current` would rewrite every field
+		// from a copy loaded a moment ago, so a concurrent edit landing in that window
+		// would be silently reverted by a mutation that changes only a name. This
+		// mutation takes no expectedUpdatedAt precondition, so the narrow write is what
+		// bounds it. It still passes through the token-grammar callback (a map
+		// destination is checked the same way a struct is).
+		//
+		// 🔴 THE MODEL IS `current`, NOT `&AIProvider{}`, AND THAT IS THE AUDIT JOURNAL.
+		// The journal reads its EntityPK off the statement's model, so a zero struct with
+		// the id pushed into a Where clause journals an EMPTY primary key — which
+		// core/rdb/audit.go defines as "a bulk/condition update". A rename would then be
+		// recorded as a bulk operation, and since the label is the token, the entry
+		// BEFORE it says `haiku` and this one says `haiku-eu` with nothing tying the two
+		// together. On the one mutation whose whole content is that the identifier
+		// changed, the PK is the only link between its two labels. Passing the loaded row
+		// writes the same single column and keeps it.
+		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
+			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
+			// must read exactly as the uncontended refusal does.
+			if rdb.IsUniqueViolation(err, aiProviderTokenIndexName, "ai_providers.token") {
+				return ErrAIProviderTokenTaken(token, newToken)
+			}
+			return err
+		}
+		current.Token = newToken
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+// ErrAIProviderTokenTaken is the ONE sentence a caller gets when the token they asked for
+// belongs to another provider — whether the pre-write lookup found it or the unique index
+// did. Both paths are made to say this, because a client cannot be asked to write two
+// handlers for one condition that differ only by timing.
+func ErrAIProviderTokenTaken(token, newToken string) error {
+	return fmt.Errorf("cannot rename ai provider %q to %q: that token is already in use "+
+		"by another provider", token, newToken)
+}
+
+// aiProviderTokenIndexName is the INSTANCE-global partial unique index the baseline creates
+// on ai_providers (token) among live rows. Postgres names it in the text of a unique
+// violation, and that name is what distinguishes "this token is taken" from any other write
+// failure.
+//
+// Unlike every tenant-scoped table's index this one is spelled as a literal in
+// schema/baseline.go rather than derived from a naming rule, so
+// TestAIProviderTokenIndexNameMatchesTheMigration compares the two literals directly.
+const aiProviderTokenIndexName = "uix_ai_providers_token"
+
+// providerParamsStr renders a stored params column as the *string the three-state fold
+// takes: nil for a NULL column, so the ABSENT reading of a request that says nothing
+// about params leaves the column NULL rather than writing an empty document.
+func providerParamsStr(params datatypes.JSON) *string {
+	if params == nil {
+		return nil
+	}
+	raw := string(params)
+	return &raw
+}
+
+// updatedSecret folds the three states of the write-only `secret` field onto the
+// *string applyProviderSecret takes, which has only two: nil means PRESERVE, and a
+// pointer is applied (empty clears, non-empty seals).
+//
+// 🔴 AN EXPLICIT NULL CLEARS, AND THAT IS A NEW OPERATION SPELLED THE PLATFORM'S WAY.
+// Under the old pointer the clear was spelled as the empty STRING — a value standing in
+// for an absence, because a pointer had no third state to give it. Now null means what
+// it means on every other field: remove the stored value. The empty string keeps
+// clearing too; a form's "" and a null are the same intent, and refusing one of them
+// would only surprise a caller who had cleared a key the other way yesterday.
+func updatedSecret(field dcgraphql.OptionalString) *string {
+	if !field.Set {
+		return nil
+	}
+	if field.Value == nil {
+		cleared := ""
+		return &cleared
+	}
+	return field.Value
 }
 
 // reloadWithSecret applies the write-only secret (keyed by the provider's immutable
-// id, so a token rename in the same update keeps the key bound) and returns the
-// freshly-reloaded provider (for the bumped updated_at).
+// id, so a rename never orphans it) and returns the freshly-reloaded provider (for the
+// bumped updated_at).
 func (api *Api) reloadWithSecret(ctx context.Context, token string, id uint, secret *string) (*AIProvider, error) {
 	if secret != nil {
 		if err := api.applyProviderSecret(ctx, id, secret); err != nil {

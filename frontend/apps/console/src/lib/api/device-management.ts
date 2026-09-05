@@ -19,6 +19,7 @@ import type {
   DeviceProfileByTokenQuery,
   DeviceProfileVersionsQuery,
   DeviceProfileCreateRequest,
+  DeviceProfileUpdateRequest,
   MetricDefinitionsQuery,
   MetricDefinitionCreateRequest,
   MetricDefinitionUpdateRequest,
@@ -83,6 +84,7 @@ export type {
   EntityGroupCreateRequest,
   EntityGroupUpdateRequest,
   DeviceProfileCreateRequest,
+  DeviceProfileUpdateRequest,
   MetricDefinitionCreateRequest,
   MetricDefinitionUpdateRequest,
   CommandDefinitionCreateRequest,
@@ -731,8 +733,21 @@ export async function createDeviceProfile(
   return data.createDeviceProfile;
 }
 
+// updateDeviceProfile is a PARTIAL update. Every field is three-state: leave it
+// `undefined` to say nothing about it (the stored value is kept), pass `null` to clear
+// it, or pass a value to set it.
+//
+// 🔴 `undefined` AND `null` ARE NOW DIFFERENT REQUESTS, and `location` is why this
+// matters most. It is the profile's position declaration, no console form edits it, and
+// the previous full-replace input made OMITTING it the clear — so an operator editing a
+// profile's name silently un-declared position for every device built on it, and the
+// only visible consequence was that fleet's map surfaces going quiet. That is why this
+// file used to carry deviceProfilePreserved(), which rebuilt the whole request from the
+// loaded profile on every save. Omission now preserves, so the workaround is gone with
+// the hazard — do NOT reintroduce `?? null`, which would turn "unchanged" back into
+// "clear this".
 const UPDATE_DEVICE_PROFILE = graphql(`
-  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {
+  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileUpdateRequest!) {
     updateDeviceProfile(token: $token, request: $request) {
       id
       token
@@ -753,38 +768,33 @@ const UPDATE_DEVICE_PROFILE = graphql(`
 
 export async function updateDeviceProfile(
   token: string,
-  request: Required<DeviceProfileCreateRequest>,
+  request: DeviceProfileUpdateRequest,
 ): Promise<DeviceProfile> {
   const data = await gql('device-management', UPDATE_DEVICE_PROFILE, { token, request });
   return data.updateDeviceProfile;
 }
 
-// 🔴 The one on this request that is not a string: `location`, the profile's
-// position declaration. It is replaced wholesale like every other field, and the
-// schema says so in as many words — "leaving it out of an update clears an
-// existing declaration". No console form edits it today, which is exactly why it
-// has to be carried: a declaration authored over the API would otherwise be
-// cleared by an operator renaming the profile, and the only visible consequence
-// would be a device's position surfaces quietly disappearing.
-//
-// The declaration is rebuilt field by field rather than spread. It is the one
-// field here that is an OBJECT, and the shape read back is a query result while
-// the shape sent is an input — they line up today, and `...p.location` would keep
-// compiling right up until they stop.
-export function deviceProfilePreserved(p: DeviceProfile): Required<DeviceProfileCreateRequest> {
-  return {
-    token: p.token,
-    name: p.name ?? null,
-    description: p.description ?? null,
-    category: p.category ?? null,
-    metadata: p.metadata ?? null,
-    location: p.location
-      ? {
-          expectedAccuracyMeters: p.location.expectedAccuracyMeters ?? null,
-          expectedUpdateIntervalSeconds: p.location.expectedUpdateIntervalSeconds ?? null,
-        }
-      : null,
-  };
+// renameDeviceProfile changes a profile's token and nothing else. It is the capability
+// updateDeviceProfile's payload token used to carry: a blank newToken is refused,
+// renaming to the current token is an idempotent success, and a token another profile
+// holds is refused by name. It is REFUSED outright once the profile has been published
+// or adopted by a device type — from that point the token is the key published rules
+// are filed under and rostered devices are tracked by.
+const RENAME_DEVICE_PROFILE = graphql(`
+  mutation RenameDeviceProfile($token: String!, $newToken: String!) {
+    renameDeviceProfile(token: $token, newToken: $newToken) {
+      id
+      token
+    }
+  }
+`);
+
+export async function renameDeviceProfile(
+  token: string,
+  newToken: string,
+): Promise<{ token: string }> {
+  const data = await gql('device-management', RENAME_DEVICE_PROFILE, { token, newToken });
+  return data.renameDeviceProfile;
 }
 
 const DELETE_DEVICE_PROFILE = graphql(`

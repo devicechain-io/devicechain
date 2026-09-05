@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -78,15 +80,26 @@ func configJSON(raw string) (datatypes.JSON, error) {
 // vocabulary type without a shipped generator yet is accepted as JSON-object-only and
 // dead-letters at dispatch until its generator lands (slice C4c) — never silently.
 func (api *Api) validateRequest(request *ConnectorCreateRequest) (datatypes.JSON, error) {
-	if err := validateConnectorType(request.Type); err != nil {
+	return api.validateTypeAndConfig(request.Type, request.Config)
+}
+
+// validateTypeAndConfig is validateRequest's body, taking the pair directly so the
+// UPDATE path can validate what a partial request FOLDS ONTO — which is not what the
+// request carries. An update naming only `type` still has to be checked against the
+// STORED config, because the per-type field shape is a property of the two together:
+// re-pointing an mqtt connector at kafka without touching its config would otherwise
+// store a document the new type cannot dispatch, and the failure would surface at send
+// time instead of at the write.
+func (api *Api) validateTypeAndConfig(connectorType, config string) (datatypes.JSON, error) {
+	if err := validateConnectorType(connectorType); err != nil {
 		return nil, err
 	}
-	cfg, err := configJSON(request.Config)
+	cfg, err := configJSON(config)
 	if err != nil {
 		return nil, err
 	}
-	if connectorspec.Supported(request.Type) {
-		if err := connectorspec.ValidateConfig(request.Type, cfg); err != nil {
+	if connectorspec.Supported(connectorType) {
+		if err := connectorspec.ValidateConfig(connectorType, cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -131,10 +144,15 @@ func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateReq
 	return created, nil
 }
 
-// UpdateConnector updates the connector (draft) with the given (current) token. The
-// secret is write-only, so a nil request.Secret preserves the stored secret (the
-// caller cannot read it back to resend it); a non-nil value replaces it, and an
-// explicit empty string clears it. Every other field is fully replaced.
+// UpdateConnector updates the connector (draft) with the given (current) token, which
+// is the ONLY thing that names the row — the request carries no token, so retargeting a
+// second connector is unrepresentable. Renaming is renameConnector's job.
+//
+// It is a PARTIAL update: an omitted field leaves the stored value alone, an explicit
+// null clears it, and a value sets it. `type` and `config` sit on NOT NULL columns and
+// refuse a null; `secret` is write-only, so omitting it preserves the stored credential
+// (the caller cannot read it back to resend it), a value rotates it, and a null — or an
+// empty string — deletes it.
 //
 // When expectedUpdatedAt is non-nil it is an optimistic-concurrency precondition (same
 // contract as the dashboard precedent): the save is rejected with ErrConflict if the
@@ -142,21 +160,7 @@ func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateReq
 // caller loaded it. The comparison uses RFC3339 (second precision), the exact string
 // the caller was handed by the `updatedAt` query field, so a value that round-trips
 // unchanged always matches.
-func (api *Api) UpdateConnector(ctx context.Context, token string, request *ConnectorCreateRequest, expectedUpdatedAt *string) (*Connector, error) {
-	cfg, err := api.validateRequest(request)
-	if err != nil {
-		return nil, err
-	}
-
-	// 🔴 A DIFFERING PAYLOAD TOKEN IS A RENAME HERE, AND THAT IS INTENDED — the credential is keyed by the connector's immutable id, so a rename keeps it bound, and TestSecretSurvivesTokenRename pins that. So
-	// this takes the RENAME rule rather than the reconcile most updates take. What it
-	// refuses is a BLANK new token: `token: String!` admits "", and that used to be
-	// written straight onto the row, leaving a live record addressable by nothing and
-	// returning success.
-	if err := dcgraphql.ErrRenameTokenUnusable("connector", token, request.Token); err != nil {
-		return nil, err
-	}
-
+func (api *Api) UpdateConnector(ctx context.Context, token string, request *ConnectorUpdateRequest, expectedUpdatedAt *string) (*Connector, error) {
 	matches, err := api.ConnectorsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -166,18 +170,40 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	}
 	current := matches[0]
 
+	// 🔴 THE FOLD RUNS — AND VALIDATES — BEFORE ANYTHING IS WRITTEN, so a refused null
+	// on a required column or a config the new type cannot take rejects the WHOLE
+	// update. A caller who retries has not half-applied the first attempt.
+	//
+	// The pair is validated as a pair, against the values the row will HOLD rather than
+	// the ones the request carried: an update naming only `type` re-checks the stored
+	// config against it, and one naming only `config` checks it against the stored type.
+	connectorType, err := request.Type.ApplyToRequired("type", current.Type)
+	if err != nil {
+		return nil, err
+	}
+	configRaw, err := request.Config.ApplyToRequired("config", string(current.Config))
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := api.validateTypeAndConfig(connectorType, configRaw)
+	if err != nil {
+		return nil, err
+	}
+	name := rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
+	description := rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+	secret := updatedSecret(request.Secret)
+
 	// No precondition → unconditional last-write-wins (non-interactive callers that
 	// don't track a version).
 	if expectedUpdatedAt == nil {
-		current.Token = request.Token
-		current.Name = rdb.NullStrOf(request.Name)
-		current.Description = rdb.NullStrOf(request.Description)
-		current.Type = request.Type
+		current.Name = name
+		current.Description = description
+		current.Type = connectorType
 		current.Config = cfg
 		if err := api.RDB.DB(ctx).Save(current).Error; err != nil {
 			return nil, err
 		}
-		return api.applyUpdatedSecret(ctx, current, request.Secret)
+		return api.applyUpdatedSecret(ctx, current, secret)
 	}
 
 	// Optimistic concurrency: a clean early-out against the caller's stated version,
@@ -197,10 +223,9 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	res := api.RDB.DB(ctx).Model(&Connector{}).
 		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
 		Updates(map[string]any{
-			"token":       request.Token,
-			"name":        rdb.NullStrOf(request.Name),
-			"description": rdb.NullStrOf(request.Description),
-			"type":        request.Type,
+			"name":        name,
+			"description": description,
+			"type":        connectorType,
 			"config":      cfg,
 		})
 	if res.Error != nil {
@@ -211,20 +236,148 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	}
 
 	// Reload for the freshly-bumped updated_at — the caller advances its precondition
-	// baseline from the returned value.
-	reloaded, err := api.ConnectorsByToken(ctx, []string{request.Token})
+	// baseline from the returned value. By the token ARGUMENT, which is the only thing
+	// that ever named this row: the payload used to carry one, and reloading by it was
+	// how a blank payload token made the success response read a row it could no longer
+	// name.
+	reloaded, err := api.ConnectorsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
 	}
 	if len(reloaded) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return api.applyUpdatedSecret(ctx, reloaded[0], request.Secret)
+	return api.applyUpdatedSecret(ctx, reloaded[0], secret)
+}
+
+// RenameConnector changes a connector's token, and changes nothing else.
+//
+// 🔴 IT EXISTS BECAUSE THE RENAME WAS A REAL CAPABILITY THE UPDATE PAYLOAD CARRIED. A
+// connector's credential is keyed by its IMMUTABLE ID (ConnectorSecretRef), so a rename
+// keeps it bound — TestSecretSurvivesTokenRename is what pins that, and it is now
+// pointed here. Dispatch resolves a connector by token to its latest published version,
+// so a rename does move what a rule's ConnectorRef must name; that is a property of the
+// rename being a real, deliberate operation rather than a reason to forbid it.
+//
+// The rules, in the order they are applied:
+//
+//  1. A BLANK new token — empty or WHITESPACE-ONLY — is refused. `token: String!`
+//     admits "", and that used to be written straight onto the row, leaving a connector
+//     REACT still dispatches to addressable by nothing, with the mutation returning
+//     success.
+//  2. newToken == token is an idempotent NO-OP SUCCESS returning the connector, so the
+//     retry of a rename that half-failed is safe.
+//  3. A token another connector in the tenant already holds is refused BY NAME, from
+//     inside the transaction that does the write.
+//
+// The new token is stored VERBATIM, never trimmed: trimming would silently accept
+// " pager " as naming "pager", while the token grammar refuses it plainly.
+func (api *Api) RenameConnector(ctx context.Context, token string, newToken string) (*Connector, error) {
+	if strings.TrimSpace(newToken) == "" {
+		return nil, fmt.Errorf("cannot rename connector %q: the new token is blank, and a "+
+			"connector named by nothing can never be dispatched to again", token)
+	}
+
+	matches, err := api.ConnectorsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	current := matches[0]
+
+	if newToken == current.Token {
+		return current, nil
+	}
+
+	// 🔴 THE LOOKUP IS THE FAST PATH; THE UNIQUE INDEX IS THE AUTHORITY. Both are made to
+	// say the same sentence, and the reason is that the transaction does NOT close the
+	// race. At READ COMMITTED a Count that matches nothing takes no lock — there is no
+	// row to lock — so two concurrent renames onto one free token both see it free and
+	// the loser is stopped by the index instead. Without the translation below it is
+	// handed `SQLSTATE 23505` and an index name, which is not what this API promises and
+	// not something a caller can act on: they cannot write two handlers for one condition
+	// that differ only by which of them got there first.
+	//
+	// The tenant predicate on the Count is the scoping callback's, so it counts within
+	// the caller's tenant; the index carries the same predicate plus `deleted_at IS NULL`,
+	// which is exactly the set the lookup queries.
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		var taken int64
+		if err := tx.Model(&Connector{}).Where("token = ?", newToken).Count(&taken).Error; err != nil {
+			return err
+		}
+		if taken > 0 {
+			return ErrConnectorTokenTaken(token, newToken)
+		}
+		// 🔴 ONE COLUMN, NOT THE WHOLE ROW. Saving `current` would rewrite every field
+		// from a copy loaded a moment ago, so a concurrent edit of the draft's config
+		// landing in that window would be silently reverted by a mutation that changes
+		// only a name. This mutation takes no expectedUpdatedAt precondition, so the
+		// narrow write is what bounds it. It still passes through the token-grammar
+		// callback (a map destination is checked the same way a struct is) and the
+		// tenant-scope callback.
+		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
+			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
+			// must read exactly as the uncontended refusal does.
+			if rdb.IsUniqueViolation(err, connectorTokenIndexName, "connectors.token") {
+				return ErrConnectorTokenTaken(token, newToken)
+			}
+			return err
+		}
+		current.Token = newToken
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+// ErrConnectorTokenTaken is the ONE sentence a caller gets when the token they asked for
+// belongs to another connector — whether the pre-write lookup found it or the unique index
+// did. Both paths are made to say this, because a client cannot be asked to write two
+// handlers for one condition that differ only by timing.
+func ErrConnectorTokenTaken(token, newToken string) error {
+	return fmt.Errorf("cannot rename connector %q to %q: that token is already in use "+
+		"by another connector in this tenant", token, newToken)
+}
+
+// connectorTokenIndexName is the per-tenant partial unique index the baseline creates on
+// connectors (tenant_id, token) among live rows. Postgres names it in the text of a unique
+// violation, and that name is what distinguishes "this token is taken" from any other write
+// failure.
+//
+// It mirrors schema/baseline.go's createTenantTokenIndex naming rule, "uix_" + the bare
+// table name + "_tenant_token". The rule is spelled in two places because that helper is a
+// deliberate copy inside the migration and is unexported;
+// TestConnectorTokenIndexNameMatchesTheMigration is what keeps the two from drifting.
+const connectorTokenIndexName = "uix_connectors_tenant_token"
+
+// updatedSecret folds the three states of the write-only `secret` field onto the
+// *string applyConnectorSecret takes, which has only two: nil means PRESERVE, and a
+// pointer is applied (empty clears, non-empty seals).
+//
+// 🔴 AN EXPLICIT NULL CLEARS, AND THAT IS A NEW OPERATION SPELLED THE PLATFORM'S WAY.
+// Under the old pointer the clear was spelled as the empty STRING — a value standing in
+// for an absence, because a pointer had no third state to give it. Now null means what
+// it means on every other field: remove the stored value. The empty string keeps
+// clearing too; a form's "" and a null are the same intent, and refusing one of them
+// would only surprise a caller who had cleared a credential the other way yesterday.
+func updatedSecret(field dcgraphql.OptionalString) *string {
+	if !field.Set {
+		return nil
+	}
+	if field.Value == nil {
+		cleared := ""
+		return &cleared
+	}
+	return field.Value
 }
 
 // applyUpdatedSecret applies the write-only secret to conn per the request (preserve on
-// nil), keyed by the connector's immutable id (so a token rename in the same update
-// keeps the existing secret bound), and returns conn for the caller.
+// nil), keyed by the connector's immutable id (so a rename never orphans it), and
+// returns conn for the caller.
 func (api *Api) applyUpdatedSecret(ctx context.Context, conn *Connector, secret *string) (*Connector, error) {
 	if secret != nil {
 		if err := api.applyConnectorSecret(ctx, conn.ID, secret); err != nil {

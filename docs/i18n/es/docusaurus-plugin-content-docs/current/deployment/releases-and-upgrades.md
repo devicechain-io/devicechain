@@ -478,6 +478,15 @@ silencio. El único síntoma es que las superficies de mapa se quedan vacías. E
 o vuelva a establecer la declaración después de cualquier actualización hecha desde un
 cliente antiguo.
 
+:::note[Esto ya no aplica]
+`updateDeviceProfile` ha pasado desde entonces a ser una [actualización
+parcial](../reference/graphql-api.md#which-mutations-are-partial-updates): una petición que no
+dice nada sobre la declaración ahora la deja como está, y limpiarla requiere un `null` explícito.
+El consejo de arriba es lo que hay que hacer en una instancia `v0.12.x` o `v0.13.x`; en una actual
+no hay nada que arrastrar. Renombrar un perfil es una [mutación
+propia](../reference/graphql-api.md#renaming-a-record).
+:::
+
 **Las reglas de detección con ventana ya no cuentan lecturas acumuladas de fuera de su
 ventana.** Las reglas de repetición, de agregado deslizante y de correlación incorporaban una
 lectura de cualquier punto del pasado, lo que permitía que una regla que dice «tres lecturas

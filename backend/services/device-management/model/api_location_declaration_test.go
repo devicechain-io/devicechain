@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -153,9 +154,14 @@ func TestClearingLocationDeclaration(t *testing.T) {
 	_, err = api.PublishDeviceProfile(ctx, "tracker", nil, nil, "tester")
 	require.NoError(t, err)
 
-	// An update carrying no declaration clears it — the same replace semantics every
-	// other field on the request has.
-	cleared, err := api.UpdateDeviceProfile(ctx, "tracker", &DeviceProfileCreateRequest{Token: "tracker"})
+	// An EXPLICIT NULL clears it. Under the full-replace input this test used to send
+	// an empty request, because omission was the clear — which is exactly the reading
+	// that made a rename un-declare position for a whole fleet by accident. The clear
+	// is now something a caller has to ASK for, and the counterweight is
+	// TestOmittingLocationOnUpdatePreservesIt.
+	cleared, err := api.UpdateDeviceProfile(ctx, "tracker", &DeviceProfileUpdateRequest{
+		Location: ClearedLocationDeclaration(),
+	})
 	require.NoError(t, err)
 	draft, err := cleared.Location()
 	require.NoError(t, err)
@@ -179,6 +185,77 @@ func TestClearingLocationDeclaration(t *testing.T) {
 
 	after := snapshotOfVersion(t, api, ctx, "tracker", 2)
 	assert.Nil(t, after.Location, "the version published after the clear must declare no location")
+}
+
+// 🔴 THE COUNTERWEIGHT TO THE CLEAR, AND THE BEHAVIOUR CHANGE THIS CONVERSION IS FOR.
+//
+// Under the full-replace input, a request that said nothing about `location` CLEARED
+// the declaration. That made omission the clear operation, so a caller editing a
+// profile's NAME silently un-declared position for every device built on it — and the
+// only visible consequence was the fleet's map surfaces going quiet. It is why the
+// console had to reconstruct the declaration field by field on every save.
+//
+// Under three states, omission PRESERVES. This drives an update that names another
+// field, which is the shape the old defect actually took: the request is well-formed,
+// it succeeds, and the declaration must be untouched afterwards.
+func TestOmittingLocationOnUpdatePreservesIt(t *testing.T) {
+	api := newLocationTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{
+		Token: "tracker",
+		Location: &LocationDeclaration{
+			ExpectedAccuracyMeters:        floatOf(7.25),
+			ExpectedUpdateIntervalSeconds: int32Of(60),
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = api.UpdateDeviceProfile(ctx, "tracker", &DeviceProfileUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Renamed display only"),
+	})
+	require.NoError(t, err)
+
+	// Read back FROM THE DATABASE: an update that preserved only its in-memory copy
+	// would satisfy an assertion made against the returned struct.
+	reloaded, err := api.deviceProfileByToken(ctx, "tracker")
+	require.NoError(t, err)
+	persisted, err := reloaded.Location()
+	require.NoError(t, err)
+	require.NotNil(t, persisted, "an update that said nothing about location erased the declaration")
+	require.NotNil(t, persisted.ExpectedAccuracyMeters)
+	assert.Equal(t, 7.25, *persisted.ExpectedAccuracyMeters)
+	require.NotNil(t, persisted.ExpectedUpdateIntervalSeconds)
+	assert.Equal(t, int32(60), *persisted.ExpectedUpdateIntervalSeconds)
+}
+
+// The third state, and the one that keeps the ADR-078 distinction alive through the
+// fold: `{}` is "reports position, no expectations stated", which is NOT the same
+// answer as "does not report position". A fold that collapsed a declared-empty value
+// onto nil would pass every assertion in the clear test above.
+func TestUpdatingLocationToDeclaredEmptyIsNotAClear(t *testing.T) {
+	api := newLocationTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	_, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{
+		Token:    "tracker",
+		Location: &LocationDeclaration{ExpectedAccuracyMeters: floatOf(7.25)},
+	})
+	require.NoError(t, err)
+
+	_, err = api.UpdateDeviceProfile(ctx, "tracker", &DeviceProfileUpdateRequest{
+		Location: OptionalLocationDeclarationOf(LocationDeclaration{}),
+	})
+	require.NoError(t, err)
+
+	reloaded, err := api.deviceProfileByToken(ctx, "tracker")
+	require.NoError(t, err)
+	persisted, err := reloaded.Location()
+	require.NoError(t, err)
+	require.NotNil(t, persisted,
+		"an empty declaration was stored as NULL, which says 'does not report position' — a different claim")
+	assert.Nil(t, persisted.ExpectedAccuracyMeters, "the stated expectation should have been replaced, not merged")
+	assert.Nil(t, persisted.ExpectedUpdateIntervalSeconds)
 }
 
 // A declaration whose stated expectations are not physically meaningful is refused at

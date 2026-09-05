@@ -44,8 +44,11 @@ type Caches struct {
 	// tokens denormalized onto every resolved event (ADR-051), keyed by tenant+device
 	// type id. It shares MetricDefsByType's invalidation triggers — a type's profile
 	// pointer changing (UpdateDeviceType) or the profile being published/rolled back
-	// (evictProfileResolution) — PLUS one the metric-def cache lacks: a profile-TOKEN
-	// rename, since the version token embeds the profile token (UpdateDeviceProfile).
+	// (evictProfileResolution). A profile-TOKEN rename would be a third trigger the
+	// metric-def cache lacks, since the version token embeds the profile token — but
+	// renameDeviceProfile refuses a profile that has been published or adopted, so no
+	// reachable rename can move a token this cache has an entry for (see the note where
+	// that override used to live, in api_cached.go).
 	// Empty scopes (untyped/unpublished) are cached too so a device with no rules does
 	// not query on every event.
 	ProfileScopeByType *messaging.Cache

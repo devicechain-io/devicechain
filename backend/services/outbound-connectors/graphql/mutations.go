@@ -25,11 +25,14 @@ func (r *SchemaResolver) CreateConnector(ctx context.Context, args struct {
 	return &ConnectorResolver{M: *created, S: r, C: ctx}, nil
 }
 
-// UpdateConnector updates the connector (draft) with the given (current) token.
-// expectedUpdatedAt, when supplied, is an optimistic-concurrency precondition.
+// UpdateConnector partially updates the connector (draft) with the given (current)
+// token: an omitted field is left alone, an explicit null clears it. The connector is
+// named by the token ARGUMENT and the request carries none, so this can never retarget
+// a second connector. expectedUpdatedAt, when supplied, is an optimistic-concurrency
+// precondition.
 func (r *SchemaResolver) UpdateConnector(ctx context.Context, args struct {
 	Token             string
-	Request           model.ConnectorCreateRequest
+	Request           model.ConnectorUpdateRequest
 	ExpectedUpdatedAt *string
 }) (*ConnectorResolver, error) {
 	if err := auth.Authorize(ctx, auth.ConnectorWrite); err != nil {
@@ -41,6 +44,25 @@ func (r *SchemaResolver) UpdateConnector(ctx context.Context, args struct {
 		return nil, err
 	}
 	return &ConnectorResolver{M: *updated, S: r, C: ctx}, nil
+}
+
+// RenameConnector changes a connector's token and nothing else. It is the capability
+// updateConnector's payload token used to carry, given a mutation where the new token
+// can mean only one thing. The authority is updateConnector's — a rename is an edit of
+// the connector, not a new kind of act.
+func (r *SchemaResolver) RenameConnector(ctx context.Context, args struct {
+	Token    string
+	NewToken string
+}) (*ConnectorResolver, error) {
+	if err := auth.Authorize(ctx, auth.ConnectorWrite); err != nil {
+		return nil, err
+	}
+	api := r.GetApi(ctx)
+	renamed, err := api.RenameConnector(ctx, args.Token, args.NewToken)
+	if err != nil {
+		return nil, err
+	}
+	return &ConnectorResolver{M: *renamed, S: r, C: ctx}, nil
 }
 
 // PublishConnector freezes the current draft into a new immutable version.

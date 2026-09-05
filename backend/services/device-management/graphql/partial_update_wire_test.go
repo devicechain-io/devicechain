@@ -102,6 +102,11 @@ var partialUpdateMutations = []partialUpdateMutation{
 		forbidden: []string{"credentialType"},
 	},
 	{mutation: "updateEntityRelationshipType", input: "EntityRelationshipTypeUpdateRequest"},
+	// The last conversion. Its token was a RENAME channel on this input rather than a
+	// duplicate identity, so it is not listed in `forbidden` — `token` is checked for
+	// every row by TestPartialUpdateInputsCannotCarryAToken, and what makes its removal
+	// legitimate here is that renameDeviceProfile carries the capability instead.
+	{mutation: "updateDeviceProfile", input: "DeviceProfileUpdateRequest"},
 }
 
 func (m partialUpdateMutation) selectionOrDefault() string {
@@ -290,14 +295,12 @@ func TestPartialUpdateAcceptsAWellFormedPartialRequest(t *testing.T) {
 // mutation added tomorrow fails here on the day it is added; a row removed fails
 // immediately.
 func TestEveryUpdateMutationIsCoveredByTheWireTests(t *testing.T) {
-	// The mutations deliberately outside the partial-update contract. Each is a full
-	// replace for a stated reason, and naming it here is what makes the residual
-	// countable instead of inferred.
-	exempt := map[string]string{
-		"updateDeviceProfile": "its payload token is a RENAME channel — a profile may be " +
-			"renamed while nothing has adopted or published it — so a dedicated input dropping " +
-			"the token would delete a capability rather than convert one",
-	}
+	// The mutations deliberately outside the partial-update contract. There are none
+	// left in this service: updateDeviceProfile was the last, and its rename channel
+	// became renameDeviceProfile rather than being dropped. The map stays because the
+	// check below fails on an entry naming a mutation the schema does not serve, so a
+	// residual can be re-declared here without also inventing the machinery to count it.
+	exempt := map[string]string{}
 
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
 	mutationType := schema.Inspect().MutationType()

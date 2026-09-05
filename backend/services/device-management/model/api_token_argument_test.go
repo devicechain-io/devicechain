@@ -59,15 +59,15 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	putest.AssertEveryUpdateTakesADedicatedRequest(t, putest.UpdateSurface[*Api]{
 		Families: partialUpdateFamilies(),
 
-		// The one update in this service still sharing its create input. A device
-		// profile's token is a RENAME channel (allowed while the profile is unused,
-		// refused once it is published or adopted), and a dedicated update input carrying
-		// no token would delete that capability rather than convert it — so this family
-		// needs a rename channel designed, not a mechanical conversion. Its token rule is
-		// pinned below.
-		Exempt: map[string]string{
-			"UpdateDeviceProfile": "DeviceProfileCreateRequest",
-		},
+		// 🔴 THERE ARE NO EXEMPTIONS LEFT IN THIS SERVICE, and the empty map is
+		// deliberate rather than an omission. The last one was UpdateDeviceProfile,
+		// whose payload token was a RENAME CHANNEL — which is why it could not be
+		// converted mechanically. The rename did not evaporate: it moved to
+		// Api.RenameDeviceProfile, where the new token can mean only one thing, and the
+		// update input then lost its token like every other. The guard fails on an
+		// exemption that matches nothing, so this map cannot quietly regrow an entry
+		// describing a state of the world that has ended.
+		Exempt: map[string]string{},
 
 		// The anti-vacuity floor. Reflection over a renamed or embedded receiver could
 		// find nothing at all, and a loop over nothing reports success.
@@ -80,52 +80,6 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	})
 }
 
-// ─── the rename exception ──────────────────────────────────────────────────
-
-// updateDeviceProfile is the documented exception and takes the RENAME rule: a differing
-// payload token names the profile's NEW token, and only a BLANK one is refused. Pinned
-// here because an exception nobody can find is one the next change deletes by accident.
-//
-// That a rename is refused once the profile is published or adopted is a separate,
-// pre-existing guard with its own test (TestUpdateDeviceProfile_RejectsRenameAfterPublish).
-func TestUpdateDeviceProfile_RefusesABlankPayloadToken(t *testing.T) {
-	// 🔴 Whitespace is included because the token GRAMMAR does not catch it — this is the
-	// fixture-weaker-than-production hole that let it through: "   " reached the row and
-	// left the profile findable by nothing.
-	for _, blank := range []string{"", "   ", "\t"} {
-		t.Run("blank="+blank, func(t *testing.T) {
-			api := newPartialUpdateApi(t, deviceProfileTables...)
-			ctx := partialUpdateCtx()
-			seedDeviceProfile(t, api, ctx, "prof")
-
-			if _, err := api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileCreateRequest{
-				Token: blank, Name: strp("Renamed"),
-			}); err == nil {
-				t.Fatalf("a blank payload token %q was accepted, which blanks the profile's token", blank)
-			}
-			rows, ferr := api.DeviceProfilesByToken(ctx, []string{"prof"})
-			p := requireOne(t, "device profile", rows, ferr)
-			if p.Token != "prof" {
-				t.Fatalf("token moved to %q", p.Token)
-			}
-		})
-	}
-}
-
-// …and the counterweight: a real rename still works, so the refusal above has not been
-// bought by removing the capability.
-func TestUpdateDeviceProfile_ADifferingTokenStillRenames(t *testing.T) {
-	api := newPartialUpdateApi(t, deviceProfileTables...)
-	ctx := partialUpdateCtx()
-	seedDeviceProfile(t, api, ctx, "prof")
-
-	if _, err := api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileCreateRequest{
-		Token: "prof2", Name: strp("Renamed"),
-	}); err != nil {
-		t.Fatalf("a rename was refused: %v", err)
-	}
-	rows, ferr := api.DeviceProfilesByToken(ctx, []string{"prof2"})
-	if requireOne(t, "device profile", rows, ferr).Token != "prof2" {
-		t.Fatal("the rename did not take")
-	}
-}
+// The rename's own rules — blank refused, same-token idempotent, collision refused by
+// name, and refused outright once the profile is published or adopted — are pinned in
+// api_profiles_rename_test.go, which is where they moved with the capability.

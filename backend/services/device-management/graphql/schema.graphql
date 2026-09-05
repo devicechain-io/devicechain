@@ -916,8 +916,25 @@ input DeviceProfileCreateRequest {
     category: String
     metadata: String
     # Whether devices built on this profile report their own position, and what to
-    # expect of it. Replaced wholesale on update like every other field here, so
-    # leaving it out of an update clears an existing declaration.
+    # expect of it. Omit it for "these devices do not report their own position".
+    location: DeviceLocationDeclarationInput
+}
+
+# Fields to change on an existing device profile (ADR-045). Every field is
+# three-state: OMIT it to leave the stored value alone, send NULL to clear it, or
+# send a value to set it.
+#
+# It carries no token. The mutation's own `token` argument names the profile, and
+# a profile is renamed through renameDeviceProfile — where the new token can mean
+# only one thing.
+input DeviceProfileUpdateRequest {
+    name: String
+    description: String
+    category: String
+    metadata: String
+    # The position declaration. Omitting it PRESERVES the stored declaration; pass
+    # null to stop declaring that these devices report their own position. Sending
+    # `{}` is the distinct "reports position, no expectations stated" form.
     location: DeviceLocationDeclarationInput
 }
 
@@ -2294,7 +2311,15 @@ type Mutation {
     # Create a new device profile (ADR-045).
     createDeviceProfile(request: DeviceProfileCreateRequest): DeviceProfile!
     # Update an existing device profile, located by the token argument (ADR-045).
-    updateDeviceProfile(token: String!, request: DeviceProfileCreateRequest): DeviceProfile!
+    # A partial update: an omitted field is left alone, an explicit null clears it.
+    updateDeviceProfile(token: String!, request: DeviceProfileUpdateRequest!): DeviceProfile!
+    # Rename a device profile. A blank newToken is refused; renaming to the token the
+    # profile already has is an idempotent success; a token another profile holds is
+    # refused by name. REFUSED outright once the profile has been published or adopted
+    # by a device type — from that point the token is the key published rules are filed
+    # under and rostered devices are tracked by, so a rename would silently stop
+    # detections and orphan dead-man entries.
+    renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
     # Delete a device profile (ADR-045). Refused while any device type references
     # it; its owned metric, command, and detection-rule definitions are cascade-removed.
     # Returns whether a row was deleted.
