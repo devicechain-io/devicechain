@@ -109,17 +109,17 @@ func callGeoFenceReads(t *testing.T, ctx context.Context, check func(name string
 func callGeoFenceWrites(t *testing.T, ctx context.Context, token string, check func(name string, err error)) {
 	t.Helper()
 	r := &SchemaResolver{}
-	request := model.GeoFenceCreateRequest{Token: token, Geometry: authTestGeometry}
-
 	_, err := r.CreateGeoFence(ctx, struct {
 		Request model.GeoFenceCreateRequest
-	}{Request: request})
+	}{Request: model.GeoFenceCreateRequest{Token: token, Geometry: authTestGeometry}})
 	check("createGeoFence", err)
 
 	_, err = r.UpdateGeoFence(ctx, struct {
 		Token   string
-		Request model.GeoFenceCreateRequest
-	}{Token: token, Request: request})
+		Request model.GeoFenceUpdateRequest
+	}{Token: token, Request: model.GeoFenceUpdateRequest{
+		Geometry: gqlcore.OptionalStringOf(authTestGeometry),
+	}})
 	check("updateGeoFence", err)
 
 	_, err = r.DeleteGeoFence(ctx, struct{ Token string }{Token: token})
@@ -186,19 +186,19 @@ func TestGeoFenceWriteAuthorityAdmitsMutations(t *testing.T) {
 func TestFenceAuthoringNeedsThePositionAuthorityButDeletingDoesNot(t *testing.T) {
 	ctx := withAuthorities(geoFenceTestCtx(t), auth.DeviceRead, auth.DeviceWrite)
 	r := &SchemaResolver{}
-	request := model.GeoFenceCreateRequest{Token: "yard", Geometry: authTestGeometry}
-
 	if _, err := r.CreateGeoFence(ctx, struct {
 		Request model.GeoFenceCreateRequest
-	}{Request: request}); err == nil {
+	}{Request: model.GeoFenceCreateRequest{Token: "yard", Geometry: authTestGeometry}}); err == nil {
 		t.Error("createGeoFence admitted a caller without location:read; a fence author can " +
 			"binary-search a position out of repeated containment answers")
 	}
 
 	if _, err := r.UpdateGeoFence(ctx, struct {
 		Token   string
-		Request model.GeoFenceCreateRequest
-	}{Token: "yard", Request: request}); err == nil {
+		Request model.GeoFenceUpdateRequest
+	}{Token: "yard", Request: model.GeoFenceUpdateRequest{
+		Geometry: gqlcore.OptionalStringOf(authTestGeometry),
+	}}); err == nil {
 		t.Error("updateGeoFence admitted a caller without location:read; reshaping an existing " +
 			"fence is the same question-shaping primitive as minting one")
 	}

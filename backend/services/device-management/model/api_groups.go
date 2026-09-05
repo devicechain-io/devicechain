@@ -110,15 +110,15 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 	return created, nil
 }
 
-// UpdateEntityGroup updates an existing entity group's mutable presentation fields
-// (name, description, branding, metadata). The member family and membership mode
-// are identity and are immutable — changing MemberType would orphan the group's
-// members, so a mismatch fails closed.
+// UpdateEntityGroup applies a PARTIAL update to an entity group's mutable fields: a
+// field the caller did not name keeps its stored value, an explicit null clears a
+// nullable one.
+//
+// The member family, the membership mode and the token are IDENTITY and are not in the
+// input at all, so changing one is unrepresentable rather than refused — see
+// EntityGroupUpdateRequest for why that is the stronger form of the same rule.
 func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
-	request *EntityGroupCreateRequest) (*EntityGroup, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("entity group", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *EntityGroupUpdateRequest) (*EntityGroup, error) {
 	matches, err := api.EntityGroupsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -128,38 +128,37 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 	}
 
 	updated := matches[0]
-	if request.MemberType != "" && request.MemberType != updated.MemberType {
-		return nil, fmt.Errorf("an entity group's member type is immutable (was %q, requested %q)",
-			updated.MemberType, request.MemberType)
-	}
-	// Membership mode is identity — converting a static group to dynamic (or back)
-	// would orphan its members, so a mismatch fails closed.
-	if request.MembershipMode != nil && MembershipMode(*request.MembershipMode) != MembershipMode(updated.MembershipMode) {
-		return nil, fmt.Errorf("an entity group's membership mode is immutable (was %q, requested %q)",
-			updated.MembershipMode, *request.MembershipMode)
-	}
 	// A dynamic group's selector is live-editable (SD-4 — a browse/filter consumer needs
 	// no frozen version yet); a provided selector is re-compiled + cost-gated before it
-	// replaces the stored one. A static group must never carry a selector.
-	if request.Selector != nil && *request.Selector != "" {
+	// replaces the stored one. It is REQUIRED rather than nullable: a dynamic group with
+	// no selector matches nothing and cannot be repaired into a valid one, so a null is
+	// refused. A static group must never carry a selector at all.
+	//
+	// The fold runs before the mode check so that `selector: null` reads the same on both
+	// modes — the field cannot be cleared, whatever the group is.
+	selectorSource, err := request.Selector.ApplyToRequired("selector", updated.Selector.String)
+	if err != nil {
+		return nil, err
+	}
+	if request.Selector.Set {
 		if MembershipMode(updated.MembershipMode) != MembershipDynamic {
 			return nil, fmt.Errorf("a static entity group must not carry a selector")
 		}
-		sel, err := selector.Compile(*request.Selector, updated.MemberType, 0)
+		sel, err := selector.Compile(selectorSource, updated.MemberType, 0)
 		if err != nil {
 			return nil, err
 		}
 		updated.Selector = sql.NullString{String: sel.Source(), Valid: true}
 		updated.SelectorSchema = selector.SchemaVersion
 	}
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	updated.ImageUrl = rdb.NullStrOf(request.ImageUrl)
-	updated.Icon = rdb.NullStrOf(request.Icon)
-	updated.BackgroundColor = rdb.NullStrOf(request.BackgroundColor)
-	updated.ForegroundColor = rdb.NullStrOf(request.ForegroundColor)
-	updated.BorderColor = rdb.NullStrOf(request.BorderColor)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(updated.ImageUrl)))
+	updated.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(updated.Icon)))
+	updated.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(updated.BackgroundColor)))
+	updated.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(updated.ForegroundColor)))
+	updated.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(updated.BorderColor)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}

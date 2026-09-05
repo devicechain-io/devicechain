@@ -29,7 +29,7 @@ func (r *SchemaResolver) CreateEntityRelationshipType(ctx context.Context, args 
 // Update an existing entity relationship type by token.
 func (r *SchemaResolver) UpdateEntityRelationshipType(ctx context.Context, args struct {
 	Token   string
-	Request model.EntityRelationshipTypeCreateRequest
+	Request model.EntityRelationshipTypeUpdateRequest
 }) (*EntityRelationshipTypeResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err

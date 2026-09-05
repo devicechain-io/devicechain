@@ -4,410 +4,206 @@
 package model
 
 import (
-	"context"
+	"reflect"
+	"strings"
 	"testing"
 )
 
 // THE TOKEN ARGUMENT NAMES THE ROW. Nothing else does.
 //
-// Every update mutation in this service declares `token: String!`, and until this
-// change that argument did three different things depending on which one you called:
+// Every update mutation in this service declares `token: String!`, and that argument
+// used to do three different things depending on which one you called:
 //
-//   - NINE of the seventeen ignored it outright and located the row by the token
-//     inside the request payload. Sending a `token` argument naming one entity and a
-//     `request.token` naming another silently updated the SECOND and returned it with
-//     a 200 — a mandatory argument that was pure decoration, which is worse than an
-//     absent one, because a client that gets the argument right and the payload wrong
-//     has no way to find out.
-//   - SEVEN located by the argument and then ASSIGNED the payload token over it, so
-//     the payload still moved the row — and an empty payload token, which the schema
-//     permits (String! admits ""), blanked the entity's token entirely.
+//   - NINE of the seventeen ignored it outright and located the row by the token inside
+//     the request payload. Sending a `token` argument naming one entity and a
+//     `request.token` naming another silently updated the SECOND and returned it with a
+//     200 — a mandatory argument that was pure decoration, which is worse than an absent
+//     one, because a client that gets the argument right and the payload wrong has no way
+//     to find out.
+//   - SEVEN located by the argument and then ASSIGNED the payload token over it, so the
+//     payload still moved the row — and an empty payload token, which the schema permits
+//     (String! admits ""), blanked the entity's token entirely.
 //   - ONE, updateGeoFence, reconciled the two and refused a mismatch.
 //
-// The rule is now geoFence's, everywhere. Seven families went further and dropped the
-// payload token from their input altogether (see partial_update_families_test.go),
-// which makes the disagreement unrepresentable; the ones still sharing a create input
-// reconcile it. updateDeviceProfile is the documented exception — a profile rename is
-// a real capability — and takes the RENAME rule instead, which refuses only a blank.
+// # 🔴 THE RECONCILING FAMILIES ARE GONE FROM THIS SERVICE, AND THE TESTS WENT WITH THEM
 //
-// The two rules themselves are exercised exhaustively in core
-// (graphql.TestErrPayloadTokenDisagrees, TestErrRenameTokenUnusable). What is checked
-// HERE is that each mutation is WIRED to one — which is a different claim, and the one
-// that was missing: six of these families had the call and no test, so deleting it was
-// invisible.
-
-// ─── the reconciling families ──────────────────────────────────────────────
-
-// tokenRuleFamily is one update still taking a *CreateRequest, described well enough
-// to drive the rule against it. Adding a family is a row, exactly as with the partial
-// harness — and a family CONVERTED to a dedicated *UpdateRequest leaves this list,
-// because its input no longer has a token to disagree with.
-type tokenRuleFamily struct {
-	// name is the entity as the schema names it.
-	name string
-	// migrate lists the tables the fixture needs.
-	migrate []any
-	// seed creates two rows, "row-a" and "row-b", plus whatever they depend on. TWO
-	// is load-bearing: with one row, "the other row was not written" is vacuous, and
-	// a lookup falling back to "the only row there is" would pass.
-	seed func(t *testing.T, api *Api, ctx context.Context)
-	// update calls the real Api update with the given token argument and payload token.
-	update func(api *Api, ctx context.Context, token, payloadToken string) error
-	// tokenOf reports the token the named row currently stores, and whether it was
-	// found at all — a row blanked by an empty payload token is found by NEITHER
-	// token, which is the failure this exists to catch.
-	tokenOf func(t *testing.T, api *Api, ctx context.Context, token string) (string, bool)
-}
-
-const (
-	rowA = "row-a"
-	rowB = "row-b"
-)
-
-func tokenRuleFamilies() []tokenRuleFamily {
-	return []tokenRuleFamily{
-		entityGroupTokenRule(),
-		metricDefinitionTokenRule(),
-		commandDefinitionTokenRule(),
-		detectionRuleTokenRule(),
-		deviceCredentialTokenRule(),
-		provisioningProfileTokenRule(),
-		entityRelationshipTypeTokenRule(),
-	}
-}
-
-// A payload token naming a DIFFERENT row is refused, and neither row moves.
+// The previous version of this file drove seven families through a reconcile rule
+// (dcgraphql.ErrPayloadTokenDisagrees) and asserted each was WIRED to it. All seven have
+// since been converted to a dedicated *UpdateRequest carrying no token at all, which
+// makes the disagreement unrepresentable rather than refused — so there is nothing left
+// in this service for that rule to govern, and the tests that drove it would now iterate
+// an empty list and pass having asserted nothing.
 //
-// This is the defect in its original form: the request named row-b, the argument
-// named row-a, and the old code wrote row-b and returned it as though it were row-a.
-func TestTokenRule_ADisagreeingPayloadTokenIsRefused(t *testing.T) {
-	for _, fam := range tokenRuleFamilies() {
-		t.Run(fam.name, func(t *testing.T) {
-			api := newPartialUpdateApi(t, fam.migrate...)
-			ctx := partialUpdateCtx()
-			fam.seed(t, api, ctx)
-
-			if err := fam.update(api, ctx, rowA, rowB); err == nil {
-				t.Fatal("an update whose payload named a different row was accepted — the " +
-					"token argument is decoration again")
-			}
-			for _, tok := range []string{rowA, rowB} {
-				got, found := fam.tokenOf(t, api, ctx, tok)
-				if !found {
-					t.Errorf("%s no longer exists after a refused update", tok)
-					continue
-				}
-				if got != tok {
-					t.Errorf("the refused update moved %s to %q", tok, got)
-				}
-			}
-		})
-	}
-}
-
-// An EMPTY payload token is "unspecified" and must not blank the row.
+// Deleting them rather than leaving the loop is deliberate: a table-driven test over an
+// empty table is the most convincing kind of green there is. What replaces the claim is
+// the guard below, which asks the TYPE rather than a list, so a family added tomorrow on
+// the full-replace shape fails on the day it is added.
 //
-// This is the OTHER half, and the one that shipped: the families that honoured the
-// argument still assigned the payload token over the stored one, so a caller who left
-// it out — legal, since `token: String!` admits "" — got a successful update and a row
-// addressable by nothing.
-func TestTokenRule_AnEmptyPayloadTokenDoesNotBlankTheRow(t *testing.T) {
-	for _, fam := range tokenRuleFamilies() {
-		t.Run(fam.name, func(t *testing.T) {
-			api := newPartialUpdateApi(t, fam.migrate...)
-			ctx := partialUpdateCtx()
-			fam.seed(t, api, ctx)
+// The rule itself is still exercised exhaustively in core (graphql.TestErrPayloadTokenDisagrees,
+// TestErrRenameTokenUnusable) and still governs the update mutations in
+// dashboard-management and notification-management, which have not been converted.
 
-			if err := fam.update(api, ctx, rowA, ""); err != nil {
-				t.Fatalf("an update with no payload token was refused: %v", err)
+// 🔴 THE EXHAUSTIVENESS CHECK, AND THE REASON IT IS NOT A LIST OF FAMILY NAMES.
+//
+// A hand-written roster of converted families is a second copy of the truth, and the
+// failure it cannot see is the one that matters: a NEW update method, added on the old
+// full-replace shape, appears in neither the roster nor anything that reads it. So this
+// enumerates *Api's own Update* methods and asks three things of each.
+//
+// # 🔴 THE NAME IS NOT ONE OF THEM, AND AN EARLIER VERSION CHECKED ONLY THE NAME
+//
+// It required the request type's name to end in "UpdateRequest", which two different
+// mutants walked straight past:
+//
+//   - DELETING A FAMILY FROM partialUpdateFamilies() left the suite green. The method
+//     still took a well-named type, so this guard was satisfied; and the harness, which
+//     is the only thing that drives the SEMANTICS, had simply stopped driving it. The
+//     conversion was certified by its own name.
+//   - A type CONVERTED IN NAME ONLY — a FooUpdateRequest of plain *string fields with
+//     full-replace semantics — would pass identically. That is not hypothetical:
+//     user-management's AdminTenantUpdateRequest is exactly that shape and says so in
+//     its own comment.
+//
+// So the name check is gone and three structural ones replace it. Each is the absence
+// of a specific way to be wrong, and the first is the one that links this guard to the
+// harness — without it, everything here is a claim about spelling.
+//
+//  1. the request type is REGISTERED with partialUpdateFamilies(), so something drives
+//     its three states against a real database;
+//  2. it carries no Token field, so naming a second record is unrepresentable;
+//  3. every exported field CARRIES THE THREE STATES — asked of the mechanism (a Set
+//     flag plus the Nullable/ImplementsGraphQLType markers that route an explicit null
+//     through the packer), not of a list of type names that would drift the moment core
+//     grew a sixth Optional.
+//
+// A family that has not been converted must be named in the exemption below, which makes
+// the residual a thing a reader can count rather than infer.
+func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
+	// The one update in this service still sharing its create input. A device profile's
+	// token is a RENAME channel (allowed while the profile is unused, refused once it is
+	// published or adopted), and a dedicated update input carrying no token would delete
+	// that capability rather than convert it — so this family needs a rename channel
+	// designed, not a mechanical conversion. Its token rule is pinned below.
+	exempt := map[string]string{
+		"UpdateDeviceProfile": "DeviceProfileCreateRequest",
+	}
+
+	// THE LINK TO THE HARNESS. Derived from the registry rather than restated, so a
+	// family removed from it stops being certified here on the same edit.
+	registered := map[reflect.Type]string{}
+	for _, fam := range partialUpdateFamilies() {
+		rt := reflect.TypeOf(fam.newRequest())
+		if rt.Kind() != reflect.Ptr {
+			t.Fatalf("family %q newRequest() returned %s, want a pointer to a struct", fam.name, rt)
+		}
+		registered[rt.Elem()] = fam.name
+	}
+
+	apiType := reflect.TypeOf(&Api{})
+	seen := 0
+	for i := 0; i < apiType.NumMethod(); i++ {
+		m := apiType.Method(i)
+		if !strings.HasPrefix(m.Name, "Update") {
+			continue
+		}
+		// An update takes (receiver, ctx, token, request). Anything else is not the shape
+		// this rule is about — a bulk or projection writer, say — and is skipped rather
+		// than mis-reported.
+		if m.Type.NumIn() != 4 || m.Type.In(3).Kind() != reflect.Ptr {
+			continue
+		}
+		seen++
+		reqType := m.Type.In(3).Elem()
+		if want, ok := exempt[m.Name]; ok {
+			if reqType.Name() != want {
+				t.Errorf("%s is exempt as taking %s but now takes %s — an exemption that no "+
+					"longer describes the code is worse than none", m.Name, want, reqType.Name())
 			}
-			got, found := fam.tokenOf(t, api, ctx, rowA)
-			if !found {
-				t.Fatal("the row is no longer findable by its own token — an empty payload " +
-					"token blanked it, leaving it addressable by nothing")
-			}
-			if got != rowA {
-				t.Fatalf("an empty payload token moved the row's token to %q", got)
-			}
-		})
+			continue
+		}
+		if _, ok := registered[reqType]; !ok {
+			t.Errorf("%s takes %s, which no family in partialUpdateFamilies() registers — so "+
+				"NOTHING drives its three states against a database, and the only thing "+
+				"certifying it is the word \"Update\" in its name. Register it, or name it in "+
+				"the exemption above with the reason", m.Name, reqType.Name())
+			continue
+		}
+		assertCarriesTheThreeStates(t, m.Name, reqType)
+	}
+	// The anti-vacuity control. Reflection over a renamed or embedded receiver could find
+	// nothing at all, and a loop over nothing reports success.
+	if seen < 15 {
+		t.Fatalf("only %d Update* methods were found on *Api; this guard has stopped seeing "+
+			"the surface it certifies", seen)
 	}
 }
 
-// THE COUNTERWEIGHT. Both refusals above are only meaningful while an AGREEING update
-// still works. Without this, a guard tightened until every update failed would leave
-// both tests passing for the wrong reason.
-func TestTokenRule_AnAgreeingPayloadTokenStillUpdates(t *testing.T) {
-	for _, fam := range tokenRuleFamilies() {
-		t.Run(fam.name, func(t *testing.T) {
-			api := newPartialUpdateApi(t, fam.migrate...)
-			ctx := partialUpdateCtx()
-			fam.seed(t, api, ctx)
-
-			if err := fam.update(api, ctx, rowA, rowA); err != nil {
-				t.Fatalf("an agreeing update was refused: %v", err)
-			}
-			got, found := fam.tokenOf(t, api, ctx, rowA)
-			if !found || got != rowA {
-				t.Fatalf("token = %q found = %v, want %q", got, found, rowA)
-			}
-		})
-	}
-}
-
-// ─── the families ──────────────────────────────────────────────────────────
-
-// seedProfileFor creates the device profile the profile-scoped families hang off.
-func seedProfileFor(t *testing.T, api *Api, ctx context.Context, token string) {
+// assertCarriesTheThreeStates checks the SHAPE of an update input: no token, and every
+// exported field able to tell absent from null.
+//
+// 🔴 IT ASKS THE MECHANISM, NOT A LIST OF TYPE NAMES. What makes a field three-state is
+// that graphql-go routes it through the unmarshaler packer — which needs the Nullable()
+// marker and ImplementsGraphQLType — and that it records whether the caller mentioned it
+// at all, which is the Set flag. A field with all three is three-state whatever it is
+// called; a *string has none of them however it is named. Checking against a roster of
+// "OptionalString, OptionalBool, …" would instead go quietly wrong the day core adds a
+// sixth, by certifying a field nothing in the roster covers.
+func assertCarriesTheThreeStates(t *testing.T, method string, reqType reflect.Type) {
 	t.Helper()
-	if _, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: token}); err != nil {
-		t.Fatalf("seed profile %q: %v", token, err)
-	}
-}
+	type nullableMarker interface{ Nullable() }
+	type graphqlTyped interface{ ImplementsGraphQLType(string) bool }
 
-var profileTables = []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
-	&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}}
-
-func entityGroupTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "entityGroup",
-		migrate: []any{&EntityGroup{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			for _, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
-					Token: tok, MemberType: "device", Name: strp("Original " + tok),
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateEntityGroup(ctx, token, &EntityGroupCreateRequest{
-				Token: payload, MemberType: "device", Name: strp("Renamed"),
-			})
-			return err
-		},
-		tokenOf: groupTokenOf,
+	for i := 0; i < reqType.NumField(); i++ {
+		f := reqType.Field(i)
+		if f.PkgPath != "" {
+			continue // unexported: not reachable from the wire
+		}
+		if f.Name == "Token" {
+			t.Errorf("%s's input %s has a Token field: the mutation's own argument names the "+
+				"record, and a second token in the payload is the disagreement this whole "+
+				"conversion removes", method, reqType.Name())
+			continue
+		}
+		v := reflect.New(f.Type).Elem().Interface()
+		_, nullable := v.(nullableMarker)
+		_, typed := v.(graphqlTyped)
+		// 🔴 THE KIND IS CHECKED BEFORE FieldByName, WHICH PANICS ON A NON-STRUCT. The
+		// field this guard exists to catch is a *string, so the very shape it is looking
+		// for is the one that would take the panic — and a panic aborts the whole test
+		// BINARY, so every test after this one would stop running and the report would be
+		// a stack trace instead of the sentence below. A guard whose failure mode is worse
+		// than the defect is not one to rely on.
+		hasSet, setIsBool := false, false
+		if f.Type.Kind() == reflect.Struct {
+			var set reflect.StructField
+			set, hasSet = f.Type.FieldByName("Set")
+			setIsBool = hasSet && set.Type.Kind() == reflect.Bool
+		}
+		if !nullable || !typed || !setIsBool {
+			t.Errorf("%s's input %s.%s is a %s, which cannot tell an ABSENT field from an "+
+				"explicit null — so the type is named like a partial update and behaves like a "+
+				"full replace", method, reqType.Name(), f.Name, f.Type)
+		}
 	}
-}
-
-func metricDefinitionTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "metricDefinition",
-		migrate: profileTables,
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			seedProfileFor(t, api, ctx, "prof")
-			for i, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateMetricDefinition(ctx, &MetricDefinitionCreateRequest{
-					Token: tok, DeviceProfileToken: "prof",
-					MetricKey: []string{"k-a", "k-b"}[i], DataType: string(MetricDouble),
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateMetricDefinition(ctx, token, &MetricDefinitionCreateRequest{
-				Token: payload, DeviceProfileToken: "prof", MetricKey: "k-a",
-				DataType: string(MetricDouble),
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.MetricDefinitionsByToken(ctx, []string{tok})
-			return firstToken(t, "metric definition", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func commandDefinitionTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "commandDefinition",
-		migrate: profileTables,
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			seedProfileFor(t, api, ctx, "prof")
-			for i, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{
-					Token: tok, DeviceProfileToken: "prof", CommandKey: []string{"c-a", "c-b"}[i],
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateCommandDefinition(ctx, token, &CommandDefinitionCreateRequest{
-				Token: payload, DeviceProfileToken: "prof", CommandKey: "c-a",
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.CommandDefinitionsByToken(ctx, []string{tok})
-			return firstToken(t, "command definition", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func detectionRuleTokenRule() tokenRuleFamily {
-	const def = `{"when":{"all":[]}}`
-	return tokenRuleFamily{
-		name:    "detectionRule",
-		migrate: profileTables,
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			seedProfileFor(t, api, ctx, "prof")
-			for _, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateDetectionRule(ctx, &DetectionRuleCreateRequest{
-					Token: tok, DeviceProfileToken: "prof", Definition: def, Enabled: true,
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateDetectionRule(ctx, token, &DetectionRuleCreateRequest{
-				Token: payload, DeviceProfileToken: "prof", Definition: def, Enabled: true,
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.DetectionRulesByToken(ctx, []string{tok})
-			return firstToken(t, "detection rule", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func deviceCredentialTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "deviceCredential",
-		migrate: append(append([]any{}, profileTables...), &DeviceCredential{}),
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
-				t.Fatalf("seed device type: %v", err)
-			}
-			if _, err := api.CreateDevice(ctx, &DeviceCreateRequest{
-				Token: "dev", DeviceTypeToken: "dt",
-			}); err != nil {
-				t.Fatalf("seed device: %v", err)
-			}
-			for i, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
-					Token: tok, DeviceToken: "dev", CredentialType: string(CredentialAccessToken),
-					CredentialId: []string{"id-a", "id-b"}[i], Enabled: true,
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateDeviceCredential(ctx, token, &DeviceCredentialCreateRequest{
-				Token: payload, DeviceToken: "dev", CredentialType: string(CredentialAccessToken),
-				CredentialId: "id-a", Enabled: true,
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.DeviceCredentialsByToken(ctx, []string{tok})
-			return firstToken(t, "device credential", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func provisioningProfileTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "provisioningProfile",
-		migrate: append(append([]any{}, profileTables...), &ProvisioningProfile{}),
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
-				t.Fatalf("seed device type: %v", err)
-			}
-			for i, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-					Token: tok, ProvisionKey: []string{"pk-a", "pk-b"}[i], ProvisionSecret: "s3cret",
-					Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true,
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateProvisioningProfile(ctx, token, &ProvisioningProfileCreateRequest{
-				Token: payload, ProvisionKey: "pk-a", ProvisionSecret: "s3cret",
-				Strategy: string(ProvisionAllowNew), DeviceTypeToken: "dt", Enabled: true,
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.ProvisioningProfilesByToken(ctx, []string{tok})
-			return firstToken(t, "provisioning profile", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func entityRelationshipTypeTokenRule() tokenRuleFamily {
-	return tokenRuleFamily{
-		name:    "entityRelationshipType",
-		migrate: []any{&EntityRelationshipType{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
-			for _, tok := range []string{rowA, rowB} {
-				if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
-					Token: tok, Name: strp("Original " + tok),
-				}); err != nil {
-					t.Fatalf("seed %q: %v", tok, err)
-				}
-			}
-		},
-		update: func(api *Api, ctx context.Context, token, payload string) error {
-			_, err := api.UpdateEntityRelationshipType(ctx, token, &EntityRelationshipTypeCreateRequest{
-				Token: payload, Name: strp("Renamed"),
-			})
-			return err
-		},
-		tokenOf: func(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-			rows, err := api.EntityRelationshipTypesByToken(ctx, []string{tok})
-			return firstToken(t, "entity relationship type", err, len(rows), func() string { return rows[0].Token })
-		},
-	}
-}
-
-func groupTokenOf(t *testing.T, api *Api, ctx context.Context, tok string) (string, bool) {
-	rows, err := api.EntityGroupsByToken(ctx, []string{tok})
-	return firstToken(t, "entity group", err, len(rows), func() string { return rows[0].Token })
-}
-
-// firstToken normalizes the "load by token" shape every family shares. A lookup
-// ERROR is fatal — it means the fixture is broken, which is a different thing from
-// the row not being there, and reporting it as "not found" would let a broken fixture
-// masquerade as the defect under test.
-func firstToken(t *testing.T, what string, err error, n int, read func() string) (string, bool) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("load %s: %v", what, err)
-	}
-	if n == 0 {
-		return "", false
-	}
-	if n > 1 {
-		t.Fatalf("expected at most one %s, got %d", what, n)
-	}
-	return read(), true
 }
 
 // ─── the rename exception ──────────────────────────────────────────────────
 
-// updateDeviceProfile is the documented exception, and gets the RENAME rule: a
-// differing payload token is the new name, and only a BLANK one is refused. Pinned
-// beside the rule it departs from, since an exception nobody can find is one the next
-// change deletes by accident.
+// updateDeviceProfile is the documented exception and takes the RENAME rule: a differing
+// payload token names the profile's NEW token, and only a BLANK one is refused. Pinned
+// here because an exception nobody can find is one the next change deletes by accident.
 //
 // That a rename is refused once the profile is published or adopted is a separate,
 // pre-existing guard with its own test (TestUpdateDeviceProfile_RejectsRenameAfterPublish).
 func TestUpdateDeviceProfile_RefusesABlankPayloadToken(t *testing.T) {
-	// 🔴 Whitespace is included because the token GRAMMAR does not catch it — this is
-	// the fixture-weaker-than-production hole that let it through: "   " reached the
-	// row and left the profile findable by nothing.
+	// 🔴 Whitespace is included because the token GRAMMAR does not catch it — this is the
+	// fixture-weaker-than-production hole that let it through: "   " reached the row and
+	// left the profile findable by nothing.
 	for _, blank := range []string{"", "   ", "\t"} {
 		t.Run("blank="+blank, func(t *testing.T) {
-			api := newPartialUpdateApi(t, profileTables...)
+			api := newPartialUpdateApi(t, deviceProfileTables...)
 			ctx := partialUpdateCtx()
-			seedProfileFor(t, api, ctx, "prof")
+			seedDeviceProfile(t, api, ctx, "prof")
 
 			if _, err := api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileCreateRequest{
 				Token: blank, Name: strp("Renamed"),
@@ -423,12 +219,12 @@ func TestUpdateDeviceProfile_RefusesABlankPayloadToken(t *testing.T) {
 	}
 }
 
-// …and the counterweight: a real rename still works, so the refusal above has not
-// been bought by removing the capability.
+// …and the counterweight: a real rename still works, so the refusal above has not been
+// bought by removing the capability.
 func TestUpdateDeviceProfile_ADifferingTokenStillRenames(t *testing.T) {
-	api := newPartialUpdateApi(t, profileTables...)
+	api := newPartialUpdateApi(t, deviceProfileTables...)
 	ctx := partialUpdateCtx()
-	seedProfileFor(t, api, ctx, "prof")
+	seedDeviceProfile(t, api, ctx, "prof")
 
 	if _, err := api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileCreateRequest{
 		Token: "prof2", Name: strp("Renamed"),

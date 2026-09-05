@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -86,35 +87,77 @@ func TestCreateEntityGroup_Validation(t *testing.T) {
 	}
 }
 
-// UpdateEntityGroup edits presentation fields but treats member family, mode, and
-// selector as immutable identity — each mismatch fails closed.
-func TestUpdateEntityGroup_ImmutableIdentity(t *testing.T) {
+// A STATIC group has no selector, and the update must say so rather than store one.
+//
+// 🔴 THIS TEST USED TO ASSERT THREE REFUSALS AND NOW ASSERTS ONE, WHICH IS NOT A LOSS OF
+// COVERAGE. The other two — a member-family change and a membership-mode change — were
+// refusals of requests EntityGroupUpdateRequest can no longer express: both fields are
+// identity, so they are not in the input at all. The claim moved from "the model refuses
+// it" to "the schema has nowhere to write it", which is checked where it is now true, in
+// graphql/partial_update_wire_test.go. A guard's test can pass while the guard is
+// unreachable; an absent field cannot.
+func TestUpdateEntityGroup_AStaticGroupRefusesASelector(t *testing.T) {
 	api := newGroupTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{Token: "g1", MemberType: "device"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// A same-identity presentation update succeeds.
-	name := "Fleet North"
-	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupCreateRequest{Token: "g1", MemberType: "device", Name: &name}); err != nil {
+	// The counterweight, first: an ordinary presentation edit still works, so the refusal
+	// below is not bought by refusing everything.
+	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Fleet North"),
+	}); err != nil {
 		t.Fatalf("presentation update rejected: %v", err)
 	}
 
-	dynamic := string(MembershipDynamic)
-	sel := "attr[\"x\"] == 1"
-	cases := []struct {
-		name string
-		req  *EntityGroupCreateRequest
-	}{
-		{"member family change", &EntityGroupCreateRequest{Token: "g1", MemberType: "area"}},
-		{"mode change", &EntityGroupCreateRequest{Token: "g1", MemberType: "device", MembershipMode: &dynamic}},
-		{"selector set", &EntityGroupCreateRequest{Token: "g1", MemberType: "device", Selector: &sel}},
+	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+		Selector: dcgraphql.OptionalStringOf(`attr["x"] == 1`),
+	}); err == nil {
+		t.Error("a static group accepted a selector, which nothing would ever evaluate")
 	}
-	for _, tc := range cases {
-		if _, err := api.UpdateEntityGroup(ctx, "g1", tc.req); err == nil {
-			t.Errorf("%s: expected error, got nil", tc.name)
-		}
+}
+
+// A DYNAMIC group's selector cannot be CLEARED. It is the only thing that decides who is
+// in the group, so a group without one matches nothing and there is no request that gets
+// it back to a valid state — which is why null is refused rather than honoured.
+func TestUpdateEntityGroup_ADynamicSelectorCannotBeCleared(t *testing.T) {
+	api := newGroupTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	mode := string(MembershipDynamic)
+	seeded := `attr["climate"] == "arid"`
+	if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
+		Token: "g1", MemberType: "device", MembershipMode: &mode, Selector: &seeded,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+		Selector: dcgraphql.ClearedString(),
+	}); err == nil {
+		t.Fatal("a dynamic group's selector was cleared, leaving a group that matches nothing")
+	}
+	rows, err := api.EntityGroupsByToken(ctx, []string{"g1"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reload: %v (%d rows)", err, len(rows))
+	}
+	if rows[0].Selector.String != seeded {
+		t.Fatalf("the refused clear still moved the selector to %q", rows[0].Selector.String)
+	}
+
+	// The counterweight: a real selector edit still takes.
+	replaced := `attr["climate"] == "humid"`
+	if _, err := api.UpdateEntityGroup(ctx, "g1", &EntityGroupUpdateRequest{
+		Selector: dcgraphql.OptionalStringOf(replaced),
+	}); err != nil {
+		t.Fatalf("a selector edit was refused: %v", err)
+	}
+	rows, err = api.EntityGroupsByToken(ctx, []string{"g1"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reload: %v (%d rows)", err, len(rows))
+	}
+	if rows[0].Selector.String != replaced {
+		t.Fatalf("selector = %q, want %q", rows[0].Selector.String, replaced)
 	}
 }
 

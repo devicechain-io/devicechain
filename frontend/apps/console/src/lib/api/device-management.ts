@@ -14,18 +14,22 @@ import type {
   DeviceBulkCreateRequest,
   EntityGroupsQuery,
   EntityGroupCreateRequest,
+  EntityGroupUpdateRequest,
   DeviceProfilesQuery,
   DeviceProfileByTokenQuery,
   DeviceProfileVersionsQuery,
   DeviceProfileCreateRequest,
   MetricDefinitionsQuery,
   MetricDefinitionCreateRequest,
+  MetricDefinitionUpdateRequest,
   CommandDefinitionsQuery,
   DeviceCommandVocabularyQuery,
   DeviceLocationDeclarationQuery,
   CommandDefinitionCreateRequest,
+  CommandDefinitionUpdateRequest,
   DetectionRulesQuery,
   DetectionRuleCreateRequest,
+  DetectionRuleUpdateRequest,
   ScopeGroupsQuery,
   EntityGroupVersionsQuery,
   DeviceGroupTargetsQuery,
@@ -77,10 +81,14 @@ export type {
   DeviceUpdateRequest,
   DeviceBulkCreateRequest,
   EntityGroupCreateRequest,
+  EntityGroupUpdateRequest,
   DeviceProfileCreateRequest,
   MetricDefinitionCreateRequest,
+  MetricDefinitionUpdateRequest,
   CommandDefinitionCreateRequest,
+  CommandDefinitionUpdateRequest,
   DetectionRuleCreateRequest,
+  DetectionRuleUpdateRequest,
 };
 
 // ── Devices ─────────────────────────────────────────────────────────────
@@ -532,7 +540,7 @@ export async function createEntityGroup(request: EntityGroupCreateRequest): Prom
 }
 
 const UPDATE_ENTITY_GROUP = graphql(`
-  mutation UpdateEntityGroup($token: String!, $request: EntityGroupCreateRequest) {
+  mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
     updateEntityGroup(token: $token, request: $request) {
       id
       token
@@ -550,34 +558,23 @@ const UPDATE_ENTITY_GROUP = graphql(`
   }
 `);
 
+/**
+ * A PARTIAL update: a field this request does not name keeps its stored value, an
+ * explicit null clears it.
+ *
+ * 🔴 THE REQUEST CARRIES NO token, memberType OR membershipMode, and it is the input
+ * type — not this function — that says so. All three are identity: a rename would
+ * strand every reference held by token, a member-family change would leave the group
+ * collecting a family its members do not belong to, and a static/dynamic conversion
+ * would orphan its members. The server used to refuse each of those; now there is no
+ * request that expresses one.
+ */
 export async function updateEntityGroup(
   token: string,
-  request: EntityGroupCreateRequest,
+  request: EntityGroupUpdateRequest,
 ): Promise<EntityGroup> {
   const data = await gql('device-management', UPDATE_ENTITY_GROUP, { token, request });
   return data.updateEntityGroup;
-}
-
-// 🔴 A group update is a full replace over every field the request names, so a
-// group form that sent only token/name/description erased the group's appearance
-// and its metadata on every rename. What it does NOT erase is membershipMode and
-// selector: the server keeps those off the request entirely — mode is immutable
-// and a selector is only replaced when one is sent — which is why a dynamic
-// group's CEL predicate survived this and its metadata did not. GroupFormRequest
-// omits all three, so returning `Required<GroupFormRequest>` is the gate over
-// exactly the fields a form is allowed to write.
-export function groupPreserved(g: EntityGroup): Required<GroupFormRequest> {
-  return {
-    token: g.token,
-    name: g.name ?? null,
-    description: g.description ?? null,
-    icon: g.icon ?? null,
-    backgroundColor: g.backgroundColor ?? null,
-    foregroundColor: g.foregroundColor ?? null,
-    borderColor: g.borderColor ?? null,
-    imageUrl: g.imageUrl ?? null,
-    metadata: g.metadata ?? null,
-  };
 }
 
 const DELETE_ENTITY_GROUP = graphql(`
@@ -599,8 +596,8 @@ export const listDeviceGroups = (opts: { pageNumber: number; pageSize: number })
 export const getDeviceGroup = (token: string) => getEntityGroupOfType(token, 'device');
 export const createDeviceGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'device' });
-export const updateDeviceGroup = (token: string, request: Required<GroupFormRequest>) =>
-  updateEntityGroup(token, { ...request, memberType: 'device' });
+export const updateDeviceGroup = (token: string, request: EntityGroupUpdateRequest) =>
+  updateEntityGroup(token, request);
 export const deleteDeviceGroup = deleteEntityGroup;
 
 // A device group as the command-batch target picker needs it (ADR-061 / ADR-043).
@@ -921,7 +918,7 @@ export async function createMetricDefinition(request: MetricDefinitionCreateRequ
 }
 
 const UPDATE_METRIC_DEFINITION = graphql(`
-  mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionCreateRequest) {
+  mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionUpdateRequest!) {
     updateMetricDefinition(token: $token, request: $request) {
       id
       token
@@ -931,7 +928,7 @@ const UPDATE_METRIC_DEFINITION = graphql(`
 
 export async function updateMetricDefinition(
   token: string,
-  request: Required<MetricDefinitionCreateRequest>,
+  request: MetricDefinitionUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_METRIC_DEFINITION, { token, request });
 }
@@ -1073,7 +1070,7 @@ export async function createCommandDefinition(
 }
 
 const UPDATE_COMMAND_DEFINITION = graphql(`
-  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {
+  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionUpdateRequest!) {
     updateCommandDefinition(token: $token, request: $request) {
       id
       token
@@ -1083,7 +1080,7 @@ const UPDATE_COMMAND_DEFINITION = graphql(`
 
 export async function updateCommandDefinition(
   token: string,
-  request: Required<CommandDefinitionCreateRequest>,
+  request: CommandDefinitionUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_COMMAND_DEFINITION, { token, request });
 }
@@ -1199,7 +1196,7 @@ export async function createDetectionRule(request: DetectionRuleCreateRequest): 
 }
 
 const UPDATE_DETECTION_RULE = graphql(`
-  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleUpdateRequest!) {
     updateDetectionRule(token: $token, request: $request) {
       id
       token
@@ -1209,7 +1206,7 @@ const UPDATE_DETECTION_RULE = graphql(`
 
 export async function updateDetectionRule(
   token: string,
-  request: Required<DetectionRuleCreateRequest>,
+  request: DetectionRuleUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_DETECTION_RULE, { token, request });
 }

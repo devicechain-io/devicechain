@@ -354,8 +354,10 @@ func TestCredentialMutationsRequireDeviceWrite(t *testing.T) {
 
 	_, err = r.UpdateDeviceCredential(ctx, struct {
 		Token   string
-		Request *model.DeviceCredentialCreateRequest
-	}{Token: "dozer-01-cred", Request: request})
+		Request model.DeviceCredentialUpdateRequest
+	}{Token: "dozer-01-cred", Request: model.DeviceCredentialUpdateRequest{
+		CredentialId: gqlcore.OptionalStringOf("a-minted-bearer"),
+	}})
 	if err != auth.ErrForbidden {
 		t.Errorf("updateDeviceCredential answered a read-only caller with %v, want ErrForbidden", err)
 	}

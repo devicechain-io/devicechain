@@ -166,8 +166,10 @@ func TestGeoFenceSetSnapshotDoorRefusesAVersionTheTenantDoesNotHave(t *testing.T
 	// and fails this test's own control.
 	if _, err := r.UpdateGeoFence(withAuthorities(acme, auth.DeviceRead, auth.DeviceWrite, auth.LocationRead), struct {
 		Token   string
-		Request model.GeoFenceCreateRequest
-	}{Token: "acme-yard", Request: model.GeoFenceCreateRequest{Token: "acme-yard", Geometry: distinctTestGeometry}}); err != nil {
+		Request model.GeoFenceUpdateRequest
+	}{Token: "acme-yard", Request: model.GeoFenceUpdateRequest{
+		Geometry: gqlcore.OptionalStringOf(distinctTestGeometry),
+	}}); err != nil {
 		t.Fatalf("advance acme: %v", err)
 	}
 

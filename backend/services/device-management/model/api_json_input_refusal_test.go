@@ -87,11 +87,16 @@ func TestMalformedMetadataDoesNotEraseTheStoredValue(t *testing.T) {
 	}
 }
 
-// The same shape on the FULL-REPLACE path, which is still how the other update mutations
-// work. Partial-update semantics do not subsume this defect and never did — a malformed
-// value is a value, so it arrives as "set", and the old converter silently turned it into
-// "clear". Both paths need the refusal, so both are pinned.
-func TestMalformedMetadataIsRefusedOnAFullReplaceUpdate(t *testing.T) {
+// The same shape on a SECOND family, because the refusal lives in each update method
+// rather than in one shared place.
+//
+// 🔴 The name and comment here used to say this was the FULL-REPLACE path. They were
+// wrong when they were written — the body calls UpdateDevice, which took a dedicated
+// DeviceUpdateRequest already — and the test's own failure message said "partial-update
+// path" three lines further down. What the pair actually proves is that partial-update
+// semantics do NOT subsume this defect: a malformed value is a value, so it arrives as
+// "set", and the converter that mis-handled it turned it into "clear".
+func TestMalformedMetadataIsRefusedOnASecondFamily(t *testing.T) {
 	api := newRosterEmitTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	seedTypeWithMetadata(t, api, ctx)

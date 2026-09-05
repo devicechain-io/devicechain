@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,28 @@ func scopeReq(token, profile string, enabled bool, groupToken *string, version *
 		EntityGroupToken:   groupToken,
 		EntityGroupVersion: version,
 	}
+}
+
+// scopeEdit is scopeReq's update-side twin. A nil groupToken/version means ABSENT under
+// the old create input as well as this one — but only because those calls also passed
+// nil for BOTH, which normalizedRuleScope collapsed to "unscoped". Under three states
+// that reading is no longer implicit, so the un-scoping cases spell out an explicit
+// CLEAR rather than leaning on a nil that now means "leave it alone".
+func scopeEdit(profile string, enabled bool, groupToken *string, version *int32) *DetectionRuleUpdateRequest {
+	req := &DetectionRuleUpdateRequest{
+		DeviceProfileToken: dcgraphql.OptionalStringOf(profile),
+		Definition:         dcgraphql.OptionalStringOf(ruleDef),
+		Enabled:            dcgraphql.OptionalBoolOf(enabled),
+		EntityGroupToken:   dcgraphql.ClearedString(),
+		EntityGroupVersion: dcgraphql.ClearedInt32(),
+	}
+	if groupToken != nil {
+		req.EntityGroupToken = dcgraphql.OptionalStringOf(*groupToken)
+	}
+	if version != nil {
+		req.EntityGroupVersion = dcgraphql.OptionalInt32Of(*version)
+	}
+	return req
 }
 
 func i32ptr(v int32) *int32 { return &v }
@@ -139,7 +162,7 @@ func TestRuleScope_DisableDraftKeepsEnrollmentUntilRepublish(t *testing.T) {
 	require.EqualValues(t, 1, countFacetRefs(t, api, ctx, g.ID, v), "published scoped rule enrolled")
 
 	// Disable the DRAFT rule without republishing: the live v1 still references G@v.
-	_, err = api.UpdateDetectionRule(ctx, "r1", scopeReq("r1", "p1", false, strptr("arid-areas"), i32ptr(v)))
+	_, err = api.UpdateDetectionRule(ctx, "r1", scopeEdit("p1", false, strptr("arid-areas"), i32ptr(v)))
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, countFacetRefs(t, api, ctx, g.ID, v),
 		"a draft disable must NOT deregister the still-live published rule's enrollment")
@@ -162,7 +185,7 @@ func TestRuleScope_RollbackReEnrolls(t *testing.T) {
 	require.EqualValues(t, 1, countFacetRefs(t, api, ctx, g.ID, v), "v1 enrolled")
 
 	// Un-scope the rule and publish v2 → GC.
-	_, err = api.UpdateDetectionRule(ctx, "r1", scopeReq("r1", "p1", true, nil, nil))
+	_, err = api.UpdateDetectionRule(ctx, "r1", scopeEdit("p1", true, nil, nil))
 	require.NoError(t, err)
 	publishProfile(t, api, ctx, "p1")
 	require.EqualValues(t, 0, countFacetRefs(t, api, ctx, g.ID, v), "v2 (unscoped) GC'd enrollment")
@@ -187,7 +210,7 @@ func TestRuleScope_RollbackToDeletedGroupFailsClosed(t *testing.T) {
 	publishProfile(t, api, ctx, "p1") // v1 scoped → enrolled
 
 	// Un-scope + publish v2 → the ref row (and enrollment) drop, and no draft pin remains.
-	_, err = api.UpdateDetectionRule(ctx, "r1", scopeReq("r1", "p1", true, nil, nil))
+	_, err = api.UpdateDetectionRule(ctx, "r1", scopeEdit("p1", true, nil, nil))
 	require.NoError(t, err)
 	publishProfile(t, api, ctx, "p1")
 	require.EqualValues(t, 0, countFacetRefs(t, api, ctx, g.ID, v), "v2 GC'd enrollment")

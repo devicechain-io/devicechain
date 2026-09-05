@@ -4,6 +4,7 @@
 package model
 
 import (
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -35,6 +36,26 @@ type EntityRelationshipTypeCreateRequest struct {
 	Description *string
 	Metadata    *string
 	Tracked     bool
+}
+
+// A PARTIAL update to an entity relationship type: omit a field to leave the stored
+// value alone, send null to clear it, send a value to set it.
+//
+// There is deliberately no Token — the type is identified by the mutation's `token`
+// argument, and an update cannot move it.
+//
+// Tracked is an OptionalBool rather than a bool for the reason the whole conversion
+// exists: a plain bool reads false for "the caller said false" and for "the caller
+// said nothing", so every edit of the NAME used to un-track the type.
+type EntityRelationshipTypeUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	Metadata    dcgraphql.OptionalString
+	// Tracked sits on a NOT NULL column with no "unset" reading, so an explicit null
+	// is refused rather than folded to false — false is a legal value, and silently
+	// writing it would stop denormalizing the type's relationships onto events while
+	// reporting success.
+	Tracked dcgraphql.OptionalBool
 }
 
 // Search criteria for locating entity relationship types.

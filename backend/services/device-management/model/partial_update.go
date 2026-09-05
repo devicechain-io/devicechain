@@ -4,18 +4,20 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"gorm.io/gorm"
 )
 
 // Helpers shared by the partial-update path (the platform-wide three-state update
 // semantic: omitted leaves alone, null clears, a value sets).
 //
-// The scalar folds themselves live on the Optional* types in core — ApplyTo and
-// ApplyToValue. What needs saying here is the one case those cannot express: a
-// reference whose FK column is NOT NULL.
+// The scalar folds themselves live on the Optional* types in core — ApplyTo for a
+// nullable column, ApplyToRequired for one that cannot be cleared. What needs saying
+// here is the one case neither expresses: a reference whose FK column is NOT NULL.
 
 // resolveRequiredTypeRef decides what an update should do with an entity's
 // REQUIRED type reference — Asset.assetTypeToken, Device.deviceTypeToken and their
@@ -65,4 +67,40 @@ func resolveRequiredTypeRef(field dcgraphql.OptionalString, currentToken string,
 		return "", false, nil
 	}
 	return requested, true, nil
+}
+
+// resolveProfileRef is resolveRequiredTypeRef plus the database hop, for the three
+// profile-scoped definition families — metric, command and detection rule — that all
+// hang off DeviceProfile through a NOT NULL FK.
+//
+// It returns the profile to re-parent onto, or nil for "the caller did not ask to
+// move it". Both the decision and the hop happen BEFORE any field is folded, so an
+// unknown profile token refuses the WHOLE update; a caller who retries has not
+// half-applied the first attempt.
+//
+// The nil `current` guard is the one in the callers of resolveRequiredTypeRef made
+// reusable: a dangling FK preloads as nil, and passing "" makes the token comparison
+// fail rather than dereferencing nothing, so a dangling reference is repaired by
+// naming a valid token instead of being compared against nothing and silently kept.
+func (api *Api) resolveProfileRef(ctx context.Context, field dcgraphql.OptionalString,
+	current *DeviceProfile) (*DeviceProfile, error) {
+	currentToken := ""
+	if current != nil {
+		currentToken = current.Token
+	}
+	requested, needsResolve, err := resolveRequiredTypeRef(field, currentToken, "deviceProfileToken")
+	if err != nil {
+		return nil, err
+	}
+	if !needsResolve {
+		return nil, nil
+	}
+	profiles, err := api.DeviceProfilesByToken(ctx, []string{requested})
+	if err != nil {
+		return nil, err
+	}
+	if len(profiles) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return profiles[0], nil
 }

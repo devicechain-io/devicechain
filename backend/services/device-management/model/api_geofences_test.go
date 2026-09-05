@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -131,9 +132,7 @@ func TestGeoFenceRoundTrip(t *testing.T) {
 	// the original geometry in place.
 	moved := polygonGeometry(-84.40, 33.75, -84.39, 33.76, -84.38, 33.74, -84.40, 33.75)
 	renamed := "North Yard (resurveyed)"
-	updated, err := api.UpdateGeoFence(ctx, "north-yard", &GeoFenceCreateRequest{
-		Token: "north-yard", Name: &renamed, Geometry: moved,
-	})
+	updated, err := api.UpdateGeoFence(ctx, "north-yard", &GeoFenceUpdateRequest{Name: dcgraphql.OptionalStringOf(renamed), Geometry: dcgraphql.OptionalStringOf(moved)})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -223,7 +222,7 @@ func TestGeoFenceChangeMintsNewFenceSetVersion(t *testing.T) {
 
 	// EDIT mints.
 	edited := polygonGeometry(-84.40, 33.75, -84.39, 33.76, -84.38, 33.74, -84.40, 33.75)
-	if _, err := api.UpdateGeoFence(acme, "yard", &GeoFenceCreateRequest{Token: "yard", Geometry: edited}); err != nil {
+	if _, err := api.UpdateGeoFence(acme, "yard", geoFenceEdit(edited)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	afterEdit := version(t, acme)
@@ -276,7 +275,7 @@ func TestGeoFenceSetSnapshotFreezesGeometry(t *testing.T) {
 	}
 
 	moved := polygonGeometry(-10, 10, -11, 11, -12, 10, -10, 10)
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{Token: "yard", Geometry: moved}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(moved)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -346,7 +345,7 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	}
 
 	edited := polygonGeometry(-10, 10, -11, 11, -12, 10, -10, 10)
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{Token: "yard", Geometry: edited}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(edited)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	afterEdit, err := api.ProfileScopeByDeviceType(ctx, dt.ID)
@@ -386,7 +385,7 @@ func TestGeoFenceMutationsEvictFenceSetVersion(t *testing.T) {
 		t.Errorf("evictions after create = %d, want 1", ev.fenceSetEvicts)
 	}
 	edited := polygonGeometry(-10, 10, -11, 11, -12, 10, -10, 10)
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{Token: "yard", Geometry: edited}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(edited)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if ev.fenceSetEvicts != 2 {
@@ -449,9 +448,7 @@ func TestGeoFenceVertexBound(t *testing.T) {
 	}
 	// And refused on update, so the bound cannot be walked around by editing a legal
 	// fence into an illegal one.
-	if _, err := api.UpdateGeoFence(ctx, "ordinary", &GeoFenceCreateRequest{
-		Token: "ordinary", Geometry: ringOf(governance.DefaultGeoFencePositionCeiling+1, 0.01),
-	}); err == nil {
+	if _, err := api.UpdateGeoFence(ctx, "ordinary", geoFenceEdit(ringOf(governance.DefaultGeoFencePositionCeiling+1, 0.01))); err == nil {
 		t.Errorf("an update to %d positions was accepted; the limit is %d",
 			governance.DefaultGeoFencePositionCeiling+1, governance.DefaultGeoFencePositionCeiling)
 	}
@@ -683,16 +680,22 @@ func TestGeoFenceTokenValidation(t *testing.T) {
 	}
 }
 
-// A fence's token is immutable. `updateGeoFence(token:, request:)` carries the token
-// twice — once to say which fence, once inside a request input shared with the create
-// path — and the second one used to win, silently moving the fence to a new token while
-// leaving every rule that named the old one resolving to nothing.
+// A REFUSED UPDATE WRITES NOTHING AND MINTS NOTHING, which is the half worth asserting:
+// an update that minted a fence-set version and then failed would leave a version on
+// record describing a change that never happened, and the stamp's whole job is that a
+// version names the fences that were live at it.
 //
-// The refusal has to write NOTHING, which is the half worth asserting: an update that
-// mints a fence-set version and then fails would leave a version on record describing a
-// change that never happened, and the stamp's whole job is that a version names the
-// fences that were live at it.
-func TestGeoFenceTokenIsImmutable(t *testing.T) {
+// 🔴 THIS TEST USED TO DRIVE A RENAME, AND THE THING IT REFUSED IS NOW UNREPRESENTABLE.
+// `updateGeoFence` carried the token twice — once to say which fence, once inside a
+// request input shared with the create path — and a guard refused the two disagreeing.
+// GeoFenceUpdateRequest has no token, so there is no rename for a guard to refuse and no
+// Go call this test could make to attempt one. That claim moved to the wire, where it is
+// now true and checkable: graphql/partial_update_wire_test.go rejects a `token` on this
+// input against the real schema.
+//
+// What is left here is the property the rename refusal was ALSO proving, driven by a
+// refusal that still exists — a geometry the validator rejects.
+func TestARefusedGeoFenceUpdateWritesNothingAndMintsNothing(t *testing.T) {
 	api := newGeoFenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
@@ -704,54 +707,42 @@ func TestGeoFenceTokenIsImmutable(t *testing.T) {
 		t.Fatalf("current version: %v", err)
 	}
 
-	moved := polygonGeometry(-84.40, 33.75, -84.39, 33.76, -84.38, 33.74, -84.40, 33.75)
-	_, err = api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
-		Token: "renamed-yard", Geometry: moved,
-	})
-	if err == nil {
-		t.Fatal("a rename was accepted")
-	}
-	// The message has to name both tokens: an operator reading it from a script needs to
-	// know which fence refused and what it was asked to become.
-	if !strings.Contains(err.Error(), "yard") || !strings.Contains(err.Error(), "renamed-yard") {
-		t.Errorf("refusal does not name both tokens: %v", err)
+	// A name the update would happily have written, alongside a geometry it must refuse.
+	// Naming a second field is what makes "nothing was written" an observation rather
+	// than a tautology about a request that asked for nothing else.
+	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceUpdateRequest{
+		Name:     dcgraphql.OptionalStringOf("North Yard"),
+		Geometry: dcgraphql.OptionalStringOf(`{"kind":"polygon","positions":"not a ring"}`),
+	}); err == nil {
+		t.Fatal("an unparseable geometry was accepted")
 	}
 
-	// Nothing moved: the fence is still under its own token, the new token names nothing,
-	// and the geometry is the one that was authored rather than the one the refused call
-	// carried.
 	still, err := api.GeoFencesByToken(ctx, []string{"yard"})
 	if err != nil || len(still) != 1 {
-		t.Fatalf("read old token: %v (%d rows)", err, len(still))
+		t.Fatalf("read back: %v (%d rows)", err, len(still))
 	}
 	if ring := decodePolygonRing(t, string(still[0].Geometry)); len(ring) != 5 {
 		t.Errorf("the refused geometry was written anyway: ring has %d positions, want 5", len(ring))
 	}
-	renamed, err := api.GeoFencesByToken(ctx, []string{"renamed-yard"})
-	if err != nil {
-		t.Fatalf("read new token: %v", err)
-	}
-	if len(renamed) != 0 {
-		t.Errorf("the new token names %d fences, want 0", len(renamed))
+	if still[0].Name.Valid {
+		t.Errorf("the refused update still wrote the name %q", still[0].Name.String)
 	}
 
-	// And no version was minted for the change that did not happen.
 	after, err := api.CurrentFenceSetVersion(ctx)
 	if err != nil {
 		t.Fatalf("current version after: %v", err)
 	}
 	if after != before {
-		t.Errorf("a refused rename minted a version: %d -> %d", before, after)
+		t.Errorf("a refused update minted a version: %d -> %d", before, after)
 	}
 
-	// NEGATIVE CONTROL. The guard refuses a CHANGED token, not every update — an edit
-	// that restates the fence's own token still goes through and still mints. Without
-	// this the test above passes just as well against a method that rejects everything.
-	renameless := "North Yard"
-	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Name: &renameless, Geometry: moved,
+	// NEGATIVE CONTROL. Without this the assertions above pass just as well against a
+	// method that rejects everything.
+	moved := polygonGeometry(-84.40, 33.75, -84.39, 33.76, -84.38, 33.74, -84.40, 33.75)
+	if _, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("North Yard"), Geometry: dcgraphql.OptionalStringOf(moved),
 	}); err != nil {
-		t.Fatalf("an update that keeps the token was refused: %v", err)
+		t.Fatalf("a well-formed edit was refused: %v", err)
 	}
 	edited, err := api.CurrentFenceSetVersion(ctx)
 	if err != nil {

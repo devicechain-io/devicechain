@@ -204,6 +204,38 @@ input MetricDefinitionCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# dataType is validated ONLY when the caller names it: an absent field has nothing to
+# validate, and checking the stored value instead would refuse a rename over a type the
+# caller never sent.
+input MetricDefinitionUpdateRequest {
+    # Re-points the definition at another device profile. Omit to keep the current one;
+    # null is refused (a metric with no profile is unreachable by any device), and an
+    # unknown token refuses the whole update.
+    deviceProfileToken: String
+    # Required and unclearable: a measurement event names the metric by this key.
+    metricKey: String
+    name: String
+    description: String
+    # Required and unclearable; validated against the metric type vocabulary when sent.
+    dataType: String
+    unit: String
+    minValue: Float
+    maxValue: Float
+    enum: String
+    descriptor: String
+    metadata: String
+}
+
 # Criteria used when searching for metric definitions.
 input MetricDefinitionSearchCriteria {
     pageNumber: Int!
@@ -354,6 +386,30 @@ input CommandDefinitionCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input CommandDefinitionUpdateRequest {
+    # Re-parents the definition. Null is refused, and an unknown token refuses the whole
+    # update. The command key's uniqueness is checked against the profile the definition
+    # ends up IN, not the one it is moving away from.
+    deviceProfileToken: String
+    # Required and unclearable; grammar-checked when sent.
+    commandKey: String
+    name: String
+    description: String
+    # Nullable: a command that takes no structured arguments is a real state, so null
+    # clears the schema back to that.
+    parameterSchema: String
+    metadata: String
+}
+
 # Criteria used when searching for command definitions.
 input CommandDefinitionSearchCriteria {
     pageNumber: Int!
@@ -421,6 +477,36 @@ input DetectionRuleCreateRequest {
     entityGroupVersion: Int
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input DetectionRuleUpdateRequest {
+    # Re-parents the rule. Null is refused; an unknown token refuses the whole update.
+    deviceProfileToken: String
+    name: String
+    description: String
+    # Required and unclearable: a rule with no definition detects nothing.
+    definition: String
+    # The canvas sidecar. Null DROPS it — what a form edit of a canvas-authored rule
+    # needs, since the graph is then stale. Omitting it KEEPS it.
+    authoringGraph: String
+    # Required and unclearable. Null is refused rather than read as false, which would
+    # park a live rule and report success.
+    enabled: Boolean
+    metadata: String
+    # The optional group scope. The two are folded independently and then validated as a
+    # PAIR against what the rule ends up with, so naming one without the other is refused
+    # rather than silently discarded. Null on either un-scopes the rule.
+    entityGroupToken: String
+    entityGroupVersion: Int
+}
+
 # Criteria used when searching for detection rules.
 input DetectionRuleSearchCriteria {
     pageNumber: Int!
@@ -468,7 +554,7 @@ type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
     metadata: String
 }
 
-# Data required to create or update a geofence. geometry is the JSON document described
+# Data required to create a geofence. geometry is the JSON document described
 # above; it is validated on write (kind, GeoJSON shape, coordinate ranges, and a vertex
 # bound). Two limits are enforced at authoring time because nothing downstream can see
 # them: a fence may carry at most 512 positions, and a tenant at most 100 fences. The
@@ -479,6 +565,31 @@ input GeoFenceCreateRequest {
     name: String
     description: String
     geometry: String!
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# A fence's token is IMMUTABLE — rules name fences by token, and a rename would leave
+# them naming nothing. Under this input a rename is unrepresentable rather than refused.
+# A caller who wants a different token creates the new fence FIRST and deletes the old
+# one after; doing it the other way round can forfeit grandfathered position headroom and
+# leave the fence unrecreatable.
+input GeoFenceUpdateRequest {
+    name: String
+    description: String
+    # Required and unclearable: a fence with no shape is not a fence. Omitting it leaves
+    # the shape alone, which is what makes a rename or a metadata edit exempt from the
+    # tenant's position ceiling — that ceiling refuses GROWTH, not size.
+    geometry: String
     metadata: String
 }
 
@@ -979,12 +1090,44 @@ type SelectorPreview {
     members: EntityGroupMemberSearchResults
 }
 
-# Data required to create or replace an entity group (ADR-061). membershipMode
-# defaults to "static"; selector is only permitted (and required) for "dynamic".
+# Data required to create an entity group (ADR-061). membershipMode defaults to
+# "static"; selector is only permitted (and required) for "dynamic".
+# Editing one afterwards is EntityGroupUpdateRequest.
 input EntityGroupCreateRequest {
     token: String!
     memberType: String!
     membershipMode: String
+    selector: String
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# memberType and membershipMode are absent for the same reason as token: all three are
+# IDENTITY. Changing the member family would leave the group collecting a family its
+# members do not belong to, and converting a static group to dynamic (or back) would
+# orphan its members. A field that can only ever be a no-op or an error does not belong
+# in an update input.
+input EntityGroupUpdateRequest {
+    # The CEL membership predicate, required (and only permitted) for a dynamic group. A
+    # provided selector is re-compiled and cost-gated before it replaces the stored one.
+    # Null is refused: a dynamic group with no selector matches nothing and cannot be
+    # repaired into a valid group.
     selector: String
     name: String
     description: String
@@ -1091,6 +1234,36 @@ input DeviceCredentialCreateRequest {
     credentialId: String!
     credentialValue: String
     enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input DeviceCredentialUpdateRequest {
+    # Re-points the credential at another device. Null is refused; an unknown token
+    # refuses the whole update.
+    deviceToken: String
+    # Required and unclearable. credentialType is validated against the known vocabulary
+    # when sent; credentialId is what a device presents at connect time.
+    credentialType: String
+    credentialId: String
+    # The secret material, nullable — a credential type that carries no secret is a real
+    # state. OMITTING IT LEAVES THE SECRET IN PLACE, which is what makes editing anything
+    # else on a credential safe; the input this replaces blanked it on every such edit.
+    credentialValue: String
+    # Required and unclearable: null is refused rather than read as false, which would
+    # silently disable the credential and take the device offline at its next reconnect.
+    enabled: Boolean
+    # An RFC3339 timestamp. Null — or an empty string, which is what a cleared form field
+    # sends — means "never expires".
     expiresAt: String
     metadata: String
 }
@@ -1218,7 +1391,7 @@ type ProvisioningProfile implements Model & TokenReference & NamedEntity & Metad
     metadata: String
 }
 
-# Data required to create or update a provisioning profile.
+# Data required to create a provisioning profile.
 input ProvisioningProfileCreateRequest {
     token: String!
     name: String
@@ -1229,6 +1402,39 @@ input ProvisioningProfileCreateRequest {
     deviceTypeToken: String!
     credentialType: String
     enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input ProvisioningProfileUpdateRequest {
+    name: String
+    description: String
+    # The credentials a fleet presents to self-register. Both are required and
+    # unclearable: a blank either side authenticates nothing. OMITTING provisionSecret
+    # LEAVES IT IN PLACE — the input this replaces blanked it on every edit that failed to
+    # restate it, after which the whole fleet failed to register.
+    provisionKey: String
+    provisionSecret: String
+    # Required and unclearable; validated against the strategy vocabulary when sent.
+    strategy: String
+    # Stamped onto auto-created devices. Null is refused; an unknown token refuses the
+    # whole update.
+    deviceTypeToken: String
+    # credentialType is deliberately absent. Provisioning can mint exactly one credential
+    # type today (ACCESS_TOKEN), so every stored value is that one and an update naming
+    # the field could only restate it or be refused — a field with no useful request does
+    # not belong in an update input. It returns additively when a second type is mintable.
+    enabled: Boolean
+    # An RFC3339 timestamp. Null or an empty string means "never expires".
     expiresAt: String
     metadata: String
 }
@@ -1720,6 +1926,24 @@ input EntityRelationshipTypeCreateRequest {
     tracked: Boolean!
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input EntityRelationshipTypeUpdateRequest {
+    name: String
+    description: String
+    metadata: String
+    # Required and unclearable: null is refused rather than read as false, which would
+    # stop denormalizing this type's relationships onto events and report success.
+    tracked: Boolean
+}
+
 # Criteria used when searching for entity relationship types.
 input EntityRelationshipTypeSearchCriteria {
     pageNumber: Int!
@@ -2084,19 +2308,19 @@ type Mutation {
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.
-    updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
+    updateMetricDefinition(token: String!, request: MetricDefinitionUpdateRequest!): MetricDefinition!
     # Delete a single metric definition.
     deleteMetricDefinition(token: String!): Boolean!
     # Create a new command definition.
     createCommandDefinition(request: CommandDefinitionCreateRequest): CommandDefinition!
     # Update an existing command definition.
-    updateCommandDefinition(token: String!, request: CommandDefinitionCreateRequest): CommandDefinition!
+    updateCommandDefinition(token: String!, request: CommandDefinitionUpdateRequest!): CommandDefinition!
     # Delete a single command definition.
     deleteCommandDefinition(token: String!): Boolean!
     # Create a new detection rule.
     createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
     # Update an existing detection rule.
-    updateDetectionRule(token: String!, request: DetectionRuleCreateRequest!): DetectionRule!
+    updateDetectionRule(token: String!, request: DetectionRuleUpdateRequest!): DetectionRule!
     # Delete a single detection rule.
     deleteDetectionRule(token: String!): Boolean!
     # Create a new geofence. Takes device:write AND location:read: a fence is a question about
@@ -2109,7 +2333,7 @@ type Mutation {
     # fence is the same question-shaping primitive as minting one. The request's `token` must
     # equal the `token` argument: a fence's token is immutable, because rules name fences by
     # token and this service cannot rewrite the rules that would be left naming nothing.
-    updateGeoFence(token: String!, request: GeoFenceCreateRequest!): GeoFence!
+    updateGeoFence(token: String!, request: GeoFenceUpdateRequest!): GeoFence!
     # Delete a single geofence. device:write alone — removing a fence constructs no question and
     # answers none, and delete-then-recreate is no way around the gate on creation.
     deleteGeoFence(token: String!): Boolean!
@@ -2154,7 +2378,7 @@ type Mutation {
     createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
     # Update an existing entity group's presentation fields (member family + mode
     # are immutable).
-    updateEntityGroup(token: String!, request: EntityGroupCreateRequest): EntityGroup!
+    updateEntityGroup(token: String!, request: EntityGroupUpdateRequest!): EntityGroup!
     # Delete an entity group, its relationship edges, and its frozen versions.
     # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
     deleteEntityGroup(token: String!): Boolean!
@@ -2173,7 +2397,7 @@ type Mutation {
     # Create a new device credential.
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.
-    updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
+    updateDeviceCredential(token: String!, request: DeviceCredentialUpdateRequest!): DeviceCredential!
     # Delete a single device credential.
     deleteDeviceCredential(token: String!): Boolean!
     # Bind a NEW physical unit to an EXISTING logical device identity: retire every
@@ -2193,7 +2417,7 @@ type Mutation {
     # Create a new provisioning profile.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
     # Update an existing provisioning profile.
-    updateProvisioningProfile(token: String!, request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+    updateProvisioningProfile(token: String!, request: ProvisioningProfileUpdateRequest!): ProvisioningProfile!
     # Delete a single provisioning profile.
     deleteProvisioningProfile(token: String!): Boolean!
     # Open (or reopen) a possession claim on a device with a secret an eventual
@@ -2209,7 +2433,7 @@ type Mutation {
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
     # Update an existing entity relationship type.
-    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
+    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeUpdateRequest!): EntityRelationshipType!
     # Delete a relationship type. Refused while any edge still uses it.
     deleteEntityRelationshipType(token: String!): Boolean!
     # Create a new entity relationship.

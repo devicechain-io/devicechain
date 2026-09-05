@@ -69,12 +69,12 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 	return created, nil
 }
 
-// Update an existing metric definition.
+// UpdateMetricDefinition applies a PARTIAL update: a field the caller did not name
+// keeps its stored value, an explicit null clears a nullable one, and the required
+// fields (deviceProfileToken, metricKey, dataType) refuse a null rather than folding
+// it to a blank the create path would have rejected.
 func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
-	request *MetricDefinitionCreateRequest) (*MetricDefinition, error) {
-	if err := dcgraphql.ErrPayloadTokenDisagrees("metric definition", token, request.Token); err != nil {
-		return nil, err
-	}
+	request *MetricDefinitionUpdateRequest) (*MetricDefinition, error) {
 	matches, err := api.MetricDefinitionsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -82,49 +82,59 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	// Validate the metric data-type vocabulary and storability (ADR-016 amd): a
-	// metric must be a numeric, aggregatable time-series type; STRING telemetry is
-	// device state, not a metric.
-	if !MetricDataType(request.DataType).Valid() {
-		return nil, fmt.Errorf("invalid metric data type: %s", request.DataType)
-	}
-	if !MetricDataType(request.DataType).StorableAsMetric() {
-		return nil, fmt.Errorf("metric data type %s is not storable as a time-series measurement; "+
-			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
-	}
-
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
-	if err != nil {
-		return nil, err
-	}
-	updated.Metadata = metadataJSON
-	updated.MetricKey = request.MetricKey
-	updated.DataType = request.DataType
-	updated.Unit = rdb.NullStrOf(request.Unit)
-	updated.MinValue = rdb.NullFloat64Of(request.MinValue)
-	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue)
-	enumJSON, err := rdb.JSONInputOf("enum", request.Enum)
-	if err != nil {
-		return nil, err
-	}
-	updated.Enum = enumJSON
-	updated.Descriptor = rdb.NullStrOf(request.Descriptor)
 
-	// Update device profile if changed.
-	if updated.DeviceProfile == nil || request.DeviceProfileToken != updated.DeviceProfile.Token {
-		matches, err := api.DeviceProfilesByToken(ctx, []string{request.DeviceProfileToken})
-		if err != nil {
-			return nil, err
+	// EVERYTHING THAT CAN REFUSE RESOLVES BEFORE ANYTHING IS WRITTEN — the profile
+	// hop, the required folds, the vocabulary check — so a refused update leaves the
+	// row exactly as it was rather than applying the fields it liked first.
+	reparent, err := api.resolveProfileRef(ctx, request.DeviceProfileToken, updated.DeviceProfile)
+	if err != nil {
+		return nil, err
+	}
+	metricKey, err := request.MetricKey.ApplyToRequired("metricKey", updated.MetricKey)
+	if err != nil {
+		return nil, err
+	}
+	dataType, err := request.DataType.ApplyToRequired("dataType", updated.DataType)
+	if err != nil {
+		return nil, err
+	}
+	// The vocabulary + storability check (ADR-016 amd) runs ONLY when the caller named
+	// dataType. An absent field has nothing to validate, and validating the STORED value
+	// instead would refuse an unrelated edit over a type the caller never sent — see
+	// MetricDefinitionUpdateRequest for why the invariant is inductive rather than
+	// re-proved on every write.
+	if request.DataType.Set {
+		if !MetricDataType(dataType).Valid() {
+			return nil, fmt.Errorf("invalid metric data type: %s", dataType)
 		}
-		if len(matches) == 0 {
-			return nil, gorm.ErrRecordNotFound
+		if !MetricDataType(dataType).StorableAsMetric() {
+			return nil, fmt.Errorf("metric data type %s is not storable as a time-series measurement; "+
+				"model string-valued telemetry as device state (ADR-016 amd)", dataType)
 		}
-		updated.DeviceProfile = matches[0]
+	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+	enumJSON, err := rdb.JSONInputOf("enum", request.Enum.ApplyTo(dcgraphql.MetadataStr(updated.Enum)))
+	if err != nil {
+		return nil, err
+	}
+
+	updated.MetricKey = metricKey
+	updated.DataType = dataType
+	updated.Metadata = metadataJSON
+	updated.Enum = enumJSON
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Unit = rdb.NullStrOf(request.Unit.ApplyTo(dcgraphql.NullStr(updated.Unit)))
+	updated.MinValue = rdb.NullFloat64Of(request.MinValue.ApplyTo(dcgraphql.NullFloat64(updated.MinValue)))
+	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue.ApplyTo(dcgraphql.NullFloat64(updated.MaxValue)))
+	updated.Descriptor = rdb.NullStrOf(request.Descriptor.ApplyTo(dcgraphql.NullStr(updated.Descriptor)))
+	if reparent != nil {
+		updated.DeviceProfile = reparent
+		updated.DeviceProfileId = reparent.ID
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)

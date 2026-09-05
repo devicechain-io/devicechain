@@ -135,7 +135,7 @@ func (api *MockApi) CreateDeviceCredential(ctx context.Context, request *model.D
 	return args.Get(0).(*model.DeviceCredential), args.Error(1)
 }
 
-func (api *MockApi) UpdateDeviceCredential(ctx context.Context, token string, request *model.DeviceCredentialCreateRequest) (*model.DeviceCredential, error) {
+func (api *MockApi) UpdateDeviceCredential(ctx context.Context, token string, request *model.DeviceCredentialUpdateRequest) (*model.DeviceCredential, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceCredential), args.Error(1)
 }
@@ -196,7 +196,7 @@ func (api *MockApi) CreateMetricDefinition(ctx context.Context, request *model.M
 	return args.Get(0).(*model.MetricDefinition), args.Error(1)
 }
 
-func (api *MockApi) UpdateMetricDefinition(ctx context.Context, token string, request *model.MetricDefinitionCreateRequest) (*model.MetricDefinition, error) {
+func (api *MockApi) UpdateMetricDefinition(ctx context.Context, token string, request *model.MetricDefinitionUpdateRequest) (*model.MetricDefinition, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.MetricDefinition), args.Error(1)
 }
@@ -263,7 +263,7 @@ func (api *MockApi) CreateCommandDefinition(ctx context.Context, request *model.
 	return args.Get(0).(*model.CommandDefinition), args.Error(1)
 }
 
-func (api *MockApi) UpdateCommandDefinition(ctx context.Context, token string, request *model.CommandDefinitionCreateRequest) (*model.CommandDefinition, error) {
+func (api *MockApi) UpdateCommandDefinition(ctx context.Context, token string, request *model.CommandDefinitionUpdateRequest) (*model.CommandDefinition, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.CommandDefinition), args.Error(1)
 }
@@ -349,7 +349,7 @@ func (api *MockApi) CreateProvisioningProfile(ctx context.Context, request *mode
 	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
 }
 
-func (api *MockApi) UpdateProvisioningProfile(ctx context.Context, token string, request *model.ProvisioningProfileCreateRequest) (*model.ProvisioningProfile, error) {
+func (api *MockApi) UpdateProvisioningProfile(ctx context.Context, token string, request *model.ProvisioningProfileUpdateRequest) (*model.ProvisioningProfile, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
 }

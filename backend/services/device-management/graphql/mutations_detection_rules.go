@@ -30,7 +30,7 @@ func (r *SchemaResolver) CreateDetectionRule(ctx context.Context, args struct {
 // Update an existing detection rule.
 func (r *SchemaResolver) UpdateDetectionRule(ctx context.Context, args struct {
 	Token   string
-	Request model.DetectionRuleCreateRequest
+	Request model.DetectionRuleUpdateRequest
 }) (*DetectionRuleResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err

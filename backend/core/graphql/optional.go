@@ -72,7 +72,8 @@ import (
 //
 // ApplyTo folds the three states onto the stored value, so a resolver reads as one
 // line per field and the semantics live here rather than being re-derived (and
-// eventually re-derived differently) at 22 call sites:
+// eventually re-derived differently) at every call site. Its counterpart for a column
+// that cannot be cleared is ApplyToRequired, in optional_required.go:
 //
 //	found.Name = request.Name.ApplyTo(found.Name)
 //	found.Metadata = request.Metadata.ApplyTo(found.Metadata)
@@ -117,17 +118,25 @@ func (o OptionalString) ApplyTo(current *string) *string {
 	return o.Value
 }
 
-// ApplyToValue is ApplyTo for a non-pointer column, where "clear" is the empty
-// string because the model has no way to represent NULL.
-func (o OptionalString) ApplyToValue(current string) string {
-	if !o.Set {
-		return current
-	}
-	if o.Value == nil {
-		return ""
-	}
-	return *o.Value
-}
+// 🔴 THERE IS DELIBERATELY NO ApplyToValue, AND ITS ABSENCE IS A DESIGN DECISION
+// RATHER THAN AN OMISSION.
+//
+// Each of these types used to carry one: ApplyTo for a NON-POINTER column, folding an
+// explicit null to the zero value on the reasoning that a model with no way to spell
+// NULL has no other reading available. Every call site it was written for turned out
+// to be a NOT NULL column, where the zero value is not a state the entity may be in —
+// so what it actually did was accept "clear this required field" and write a value the
+// create path would have refused, successfully. On a Boolean that is invisible:
+// `enabled: null` becomes false, and false is a value the caller could have sent.
+//
+// ApplyToRequired in optional_required.go is what those call sites need, and it
+// REFUSES the null instead. Deleting ApplyToValue rather than documenting it as a trap
+// is the same move as dropping an immutable field from an update input: a fold nobody
+// can reach cannot be reached by accident, and a warning comment only works on someone
+// who reads it first.
+//
+// If a genuinely nullable-in-the-model-but-not-in-the-column case ever appears, the
+// honest fix is to make the column nullable, not to bring this back.
 
 // OptionalStringOf builds a field in the "sent with a value" state. Constructors
 // exist for the callers that build requests in Go rather than receiving them off
@@ -170,16 +179,6 @@ func (o OptionalBool) ApplyTo(current *bool) *bool {
 		return current
 	}
 	return o.Value
-}
-
-func (o OptionalBool) ApplyToValue(current bool) bool {
-	if !o.Set {
-		return current
-	}
-	if o.Value == nil {
-		return false
-	}
-	return *o.Value
 }
 
 // OptionalInt32 carries a nullable Int input field. GraphQL's Int is 32-bit by
@@ -240,16 +239,6 @@ func (o OptionalInt32) ApplyTo(current *int32) *int32 {
 	return o.Value
 }
 
-func (o OptionalInt32) ApplyToValue(current int32) int32 {
-	if !o.Set {
-		return current
-	}
-	if o.Value == nil {
-		return 0
-	}
-	return *o.Value
-}
-
 // OptionalFloat64 carries a nullable Float input field.
 type OptionalFloat64 struct {
 	Set   bool
@@ -291,16 +280,6 @@ func (o OptionalFloat64) ApplyTo(current *float64) *float64 {
 		return current
 	}
 	return o.Value
-}
-
-func (o OptionalFloat64) ApplyToValue(current float64) float64 {
-	if !o.Set {
-		return current
-	}
-	if o.Value == nil {
-		return 0
-	}
-	return *o.Value
 }
 
 // OptionalID carries a nullable ID input field.

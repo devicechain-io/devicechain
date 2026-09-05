@@ -319,7 +319,7 @@ type DeviceManagementApi interface {
 
 	// Device credentials (ADR-014).
 	CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error)
-	UpdateDeviceCredential(ctx context.Context, token string, request *DeviceCredentialCreateRequest) (*DeviceCredential, error)
+	UpdateDeviceCredential(ctx context.Context, token string, request *DeviceCredentialUpdateRequest) (*DeviceCredential, error)
 	DeviceCredentialsById(ctx context.Context, ids []uint) ([]*DeviceCredential, error)
 	DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error)
 	DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error)
@@ -344,7 +344,7 @@ type DeviceManagementApi interface {
 
 	// Metric definitions (ADR-016).
 	CreateMetricDefinition(ctx context.Context, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)
-	UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionCreateRequest) (*MetricDefinition, error)
+	UpdateMetricDefinition(ctx context.Context, token string, request *MetricDefinitionUpdateRequest) (*MetricDefinition, error)
 	MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error)
 	MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error)
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
@@ -368,7 +368,7 @@ type DeviceManagementApi interface {
 
 	// Command definitions (ADR-043).
 	CreateCommandDefinition(ctx context.Context, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
-	UpdateCommandDefinition(ctx context.Context, token string, request *CommandDefinitionCreateRequest) (*CommandDefinition, error)
+	UpdateCommandDefinition(ctx context.Context, token string, request *CommandDefinitionUpdateRequest) (*CommandDefinition, error)
 	CommandDefinitionsById(ctx context.Context, ids []uint) ([]*CommandDefinition, error)
 	CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error)
 	CommandDefinitions(ctx context.Context, criteria CommandDefinitionSearchCriteria) (*CommandDefinitionSearchResults, error)
@@ -399,7 +399,7 @@ type DeviceManagementApi interface {
 
 	// Device provisioning + self-registration (ADR-012).
 	CreateProvisioningProfile(ctx context.Context, request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error)
-	UpdateProvisioningProfile(ctx context.Context, token string, request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error)
+	UpdateProvisioningProfile(ctx context.Context, token string, request *ProvisioningProfileUpdateRequest) (*ProvisioningProfile, error)
 	ProvisioningProfilesById(ctx context.Context, ids []uint) ([]*ProvisioningProfile, error)
 	ProvisioningProfilesByToken(ctx context.Context, tokens []string) ([]*ProvisioningProfile, error)
 	ProvisioningProfiles(ctx context.Context, criteria ProvisioningProfileSearchCriteria) (*ProvisioningProfileSearchResults, error)

@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -97,6 +98,46 @@ type MetricDefinitionCreateRequest struct {
 	Enum               *string
 	Descriptor         *string
 	Metadata           *string
+}
+
+// A PARTIAL update to a metric definition: omit a field to leave the stored value
+// alone, send null to clear a nullable one, send a value to set it. There is no
+// Token — the definition is identified by the mutation's `token` argument.
+//
+// 🔴 WHAT THE dataType VOCABULARY CHECK MEANS ONCE THE FIELD CAN BE ABSENT. The
+// full-replace shape validated dataType on every update because every update carried
+// one. Under three states an ABSENT dataType has nothing to validate, and running the
+// check against the stored value would be a different rule wearing the same clothes:
+// it would refuse to let a caller fix a metric's NAME because of a data type it did
+// not send and cannot see. The invariant is instead maintained inductively — create
+// validates, and every update that NAMES dataType validates — which is what makes
+// "the stored value is a valid, storable metric type" true of every row without an
+// edit to an unrelated field having to re-prove it.
+//
+// The deliberate consequence, stated because it is a behaviour change: a row that
+// somehow holds an invalid data type can now have its other fields edited. That is
+// the same shape as the geofence ceiling, which refuses GROWTH rather than existence
+// — the alternative traps the row, since the only surface that could repair it is
+// the one being refused.
+type MetricDefinitionUpdateRequest struct {
+	// DeviceProfileToken re-parents the definition. The FK is NOT NULL, so an
+	// explicit null is refused rather than honoured (a metric with no profile is
+	// unreachable by any device), and an unknown token refuses the whole update.
+	DeviceProfileToken dcgraphql.OptionalString
+	// MetricKey is what a measurement event names, and it must stay unique within
+	// the profile the definition ends up in — so it is required and unclearable.
+	MetricKey   dcgraphql.OptionalString
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// DataType is a NOT NULL vocabulary column: a null would store "", which is not
+	// a metric type, so it is refused.
+	DataType   dcgraphql.OptionalString
+	Unit       dcgraphql.OptionalString
+	MinValue   dcgraphql.OptionalFloat64
+	MaxValue   dcgraphql.OptionalFloat64
+	Enum       dcgraphql.OptionalString
+	Descriptor dcgraphql.OptionalString
+	Metadata   dcgraphql.OptionalString
 }
 
 // Search criteria for locating metric definitions.

@@ -17,6 +17,7 @@ import (
 	dcconfig "github.com/devicechain-io/dc-microservice/config"
 	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -485,7 +486,7 @@ func TestEditingOneFenceOfManyTransfersOnlyTheChangedBody(t *testing.T) {
 	// Edit ONE fence. The mint re-freezes all hundred, so the new manifest names a hundred
 	// addresses — ninety-nine of which are byte-identical to the ones already resolved.
 	if _, err := api.UpdateGeoFence(dccore.WithTenant(ctx, "acme"), "yard",
-		&dmmodel.GeoFenceCreateRequest{Token: "yard", Geometry: maxVertexFence(0, 0, 2)}); err != nil {
+		&dmmodel.GeoFenceUpdateRequest{Geometry: dcgraphql.OptionalStringOf(maxVertexFence(0, 0, 2))}); err != nil {
 		t.Fatalf("update yard: %v", err)
 	}
 	_, second := lastFact(t, facts)

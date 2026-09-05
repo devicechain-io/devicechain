@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -55,13 +56,15 @@ import (
 //  4. an update naming nothing changes nothing.
 //  5. the row is addressed by the token ARGUMENT — an argument naming nothing is a
 //     not-found, and it does not fall back to some other row.
-//  6. a null on a reference the family declares NOT nullable is REFUSED, totally.
+//  6. a null on a field the family declares REQUIRED is refused, totally — including a
+//     required BOOLEAN, where the zero value a fold would write is legal and therefore
+//     invisible to everything downstream.
 //  7. an unknown reference token refuses the WHOLE update, leaving nothing written.
 //
-// Properties 6 and 7 run over exactly the fields a family declares non-nullable, and
-// property 3 over exactly the ones it declares nullable — so every field is covered
-// by one or the other, and a family that declares a field wrongly FAILS rather than
-// falling through the gap between them.
+// Property 3 runs over exactly the fields a family declares clearable, property 6 over
+// exactly the ones it declares required, and property 7 over the required REFERENCES —
+// so every field is covered by 3 or 6, and a family that declares a field in the wrong
+// kind FAILS rather than falling through the gap between them.
 //
 // # What the harness deliberately does NOT cover
 //
@@ -71,6 +74,32 @@ import (
 // all is proved once, generically, in core's optional_test.go.
 
 // ─── the family description ────────────────────────────────────────────────
+
+// fieldKind says which of the three property sets a field is subject to. It replaces
+// a `nullable bool`, and the split it adds is not cosmetic: a boolean flag conflated
+// "an explicit null is refused" with "this is a reference that can name something
+// unknown", so a NOT NULL column that is not a reference had nowhere to go. Declaring
+// one as nullable made the harness assert it could be CLEARED — which for a required
+// vocabulary column is the opposite of the rule — and declaring it as a reference made
+// the harness send it the literal string "no-such-<field>" and expect a lookup failure.
+//
+// 🔴 A FIELD DECLARED IN THE WRONG KIND FAILS RATHER THAN BEING SKIPPED, which is what
+// makes the kind worth declaring at all: every kind is covered by at least one property
+// that a mis-declaration breaks.
+type fieldKind int
+
+const (
+	// fieldClearable: a nullable column. Absent keeps, null clears, a value sets.
+	fieldClearable fieldKind = iota
+	// fieldRequiredValue: a NOT NULL column that is not a reference — a vocabulary
+	// string, a required key, a flag. Absent keeps, a value sets, NULL IS REFUSED,
+	// because the zero value it would otherwise be folded to is a legal value nothing
+	// downstream could tell from a deliberate one.
+	fieldRequiredValue
+	// fieldRequiredRef: a reference on a NOT NULL FK. Everything fieldRequiredValue
+	// has, plus: an unknown token refuses the WHOLE update, writing nothing.
+	fieldRequiredRef
+)
 
 // partialField is one field of one family, described well enough for the harness
 // to seed it, read it back, set it and clear it without knowing its type.
@@ -83,18 +112,28 @@ type partialField struct {
 	seeded string
 	// replace is a DIFFERENT value, used for the "sent with a value" state.
 	replace string
-	// cleared is what read returns after an explicit null.
+	// cleared is what read returns after an explicit null. Meaningful only for
+	// fieldClearable — the other kinds refuse the null rather than reaching a reading.
 	cleared string
-	// set puts this field into the "sent with a value" state on a fresh request.
+	// set puts this field into the "sent with a value" state on a fresh request. The
+	// value is always a string; a typed constructor parses it, so one registry can
+	// hold booleans, ints and floats alongside strings.
 	set func(req any, v string)
 	// setNull puts the field into the "sent as null" state. Always present — the
 	// refusal properties need to build that state too.
 	setNull func(req any)
-	// nullable says whether that null is HONOURED (a nullable column, so it clears)
-	// or REFUSED (a reference on a NOT NULL column). It selects which property the
-	// harness applies, so a family that declares it wrongly FAILS rather than
-	// quietly skipping the field.
-	nullable bool
+	// kind selects which properties apply. See fieldKind.
+	kind fieldKind
+	// partner names the field this one CANNOT MOVE WITHOUT, or "" for the usual case.
+	//
+	// 🔴 IT IS A THIRD INPUT CLASS, NOT A CONVENIENCE. A detection rule's group scope is
+	// two columns validated as a pair: naming a token without a version, or a version
+	// without a token, is a half-set scope and is REFUSED. Driving such a field one at a
+	// time — which is what every property here does — would therefore assert that a legal
+	// request fails, and the only way to make the suite green would be to stop driving the
+	// field at all. So the harness moves the pair together, and "every OTHER field is
+	// unchanged" excludes the partner rather than pretending it did not move.
+	partner string
 }
 
 // partialUpdateFamily is one converted entity family.
@@ -139,12 +178,29 @@ func jsonStr(v *datatypes.JSON) string {
 }
 
 // newPartialUpdateApi builds a SQLite-backed Api migrated for one family.
+//
+// 🔴 THE DSN IS A NAMED SHARED-CACHE DATABASE, NOT ":memory:", and the difference is not
+// cosmetic. A bare ":memory:" gives every pooled connection its OWN database, so a family
+// whose seed opens a transaction — publishing an entity group or an asset type, minting a
+// fence-set version — writes into one database and reads back from another, and the
+// failure reads as a missing table rather than as the connection-per-database it is.
+// Naming it after the test keeps the isolation that ":memory:" was chosen for.
+//
+// 🔴 AND THE POOL MUST BE CLOSED, OR THE NAME OUTLIVES THE TEST. A shared-cache in-memory
+// database exists for as long as ONE connection to it is open, and gorm never closes the
+// pool by itself — so a second run of the same test name reopens the database the first
+// one left behind, complete with its rows, and the seed's "exactly one" reload finds two.
+// `go test -count=2` failed exactly that way. CI passes -count=1, which is why this hid:
+// the leak needs the same test name to run twice in one process, and nothing in CI does
+// that. The Cleanup below is what makes the fixture's isolation a property of the fixture
+// rather than of how it happens to be invoked.
 func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+partialUpdateDSNName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	closePartialUpdateDB(t, db)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -218,7 +274,7 @@ func TestPartialUpdate_SeedPopulatesEveryFieldDistinctly(t *testing.T) {
 					t.Errorf("%s: the replacement value equals the seeded one, so \"the update "+
 						"wrote it\" is unobservable", f.name)
 				}
-				if f.nullable && f.cleared == f.seeded {
+				if f.kind == fieldClearable && f.cleared == f.seeded {
 					t.Errorf("%s: the cleared reading equals the seeded one, so \"the update "+
 						"cleared it\" is unobservable", f.name)
 				}
@@ -250,6 +306,10 @@ func TestPartialUpdate_SettingOneFieldLeavesEveryOtherAlone(t *testing.T) {
 
 				req := fam.newRequest()
 				f.set(req, f.replace)
+				partner := partnerOf(t, fam, f)
+				if partner != nil {
+					partner.set(req, partner.replace)
+				}
 				if err := fam.update(api, ctx, fam.token, req); err != nil {
 					t.Fatalf("update: %v", err)
 				}
@@ -258,6 +318,10 @@ func TestPartialUpdate_SettingOneFieldLeavesEveryOtherAlone(t *testing.T) {
 				if got[f.name] != f.replace {
 					t.Fatalf("%s = %q, want %q — the field the caller SENT was not written",
 						f.name, got[f.name], f.replace)
+				}
+				if partner != nil && got[partner.name] != partner.replace {
+					t.Fatalf("%s = %q, want %q — the partner the request moved with %s was not written",
+						partner.name, got[partner.name], partner.replace, f.name)
 				}
 				assertOthersHoldSeeded(t, fam, got, f.name,
 					"a partial update erased %s: got %q, want %q — the update is still a full replace")
@@ -270,7 +334,7 @@ func TestPartialUpdate_SettingOneFieldLeavesEveryOtherAlone(t *testing.T) {
 func TestPartialUpdate_ClearingOneFieldClearsOnlyIt(t *testing.T) {
 	for _, fam := range partialUpdateFamilies() {
 		for _, f := range fam.fields {
-			if !f.nullable {
+			if f.kind != fieldClearable {
 				continue
 			}
 			t.Run(fam.name+"/"+f.name, func(t *testing.T) {
@@ -280,6 +344,10 @@ func TestPartialUpdate_ClearingOneFieldClearsOnlyIt(t *testing.T) {
 
 				req := fam.newRequest()
 				f.setNull(req)
+				partner := partnerOf(t, fam, f)
+				if partner != nil {
+					partner.setNull(req)
+				}
 				if err := fam.update(api, ctx, fam.token, req); err != nil {
 					t.Fatalf("update: %v", err)
 				}
@@ -288,6 +356,10 @@ func TestPartialUpdate_ClearingOneFieldClearsOnlyIt(t *testing.T) {
 				if got[f.name] != f.cleared {
 					t.Fatalf("%s = %q after an explicit null, want %q — a field that cannot be "+
 						"cleared is a field that can never be corrected", f.name, got[f.name], f.cleared)
+				}
+				if partner != nil && got[partner.name] != partner.cleared {
+					t.Fatalf("%s = %q after an explicit null, want %q — the partner cleared with %s "+
+						"did not clear", partner.name, got[partner.name], partner.cleared, f.name)
 				}
 				assertOthersHoldSeeded(t, fam, got, f.name,
 					"clearing one field also changed %s: got %q, want %q")
@@ -349,14 +421,20 @@ func TestPartialUpdate_UnknownTokenIsNotFound(t *testing.T) {
 	}
 }
 
-// A reference on a NOT NULL column cannot be cleared, and the refusal must be a
-// REFUSAL rather than a silent no-op. Driven off the same declaration as everything
-// else: a field with no clear closure is one the family says cannot be cleared, so
-// this asserts the API agrees.
-func TestPartialUpdate_RequiredReferenceRefusesAnExplicitNull(t *testing.T) {
+// A field on a NOT NULL column cannot be cleared, and the refusal must be a REFUSAL
+// rather than a silent no-op. Driven off the same declaration as everything else: a
+// family that calls a field required is asserting the API agrees.
+//
+// 🔴 THE DANGEROUS CASE IS THE ONE THAT LOOKS HARMLESS. For a reference, folding a null
+// to the zero value would write a dangling FK and probably fail somewhere downstream.
+// For a required BOOLEAN it writes `false` — a legal value, indistinguishable from a
+// deliberate one — so `enabled: null` would disable a credential or park a rule, report
+// success, and leave nothing anywhere to say what happened. That is why this property
+// covers every required field rather than only the references it started with.
+func TestPartialUpdate_ARequiredFieldRefusesAnExplicitNull(t *testing.T) {
 	for _, fam := range partialUpdateFamilies() {
 		for _, f := range fam.fields {
-			if f.nullable {
+			if f.kind == fieldClearable {
 				continue
 			}
 			t.Run(fam.name+"/"+f.name, func(t *testing.T) {
@@ -388,7 +466,7 @@ func TestPartialUpdate_RequiredReferenceRefusesAnExplicitNull(t *testing.T) {
 func TestPartialUpdate_UnknownReferenceRefusesTheWholeUpdate(t *testing.T) {
 	for _, fam := range partialUpdateFamilies() {
 		for _, f := range fam.fields {
-			if f.nullable {
+			if f.kind != fieldRequiredRef {
 				continue
 			}
 			t.Run(fam.name+"/"+f.name, func(t *testing.T) {
@@ -401,7 +479,7 @@ func TestPartialUpdate_UnknownReferenceRefusesTheWholeUpdate(t *testing.T) {
 				// Name another field too, so "nothing was written" is an observation and
 				// not a tautology about a request that asked for nothing else.
 				for _, other := range fam.fields {
-					if other.name != f.name && other.nullable {
+					if other.name != f.name && other.kind == fieldClearable {
 						other.set(req, other.replace)
 						break
 					}
@@ -425,14 +503,50 @@ func TestPartialUpdate_UnknownReferenceRefusesTheWholeUpdate(t *testing.T) {
 func assertOthersHoldSeeded(t *testing.T, fam partialUpdateFamily, got map[string]string,
 	touched string, msg string) {
 	t.Helper()
+	partner := ""
+	for _, f := range fam.fields {
+		if f.name == touched {
+			partner = f.partner
+		}
+	}
 	for _, other := range fam.fields {
-		if other.name == touched {
+		if other.name == touched || (partner != "" && other.name == partner) {
 			continue
 		}
 		if got[other.name] != other.seeded {
 			t.Errorf(msg, other.name, got[other.name], other.seeded)
 		}
 	}
+}
+
+// partnerOf resolves a field's declared partner, FAILING when it names nothing. A
+// partner that has been renamed away would otherwise silently become "no partner", and
+// the pair would go back to being driven one at a time — the exact state the partner
+// mechanism exists to prevent, arriving through the mechanism itself.
+func partnerOf(t *testing.T, fam partialUpdateFamily, f partialField) *partialField {
+	t.Helper()
+	if f.partner == "" {
+		return nil
+	}
+	for i := range fam.fields {
+		if fam.fields[i].name == f.partner {
+			if fam.fields[i].partner != f.name {
+				t.Fatalf("%s names %s as its partner, but %s does not name it back — a pairing "+
+					"only one side knows about is driven one-way", f.name, f.partner, f.partner)
+			}
+			return &fam.fields[i]
+		}
+	}
+	t.Fatalf("%s names %q as its partner, but the family declares no such field", f.name, f.partner)
+	return nil
+}
+
+// pairedWith declares the two-way partnership. It is a function rather than a field set
+// by hand so the two halves cannot be written asymmetrically in the first place.
+func pairedWith(a, b partialField) (partialField, partialField) {
+	a.partner = b.name
+	b.partner = a.name
+	return a, b
 }
 
 func declaresField(fam partialUpdateFamily, name string) bool {
@@ -453,23 +567,100 @@ func optionalStringField[R any](name, seeded, replace string,
 	pick func(*R) *dcgraphql.OptionalString) partialField {
 	return partialField{
 		name: name, seeded: seeded, replace: replace, cleared: nullMarker,
-		set:      func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
-		setNull:  func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
-		nullable: true,
-	}
-}
-
-// requiredRefField describes a reference on a NOT NULL column: settable, and a null
-// on it is REFUSED rather than honoured. nullable:false is the family saying so,
-// which is what routes the field into the two refusal properties instead of the
-// clearing one.
-func requiredRefField[R any](name, seeded, replace string,
-	pick func(*R) *dcgraphql.OptionalString) partialField {
-	return partialField{
-		name: name, seeded: seeded, replace: replace,
+		kind:    fieldClearable,
 		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
 		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
 	}
+}
+
+// requiredRefField describes a reference on a NOT NULL column: settable, a null on it
+// is REFUSED rather than honoured, and an unknown token refuses the whole update.
+func requiredRefField[R any](name, seeded, replace string,
+	pick func(*R) *dcgraphql.OptionalString) partialField {
+	return partialField{
+		name: name, seeded: seeded, replace: replace, kind: fieldRequiredRef,
+		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
+		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
+	}
+}
+
+// requiredStringField describes a NOT NULL string column that is NOT a reference — a
+// vocabulary value, a required key. Settable, unclearable, and no lookup to fail.
+func requiredStringField[R any](name, seeded, replace string,
+	pick func(*R) *dcgraphql.OptionalString) partialField {
+	return partialField{
+		name: name, seeded: seeded, replace: replace, kind: fieldRequiredValue,
+		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
+		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
+	}
+}
+
+// requiredBoolField describes a NOT NULL boolean column. The harness's uniform value
+// representation is a string, so the seeded/replace readings are "true"/"false" and the
+// setter parses — which is what lets one registry hold booleans beside strings without a
+// second copy of every property.
+//
+// 🔴 It is deliberately NOT clearable. Folding a null to false here is the quietest
+// possible data loss: false is a value a caller could legitimately have sent.
+func requiredBoolField[R any](name string, seeded bool,
+	pick func(*R) *dcgraphql.OptionalBool) partialField {
+	return partialField{
+		name: name, seeded: boolStr(seeded), replace: boolStr(!seeded), kind: fieldRequiredValue,
+		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalBoolOf(v == "true") },
+		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedBool() },
+	}
+}
+
+// optionalFloat64Field describes a nullable Float column.
+func optionalFloat64Field[R any](name string, seeded, replace float64,
+	pick func(*R) *dcgraphql.OptionalFloat64) partialField {
+	return partialField{
+		name: name, seeded: floatStr(seeded), replace: floatStr(replace), cleared: nullMarker,
+		kind:    fieldClearable,
+		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalFloat64Of(mustFloat(v)) },
+		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedFloat64() },
+	}
+}
+
+// optionalInt32Field describes a nullable Int column.
+func optionalInt32Field[R any](name string, seeded, replace int32,
+	pick func(*R) *dcgraphql.OptionalInt32) partialField {
+	return partialField{
+		name: name, seeded: intStr(seeded), replace: intStr(replace), cleared: nullMarker,
+		kind:    fieldClearable,
+		set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalInt32Of(mustInt32(v)) },
+		setNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedInt32() },
+	}
+}
+
+// The string representations the harness compares. They are shared by the field
+// constructors and by the families' read() closures, so a family cannot declare a
+// seeded float as "1.5" while its read reports "1.50" — a difference that would fail
+// the anti-vacuity control for a reason that has nothing to do with the update.
+func boolStr(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+func floatStr(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+func intStr(v int32) string     { return strconv.FormatInt(int64(v), 10) }
+
+func mustFloat(v string) float64 {
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		panic("the harness declared a non-numeric Float value: " + v)
+	}
+	return f
+}
+
+func mustInt32(v string) int32 {
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		panic("the harness declared a non-integral Int value: " + v)
+	}
+	return int32(n)
 }
 
 // 🔴 THE EXHAUSTIVENESS CHECK, AND THE REASON IT IS NOT A HAND-WRITTEN LIST.
@@ -554,4 +745,47 @@ func TestPartialUpdateFixtureIsAsStrictAsProduction(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("the fixture refused a grammar-conforming token: %v", err)
 	}
+}
+
+// closePartialUpdateDB releases the pool when the test ends, which is what bounds a
+// shared-cache in-memory database's LIFETIME.
+//
+// 🔴 IT IS NOT TIDINESS. Such a database exists while at least one connection to it is
+// open, and gorm closes nothing on its own — so the name survives the test that made it,
+// and the next test to use the same name inherits its rows. See the comment on
+// newPartialUpdateApi for how that surfaced.
+//
+// A failure to close is reported rather than ignored: a Close that started erroring would
+// otherwise reintroduce the leak silently, which is the whole failure mode again.
+func closePartialUpdateDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Errorf("reach the underlying pool to close it: %v", err)
+			return
+		}
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close the fixture's pool: %v — the shared-cache database outlives this "+
+				"test and the next one to reuse its name inherits these rows", err)
+		}
+	})
+}
+
+// partialUpdateDSNName turns a test's name into something safe to sit in a SQLite URI.
+// Subtest names carry "/" and the harness's carry "#" once the same name repeats, both of
+// which a URI filename reads as structure rather than as a name.
+//
+// 🔴 THE "#" IS THE DANGEROUS ONE. A URI reads it as the start of a fragment, so the name
+// silently truncates and sqlite falls back to an ON-DISK FILE — a test fixture writing to
+// the working directory, sharing state with every other test whose name truncates the
+// same way, and outliving the run. Go appends "#01", "#02" … whenever one test name
+// repeats within a run, which is exactly what a table-driven harness produces.
+func partialUpdateDSNName(t *testing.T) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, t.Name())
 }

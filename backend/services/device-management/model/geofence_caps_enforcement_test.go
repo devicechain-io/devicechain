@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"gorm.io/datatypes"
 )
 
@@ -197,17 +198,13 @@ func TestATenantOverItsPositionCeilingCanStillEditDownwards(t *testing.T) {
 
 	// A metadata-only edit: same geometry, so no growth, so no refusal.
 	name := "renamed in place"
-	if _, err := api.UpdateGeoFence(ctx, "big", &GeoFenceCreateRequest{
-		Token: "big", Name: &name, Geometry: big,
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "big", &GeoFenceUpdateRequest{Name: dcgraphql.OptionalStringOf(name), Geometry: dcgraphql.OptionalStringOf(big)}); err != nil {
 		t.Errorf("a metadata edit resubmitting identical geometry was refused after the ceiling "+
 			"dropped below the stored fence: %v", err)
 	}
 
 	// A SHRINK that is still far over the new ceiling: allowed, because it is an improvement.
-	if _, err := api.UpdateGeoFence(ctx, "big", &GeoFenceCreateRequest{
-		Token: "big", Geometry: ringOf(200, 0.01),
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "big", geoFenceEdit(ringOf(200, 0.01))); err != nil {
 		t.Errorf("shrinking 300 positions to 200 was refused because 200 is over the new "+
 			"64-position ceiling; the ceiling bounds growth, not size: %v", err)
 	}
@@ -241,15 +238,11 @@ func TestGrowthPastThePositionCeilingIsRefusedOnUpdate(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	// Growth that stays UNDER the ceiling is fine — the counterweight.
-	if _, err := api.UpdateGeoFence(ctx, "small", &GeoFenceCreateRequest{
-		Token: "small", Geometry: ringOf(48, 0.01),
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "small", geoFenceEdit(ringOf(48, 0.01))); err != nil {
 		t.Fatalf("growing from 32 to 48 positions under a 64 ceiling was refused: %v", err)
 	}
 
-	_, err := api.UpdateGeoFence(ctx, "small", &GeoFenceCreateRequest{
-		Token: "small", Geometry: ringOf(96, 0.01),
-	})
+	_, err := api.UpdateGeoFence(ctx, "small", geoFenceEdit(ringOf(96, 0.01)))
 	if err == nil {
 		t.Fatal("an update from 48 to 96 positions was accepted against a 64-position ceiling")
 	}
@@ -301,9 +294,7 @@ func TestTheTenantFenceCeilingRefusesOnlyCreates(t *testing.T) {
 
 	// The operator lowers it further, below what the tenant holds. Editing and deleting still work.
 	resolver.caps.FenceCeiling = 1
-	if _, err := api.UpdateGeoFence(ctx, "f0", &GeoFenceCreateRequest{
-		Token: "f0", Geometry: ringOf(8, 0.05),
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "f0", geoFenceEdit(ringOf(8, 0.05))); err != nil {
 		t.Errorf("editing a fence while the tenant holds 3 against a ceiling of 1 was refused: %v", err)
 	}
 	if ok, err := api.DeleteGeoFence(ctx, "f1"); err != nil || !ok {
@@ -370,9 +361,7 @@ func TestATenantOverItsBudgetCanStillShrinkAndDelete(t *testing.T) {
 	resolver.caps.PositionBudget = 50
 
 	// A shrink: allowed, even though the result (250) is still five times the budget.
-	if _, err := api.UpdateGeoFence(ctx, "f0", &GeoFenceCreateRequest{
-		Token: "f0", Geometry: ringOf(50, 0.01),
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "f0", geoFenceEdit(ringOf(50, 0.01))); err != nil {
 		t.Errorf("shrinking a fence while over budget was refused; the budget bounds growth, not "+
 			"size, and refusing this leaves the tenant no way down: %v", err)
 	}
@@ -429,7 +418,7 @@ func TestShrinkingOneOfTwoIdenticalFencesCanRaiseTheCharge(t *testing.T) {
 	}
 
 	// Now shrink ONE of them to 60. Distinct total goes 100 -> 160, over the 150 budget.
-	_, err = api.UpdateGeoFence(ctx, "a", &GeoFenceCreateRequest{Token: "a", Geometry: ringOf(60, 0.02)})
+	_, err = api.UpdateGeoFence(ctx, "a", geoFenceEdit(ringOf(60, 0.02)))
 	if err == nil {
 		t.Fatal("shrinking one of two identical fences past the budget was accepted; the sum is " +
 			"over DISTINCT geometry, so un-deduplicating must be charged")
@@ -485,15 +474,11 @@ func TestAnUnresolvableCapRefusesGrowthAndNothingElse(t *testing.T) {
 
 	// A metadata-only edit, resubmitting identical geometry: allowed.
 	name := "still editable"
-	if _, err := api.UpdateGeoFence(ctx, "f", &GeoFenceCreateRequest{
-		Token: "f", Name: &name, Geometry: big,
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "f", &GeoFenceUpdateRequest{Name: dcgraphql.OptionalStringOf(name), Geometry: dcgraphql.OptionalStringOf(big)}); err != nil {
 		t.Errorf("a metadata edit was refused during a user-management outage: %v", err)
 	}
 	// A shrink: allowed.
-	if _, err := api.UpdateGeoFence(ctx, "f", &GeoFenceCreateRequest{
-		Token: "f", Geometry: ringOf(100, 0.01),
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "f", geoFenceEdit(ringOf(100, 0.01))); err != nil {
 		t.Errorf("a shrink was refused during a user-management outage: %v", err)
 	}
 	// A delete: allowed.
@@ -635,9 +620,7 @@ func TestAnUnchangedFenceSetNeverReachesTheBudget(t *testing.T) {
 	resolver.err = fmt.Errorf("user-management unreachable")
 
 	description := "edited"
-	if _, err := api.UpdateGeoFence(ctx, "f", &GeoFenceCreateRequest{
-		Token: "f", Description: &description, Geometry: geometry,
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "f", &GeoFenceUpdateRequest{Description: dcgraphql.OptionalStringOf(description), Geometry: dcgraphql.OptionalStringOf(geometry)}); err != nil {
 		t.Errorf("a description edit resubmitting identical geometry was refused by a budget of 1 "+
 			"during an outage; it changes no shape and mints no version: %v", err)
 	}
