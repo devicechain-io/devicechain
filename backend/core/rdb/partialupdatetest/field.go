@@ -196,15 +196,39 @@ func OptionalInt32Field[R any](name string, seeded, replace int32,
 // SetEmpty, because the claim that the two spellings agree is worth nothing until both
 // are sent.
 //
+// 🔴 CLEARED IS FIXED AT "[]", WHICH CONSTRAINS THE FAMILY'S Read AND IS WORTH KNOWING
+// BEFORE YOU WRITE ONE. A family whose column stores NULL for "emptied" — a nullable JSON
+// or text column rather than a join table — must render that NULL as "[]" here, not as
+// NullMarker, or ClearingOneFieldClearsOnlyIt fails on a reading that is actually correct.
+// That does collapse the NULL/"[]" distinction RenderStringList otherwise keeps, and the
+// collapse is the right one for this datatype: null and [] are the same request on the
+// wire (see dcgraphql.OptionalStringList) so they are the same state in the column, and a
+// harness that insisted on telling them apart would be asserting a difference the API has
+// no way to express. What must still never collapse is "[]" against NullMarker for a
+// column that is genuinely ABSENT, and against "" for one holding the empty string.
+//
 // A field seeded with an EMPTY list panics here rather than failing later: "preserved"
 // and "never set" would be the same observation, which is the vacuity the whole harness
 // is built to refuse, and the generic anti-vacuity control cannot see it — RenderStringList
 // of an empty list is "[]", which is neither blank nor NullMarker.
+//
+// An empty REPLACEMENT panics for the neighbouring reason. It renders "[]", which is
+// exactly the cleared reading, so "the update SET this list" and "the update EMPTIED it"
+// become one observation — and the survivor that lets through is a real fold: an ApplyTo
+// returning []string{} whenever Set is true, ignoring every non-empty list, passes
+// SettingOneField, ClearingOneField AND EmptyList for that field. The generic
+// Replace != Cleared check in the harness catches the same shape for every kind; this
+// panic names it at the declaration, where the fix is.
 func OptionalStringListField[R any](name string, seeded, replace []string,
 	pick func(*R) *dcgraphql.OptionalStringList) Field {
 	if len(seeded) == 0 {
 		panic("partialupdatetest: list field " + name + " is seeded empty, so \"the update " +
 			"preserved it\" and \"it was never set\" are the same observation")
+	}
+	if len(replace) == 0 {
+		panic("partialupdatetest: list field " + name + " has an empty replacement, which " +
+			"renders the same as the cleared reading, so \"the update set this list\" and " +
+			"\"the update emptied it\" are the same observation")
 	}
 	return Field{
 		Name: name, Seeded: RenderStringList(seeded), Replace: RenderStringList(replace),

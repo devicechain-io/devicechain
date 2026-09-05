@@ -233,6 +233,20 @@ func seedPopulatesEveryFieldDistinctly[A any](t *testing.T, s Suite[A]) {
 					t.Errorf("%s: the cleared reading equals the seeded one, so \"the update "+
 						"cleared it\" is unobservable", f.Name)
 				}
+				// 🔴 THE THIRD PAIR, AND THE ONE THAT WAS MISSING. Seeded/replace and
+				// seeded/cleared were checked; replace/cleared was not, so a field whose
+				// replacement rendered the same as its cleared reading made SET and CLEARED
+				// one observation. That is not a hypothetical shape for a list — an empty
+				// replacement renders "[]", which is exactly the cleared reading — and the
+				// survivor it admits is a fold that returns the empty value whenever Set is
+				// true, ignoring what the caller sent, while passing every property that
+				// drives the field.
+				if f.Kind == Clearable && f.Replace == f.Cleared {
+					t.Errorf("%s: the replacement value renders the same as the cleared one "+
+						"(%q), so \"the update SET this\" and \"the update CLEARED it\" are the "+
+						"same observation and a fold that ignores the sent value would pass",
+						f.Name, f.Replace)
+				}
 			}
 			// Every field Read() reports must be declared, or a column added by a later
 			// change goes untested while the suite stays green.

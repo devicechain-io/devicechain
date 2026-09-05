@@ -49,6 +49,18 @@ import (
 //
 // A family that has not been converted must be named in the exemption map, which makes the
 // residual a thing a reader can COUNT rather than infer.
+//
+// # 🔴 AND NOTHING IS SKIPPED, WHICH IS THE FOURTH THING AND WAS ONCE THE HOLE
+//
+// Before any of the three above can be asked, the update input has to be FOUND, and the
+// first version of this guard found it by position — parameter 3 of exactly 4. Every
+// method not in that shape was walked past in silence: it landed in neither the counted
+// set nor the exemptions, so it was certified by nothing, and the anti-vacuity floor
+// could not see it because the floor bounds what was counted. Three of this platform's
+// updates carry a trailing `expectedUpdatedAt *string` and four take their input by
+// value; all seven were invisible. See requestParamOf and NotAnEntityUpdate for the two
+// halves of the replacement — locate by SHAPE, and make every remaining mismatch a named
+// failure rather than a `continue`.
 
 // UpdateSurface is what one service supplies to
 // AssertEveryUpdateTakesADedicatedRequest. A is the service's Api type; the guard derives
@@ -58,19 +70,81 @@ type UpdateSurface[A any] struct {
 	// Families is the registry Run drives. Derived from it rather than restated, so a
 	// family removed from the registry stops being certified here on the same edit.
 	Families []Family[A]
-	// Exempt names the updates that have NOT been converted, mapping the method name to
-	// the request type it still takes. An exemption whose type no longer matches FAILS:
-	// one that no longer describes the code is worse than none.
+	// Exempt names the updates that ARE entity updates but have NOT been converted,
+	// mapping the method name to the request type it still takes. An exemption whose type
+	// no longer matches FAILS: one that no longer describes the code is worse than none.
 	Exempt map[string]string
+	// NotAnEntityUpdate names the Update* methods this rule does not govern at all,
+	// mapping the method name to WHY — a bulk writer, a projection refresher, a
+	// scalar-argument edit with no input object to convert.
+	//
+	// 🔴 IT EXISTS BECAUSE THE GUARD USED TO SKIP THESE SILENTLY, AND THAT IS THE FAILURE
+	// IT WAS BUILT TO PREVENT, ARRIVING THROUGH ITS OWN SHAPE FILTER. The earlier version
+	// walked past any method that was not exactly (receiver, ctx, token, *request):
+	// anything with a trailing `expectedUpdatedAt *string`, anything taking its input by
+	// value, anything with a leading scope argument. Such a method landed in neither the
+	// walked set nor the exemptions, so it was certified by NOTHING — and the anti-vacuity
+	// floor could not catch it BY CONSTRUCTION, because the floor bounds the methods that
+	// were walked and a skipped one is not among them. One 4-argument update beside a
+	// 5-argument one was enough: the floor was met by the first and the second was
+	// invisible, so an unconverted full-replace update sat under a green guard.
+	//
+	// So nothing is skipped now. A method matching neither this map nor the request shape
+	// is a FAILURE that names itself, and the reason recorded here is what a reader gets
+	// instead of a silence they would have to reconstruct.
+	NotAnEntityUpdate map[string]string
 	// MinUpdateMethods is the anti-vacuity floor — the number of Update* methods this
-	// service is known to have. Reflection over a renamed or embedded receiver could find
-	// NOTHING at all, and a loop over nothing reports success.
+	// service is known to have, counting the exempt ones and the ones named above.
+	// Reflection over a renamed or embedded receiver could find NOTHING at all, and a
+	// loop over nothing reports success.
 	//
 	// It is a per-service number rather than a constant because services differ by an
 	// order of magnitude in how many updates they carry, and a floor set for the largest
 	// would be unreachable for the smallest — which ends with the floor being deleted
 	// rather than lowered. It must be greater than zero.
 	MinUpdateMethods int
+}
+
+// requestParamOf locates the update input among a method's parameters.
+//
+// 🔴 IT LOOKS FOR A SHAPE, NOT A POSITION, and that is the whole point. "Parameter 3 of
+// 4" is a description of one service's convention, not of what an update input IS, and
+// three of this platform's updates already carry a trailing `expectedUpdatedAt *string`
+// while four take a leading scope argument. A positional rule reads those as "not an
+// update" and certifies them by omission.
+//
+// A candidate is a struct, or a pointer to one. That excludes the receiver (skipped
+// outright), context.Context (an interface), and every scalar argument a real update
+// carries — `token string`, `scope string`, `expectedUpdatedAt *string`, `firstName,
+// lastName *string` — because a pointer to a non-struct is not an input object.
+//
+// # A BY-VALUE INPUT IS ACCEPTED, DELIBERATELY
+//
+// user-management passes its admin inputs by value (`in RoleMutableInput`). Refusing
+// that shape would mean the guard's answer to four real updates was "change the
+// signature", which is a demand about calling convention rather than about the semantic
+// this rule governs: the three-state check is structural, so it reads a struct type
+// exactly as well by value as through a pointer. What the guard has to refuse is an
+// input it cannot FIND, not one that arrives without an indirection.
+//
+// Ambiguity is a refusal rather than a guess. Two struct parameters means the guard
+// would have to pick, and picking wrongly would certify the wrong type while reporting
+// success.
+func requestParamOf(m reflect.Method) (reflect.Type, []reflect.Type) {
+	var candidates []reflect.Type
+	for i := 1; i < m.Type.NumIn(); i++ { // 1: skip the receiver
+		p := m.Type.In(i)
+		switch {
+		case p.Kind() == reflect.Struct:
+			candidates = append(candidates, p)
+		case p.Kind() == reflect.Ptr && p.Elem().Kind() == reflect.Struct:
+			candidates = append(candidates, p.Elem())
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	return nil, candidates
 }
 
 // AssertEveryUpdateTakesADedicatedRequest runs the guard over one service's Api.
@@ -104,23 +178,69 @@ func AssertEveryUpdateTakesADedicatedRequest[A any](t *testing.T, s UpdateSurfac
 			"reflection would otherwise see a different method set than callers do", apiType)
 	}
 
-	usedExemptions := map[string]bool{}
+	// A reason is required, and an empty one is refused rather than accepted as a
+	// formality: "not an entity update" without the because is a skip with a nicer name,
+	// which is what this map exists to replace.
+	for name, why := range s.NotAnEntityUpdate {
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("%s is named in NotAnEntityUpdate with no reason — an unexplained "+
+				"exclusion is the silent skip this map replaced, spelled differently", name)
+		}
+		// The two maps say opposite things: Exempt means "an entity update, not yet
+		// converted", NotAnEntityUpdate means "not an entity update at all". A method in
+		// both would take the exclusion branch and mark the exemption used on the way
+		// past, so the contradiction would resolve itself into silence — which is how a
+		// converted family's exemption survives the conversion that should have deleted
+		// it.
+		if _, both := s.Exempt[name]; both {
+			t.Errorf("%s is in both Exempt and NotAnEntityUpdate, which say opposite things "+
+				"about it: one calls it an unconverted entity update, the other says the rule "+
+				"does not govern it. Decide which, because as it stands the exclusion wins and "+
+				"the exemption is never checked against the code", name)
+		}
+	}
+
+	used := map[string]bool{}
 	seen := 0
 	for i := 0; i < apiType.NumMethod(); i++ {
 		m := apiType.Method(i)
 		if !strings.HasPrefix(m.Name, "Update") {
 			continue
 		}
-		// An update takes (receiver, ctx, token, request). Anything else is not the shape
-		// this rule is about — a bulk or projection writer, say — and is skipped rather
-		// than mis-reported.
-		if m.Type.NumIn() != 4 || m.Type.In(3).Kind() != reflect.Ptr {
+		seen++
+
+		// Outside the rule entirely, by an explicit decision someone had to write down.
+		if _, ok := s.NotAnEntityUpdate[m.Name]; ok {
+			used[m.Name] = true
 			continue
 		}
-		seen++
-		reqType := m.Type.In(3).Elem()
+
+		reqType, ambiguous := requestParamOf(m)
+		if reqType == nil {
+			// 🔴 NOT A SKIP. The message says which of the two things is wrong — the
+			// method has no input object to convert, or it has several and the guard
+			// will not pick — and names the map that resolves it either way.
+			if len(ambiguous) == 0 {
+				t.Errorf("%s takes no struct parameter, so there is no update input for this "+
+					"rule to certify: %s. Either it is not an entity update — name it in "+
+					"NotAnEntityUpdate with the reason — or its arguments are loose scalars "+
+					"that need collecting into a dedicated *UpdateRequest", m.Name, m.Type)
+			} else {
+				names := make([]string, 0, len(ambiguous))
+				for _, c := range ambiguous {
+					names = append(names, c.String())
+				}
+				t.Errorf("%s takes %d struct parameters (%s), so this guard cannot tell which "+
+					"one is the update input — and picking would certify the wrong type while "+
+					"reporting success. Give it one input object, or name it in "+
+					"NotAnEntityUpdate with the reason",
+					m.Name, len(ambiguous), strings.Join(names, ", "))
+			}
+			continue
+		}
+
 		if want, ok := s.Exempt[m.Name]; ok {
-			usedExemptions[m.Name] = true
+			used[m.Name] = true
 			if reqType.Name() != want {
 				t.Errorf("%s is exempt as taking %s but now takes %s — an exemption that no "+
 					"longer describes the code is worse than none", m.Name, want, reqType.Name())
@@ -137,29 +257,39 @@ func AssertEveryUpdateTakesADedicatedRequest[A any](t *testing.T, s UpdateSurfac
 		AssertCarriesTheThreeStates(t, m.Name, reqType)
 	}
 
-	// 🔴 AN EXEMPTION THAT MATCHES NOTHING IS THE SAME DEFECT AS ONE THAT NAMES THE WRONG
+	// 🔴 AN ENTRY THAT MATCHES NOTHING IS THE SAME DEFECT AS ONE THAT NAMES THE WRONG
 	// TYPE, and it is the one a conversion leaves behind: B3-b removes an exemption's
 	// method from the unconverted set and the entry sits there afterwards, describing a
 	// state of the world that has ended, while the residual a reader counts stays one too
-	// high.
+	// high. The same applies to a NotAnEntityUpdate entry outliving its method.
+	assertNoStaleEntries(t, apiType, "exemptions match no Update* method on %s: %s — an "+
+		"exemption nothing uses still counts against the residual a reader is asked to trust, "+
+		"so delete it once its family is converted", s.Exempt, used)
+	assertNoStaleEntries(t, apiType, "NotAnEntityUpdate entries match no Update* method on "+
+		"%s: %s — an exclusion for a method that no longer exists silences nothing and hides "+
+		"the next method to take that name", s.NotAnEntityUpdate, used)
+
+	// The anti-vacuity control. It now bounds EVERY Update* method rather than only the
+	// ones that matched a shape, which is what makes it able to notice the walk shrinking.
+	if seen < s.MinUpdateMethods {
+		t.Fatalf("only %d Update* methods were found on %s, and this service is known to have "+
+			"at least %d; this guard has stopped seeing the surface it certifies",
+			seen, apiType, s.MinUpdateMethods)
+	}
+}
+
+func assertNoStaleEntries(t *testing.T, apiType reflect.Type, msg string,
+	entries map[string]string, used map[string]bool) {
+	t.Helper()
 	var stale []string
-	for name := range s.Exempt {
-		if !usedExemptions[name] {
+	for name := range entries {
+		if !used[name] {
 			stale = append(stale, name)
 		}
 	}
 	if len(stale) > 0 {
 		sort.Strings(stale)
-		t.Errorf("these exemptions match no Update* method on %s: %s — an exemption nothing "+
-			"uses still counts against the residual a reader is asked to trust, so delete it "+
-			"once its family is converted", apiType, strings.Join(stale, ", "))
-	}
-
-	// The anti-vacuity control.
-	if seen < s.MinUpdateMethods {
-		t.Fatalf("only %d Update* methods were found on %s, and this service is known to have "+
-			"at least %d; this guard has stopped seeing the surface it certifies",
-			seen, apiType, s.MinUpdateMethods)
+		t.Errorf("these "+msg, apiType, strings.Join(stale, ", "))
 	}
 }
 

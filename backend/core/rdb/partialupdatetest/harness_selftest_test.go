@@ -50,6 +50,20 @@ type demoThing struct {
 	Owner   *demoOwner
 }
 
+type demoWidget struct {
+	gorm.Model
+	rdb.TenantScoped
+	rdb.TokenReference
+	Name  sql.NullString
+	Label string
+}
+
+// demoWidgetUpdateRequest is a converted update input: no token, every field three-state.
+type demoWidgetUpdateRequest struct {
+	Name  dcgraphql.OptionalString
+	Label dcgraphql.OptionalString
+}
+
 // demoUpdateRequest is a converted update input: no token, every field three-state.
 type demoUpdateRequest struct {
 	Name       dcgraphql.OptionalString
@@ -126,6 +140,31 @@ func (a *demoApi) UpdateDemoThing(ctx context.Context, token string,
 	return &found, nil
 }
 
+// UpdateDemoWidget is the toy service's SECOND converted family, and it exists for one
+// reason: so that "a family dropped from the registry" is a real drop-one.
+//
+// 🔴 WITH A SINGLE FAMILY, DROPPING IT IS INDISTINGUISHABLE FROM SUPPLYING NO REGISTRY AT
+// ALL, and the guard's early "no families were supplied" Fatal fires first — so the
+// negative control for the headline claim of this whole package was tripping a
+// precondition rather than the check it names. Two families make the drop a drop.
+func (a *demoApi) UpdateDemoWidget(ctx context.Context, token string,
+	req *demoWidgetUpdateRequest) (*demoWidget, error) {
+	var found demoWidget
+	if err := a.db.WithContext(ctx).Where("token = ?", token).First(&found).Error; err != nil {
+		return nil, err
+	}
+	label, err := req.Label.ApplyToRequired("label", found.Label)
+	if err != nil {
+		return nil, err
+	}
+	found.Label = label
+	found.Name = applyNullString(req.Name, found.Name)
+	if err := a.db.WithContext(ctx).Save(&found).Error; err != nil {
+		return nil, err
+	}
+	return &found, nil
+}
+
 // UpdateDemoOwner is the unconverted update. It exists so the guard's exemption path has
 // something real to describe.
 func (a *demoApi) UpdateDemoOwner(ctx context.Context, token string,
@@ -162,12 +201,18 @@ func nullStringFrom(v *string) sql.NullString {
 // ─── the toy service's suite ───────────────────────────────────────────────
 
 const (
-	demoToken       = "thing-1"
-	demoOwnerToken  = "owner-a"
-	demoOwnerOther  = "owner-b"
-	demoSeededName  = "Original name"
-	demoSeededKind  = "gauge"
-	demoStrictValid = "a-valid_token1"
+	demoToken        = "thing-1"
+	demoWidgetToken  = "widget-1"
+	demoOwnerToken   = "owner-a"
+	demoOwnerOther   = "owner-b"
+	demoSeededName   = "Original name"
+	demoSeededKind   = "gauge"
+	demoSeededLabel  = "Original label"
+	demoStrictValid  = "a-valid_token1"
+	demoUpdateFloor  = 3 // UpdateDemoThing, UpdateDemoWidget, UpdateDemoOwner
+	demoOwnerExempt  = "demoOwnerFullReplaceRequest"
+	demoOwnerMethod  = "UpdateDemoOwner"
+	demoWidgetMethod = "UpdateDemoWidget"
 )
 
 var demoSeededTags = []string{"alpha", "beta"}
@@ -248,25 +293,70 @@ func demoFamilies() []Family[*demoApi] {
 			RequiredRefField("ownerToken", demoOwnerToken, demoOwnerOther,
 				func(r *demoUpdateRequest) *dcgraphql.OptionalString { return &r.OwnerToken }),
 		},
-	}}
+	}, demoWidgetFamily()}
 }
 
-// THE POSITIVE CONTROL. Every property, over a family that includes a LIST field — which
+// The second converted family. It is deliberately plain — a nullable column and a NOT
+// NULL one, no reference and no list — because what it is here to be is a family the
+// registry can LOSE while still having one, which is what makes the drop-one negative
+// control a drop-one rather than an empty registry.
+func demoWidgetFamily() Family[*demoApi] {
+	return Family[*demoApi]{
+		Name:    "demoWidget",
+		Token:   demoWidgetToken,
+		Migrate: []any{&demoWidget{}},
+		Seed: func(t *testing.T, api *demoApi, ctx context.Context) {
+			t.Helper()
+			if err := api.db.WithContext(ctx).Create(&demoWidget{
+				TokenReference: rdb.TokenReference{Token: demoWidgetToken},
+				Name:           sql.NullString{String: demoSeededName, Valid: true},
+				Label:          demoSeededLabel,
+			}).Error; err != nil {
+				t.Fatalf("seed widget: %v", err)
+			}
+		},
+		Read: func(t *testing.T, api *demoApi, ctx context.Context) map[string]string {
+			t.Helper()
+			var rows []*demoWidget
+			err := api.db.WithContext(ctx).Where("token = ?", demoWidgetToken).Find(&rows).Error
+			e := RequireOne(t, "demo widget", rows, err)
+			return map[string]string{"name": NullString(e.Name), "label": e.Label}
+		},
+		NewRequest: func() any { return new(demoWidgetUpdateRequest) },
+		Update: func(api *demoApi, ctx context.Context, token string, req any) error {
+			_, err := api.UpdateDemoWidget(ctx, token, req.(*demoWidgetUpdateRequest))
+			return err
+		},
+		Fields: []Field{
+			OptionalStringField("name", demoSeededName, "Renamed",
+				func(r *demoWidgetUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
+			RequiredStringField("label", demoSeededLabel, "Relabelled",
+				func(r *demoWidgetUpdateRequest) *dcgraphql.OptionalString { return &r.Label }),
+		},
+	}
+}
+
+// demoSurface is the guard's input for the toy service, in one place so the positive
+// control and the mutants that perturb it cannot drift apart on everything except the one
+// thing a mutant is changing.
+func demoSurface() UpdateSurface[*demoApi] {
+	return UpdateSurface[*demoApi]{
+		Families:         demoFamilies(),
+		Exempt:           map[string]string{demoOwnerMethod: demoOwnerExempt},
+		MinUpdateMethods: demoUpdateFloor,
+	}
+}
+
+// THE POSITIVE CONTROL. Every property, over families that include a LIST field — which
 // is the only place in the tree today where the list field kind is executed at all.
 func TestHarnessDrivesEveryPropertyIncludingLists(t *testing.T) {
 	Run(t, demoSuite(false))
 }
 
-// The guard, over the toy service's own two updates: one converted and registered, one
+// The guard, over the toy service's own three updates: two converted and registered, one
 // unconverted and exempt.
 func TestGuardOverTheToyService(t *testing.T) {
-	AssertEveryUpdateTakesADedicatedRequest(t, UpdateSurface[*demoApi]{
-		Families: demoFamilies(),
-		Exempt: map[string]string{
-			"UpdateDemoOwner": "demoOwnerFullReplaceRequest",
-		},
-		MinUpdateMethods: 2,
-	})
+	AssertEveryUpdateTakesADedicatedRequest(t, demoSurface())
 }
 
 // RenderStringList / ParseStringList have to round-trip, or the list field's Set closure
@@ -297,12 +387,40 @@ func TestStringListRoundTripsAndKeepsTheEmptyCaseDistinct(t *testing.T) {
 // control cannot see it: "[]" is neither blank nor NullMarker, so "preserved" and "never
 // set" would be the same observation with every property green.
 func TestAListFieldSeededEmptyIsRefused(t *testing.T) {
+	assertPanics(t, "an empty seed", func() {
+		OptionalStringListField("tags", nil, []string{"a"},
+			func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags })
+	})
+}
+
+// And an empty REPLACEMENT, which is the neighbouring vacuity: it renders "[]", the same
+// as the cleared reading, so "the update set this list" and "the update emptied it"
+// become one observation — and the fold that survives is one returning []string{} for
+// every Set request, ignoring what the caller sent.
+//
+// Both spellings of empty are driven, because nil and []string{} are two ways to write
+// the same declaration and a check that caught only one would be half a check.
+func TestAListFieldWithAnEmptyReplacementIsRefused(t *testing.T) {
+	for _, empty := range [][]string{nil, {}} {
+		assertPanics(t, "an empty replacement", func() {
+			OptionalStringListField("tags", []string{"a"}, empty,
+				func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags })
+		})
+	}
+
+	// The counterweight: a non-empty replacement is still accepted, so the refusals above
+	// were not bought by refusing every list field.
+	OptionalStringListField("tags", []string{"a"}, []string{"b"},
+		func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags })
+}
+
+func assertPanics(t *testing.T, what string, fn func()) {
+	t.Helper()
 	defer func() {
 		if recover() == nil {
-			t.Fatal("declaring a list field with an empty seed was allowed, so a family could " +
-				"assert nothing about it and stay green")
+			t.Errorf("declaring a list field with %s was allowed, so a family could assert "+
+				"nothing about it and stay green", what)
 		}
 	}()
-	OptionalStringListField("tags", nil, []string{"a"},
-		func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags })
+	fn()
 }

@@ -371,6 +371,32 @@ func ClearedID() OptionalID                { return OptionalID{Set: true} }
 // A non-null input field with no default is REQUIRED by validation, so the absent state
 // becomes unrepresentable — the same trap as an SDL default, arriving from the other
 // direction.
+//
+// # 🔴 THE ABSENT STATE IS A PROPERTY OF THE WHOLE-OBJECT VARIABLE, NOT OF THE FIELD
+//
+// Absent works because the request map does not contain the key, and that is true when
+// the caller sends the input as ONE variable:
+//
+//	mutation ($request: RoleUpdateRequest!) { updateRole(token: $t, request: $request) }
+//
+// It is NOT true of the per-field shape, where the input is a literal with a variable in
+// each slot:
+//
+//	updateRole(request: {authorities: $a})   # $a not supplied
+//
+// There the key IS present in the literal, and an unsupplied variable deserializes to
+// nil — so the field arrives Set=true, Value=nil and the stored list is EMPTIED. That is
+// graphql-go's behaviour and OptionalString has it identically, so it is not this type's
+// to fix; it is written down here because the CONSEQUENCE differs by datatype. A scalar
+// loses one value; a list loses a whole set — every authority on a role, every redirect
+// URI on an OAuth client — and the caller is told it worked.
+//
+// Every client on this platform sends the whole-object shape: the console's generated
+// documents are whole-object at all 246 update call sites and none per-field, and the
+// SDKs and dcctl build the input as one object because that is what codegen produces. So
+// the exposure is a client someone writes by hand. Making the library refuse an
+// unsupplied variable in a literal slot is a fork candidate; until then, a service adding
+// a list field should not invite the per-field shape in its own documentation.
 type OptionalStringList struct {
 	// Set is true only when the field was PRESENT in the request, whether its value
 	// was null, an empty list, or a list with entries.

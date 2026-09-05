@@ -71,7 +71,12 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 
 		// The anti-vacuity floor. Reflection over a renamed or embedded receiver could
 		// find nothing at all, and a loop over nothing reports success.
-		MinUpdateMethods: 15,
+		//
+		// 17 is what the walk actually counts today, not a round number under it. The
+		// floor now bounds EVERY Update* method rather than only the ones matching a
+		// parameter shape, so it can be set to the measured count — and a floor set at
+		// the measurement is the only one that notices a single update vanishing.
+		MinUpdateMethods: 17,
 	})
 }
 
