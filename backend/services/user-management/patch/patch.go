@@ -11,9 +11,9 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
-// EmptiableString folds an OptionalString onto a NOT NULL string column WHOSE EMPTY
-// VALUE IS A LEGITIMATE STATE: absent keeps, a value sets it verbatim, and an explicit
-// null writes "".
+// EmptiableString folds an OptionalString onto a string column that CANNOT SPELL NULL and
+// whose EMPTY VALUE IS A LEGITIMATE STATE: absent keeps, a value sets it verbatim, and an
+// explicit null writes "".
 //
 // # 🔴 WHY THIS IS NOT ApplyToRequired, AND WHY CORE HAVING DELETED ApplyToValue IS NOT
 // AN ARGUMENT AGAINST IT
@@ -25,21 +25,35 @@ import (
 // have refused. ApplyToRequired refuses those, and that is right.
 //
 // The three columns this serves are the counter-case, and each is one whose EMPTY value
-// the create path already writes and the read path already renders:
+// the create path already writes and the read path already renders. They arrive here by
+// two DIFFERENT routes, and an earlier version of this comment gave the wrong one for two
+// of the three — it called all three columns NOT NULL, which the golden schema
+// contradicts. The distinction is worth keeping straight, because only one of them is
+// settled:
 //
-//   - iam.Identity.FirstName / LastName — a person may have no recorded first name, and
-//     `updateProfile(firstName: "")` has always cleared one. ApplyToRequired would refuse
-//     that as blank, which removes a capability rather than converting one.
-//   - iam.TenantTier.Color — `not null; default ”`, where "" means "no pill" and is what
-//     ValidTierColor accepts alongside every palette token.
+//   - iam.TenantTier.Color is the genuine case: `color character varying(32)` declared
+//     NOT NULL with an empty-string default in the golden schema, where the empty string
+//     means "no pill" and is what ValidTierColor accepts alongside every palette token.
+//     The column has no NULL to reach, so the empty string IS the clear, and this fold is
+//     justified there without qualification.
+//   - iam.Identity.FirstName / LastName reach the same fold for a WEAKER reason: the
+//     COLUMNS are nullable (`first_name character varying(128)`, no NOT NULL), but the Go
+//     model holds a bare `string` (iam/model.go), which cannot represent the null the
+//     column would accept. So "" is the only empty this code path can write, and
+//     `updateProfile(firstName: "")` has always written it. ApplyToRequired would refuse
+//     that as blank, removing a capability rather than converting one.
 //
-// So an explicit null here is not "clear a required field"; it is the only spelling of a
-// value the column genuinely holds. What is NOT available is a third state: "" and null
-// are the same stored value, exactly as they are for a list.
+// So an explicit null here is not "clear a required field"; it is the only spelling of an
+// empty this model can produce. What is NOT available is a third state: "" and null are
+// the same stored value, exactly as they are for a list.
 //
-// If any of those columns ever becomes nullable, this stops being the right fold for it
-// and OptionalString.ApplyTo becomes the right one — the honest fix then is the column,
-// not this.
+// 🔴 THE SECOND CASE HAS AN HONEST FIX AND THIS IS NOT IT. core's deletion note
+// prescribes it exactly — "the honest fix is to make the column nullable, not to bring
+// this back" — and for these two the column ALREADY IS: only the model has to change, to
+// sql.NullString, and no migration is involved. That is a change to a type used across
+// this service and is filed separately rather than folded into a partial-update
+// conversion. Until it lands, this fold is what the model can express, and the reason
+// above is the true one.
 func EmptiableString(o dcgraphql.OptionalString, current string) string {
 	if !o.Set {
 		return current
@@ -62,16 +76,22 @@ func EmptiableString(o dcgraphql.OptionalString, current string) string {
 // tenant as mis-configured.
 //
 // nil in, nil out: an explicit null REMOVES the override rather than zeroing it.
+//
+// 🔴 THE ABSENT BRANCH RETURNS current UNTOUCHED, AND THAT IS NOT MERELY AN EARLY EXIT.
+// The stored column is a bigint behind a Go `int`; the wire type is a 32-bit GraphQL Int.
+// An earlier version converted `current` through int32 before handing it to ApplyTo, so a
+// field the caller never mentioned round-tripped its stored value through a NARROWING
+// cast — on the one branch whose entire contract is "touch nothing". No value reachable
+// through the API today is wide enough to lose anything, because both write doors take a
+// GraphQL Int; the point is that a fold meaning "leave it alone" must not be the thing
+// that changes it, whatever a future writer puts in the column.
 func IntPtr(o dcgraphql.OptionalInt32, current *int) *int {
-	var currentWide *int32
-	if current != nil {
-		v := int32(*current)
-		currentWide = &v
+	if !o.Set {
+		return current
 	}
-	applied := o.ApplyTo(currentWide)
-	if applied == nil {
+	if o.Value == nil {
 		return nil
 	}
-	out := int(*applied)
+	out := int(*o.Value)
 	return &out
 }

@@ -132,9 +132,17 @@ func nullFloatStr(v *float64) string {
 // 🔴 core has RequiredBoolField and deliberately no clearable counterpart, on the
 // reasoning that folding a null to `false` is the quietest possible data loss — false is
 // a value a caller could legitimately have sent. That reasoning is about a NOT NULL
-// column. aiExternalEnabled's column is nullable and its three readings are distinct
-// (null = never decided, false = declined, true = consented), so clearing it is a real
-// state and not a fold onto a zero value.
+// column, where the zero value is not a state the entity may be in.
+//
+// aiExternalEnabled's column IS nullable, so clearing it writes NULL rather than folding
+// onto a zero. What that null means depends on who is reading, and it is worth being
+// precise because an earlier version of this comment was not: STORAGE and the admin
+// read-back (AdminTenant.aiExternalEnabled) keep nil and false apart, which is why the
+// operator can see whether a tenant was ever considered — but the ENFORCING read folds
+// them together, correctly and fail-closed. tenantGovernance and ai-inference's consent
+// check both treat nil as "not opted in", so clearing consent and declining it have the
+// same effect on whether data may leave the boundary, and only the audit trail
+// distinguishes them.
 func optionalBoolField[R any](name string, seeded bool,
 	pick func(*R) *dcgraphql.OptionalBool) putest.Field {
 	return putest.Field{
@@ -142,22 +150,6 @@ func optionalBoolField[R any](name string, seeded bool,
 		Kind:    putest.Clearable,
 		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalBoolOf(v == "true") },
 		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedBool() },
-	}
-}
-
-// emptiableStringField describes a NOT NULL string column whose EMPTY value is a
-// legitimate state — a tier's color, where "" means "no pill". Clearable, but its
-// cleared reading is "" rather than NullMarker: there is no NULL for it to reach.
-//
-// See patch.EmptiableString for why this is not ApplyToRequired, which would refuse the
-// clear outright and remove a capability the create path has always had.
-func emptiableStringField[R any](name, seeded, replace string,
-	pick func(*R) *dcgraphql.OptionalString) putest.Field {
-	return putest.Field{
-		Name: name, Seeded: seeded, Replace: replace, Cleared: "",
-		Kind:    putest.Clearable,
-		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
-		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
 	}
 }
 

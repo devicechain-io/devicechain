@@ -543,13 +543,15 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 //	explicit null  the same as "" — see below
 //	a value        set it
 //
-// 🔴 NULL AND "" AGREE HERE, AND THAT IS THE DECISION. first_name / last_name are NOT
-// NULL columns whose empty value is a state a person may legitimately be in, so there is
-// no third stored outcome for null to map onto (patch.EmptiableString carries the
-// reasoning, and why ApplyToRequired — which would REFUSE both — is the wrong fold for
-// exactly these columns). Under the old inline arguments, `firstName: null` was
-// indistinguishable from omitting it; it now clears, which is the only reading that
-// leaves "" and null meaning one thing.
+// 🔴 NULL AND "" AGREE HERE, AND THAT IS THE DECISION. The first_name / last_name
+// COLUMNS are nullable, but iam.Identity holds them as a bare `string`, which cannot
+// represent that null — so "" is the only empty this path can write and there is no third
+// stored outcome for null to map onto. patch.EmptiableString carries the reasoning, why
+// ApplyToRequired (which would REFUSE both) is the wrong fold here, and the honest fix
+// that is filed separately: the model, not the column, is what makes the null
+// unreachable. Under the old inline arguments `firstName: null` was indistinguishable
+// from omitting it; it now clears, which is the only reading that leaves "" and null
+// meaning one thing.
 type ProfileUpdateRequest struct {
 	FirstName dcgraphql.OptionalString
 	LastName  dcgraphql.OptionalString

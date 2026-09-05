@@ -228,9 +228,9 @@ type CurrentIdentity {
 #
 # Both fields carry the platform's three update states: OMITTING one leaves the stored
 # name alone, sending a value sets it, and sending null (or "") clears it. Null and ""
-# mean the same thing because the columns behind them are NOT NULL and an empty display
-# name is a state a person may legitimately be in — there is no third stored outcome for
-# them to differ over.
+# mean the same thing: an empty display name is a state a person may legitimately be in,
+# and the server writes the same empty for either spelling — so there is no third stored
+# outcome for them to differ over.
 input ProfileUpdateRequest {
     firstName: String
     lastName: String

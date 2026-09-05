@@ -104,29 +104,17 @@ func profileFamily() putest.Family[*Manager] {
 			return err
 		},
 		Fields: []putest.Field{
-			// 🔴 CLEARABLE, WITH "" AS THE CLEARED READING RATHER THAN NullMarker. These are
-			// NOT NULL columns whose empty value is a state a person may legitimately be in,
-			// so there is no NULL for a clear to reach — see patch.EmptiableString for why
-			// ApplyToRequired, which would refuse the clear, is the wrong fold here.
-			emptiableStringField("firstName", "Ada", "Augusta",
+			// 🔴 CLEARABLE, WITH "" AS THE CLEARED READING RATHER THAN NullMarker. The
+			// COLUMNS are nullable; iam.Identity holds them as a bare `string`, which cannot
+			// represent that null, so "" is the only empty this path writes and is what the
+			// row reads back as. See patch.EmptiableString for why ApplyToRequired — which
+			// would refuse the clear — is the wrong fold here, and for the model change that
+			// would make NullMarker the right reading instead.
+			putest.EmptiableStringField("firstName", "Ada", "Augusta",
 				func(r *ProfileUpdateRequest) *dcgraphql.OptionalString { return &r.FirstName }),
-			emptiableStringField("lastName", "Lovelace", "Byron",
+			putest.EmptiableStringField("lastName", "Lovelace", "Byron",
 				func(r *ProfileUpdateRequest) *dcgraphql.OptionalString { return &r.LastName }),
 		},
-	}
-}
-
-// emptiableStringField describes a NOT NULL string column whose EMPTY value is a
-// legitimate state. core has no constructor for it — its clearable constructor reads back
-// NullMarker, and its required one refuses the clear outright — so this is built from the
-// same exported Field struct rather than by widening core for one service's fixture.
-func emptiableStringField[R any](name, seeded, replace string,
-	pick func(*R) *dcgraphql.OptionalString) putest.Field {
-	return putest.Field{
-		Name: name, Seeded: seeded, Replace: replace, Cleared: "",
-		Kind:    putest.Clearable,
-		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
-		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
 	}
 }
 

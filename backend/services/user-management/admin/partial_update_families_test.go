@@ -266,9 +266,12 @@ func tenantTierFamily() putest.Family[*Service] {
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
 			putest.OptionalStringField("config", seededConfig, replaceConfig,
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Config }),
-			// NOT NULL with an empty default, so its cleared reading is "" — see
-			// emptiableStringField.
-			emptiableStringField("color", string(iam.TierColorAmber), string(iam.TierColorViolet),
+			// 🔴 THE GENUINE COUNTER-CASE. iam_tenant_tiers.color is `not null default ''`,
+			// so "" — meaning "no pill" — is a value the column HOLDS rather than an
+			// absence, and its cleared reading is "" rather than NullMarker. This is the
+			// column core's ApplyToValue deletion note did not carve out: refusing the
+			// clear would remove a capability the create path has always had.
+			putest.EmptiableStringField("color", string(iam.TierColorAmber), string(iam.TierColorViolet),
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Color }),
 		},
 	}
