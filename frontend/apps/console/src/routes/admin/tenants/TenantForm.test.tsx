@@ -1,30 +1,40 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// 🔴 updateTenant is a FULL REPLACE of a tenant's governance overrides — a field the
-// request omits is written as NULL, which clears the override back to the tier's value
-// and then the platform default. So every override this form does not carry is an
-// override the next save destroys, no matter how unrelated the edit that triggered it.
-// Renaming a tenant is enough. There is no warning and no diff; the toast says saved.
+// 🔴 THIS FILE IS NOW THE LOAD-BEARING HALF OF THE GATE, NOT THE SECOND HALF.
 //
-// That is not hypothetical, and it has now happened TWICE. `heldCommandCeiling` shipped
-// on the admin API and in the full-replace set while this form built its governance
-// payload from the ingest, outbound and AI fields alone. The fix carried that one field
-// and wrote the rule down beside it — and `shedPriority`, already shipped and already in
-// the same full-replace set, stayed uncarried for another release. An operator could not
-// even author one from the console, and any save destroyed one set through the API.
+// updateTenant USED TO BE a full replace of a tenant's governance overrides — a field the
+// request omitted was written as NULL, which cleared the override back to the tier's value
+// and then the platform default. Every override this form did not carry was one the next
+// save destroyed, no matter how unrelated the edit that triggered it. Renaming a tenant was
+// enough. There was no warning and no diff; the toast said saved.
 //
-// 🔑 So the lesson is not "remember the new field". It is that a per-field assertion list
-// is the SAME artifact as the bug: both are someone's memory of which fields exist. This
-// file therefore derives its expectation set from `AdminTenantUpdateRequest` — the
-// generated input type — so a governance column added to the schema is a COMPILE error
-// here until it is accounted for. The previous version of this test asserted on four
-// hand-picked keys out of twelve and passed throughout the entire shedPriority window.
+// That was not hypothetical, and it happened TWICE. `heldCommandCeiling` shipped on the
+// admin API and in the full-replace set while this form built its governance payload from
+// the ingest, outbound and AI fields alone. The fix carried that one field and wrote the
+// rule down beside it — and `shedPriority`, already shipped and already in the same
+// full-replace set, stayed uncarried for another release. An operator could not even author
+// one from the console, and any save destroyed one set through the API.
 //
-// The compile gate's other half lives on the callees: `updateTenant`/`createTenant` take
-// `Required<…>`, so an omitted field cannot compile at the CALL SITE either. That proves
-// the caller considered every field; it cannot prove one was carried over, because `null`
-// compiles and `null` is precisely the erasure. That is this file's job.
+// The server now leaves an omitted field alone, so the omission itself is no longer
+// destructive. What has NOT changed is this form: it renders all fifteen and restates all
+// fifteen on every save, and a blank box is submitted as an explicit `null`. So the
+// destructive spelling is still reachable and this form still sends it — the erasure is
+// now one keystroke away rather than automatic, which is a smaller hazard and the same one.
+//
+// 🔑 The lesson is unchanged and is why this file survives the conversion: a per-field
+// assertion list is the SAME artifact as the bug — both are someone's memory of which
+// fields exist. This file derives its expectation set from `AdminTenantUpdateRequest`, the
+// generated input type, so a governance column added to the schema is a COMPILE error here
+// until it is accounted for. The previous version asserted on four hand-picked keys out of
+// twelve and passed throughout the entire shedPriority window.
+//
+// The compile gate that used to be its other half is GONE, deliberately: `updateTenant` no
+// longer takes `Required<…>`, because forcing every key to be named would make a partial
+// update unexpressible from the SDK — see the note above `createTenant` in lib/api/admin.
+// That gate only ever proved the caller CONSIDERED a field, never that one was carried
+// over, since `null` compiles and `null` is precisely the erasure. Carrying it over is
+// this file's job, and now nothing else does it.
 //
 // The transport is the only seam faked. The form, the tier picker and the request it
 // builds all run for real, which is the only reason asserting on what went out means

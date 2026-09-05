@@ -222,6 +222,20 @@ type CurrentIdentity {
     lastName: String
 }
 
+# Data to update the signed-in user's own profile. The identity is named by the
+# caller's own token, so it is not a member of this input — editing someone else's
+# profile is unrepresentable here, not merely refused.
+#
+# Both fields carry the platform's three update states: OMITTING one leaves the stored
+# name alone, sending a value sets it, and sending null (or "") clears it. Null and ""
+# mean the same thing: an empty display name is a state a person may legitimately be in,
+# and the server writes the same empty for either spelling — so there is no third stored
+# outcome for them to differ over.
+input ProfileUpdateRequest {
+    firstName: String
+    lastName: String
+}
+
 # The tenant-scoped user-management API is the authentication surface only
 # (ADR-033). Identities, memberships, the role catalog, and tenants are
 # administered through the instance-scoped admin API (admin_schema.gql) — the one
@@ -277,8 +291,9 @@ type Mutation {
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
     refresh(refreshToken: String!): AuthToken!
     # Update the signed-in user's own display name (first/last). Email is fixed;
-    # self-scoped to the caller's identity.
-    updateProfile(firstName: String, lastName: String): CurrentIdentity!
+    # self-scoped to the caller's identity. A partial update: an omitted field is left
+    # alone, a null (or "") clears it, a value sets it.
+    updateProfile(request: ProfileUpdateRequest!): CurrentIdentity!
     # Set the caller's OWN tenant white-labeling theme (ADR-038): title, colors,
     # logo height. Self-scoped to the tenant in the access token; requires
     # branding:write. A null field clears that override. Does NOT manage the logo

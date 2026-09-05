@@ -70,9 +70,10 @@ export function RoleForm({ role, onDone }: { role?: AdminRole; onDone: (message:
     setBusy(true);
     try {
       if (editing) {
-        // Explicit nulls, not omitted keys: updateRole is a full replace, so a blank
-        // field is written as NULL either way — saying it is what lets Required<…>
-        // catch a field nobody carried. See the note above createTenant in lib/api/admin.
+        // Explicit nulls, not omitted keys. updateRole is a partial update now, so the
+        // two spellings differ — omitting `name` would leave the stored one alone. This
+        // form renders all three fields and seeds them from the loaded role, so it states
+        // the operator's full end state and a cleared box means a cleared field.
         await updateRole(role.scope, role.token, {
           name: name.trim() || null,
           description: description.trim() || null,

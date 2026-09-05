@@ -62,6 +62,13 @@ func newWireTestService(t *testing.T) *admin.Service {
 // the three geofence caps must not exceed their platform maxima (1024 / 4000 / 125000). A window
 // inside 1–100 is the intersection. Distinct matters more than large: a repeated value would let
 // "the field arrived" be satisfied by a neighbour's value.
+//
+// It fills BOTH request shapes, which is what keeps one derived gate over two mutations that no
+// longer take the same kind of field: the CREATE input still spells an optional override as a
+// plain pointer (a create has nothing to preserve, so two states are all it needs), while the
+// UPDATE request spells it as a three-state dcgraphql.Optional*. Handling only one shape here
+// would silently stop covering the other — and the update is the one the reviewer's deleted line
+// was in.
 func distinctOverrides(t *testing.T, dst reflect.Value, base int) map[string]int {
 	t.Helper()
 	overrides := reflect.TypeOf(admin.GovernanceOverrides{})
@@ -76,21 +83,61 @@ func distinctOverrides(t *testing.T, dst reflect.Value, base int) map[string]int
 
 		v := base + i
 		want[name] = v
-
-		// The request struct spells whole numbers as *int32 (a GraphQL Int) and rates as
-		// *float64. Both are set from the same integer so the assertion can compare one way.
-		elem := field.Type().Elem()
-		switch elem.Kind() {
-		case reflect.Int32, reflect.Int, reflect.Float64:
-			p := reflect.New(elem)
-			p.Elem().Set(reflect.ValueOf(v).Convert(elem))
-			field.Set(p)
-		default:
-			t.Fatalf("%s is a *%s, which this test does not know how to fill", name, elem.Kind())
-		}
+		fillNumeric(t, field, name, v)
 	}
 	require.NotEmpty(t, want, "reflection found no governance overrides — the gate is measuring nothing")
 	return want
+}
+
+// fillNumeric puts one numeric value into a request field, whichever of the two shapes it is.
+//
+// A create input's field is a *int32 or *float64. An update request's is an Optional* — a struct
+// carrying `Set bool` and `Value *T` — and BOTH halves have to be written: a value assigned
+// without Set is the ABSENT state, which means "leave it alone", so a version of this that only
+// wrote Value would drive an update that changes nothing and then assert the row holds what it
+// never sent.
+func fillNumeric(t *testing.T, field reflect.Value, name string, v int) {
+	t.Helper()
+	if field.Kind() == reflect.Struct {
+		set := field.FieldByName("Set")
+		value := field.FieldByName("Value")
+		require.Truef(t, set.IsValid() && value.IsValid(),
+			"%s is a %s with no Set/Value pair, so it cannot tell an absent field from a null",
+			name, field.Type())
+		set.SetBool(true)
+		elem := value.Type().Elem()
+		p := reflect.New(elem)
+		p.Elem().Set(reflect.ValueOf(v).Convert(elem))
+		value.Set(p)
+		return
+	}
+	require.Equalf(t, reflect.Ptr, field.Kind(), "%s is a %s, which this test cannot fill", name, field.Type())
+	elem := field.Type().Elem()
+	switch elem.Kind() {
+	case reflect.Int32, reflect.Int, reflect.Float64:
+		p := reflect.New(elem)
+		p.Elem().Set(reflect.ValueOf(v).Convert(elem))
+		field.Set(p)
+	default:
+		t.Fatalf("%s is a *%s, which this test does not know how to fill", name, elem.Kind())
+	}
+}
+
+// clearAllOverrides puts every override on an UPDATE request into the explicit-null state, which
+// is what an operator sends to revert a tenant to its tier and then the platform default.
+func clearAllOverrides(t *testing.T, dst reflect.Value) {
+	t.Helper()
+	overrides := reflect.TypeOf(admin.GovernanceOverrides{})
+	for i := 0; i < overrides.NumField(); i++ {
+		name := overrides.Field(i).Name
+		field := dst.FieldByName(name)
+		require.Truef(t, field.IsValid(), "the update request has no %s", name)
+		require.Equalf(t, reflect.Struct, field.Kind(),
+			"%s is a %s, so it has no explicit-null state to put it in", name, field.Type())
+		field.FieldByName("Set").SetBool(true)
+		value := field.FieldByName("Value")
+		value.Set(reflect.Zero(value.Type()))
+	}
 }
 
 // assertStored requires every assigned override to have reached the tenant ROW. The resolver's M
@@ -113,10 +160,12 @@ func assertStored(t *testing.T, got *AdminTenantResolver, want map[string]int, w
 // TestEveryGovernanceOverrideSurvivesTheAdminWireCopy drives the real resolvers against the real
 // service and store, on BOTH mutations.
 //
-// Both are covered because they are separate hand-written literals that drift independently — the
-// reviewer's deletion hit the update one only, and the create one would still have looked fine.
-// Update is the more dangerous of the two (it is a full REPLACE, so a missing field does not fail
-// to set, it CLEARS), but a create that silently drops an override is equally invisible.
+// Both are covered because they used to be separate hand-written literals that drift
+// independently — the reviewer's deletion hit the update one only, and the create one would still
+// have looked fine. The update literal is GONE now: the resolver hands the service its own
+// TenantUpdateRequest, so there is no field-by-field copy left to lose a field in, and what this
+// gate measures on that side is the fold (governanceFor) rather than a copy. The create side still
+// copies by hand, and is still the reason this is derived rather than listed.
 func TestEveryGovernanceOverrideSurvivesTheAdminWireCopy(t *testing.T) {
 	svc := newWireTestService(t)
 	ctx := context.WithValue(adminCtx(string(auth.TenantWrite)), ContextAdminKey, svc)
@@ -133,31 +182,45 @@ func TestEveryGovernanceOverrideSurvivesTheAdminWireCopy(t *testing.T) {
 	assertStored(t, created, wantCreate, "CreateTenant")
 
 	// Different values on update, so "the update landed" cannot be satisfied by the create's.
-	updateIn := adminTenantUpdateInput{TierToken: iam.TierGoldToken}
+	updateIn := admin.TenantUpdateRequest{}
 	wantUpdate := distinctOverrides(t, reflect.ValueOf(&updateIn).Elem(), 31)
 	updated, err := r.UpdateTenant(ctx, struct {
 		Token   string
-		Request adminTenantUpdateInput
+		Request admin.TenantUpdateRequest
 	}{Token: "seam", Request: updateIn})
 	require.NoError(t, err)
 	assertStored(t, updated, wantUpdate, "UpdateTenant")
 
-	// 🔴 THE HALF THAT MAKES THE OTHER HALF MEAN SOMETHING. updateTenant is a full replace, so an
-	// omitted override must CLEAR the column rather than leave the old value — which is the
-	// behaviour the console's round-trip depends on, and the direction in which a "carried over"
-	// value would be indistinguishable from a working copy.
-	empty := adminTenantUpdateInput{TierToken: iam.TierGoldToken}
+	// 🔴 THE HALF THAT MAKES THE OTHER HALF MEAN SOMETHING, AND IT HAS BEEN INVERTED.
+	//
+	// It used to assert that an update OMITTING an override CLEARED the column — correct for a
+	// full replace, and precisely the defect this conversion removes. An omitted override must
+	// now leave the stored bound exactly where it is, or renaming a tenant still silently
+	// removes every ceiling an operator set.
+	preserved, err := r.UpdateTenant(ctx, struct {
+		Token   string
+		Request admin.TenantUpdateRequest
+	}{Token: "seam", Request: admin.TenantUpdateRequest{}})
+	require.NoError(t, err)
+	assertStored(t, preserved, wantUpdate,
+		"UpdateTenant naming nothing (every override must survive an unrelated edit)")
+
+	// And clearing is still reachable — it just has to be SAID. Without this the assertion above
+	// would be satisfied by an update that ignores the overrides entirely, which is the same
+	// fail-open one level over: an operator could no longer revert a tenant to its tier.
+	clearIn := admin.TenantUpdateRequest{}
+	clearAllOverrides(t, reflect.ValueOf(&clearIn).Elem())
 	cleared, err := r.UpdateTenant(ctx, struct {
 		Token   string
-		Request adminTenantUpdateInput
-	}{Token: "seam", Request: empty})
+		Request admin.TenantUpdateRequest
+	}{Token: "seam", Request: clearIn})
 	require.NoError(t, err)
 	row := reflect.ValueOf(cleared.M)
 	overrides := reflect.TypeOf(admin.GovernanceOverrides{})
 	for i := 0; i < overrides.NumField(); i++ {
 		name := overrides.Field(i).Name
 		require.Truef(t, row.FieldByName(name).IsNil(),
-			"%s survived an update that omitted it — updateTenant is a full replace, so an omitted "+
-				"override must revert the tenant to its tier, not silently keep the old bound", name)
+			"%s survived an explicit null — clearing an override is how an operator reverts a "+
+				"tenant to its tier, and a null that does nothing removes that capability", name)
 	}
 }

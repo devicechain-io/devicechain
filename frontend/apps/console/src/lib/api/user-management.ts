@@ -350,8 +350,8 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 // Self-service edit of the signed-in user's display name (email is fixed).
 
 const UPDATE_PROFILE = graphql(`
-  mutation UpdateProfile($firstName: String, $lastName: String) {
-    updateProfile(firstName: $firstName, lastName: $lastName) {
+  mutation UpdateProfile($request: ProfileUpdateRequest!) {
+    updateProfile(request: $request) {
       email
       firstName
       lastName
@@ -359,13 +359,22 @@ const UPDATE_PROFILE = graphql(`
   }
 `);
 
+// A partial update on a dedicated input, like every other update on the platform: an
+// omitted field is left alone, and a `null` — or an empty string, which is what the form
+// sends for a name the user cleared — sets it to empty.
+//
+// 🔴 THE `?? null` IS DELIBERATE AND IS NOT THE PARTIAL-UPDATE ESCAPE HATCH. This is the
+// profile FORM's client: it renders both names, so on save it states both, and a field
+// the user emptied has to be sent as something rather than omitted. Passing the request
+// through would let a caller omit a key and mean "leave it alone" — correct, but it is a
+// capability this one screen has no use for and the coercion here is what keeps
+// `firstName: undefined` from silently becoming that.
 export async function updateProfile(input: {
   firstName?: string | null;
   lastName?: string | null;
 }): Promise<CurrentUser> {
   const data = await gql('user-management', UPDATE_PROFILE, {
-    firstName: input.firstName ?? null,
-    lastName: input.lastName ?? null,
+    request: { firstName: input.firstName ?? null, lastName: input.lastName ?? null },
   });
   return data.updateProfile;
 }

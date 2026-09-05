@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/glebarez/sqlite"
@@ -89,12 +90,16 @@ func TestUpdateTenantRetiersLive(t *testing.T) {
 	require.NoError(t, err)
 
 	// The upgrade path — a customer paying more money.
-	up, err := s.UpdateTenant(ctx, "acme", TenantMutableInput{TierToken: iam.TierGoldToken})
+	up, err := s.UpdateTenant(ctx, "acme", &TenantUpdateRequest{
+		TierToken: dcgraphql.OptionalStringOf(iam.TierGoldToken),
+	})
 	require.NoError(t, err)
 	require.Equal(t, iam.TierGoldToken, up.Tier.Token)
 
 	// An unknown tier is refused, and the tenant keeps the tier it had.
-	_, err = s.UpdateTenant(ctx, "acme", TenantMutableInput{TierToken: "platinum"})
+	_, err = s.UpdateTenant(ctx, "acme", &TenantUpdateRequest{
+		TierToken: dcgraphql.OptionalStringOf("platinum"),
+	})
 	require.ErrorIs(t, err, ErrTierNotFound)
 	still, err := s.ListTenants(ctx)
 	require.NoError(t, err)
@@ -131,7 +136,9 @@ func TestDeleteTenantTierRefusedWhileInUse(t *testing.T) {
 	require.True(t, removed)
 
 	// Move the tenant off bronze, and bronze becomes deletable.
-	_, err = s.UpdateTenant(ctx, "acme", TenantMutableInput{TierToken: iam.TierGoldToken})
+	_, err = s.UpdateTenant(ctx, "acme", &TenantUpdateRequest{
+		TierToken: dcgraphql.OptionalStringOf(iam.TierGoldToken),
+	})
 	require.NoError(t, err)
 	removed, err = s.DeleteTenantTier(ctx, iam.TierBronzeToken)
 	require.NoError(t, err)
@@ -180,33 +187,33 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 
 	// Update: the same bar applies to the edit door.
 	seedTiers(t, s)
-	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
-		Name:   "Gold",
-		Config: &map[string]any{"ingestBurst": float64(0)},
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name:   dcgraphql.OptionalStringOf("Gold"),
+		Config: dcgraphql.OptionalStringOf(`{"ingestBurst":0}`),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must be positive")
 
-	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
-		Name:   "Gold",
-		Config: &map[string]any{"retentionWindowDays": float64(30)},
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name:   dcgraphql.OptionalStringOf("Gold"),
+		Config: dcgraphql.OptionalStringOf(`{"retentionWindowDays":30}`),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown tier setting")
 
 	// shedPriority (ADR-063) IS a registered key, held to its 1–100 band: an
 	// out-of-band value is rejected at the door, a valid one lands.
-	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
-		Name:   "Gold",
-		Config: &map[string]any{"shedPriority": float64(200)},
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name:   dcgraphql.OptionalStringOf("Gold"),
+		Config: dcgraphql.OptionalStringOf(`{"shedPriority":200}`),
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "between 1 and 100")
 
 	// A valid config passes both doors and lands.
-	got, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
-		Name:   "Gold",
-		Config: &map[string]any{"ingestMessagesPerSecond": float64(2000)},
+	got, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name:   dcgraphql.OptionalStringOf("Gold"),
+		Config: dcgraphql.OptionalStringOf(`{"ingestMessagesPerSecond":2000}`),
 	})
 	require.NoError(t, err)
 	require.Equal(t, float64(2000), got.Config["ingestMessagesPerSecond"])
@@ -215,7 +222,7 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 // TestRenamingATierDoesNotWipeItsPackaging is the guard for a silent, tier-wide
 // re-pricing.
 //
-// If config were a full replace like name/description, then
+// If config were cleared by omission — as name and description once were — then
 // `updateTenantTier(token:"gold", request:{name:"Gold Plus"})` — a mutation that
 // states ONLY a rename — would NULL gold's settings. Every gold tenant would drop
 // from 2000/s to the platform default within core/governance's 60s TTL: no error, no
@@ -223,7 +230,10 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 // fail-safe (the default, never unlimited), which is the only reason it would be
 // survivable rather than an outage.
 //
-// So config is a patch: nil leaves it alone, and an explicit empty map clears it.
+// Config used to be the ONE field with an absent state, hand-rolled as a *map[string]any.
+// Every field has it now, so this test measures the shared mechanism rather than an
+// exception — and it still measures the same thing, because "the exception was
+// generalized" is exactly the change that could have dropped it.
 func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	s := newTestService(t)
 	ctx := context.Background()
@@ -236,7 +246,9 @@ func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	require.NoError(t, err)
 
 	// A rename that says nothing about config must leave the packaging intact.
-	renamed, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{Name: "Gold Plus"})
+	renamed, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Gold Plus"),
+	})
 	require.NoError(t, err)
 	require.Equal(t, "Gold Plus", renamed.Name.String)
 	require.Equal(t, float64(2000), renamed.Config["ingestMessagesPerSecond"],
@@ -248,12 +260,25 @@ func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	require.Equal(t, float64(2000), reloaded.Config["ingestMessagesPerSecond"])
 
 	// Clearing stays possible — it just has to be said out loud.
-	cleared, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, TierMutableInput{
-		Name:   "Gold Plus",
-		Config: &map[string]any{},
+	cleared, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Name:   dcgraphql.OptionalStringOf("Gold Plus"),
+		Config: dcgraphql.OptionalStringOf("{}"),
 	})
 	require.NoError(t, err)
 	require.Empty(t, cleared.Config, "an explicit empty config clears the tier's settings")
+
+	// …and so does an explicit null, which is the same request spelled the way the
+	// three-state semantic spells "clear it". The two must agree: a client that sends
+	// null and a client that sends "{}" are asking for one thing.
+	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Config: dcgraphql.OptionalStringOf(`{"ingestMessagesPerSecond":2000}`),
+	})
+	require.NoError(t, err)
+	nulled, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
+		Config: dcgraphql.ClearedString(),
+	})
+	require.NoError(t, err)
+	require.Empty(t, nulled.Config, "an explicit null config clears the tier's settings")
 }
 
 // TestUpdateTenantTierEditsPackaging pins decision 4: the seeded vocabulary is
@@ -264,15 +289,17 @@ func TestUpdateTenantTierEditsPackaging(t *testing.T) {
 	ctx := context.Background()
 	seedTiers(t, s)
 
-	updated, err := s.UpdateTenantTier(ctx, iam.TierBronzeToken, TierMutableInput{
-		Name:        "Starter",
-		Description: "Renamed packaging",
+	updated, err := s.UpdateTenantTier(ctx, iam.TierBronzeToken, &TierUpdateRequest{
+		Name:        dcgraphql.OptionalStringOf("Starter"),
+		Description: dcgraphql.OptionalStringOf("Renamed packaging"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "Starter", updated.Name.String)
 	require.Equal(t, iam.TierBronzeToken, updated.Token, "the token is the tier's identity and is fixed")
 
 	// Editing an unknown tier is a legible not-found, not a silent create.
-	_, err = s.UpdateTenantTier(ctx, "platinum", TierMutableInput{Name: "Platinum"})
+	_, err = s.UpdateTenantTier(ctx, "platinum", &TierUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Platinum"),
+	})
 	require.ErrorIs(t, err, ErrTierNotFound)
 }

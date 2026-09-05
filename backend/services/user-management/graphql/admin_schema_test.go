@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/admin"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 )
@@ -192,7 +193,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	_, err = r.UpdateTenantTier(bare, struct {
 		Token   string
-		Request adminTenantTierUpdateInput
+		Request admin.TierUpdateRequest
 	}{})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	_, err = r.DeleteTenantTier(bare, struct{ Token string }{})
@@ -206,7 +207,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.UpdateTenantTier(limited, struct {
 		Token   string
-		Request adminTenantTierUpdateInput
+		Request admin.TierUpdateRequest
 	}{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.DeleteTenantTier(limited, struct{ Token string }{})

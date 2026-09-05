@@ -307,14 +307,14 @@ Anything not named here follows its mutation's contract.
 | --- | --- |
 | `secret` on `updateConnector`, `updateAiProvider` | **Kept** — and an empty string *clears* it. The inverse of a partial update's `null`; see the warning below |
 | `secret` on `updateNotificationChannel` | **Kept**, and `null` *clears* it, like every other field on a partial update. An empty string also clears, so a client already spelling it that way keeps working. This is the only write-only secret without the inversion below |
-| `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `{}` to clear |
+| `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `null` or `{}` to clear |
 | `selector` on `updateEntityGroup` | **Kept** when omitted. Unlike most partial-update fields it cannot be *cleared*: `null` is refused, because a dynamic group with no selector matches nothing and cannot be repaired. A static group is refused a selector outright |
 | `definition` on `updateDashboard` | **Kept** when omitted, which is how you rename a dashboard without resending its document. Like `selector` above it cannot be *cleared*: `null` is refused, because a dashboard with no definition is not a thing. A malformed one refuses the whole update, so a rename sent with it is not applied either |
-| `firstName` / `lastName` on `updateProfile` | **Kept.** The one `update*` taking bare arguments rather than a `request`; an empty string still clears |
+| `firstName` / `lastName` on `updateProfile` | **Kept.** An empty string clears, and `null` means the same thing — these are the display-name columns, where "empty" is a value a person may legitimately have rather than an absence |
 | `credentialType` on `updateProvisioningProfile` | **Not in the update input.** Provisioning can mint exactly one credential type today, so the field would only ever restate what is stored. It used to be *reset* to `ACCESS_TOKEN` by any update that omitted it |
 | `activeVersion` on a device profile or an entity group | Nothing: it is not writable here at all, and moves only by publish and rollback |
 | `memberType` / `membershipMode` on `updateEntityGroup` | **Not in the update input.** Both are identity, so a change is unrepresentable rather than refused |
-| A tenant's [governance overrides](../concepts/governance.md) on `updateTenant` | Erased — and erased here means **inherit the platform default**, never "unlimited" |
+| A tenant's [governance overrides](../concepts/governance.md) on `updateTenant` | **Kept.** Sending `null` removes the override, which means **inherit the tier and then the platform default** — never zero, and never "unlimited" |
 
 :::danger An empty string is not a safe way to say "leave this alone"
 For the write-only `secret` on `updateConnector` and `updateAiProvider`, **null preserves and `""`
@@ -366,6 +366,10 @@ is **refused**, because a dashboard with no definition is not a thing. It keeps 
 `expectedUpdatedAt` precondition, and an update that names no field at all writes nothing (not even
 `updatedAt`) while a stale precondition on it is still a conflict.
 
+In user-management, **every `update*`** now takes a dedicated request too:
+
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+
 **Anything not named above is still a full replace, and the way to tell is the mutation's own
 signature rather than a list here.** This page used to carry a second list of the areas that had
 not converted yet, and it was wrong every time an area landed — it named four while saying three.
@@ -377,21 +381,33 @@ needs care.
 `request: FooCreateRequest` always means a full replace, and that direction never lies — a shared
 create input cannot express the difference between omitted and cleared, whatever anyone intends.
 
-The other direction has one exception you have to know about. **Four `update*` mutations on
-user-management's admin plane take a dedicated `*UpdateRequest` and are still full replaces on every
-field they declare** — `AdminTenantUpdateRequest`, `AdminRoleUpdateRequest`,
-`AdminOAuthClientUpdateRequest` and `AdminTenantTierUpdateRequest`. They were given a separate input
-so the payload could drop the token, which is why they carry no payload-token question; the fields
-inside were never converted, so omitting one still blanks it.
-
-They are the only four, they are all on the admin plane, and they will be converted before 1.0.
-Everywhere else the signature is the whole answer, and the [schema you
-downloaded](#download-the-schemas) is the authority for which one a mutation is on.
+The other direction is not proof on its own. A dedicated `*UpdateRequest` is what a partial update
+needs, not what makes one: an input can carry its own type and still write every field it declares
+from whatever you happened to send. Four of user-management's admin mutations were exactly that
+until this release — separate inputs, so the payload could drop the token, with full-replace fields
+inside — which is why the [schema you downloaded](#download-the-schemas) is the authority rather
+than the signature.
 :::
 
-`updateProfile` is not among them and is not a full replace: it takes bare `firstName` / `lastName`
-arguments rather than a `request`, writes only the ones you send, and clears with `""` rather than
-`null` — see [the exceptions table](#where-the-default-does-not-hold).
+:::note[This changed for user-management]
+`updateRole`, `updateTenant`, `updateTenantTier` and `updateOauthClient` used to write every field
+their input declared, so a request naming only `name` blanked the rest and returned the emptied
+record. `updateTenant` is the one to re-check first: omitting a governance override used to **erase**
+it, so renaming a tenant removed every ceiling an operator had set. Omitting one now leaves it alone,
+and only an explicit `null` removes it.
+
+`tierToken` on `updateTenant` became **optional**. Omitting it keeps the tenant at its current tier;
+an explicit `null` is refused, because every tenant has a tier.
+
+`authorities`, `redirectUris` and `scopes` became **nullable lists** (`[String!]`, not `[String!]!`),
+so they now have an absent state. Omitting one leaves it alone; sending a list replaces it wholesale;
+`null` and `[]` both mean "empty". A role's authorities **may** be emptied, because a role that
+grants nothing is a thing you can create. An OAuth client's redirect URIs and scopes **may not** —
+an empty redirect allowlist matches nothing, so the client could never complete an authorization.
+
+`updateProfile` now takes `request: ProfileUpdateRequest!` instead of bare `firstName` / `lastName`
+arguments. Its behaviour is unchanged: it writes only the names you send, and `""` still clears one.
+:::
 
 #### Fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}
 

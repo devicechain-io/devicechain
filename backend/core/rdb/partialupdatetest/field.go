@@ -145,6 +145,31 @@ func RequiredStringField[R any](name, seeded, replace string,
 	}
 }
 
+// EmptiableStringField describes a string column WHOSE EMPTY VALUE IS A LEGITIMATE STATE
+// and whose model cannot spell NULL — so it is Clearable, and its cleared reading is ""
+// rather than NullMarker, because there is no NULL for a clear to reach.
+//
+// 🔴 IT IS THE THIRD SHAPE, AND IT IS NEITHER OF THE TWO EITHER SIDE OF IT.
+// OptionalStringField reads back NullMarker once cleared, which needs a nullable column
+// AND a model that can represent the null. RequiredStringField REFUSES the clear, which
+// is right for a vocabulary value whose zero is not a state the entity may be in. This
+// one is for the column where "" is a value the create path already writes and the read
+// path already renders — a person's display name, a tier's colour meaning "no pill" —
+// where refusing the clear would delete a capability rather than convert one.
+//
+// It arrived here from two service test packages that had each written it, which is the
+// duplication this shared package exists to end: a second copy is how two call sites come
+// to disagree about what "cleared" looks like.
+func EmptiableStringField[R any](name, seeded, replace string,
+	pick func(*R) *dcgraphql.OptionalString) Field {
+	return Field{
+		Name: name, Seeded: seeded, Replace: replace, Cleared: "",
+		Kind:    Clearable,
+		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
+		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
+	}
+}
+
 // RequiredBoolField describes a NOT NULL boolean column. The harness's uniform value
 // representation is a string, so the seeded/replace readings are "true"/"false" and the
 // setter parses — which is what lets one registry hold booleans beside strings without a
