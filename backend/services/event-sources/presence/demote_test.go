@@ -245,9 +245,15 @@ func (w *cancellingWaiter) Wait(ctx context.Context) error {
 // NATS StatefulSet alongside the Deployments — so it waits too.
 func TestStartDelayAppliesOnlyToTheAmbiguousReasons(t *testing.T) {
 	const jitter = 7 * time.Second
+	// 🔴 THE EXPECTED VALUES ARE LITERALS, NOT `SettleWindow + jitter`. Built from the
+	// constant they are checking, they agree with it wherever it moves — including to
+	// zero, which turns the settle window into no window at all and lets a fleet be
+	// released the instant a bring-up races its own broker roll. The number is published
+	// as two minutes in the concept page, the deployment page and the chart, so it is
+	// asserted here the way a reader would check it.
 	require.Equal(t, jitter, StartDelayFor(TapOffDisabled, jitter))
-	require.Equal(t, SettleWindow+jitter, StartDelayFor(TapOffNoSystemCredential, jitter))
-	require.Equal(t, SettleWindow+jitter, StartDelayFor(TapOffBrokerUnreachable, jitter))
+	require.Equal(t, 2*time.Minute+jitter, StartDelayFor(TapOffNoSystemCredential, jitter))
+	require.Equal(t, 2*time.Minute+jitter, StartDelayFor(TapOffBrokerUnreachable, jitter))
 	// The remaining reasons never start a drain at all, but the function is total and must
 	// not accidentally hand one of them the settle window if that ever changes.
 	for _, r := range []TapOffReason{TapOffNoGatewaySource, TapOffNoServiceAuth,

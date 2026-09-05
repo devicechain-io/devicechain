@@ -87,14 +87,22 @@ func (g *ReadinessGate) Validator() *auth.Validator {
 // reports healthy. Refusing keeps the pod out of Service endpoints, which is the
 // loud failure. A service that legitimately verifies nothing says so once, at its
 // call site, with MarkReadyWithoutAuthSurface.
-func (g *ReadinessGate) MarkReady(validator *auth.Validator) {
+//
+// 🔑 IT RETURNS WHETHER THE GATE IS OPEN AFTERWARDS, and that is not decoration. A
+// caller that treats "I called MarkReady" as "auth is live" writes down the one
+// claim this refusal exists to falsify — StartAuthGate did exactly that, logging
+// "Auth is live" and leaving its retry loop on a refused call. The answer is the
+// gate's state, not this call's effect, so a second call on an already-open gate
+// still says true.
+func (g *ReadinessGate) MarkReady(validator *auth.Validator) bool {
 	if validator == nil {
 		log.Error().Msg("Refusing to open the readiness gate with no JWT validator: this service " +
 			"would report ready and then refuse every authenticated request. A service that verifies " +
 			"no tokens must open the gate with MarkReadyWithoutAuthSurface instead.")
-		return
+		return g.Ready()
 	}
 	g.markReady(validator)
+	return true
 }
 
 // MarkReadyWithoutAuthSurface opens the gate with NO validator, for a service whose
@@ -157,9 +165,10 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 // validator, so setting the gauge because MarkReady was CALLED would export a 1
 // for a service the gate had just kept closed — the exported signal disagreeing
 // with the probe that governs traffic.
-func (ms *Microservice) MarkReady(validator *auth.Validator) {
-	ms.Readiness.MarkReady(validator)
+func (ms *Microservice) MarkReady(validator *auth.Validator) bool {
+	open := ms.Readiness.MarkReady(validator)
 	ms.exportReady()
+	return open
 }
 
 // MarkReadyWithoutAuthSurface opens the gate for a service that verifies no tokens
@@ -182,6 +191,16 @@ func (ms *Microservice) exportReady() {
 // rather than failing its startup (amends ADR-008's fatal startup fetch), without
 // ever processing traffic before auth is live. The loop exits on ctx
 // cancellation (shutdown).
+//
+// 🔴 THE LOOP ENDS WHEN THE GATE IS OPEN, NOT WHEN THE FETCH RETURNED NO ERROR, and
+// those came apart the moment MarkReady gained the right to refuse. A fetch yielding
+// (nil, nil) would otherwise leave this loop, log "Auth is live", and leave the gate
+// shut for the life of the process with nothing retrying and nothing counting it —
+// a success message asserting exactly the invariant that had just failed.
+// FetchValidatorForInstance cannot produce that pair today, so this is latent rather
+// than live; it is fixed anyway because "the caller happens not to do it" is the
+// property that keeps changing, and a log line that states an invariant nothing
+// enforces is the shape this whole change exists to remove.
 func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Context) (*auth.Validator, error)) {
 	go func() {
 		for {
@@ -189,15 +208,19 @@ func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Co
 				ms.authAttempts.Inc()
 			}
 			validator, err := fetch(ctx)
-			if err == nil {
-				ms.MarkReady(validator)
+			if err == nil && ms.MarkReady(validator) {
 				log.Info().Msg("Auth is live; service is ready and the data plane is released.")
 				return
 			}
 			if ms.authFailures != nil {
 				ms.authFailures.Inc()
 			}
-			log.Warn().Err(err).Msg("Auth not yet live; service remains not-ready (degraded). Retrying.")
+			if err != nil {
+				log.Warn().Err(err).Msg("Auth not yet live; service remains not-ready (degraded). Retrying.")
+			} else {
+				log.Error().Msg("The auth bootstrap reported success but produced no validator, so the " +
+					"readiness gate stayed CLOSED and this service is NOT ready. Retrying.")
+			}
 			select {
 			case <-ctx.Done():
 				return

@@ -85,8 +85,15 @@ the MQTT gateway devices connect through lives in that same broker, so while it 
 device is connected through it either. The tap gives the connection thirty seconds to come up before
 it decides, so this is half a minute with no system-account connection rather than one failed
 attempt — long enough that a broker restarting alongside the services is not mistaken for one that
-is gone. It then waits the same two-minute settle window a missing credential gets before its first
-release pass.
+is gone.
+
+**For this one reason the two-minute wait is a re-check rather than a delay**, and the difference is
+what stops the release outliving the outage it was a response to. Before each pass — the first one
+included — the service re-dials the system account. If the broker answers, nothing is released: the
+service **exits, and the pod restarts** with a tap that comes up normally. So a broker that returns
+produces a pod restart, not a fleet of released devices. The other two release paths cannot work
+this way and do not need to: both are configuration read once at startup, so what their window waits
+for is the *replacement pod* a configuration change rolls out.
 
 Nothing is released automatically for the remaining three: no source pointed at the platform broker,
 no service-to-service configuration, and a subscription that fails on a connection that *did* reach

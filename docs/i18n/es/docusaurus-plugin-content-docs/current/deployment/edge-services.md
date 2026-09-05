@@ -220,6 +220,16 @@ credencial que el broker rechaza. La pasarela MQTT vive en ese mismo broker, as�
 inalcanzable no hay ningún dispositivo conectado por ella — la liberación no es una suposición sobre
 la flota, es la única lectura compatible con que el broker no esté.
 
+Es además la única de las tres cuya verdad puede cambiar con el pod ya en marcha, así que es la única
+que sigue preguntando. **Cada pasada de liberación vuelve a marcar primero contra la cuenta de
+sistema, la primera incluida. Si el broker responde, no se libera nada: el servicio termina y el pod
+se reinicia**, y el reemplazo marca contra el broker con normalidad y ejecuta su toma. Un broker que
+vuelve aparece por tanto como un reinicio de pod, no como una flota de dispositivos liberados. Sin
+eso la liberación seguiría sin más: la pasada recorre lo que esté afirmado *ahora* según el intervalo
+de reconciliación, así que con pares que siguen afirmando, las dos se turnarían sobre cada fila
+indefinidamente, y en el hueco entre ambas el barrido de inactividad marcaría fuera de línea a los
+dispositivos conectados pero silenciosos.
+
 Lo que **no** libera es una suscripción que falla sobre una conexión que sí alcanzó el broker —esa sí
 es mala suerte de esa réplica en concreto, sus pares pueden estar leyendo los avisos perfectamente— y
 las dos razones que significan que esta instancia no tiene toma que ejecutar: ninguna fuente apuntando
@@ -231,7 +241,9 @@ Tres propiedades de la liberación automática conviene conocerlas antes de depe
 - **Una credencial ausente y un broker inalcanzable esperan dos minutos primero.** Un arranque inicial
   acuña esa credencial y renueva el broker en la misma ejecución que pone en marcha los servicios, así
   que cualquiera de los dos puede ser simplemente una carrera con esa ejecución y no una condición
-  permanente. Un `enabled: false` escrito es inequívoco, y actúa de inmediato.
+  permanente. Un `enabled: false` escrito es inequívoco, y actúa de inmediato. Para el broker la
+  espera es además una **comprobación** —véase más arriba—; para la credencial no puede serlo, porque
+  la configuración se lee una sola vez al arrancar y un cambio renueva el pod.
 - **Necesita una fuente de pasarela y configuración de llamadas entre servicios propias**: algo bajo
   lo que emitir, y una manera de enumerar inquilinos y leer la proyección. Sin eso no se ejecuta en
   absoluto. Registra que no lo hizo y apunta a la puerta manual, que entonces es la única.

@@ -899,6 +899,14 @@ functionalAreas:
     # MQTT gateway lives in that same broker, so while it is unreachable no device is
     # connected through it either.
     #
+    # 🔑 FOR THE BROKER CASE THE WINDOW IS A RE-CHECK, NOT JUST A WAIT, and that is what
+    # keeps the release from outliving the outage. Every pass first re-dials the system
+    # account; if it answers, this pod does not release anything — it EXITS so the
+    # kubelet restarts it and the tap comes up normally. Expect a pod restart, not a
+    # release, when a broker comes back. The other two release paths cannot re-check:
+    # both are configuration read once at startup, so the pod is replaced rather than
+    # repaired, which is what their window waits for.
+    #
     # The remaining bail paths do NOT release: no gateway source, no service-to-service
     # calls, and a subscription that fails on a connection that DID reach the broker.
     # Release those by hand with `dcctl presence demote`.

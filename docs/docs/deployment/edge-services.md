@@ -201,6 +201,15 @@ that is down, or a credential it refuses. The MQTT gateway lives in that same br
 unreachable no device is connected through it either — the release is not a guess about the fleet,
 it is the only reading consistent with the broker being gone.
 
+It is also the only one of the three whose truth can change while the pod is running, so it is the
+only one that keeps asking. **Every release pass re-dials the system account first, the first pass
+included. If the broker answers, nothing is released — the service exits and the pod restarts**, and
+the replacement dials the broker normally and runs its tap. A returning broker therefore shows up as
+a pod restart, not as a fleet of released devices. Without that, the release would simply continue:
+the pass walks whatever is asserted *now* on the reconcile interval, so with peers still asserting,
+the two would take turns on every row indefinitely, and in the gap between them the inactivity sweep
+would mark connected-but-quiet devices offline.
+
 What does **not** release is a failed subscription on a connection that did reach the broker — that
 one really is this replica's own bad luck, its peers may be reading advisories perfectly well — and
 the two reasons that mean this instance has no tap to run at all: no source pointed at the platform
@@ -212,7 +221,8 @@ Three properties of the automatic release are worth knowing before relying on it
 - **A missing credential and an unreachable broker wait two minutes first.** A bring-up mints that
   credential and rolls the broker in the same run that starts the services, so either can simply be a
   race with the run rather than a standing condition. A written `enabled: false` is unambiguous, and
-  acts immediately.
+  acts immediately. For the broker the wait is also a **re-check** — see above; for the credential it
+  cannot be, because configuration is read once at startup and a change rolls the pod.
 - **It needs a gateway source and service-to-service configuration of its own** — something to emit
   under, and a way to enumerate tenants and read the projection. Without them it does not run at all.
   It logs that it did not, and points at the manual door, which is then the only one.

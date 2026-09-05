@@ -94,7 +94,7 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	conn, err := dialSystemAccount(ctx, infra.Nats)
+	conn, err := dialSystemAccount(ctx, infra.Nats, systemAccountConnectWait)
 	if err != nil {
 		log.Error().Err(err).Msg("Could not reach the NATS system account within the startup window; " +
 			"broker-asserted MQTT presence is OFF for this pod's run and MQTT presence stays inferred. " +
@@ -209,10 +209,18 @@ func tapOff(reason presence.TapOffReason) {
 // broker, so if it is unreachable no device is connected through it, and a graceful broker
 // shutdown announces no deaths at all.
 //
-// The residual replica-local case — this pod's network is broken while its peers are fine
-// — is self-limiting rather than argued away: the drain emits over the DATA-PLANE
-// connection, so a pod that cannot reach the broker cannot write the demotions either. Its
-// rows stay asserted and the next pass retries them.
+// The residual replica-local case — this pod's network is broken while its peers are fine —
+// is bounded by the RECHECK, not by the emit path. An earlier version of this comment said
+// the drain was self-limiting because it emits over the data-plane connection, so a pod
+// that cannot reach the broker cannot write the demotions either. That is only true of a
+// PERSISTENT partition, and the common case is a transient one: the data-plane connection
+// is MaxReconnects(-1) with a multi-megabyte reconnect buffer, so a publish made while
+// partitioned has its ack time out but is QUEUED and flushed on reconnect. The flushed
+// demotion is harmless — it names the session the row had when it was written, and a
+// demotion is refused unless it is newer than the row it releases — but "harmless once
+// it lands" is not the same claim, and the one that does the work is recheckBroker below:
+// a pod whose network recovers finds the broker reachable at its next pass and restarts
+// instead of draining.
 //
 // A failed subscription on a CONNECTED conn stays replica-local. It gets the gauge and
 // nothing more; the gauge is what makes it visible, which is the actual gap it had.
@@ -228,29 +236,49 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 		return
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	if !drainEndpointsReady(GatewaySourceId, infra.ServiceAuth.Secret, infra.UserManagement.Hostname,
-		infra.UserManagement.Port, infra.DeviceState.Hostname, infra.DeviceState.Port) {
+	drainReady := drainEndpointsReady(GatewaySourceId, infra.ServiceAuth.Secret, infra.UserManagement.Hostname,
+		infra.UserManagement.Port, infra.DeviceState.Hostname, infra.DeviceState.Port)
+	rechecks := reason == presence.TapOffBrokerUnreachable
+
+	if !drainReady {
 		log.Warn().Str("reason", string(reason)).Msg("Broker-asserted MQTT presence is off, so the devices " +
 			"this instance already asserted are frozen at their last known state — but releasing them " +
 			"automatically needs a gateway source and service-to-service calls, which are not configured. " +
 			"Release them with `dcctl presence demote` instead.")
-		return
+		// 🔑 AN UNREACHABLE BROKER STILL GETS ITS LOOP, WITH NOTHING TO DRAIN. The recheck
+		// is what ends this pod's tap-less run when the broker comes back, and that is
+		// worth having on an instance whose drain has nowhere to read from — otherwise the
+		// one reason that can REPAIR ITSELF is the one silently left to a manual restart.
+		if !rechecks {
+			return
+		}
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{})}
 
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
-		[]string{string(auth.TenantRead), string(auth.StateRead)})
-	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-	dsURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
-	reader := presence.NewGraphQLProjectionReader(client, dsURL)
+	var runner presence.DemoteRunner
+	if drainReady {
+		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
+			[]string{string(auth.TenantRead), string(auth.StateRead)})
+		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		dsURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
+		reader := presence.NewGraphQLProjectionReader(client, dsURL)
 
-	demoter := presence.NewDemoter(GatewaySourceId,
-		presence.NewPublisher(GatewaySourceId, presenceEmitter(), presence.Gate(ingestGate), presenceMetrics()),
-		presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
-		reader, presence.NewRateWaiter(),
-		presence.DemoterMetrics{Released: PresenceReleasedCounter, Remaining: PresenceStillAssertedGauge})
+		runner = presence.NewDemoter(GatewaySourceId,
+			presence.NewPublisher(GatewaySourceId, presenceEmitter(), presence.Gate(ingestGate), presenceMetrics()),
+			presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
+			reader, presence.NewRateWaiter(),
+			presence.DemoterMetrics{Released: PresenceReleasedCounter, Remaining: PresenceStillAssertedGauge})
+	}
+	if rechecks {
+		nats := infra.Nats
+		runner = recheckBroker{
+			drain:     runner,
+			reachable: func(ctx context.Context) bool { return systemAccountReachable(ctx, nats) },
+			recovered: restartForRecoveredBroker,
+		}
+	}
 
 	interval := Configuration.BrokerPresence.ReconcileInterval()
 	delay := presence.StartDelayFor(reason, demotionStartJitter())
@@ -258,9 +286,72 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 		// Closes rt.stopped so stopBrokerPresence's five-second wait does not fire on every
 		// disabled instance — the runtime is shaped the same whether the tap ran or not.
 		defer close(rt.stopped)
-		presence.RunDemoteLoop(runCtx, demoter, interval, delay, time.Now)
+		presence.RunDemoteLoop(runCtx, runner, interval, delay, time.Now)
 	}()
 	brokerPresence = rt
+}
+
+// recheckBroker turns the settle window from a DELAY into a QUESTION, for the one bail
+// reason that can stop being true while this process is still running.
+//
+// 🔴 THE WINDOW ONLY EVER POSTPONED THE DECISION; NOTHING RE-EXAMINED IT. The drain ticks
+// on the reconcile interval for the pod's lifetime and walks whatever this source has
+// asserted RIGHT NOW with a fresh clock, so once the broker returned, the reclassification
+// that was correct at minute two became wrong at minute three and stayed wrong. With peers
+// it is worse than churn: the peers' reconcile re-asserts every row this pod releases, the
+// drain releases them again on the next tick, and in the gap between the two the inactivity
+// sweep marks every CONNECTED-but-quiet device offline — two durable events and a false
+// offline alarm per device, per cycle, for as long as the pod lives. Alone, it is a fleet
+// demoted once and quiet devices reading offline while connected until someone restarts
+// the pod. Both are the "standing condition" the comment, the docs and the chart all
+// asserted and nothing checked.
+//
+// 🔑 THE RECHECK IS A DIAL, NOT A FLAG, because a dial is the only thing that answers the
+// question actually asked: can THIS pod reach the system account now. And it runs BEFORE
+// the first pass as well as before every later one, so the settle window now buys what it
+// always claimed to.
+//
+// drain MAY BE NIL, which means "recheck only" — an instance whose drain has no endpoints
+// to read still gets its tap back when the broker returns.
+type recheckBroker struct {
+	drain     presence.DemoteRunner
+	reachable func(context.Context) bool
+	recovered func()
+}
+
+// Run answers the question first and drains only if the answer is still "no".
+func (r recheckBroker) Run(ctx context.Context, now time.Time) error {
+	if r.reachable(ctx) {
+		r.recovered()
+		return nil
+	}
+	if r.drain == nil {
+		return nil
+	}
+	return r.drain.Run(ctx, now)
+}
+
+// restartForRecoveredBroker ends this pod's tap-less run the way this codebase already
+// ends one elsewhere: by exiting so the kubelet starts a process that will dial the broker
+// normally (lwm2m-ingest does the same for a transport that dies under it).
+//
+// 🔑 IT IS NOT A RESTART LOOP, AND THE ASYMMETRY OF THE TWO WINDOWS IS WHAT GUARANTEES
+// THAT. The recheck window is strictly SHORTER than the startup window, so any broker the
+// recheck can reach is one the next startup dial — which is given more time, not less —
+// would also have reached. A broker flapping faster than the settle window can still
+// restart this pod repeatedly, but that is a broker outage, the exit is clean, and the
+// kubelet backs the restarts off; the alternative is the unbounded per-device event churn
+// above, which nothing backs off.
+//
+// It is deliberate that this kills a pod that is ingesting perfectly well. Presence is an
+// enrichment of ingest, so this is the one place that trade is inverted — and it is
+// inverted because the state being ended is not "a capability is missing", it is "this pod
+// is actively writing wrong presence for the whole fleet".
+func restartForRecoveredBroker() {
+	log.Fatal().Msg("The NATS system account is reachable again, but this pod's presence tap has been " +
+		"OFF since startup and cannot be re-established in place — so it has been releasing devices " +
+		"its peers immediately re-assert. Terminating so the pod is restarted and the tap comes up " +
+		"normally.")
 }
 
 // reasonIsInstanceWide reports whether a bail reason is evidence about the INSTANCE rather
@@ -455,7 +546,7 @@ func stopBrokerPresence() {
 // data-plane one authenticates as the shared service user, this one as the
 // system-account user. They are distinct connections because they are distinct
 // accounts; a single connection lands in one account only.
-func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration) (*nats.Conn, error) {
+func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait time.Duration) (*nats.Conn, error) {
 	url := fmt.Sprintf("nats://%s:%d", cfg.Hostname, cfg.Port)
 	opts := []nats.Option{
 		nats.Name("event-sources-presence"),
@@ -498,11 +589,24 @@ func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration) (*nats
 	if err != nil {
 		return nil, err
 	}
-	if err := waitConnected(ctx, conn, systemAccountConnectWait); err != nil {
+	if err := waitConnected(ctx, conn, wait); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	return conn, nil
+}
+
+// systemAccountReachable answers the recheck's one question — can this pod reach the
+// system account NOW — and closes whatever it opened. It is a real dial rather than a
+// cached flag because a cached flag would be the same mistake the settle window was: an
+// answer from a moment that has passed.
+func systemAccountReachable(ctx context.Context, cfg config.NatsConfiguration) bool {
+	conn, err := dialSystemAccount(ctx, cfg, systemAccountRecheckWait)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // systemAccountConnectWait is how long the initial system-account dial is given to
@@ -515,7 +619,19 @@ func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration) (*nats
 // delays neither the probes nor ingest.
 //
 // A var, not a const, so a test can wait milliseconds for a broker it knows is not there.
+// TestTheDialWindowsAreTheOnesEveryComentQuotes pins the value itself against a literal,
+// because a test that shortens the var cannot also be the thing that proves it is 30s.
 var systemAccountConnectWait = 30 * time.Second
+
+// systemAccountRecheckWait bounds one recheck dial (see recheckBroker).
+//
+// 🔴 IT MUST STAY STRICTLY SHORTER THAN systemAccountConnectWait, and that is a
+// correctness property rather than a tuning choice: the recheck's "yes" causes a process
+// restart, and the restarted process decides with the LONGER window. Shorter here means a
+// broker the recheck accepted is one the next startup dial also accepts, so the restart
+// converges. Invert the two and a broker reachable in 30s but not in 5 would restart this
+// pod on every pass forever. Pinned by TestTheRecheckWindowIsShorterThanTheStartupWindow.
+var systemAccountRecheckWait = 5 * time.Second
 
 // waitConnected blocks until the connection has actually reached the broker, or until
 // the deadline or ctx says it will not.
