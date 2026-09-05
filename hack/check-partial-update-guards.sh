@@ -58,9 +58,15 @@ EXPECTED_UPDATE_SCHEMAS=7
 # mutation_block prints the body of a schema's `type Mutation { … }`, by brace depth rather
 # than by looking for a closing brace in column one — a schema that indents its type
 # declarations would defeat the latter silently.
+#
+# The `implements` clause is accepted (`type Mutation implements Node {`) because a root
+# written that way would otherwise be INVISIBLE: the service would be skipped rather than
+# reported, which is the certified-by-omission failure this whole guard exists to remove.
+# It costs one alternation, and the self-test's new-service plant uses that form so the
+# branch is exercised rather than merely written.
 mutation_block() {
   awk '
-    !inb && /type[[:space:]]+Mutation[[:space:]]*\{/ { inb = 1; d = 1; next }
+    !inb && /type[[:space:]]+Mutation([[:space:]]+implements[^{]*)?[[:space:]]*\{/ { inb = 1; d = 1; next }
     inb {
       o = gsub(/\{/, "{"); c = gsub(/\}/, "}")
       d += o - c
@@ -78,11 +84,39 @@ update_fields() {
     sed -E 's/[[:space:]]*[(:]$//; s/^[[:space:]]+//' | sort -u
 }
 
+# mutation_signatures prints one line per mutation field, with a multi-line argument list
+# JOINED back onto its field. Every signature on this platform fits one line today, and
+# that is exactly why the join is here rather than a note saying so: a check whose reach
+# depends on how a schema happens to be FORMATTED overstates itself, and the one thing this
+# PR is about is a guard that claims more than it does. Reformatting
+#
+#	updateDashboard(
+#	    token: String!
+#	    request: DashboardCreateRequest!
+#	): Dashboard!
+#
+# must not become a way past it.
+#
+# `#` comments are stripped first, so a parenthesis in prose cannot unbalance the depth
+# count and swallow the rest of the block.
+mutation_signatures() {
+  mutation_block "$1" | awk '
+    { sub(/#.*/, "") }
+    { joined = (joined == "" ? $0 : joined " " $0)
+      o = gsub(/\(/, "("); c = gsub(/\)/, ")")
+      d += o - c
+      if (d < 0) { d = 0 }
+      if (d == 0) { print joined; joined = "" }
+    }
+    END { if (joined != "") print joined }
+  '
+}
+
 # create_request_updates prints any update* mutation still taking a *CreateRequest — the
-# full-replace shape this arc converted away from. It reads the mutation block, so a create
-# mutation naming its own input is not a match.
+# full-replace shape this arc converted away from. It reads whole signatures, so neither a
+# line break nor a create mutation naming its own input changes the answer.
 create_request_updates() {
-  mutation_block "$1" | grep -E '^[[:space:]]+update[A-Za-z0-9_]*[[:space:]]*\(' |
+  mutation_signatures "$1" | grep -E '^[[:space:]]*update[A-Za-z0-9_]*[[:space:]]*\(' |
     grep 'CreateRequest' || true
 }
 
@@ -106,27 +140,62 @@ embed_var() {
   return 1
 }
 
-# sdl_guard_wired requires the SDL-default assertion to be called in a test file that also
-# names THIS schema's embed variable. Two separate greps would accept a service that wires
-# the guard for one of its schemas and not the other, which is exactly the half-wiring a
-# multi-schema service produces.
+# 🔴 EVERY "IS IT WIRED" QUESTION BELOW IS ASKED OF CODE, NEVER OF A DOC COMMENT, AND THAT
+# DISTINCTION IS NOT PEDANTRY — IT WAS A LIVE HOLE IN THE FIRST VERSION OF THIS SCRIPT.
+#
+# Both checks used to be a plain grep for the assertion's NAME. Every module that wires
+# these guards also documents them, in a sentence of the form "The guard itself is core's
+# putest.AssertEveryUpdateTakesADedicatedRequest — it enumerates…". So replacing only the
+# CALL — `putest.AssertEveryUpdateTakesADedicatedRequest(` → `putest.assertRemoved(` — left
+# the doc comment behind, the grep matched it, and this guard reported the surface as
+# guarded WITH THE GUARD REMOVED. The same held for the SDL side: commenting out one
+# `SDL: SchemaContent` row of a multi-schema wiring left the Go suite green (the other row
+# still ran) and left the commented text for the grep to find.
+#
+# The self-test could not see either, because its plant was STRONGER than the defect: it
+# used `s/…/g`, which deletes the doc comment along with the call, so it certified a
+# property this script did not have. A control built out of the thing under test cannot
+# notice that thing moving — plant the WEAKEST mutant that should still be caught.
+#
+# So `//` and everything after it is stripped before matching, and a call is required to
+# look like one (a `(` after the name). Stripping is deliberately crude — it also blanks a
+# `//` inside a string literal — because every way of being wrong here is a FALSE NEGATIVE
+# on the wiring, i.e. this guard failing loudly on a wired module, never passing an
+# unwired one.
+code_of() {
+  sed -E 's@//.*@@' "$1"
+}
+
+# sdl_guard_wired requires the SDL-default assertion to be CALLED in a test file that also
+# names THIS schema's embed variable, both on non-comment lines. Two independent greps
+# would accept a service that wires the guard for one of its schemas and not the other,
+# which is exactly the half-wiring a multi-schema service produces.
 sdl_guard_wired() {
-  local svcdir="$1" var="$2" f
+  local svcdir="$1" var="$2" f code
   while read -r f; do
     [ -n "$f" ] || continue
-    if grep -qE "SDL:[[:space:]]*$var([^A-Za-z0-9_]|\$)" "$f"; then
+    code="$(code_of "$f")"
+    printf '%s\n' "$code" | grep -qE 'AssertNoUpdateInputCarriesAnSDLDefault[[:space:]]*\(' || continue
+    if printf '%s\n' "$code" | grep -qE "SDL:[[:space:]]*$var([^A-Za-z0-9_]|\$)"; then
       return 0
     fi
   done < <(grep -rl 'AssertNoUpdateInputCarriesAnSDLDefault' "$svcdir" --include='*_test.go' 2>/dev/null || true)
   return 1
 }
 
-# surface_guard_wired requires the exhaustiveness guard somewhere in the module. It is a
-# per-Api claim rather than a per-schema one — user-management wires it twice, for its
-# admin Service and its identity Manager — so the module is the right granularity for a
-# check that deliberately does not know which Api backs which schema.
+# surface_guard_wired requires the exhaustiveness guard to be CALLED somewhere in the
+# module. It is a per-Api claim rather than a per-schema one — user-management wires it
+# twice, for its admin Service and its identity Manager — so the module is the right
+# granularity for a check that deliberately does not know which Api backs which schema.
 surface_guard_wired() {
-  grep -rq 'AssertEveryUpdateTakesADedicatedRequest' "$1" --include='*_test.go' 2>/dev/null
+  local svcdir="$1" f
+  while read -r f; do
+    [ -n "$f" ] || continue
+    if code_of "$f" | grep -qE 'AssertEveryUpdateTakesADedicatedRequest[[:space:]]*\('; then
+      return 0
+    fi
+  done < <(grep -rl 'AssertEveryUpdateTakesADedicatedRequest' "$svcdir" --include='*_test.go' 2>/dev/null || true)
+  return 1
 }
 
 check_tree() {
@@ -197,16 +266,23 @@ self_test() {
   fi
   echo "  ok   a clean tree passes"
 
-  # Each defect is planted ALONE. A self-test that plants several at once is satisfied by
-  # a checker that finds any one of them.
+  # Each defect is planted ALONE, and each is the WEAKEST mutant that should still be
+  # caught. A plant stronger than the defect certifies a property the guard does not have:
+  # case 4 below used to delete the doc comment along with the call, which is precisely how
+  # this script shipped a version that a doc comment alone could satisfy.
 
   # 1. 🔴 THE HOLE THIS GUARD EXISTS FOR: a whole new service with an update mutation and
   #    no partial-update test of any kind. No per-service guard can see this, because the
   #    observation is that the module calls nothing.
+  #
+  #    The root is written `type Mutation implements …` deliberately: that form is what
+  #    mutation_block's alternation exists for, and a plant using it means the branch is
+  #    EXERCISED — if discovery could not see it, this service would be skipped, the check
+  #    would pass, and this case would report the miss.
   rm -rf "$tmp/t"; cp -r backend "$tmp/t"
   mkdir -p "$tmp/t/services/widget-registry/graphql"
   cat >"$tmp/t/services/widget-registry/graphql/schema.graphql" <<'EOF'
-type Mutation {
+type Mutation implements Node {
     createWidget(request: WidgetCreateRequest!): Widget!
     updateWidget(token: String!, request: WidgetUpdateRequest!): Widget!
 }
@@ -245,17 +321,47 @@ EOF
   fi
   echo "  ok   a schema whose own SDL variable is not wired is caught"
 
-  # 4. The exhaustiveness guard deleted from a service that serves updates.
+  # 4. 🔴 THE CALL REMOVED AND THE DOC COMMENT LEFT BEHIND — the weakest mutant, and the
+  #    one an earlier version of this script passed. Every module wiring these guards also
+  #    documents them by name ("The guard itself is core's putest.Assert…"), so a plain
+  #    grep for the name matches the prose after the call is gone. Only the `(` form is
+  #    replaced here; line 14 of the target file still names the assertion in full.
   rm -rf "$tmp/t"; cp -r backend "$tmp/t"
-  sed -i 's/AssertEveryUpdateTakesADedicatedRequest/assertRemoved/g' \
+  sed -i 's/putest\.AssertEveryUpdateTakesADedicatedRequest(/putest.assertRemoved(/' \
     "$tmp/t/services/dashboard-management/model/partial_update_guard_test.go"
-  if check_tree "$tmp/t" >/dev/null 2>&1; then
-    echo "🔴 self-test: a deleted exhaustiveness guard was not caught" >&2
+  if ! grep -q 'AssertEveryUpdateTakesADedicatedRequest' \
+    "$tmp/t/services/dashboard-management/model/partial_update_guard_test.go"; then
+    echo "🔴 self-test: the plant removed the doc comment too, so it is stronger than the" >&2
+    echo "   defect and proves nothing about a comment-only match" >&2
     return 1
   fi
-  echo "  ok   a deleted exhaustiveness guard is caught"
+  if check_tree "$tmp/t" >/dev/null 2>&1; then
+    echo "🔴 self-test: an exhaustiveness guard whose CALL was removed, doc comment intact," >&2
+    echo "   was not caught — a doc comment is satisfying this check" >&2
+    return 1
+  fi
+  echo "  ok   a removed call is caught though the doc comment still names it"
 
-  # 5. An update mutation reverted to a shared create input — the shape the whole arc
+  # 5. 🔴 THE SAME DEFECT ON THE SDL SIDE: one row of a multi-schema wiring COMMENTED OUT.
+  #    The Go suite stays green — the admin row still runs — and the commented text is
+  #    still there for a naive grep to find, while user-management's tenant plane and its
+  #    updateProfile are guarded by nothing.
+  rm -rf "$tmp/t"; cp -r backend "$tmp/t"
+  sed -i 's@^\(\t*\)Name: "tenant", SDL: SchemaContent@\1// Name: "tenant", SDL: SchemaContent@' \
+    "$tmp/t/services/user-management/graphql/partial_update_sdl_default_test.go"
+  if ! grep -q 'SDL: SchemaContent' \
+    "$tmp/t/services/user-management/graphql/partial_update_sdl_default_test.go"; then
+    echo "🔴 self-test: the plant deleted the row rather than commenting it out, so it is" >&2
+    echo "   stronger than the defect and proves nothing" >&2
+    return 1
+  fi
+  if check_tree "$tmp/t" >/dev/null 2>&1; then
+    echo "🔴 self-test: a COMMENTED-OUT UpdateSchema row still counted as wiring" >&2
+    return 1
+  fi
+  echo "  ok   a commented-out UpdateSchema row does not count as wiring"
+
+  # 6. An update mutation reverted to a shared create input — the shape the whole arc
   #    converted away from, and the one that reintroduces full-replace semantics.
   rm -rf "$tmp/t"; cp -r backend "$tmp/t"
   sed -i 's/updateDashboard(token: String!, request: DashboardUpdateRequest!/updateDashboard(token: String!, request: DashboardCreateRequest!/' \
@@ -266,7 +372,31 @@ EOF
   fi
   echo "  ok   an update* mutation taking a *CreateRequest is caught"
 
-  # 6. THE FLOOR ITSELF. Discovery that reads nothing must FAIL rather than report a clean
+  # 7. THE SAME DEFECT SPREAD OVER SEVERAL LINES, which is what a reformat produces and
+  #    what a line-shaped grep walks straight past. The check joins a signature before
+  #    reading it precisely so its reach does not depend on formatting.
+  rm -rf "$tmp/t"; cp -r backend "$tmp/t"
+  python3 - "$tmp/t/services/dashboard-management/graphql/schema.graphql" <<'EOF'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding="utf-8").read()
+old = "    updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!"
+new = ("    updateDashboard(\n"
+       "        token: String!\n"
+       "        request: DashboardCreateRequest!\n"
+       "        expectedUpdatedAt: String\n"
+       "    ): Dashboard!")
+assert old in s, "the self-test's reformat plant no longer matches the schema"
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+EOF
+  if check_tree "$tmp/t" >/dev/null 2>&1; then
+    echo "🔴 self-test: a *CreateRequest on its own line was not caught — the check is" >&2
+    echo "   line-shaped and claims more than it does" >&2
+    return 1
+  fi
+  echo "  ok   a *CreateRequest split across lines is caught"
+
+  # 8. THE FLOOR ITSELF. Discovery that reads nothing must FAIL rather than report a clean
   #    sweep over zero schemas — the failure every loop-shaped guard has by default.
   rm -rf "$tmp/t"; mkdir -p "$tmp/t/services"
   if check_tree "$tmp/t" >/dev/null 2>&1; then

@@ -177,18 +177,14 @@ so it works on all three routes (ingress, port-forward, and the console's dev pr
 
 ### How much of a record an update writes {#an-update-replaces-the-whole-record}
 
-**Two update contracts are in service at once, and which one a mutation is on is visible in its
-signature.** A mutation taking a dedicated `*UpdateRequest` is a **partial update**; one taking its
-`create*` sibling's input is a **full replace**. Those are the only two contracts — but two caveats
-sit on top of them and both bite in practice. A handful of individual fields behave differently from
-the mutation they are on — a required field on a partial update that cannot be cleared, a secret on
-a full replace that is kept rather than erased, one that behaves in exactly the opposite way; those
-are enumerated [below](#where-the-default-does-not-hold). And the **token** inside a full-replace
-payload has its own rules, which differ by mutation — see
-[the token argument](#the-token-argument-names-the-record). Read both tables before you automate
-anything.
+**Every `update*` mutation is a partial update, and there is only one contract.** Each takes a
+dedicated `*UpdateRequest` — never the `create*` sibling's input — and each distinguishes three
+states rather than two. Individual **fields** can still deviate: a required reference that refuses
+to be cleared, a write-only secret, a field that is not in the update input at all. Those are
+enumerated [below](#where-the-default-does-not-hold), and that table is the complete list. Read it
+before you automate anything.
 
-A **partial update** distinguishes three states rather than two:
+The three states:
 
 | What you send for a field | What happens to the stored value |
 | --- | --- |
@@ -209,31 +205,16 @@ mutation {
 }
 ```
 
-A **full replace** rebuilds the stored record from the request: every field you send is written,
-and **every field you leave out is erased**. The mutation returns the entity and succeeds, so a
-field you did not mean to clear is gone with nothing to indicate it. The remedy is to read the
-entity first, change what you mean to change, and send the whole thing back:
+**Send only what you mean to change.** Reading the record first and posting the whole thing back is
+the habit a full-replace API teaches, and it is the wrong one here: it is more work, it widens the
+window in which you overwrite a concurrent edit, and on a write-only `secret` field it is actively
+destructive — see [the warning below](#where-the-default-does-not-hold).
 
-```graphql
-query {
-  metricDefinitionsByToken(tokens: ["inlet-temp"]) {
-    token name description unit minValue maxValue metadata
-    deviceProfile { token }
-  }
-}
-```
-
-Two consequences of a full replace worth planning around. Because the write covers every field,
-**two people editing one entity overwrite each other across all of it**, not only where they
-overlap. And because the update input is the create input, it carries a **token**, which is where
-the two contracts differ most.
-
-Three mutations guard against the first of those, and all three are partial updates rather than
-full replaces: `updateDashboard`, `updateConnector` and `updateAiProvider` take an optional
-`expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read it.
-Pass the `updatedAt` you last read; omit it for last-write-wins. A partial update narrows the
-overlap two writers can have, but it does not remove it — two people editing the same field still
-need this.
+Concurrency is the one thing a partial update narrows without removing: two writers who touch
+different fields no longer clobber each other, but two who touch the same field still do.
+`updateDashboard`, `updateConnector` and `updateAiProvider` take an optional `expectedUpdatedAt`
+and refuse the write when the stored timestamp has moved since you read it. Pass the `updatedAt`
+you last read; omit it for last-write-wins.
 
 #### The `token` argument names the record {#the-token-argument-names-the-record}
 
@@ -320,8 +301,8 @@ token; those have all converted.
 
 ### Where the default does not hold {#where-the-default-does-not-hold}
 
-Every exception in the API this release serves, on top of the partial/full-replace split above.
-Anything not named here follows its mutation's contract.
+Every field-level exception in the API this release serves. Anything not named here follows the
+three states above: absent leaves it alone, `null` clears it, a value sets it.
 
 | Field | What omitting it does |
 | --- | --- |
@@ -339,22 +320,23 @@ Anything not named here follows its mutation's contract.
 For every write-only `secret` field, **`""` deletes the stored credential.** You cannot read a
 secret back, so there is nothing to re-send; the API's answer is that omitting it keeps it.
 
-This matters because the full-replace advice above — read the entity, send the whole thing back —
-pushes you toward filling in every field. Doing that for a secret you did not mean to touch, by
-sending `secret: ""`, deletes the stored credential and the mutation returns success. A connector
-whose credential is gone starts failing authentication on every outbound dispatch. **Leave the
-field out.**
+This matters because "read the record, change one thing, send it all back" is the habit a
+full-replace API teaches, and clients written against one still do it. Filling in every field means
+sending `secret: ""` for a credential you never meant to touch — which deletes it, and the mutation
+returns success. A connector whose credential is gone starts failing authentication on every
+outbound dispatch. **Leave the field out.**
 
-All three now sit on partial updates, so `null` deletes the credential as well. That is the
-platform's ordinary meaning of a null rather than an exception: a null clears the field it names.
-The **inversion** these fields used to carry — where null preserved and only `""` deleted — is gone.
+`null` deletes the credential too. That is the platform's ordinary meaning of a null rather than an
+exception: a null clears the field it names. The **inversion** these fields used to carry — where
+null preserved and only `""` deleted — is gone.
 :::
 
 ### Which mutations are partial updates {#which-mutations-are-partial-updates}
 
-Partial updates are arriving one area at a time rather than all at once, and the intent is to
-convert the rest before 1.0. In device-management, **every `update*`** now takes a dedicated
-`*UpdateRequest`:
+**All of them.** The conversion arrived one area at a time and is now complete, so this section is
+no longer a roster of which mutations are safe — it is a record of what changed in each area, kept
+because a client written against the old behaviour needs to know. In device-management, **every
+`update*`** takes a dedicated `*UpdateRequest`:
 
 `updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
 `updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
@@ -396,23 +378,25 @@ and `kind`/`endpoint` respectively are validated as a **pair** against the value
 hold — so naming one of a pair re-checks the stored other, and a change that would leave the record
 unusable is refused at the write rather than at first use.
 
-**Anything not named above is still a full replace, and the way to tell is the mutation's own
-signature rather than a list here.** This page used to carry a second list of the areas that had
-not converted yet, and it was wrong every time an area landed — it named four while saying three.
-The signature cannot drift from the code that way: `request: FooCreateRequest` is a full replace and
-`request: FooUpdateRequest` is a partial update. The caution immediately below is where that reading
-needs care.
+**That is the whole update surface.** No `update*` mutation anywhere takes a `create*` sibling's
+input, so there is no remaining mutation for a reader to check against a list — and this page no
+longer carries one. Earlier releases did, twice: first a roster of the areas that had not converted
+(wrong every time one landed), then a rule saying the signature was the authority because two
+contracts coexisted. Both were written to be drift-proof and both drifted, in the same way — their
+premise expired. What replaced them is the [three states](#an-update-replaces-the-whole-record) and
+the [field-level exceptions](#where-the-default-does-not-hold), which is a statement about the
+whole API rather than a partition of it.
 
-:::caution[The signature is a reliable NO, and only a partly reliable YES]
-`request: FooCreateRequest` always means a full replace, and that direction never lies — a shared
-create input cannot express the difference between omitted and cleared, whatever anyone intends.
+:::caution[Check the schema for what a given input declares]
+One contract does not mean every input takes every field. What an update *can* express is what its
+`*UpdateRequest` declares, and some fields are deliberately absent — `deviceTypeToken` on
+`updateNotificationPolicy`, `memberType` on `updateEntityGroup`, `credentialType` on
+`updateProvisioningProfile` — because no request for them would be accepted. Others accept a value
+but refuse a `null`.
 
-The other direction is not proof on its own. A dedicated `*UpdateRequest` is what a partial update
-needs, not what makes one: an input can carry its own type and still write every field it declares
-from whatever you happened to send. Four of user-management's admin mutations were exactly that
-until this release — separate inputs, so the payload could drop the token, with full-replace fields
-inside — which is why the [schema you downloaded](#download-the-schemas) is the authority rather
-than the signature.
+The [schema you downloaded](#download-the-schemas) is the authority for the first of those; the
+[exceptions table](#where-the-default-does-not-hold) is the authority for the second. Neither is a
+question about which contract the mutation is on, because there is only one.
 :::
 
 :::note[This changed for user-management]
