@@ -11,6 +11,7 @@ import (
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"gorm.io/datatypes"
 )
 
@@ -38,8 +39,8 @@ import (
 // requires each to take a dedicated *UpdateRequest, with deviceProfile named as the one
 // exemption — so a family added tomorrow on the full-replace shape fails there whether or
 // not anyone remembers to write it down here.
-func partialUpdateFamilies() []partialUpdateFamily {
-	return []partialUpdateFamily{
+func partialUpdateFamilies() []putest.Family[*Api] {
+	return []putest.Family[*Api]{
 		deviceTypeFamily(),
 		assetTypeFamily(),
 		customerTypeFamily(),
@@ -103,16 +104,16 @@ const (
 // field renamed on the request is a compile error here, not a silently skipped test.
 func brandedFields[R any](
 	name, description, imageURL, icon, bg, fg, border, metadata func(*R) *dcgraphql.OptionalString,
-) []partialField {
-	return []partialField{
-		optionalStringField("name", brandedSeed.Name, "Renamed", name),
-		optionalStringField("description", brandedSeed.Description, "Rewritten", description),
-		optionalStringField("imageUrl", brandedSeed.ImageUrl, "https://example.invalid/new.png", imageURL),
-		optionalStringField("icon", brandedSeed.Icon, "wrench", icon),
-		optionalStringField("backgroundColor", brandedSeed.Bg, "#aaaaaa", bg),
-		optionalStringField("foregroundColor", brandedSeed.Fg, "#bbbbbb", fg),
-		optionalStringField("borderColor", brandedSeed.Border, "#cccccc", border),
-		optionalStringField("metadata", brandedSeed.Metadata, `{"fleet":"south"}`, metadata),
+) []putest.Field {
+	return []putest.Field{
+		putest.OptionalStringField("name", brandedSeed.Name, "Renamed", name),
+		putest.OptionalStringField("description", brandedSeed.Description, "Rewritten", description),
+		putest.OptionalStringField("imageUrl", brandedSeed.ImageUrl, "https://example.invalid/new.png", imageURL),
+		putest.OptionalStringField("icon", brandedSeed.Icon, "wrench", icon),
+		putest.OptionalStringField("backgroundColor", brandedSeed.Bg, "#aaaaaa", bg),
+		putest.OptionalStringField("foregroundColor", brandedSeed.Fg, "#bbbbbb", fg),
+		putest.OptionalStringField("borderColor", brandedSeed.Border, "#cccccc", border),
+		putest.OptionalStringField("metadata", brandedSeed.Metadata, `{"fleet":"south"}`, metadata),
 	}
 }
 
@@ -138,12 +139,12 @@ func readBranded(named *namedBrandedRow) map[string]string {
 // their own tests, not by this one.
 const seededPropertySchema = `[{"name":"vendor","dataType":"STRING"}]`
 
-func assetTypeFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "assetType",
-		token:   "at-1",
-		migrate: []any{&AssetType{}, &Asset{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func assetTypeFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "assetType",
+		Token:   "at-1",
+		Migrate: []any{&AssetType{}, &Asset{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateAssetType(ctx, &AssetTypeCreateRequest{
 				Token: "at-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
@@ -154,19 +155,19 @@ func assetTypeFamily() partialUpdateFamily {
 				t.Fatalf("seed asset type: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AssetTypesByToken(ctx, []string{"at-1"})
 			e := requireOne(t, "asset type", rows, err)
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["propertySchema"] = jsonStr(e.PropertySchema)
 			return got
 		},
-		newRequest: func() any { return new(AssetTypeUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(AssetTypeUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAssetType(ctx, token, req.(*AssetTypeUpdateRequest))
 			return err
 		},
-		fields: append(brandedFields(
+		Fields: append(brandedFields(
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -180,19 +181,19 @@ func assetTypeFamily() partialUpdateFamily {
 			// omitted keeps it, null withdraws it, a value replaces it wholesale. It is
 			// listed here rather than folded into brandedFields because only asset types
 			// have one.
-			optionalStringField("propertySchema", seededPropertySchema,
+			putest.OptionalStringField("propertySchema", seededPropertySchema,
 				`[{"name":"vendor","dataType":"STRING"},{"name":"stages","dataType":"INT"}]`,
 				func(r *AssetTypeUpdateRequest) *dcgraphql.OptionalString { return &r.PropertySchema }),
 		),
 	}
 }
 
-func customerTypeFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "customerType",
-		token:   "ct-1",
-		migrate: []any{&CustomerType{}, &Customer{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func customerTypeFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "customerType",
+		Token:   "ct-1",
+		Migrate: []any{&CustomerType{}, &Customer{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{
 				Token: "ct-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
@@ -202,17 +203,17 @@ func customerTypeFamily() partialUpdateFamily {
 				t.Fatalf("seed customer type: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.CustomerTypesByToken(ctx, []string{"ct-1"})
 			e := requireOne(t, "customer type", rows, err)
 			return readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 		},
-		newRequest: func() any { return new(CustomerTypeUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(CustomerTypeUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateCustomerType(ctx, token, req.(*CustomerTypeUpdateRequest))
 			return err
 		},
-		fields: brandedFields(
+		Fields: brandedFields(
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *CustomerTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -225,12 +226,12 @@ func customerTypeFamily() partialUpdateFamily {
 	}
 }
 
-func areaTypeFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "areaType",
-		token:   "art-1",
-		migrate: []any{&AreaType{}, &Area{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func areaTypeFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "areaType",
+		Token:   "art-1",
+		Migrate: []any{&AreaType{}, &Area{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{
 				Token: "art-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
@@ -240,17 +241,17 @@ func areaTypeFamily() partialUpdateFamily {
 				t.Fatalf("seed area type: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AreaTypesByToken(ctx, []string{"art-1"})
 			e := requireOne(t, "area type", rows, err)
 			return readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 		},
-		newRequest: func() any { return new(AreaTypeUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(AreaTypeUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAreaType(ctx, token, req.(*AreaTypeUpdateRequest))
 			return err
 		},
-		fields: brandedFields(
+		Fields: brandedFields(
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AreaTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ImageUrl },
@@ -272,12 +273,12 @@ func areaTypeFamily() partialUpdateFamily {
 
 func memberFields[R any](refName string,
 	name, description, metadata, typeToken func(*R) *dcgraphql.OptionalString,
-) []partialField {
-	return []partialField{
-		optionalStringField("name", memberSeed.Name, "Renamed", name),
-		optionalStringField("description", memberSeed.Description, "Rewritten", description),
-		optionalStringField("metadata", memberSeed.Metadata, `{"fleet":"south"}`, metadata),
-		requiredRefField(refName, seededTypeToken, otherTypeToken, typeToken),
+) []putest.Field {
+	return []putest.Field{
+		putest.OptionalStringField("name", memberSeed.Name, "Renamed", name),
+		putest.OptionalStringField("description", memberSeed.Description, "Rewritten", description),
+		putest.OptionalStringField("metadata", memberSeed.Metadata, `{"fleet":"south"}`, metadata),
+		putest.RequiredRefField(refName, seededTypeToken, otherTypeToken, typeToken),
 	}
 }
 
@@ -290,12 +291,12 @@ func readMember(named *namedRow, refName, refToken string) map[string]string {
 	}
 }
 
-func assetFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "asset",
-		token:   "a-1",
-		migrate: []any{&AssetType{}, &Asset{}, &AssetTypeVersion{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func assetFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "asset",
+		Token:   "a-1",
+		Migrate: []any{&AssetType{}, &Asset{}, &AssetTypeVersion{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			// BOTH types declare AND PUBLISH the same contract. Publishing is what makes
 			// properties settable at all, and giving both types the same one is what lets
 			// the retype field move the asset between them without its already-stored
@@ -319,7 +320,7 @@ func assetFamily() partialUpdateFamily {
 				t.Fatalf("seed asset: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AssetsByToken(ctx, []string{"a-1"})
 			e := requireOne(t, "asset", rows, err)
 			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "assetTypeToken",
@@ -327,12 +328,12 @@ func assetFamily() partialUpdateFamily {
 			got["properties"] = jsonStr(e.Properties)
 			return got
 		},
-		newRequest: func() any { return new(AssetUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(AssetUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateAsset(ctx, token, req.(*AssetUpdateRequest))
 			return err
 		},
-		fields: append(memberFields("assetTypeToken",
+		Fields: append(memberFields("assetTypeToken",
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
@@ -341,7 +342,7 @@ func assetFamily() partialUpdateFamily {
 			// The property document is nullable — clearing it is how an asset stops
 			// carrying properties — so it takes the honoured-null path, not the refused
 			// one its assetTypeToken neighbour takes.
-			optionalStringField("properties", seededProperties, `{"vendor":"Northwind"}`,
+			putest.OptionalStringField("properties", seededProperties, `{"vendor":"Northwind"}`,
 				func(r *AssetUpdateRequest) *dcgraphql.OptionalString { return &r.Properties }),
 		),
 	}
@@ -350,12 +351,12 @@ func assetFamily() partialUpdateFamily {
 // seededProperties fills seededPropertySchema's one declared property.
 const seededProperties = `{"vendor":"Acme"}`
 
-func customerFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "customer",
-		token:   "c-1",
-		migrate: []any{&CustomerType{}, &Customer{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func customerFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "customer",
+		Token:   "c-1",
+		Migrate: []any{&CustomerType{}, &Customer{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed customer type %q: %v", tok, err)
@@ -369,18 +370,18 @@ func customerFamily() partialUpdateFamily {
 				t.Fatalf("seed customer: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.CustomersByToken(ctx, []string{"c-1"})
 			e := requireOne(t, "customer", rows, err)
 			return readMember(&namedRow{e.NamedEntity, e.Metadata}, "customerTypeToken",
 				refTokenOf(t, e.CustomerType == nil, func() string { return e.CustomerType.Token }))
 		},
-		newRequest: func() any { return new(CustomerUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(CustomerUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateCustomer(ctx, token, req.(*CustomerUpdateRequest))
 			return err
 		},
-		fields: memberFields("customerTypeToken",
+		Fields: memberFields("customerTypeToken",
 			func(r *CustomerUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *CustomerUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *CustomerUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
@@ -389,12 +390,12 @@ func customerFamily() partialUpdateFamily {
 	}
 }
 
-func areaFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "area",
-		token:   "ar-1",
-		migrate: []any{&AreaType{}, &Area{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func areaFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "area",
+		Token:   "ar-1",
+		Migrate: []any{&AreaType{}, &Area{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed area type %q: %v", tok, err)
@@ -408,18 +409,18 @@ func areaFamily() partialUpdateFamily {
 				t.Fatalf("seed area: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AreasByToken(ctx, []string{"ar-1"})
 			e := requireOne(t, "area", rows, err)
 			return readMember(&namedRow{e.NamedEntity, e.Metadata}, "areaTypeToken",
 				refTokenOf(t, e.AreaType == nil, func() string { return e.AreaType.Token }))
 		},
-		newRequest: func() any { return new(AreaUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(AreaUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateArea(ctx, token, req.(*AreaUpdateRequest))
 			return err
 		},
-		fields: memberFields("areaTypeToken",
+		Fields: memberFields("areaTypeToken",
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
@@ -434,14 +435,14 @@ func areaFamily() partialUpdateFamily {
 // reason the others' are, and carries more weight: a re-type may move the device
 // onto a different profile, which is what the post-commit roster fan-out watches.
 
-func deviceFamily() partialUpdateFamily {
+func deviceFamily() putest.Family[*Api] {
 	const externalIdSeed = "ext-original"
-	return partialUpdateFamily{
-		name:  "device",
-		token: "d-1",
-		migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+	return putest.Family[*Api]{
+		Name:  "device",
+		Token: "d-1",
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed device type %q: %v", tok, err)
@@ -455,7 +456,7 @@ func deviceFamily() partialUpdateFamily {
 				t.Fatalf("seed device: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.DevicesByToken(ctx, []string{"d-1"})
 			e := requireOne(t, "device", rows, err)
 			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "deviceTypeToken",
@@ -463,19 +464,19 @@ func deviceFamily() partialUpdateFamily {
 			got["externalId"] = nullStr(e.ExternalId)
 			return got
 		},
-		newRequest: func() any { return new(DeviceUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(DeviceUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateDevice(ctx, token, req.(*DeviceUpdateRequest))
 			return err
 		},
-		fields: append(
+		Fields: append(
 			memberFields("deviceTypeToken",
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceTypeToken },
 			),
-			optionalStringField("externalId", externalIdSeed, "ext-new",
+			putest.OptionalStringField("externalId", externalIdSeed, "ext-new",
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.ExternalId }),
 		),
 	}
@@ -493,18 +494,18 @@ func deviceFamily() partialUpdateFamily {
 // refusing the whole update, a re-point moving it — stay in
 // api_device_type_partial_update_test.go, which is where a reader looks for them.
 
-func deviceTypeFamily() partialUpdateFamily {
+func deviceTypeFamily() putest.Family[*Api] {
 	const (
 		manufacturerSeed = "Acme"
 		modelSeed        = "A-1000"
 		profileSeed      = "profile-a"
 	)
-	return partialUpdateFamily{
-		name:  "deviceType",
-		token: "dt-1",
-		migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+	return putest.Family[*Api]{
+		Name:  "deviceType",
+		Token: "dt-1",
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{profileSeed, "profile-b"} {
 				if _, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed profile %q: %v", tok, err)
@@ -521,7 +522,7 @@ func deviceTypeFamily() partialUpdateFamily {
 				t.Fatalf("seed device type: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.DeviceTypesByToken(ctx, []string{"dt-1"})
 			e := requireOne(t, "device type", rows, err)
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
@@ -537,12 +538,12 @@ func deviceTypeFamily() partialUpdateFamily {
 			}
 			return got
 		},
-		newRequest: func() any { return new(DeviceTypeUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(DeviceTypeUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateDeviceType(ctx, token, req.(*DeviceTypeUpdateRequest))
 			return err
 		},
-		fields: append(
+		Fields: append(
 			brandedFields(
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
@@ -553,13 +554,13 @@ func deviceTypeFamily() partialUpdateFamily {
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.BorderColor },
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 			),
-			optionalStringField("manufacturer", manufacturerSeed, "Globex",
+			putest.OptionalStringField("manufacturer", manufacturerSeed, "Globex",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Manufacturer }),
-			optionalStringField("model", modelSeed, "B-2000",
+			putest.OptionalStringField("model", modelSeed, "B-2000",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Model }),
 			// NULLABLE, unlike every other reference in this file: detaching a profile is
 			// a state a device type can legitimately be in.
-			optionalStringField("profileToken", profileSeed, "profile-b",
+			putest.OptionalStringField("profileToken", profileSeed, "profile-b",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ProfileToken }),
 		),
 	}
@@ -614,7 +615,7 @@ const (
 	otherProfileToken  = "prof-b"
 )
 
-func metricDefinitionFamily() partialUpdateFamily {
+func metricDefinitionFamily() putest.Family[*Api] {
 	const (
 		metricKeySeed   = "temperature"
 		dataTypeSeed    = string(MetricDouble)
@@ -627,11 +628,11 @@ func metricDefinitionFamily() partialUpdateFamily {
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
 	)
-	return partialUpdateFamily{
-		name:    "metricDefinition",
-		token:   "md-1",
-		migrate: deviceProfileTables,
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "metricDefinition",
+		Token:   "md-1",
+		Migrate: deviceProfileTables,
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			twoProfiles(t, api, ctx)
 			minValue, maxValue := minSeed, maxSeed
 			if _, err := api.CreateMetricDefinition(ctx, &MetricDefinitionCreateRequest{
@@ -643,7 +644,7 @@ func metricDefinitionFamily() partialUpdateFamily {
 				t.Fatalf("seed metric definition: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.MetricDefinitionsByToken(ctx, []string{"md-1"})
 			e := requireOne(t, "metric definition", rows, err)
 			return map[string]string{
@@ -660,42 +661,42 @@ func metricDefinitionFamily() partialUpdateFamily {
 				"metadata":           jsonStr(e.Metadata),
 			}
 		},
-		newRequest: func() any { return new(MetricDefinitionUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(MetricDefinitionUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateMetricDefinition(ctx, token, req.(*MetricDefinitionUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			requiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
+		Fields: []putest.Field{
+			putest.RequiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceProfileToken }),
-			requiredStringField("metricKey", metricKeySeed, "humidity",
+			putest.RequiredStringField("metricKey", metricKeySeed, "humidity",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.MetricKey }),
-			optionalStringField("name", nameSeed, "Renamed",
+			putest.OptionalStringField("name", nameSeed, "Renamed",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", descriptionSeed, "Rewritten",
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
 			// The replacement is another STORABLE type. INT is; STRING is not, and using it
 			// would make this property fail for a reason that belongs to the vocabulary
 			// check rather than to the fold under test.
-			requiredStringField("dataType", dataTypeSeed, string(MetricInt),
+			putest.RequiredStringField("dataType", dataTypeSeed, string(MetricInt),
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.DataType }),
-			optionalStringField("unit", unitSeed, "kW",
+			putest.OptionalStringField("unit", unitSeed, "kW",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Unit }),
-			optionalFloat64Field("minValue", minSeed, -40,
+			putest.OptionalFloat64Field("minValue", minSeed, -40,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.MinValue }),
-			optionalFloat64Field("maxValue", maxSeed, 125,
+			putest.OptionalFloat64Field("maxValue", maxSeed, 125,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.MaxValue }),
-			optionalStringField("enum", enumSeed, `["cold","hot"]`,
+			putest.OptionalStringField("enum", enumSeed, `["cold","hot"]`,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Enum }),
-			optionalStringField("descriptor", descriptorSeed, "wot:HumidityProperty",
+			putest.OptionalStringField("descriptor", descriptorSeed, "wot:HumidityProperty",
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Descriptor }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
 }
 
-func commandDefinitionFamily() partialUpdateFamily {
+func commandDefinitionFamily() putest.Family[*Api] {
 	const (
 		commandKeySeed  = "drive"
 		schemaSeed      = `[{"name":"speed","dataType":"DOUBLE"}]`
@@ -703,11 +704,11 @@ func commandDefinitionFamily() partialUpdateFamily {
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
 	)
-	return partialUpdateFamily{
-		name:    "commandDefinition",
-		token:   "cd-1",
-		migrate: deviceProfileTables,
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "commandDefinition",
+		Token:   "cd-1",
+		Migrate: deviceProfileTables,
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			twoProfiles(t, api, ctx)
 			if _, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{
 				Token: "cd-1", DeviceProfileToken: seededProfileToken, CommandKey: commandKeySeed,
@@ -717,7 +718,7 @@ func commandDefinitionFamily() partialUpdateFamily {
 				t.Fatalf("seed command definition: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.CommandDefinitionsByToken(ctx, []string{"cd-1"})
 			e := requireOne(t, "command definition", rows, err)
 			return map[string]string{
@@ -729,23 +730,23 @@ func commandDefinitionFamily() partialUpdateFamily {
 				"metadata":           jsonStr(e.Metadata),
 			}
 		},
-		newRequest: func() any { return new(CommandDefinitionUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(CommandDefinitionUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateCommandDefinition(ctx, token, req.(*CommandDefinitionUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			requiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
+		Fields: []putest.Field{
+			putest.RequiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceProfileToken }),
-			requiredStringField("commandKey", commandKeySeed, "steer",
+			putest.RequiredStringField("commandKey", commandKeySeed, "steer",
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.CommandKey }),
-			optionalStringField("name", nameSeed, "Renamed",
+			putest.OptionalStringField("name", nameSeed, "Renamed",
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", descriptionSeed, "Rewritten",
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			optionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
+			putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
@@ -755,13 +756,13 @@ func commandDefinitionFamily() partialUpdateFamily {
 //
 // The only family here whose fields are not independent: entityGroupToken and
 // entityGroupVersion are one SCOPE validated as a pair, so they are declared with
-// pairedWith and the harness moves them together. See partialField.partner.
+// putest.PairedWith and the harness moves them together. See putest.Field.Partner.
 //
 // The fixture publishes two dynamic entity groups because the pair's replacement value
 // has to be a scope that EXISTS: moving the token to grp-b and the version to 2 in one
 // request means grp-b@2 must resolve, which is why grp-b is published twice.
 
-func detectionRuleFamily() partialUpdateFamily {
+func detectionRuleFamily() putest.Family[*Api] {
 	const (
 		definitionSeed     = `{"type":"threshold","metric":"temp","op":">","value":30}`
 		definitionReplace  = `{"type":"threshold","metric":"temp","op":">","value":45}`
@@ -772,19 +773,19 @@ func detectionRuleFamily() partialUpdateFamily {
 		scopeGroupSeed     = "grp-a"
 		scopeGroupReplace  = "grp-b"
 	)
-	scopeToken, scopeVersion := pairedWith(
-		optionalStringField("entityGroupToken", scopeGroupSeed, scopeGroupReplace,
+	scopeToken, scopeVersion := putest.PairedWith(
+		putest.OptionalStringField("entityGroupToken", scopeGroupSeed, scopeGroupReplace,
 			func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.EntityGroupToken }),
-		optionalInt32Field("entityGroupVersion", 1, 2,
+		putest.OptionalInt32Field("entityGroupVersion", 1, 2,
 			func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalInt32 { return &r.EntityGroupVersion }),
 	)
-	return partialUpdateFamily{
-		name:  "detectionRule",
-		token: "dr-1",
-		migrate: append(append([]any{}, deviceProfileTables...),
+	return putest.Family[*Api]{
+		Name:  "detectionRule",
+		Token: "dr-1",
+		Migrate: append(append([]any{}, deviceProfileTables...),
 			&EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 			&EntityAttribute{}),
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			twoProfiles(t, api, ctx)
 			publishDynamicGroupVersions(t, api, ctx, scopeGroupSeed, 1)
 			publishDynamicGroupVersions(t, api, ctx, scopeGroupReplace, 2)
@@ -798,7 +799,7 @@ func detectionRuleFamily() partialUpdateFamily {
 				t.Fatalf("seed detection rule: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.DetectionRulesByToken(ctx, []string{"dr-1"})
 			e := requireOne(t, "detection rule", rows, err)
 			got := map[string]string{
@@ -823,25 +824,25 @@ func detectionRuleFamily() partialUpdateFamily {
 			}
 			return got
 		},
-		newRequest: func() any { return new(DetectionRuleUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(DetectionRuleUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateDetectionRule(ctx, token, req.(*DetectionRuleUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			requiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
+		Fields: []putest.Field{
+			putest.RequiredRefField("deviceProfileToken", seededProfileToken, otherProfileToken,
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceProfileToken }),
-			optionalStringField("name", nameSeed, "Renamed",
+			putest.OptionalStringField("name", nameSeed, "Renamed",
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", descriptionSeed, "Rewritten",
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			requiredStringField("definition", definitionSeed, definitionReplace,
+			putest.RequiredStringField("definition", definitionSeed, definitionReplace,
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.Definition }),
-			requiredBoolField("enabled", true,
+			putest.RequiredBoolField("enabled", true,
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
-			optionalStringField("authoringGraph", authoringGraphSeed, `{"nodes":[{"id":"n1"}],"edges":[]}`,
+			putest.OptionalStringField("authoringGraph", authoringGraphSeed, `{"nodes":[{"id":"n1"}],"edges":[]}`,
 				func(r *DetectionRuleUpdateRequest) *dcgraphql.OptionalString { return &r.AuthoringGraph }),
 			scopeToken,
 			scopeVersion,
@@ -885,7 +886,7 @@ func publishDynamicGroupVersions(t *testing.T, api *Api, ctx context.Context, to
 
 // ─── GeoFence ──────────────────────────────────────────────────────────────
 
-func geoFenceFamily() partialUpdateFamily {
+func geoFenceFamily() putest.Family[*Api] {
 	const (
 		nameSeed        = "Original name"
 		descriptionSeed = "Original description"
@@ -901,11 +902,11 @@ func geoFenceFamily() partialUpdateFamily {
 		-84.3872, 33.7486, -84.3879, 33.7483, -84.3881, 33.7490))
 	replaceGeometry := canonicalGeometryFor(polygonGeometry(-84.40, 33.75, -84.39, 33.76,
 		-84.38, 33.74, -84.40, 33.75))
-	return partialUpdateFamily{
-		name:    "geoFence",
-		token:   "gf-1",
-		migrate: []any{&GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "geoFence",
+		Token:   "gf-1",
+		Migrate: []any{&GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{
 				Token: "gf-1", Geometry: seededGeometry,
 				Name: strp(nameSeed), Description: strp(descriptionSeed), Metadata: strp(metadataSeed),
@@ -913,7 +914,7 @@ func geoFenceFamily() partialUpdateFamily {
 				t.Fatalf("seed geofence: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.GeoFencesByToken(ctx, []string{"gf-1"})
 			e := requireOne(t, "geofence", rows, err)
 			return map[string]string{
@@ -923,19 +924,19 @@ func geoFenceFamily() partialUpdateFamily {
 				"metadata":    jsonStr(e.Metadata),
 			}
 		},
-		newRequest: func() any { return new(GeoFenceUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(GeoFenceUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateGeoFence(ctx, token, req.(*GeoFenceUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			optionalStringField("name", nameSeed, "Renamed",
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", nameSeed, "Renamed",
 				func(r *GeoFenceUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", descriptionSeed, "Rewritten",
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *GeoFenceUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			requiredStringField("geometry", seededGeometry, replaceGeometry,
+			putest.RequiredStringField("geometry", seededGeometry, replaceGeometry,
 				func(r *GeoFenceUpdateRequest) *dcgraphql.OptionalString { return &r.Geometry }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *GeoFenceUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
@@ -956,13 +957,13 @@ func canonicalGeometryFor(raw string) string {
 // input is exercisable: a static group has no selector, so seeding one would leave the
 // only field with three interesting states out of the harness entirely.
 
-func entityGroupFamily() partialUpdateFamily {
+func entityGroupFamily() putest.Family[*Api] {
 	const selectorSeed = `attr["climate"] == "arid"`
-	return partialUpdateFamily{
-		name:    "entityGroup",
-		token:   "eg-1",
-		migrate: []any{&EntityGroup{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "entityGroup",
+		Token:   "eg-1",
+		Migrate: []any{&EntityGroup{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			dynamic := string(MembershipDynamic)
 			selector := selectorSeed
 			if _, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
@@ -975,19 +976,19 @@ func entityGroupFamily() partialUpdateFamily {
 				t.Fatalf("seed entity group: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.EntityGroupsByToken(ctx, []string{"eg-1"})
 			e := requireOne(t, "entity group", rows, err)
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["selector"] = nullStr(e.Selector)
 			return got
 		},
-		newRequest: func() any { return new(EntityGroupUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(EntityGroupUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateEntityGroup(ctx, token, req.(*EntityGroupUpdateRequest))
 			return err
 		},
-		fields: append(
+		Fields: append(
 			brandedFields(
 				func(r *EntityGroupUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 				func(r *EntityGroupUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
@@ -998,7 +999,7 @@ func entityGroupFamily() partialUpdateFamily {
 				func(r *EntityGroupUpdateRequest) *dcgraphql.OptionalString { return &r.BorderColor },
 				func(r *EntityGroupUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 			),
-			requiredStringField("selector", selectorSeed, `attr["climate"] == "humid"`,
+			putest.RequiredStringField("selector", selectorSeed, `attr["climate"] == "humid"`,
 				func(r *EntityGroupUpdateRequest) *dcgraphql.OptionalString { return &r.Selector }),
 		),
 	}
@@ -1006,18 +1007,18 @@ func entityGroupFamily() partialUpdateFamily {
 
 // ─── DeviceCredential ──────────────────────────────────────────────────────
 
-func deviceCredentialFamily() partialUpdateFamily {
+func deviceCredentialFamily() putest.Family[*Api] {
 	const (
 		credentialIdSeed    = "a-minted-bearer"
 		credentialValueSeed = "s3cret-material"
 		expiresAtSeed       = "2031-03-04T05:06:07Z"
 		metadataSeed        = `{"fleet":"north"}`
 	)
-	return partialUpdateFamily{
-		name:    "deviceCredential",
-		token:   "dcred-1",
-		migrate: append(append([]any{}, deviceProfileTables...), &DeviceCredential{}),
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "deviceCredential",
+		Token:   "dcred-1",
+		Migrate: append(append([]any{}, deviceProfileTables...), &DeviceCredential{}),
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
 				t.Fatalf("seed device type: %v", err)
 			}
@@ -1037,7 +1038,7 @@ func deviceCredentialFamily() partialUpdateFamily {
 				t.Fatalf("seed device credential: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.DeviceCredentialsByToken(ctx, []string{"dcred-1"})
 			e := requireOne(t, "device credential", rows, err)
 			return map[string]string{
@@ -1050,25 +1051,25 @@ func deviceCredentialFamily() partialUpdateFamily {
 				"metadata":        jsonStr(e.Metadata),
 			}
 		},
-		newRequest: func() any { return new(DeviceCredentialUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(DeviceCredentialUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateDeviceCredential(ctx, token, req.(*DeviceCredentialUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			requiredRefField("deviceToken", "dev-a", "dev-b",
+		Fields: []putest.Field{
+			putest.RequiredRefField("deviceToken", "dev-a", "dev-b",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceToken }),
-			requiredStringField("credentialType", string(CredentialAccessToken), string(CredentialMqttBasic),
+			putest.RequiredStringField("credentialType", string(CredentialAccessToken), string(CredentialMqttBasic),
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialType }),
-			requiredStringField("credentialId", credentialIdSeed, "a-rotated-bearer",
+			putest.RequiredStringField("credentialId", credentialIdSeed, "a-rotated-bearer",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialId }),
-			optionalStringField("credentialValue", credentialValueSeed, "rotated-material",
+			putest.OptionalStringField("credentialValue", credentialValueSeed, "rotated-material",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialValue }),
-			requiredBoolField("enabled", true,
+			putest.RequiredBoolField("enabled", true,
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
-			optionalStringField("expiresAt", expiresAtSeed, "2032-01-02T03:04:05Z",
+			putest.OptionalStringField("expiresAt", expiresAtSeed, "2032-01-02T03:04:05Z",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.ExpiresAt }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
@@ -1099,7 +1100,7 @@ func nullFloatStr(v sql.NullFloat64) string {
 
 // ─── ProvisioningProfile ───────────────────────────────────────────────────
 
-func provisioningProfileFamily() partialUpdateFamily {
+func provisioningProfileFamily() putest.Family[*Api] {
 	const (
 		nameSeed        = "Original name"
 		descriptionSeed = "Original description"
@@ -1108,11 +1109,11 @@ func provisioningProfileFamily() partialUpdateFamily {
 		expiresAtSeed   = "2031-03-04T05:06:07Z"
 		metadataSeed    = `{"fleet":"north"}`
 	)
-	return partialUpdateFamily{
-		name:    "provisioningProfile",
-		token:   "pp-1",
-		migrate: append(append([]any{}, deviceProfileTables...), &ProvisioningProfile{}),
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+	return putest.Family[*Api]{
+		Name:    "provisioningProfile",
+		Token:   "pp-1",
+		Migrate: append(append([]any{}, deviceProfileTables...), &ProvisioningProfile{}),
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{"dt-a", "dt-b"} {
 				if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed device type %q: %v", tok, err)
@@ -1127,7 +1128,7 @@ func provisioningProfileFamily() partialUpdateFamily {
 				t.Fatalf("seed provisioning profile: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.ProvisioningProfilesByToken(ctx, []string{"pp-1"})
 			e := requireOne(t, "provisioning profile", rows, err)
 			return map[string]string{
@@ -1142,29 +1143,29 @@ func provisioningProfileFamily() partialUpdateFamily {
 				"metadata":        jsonStr(e.Metadata),
 			}
 		},
-		newRequest: func() any { return new(ProvisioningProfileUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(ProvisioningProfileUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateProvisioningProfile(ctx, token, req.(*ProvisioningProfileUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			optionalStringField("name", nameSeed, "Renamed",
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", nameSeed, "Renamed",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", descriptionSeed, "Rewritten",
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			requiredStringField("provisionKey", provisionKey, "rotated-key",
+			putest.RequiredStringField("provisionKey", provisionKey, "rotated-key",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ProvisionKey }),
-			requiredStringField("provisionSecret", provisionSecret, "rotated-s3cret",
+			putest.RequiredStringField("provisionSecret", provisionSecret, "rotated-s3cret",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ProvisionSecret }),
-			requiredStringField("strategy", string(ProvisionAllowNew), string(ProvisionCheckPreProvisioned),
+			putest.RequiredStringField("strategy", string(ProvisionAllowNew), string(ProvisionCheckPreProvisioned),
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Strategy }),
-			requiredRefField("deviceTypeToken", "dt-a", "dt-b",
+			putest.RequiredRefField("deviceTypeToken", "dt-a", "dt-b",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceTypeToken }),
-			requiredBoolField("enabled", true,
+			putest.RequiredBoolField("enabled", true,
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
-			optionalStringField("expiresAt", expiresAtSeed, "2032-01-02T03:04:05Z",
+			putest.OptionalStringField("expiresAt", expiresAtSeed, "2032-01-02T03:04:05Z",
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.ExpiresAt }),
-			optionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *ProvisioningProfileUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
@@ -1172,12 +1173,12 @@ func provisioningProfileFamily() partialUpdateFamily {
 
 // ─── EntityRelationshipType ────────────────────────────────────────────────
 
-func entityRelationshipTypeFamily() partialUpdateFamily {
-	return partialUpdateFamily{
-		name:    "entityRelationshipType",
-		token:   "ert-1",
-		migrate: []any{&EntityRelationshipType{}},
-		seed: func(t *testing.T, api *Api, ctx context.Context) {
+func entityRelationshipTypeFamily() putest.Family[*Api] {
+	return putest.Family[*Api]{
+		Name:    "entityRelationshipType",
+		Token:   "ert-1",
+		Migrate: []any{&EntityRelationshipType{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
 				Token: "ert-1", Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
 				Metadata: strp(memberSeed.Metadata), Tracked: true,
@@ -1185,7 +1186,7 @@ func entityRelationshipTypeFamily() partialUpdateFamily {
 				t.Fatalf("seed entity relationship type: %v", err)
 			}
 		},
-		read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.EntityRelationshipTypesByToken(ctx, []string{"ert-1"})
 			e := requireOne(t, "entity relationship type", rows, err)
 			return map[string]string{
@@ -1195,19 +1196,19 @@ func entityRelationshipTypeFamily() partialUpdateFamily {
 				"tracked":     boolStr(e.Tracked),
 			}
 		},
-		newRequest: func() any { return new(EntityRelationshipTypeUpdateRequest) },
-		update: func(api *Api, ctx context.Context, token string, req any) error {
+		NewRequest: func() any { return new(EntityRelationshipTypeUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateEntityRelationshipType(ctx, token, req.(*EntityRelationshipTypeUpdateRequest))
 			return err
 		},
-		fields: []partialField{
-			optionalStringField("name", memberSeed.Name, "Renamed",
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", memberSeed.Name, "Renamed",
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
-			optionalStringField("description", memberSeed.Description, "Rewritten",
+			putest.OptionalStringField("description", memberSeed.Description, "Rewritten",
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			optionalStringField("metadata", memberSeed.Metadata, `{"fleet":"south"}`,
+			putest.OptionalStringField("metadata", memberSeed.Metadata, `{"fleet":"south"}`,
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
-			requiredBoolField("tracked", true,
+			putest.RequiredBoolField("tracked", true,
 				func(r *EntityRelationshipTypeUpdateRequest) *dcgraphql.OptionalBool { return &r.Tracked }),
 		},
 	}

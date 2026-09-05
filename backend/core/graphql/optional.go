@@ -331,3 +331,119 @@ func ClearedFloat64() OptionalFloat64             { return OptionalFloat64{Set: 
 
 func OptionalIDOf(v graphql.ID) OptionalID { return OptionalID{Set: true, Value: &v} }
 func ClearedID() OptionalID                { return OptionalID{Set: true} }
+
+// OptionalStringList carries a nullable list-of-String input field — `[String!]` —
+// through the packer with its present/absent distinction intact.
+//
+// # 🔴 THE THREE STATES COLLAPSE TO TWO HERE, AND THAT IS THE DECISION, NOT AN OVERSIGHT
+//
+// For a scalar the three wire states map onto three stored outcomes: keep, clear, set.
+// A list has no third outcome to map onto. "Cleared" and "set to []" are the SAME
+// stored value — a list with nothing in it — so:
+//
+//	ABSENT    the field was not in the request     -> leave the stored list alone
+//	NULL      the field was sent as null           -> the list is now empty
+//	[]        the field was sent as an empty list  -> the list is now empty
+//	[a, b]    the field was sent with entries      -> the list is now exactly [a, b]
+//
+// Null and [] are therefore the same request spelled two ways, and ApplyTo returns the
+// same value for both. Do NOT "fix" this by making one of them mean "leave it alone":
+// that would put the ABSENT reading on a spelling a client can send by accident (a form
+// with nothing selected serializes as [], not as an omitted key), and the field would
+// then have no way to be emptied at all. Absent is the only thing that means "leave it
+// alone", and it is spelled by not sending the field.
+//
+// A value REPLACES the stored list wholesale. There is deliberately no append or remove
+// state: a partial update says what the field should hold afterwards, and a merge
+// semantic would make the same request produce different results depending on what was
+// already there.
+//
+// # Why only one spelling of the schema type is accepted
+//
+// ImplementsGraphQLType is handed the schema type as the library spells it, which for a
+// list is "[" + element + "]". Accepting only "[String!]" means a field declared
+// `[String]` — a list whose ENTRIES may be null — fails at SCHEMA CONSTRUCTION with
+// "can not unmarshal [String] into ...", rather than reaching UnmarshalGraphQL with a
+// nil entry this type has no honest reading for. A list of optional strings is a
+// different datatype and would need its own; there is no such field on the platform.
+//
+// The field must still be declared NULLABLE in the SDL (`[String!]`, not `[String!]!`).
+// A non-null input field with no default is REQUIRED by validation, so the absent state
+// becomes unrepresentable — the same trap as an SDL default, arriving from the other
+// direction.
+type OptionalStringList struct {
+	// Set is true only when the field was PRESENT in the request, whether its value
+	// was null, an empty list, or a list with entries.
+	Set bool
+	// Value is nil when the field was present and explicitly null, and a non-nil empty
+	// slice when it was present as []. Both mean the same thing — see ApplyTo, which
+	// folds them together — so read this through ApplyTo rather than testing it for nil
+	// and inventing a third reading.
+	Value []string
+}
+
+func (OptionalStringList) ImplementsGraphQLType(name string) bool { return name == "[String!]" }
+
+// Nullable marks this as a type that can accept an explicit null. REQUIRED — see the
+// package comment above; without it the schema will not build.
+func (OptionalStringList) Nullable() {}
+
+func (o *OptionalStringList) UnmarshalGraphQL(input any) error {
+	o.Set = true
+	if input == nil {
+		o.Value = nil
+		return nil
+	}
+	// A single value where a list is expected is coerced to a one-entry list, which is
+	// what the GraphQL specification's list input coercion says and — more to the point
+	// here — what the library's own listPacker does for an ordinary []string field.
+	// Diverging would make `tags: "a"` mean one thing on a plain field and another on
+	// this one, under the same schema.
+	entries, ok := input.([]any)
+	if !ok {
+		entries = []any{input}
+	}
+	// Non-nil even at length zero, so an empty list is not mistaken for a null by
+	// anything reading Value directly. ApplyTo treats them the same regardless.
+	out := make([]string, 0, len(entries))
+	for i, entry := range entries {
+		s, ok := entry.(string)
+		if !ok {
+			return fmt.Errorf("expected a String at index %d of [String!], got %T", i, entry)
+		}
+		out = append(out, s)
+	}
+	o.Value = out
+	return nil
+}
+
+// ApplyTo returns the list the field should hold after this request: current when the
+// field was absent, and otherwise exactly what was sent — with an explicit null and an
+// empty list both folding to an EMPTY list rather than to nil.
+//
+// The empty result is non-nil deliberately. A caller storing it into a JSON column or
+// re-marshalling it gets `[]` rather than `null`, so "the caller emptied this" and
+// "this was never set" do not become the same stored document.
+func (o OptionalStringList) ApplyTo(current []string) []string {
+	if !o.Set {
+		return current
+	}
+	if o.Value == nil {
+		return []string{}
+	}
+	return o.Value
+}
+
+// OptionalStringListOf builds a field in the "sent with a value" state.
+//
+// Passing nil or an empty slice builds the EMPTY state, which is the same request
+// ClearedStringList builds — the two spellings mean one thing for a list, and this
+// constructor does not pretend otherwise. Say ClearedStringList() when emptying is what
+// you mean, so the call site reads as the decision it is.
+func OptionalStringListOf(v []string) OptionalStringList {
+	return OptionalStringList{Set: true, Value: v}
+}
+
+// ClearedStringList builds the "sent as null" state, which EMPTIES the stored list. The
+// zero OptionalStringList is the absent state and leaves it alone.
+func ClearedStringList() OptionalStringList { return OptionalStringList{Set: true} }
