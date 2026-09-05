@@ -79,9 +79,21 @@ vez, porque un dispositivo afirmado está exento del barrido de inactividad y un
 puede cambiarlo. Así que, por los dos primeros motivos de la lista —un `enabled: false` escrito y una
 credencial de cuenta de sistema ausente—, `event-sources` devuelve por sí mismo esos dispositivos a
 presencia inferida. Ambos son configuración que todas las réplicas leen igual, que es lo que hace
-seguro automatizar la liberación de una flota entera a partir de ellos. Por los otros dos, y cuando la
-toma no consigue alcanzar el broker o falla su suscripción, no se libera nada automáticamente;
-`dcctl presence demote` es la puerta en esos casos. Ambas vías están descritas en [Devolver un dispositivo a presencia
+seguro automatizar la liberación de una flota entera a partir de ellos.
+
+**Un broker que la toma no consigue alcanzar también los libera**, y por una razón más fuerte que la
+configuración: la pasarela MQTT por la que se conectan los dispositivos vive en ese mismo broker, así
+que mientras esté inalcanzable no hay ningún dispositivo conectado por ella. La toma da treinta
+segundos a la conexión para establecerse antes de decidir, así que esto es medio minuto sin conexión
+con la cuenta de sistema, no un intento fallido —tiempo suficiente para no confundir un broker que se
+está reiniciando junto a los servicios con uno que se ha ido—. Después espera la misma ventana de
+asentamiento de dos minutos que recibe una credencial ausente antes de su primera pasada de
+liberación.
+
+Por las tres razones restantes no se libera nada automáticamente: ninguna fuente apuntando al broker
+de la plataforma, ninguna configuración de llamadas entre servicios, y una suscripción que falla sobre
+una conexión que *sí* alcanzó el broker. `dcctl presence demote` es la puerta en esos casos. Ambas
+vías están descritas en [Devolver un dispositivo a presencia
 inferida](../deployment/edge-services.md#demoting-a-device).
 
 **Dos señales le dicen que la toma no está en marcha, y cubren fallos distintos.**
