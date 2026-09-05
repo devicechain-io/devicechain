@@ -30,15 +30,22 @@ import { GraphQLRequestError } from '@devicechain/client';
  *
  *   - `err instanceof GraphQLRequestError` alone: the transport throws that same class
  *     with `status: 0` when `fetch` itself fails, so an unplugged network reads as a
- *     bad password. (The console's Login.tsx has exactly this bug today; see the
- *     residual on this app's PR. It is not inherited here.)
+ *     bad password. (This was live in the console's Login.tsx, which is where it was
+ *     found; that screen now asks the same question through its own copy of this file,
+ *     apps/console/src/i18n/signInError.ts.)
  *   - `… && err.status !== 0`: fixes the network case and keeps the class of bug. A 503
  *     from the ingress, or a 502 from a service that is down, carries a real HTTP status
  *     and no `errors` array — so it is `!== 0`, and it still reports as a bad password.
  *
  * The `errors` array is present on exactly one throw in the transport: the one taken
- * after the server returned a GraphQL body containing errors. That is the same as
- * saying "the server received this, ran it, and said no" — which is the actual question.
+ * after the server returned a GraphQL body containing errors. That is the same as saying
+ * "the resolver ran and returned an error" — the question this screen can actually ask.
+ *
+ * 🔴 IT IS NOT THE SAME AS "the server decided about these credentials". `login` returns
+ * whatever the identity lookup gives it for any non-not-found database error, so a
+ * database failing over mid-login also arrives as HTTP 200 with an `errors` array and is
+ * reported here as a bad password. Nothing on the wire distinguishes the two today, so
+ * the fix is server-side; this stays as good as the response allows.
  *
  * This app's two sign-in calls are both anonymous, so the 401 branch of the GraphQL
  * handler (which needs a bearer token to reject) cannot fire on them: a rejected login

@@ -63,6 +63,54 @@ describe('i18n config', () => {
     await i18n.changeLanguage('en');
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBeNull();
   });
+
+  // 🔴 THE LITERAL, PINNED. Two other places write this exact string out rather than
+  // importing it, and both are forced to: documentLanguage.test.ts must seed the key
+  // BEFORE config.ts is evaluated (an import would hoist the evaluation above the write
+  // and defeat the test), and /dash carries its own copy because the two apps share a
+  // localStorage origin behind the shared ingress and a viewer who picked Spanish in the
+  // console should not have to pick it again there. A rename that only touched this file
+  // would silently strand both. It reddens here instead, naming the string to change.
+  it('is keyed on the exact string /dash and the init-time test also write out', () => {
+    expect(LOCALE_STORAGE_KEY).toBe('dc.locale');
+  });
+});
+
+// 🔴 The document language is what a screen reader picks its voice from. index.html
+// ships a static lang="en", so nothing but this sync makes it true for a Spanish user —
+// and nothing else in the app or the build would notice it staying wrong.
+//
+// This describe covers the LISTENER half only. Every assertion here runs after a
+// changeLanguage, so it passes with the init-time call deleted; documentLanguage.test.ts
+// is the other half, and it has to be its own file to be one.
+describe('document language', () => {
+  it('follows the language actually in effect', async () => {
+    await i18n.changeLanguage('es');
+    expect(document.documentElement.lang).toBe('es');
+    await i18n.changeLanguage('en');
+    expect(document.documentElement.lang).toBe('en');
+  });
+
+  it('reports the RESOLVED language, not the raw request', async () => {
+    // A regional variant falls back to its base catalog (nonExplicitSupportedLngs), so
+    // the page is rendering Spanish and must say so. Announcing 'es-MX' here would be
+    // announcing a catalog that does not exist.
+    await i18n.changeLanguage('es-MX');
+    expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('follows the tenant default and the revert that ends it', async () => {
+    // The two seams that change the language without anyone touching the switcher. A
+    // listener wired to the switcher alone would leave both of these announcing the
+    // previous language.
+    applyTenantDefaultLocale('es');
+    await Promise.resolve();
+    expect(document.documentElement.lang).toBe('es');
+
+    resetToDetectedLocale();
+    await Promise.resolve();
+    expect(document.documentElement.lang).toBe(DEFAULT_LOCALE);
+  });
 });
 
 describe('setUserLocale', () => {
@@ -144,7 +192,7 @@ describe('applyTenantDefaultLocale (ADR-066 rung-2 seam)', () => {
   });
 });
 
-// 🔴 isShippedLocale must agree with changeLanguage on EVERY tag, because disagreement
+// 🔴 isShippedLocale must agree with changeLanguage on every tag it is asked about, because disagreement
 // is the whole defect class: the guard says "this renders" and the renderer says
 // otherwise. Asserted as a property over a table rather than case by case, so a future
 // i18next option change (lowerCaseLng, load:'languageOnly', a new supportedLng) moves
@@ -157,6 +205,16 @@ describe('isShippedLocale agrees with what i18next actually resolves', () => {
   // are the same observation. `ES` is the same misspelling shape and IS observable,
   // because its base is `es`, so the case property is still covered; the dedicated
   // upper-case test above covers `ES` directly.
+
+  // 🔴 AND ONE CLASS IS EXCLUDED BECAUSE THE TWO GENUINELY DISAGREE, not because it was
+  // not thought of: `ES-MX`, `eS-mx` and `ES-419` are refused here and rendered as Spanish
+  // by changeLanguage — i18next's isSupportedCode splits the tag before formatting it,
+  // while its resolve hierarchy canonicalises the whole tag first. Adding them would redden
+  // this test against a defect that is not ours and cannot be fixed here without
+  // reintroducing the hand-rolled normalisation this seam exists to be rid of. The
+  // disagreement is fail-CLOSED and its reasoning is recorded on isShippedLocale itself; if
+  // a later i18next release aligns the two, that comment and this exclusion come out
+  // together.
   const TAGS = [
     'en', 'es', 'ES',
     'es-MX', 'es-mx', 'es-419', 'es-Latn-MX',
@@ -182,6 +240,18 @@ describe('isShippedLocale agrees with what i18next actually resolves', () => {
 
   it('loses to an explicit user choice already in localStorage', () => {
     localStorage.setItem(LOCALE_STORAGE_KEY, 'en');
+    const spy = vi.spyOn(i18n, 'changeLanguage');
+    applyTenantDefaultLocale('en');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE STORED SIDE OF THE SAME QUESTION. The guard asks isShippedLocale about the
+  // stored value too, so it has to get the same answer there: `es-MX` DOES render
+  // Spanish, so it is an effective rung-1 and must block rung 2. An exact match against
+  // SUPPORTED_LOCALES calls it neither shipped nor stale, and the viewer is moved off a
+  // language they had picked.
+  it('is blocked by a stored regional variant, which is an effective choice', () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, 'es-MX');
     const spy = vi.spyOn(i18n, 'changeLanguage');
     applyTenantDefaultLocale('en');
     expect(spy).not.toHaveBeenCalled();

@@ -162,9 +162,53 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
   // ignores it), so it must NOT block an effective tenant default; treating any
   // string as "chosen" would let an ineffective rung-1 suppress an effective rung-2.
   const chosen = localStorage.getItem(LOCALE_STORAGE_KEY);
-  if (chosen && SUPPORTED_LOCALES.some((l) => l.code === chosen)) return;
-  if (!SUPPORTED_LOCALES.some((l) => l.code === locale)) return;
+  if (chosen && isShippedLocale(chosen)) return;
+  if (!isShippedLocale(locale)) return; // never select a locale that would render raw keys
   void i18n.changeLanguage(locale);
+}
+
+/**
+ * Whether a language tag resolves to a catalog this build actually ships.
+ *
+ * 🔴 IT ASKS i18next RATHER THAN RE-DERIVING THE ANSWER, and that is the whole point. The
+ * question "would this tag render one of our catalogs?" has exactly one correct answer —
+ * the one `changeLanguage` is about to act on — and any second implementation of it is a
+ * source of disagreement rather than a convenience.
+ *
+ * This seam was an EXACT match against SUPPORTED_LOCALES, which disagreed with
+ * `changeLanguage` in both directions at once. `nonExplicitSupportedLngs` is on, so a
+ * browser advertising `es-MX` renders Spanish while a TENANT DEFAULT of `es-MX` was
+ * declared unshipped and left the viewer on English — the same tag, two answers,
+ * depending only on which rung supplied it. The console's identical seam then grew a
+ * hand-rolled fold to cover the regional case (`code === tag || code.toLowerCase() ===
+ * base`) and got the other direction wrong: it lowercased where i18next does not, so `ES`
+ * was declared resolvable, handed to `changeLanguage`, and rendered `en`. Both are gone
+ * for the same reason — a fold that has now been wrong twice does not get a third copy.
+ *
+ * `isSupportedCode` applies `nonExplicitSupportedLngs` itself, so the regional fold comes
+ * for free and stays correct if that option ever changes. Measured, not assumed — `es-MX`,
+ * `es-mx`, `es-419` and `es-Latn-MX` are supported and render Spanish; `ES`, `pt-BR`,
+ * `fr-CA` and `zh-Hans-CN` are not and render English.
+ *
+ * 🔴 ONE CLASS OF TAG WHERE THE TWO STILL DISAGREE, measured the same way and recorded
+ * because "asks i18next" reads like it cannot: `ES-MX`, `eS-mx` and `ES-419` are answered
+ * NO here and rendered as Spanish by changeLanguage. It is i18next's own seam —
+ * isSupportedCode splits the tag before formatting it, while the resolve hierarchy
+ * canonicalises the whole tag first — not a fold of ours. The disagreement is FAIL-CLOSED
+ * (a tag that would have worked is refused, never a tag that would render raw keys) and no
+ * browser sends an upper-cased language subtag. Left as is rather than papered over with a
+ * second normalisation, which is the thing this function exists to not have.
+ *
+ * The full tag is still what gets passed to changeLanguage, never a folded base: i18next
+ * does the folding, so the day an `es-MX` catalog ships it is picked up with no change
+ * here.
+ */
+export function isShippedLocale(tag: string): boolean {
+  // services.languageUtils exists once init() has run, and init is synchronous here
+  // (catalogs are bundled, no async backend). Guarded anyway, and fail-CLOSED: an
+  // unanswerable question must not select a language.
+  const utils = i18n.services?.languageUtils;
+  return utils ? utils.isSupportedCode(tag) : false;
 }
 
 export default i18n;
