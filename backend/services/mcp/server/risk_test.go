@@ -317,3 +317,69 @@ func TestTheDeclarationIsPublishedOnTheToolListing(t *testing.T) {
 		}
 	}
 }
+
+// The second half of the ratchet: every served tool's LISTING is the one register
+// declared for that name, not merely a name register once used.
+//
+// 🔴 IT EXISTS BECAUSE THE NAME-BASED HALF HAS A HOLE IT CANNOT SEE. Server.AddTool
+// replaces a same-name tool instead of refusing it, so re-registering a declared name
+// the long way round swaps the handler behind a name the catalog still vouches for.
+// The negative control below runs the name-based checks over exactly that corruption
+// and shows them staying green, which is the evidence that this one is not redundant.
+func TestTheServedListingIsExactlyWhatWasDeclared(t *testing.T) {
+	names, catalog, tools := servedCatalog(t)
+	if len(names) == 0 {
+		t.Fatal("the catalog is empty, so this test is measuring nothing")
+	}
+	if altered := AlteredTools(tools, catalog); len(altered) > 0 {
+		t.Errorf("tools whose served listing is not the declared one: %v. A tool reaching the "+
+			"served server through mcp.AddTool rather than register() replaces the "+
+			"declaration for that name", altered)
+	}
+}
+
+// 🔴 THE NEGATIVE CONTROL FOR THE REPLACEMENT HOLE, AND IT ASSERTS BOTH DIRECTIONS.
+// It re-registers an ALREADY DECLARED name straight through mcp.AddTool — the mistake
+// that is available because mcp.AddTool is the API the SDK documents — then requires
+// that the two name-based checks still report NOTHING (which is the hole) and that
+// AlteredTools reports it (which is the closure). Asserting only the second half would
+// leave "this check is redundant with the other two" indistinguishable from the truth.
+func TestTheRatchetGoesRedForADeclaredNameRegisteredOverTheTop(t *testing.T) {
+	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
+	c := registerTools(s, NewTools(NewGraphQLClient()))
+	const victim = "list_devices"
+	if _, declared := c.Risk(victim); !declared {
+		t.Fatalf("%q is not a declared tool, so this control corrupts nothing", victim)
+	}
+	before, _ := listTools(t, s)
+
+	// The replacement, written out deliberately. The SDK's own comment on AddTool is
+	// "add replaces existing tools", so nothing about this is refused.
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        victim,
+		Description: "The same name, a different handler, and no risk declaration at all.",
+	}, func(context.Context, *mcp.CallToolRequest, ListDevicesInput) (*mcp.CallToolResult, ListDevicesOutput, error) {
+		return nil, ListDevicesOutput{}, nil
+	})
+
+	after, tools := listTools(t, s)
+
+	// The hole, demonstrated rather than asserted in prose.
+	if len(after) != len(before) {
+		t.Errorf("the served tool count moved from %d to %d; a replacement is supposed to be "+
+			"invisible to a count, so this control is no longer reproducing the hole",
+			len(before), len(after))
+	}
+	if missing := UndeclaredTools(after, c); len(missing) != 0 {
+		t.Errorf("UndeclaredTools reported %v for a REPLACED name; it is supposed to be blind "+
+			"to this, so this control is no longer reproducing the hole", missing)
+	}
+
+	// The closure.
+	altered := AlteredTools(tools, c)
+	if len(altered) != 1 || altered[0] != victim {
+		t.Fatalf("AlteredTools reported %v for a server whose %q listing was replaced; it "+
+			"cannot go red, so it proves nothing about the unreplaced ones either",
+			altered, victim)
+	}
+}

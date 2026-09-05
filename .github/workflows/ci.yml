@@ -1347,6 +1347,29 @@ jobs:
         # It also covers telemetry and ingest-only, which were rendered by nothing.
         run: hack/check-profile-workloads.sh
 
+      - name: OAuth discovery routing
+        # An MCP client's discovery walk is three requests, each derived from a string a
+        # service handed it, and nothing inside a service can tell whether the URL it
+        # published reaches anything. The ingress decides that, in another language in
+        # another directory — and the reference client aborts the whole walk on the FIRST
+        # error, so one unrouted hop ends discovery rather than degrading it.
+        #
+        # All three were broken at once with every service test green: the endpoint was
+        # mounted at /mcp while the ingress delivered the advertised /api/mcp as "/" (an
+        # unauthenticated 404); the challenge advertised a path only the console matched;
+        # and the authorization-server metadata, whose location a path-carrying issuer
+        # puts under /.well-known/, was matched by the console too — which answers 200
+        # with index.html, so the client reports a decode failure rather than a routing
+        # problem. Package tests drive handlers directly and can see none of it.
+        #
+        # Expectations come from the RENDERED identifiers and from the suffix constants
+        # read out of the Go source, not from constants restated in the script, so moving
+        # either side without moving the other fails here.
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-oauth-discovery-routing.sh
+          hack/check-oauth-discovery-routing.sh --self-test
+
   # ---------------------------------------------------------------------------
   # OpenTofu: format, init (no backend), validate.
   # ---------------------------------------------------------------------------

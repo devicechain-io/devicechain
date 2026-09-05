@@ -69,6 +69,21 @@ func validateHTTPSUrl(field, raw string) error {
 	if u.RawQuery != "" || u.Fragment != "" || u.User != nil || strings.ContainsAny(raw, "?#") {
 		return fmt.Errorf("%s: must have no query, fragment, or userinfo (got %q)", field, raw)
 	}
+	// 🔴 A TRAILING SLASH IS REJECTED, AND THE COMMENT ABOVE ALREADY PROMISED THAT.
+	// This claims to mirror the AS issuer-URL rule "so identifiers compare
+	// byte-for-byte" — and that rule rejects a trailing slash, while this one did not.
+	// The gap is not cosmetic: the metadata document's `resource` field and the token
+	// `aud` both carry the raw string, and BOTH are compared exactly. A client that
+	// derived the metadata location from ".../api/mcp/" (the location normalises the
+	// slash away, per RFC 9728 §3.1) then fetches a document whose `resource` still
+	// has it, and rejects the document outright — after which nothing works and
+	// nothing says why. Two spellings of one identifier is the whole problem; refusing
+	// the second is the fix.
+	if strings.HasSuffix(u.Path, "/") {
+		return fmt.Errorf("%s: must not end with a trailing slash (got %q) — the identifier is "+
+			"compared byte-for-byte as the token audience and as the `resource` field of the "+
+			"metadata document, so it must have exactly one spelling", field, raw)
+	}
 	host := u.Hostname()
 	isLocalhost := host == "localhost" || host == "127.0.0.1" || host == "::1"
 	if u.Scheme != "https" && !(u.Scheme == "http" && isLocalhost) {

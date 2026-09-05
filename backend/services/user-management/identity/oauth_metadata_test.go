@@ -82,6 +82,76 @@ func TestAuthorizationServerMetadataHandler(t *testing.T) {
 	}
 }
 
+// The location a client actually asks for, for the issuer shape this instance
+// derives: the RFC 8414 §3.1 path-INSERTED path.
+//
+// 🔴 IT IS PINNED AS A WHOLE STRING BECAUSE THE THREE PLAUSIBLE ANSWERS ARE ALL
+// PATH-SHAPED. Inserted is specified; appended is what the ingress happened to route;
+// the bare suffix is what a path-less issuer uses. The MCP reference client tries the
+// inserted one first and aborts the walk on the first error, so getting this one
+// wrong is not a fallback away from working — it is the end of discovery.
+func TestMetadataPathForInsertsTheIssuerPath(t *testing.T) {
+	const issuer = "https://iot.example.com/api/user-management"
+	if got, want := MetadataPathFor(issuer),
+		"/.well-known/oauth-authorization-server/api/user-management"; got != want {
+		t.Errorf("MetadataPathFor(%q) = %q, want %q", issuer, got, want)
+	}
+	// A path-less issuer collapses onto MetadataPath, which is what lets main.go skip
+	// the second registration rather than registering the same pattern twice (which
+	// ServeMux panics on).
+	if got := MetadataPathFor("https://as.example.com"); got != MetadataPath {
+		t.Errorf("MetadataPathFor(path-less) = %q, want %q", got, MetadataPath)
+	}
+}
+
+// The registration, driven through a real mux at the URLs a client actually requests.
+//
+// 🔴 THIS IS THE HALF THAT WAS MISSING, NOT MetadataPathFor. A function returning the
+// right string is worth nothing if nothing mounts the document there, and the mounting
+// lived in main.go where no test reaches it. Both locations are exercised, and the
+// document is decoded rather than merely counted as a 200 — a mux that answered with
+// the wrong handler would pass a status check.
+func TestRegisterMetadataHandlersServesBothLocations(t *testing.T) {
+	const issuer = "https://iot.example.com/api/user-management"
+	mux := http.NewServeMux()
+	RegisterMetadataHandlers(mux, issuer)
+
+	for _, path := range []string{
+		// What a client builds for a path-carrying issuer, and tries FIRST.
+		"/.well-known/oauth-authorization-server/api/user-management",
+		// The bare suffix: the location for a path-less issuer, and what the
+		// /api/<area> ingress rule delivers for a client that appends instead.
+		MetadataPath,
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", path, rec.Code)
+			continue
+		}
+		var md AuthorizationServerMetadata
+		if err := json.Unmarshal(rec.Body.Bytes(), &md); err != nil {
+			t.Errorf("GET %s: body is not the metadata document: %v", path, err)
+			continue
+		}
+		if md.Issuer != issuer {
+			t.Errorf("GET %s: issuer = %q, want %q", path, md.Issuer, issuer)
+		}
+	}
+}
+
+// A path-less issuer must not register the same pattern twice — ServeMux panics on a
+// duplicate, which would take the service down at startup rather than at review.
+func TestRegisterMetadataHandlersDoesNotDoubleRegisterForAPathlessIssuer(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterMetadataHandlers(mux, "https://as.example.com")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, MetadataPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+}
+
 func assertContains(t *testing.T, field string, got []string, want string) {
 	t.Helper()
 	for _, v := range got {

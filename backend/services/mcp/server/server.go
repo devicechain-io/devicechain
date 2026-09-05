@@ -33,8 +33,10 @@ const sessionTimeout = 30 * time.Minute
 //   - issuer is the Authorization Server that issues tokens for it.
 //   - validator is the late-bound JWKS validator (nil until the readiness gate opens).
 //
-// It returns (mcpHandler, metadataHandler) for the caller to mount at /mcp and the
-// RFC 9728 well-known path.
+// It returns (mcpHandler, metadataHandler) as bare handlers. WHERE they get mounted is
+// Routes' business, not the caller's — the paths are load-bearing (they have to match
+// what the ingress delivers and what the 401 challenge advertises), and leaving them to
+// each caller is how the endpoint came to be served at a path nothing published.
 func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHandler, metadataHandler http.Handler) {
 	// The catalog of risk declarations is not needed here: it is published on each tool's
 	// own listing at registration, so nothing at runtime consults it, and it is dropped
@@ -169,14 +171,95 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	return c
 }
 
-// metadataURL is the absolute URL of the RFC 9728 protected-resource metadata: the
-// well-known path at the resource identifier's origin. Advertised in the 401
-// WWW-Authenticate challenge so a client can discover the Authorization Server.
+// metadataURL is the absolute URL of the RFC 9728 protected-resource metadata,
+// advertised in the 401 WWW-Authenticate challenge (§5.1's `resource_metadata`) so a
+// client can discover the Authorization Server.
+//
+// 🔴 IT IS THE §3.1 PATH-INSERTED LOCATION, and it used to be the resource
+// identifier's ORIGIN with the path thrown away. Both halves of that were wrong: it
+// named a different resource's document, and — because the ingress routes /api/<area>
+// and the console owns "/" — a client that did the correct thing, hit the endpoint and
+// followed the challenge, was handed the console's index.html. The challenge is the
+// discovery path the MCP specification requires a client to use, so a challenge that
+// points at the SPA is the whole flow, not an edge case.
+//
+// 🔑 THE PATH COMES FROM THE SAME FUNCTION THE MUX AND THE 404 USE, so the URL this
+// advertises cannot disagree with the path this server answers on. It used to have
+// its own error branch that concatenated the raw identifier onto the bare suffix
+// while its sibling returned the suffix alone — two fallbacks for one unparseable
+// input, giving two different answers. There is one now: an identifier with no
+// recoverable origin contributes no origin, and the path is whatever the sibling
+// says. Unreachable in any case, since config.Validate refuses an identifier that is
+// not an absolute URL long before New is called.
 func metadataURL(resourceID string) string {
-	u, err := url.Parse(resourceID)
-	if err != nil {
-		return resourceID + ProtectedResourceMetadataPath
+	origin := ""
+	if u, err := url.Parse(resourceID); err == nil {
+		origin = (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 	}
-	origin := url.URL{Scheme: u.Scheme, Host: u.Host}
-	return origin.String() + ProtectedResourceMetadataPath
+	return origin + ProtectedResourceMetadataPathFor(resourceID)
+}
+
+// Routes registers this service's entire MCP surface on mux: the endpoint and every
+// location the protected-resource metadata has to answer on.
+//
+// 🔴 IT EXISTS SO THE ROUTING IS TESTABLE, and that is not a stylistic preference.
+// The two defects it fixes were both defects of WIRING — which path the handler was
+// mounted at, and which URL the challenge named — and every one of this package's
+// tests drove a handler directly, so nothing in the package could see either. main.go
+// is not covered by any test, so a mux built there is a mux nothing measures. A test
+// now builds this exact mux and drives the exact URLs a client uses.
+//
+// 🔴 THE ENDPOINT IS AT THE ROOT, NOT AT /mcp. The ingress routes /api/<area> and
+// STRIPS that prefix, so the advertised resource identifier https://host/api/mcp
+// arrives here as "/". Mounted at /mcp, the advertised URL 404ed — unauthenticated,
+// so it did not even look like an auth problem — and the working URL was
+// https://host/api/mcp/mcp, which was written down nowhere. Mounting at the root
+// makes the advertised URL and the working URL the same string, which is also what
+// RFC 8707 audience binding needs them to be: the identifier tokens are minted for is
+// the identifier a client POSTs to.
+//
+// The probe and metrics handlers main.go adds are more specific patterns, so
+// ServeMux still routes them ahead of this catch-all.
+func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator) {
+	mcpHandler, metadataHandler := New(resourceID, issuer, validator)
+	mux.Handle("/", mcpHandler)
+
+	// TWO metadata locations, deliberately, because two different things reach this
+	// pod at two different paths:
+	//
+	//   - ProtectedResourceMetadataPathFor(resourceID) — the RFC 9728 §3.1 location,
+	//     which is what metadataURL advertises and what a client constructs on its
+	//     own. The chart routes the whole well-known PREFIX here with no rewrite, so
+	//     the path a client asks for is the path that arrives.
+	//   - ProtectedResourceMetadataPath — the bare suffix. It is what the §3.1 base
+	//     case needs for a path-less resource identifier, AND what the /api/mcp
+	//     ingress rule delivers when a lenient client APPENDS the suffix to the
+	//     resource identifier instead of inserting it, since that rule strips
+	//     /api/mcp. Serving it costs one line and covers a client the RFC does not
+	//     describe but the ecosystem contains.
+	//
+	// They are the same document: RFC 9728 §3.3 has the client check the `resource`
+	// field against the identifier it expects, so a document fetched from either
+	// location identifies itself, and a mismatch is the client's to reject.
+	//
+	// 🔴 THE SUBTREE IS CLAIMED, NOT JUST THE TWO PATHS, AND THAT IS WHAT LETS THE
+	// CHART STOP IMPLEMENTING §3.1. The ingress cannot route one exact well-known
+	// path without computing the insertion itself — a second implementation of the
+	// rule, in another language, that nothing compares against this one. So it routes
+	// the constant SUFFIX as a prefix instead and this service decides which path
+	// under it is correct. Everything else in the subtree is refused HERE, with a
+	// message naming the right location, rather than falling through to the catch-all
+	// above and being answered with an authentication challenge for a document
+	// request.
+	mux.Handle(ProtectedResourceMetadataPath, metadataHandler)
+	served := ProtectedResourceMetadataPathFor(resourceID)
+	mux.Handle(ProtectedResourceMetadataPath+"/", http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == served {
+				metadataHandler.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "no protected resource is served at this path; this server's "+
+				"metadata is at "+served, http.StatusNotFound)
+		}))
 }
