@@ -59,8 +59,17 @@ func (g *ReadinessGate) Ready() bool {
 	}
 }
 
-// Validator returns the live JWT validator, or nil while the gate is still
-// closed. Callers must treat nil as "not yet authenticated" and fail closed.
+// Validator returns the live JWT validator, or nil. Callers must treat nil as
+// "not authenticated" and fail closed.
+//
+// 🔑 NIL HAS TWO CAUSES AND ONLY ONE OF THEM IS TEMPORARY. The gate may still be
+// closed, in which case a validator arrives later; or the service opened the gate
+// through MarkReadyWithoutAuthSurface because it verifies no tokens at all, in
+// which case nil is the permanent, correct answer. Nothing here distinguishes
+// them, and nothing needs to: both mean the same thing to a caller holding a
+// token. What matters is that an earlier version of this comment said nil meant
+// "still closed", which read as a promise that a READY service always has one —
+// and two services have been opening the gate with nil since they were written.
 func (g *ReadinessGate) Validator() *auth.Validator {
 	return g.validator.Load()
 }
@@ -70,7 +79,43 @@ func (g *ReadinessGate) Validator() *auth.Validator {
 // whose validator is available synchronously (e.g. user-management, which signs
 // and verifies with its own local key) call this directly; others reach it
 // through StartAuthGate once the background fetch succeeds.
+//
+// 🔴 A NIL VALIDATOR IS REFUSED AND THE GATE STAYS CLOSED. Storing it would open
+// the gate on a service that has a token-verifying surface and no way to verify a
+// token: /readyz answers 200, the endpoint controller sends it traffic, and every
+// authenticated request is refused for the life of the process while the pod
+// reports healthy. Refusing keeps the pod out of Service endpoints, which is the
+// loud failure. A service that legitimately verifies nothing says so once, at its
+// call site, with MarkReadyWithoutAuthSurface.
 func (g *ReadinessGate) MarkReady(validator *auth.Validator) {
+	if validator == nil {
+		log.Error().Msg("Refusing to open the readiness gate with no JWT validator: this service " +
+			"would report ready and then refuse every authenticated request. A service that verifies " +
+			"no tokens must open the gate with MarkReadyWithoutAuthSurface instead.")
+		return
+	}
+	g.markReady(validator)
+}
+
+// MarkReadyWithoutAuthSurface opens the gate with NO validator, for a service whose
+// HTTP surface is health and metrics only and which therefore verifies no token.
+//
+// It exists so that "ready with no validator" is something a service STATES rather
+// than something it falls into by passing nil. The two are indistinguishable once
+// stored, so the difference has to be made at the call site or not at all — and the
+// call site is also the only place that knows whether a token ever arrives.
+//
+// 🔴 IT IS NOT AN OPT-OUT FROM AUTHENTICATION. It asserts there is nothing to
+// authenticate. Adding any token-verifying handler to such a service means moving
+// it back onto StartInstanceAuthGate; Validator() will otherwise return nil to that
+// handler forever, and a handler that fails closed on nil refuses every request.
+func (g *ReadinessGate) MarkReadyWithoutAuthSurface() {
+	g.markReady(nil)
+}
+
+// markReady is the one place the gate opens, so the two doors above differ only in
+// what they are allowed to store.
+func (g *ReadinessGate) markReady(validator *auth.Validator) {
 	g.once.Do(func() {
 		g.validator.Store(validator)
 		close(g.readyCh)
@@ -107,9 +152,25 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 // MarkReady opens the readiness gate and records the readiness metric (E17).
 // Services call this rather than ms.Readiness.MarkReady directly so the ready
 // signal is exported. It is idempotent (the gate's MarkReady is).
+//
+// 🔑 THE GAUGE FOLLOWS THE GATE, NOT THE CALL. The gate refuses to open on a nil
+// validator, so setting the gauge because MarkReady was CALLED would export a 1
+// for a service the gate had just kept closed — the exported signal disagreeing
+// with the probe that governs traffic.
 func (ms *Microservice) MarkReady(validator *auth.Validator) {
 	ms.Readiness.MarkReady(validator)
-	if ms.readyGauge != nil {
+	ms.exportReady()
+}
+
+// MarkReadyWithoutAuthSurface opens the gate for a service that verifies no tokens
+// and records the readiness metric. See ReadinessGate.MarkReadyWithoutAuthSurface.
+func (ms *Microservice) MarkReadyWithoutAuthSurface() {
+	ms.Readiness.MarkReadyWithoutAuthSurface()
+	ms.exportReady()
+}
+
+func (ms *Microservice) exportReady() {
+	if ms.readyGauge != nil && ms.Readiness.Ready() {
 		ms.readyGauge.Set(1)
 	}
 }

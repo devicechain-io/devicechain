@@ -272,10 +272,11 @@ func TestSamplesCappedAtMaxPerNotify(t *testing.T) {
 	}
 	b.WriteString(`]`)
 
-	samples, truncated, err := Samples(message.AppSenmlJSON, []byte(b.String()), fixedNow)
+	samples, skips, err := Samples(message.AppSenmlJSON, []byte(b.String()), fixedNow)
 	require.NoError(t, err)
 	assert.Len(t, samples, MaxSamplesPerNotify, "output capped at the per-Notify maximum")
-	assert.Equal(t, 50, truncated, "the 50 records past the cap are reported dropped")
+	assert.Equal(t, 50, skips.Truncated, "the 50 records past the cap are reported dropped")
+	assert.Equal(t, 50, skips.Total(), "a truncated pack of otherwise-good records skips nothing else")
 	// The kept samples are the FIRST cap records, in order (the tail is what is dropped).
 	assert.Equal(t, "/3303/0/0", samples[0].Name)
 	assert.Equal(t, float64(MaxSamplesPerNotify-1), samples[MaxSamplesPerNotify-1].Value)
@@ -284,8 +285,8 @@ func TestSamplesCappedAtMaxPerNotify(t *testing.T) {
 // A pack at or below the cap is never truncated (the common case): truncated is 0.
 func TestSamplesNotTruncatedUnderCap(t *testing.T) {
 	payload := []byte(`[{"bn":"/3303/0/","n":"5700","v":21.5},{"n":"5601","v":20.1}]`)
-	samples, truncated, err := Samples(message.AppSenmlJSON, payload, fixedNow)
+	samples, skips, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)
 	require.Len(t, samples, 2)
-	assert.Equal(t, 0, truncated)
+	assert.Equal(t, Skips{}, skips)
 }

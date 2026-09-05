@@ -59,7 +59,8 @@ func startBrokerPresence(ctx context.Context) {
 
 	// The tap emits under the GATEWAY source's id rather than a name of its own, and
 	// the reason is not cosmetic: device-state records the source of the last event
-	// that touched a device (device-state/model/api.go:133-135), so presence under a
+	// that touched a device (the Source merge in Api.MergeDeviceState, in
+	// device-state/model/api.go), so presence under a
 	// different name would make a device's row alternate between two sources on every
 	// event — and the reconciler's source-scoped read would then see the device only
 	// half the time, repairing it intermittently.
@@ -79,7 +80,12 @@ func startBrokerPresence(ctx context.Context) {
 			"connection advisories to read; MQTT presence stays inferred.")
 		tapOff(presence.TapOffNoGatewaySource)
 		return
-	case infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "":
+	// The PORT is part of "configured", not a detail. Every service call this tap makes
+	// builds its URL as host:port, and the instance config's own Validate already refuses
+	// a user-management coordinate missing either half — so this branch is unreachable on
+	// a validated instance and is written to stay total anyway, because a predicate that
+	// reads half a coordinate is one edit away from being the live check.
+	case infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0:
 		log.Warn().Msg("Broker-asserted MQTT presence needs service-to-service calls to enumerate tenants " +
 			"and read presence state, which are not configured. It stays OFF rather than running without " +
 			"its repair path: a device whose disconnect the broker never announced would otherwise read " +
@@ -88,10 +94,13 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	conn, err := dialSystemAccount(infra.Nats)
+	conn, err := dialSystemAccount(ctx, infra.Nats)
 	if err != nil {
-		log.Error().Err(err).Msg("Could not connect to the NATS system account; broker-asserted MQTT " +
-			"presence is OFF and MQTT presence stays inferred.")
+		log.Error().Err(err).Msg("Could not reach the NATS system account within the startup window; " +
+			"broker-asserted MQTT presence is OFF for this pod's run and MQTT presence stays inferred. " +
+			"An unreachable broker is the instance's condition rather than this replica's — the MQTT " +
+			"gateway is in that same broker — so the devices this source asserted are released back to " +
+			"inferred after a settle window, unless the next log line says the release could not start.")
 		tapOff(presence.TapOffBrokerUnreachable)
 		return
 	}
@@ -185,14 +194,28 @@ func tapOff(reason presence.TapOffReason) {
 // startPresenceDemotion drains this source's asserted rows back to inferred, when the
 // reason the tap is off is one that can be trusted to mean it.
 //
-// 🔑 IT ACTS ON TWO OF THE SIX BAIL PATHS, and the line is what the evidence is made of.
+// 🔑 IT ACTS ON THREE OF THE SIX BAIL PATHS, and the line is what the evidence is made of.
 // A written `enabled: false` and a missing system-account credential are CONFIGURATION:
 // every replica of the instance reads the same values and reaches the same conclusion, so
-// a demotion is the instance speaking, not one replica guessing. A failed dial or a failed
-// subscription is this replica's own bad luck — its peers may be reading advisories
-// perfectly well — and demoting a fleet on that evidence would cost two durable events per
-// device to undo something that was never broken. Those paths get the gauge and nothing
-// more; the gauge is what makes them visible, which is the actual gap they had.
+// a demotion is the instance speaking, not one replica guessing.
+//
+// 🔴 AN UNREACHABLE BROKER JOINED THEM, AND THAT REVERSES WHAT THIS COMMENT USED TO SAY.
+// It said a failed dial was this replica's own bad luck. That was written when a "failed
+// dial" meant one nats.Connect returning an error — but the dial retries, so it now means
+// this pod could not reach or authenticate to the system account for thirty CONTINUOUS
+// seconds. The two ways that happens are a broker that is down or rolling and a
+// system-account credential the broker refuses, and both are instance-wide. The first is
+// also the case where demotion is simply CORRECT: the MQTT gateway lives in that same
+// broker, so if it is unreachable no device is connected through it, and a graceful broker
+// shutdown announces no deaths at all.
+//
+// The residual replica-local case — this pod's network is broken while its peers are fine
+// — is self-limiting rather than argued away: the drain emits over the DATA-PLANE
+// connection, so a pod that cannot reach the broker cannot write the demotions either. Its
+// rows stay asserted and the next pass retries them.
+//
+// A failed subscription on a CONNECTED conn stays replica-local. It gets the gauge and
+// nothing more; the gauge is what makes it visible, which is the actual gap it had.
 //
 // 🔴 THE PRECONDITIONS ARE RE-CHECKED HERE RATHER THAN INFERRED FROM THE BRANCH, because
 // the switch above is ORDERED: `!cfg.IsEnabled()` returns before GatewaySourceId or
@@ -206,7 +229,7 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if !drainEndpointsReady(GatewaySourceId, infra.ServiceAuth.Secret, infra.UserManagement.Hostname,
-		infra.DeviceState.Hostname, infra.DeviceState.Port) {
+		infra.UserManagement.Port, infra.DeviceState.Hostname, infra.DeviceState.Port) {
 		log.Warn().Str("reason", string(reason)).Msg("Broker-asserted MQTT presence is off, so the devices " +
 			"this instance already asserted are frozen at their last known state — but releasing them " +
 			"automatically needs a gateway source and service-to-service calls, which are not configured. " +
@@ -244,7 +267,9 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 // than about this replica. Only instance-wide evidence justifies emitting durable events
 // for a whole fleet; see startPresenceDemotion.
 func reasonIsInstanceWide(reason presence.TapOffReason) bool {
-	return reason == presence.TapOffDisabled || reason == presence.TapOffNoSystemCredential
+	return reason == presence.TapOffDisabled ||
+		reason == presence.TapOffNoSystemCredential ||
+		reason == presence.TapOffBrokerUnreachable
 }
 
 // drainEndpointsReady reports whether the drain has what it needs: a source name to emit
@@ -255,8 +280,15 @@ func reasonIsInstanceWide(reason presence.TapOffReason) bool {
 // caller arrived on carries NO information about these values. Deriving them from the
 // branch would work for one path and be silently wrong for the other — which is the whole
 // reason this is checked rather than assumed.
-func drainEndpointsReady(source, serviceSecret, umHost, dsHost string, dsPort uint32) bool {
-	return source != "" && serviceSecret != "" && umHost != "" && dsHost != "" && dsPort != 0
+func drainEndpointsReady(source, serviceSecret, umHost string, umPort uint32, dsHost string, dsPort uint32) bool {
+	// Both endpoints are checked as a COORDINATE. user-management's port was missing here
+	// while device-state's was present, which is the asymmetry that makes a total predicate
+	// worth writing down: a zero port renders "http://dc-user-management:0/graphql", which
+	// fails every call rather than being absent, so the drain would start and never list a
+	// tenant.
+	return source != "" && serviceSecret != "" &&
+		umHost != "" && umPort != 0 &&
+		dsHost != "" && dsPort != 0
 }
 
 // demotionStartJitter spreads the first drain pass across replicas that all restarted
@@ -423,7 +455,7 @@ func stopBrokerPresence() {
 // data-plane one authenticates as the shared service user, this one as the
 // system-account user. They are distinct connections because they are distinct
 // accounts; a single connection lands in one account only.
-func dialSystemAccount(cfg config.NatsConfiguration) (*nats.Conn, error) {
+func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration) (*nats.Conn, error) {
 	url := fmt.Sprintf("nats://%s:%d", cfg.Hostname, cfg.Port)
 	opts := []nats.Option{
 		nats.Name("event-sources-presence"),
@@ -432,9 +464,20 @@ func dialSystemAccount(cfg config.NatsConfiguration) (*nats.Conn, error) {
 		// 🔑 RETRY, BECAUSE THE LIKELIEST FIRST DIAL IS THE ONE THAT FAILS. The bring-up
 		// rolls the broker with the new system-account user in the same run that
 		// restarts the services, so this service can start while the broker is mid-roll.
-		// Without this, nats.Connect fails once, the tap is disabled for the pod's
-		// lifetime, and the only symptom is a capability quietly absent — the failure
-		// mode the canary exists to catch, except the canary is disabled too.
+		// Without this, nats.Connect fails once and the tap is disabled for the pod's
+		// lifetime.
+		//
+		// 🔴 ON ITS OWN IT DOES NOT DELIVER THAT, AND AN EARLIER COMMENT HERE CLAIMED IT
+		// DID. Under this option nats.Connect returns a non-nil conn and a NIL error
+		// against a broker that is not there — it hands back a stub in RECONNECTING state
+		// and dials in the background (core/messaging documents the same behaviour in
+		// connect_wait_test.go). Every caller that reads connection-derived state then
+		// gets a zero value, and here the first one to do so was Tap.Subscribe's Flush:
+		// it timed out after ten seconds, the tap was disabled for the pod's lifetime
+		// exactly as if the dial had failed, and it was recorded as SUBSCRIBE_FAILED —
+		// which is a replica-local reason, so no demotion ran and the whole fleet stayed
+		// ASSERTED with nothing but a gauge label naming the wrong cause. waitConnected
+		// below is what makes the retry mean what this comment says.
 		nats.RetryOnFailedConnect(true),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			log.Warn().Err(err).Msg("Lost the NATS system-account connection; broker presence is not " +
@@ -451,7 +494,51 @@ func dialSystemAccount(cfg config.NatsConfiguration) (*nats.Conn, error) {
 	if tlsCfg != nil {
 		opts = append(opts, nats.Secure(tlsCfg))
 	}
-	return nats.Connect(url, opts...)
+	conn, err := nats.Connect(url, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if err := waitConnected(ctx, conn, systemAccountConnectWait); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// systemAccountConnectWait is how long the initial system-account dial is given to
+// actually reach the broker before the tap gives up on this pod's run.
+//
+// It is longer than the ten-second Flush timeout it replaces, because the case it must
+// survive is a NATS StatefulSet rolling alongside the Deployments, and shorter than
+// anything that would matter to the lifecycle: this runs in the Starter's Postprocess,
+// after the GraphQL server and every event source are already serving, so a wait here
+// delays neither the probes nor ingest.
+//
+// A var, not a const, so a test can wait milliseconds for a broker it knows is not there.
+var systemAccountConnectWait = 30 * time.Second
+
+// waitConnected blocks until the connection has actually reached the broker, or until
+// the deadline or ctx says it will not.
+//
+// 🔴 IT IS THE ONLY THING THAT CAN TELL THE TWO APART. nc.IsConnected() is false both
+// for a broker that is momentarily unreachable and for one that this pod will never
+// reach; polling it to a deadline is what turns the second into an answer. Without it
+// every reader of connection-derived state gets a zero value and reports its own
+// symptom — a Flush timeout, a bogus server version — instead of the cause.
+func waitConnected(ctx context.Context, nc *nats.Conn, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if nc.IsConnected() {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the system-account connection is still %s after %s", nc.Status(), timeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // mqttGatewayURL is where the canary opens its probe connection.
