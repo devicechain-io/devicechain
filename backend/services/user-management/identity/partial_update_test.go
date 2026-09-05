@@ -132,18 +132,30 @@ func emptiableStringField[R any](name, seeded, replace string,
 
 // 🔴 THE EXHAUSTIVENESS CHECK OVER *Manager's UPDATE SURFACE.
 //
-// 🔴 IT CANNOT SEE UpdateProfile TODAY, AND SAYING SO IS THE POINT OF RUNNING IT ANYWAY.
-// The guard's method filter accepts (receiver, ctx, token, *request) — four inputs, the
-// last a pointer — and UpdateProfile has exactly that shape since the conversion, so it
-// IS enumerated. What the guard cannot do is fail when a service has no other Update*
-// method: MinUpdateMethods is the anti-vacuity floor, and 1 is the honest number here
-// rather than a floor lowered to make a walk pass.
+// 🔴 THIS GUARD IS WHY updateProfile HAS AN INPUT TYPE AT ALL. Before the conversion the
+// mutation took two loose nullable arguments — `UpdateProfile(ctx, email, firstName,
+// lastName *string)` — which the guard reports by NAME rather than skipping:
+//
+//	takes no struct parameter, so there is no update input for this rule to certify …
+//	Either it is not an entity update — name it in NotAnEntityUpdate with the reason —
+//	or its arguments are loose scalars that need collecting into a dedicated
+//	*UpdateRequest
+//
+// It is an entity update; it simply never had an input object. Collecting the two
+// arguments into ProfileUpdateRequest is what makes the mechanism visible, and the
+// behaviour is unchanged — see the manager's own header for what each state does.
 func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	putest.AssertEveryUpdateTakesADedicatedRequest(t, putest.UpdateSurface[*Manager]{
 		Families: partialUpdateFamilies(),
-		// Nothing on this service is still on the full-replace shape. Written out empty
-		// rather than omitted, so "the residual is zero" is a statement and not an absence.
-		Exempt:           map[string]string{},
+		// Nothing on this service is still on the full-replace shape, and nothing on it is
+		// outside the rule. Both maps are written out empty rather than omitted, so "the
+		// residual is zero" is a statement rather than an absence.
+		Exempt:            map[string]string{},
+		NotAnEntityUpdate: map[string]string{},
+		// The TOTAL number of Update* methods on the Manager, which is one. A floor of one
+		// is weak by construction — it is the honest number here, not a floor lowered to
+		// make a walk pass, and the day this service gains a second update the guard fails
+		// until someone raises it and looks at what was added.
 		MinUpdateMethods: 1,
 	})
 }

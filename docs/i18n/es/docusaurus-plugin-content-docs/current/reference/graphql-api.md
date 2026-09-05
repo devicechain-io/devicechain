@@ -318,14 +318,14 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 | --- | --- |
 | `secret` en `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *limpia*. Lo contrario del `null` de una actualización parcial; consulta la advertencia de abajo |
 | `secret` en `updateNotificationChannel` | **Se conserva**, y `null` lo *limpia*, como cualquier otro campo de una actualización parcial. Una cadena vacía también lo limpia, así que un cliente que ya lo escriba así sigue funcionando. Es el único secreto de solo escritura sin la inversión de abajo |
-| `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `{}` para limpiarlo |
+| `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `null` o `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no puede *limpiarse*: un `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
-| `firstName` / `lastName` en `updateProfile` | **Se conservan.** La única `update*` que toma argumentos sueltos en lugar de un `request`; una cadena vacía sí limpia |
+| `firstName` / `lastName` en `updateProfile` | **Se conservan.** Una cadena vacía limpia, y `null` significa lo mismo: son las columnas del nombre visible, donde «vacío» es un valor que una persona puede tener legítimamente y no una ausencia |
 | `credentialType` en `updateProvisioningProfile` | **No está en la entrada de actualización.** Hoy el aprovisionamiento solo puede emitir un tipo de credencial, así que el campo únicamente repetiría lo almacenado. Antes cualquier actualización que lo omitiera lo *restablecía* a `ACCESS_TOKEN` |
 | `activeVersion` en un perfil de dispositivo o un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve con publicar y revertir |
 | `memberType` / `membershipMode` en `updateEntityGroup` | **No están en la entrada de actualización.** Ambos son identidad, así que un cambio no es representable en lugar de rechazarse |
-| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | Se borran — y borrar aquí significa **heredar el valor por defecto de la plataforma**, nunca «sin límite» |
+| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | **Se conservan.** Enviar `null` elimina la anulación, lo que significa **heredar el nivel y luego el valor por defecto de la plataforma**: nunca cero, y nunca «ilimitado» |
 
 :::danger Una cadena vacía no es una forma segura de decir «deja esto como está»
 Para el `secret` de solo escritura de `updateConnector` y `updateAiProvider`, **null conserva y `""`
@@ -379,6 +379,10 @@ renombra un panel sin reenviar su documento entero —, pero un `null` explícit
 `expectedUpdatedAt`, y una actualización que no nombre ningún campo no escribe nada (ni siquiera
 `updatedAt`), aunque una precondición obsoleta sobre ella sigue siendo un conflicto.
 
+En user-management, **todas las `update*`** toman ya una petición propia:
+
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+
 **Todo lo que no se nombre arriba sigue siendo un reemplazo completo, y la forma de saberlo es la
 firma de la propia mutación, no una lista aquí.** Esta página llevaba una segunda lista con las
 áreas que aún no se habían convertido, y se equivocaba cada vez que aterrizaba una: decía tres y
@@ -391,22 +395,35 @@ debajo es donde esa lectura requiere cuidado.
 entrada de creación compartida no puede expresar la diferencia entre omitido y limpiado, sea cual
 sea la intención.
 
-La otra dirección tiene una excepción que conviene conocer. **Cuatro mutaciones `update*` del plano
-de administración de user-management toman un `*UpdateRequest` propio y siguen siendo reemplazos
-completos en todos los campos que declaran**: `AdminTenantUpdateRequest`, `AdminRoleUpdateRequest`,
-`AdminOAuthClientUpdateRequest` y `AdminTenantTierUpdateRequest`. Se les dio una entrada aparte para
-que la petición pudiera omitir el token — por eso no plantean la cuestión del token en la petición —,
-pero los campos de dentro nunca se convirtieron, así que omitir uno lo sigue dejando en blanco.
-
-Son solo esas cuatro, todas en el plano de administración, y se convertirán antes de la 1.0. En
-todos los demás sitios la firma es la respuesta completa, y el
-[esquema que descargaste](#descargar-los-esquemas) es la autoridad sobre en qué contrato está cada
-mutación.
+La otra dirección no es prueba por sí sola. Un `*UpdateRequest` propio es lo que una actualización
+parcial necesita, no lo que la convierte en una: una entrada puede tener su propio tipo y aun así
+escribir todos los campos que declara con lo que le hayas enviado. Cuatro mutaciones del plano de
+administración de user-management eran exactamente eso hasta esta versión — entradas aparte, para que
+la petición pudiera omitir el token, con campos de reemplazo completo dentro —, y por eso el
+[esquema que descargaste](#descargar-los-esquemas) es la autoridad y no la firma.
 :::
 
-`updateProfile` no está entre ellas y no es un reemplazo completo: toma argumentos sueltos
-`firstName` / `lastName` en lugar de un `request`, escribe solo los que envías y limpia con `""` en
-lugar de `null` — consulta [la tabla de excepciones](#where-the-default-does-not-hold).
+:::note[Esto cambió en user-management]
+`updateRole`, `updateTenant`, `updateTenantTier` y `updateOauthClient` escribían todos los campos que
+declaraba su entrada, así que una petición que solo nombraba `name` dejaba el resto en blanco y
+devolvía el registro vaciado. `updateTenant` es la primera que conviene revisar: omitir una anulación
+de gobernanza la **borraba**, así que renombrar un inquilino eliminaba todos los techos que un
+operador hubiera fijado. Ahora omitir una la deja tal cual, y solo un `null` explícito la elimina.
+
+`tierToken` en `updateTenant` pasó a ser **opcional**. Omitirlo mantiene al inquilino en su nivel
+actual; un `null` explícito se rechaza, porque todo inquilino tiene un nivel.
+
+`authorities`, `redirectUris` y `scopes` pasaron a ser **listas anulables** (`[String!]`, no
+`[String!]!`), así que ya tienen estado ausente. Omitir una la deja tal cual; enviar una lista la
+sustituye entera; `null` y `[]` significan ambos «vacía». Las autoridades de un rol **sí** se pueden
+vaciar, porque un rol que no concede nada es algo que puedes crear. Las URI de redirección y los
+ámbitos de un cliente OAuth **no** — una lista de redirección vacía no coincide con nada, así que el
+cliente jamás podría completar una autorización.
+
+`updateProfile` toma ahora `request: ProfileUpdateRequest!` en lugar de argumentos sueltos
+`firstName` / `lastName`. Su comportamiento no cambia: escribe solo los nombres que envías, y `""`
+sigue limpiando uno.
+:::
 
 #### Campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
 

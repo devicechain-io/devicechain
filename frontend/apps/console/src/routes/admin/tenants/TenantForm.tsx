@@ -28,9 +28,17 @@ import { Textarea } from '@/components/ui/textarea';
 // assignment, ADR-065 S5c′, with its own mutations). Basic and Settings are two VIEWS OF ONE SAVE,
 // not two independent forms: a tenant update sends name/tier/config and the ceilings
 // together, so both tabs share this component's state and its single `submit`, and each
-// renders the same Save button. Splitting them into separate submits could let one tab's
-// save omit — and so silently reset — a field the other tab owns (the AI-consent flag is
-// sent explicitly on every save, so a partial payload is not merely stale, it flips it).
+// renders the same Save button.
+//
+// 🔴 THE REASON FOR THE SHARED SUBMIT HAS CHANGED AND THE STRUCTURE HAS NOT BEEN REVISITED.
+// It was a correctness requirement: updateTenant was a full replace, so a per-tab save
+// omitting a field the other tab owned SILENTLY RESET it — and the AI-consent flag, sent
+// explicitly on every save, was not merely stale but flipped. Under the partial update an
+// omitted field is left alone, so a per-tab submit would be safe PROVIDED each tab omitted
+// the keys it does not own; what is not safe is the idiom this form actually uses, which
+// spells a blank field as an explicit `null` and would therefore still clear it. Splitting
+// the tabs is a deliberate piece of work, not a consequence of the conversion, and it is
+// not done here.
 export function TenantForm({
   tenant,
   onDone,
@@ -76,8 +84,11 @@ export function TenantForm({
   // How many commands this tenant may hold for absent devices before an enqueue is
   // refused. Blank inherits the tier's ceiling, then the platform default — never
   // unlimited. It is seeded from the tenant and resubmitted on every save for the same
-  // reason every override above is: the update is a full REPLACE of the governance
-  // fields, so a value this form does not carry is a value the next save clears.
+  // reason every override above is: this form is a whole-entity editor, so what it
+  // sends is the operator's full stated end state. That used to be MANDATORY rather
+  // than a convention — the update was a full REPLACE, so a value this form did not
+  // carry was a value the next save cleared — which is how this field, and shedPriority
+  // after it, came to be erased on every unrelated edit for a release each.
   const [heldCeiling, setHeldCeiling] = useState(tenant?.heldCommandCeiling?.toString() ?? '');
   // Which tenants degrade LAST when the platform sheds under contention (1–100). A
   // preference, not a ceiling — unlike every override above it, a bigger number buys
@@ -106,9 +117,23 @@ export function TenantForm({
 
   // An empty override field submits an explicit NULL (see optNum in lib/utils.ts),
   // clearing any existing override so the tenant inherits its tier's value and then the
-  // platform default. Null rather than an omitted key because updateTenant is a full
-  // replace and writes NULL either way — saying it makes the request describe what the
-  // server will actually do, and is what `Required<…>` on the two callees enforces.
+  // platform default.
+  //
+  // 🔴 NULL RATHER THAN AN OMITTED KEY, AND THAT IS NOW A CHOICE RATHER THAN THE ONLY
+  // OPTION. updateTenant used to be a full replace, so an omitted key WAS a null and
+  // saying it merely made the request honest. It is a partial update now: omitting a key
+  // leaves the stored value alone, so the two spellings mean opposite things.
+  //
+  // This form states all of them because it is a whole-entity editor — every field below
+  // is rendered, seeded from the loaded tenant, and editable on this screen, so what it
+  // sends is the operator's full stated end state and a blank box genuinely means "no
+  // override". A form that sent only what changed would need per-field dirty tracking to
+  // say the same thing, and would break the one gesture that has to work: clearing a
+  // ceiling by emptying its box.
+  //
+  // What the partial update buys HERE is the failure mode: a governance column added to
+  // the schema and not yet rendered by this form is now left alone by every save, where
+  // it used to be erased by all of them.
   const submit = async () => {
     setFormError(null);
     setBusy(true);

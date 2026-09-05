@@ -4,7 +4,6 @@
 package admin
 
 import (
-	"reflect"
 	"testing"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -25,58 +24,35 @@ import (
 // AdminTenantUpdateRequest was a well-named type of plain pointers with full-replace
 // semantics and said so in its own comment.
 //
-// What is local is what only this service can say: which updates have NOT been
-// converted, and how many Update* methods reflection must find before the walk is
-// believable.
+// 🔴 ALL FOUR ARE VISIBLE TO IT, INCLUDING UpdateRole, AND THAT IS RECENT. The guard used
+// to locate the input by POSITION — parameter 3 of exactly 4 — and walked past anything
+// else in silence. UpdateRole takes (ctx, scope, token, request), because a role's
+// identity is the PAIR: "operator" at system scope and "operator" at tenant scope are
+// different roles with different authority vocabularies, so the scope cannot move into
+// the payload and cannot be dropped. Under the positional rule that fifth parameter made
+// it invisible — certified by nothing, and uncatchable by the anti-vacuity floor, because
+// the floor bounds what was WALKED and a skipped method is not among them. The guard now
+// locates the input by SHAPE, so the signature this conversion needs and the rule this
+// conversion is measured by no longer disagree.
 //
-// 🔴 UpdateRole MAY BE INVISIBLE TO IT, AND THAT IS NOT SOMETHING THIS FILE CAN FIX.
-// The guard's method filter accepts (receiver, ctx, token, *request) — four inputs, the
-// last a pointer. A role is named by a PAIR (scope, token), because "operator" at system
-// scope and "operator" at tenant scope are different roles with different authority
-// vocabularies, so UpdateRole has five and is SKIPPED rather than reported. Contorting
-// the signature to fit a reflection filter would change which role a caller addresses,
-// which is the one thing this conversion must not do. TestUpdateRoleIsCoveredDespiteItsScopeArgument
-// below is the standing check on that gap: it asserts the shape directly, so the day the
-// filter widens, the guard's MinUpdateMethods floor rises and this file has to be read.
+// What is local is what only this service can say: which updates have NOT been converted,
+// and how many Update* methods reflection must find before the walk is believable.
 func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	putest.AssertEveryUpdateTakesADedicatedRequest(t, putest.UpdateSurface[*Service]{
 		Families: partialUpdateFamilies(),
 
-		// Every admin-plane update in this service is converted, so there is nothing to
-		// exempt. The map is present and empty rather than omitted: a nil map and an empty
-		// one behave identically here, and writing it out is what makes "the residual is
-		// zero" a statement rather than an absence.
-		Exempt: map[string]string{},
+		// Every admin-plane update in this service is converted, so both maps are empty.
+		// They are written out rather than omitted: a nil map and an empty one behave
+		// identically here, and spelling them is what makes "the residual is zero" a
+		// statement a reader can count rather than an absence they have to infer.
+		Exempt:            map[string]string{},
+		NotAnEntityUpdate: map[string]string{},
 
-		// The anti-vacuity floor. Reflection over a renamed or embedded receiver could
-		// find nothing at all, and a loop over nothing reports success.
-		//
-		// 🔴 IT IS 3, NOT 4, AND THE MISSING ONE IS UpdateRole — see the header. Raising it
-		// to 4 would fail today for the right reason and the wrong cause, which is how a
-		// floor gets deleted instead of understood.
-		MinUpdateMethods: 3,
+		// The anti-vacuity floor: the TOTAL number of Update* methods on this service,
+		// not the number converted. UpdateRole, UpdateTenant, UpdateTenantTier and
+		// UpdateOAuthClient — four, and every one of them is walked rather than skipped.
+		MinUpdateMethods: 4,
 	})
-}
-
-// TestUpdateRoleIsCoveredDespiteItsScopeArgument is what stands in for the guard on the
-// one method the guard cannot see.
-//
-// It asserts the same three structural things by hand — the request type is the one the
-// harness registers, it carries no Token, and every exported field carries the three
-// states — so UpdateRole is not certified by the word "Update" in its name while the
-// reflection filter looks past it.
-func TestUpdateRoleIsCoveredDespiteItsScopeArgument(t *testing.T) {
-	var registered bool
-	for _, fam := range partialUpdateFamilies() {
-		if fam.Name == "role" {
-			_, registered = fam.NewRequest().(*RoleUpdateRequest)
-		}
-	}
-	require.True(t, registered,
-		"the role family does not build a *RoleUpdateRequest, so nothing drives UpdateRole's "+
-			"three states against a database and the guard cannot see it either")
-
-	putest.AssertCarriesTheThreeStates(t, "UpdateRole", reflect.TypeOf(RoleUpdateRequest{}))
 }
 
 // TestEmptyListIsRefusedForAnOAuthClientsAllowlists drives the FOURTH wire state a list

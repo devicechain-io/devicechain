@@ -30,7 +30,7 @@ import (
 //   - iam.Identity.FirstName / LastName — a person may have no recorded first name, and
 //     `updateProfile(firstName: "")` has always cleared one. ApplyToRequired would refuse
 //     that as blank, which removes a capability rather than converting one.
-//   - iam.TenantTier.Color — `not null; default ''`, where "" means "no pill" and is what
+//   - iam.TenantTier.Color — `not null; default ”`, where "" means "no pill" and is what
 //     ValidTierColor accepts alongside every palette token.
 //
 // So an explicit null here is not "clear a required field"; it is the only spelling of a

@@ -4,6 +4,11 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+export type ProfileUpdateRequest = {
+  firstName?: string | null | undefined;
+  lastName?: string | null | undefined;
+};
+
 export type TenantBasemapInput = {
   attribution?: string | null | undefined;
   centerLat?: number | null | undefined;
@@ -92,8 +97,7 @@ export type MeQueryVariables = Exact<{ [key: string]: never; }>;
 export type MeQuery = { me: { email: string, firstName: string | null, lastName: string | null } };
 
 export type UpdateProfileMutationVariables = Exact<{
-  firstName?: string | null | undefined;
-  lastName?: string | null | undefined;
+  request: ProfileUpdateRequest;
 }>;
 
 
@@ -454,8 +458,8 @@ export const MeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<MeQuery, MeQueryVariables>;
 export const UpdateProfileDocument = new TypedDocumentString(`
-    mutation UpdateProfile($firstName: String, $lastName: String) {
-  updateProfile(firstName: $firstName, lastName: $lastName) {
+    mutation UpdateProfile($request: ProfileUpdateRequest!) {
+  updateProfile(request: $request) {
     email
     firstName
     lastName
