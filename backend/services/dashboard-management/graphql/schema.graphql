@@ -37,21 +37,15 @@ input DashboardCreateRequest {
     definition: String!
 }
 
-# Data required to update a dashboard. Every field is THREE-STATE: omitting it leaves
-# the stored value alone, sending it with a value sets it, and sending an explicit null
-# clears it. That is why every field is declared nullable — `definition: String`, not
-# `String!` — even though the column behind it is NOT NULL: a non-null input field with
-# no default is REQUIRED by validation, which would make the absent state (the one that
-# means "leave it alone") unrepresentable.
+# Data required to update a dashboard. Every field is three-state: omit it to leave the
+# stored value alone, send a value to set it, send an explicit null to clear it.
 #
-# There is deliberately no `token`. The mutation's own `token` argument names the
-# dashboard; a second one in the payload could only agree with it or name a different
-# record, and this input makes the disagreement unrepresentable rather than refused.
-# Nothing here renames a dashboard — a dashboard has no rename channel today.
+# There is no `token`: the mutation's own `token` argument names the dashboard, so no
+# request can name a second one.
 #
-# `definition` is the exception to the clearing rule. The column is NOT NULL and a
-# dashboard with no definition is not a thing, so an explicit null on it is REFUSED
-# rather than folded to an empty document.
+# `definition` is the exception to the clearing rule — omit it to keep the stored
+# document, but an explicit null is REFUSED, because a dashboard with no definition is
+# not a thing. It is declared nullable only so that omitting it stays expressible.
 input DashboardUpdateRequest {
     name: String
     description: String

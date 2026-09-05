@@ -87,9 +87,12 @@ func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateReq
 	return created, nil
 }
 
-// UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with
-// the given token: a field the request omits is left alone, a field it sends is written,
-// and an explicit null clears it — except definition, which refuses one (see below).
+// UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with the
+// given token. What the three states mean, why the input carries no token, and why
+// definition refuses an explicit null are all stated once on DashboardUpdateRequest in
+// model.go; this function is where those decisions are carried out. What is said here is
+// only what is about the ORDER of operations, which is a property of this code and of
+// nowhere else.
 //
 // When expectedUpdatedAt is non-nil it is an optimistic-concurrency precondition: the
 // save is rejected with ErrConflict if the row's current UpdatedAt no longer matches,
@@ -104,33 +107,40 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	}
 	current := matches[0]
 
-	// 🔴 EVERY FOLD AND EVERY VALIDATION HAPPENS BEFORE THE FIRST WRITE, and that
-	// ordering is the contract rather than a tidiness preference. A request carrying a
-	// rename AND a malformed definition must be refused WHOLE: applying the name and
-	// then failing on the document would leave a caller who retries having already
-	// half-applied their first attempt, with nothing anywhere to say so.
+	// 🔴 EVERY FOLD AND EVERY VALIDATION HAPPENS BEFORE THE FIRST WRITE, and both halves
+	// of that ordering are contract rather than tidiness.
 	//
-	// The assignment map is built from the fields the request actually NAMED, which is
-	// what makes this a partial update at the SQL level and not merely at the caller's:
-	// a column nobody mentioned is not in the statement at all, so it cannot be written
-	// from a stale read.
+	// Before the write: a request carrying a rename AND a malformed definition is refused
+	// WHOLE. Applying the name and then failing on the document would leave a caller who
+	// retries having already half-applied their first attempt, with nothing anywhere to
+	// say so. Pinned by TestUpdateDashboard_ARefusedDefinitionLeavesTheRenameUnwritten.
 	//
-	// The folds run BEFORE the precondition check on purpose. A malformed request is
-	// malformed whoever else is writing, so reporting it as a conflict would send the
-	// caller off to reload and retry a request that can never succeed.
+	// Before the PRECONDITION: a malformed request is malformed whoever else is writing,
+	// so reporting it as ErrConflict would send the caller off to reload and retry a
+	// request that can never succeed. Pinned by
+	// TestUpdateDashboard_AMalformedRequestIsRefusedAsMalformedNotAsAConflict — without
+	// which moving the compare above these folds passes the whole suite.
+	//
+	// 🔴 THE FOLDS WRITE INTO assignments AND NOT INTO `current`, WHICH IS WHAT MAKES
+	// "the empty path returns the row AS READ" TRUE BY CONSTRUCTION. An earlier version
+	// assigned each folded value onto `current` as well and then never read it back — the
+	// non-empty path returns the reload, and the empty path is reached only when no fold
+	// ran. Dead stores are not merely untidy here: they mean a `return current, nil` added
+	// to the write path later would hand the caller values that were never written, and
+	// nothing about it would look wrong.
+	//
+	// The map holds exactly the columns the request NAMED, which is what makes this a
+	// partial update at the SQL level and not merely at the caller's: a column nobody
+	// mentioned is not in the statement at all, so it cannot be written from a stale read.
 	assignments := map[string]any{}
 	if request.Name.Set {
-		current.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
-		assignments["name"] = current.Name
+		assignments["name"] = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
 	}
 	if request.Description.Set {
-		current.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
-		assignments["description"] = current.Description
+		assignments["description"] = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
 	}
-	// 🔴 definition TAKES ApplyToRequired, SO AN EXPLICIT NULL IS REFUSED. The column is
-	// NOT NULL and the document is a dashboard's entire content (opaque versioned JSON),
-	// so there is no reading of "clear it" that leaves a dashboard behind — folding the
-	// null to "" would store a document nothing can render, and report success.
+	// definition takes ApplyToRequired, which REFUSES an explicit null — see
+	// DashboardUpdateRequest in model.go for why a dashboard may not be left without one.
 	//
 	// Validation is gated on Set for the same reason the fold is: definitionJSON is a
 	// check on what the CALLER SENT. Re-running it over the stored document on every
@@ -145,7 +155,6 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 		if derr != nil {
 			return nil, derr
 		}
-		current.Definition = def
 		assignments["definition"] = def
 	}
 
@@ -158,10 +167,10 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	//
 	// Under a precondition the check below still runs first, so a STALE one is a
 	// conflict whether or not any field was named — an empty update is not a way to be
-	// told "success" about a row that has moved on. What is returned is the row AS READ,
-	// whose UpdatedAt equals the precondition the caller supplied; reloading instead
-	// would hand a caller who wrote nothing a baseline advanced past a concurrent
-	// writer's content they have never seen.
+	// told "success" about a row that has moved on. What is returned is the row exactly
+	// as it was READ, since nothing above touched it; reloading instead would hand a
+	// caller who wrote nothing a baseline advanced past a concurrent writer's content
+	// they have never seen.
 	if expectedUpdatedAt != nil {
 		// The clean early-out against the caller's stated version — the exact string the
 		// caller was handed by core/graphql.FormatTime, so the layout must match it.

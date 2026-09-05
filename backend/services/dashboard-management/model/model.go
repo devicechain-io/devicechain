@@ -98,6 +98,17 @@ type DashboardCreateRequest struct {
 // OptionalString rather than a plain string because the ABSENT state is what "leave the
 // definition alone while I rename this" is spelled with, and a plain string cannot spell
 // it.
+//
+// That is also why the SDL declares it `definition: String` and not `String!` even though
+// the column is NOT NULL. A non-null input field with no default is REQUIRED by
+// validation, so declaring it that way would delete the ABSENT state along with the null
+// and make every rename resend the whole document. The schema admits the null; this fold
+// refuses it, with a message about the REQUEST rather than about the document.
+//
+// This comment is the single home for all of the above. The SDL states the contract for
+// the clients that read it, and UpdateDashboard in api.go points here rather than
+// restating it a third time — three copies of one argument is three chances for the
+// argument to drift.
 type DashboardUpdateRequest struct {
 	Name        dcgraphql.OptionalString
 	Description dcgraphql.OptionalString

@@ -23,10 +23,9 @@ import (
 // The guarantees split across three layers, and no one of them is sufficient:
 //
 //   - THE SHAPE OF THE INPUT is only observable here, against the real schema: that
-//     `token` is not a member of DashboardUpdateRequest, that `request` is required, and
-//     — the one this conversion turns on — that `definition` is NULLABLE in the SDL. A
-//     model test cannot see any of the three, because all three are decisions the schema
-//     makes before a resolver runs.
+//     `token` is not a member of DashboardUpdateRequest, and — the one this conversion
+//     turns on — that `definition` is NULLABLE in the SDL. A model test cannot see
+//     either, because both are decisions the schema makes before a resolver runs.
 //   - THE THREE STATES REACHING STORAGE live in the model harness
 //     (model/partial_update_families_test.go), which drives the real Api against a real
 //     database.
@@ -34,6 +33,14 @@ import (
 //     core's graphql.TestOptionalStringCarriesThreeStates. Every field on this input is
 //     an OptionalString, so that proof carries here by construction rather than by
 //     repetition.
+//
+// 🔴 WHAT IS DELIBERATELY NOT TESTED HERE: that `request: DashboardUpdateRequest!`
+// refuses a null. That is graphql-go's guarantee, not ours, and the Go binding cannot
+// even express the alternative — the resolver takes `Request model.DashboardUpdateRequest`
+// by value, so a schema declaring the argument nullable would panic in MustParseSchema
+// before any test ran. A test for it is a green that no mutant of OUR code can turn red,
+// and this arc has now produced three of those; it was written and then deleted rather
+// than left as decoration.
 //
 // 🔴 WHY `definition: String` AND NOT `String!`, WHEN THE COLUMN IS NOT NULL. A non-null
 // input field with no default is REQUIRED by validation, which would make the ABSENT
@@ -146,23 +153,6 @@ func TestUpdateDashboardInputCannotCarryAToken(t *testing.T) {
 			"refused by the schema — either the field was re-added to the input, or an " +
 			"undeclared field is being silently dropped again")
 	}
-}
-
-// `request` is non-null, so a caller who sends nothing gets a request error rather than a
-// silently successful no-op that returns the dashboard unchanged.
-func TestUpdateDashboardRequiresARequest(t *testing.T) {
-	_, ctx := newWireFixture(t)
-	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
-	res := schema.Exec(ctx, `mutation($token: String!) {
-	  updateDashboard(token: $token, request: null) { token }
-	}`, "", map[string]any{"token": "whatever"})
-	for _, e := range res.Errors {
-		if e.Path == nil {
-			return
-		}
-	}
-	t.Fatalf("a null request reached the resolver instead of being refused by the schema "+
-		"(errors: %v)", res.Errors)
 }
 
 // THE COUNTERWEIGHT, and it is what makes the two rejections above mean anything: they

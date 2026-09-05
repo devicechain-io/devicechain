@@ -47,20 +47,32 @@ func readDashboard(t *testing.T, api *Api, ctx context.Context, token string) *D
 	return found[0]
 }
 
-// 🔴 AN EXPLICIT NULL ON definition IS REFUSED, NOT FOLDED TO AN EMPTY DOCUMENT.
+// 🔴 AN EXPLICIT NULL ON definition IS REFUSED BY THE FOLD, NOT BY THE JSON VALIDATOR.
 //
-// The column is NOT NULL and the definition is the dashboard: a fold to "" would store a
-// document nothing can render and report success, which is the fail-open ApplyToRequired
-// exists to close. A whitespace-only string is the same request spelled differently and
-// is refused with it — otherwise the API would have a second, undocumented way to reach
-// the state the null was refused for.
+// The distinction is the whole test, and asserting only "there was an error" misses it. A
+// fold that folded the null to "" — dcgraphql.ApplyTo instead of ApplyToRequired — would
+// ALSO be refused, because "" is not valid JSON, and it would be refused by
+// ErrInvalidDefinition whose own text contains the word "definition". So the obvious
+// assertions (an error occurred; it mentions the field) are satisfied by a mutant that
+// deletes the fold this conversion turns on, and the suite would go green having lost it.
+//
+// What separates them is WHICH refusal arrives. ApplyToRequired says "cannot be cleared" /
+// "cannot be blank", which is a statement about the REQUEST — send a value or omit it.
+// ErrInvalidDefinition says the document is not a JSON object, which is a statement about
+// a document the caller never sent, and would send whoever hit it looking for a malformed
+// payload that does not exist. Both refuse; only one is answerable.
+//
+// A whitespace-only string is refused with the null because it is the same request spelled
+// differently — otherwise the API would have a second, undocumented way to reach the state
+// the null was refused for.
 func TestUpdateDashboard_AnExplicitNullOnDefinitionIsRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		field util.OptionalString
+		says  string
 	}{
-		{"explicit null", util.ClearedString()},
-		{"whitespace only", util.OptionalStringOf("   ")},
+		{"explicit null", util.ClearedString(), "cannot be cleared"},
+		{"whitespace only", util.OptionalStringOf("   "), "cannot be blank"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api, ctx := partialUpdateApiCtx(t)
@@ -72,6 +84,12 @@ func TestUpdateDashboard_AnExplicitNullOnDefinitionIsRefused(t *testing.T) {
 			require.Error(t, err, "a dashboard was left with no definition, successfully")
 			assert.Contains(t, err.Error(), "definition",
 				"the refusal must name the field the caller can act on")
+			assert.Contains(t, err.Error(), tc.says,
+				"the refusal did not come from the required-field fold — the request was "+
+					"refused for what it produced rather than for what it asked")
+			assert.NotErrorIs(t, err, ErrInvalidDefinition,
+				"an unsendable request was reported as a malformed document, which sends the "+
+					"caller looking for a payload they never sent")
 
 			assert.JSONEq(t, defV1, string(readDashboard(t, api, ctx, "dash-a").Definition),
 				"the refused update still moved the stored definition")
@@ -128,6 +146,57 @@ func TestUpdateDashboard_AnOmittedDefinitionIsLeftAlone(t *testing.T) {
 	got := readDashboard(t, api, ctx, "dash-a")
 	assert.Equal(t, "Renamed", got.Name.String)
 	assert.JSONEq(t, defV1, string(got.Definition), "the omitted definition was overwritten")
+}
+
+// 🔴 A MALFORMED REQUEST IS REFUSED AS MALFORMED, EVEN WHEN THE PRECONDITION IS STALE.
+//
+// The folds and the version check are both refusals, so the ORDER they run in decides
+// which error a caller carrying both problems is told about — and the two send that
+// caller to opposite places. ErrConflict means "reload and re-apply", which is advice a
+// client can act on and which, for a request that can never succeed, is an instruction to
+// loop forever. The fold's refusal means "change what you sent".
+//
+// So the folds run first, and this is what says so: moving the RFC3339Nano compare above
+// them passes every other test in this package and in graphql/, because no other test
+// sends a request that is BOTH stale and unsendable. That combination is the missing input
+// class, not a missing assertion.
+//
+// Its counterweight is TestUpdateOptimisticConcurrency, where a WELL-FORMED request under
+// a stale precondition is still ErrConflict — without which this could be satisfied by a
+// precondition that had stopped being checked at all.
+func TestUpdateDashboard_AMalformedRequestIsRefusedAsMalformedNotAsAConflict(t *testing.T) {
+	const stale = "2000-01-01T00:00:00Z"
+	for _, tc := range []struct {
+		name  string
+		field util.OptionalString
+		says  string
+	}{
+		{"explicit null", util.ClearedString(), "cannot be cleared"},
+		{"whitespace only", util.OptionalStringOf("   "), "cannot be blank"},
+		{"not json", util.OptionalStringOf("}{"), ErrInvalidDefinition.Error()},
+		{"a well-formed non-object", util.OptionalStringOf(`[{"id":"w1"}]`), ErrInvalidDefinition.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, ctx := partialUpdateApiCtx(t)
+			seedDashboards(t, api, ctx, "dash-a")
+			expected := stale
+
+			_, err := api.UpdateDashboard(ctx, "dash-a", &DashboardUpdateRequest{
+				Name:       util.OptionalStringOf("Renamed"),
+				Definition: tc.field,
+			}, &expected)
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrConflict,
+				"a request that can never succeed was reported as a conflict, which tells the "+
+					"caller to reload and try again — forever")
+			assert.Contains(t, err.Error(), tc.says)
+
+			got := readDashboard(t, api, ctx, "dash-a")
+			assert.Equal(t, "Original dash-a", got.Name.String,
+				"the refused update still applied the rename")
+			assert.JSONEq(t, defV1, string(got.Definition))
+		})
+	}
 }
 
 // ─── the empty update, under and without a precondition ────────────────────
