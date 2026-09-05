@@ -128,12 +128,20 @@ func TestRenameChannel_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 // THE COUNTERWEIGHT. The translation must not swallow an unrelated write failure into "that
 // token is taken", which would be a worse lie than the driver text: it names a cause the
 // caller can act on, and acting on it would not help.
+//
+// 🔴 IT IS ALSO WHAT KEEPS THE MOVE INTO core HONEST. The matcher is now
+// rdb.IsUniqueViolation, which recognises a violation from EITHER piece of evidence — the
+// index name alone, or the marker plus every named column. Recognising more spellings is
+// only safe while it still refuses these, and the last two rows are the ones a looser
+// matcher passes: the same VIOLATION on another table, and another INDEX on this one.
 func TestRenameChannel_AnUnrelatedWriteFailureIsNotReportedAsACollision(t *testing.T) {
 	for name, err := range map[string]error{
-		"connection lost":   fmt.Errorf("driver: bad connection"),
-		"another table":     fmt.Errorf(`UNIQUE constraint failed: notification_policies.tenant_id, notification_policies.token`),
-		"a different index": fmt.Errorf(`duplicate key value violates unique constraint "uix_notification_policies_tenant_token" (SQLSTATE 23505)`),
-		"no error":          nil,
+		"connection lost":              fmt.Errorf("driver: bad connection"),
+		"another table":                fmt.Errorf(`UNIQUE constraint failed: notification_policies.tenant_id, notification_policies.token`),
+		"a different index":            fmt.Errorf(`duplicate key value violates unique constraint "uix_notification_policies_tenant_token" (SQLSTATE 23505)`),
+		"another index on this table":  fmt.Errorf(`duplicate key value violates unique constraint "uix_notification_channels_tenant_name" (SQLSTATE 23505)`),
+		"another column on this table": fmt.Errorf(`UNIQUE constraint failed: notification_channels.tenant_id, notification_channels.name`),
+		"no error":                     nil,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if isChannelTokenCollision(err) {

@@ -506,6 +506,23 @@ jobs:
         # quietly stops naming it. Nothing goes red at runtime.
         run: hack/check-rejection-code-labels.sh
 
+      - name: partial-update guard wiring self-test
+        run: hack/check-partial-update-guards.sh --self-test
+
+      - name: every update* surface wires both partial-update guards
+        # Two per-service Go guards protect the three-state update semantic
+        # (omitted leaves a field alone, explicit null clears, a value sets):
+        # one reflects over a service's Api, the other walks its served schema
+        # for SDL defaults — a default makes every update OMITTING that field
+        # write it, and is only reachable once an input has been converted.
+        #
+        # Neither can see a module that calls neither of them. A service added
+        # with an `updateThing` mutation and no partial-update test has a fully
+        # green suite and no coverage at all, and the observation that would
+        # catch it is about a module's ABSENCE — so it is asked of the tree here
+        # rather than from inside any module.
+        run: hack/check-partial-update-guards.sh
+
   # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
   #

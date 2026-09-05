@@ -82,10 +82,11 @@ type DashboardCreateRequest struct {
 // 🔴 THERE IS NO Token FIELD, and its absence is the point. The mutation's `token`
 // argument names the dashboard; the create input carried a second one, which could only
 // agree with the argument or name a different record. That disagreement used to be
-// REFUSED (dcgraphql.ErrPayloadTokenDisagrees) after the payload token had already been
-// written onto the row in an earlier incarnation, where an empty one — legal, since
+// REFUSED by a reconcile rule in core, after the payload token had already been written
+// onto the row in an earlier incarnation, where an empty one — legal, since
 // `token: String!` admits "" — blanked the dashboard's token and left it addressable by
-// nothing. Dropping the field makes the whole class unrepresentable rather than caught.
+// nothing. Dropping the field makes the whole class unrepresentable rather than caught,
+// and this was the last conversion, so the reconcile rule was deleted with it.
 //
 // Nothing is lost by dropping it, because unlike a connector, a notification channel or
 // an AI provider, a dashboard has no rename channel: nothing keys a secret or a policy

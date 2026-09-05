@@ -21,17 +21,18 @@ import (
 // # 🔴 THE DISAGREEMENT IS NOW UNREPRESENTABLE, AND THE TWO POLICY TESTS ARE GONE
 //
 // Both inputs are dedicated *UpdateRequests carrying no token at all. The policy's
-// reconcile rule (dcgraphql.ErrPayloadTokenDisagrees) therefore has nothing left to
-// govern in this service, and the two tests that drove it — a disagreeing payload token
-// refused, an empty one read as "unspecified" — would now be asserting the behaviour of a
-// field that does not exist. Deleting them rather than rewriting them against the new
-// shape is deliberate: there is no request they could send.
+// reconcile rule therefore had nothing left to govern in this service, and the two tests
+// that drove it — a disagreeing payload token refused, an empty one read as "unspecified"
+// — would now be asserting the behaviour of a field that does not exist. Deleting them
+// rather than rewriting them against the new shape is deliberate: there is no request they
+// could send. updateDashboard was the rule's only other caller, so
+// dcgraphql.ErrPayloadTokenDisagrees was deleted outright once it too was converted.
 //
 // What replaces the claim structurally is the guard in
 // partial_update_guard_test.go, which asks the request TYPE whether it carries a Token
-// field, so a token reintroduced into either input fails on the day it is added. The rule
-// itself is still exercised exhaustively in core (graphql.TestErrPayloadTokenDisagrees,
-// TestErrRenameTokenUnusable).
+// field, so a token reintroduced into either input fails on the day it is added. What is
+// still exercised in core is the RENAME floor alone (graphql.TestErrRenameTokenUnusable),
+// which RenameNotificationChannel below is its one caller for.
 //
 // # What stays here is the CHANNEL rename, which survived rather than being deleted
 //

@@ -27,21 +27,24 @@ import (
 //
 // # 🔴 THE RECONCILING FAMILIES ARE GONE FROM THIS SERVICE, AND THE TESTS WENT WITH THEM
 //
-// The previous version of this file drove seven families through a reconcile rule
-// (dcgraphql.ErrPayloadTokenDisagrees) and asserted each was WIRED to it. All seven have
-// since been converted to a dedicated *UpdateRequest carrying no token at all, which
-// makes the disagreement unrepresentable rather than refused — so there is nothing left
-// in this service for that rule to govern, and the tests that drove it would now iterate
-// an empty list and pass having asserted nothing.
+// The previous version of this file drove seven families through a reconcile rule and
+// asserted each was WIRED to it. All seven have since been converted to a dedicated
+// *UpdateRequest carrying no token at all, which makes the disagreement unrepresentable
+// rather than refused — so there is nothing left in this service for that rule to govern,
+// and the tests that drove it would now iterate an empty list and pass having asserted
+// nothing.
 //
 // Deleting them rather than leaving the loop is deliberate: a table-driven test over an
 // empty table is the most convincing kind of green there is. What replaces the claim is
 // the guard below, which asks the TYPE rather than a list, so a family added tomorrow on
 // the full-replace shape fails on the day it is added.
 //
-// The rule itself is still exercised exhaustively in core (graphql.TestErrPayloadTokenDisagrees,
-// TestErrRenameTokenUnusable) and still governs the update mutations in
-// dashboard-management and notification-management, which have not been converted.
+// The rule itself no longer exists. Every update mutation on the platform now takes a
+// dedicated *UpdateRequest, so its last two callers — updateNotificationPolicy and
+// updateDashboard — were converted out from under it and dcgraphql.ErrPayloadTokenDisagrees
+// was deleted with them. What survives in core is only the RENAME floor
+// (graphql.TestErrRenameTokenUnusable), which this service's RenameDeviceProfile states
+// inline so its refusal can say what a blank costs a profile.
 
 // 🔴 THE EXHAUSTIVENESS CHECK OVER THIS SERVICE'S UPDATE SURFACE.
 //

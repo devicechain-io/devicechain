@@ -6,7 +6,6 @@ package model
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -270,32 +269,33 @@ func ErrChannelTokenTaken(token, newToken string) error {
 // TestRenameCollisionIndexNameMatchesTheTable is what keeps the two from drifting apart.
 const channelTokenIndexName = "uix_notification_channels_tenant_token"
 
-// isChannelTokenCollision reports whether a write failed because another row already holds
-// the token, as opposed to failing for any other reason.
+// isChannelTokenCollision reports whether a write failed because another channel already
+// holds the token, as opposed to failing for any other reason.
 //
-// It matches TWO spellings because the two databases this code runs against report the
-// violation differently, and recognising only one of them would make the translation a
-// property of the harness rather than of production:
+// # THE MATCHING LIVES IN core; WHAT IS HERE IS THE EVIDENCE THIS TABLE OFFERS
 //
-//   - Postgres, which is production, names the INDEX: `duplicate key value violates unique
-//     constraint "uix_notification_channels_tenant_token"`.
-//   - SQLite, which is only ever the unit-test fixture, names the COLUMNS instead:
-//     `UNIQUE constraint failed: notification_channels.tenant_id, notification_channels.token`.
+// The two databases report a unique violation differently — Postgres names the INDEX,
+// SQLite names the COLUMNS — and rdb.IsUniqueViolation is the one place on the platform
+// that knows both spellings. This service wrote its own matcher first, before that
+// function existed; three other renames have since arrived at the same code, which is how
+// four call sites come to disagree about what counts as a collision.
 //
-// Matching is on the message text rather than on a driver error type, because that is the
-// only thing both drivers agree to expose without pulling a Postgres driver dependency into
-// a package two maintainer-only tools import. It is narrow enough not to catch an unrelated
-// failure: both patterns name this table's uniqueness constraint specifically.
+// Naming the ONE column that distinguishes this index, rather than the pair the index
+// declares, is deliberate: it does not depend on the order the index lists them in, and it
+// is still table-specific, so an unrelated collision — a policy token, a version number —
+// is not translated into "that token is already in use".
+//
+// # 🔴 IT IS STILL A NAMED FUNCTION, AND NOT FOR TIDINESS
+//
+// The other renames call rdb.IsUniqueViolation inline at their write. Here the arguments
+// have tests of their own — TestRenameChannel_ThePostgresUniqueViolationIsRecognised drives
+// production's Postgres branch, which the SQLite fixture cannot reach, and
+// TestRenameChannel_AnUnrelatedWriteFailureIsNotReportedAsACollision is its counterweight —
+// and a test that spelled the index and the column out for itself would keep passing after
+// the call site's arguments moved away from it. One function means the tests and the write
+// ask the same question with the same evidence.
 func isChannelTokenCollision(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	if strings.Contains(msg, channelTokenIndexName) {
-		return true
-	}
-	return strings.Contains(msg, "UNIQUE constraint failed") &&
-		strings.Contains(msg, "notification_channels.token")
+	return rdb.IsUniqueViolation(err, channelTokenIndexName, "notification_channels.token")
 }
 
 // applyChannelSecret writes the channel's delivery secret to the store to match the
