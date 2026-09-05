@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -98,9 +99,9 @@ type NotificationRuleCreateRequest struct {
 	Recipients   *string
 }
 
-// NotificationPolicyCreateRequest is the data required to create or update a
-// policy together with its full rule set (Rules replaces any existing rules on
-// update).
+// NotificationPolicyCreateRequest is the data required to CREATE a policy together with
+// its full rule set. It is no longer the update input; NotificationPolicyUpdateRequest
+// is.
 type NotificationPolicyCreateRequest struct {
 	Token                string
 	Name                 *string
@@ -112,6 +113,58 @@ type NotificationPolicyCreateRequest struct {
 	Enabled              bool
 	Rules                []*NotificationRuleCreateRequest
 	Metadata             *string
+}
+
+// NotificationPolicyUpdateRequest is the three-state update input: an OMITTED field
+// leaves the stored value alone, an explicit NULL clears it, and a value sets it.
+//
+// It carries NO Token. The `token` argument names the record, and this input has no way
+// to disagree with it — where before the two were reconciled and a disagreement refused.
+// A policy's token is referenced by nothing and pinned by nothing, so there is no rename
+// mutation to replace it with: a policy is renamed by creating one and deleting the other.
+//
+// # 🔴 Rules IS OPTIONAL, AND THAT IS THE POINT OF THE CONVERSION
+//
+// The create input declares `Rules []*NotificationRuleCreateRequest` — required, and on
+// the old update path it was applied unconditionally: every update DELETED every rule and
+// reinserted the request's, so an edit that said nothing about rules destroyed and
+// recreated them (new ids, new updated_at) or, if the caller omitted the list, emptied the
+// policy outright and returned success. For the service that carries alarms to humans,
+// that is an alerting outage spelled as a metadata edit.
+//
+// Optional makes the absent state representable:
+//
+//	ABSENT   -> the rule set is untouched, ids and all
+//	NULL, [] -> the policy now has no rules
+//	[a, b]   -> the rule set is exactly [a, b] (the whole-replace that was the only option)
+//
+// See OptionalNotificationRuleList for why null and [] are one state rather than two.
+//
+// # 🔴 deviceTypeToken IS DELIBERATELY ABSENT FROM THIS INPUT
+//
+// A non-empty deviceTypeToken is REFUSED at write (validateDeviceTypeScoping): the
+// dispatcher skips a device-type-scoped policy rather than applying it tenant-wide, so
+// accepting one would return success on a policy that delivers nothing. The create input
+// keeps the field, and keeps the refusal, because that is where an operator meets the
+// limitation and reads the explanation.
+//
+// On UPDATE the field would have no reachable meaning at all. Every stored policy's
+// device_type_token is NULL — the create path is the only way one is written, and it
+// refuses anything else — so a value is refused, and a null clears a column that is
+// already null. A field whose only accepted request is a no-op is not a field, and
+// leaving it here would mean declaring it to the partial-update harness with a seeded
+// value no create path can produce. When the cross-service originator→device-type
+// resolution lands, this field comes back here alongside the dispatcher change that
+// honours it.
+type NotificationPolicyUpdateRequest struct {
+	Name                 dcgraphql.OptionalString
+	Description          dcgraphql.OptionalString
+	ThrottleSeconds      dcgraphql.OptionalInt32
+	EscalateAfterSeconds dcgraphql.OptionalInt32
+	MaxEscalations       dcgraphql.OptionalInt32
+	Enabled              dcgraphql.OptionalBool
+	Rules                OptionalNotificationRuleList
+	Metadata             dcgraphql.OptionalString
 }
 
 // NotificationPolicySearchCriteria locates policies by optional filters.

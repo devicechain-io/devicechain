@@ -25,10 +25,12 @@ func (r *SchemaResolver) CreateNotificationPolicy(ctx context.Context, args stru
 	return &NotificationPolicyResolver{M: *created, S: r, C: ctx}, nil
 }
 
-// UpdateNotificationPolicy updates a routing policy (replacing its rule set) by token.
+// UpdateNotificationPolicy applies a partial update to a routing policy: a field the
+// request omits is left alone, an explicit null clears it, a value sets it. An omitted
+// `rules` leaves the stored rule set untouched; a list replaces it wholesale.
 func (r *SchemaResolver) UpdateNotificationPolicy(ctx context.Context, args struct {
 	Token   string
-	Request model.NotificationPolicyCreateRequest
+	Request model.NotificationPolicyUpdateRequest
 }) (*NotificationPolicyResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err

@@ -247,15 +247,33 @@ disimularse.
 | El token de la petición | Qué mutaciones | Un token que **no coincide** | Un token **vacío** |
 | --- | --- | --- | --- |
 | **No existe** | toda [actualización parcial](#which-mutations-are-partial-updates) | *no representable* — la entrada no tiene campo `token`, así que el esquema lo rechaza | — |
-| **Debe coincidir** | `updateNotificationPolicy`, `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
-| **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
+| **Debe coincidir** | `updateDashboard` | **rechazado** | ignorado — se lee como «sin especificar» |
+| **Nombra el nuevo token** (un renombrado) | `updateDeviceProfile`, `updateConnector`, `updateAiProvider` | **renombra el registro** | **rechazado** |
 
-La fila del renombrado no es un resto del pasado. Cada una de esas cuatro vincula lo que depende del
-registro por su id interno y no por su token — el secreto de entrega de un canal, la credencial de
-un conector, el manejador de clave de un proveedor —, así que renombrar uno no deja nada huérfano.
-Una lleva además una salvaguarda propia: `updateDeviceProfile` rechaza el renombrado una vez que el
-perfil ha sido **publicado o adoptado** por un tipo de dispositivo, porque a partir de ahí las
-reglas publicadas y los inventarios de dispositivos *sí* lo nombran por token.
+La fila del renombrado no es un resto del pasado. Cada una de ellas vincula lo que depende del
+registro por su id interno y no por su token — la credencial de un conector, el manejador de clave
+de un proveedor —, así que renombrar uno no deja nada huérfano. Una lleva además una salvaguarda
+propia: `updateDeviceProfile` rechaza el renombrado una vez que el perfil ha sido **publicado o
+adoptado** por un tipo de dispositivo, porque a partir de ahí las reglas publicadas y los
+inventarios de dispositivos *sí* lo nombran por token.
+
+**Un canal de notificación se renombra con su propia mutación, no con el token de la petición.** Su
+renombrado siempre fue intencionado — el secreto de entrega está indexado por el id interno del
+canal, y las reglas de una política guardan ese id y no el token —, así que cuando
+`updateNotificationChannel` pasó a ser una actualización parcial, la capacidad se movió en lugar de
+desaparecer:
+
+```graphql
+mutation {
+  renameNotificationChannel(token: "smtp-old", newToken: "smtp-primary") { token }
+}
+```
+
+Un `newToken` en blanco se rechaza (dejaría un canal vivo al que no se puede llegar por ningún
+nombre), pasar el token actual del canal es una operación idempotente que devuelve el canal, y un
+`newToken` que ya tenga otro de tus canales se rechaza por su nombre en lugar de aflorar como una
+violación de restricción. `updateNotificationPolicy` no necesitó tal mutación: nada se indexa por el
+token de una política, así que una política se mueve creando la nueva y borrando la antigua.
 
 **El token de un geocerco es inmutable, y ahora la regla vive en la primera fila.**
 `updateGeoFence` reconciliaba dos tokens y rechazaba una discrepancia; su entrada ya no lleva
@@ -293,7 +311,8 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 
 | Campo | Qué ocurre al omitirlo |
 | --- | --- |
-| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *limpia*. Lo contrario del `null` de una actualización parcial; consulta la advertencia de abajo |
+| `secret` en `updateConnector`, `updateAiProvider` | **Se conserva** — y una cadena vacía lo *limpia*. Lo contrario del `null` de una actualización parcial; consulta la advertencia de abajo |
+| `secret` en `updateNotificationChannel` | **Se conserva**, y `null` lo *limpia*, como cualquier otro campo de una actualización parcial. Una cadena vacía también lo limpia, así que un cliente que ya lo escriba así sigue funcionando. Es el único secreto de solo escritura sin la inversión de abajo |
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `firstName` / `lastName` en `updateProfile` | **Se conservan.** La única `update*` que toma argumentos sueltos en lugar de un `request`; una cadena vacía sí limpia |
@@ -303,9 +322,11 @@ completo de arriba. Lo que no se nombre aquí sigue el contrato de su mutación.
 | Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | Se borran — y borrar aquí significa **heredar el valor por defecto de la plataforma**, nunca «sin límite» |
 
 :::danger Una cadena vacía no es una forma segura de decir «deja esto como está»
-Para los tres campos `secret` de solo escritura, **null conserva y `""` borra** — exactamente lo
-contrario de una actualización parcial, donde null limpia. No puedes leer un secreto de vuelta, así
-que no hay nada que reenviar; la respuesta de la API es que omitirlo lo conserva.
+Para el `secret` de solo escritura de `updateConnector` y `updateAiProvider`, **null conserva y `""`
+borra** — exactamente lo contrario de una actualización parcial, donde null limpia. No puedes leer
+un secreto de vuelta, así que no hay nada que reenviar; la respuesta de la API es que omitirlo lo
+conserva. (`updateNotificationChannel` ya no tiene esa inversión: allí omitirlo lo conserva y
+**tanto** `null` como `""` lo limpian.)
 
 Esto importa porque el consejo de arriba para el reemplazo completo — leer la entidad y reenviarla
 entera — te empuja a rellenar todos los campos. Hacerlo con un secreto que no querías tocar,
@@ -329,8 +350,24 @@ descuido: el token de su petición es un **canal de renombrado** — un perfil p
 mientras nada lo haya adoptado ni publicado —, y una entrada de actualización que omitiera el token
 eliminaría esa capacidad en lugar de convertirla.
 
-Ninguna otra área se ha convertido todavía: notification-management, dashboard-management,
-outbound-connectors, ai-inference y user-management siguen siendo reemplazos completos.
+En notification-management se han convertido **ambas** mutaciones `update*`:
+`updateNotificationChannel` y `updateNotificationPolicy`. Dos cosas de la política conviene saberlas
+antes de enviar una:
+
+- **`rules` es opcional, y omitirlo deja ahora el conjunto de reglas exactamente como está** — las
+  mismas filas, no una copia reconstruida. Antes era obligatorio y cada actualización reemplazaba el
+  conjunto entero, así que una edición que solo cambiaba un nombre destruía y recreaba cada regla; y
+  una edición que dejaba `rules` fuera vaciaba la política y devolvía éxito. El reemplazo completo
+  sigue disponible: envía la lista. Enviar `null` **o** `[]` vacía el conjunto de reglas — para una
+  lista son la misma petición escrita de dos formas.
+- **`deviceTypeToken` no está en la entrada de actualización.** Un valor no vacío se rechaza al
+  escribir (el despachador omite una política acotada a un tipo de dispositivo, así que aceptarla
+  devolvería éxito sobre una política que no entrega nada), lo que dejaba al campo sin ninguna
+  petición aceptable más allá de una operación nula. Sigue en la entrada de creación, donde el
+  rechazo se explica solo.
+
+Las áreas restantes no se han convertido: dashboard-management, outbound-connectors, ai-inference y
+user-management siguen siendo reemplazos completos.
 
 :::caution[La firma es un NO fiable, y solo un SÍ parcialmente fiable]
 `request: FooCreateRequest` siempre significa reemplazo completo, y esa dirección nunca miente: una

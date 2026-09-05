@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
@@ -125,21 +126,35 @@ func TestCreateChannelSecretAndValidation(t *testing.T) {
 	}
 }
 
-// Update preserves the secret when the request omits it (nil), replaces it when a
-// value is given, and clears it on an explicit empty string.
-func TestUpdateChannelSecretPreserveOnOmit(t *testing.T) {
+// THE SECRET'S THREE STATES, all four spellings.
+//
+// The secret is the one field on the channel whose value lives outside the row, and the
+// one where getting the fold wrong is silent: a channel whose delivery credential quietly
+// went missing keeps its config, keeps returning success on every edit, and stops
+// authenticating at the moment an alarm needed to reach a human.
+//
+//	OMITTED  preserves — it cannot be read back to re-send, so this is the only reading
+//	value    rotates
+//	NULL     clears — NEW, and the state the create input could not express
+//	""       clears — unchanged, so a client already sending it keeps working
+func TestUpdateChannelSecretThreeStates(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 
-	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr("orig"), Enabled: true,
-	}); err != nil {
-		t.Fatalf("create: %v", err)
+	seed := func() {
+		if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+			Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr("orig"), Enabled: true,
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
 	}
+	seed()
 
-	// Omit the secret (nil): it must be preserved.
-	updated, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
-		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Name: strPtr("Primary"), Enabled: false,
+	// Omit the secret: it must be preserved, and the rest of the update must still apply
+	// (otherwise "preserved" could be bought by the update doing nothing at all).
+	updated, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelUpdateRequest{
+		Name:    dcgraphql.OptionalStringOf("Primary"),
+		Enabled: dcgraphql.OptionalBoolOf(false),
 	})
 	if err != nil {
 		t.Fatalf("update (omit secret): %v", err)
@@ -151,9 +166,9 @@ func TestUpdateChannelSecretPreserveOnOmit(t *testing.T) {
 		t.Fatal("other fields should still update when secret omitted")
 	}
 
-	// Provide a new secret: it must replace.
-	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
-		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr("rotated"), Enabled: true,
+	// A value rotates it.
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("rotated"),
 	}); err != nil {
 		t.Fatalf("update (new secret): %v", err)
 	}
@@ -161,11 +176,32 @@ func TestUpdateChannelSecretPreserveOnOmit(t *testing.T) {
 		t.Fatalf("secret not replaced: %q", got)
 	}
 
-	// Explicit empty string clears it.
-	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelCreateRequest{
-		Token: "smtp-primary", ChannelType: ChannelTypeSMTP, Secret: strPtr(""), Enabled: true,
+	// An explicit null clears it. This is the state that did not exist before: the only
+	// way to remove a secret used to be the empty string, which is the exact inverse of
+	// what null means on every other field of the same request.
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelUpdateRequest{
+		Secret: dcgraphql.ClearedString(),
 	}); err != nil {
-		t.Fatalf("update (clear secret): %v", err)
+		t.Fatalf("update (null secret): %v", err)
+	}
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "" {
+		t.Fatalf("secret not cleared on an explicit null: %q", got)
+	}
+
+	// And the empty string still clears, because a client that already spells the removal
+	// that way must not silently start storing "" as a credential instead.
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("restored"),
+	}); err != nil {
+		t.Fatalf("update (restore secret): %v", err)
+	}
+	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "restored" {
+		t.Fatalf("secret not restored before the empty-string case: %q", got)
+	}
+	if _, err := api.UpdateNotificationChannel(ctx, "smtp-primary", &NotificationChannelUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf(""),
+	}); err != nil {
+		t.Fatalf("update (empty-string secret): %v", err)
 	}
 	if got := channelSecretValue(t, api, ctx, "smtp-primary"); got != "" {
 		t.Fatalf("secret not cleared on empty string: %q", got)
@@ -173,10 +209,16 @@ func TestUpdateChannelSecretPreserveOnOmit(t *testing.T) {
 }
 
 // A token rename keeps the channel's delivery secret bound to it. The secret is keyed
-// by the channel's immutable id, not its mutable token, so renaming (while omitting the
-// secret) must not orphan the credential — the pre-ADR-059 token-keyed design would have
-// silently lost it and broken SMTP/webhook auth with no config change.
-func TestUpdateChannelRenamePreservesSecret(t *testing.T) {
+// by the channel's immutable id, not its mutable token, so renaming must not orphan the
+// credential — the pre-ADR-059 token-keyed design would have silently lost it and broken
+// SMTP/webhook auth with no config change.
+//
+// 🔴 THIS TEST WAS RE-POINTED, NOT REPLACED. It used to drive the rename through
+// UpdateNotificationChannel's payload token, which the partial-update conversion removed;
+// it now drives RenameNotificationChannel. Deleting it with the old shape would have
+// removed the only evidence for the claim while leaving the claim standing in three
+// comments and a core doc.
+func TestRenameChannelPreservesSecret(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 
@@ -185,10 +227,7 @@ func TestUpdateChannelRenamePreservesSecret(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Rename the token, omitting the secret (preserve-on-omit).
-	if _, err := api.UpdateNotificationChannel(ctx, "smtp-old", &NotificationChannelCreateRequest{
-		Token: "smtp-new", ChannelType: ChannelTypeSMTP, Enabled: true,
-	}); err != nil {
+	if _, err := api.RenameNotificationChannel(ctx, "smtp-old", "smtp-new"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	if got := channelSecretValue(t, api, ctx, "smtp-new"); got != "keepme" {
@@ -245,11 +284,10 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 		t.Fatal("failed policy create left a row behind")
 	}
 
-	// Update replaces the rule set (2 -> 1).
-	updated, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyCreateRequest{
-		Token:   "ops-policy",
-		Enabled: true,
-		Rules:   []*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-crit"}},
+	// An update that NAMES a rule set replaces it wholesale (2 -> 1).
+	updated, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyUpdateRequest{
+		Rules: OptionalNotificationRuleListOf(
+			[]*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-crit"}}),
 	})
 	if err != nil {
 		t.Fatalf("update policy: %v", err)
@@ -264,6 +302,155 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 	}
 	if reloaded[0].Rules[0].Channel == nil || reloaded[0].Rules[0].Channel.Token != "smtp-crit" {
 		t.Fatal("rule channel not preloaded on read")
+	}
+}
+
+// Everything a channel update can refuse is decided BEFORE anything is written.
+//
+// 🔴 THE ASSERTION IS THAT `name` DID NOT MOVE, not merely that an error came back. Under
+// a naive conversion each field is folded and saved as it is reached, so a request pairing
+// a good `name` with a bad `channelType` returns an error AND leaves the rename applied —
+// a half-configured channel the caller was told did not happen. The harness's own
+// refusal property covers the required-null case; these are the VALIDATION refusals, which
+// it has no way to declare.
+func TestUpdateChannelRefusesTheWholeUpdateBeforeWriting(t *testing.T) {
+	for name, request := range map[string]*NotificationChannelUpdateRequest{
+		"unknown channel type": {
+			Name:        dcgraphql.OptionalStringOf("Renamed"),
+			ChannelType: dcgraphql.OptionalStringOf("carrier-pigeon"),
+		},
+		"malformed config": {
+			Name:   dcgraphql.OptionalStringOf("Renamed"),
+			Config: dcgraphql.OptionalStringOf("{not json"),
+		},
+		"config is not an object": {
+			Name:   dcgraphql.OptionalStringOf("Renamed"),
+			Config: dcgraphql.OptionalStringOf(`["an","array"]`),
+		},
+		"malformed metadata": {
+			Name:     dcgraphql.OptionalStringOf("Renamed"),
+			Metadata: dcgraphql.OptionalStringOf("{nope"),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newTestApi(t)
+			ctx := tenantCtx("A")
+			if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+				Token: "chan-a", Name: strPtr("Original"), ChannelType: ChannelTypeSMTP,
+				Config: strPtr(`{"host":"smtp.example.invalid"}`), Enabled: true,
+			}); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+
+			if _, err := api.UpdateNotificationChannel(ctx, "chan-a", request); err == nil {
+				t.Fatal("the update was accepted")
+			}
+			rows, err := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("reload: err=%v rows=%d", err, len(rows))
+			}
+			if got := rows[0].Name.String; got != "Original" {
+				t.Errorf("the refused update still renamed the channel to %q", got)
+			}
+			if rows[0].ChannelType != ChannelTypeSMTP {
+				t.Errorf("the refused update still changed the channel type to %q", rows[0].ChannelType)
+			}
+			if got := string(*rows[0].Config); got != `{"host":"smtp.example.invalid"}` {
+				t.Errorf("the refused update still changed the config to %q", got)
+			}
+		})
+	}
+}
+
+// The counterweight: a channel type the catalog DOES define is still accepted, so the
+// refusals above were not bought by refusing every type.
+func TestUpdateChannelAcceptsAKnownChannelType(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeSMTP, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := api.UpdateNotificationChannel(ctx, "chan-a", &NotificationChannelUpdateRequest{
+		ChannelType: dcgraphql.OptionalStringOf(ChannelTypeWebhook),
+	}); err != nil {
+		t.Fatalf("a known channel type was refused: %v", err)
+	}
+	rows, _ := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
+	if len(rows) != 1 || rows[0].ChannelType != ChannelTypeWebhook {
+		t.Fatalf("the type did not change: %+v", rows)
+	}
+}
+
+// A policy update refuses malformed metadata the same way, and writes nothing.
+func TestUpdatePolicyRefusesMalformedMetadataBeforeWriting(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
+		Token: "ops-policy", Name: strPtr("Original"), Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyUpdateRequest{
+		Name:     dcgraphql.OptionalStringOf("Renamed"),
+		Metadata: dcgraphql.OptionalStringOf("{nope"),
+	}); err == nil {
+		t.Fatal("malformed metadata was accepted")
+	}
+	rows, err := api.NotificationPoliciesByToken(ctx, []string{"ops-policy"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reload: err=%v rows=%d", err, len(rows))
+	}
+	if got := rows[0].Name.String; got != "Original" {
+		t.Errorf("the refused update still renamed the policy to %q", got)
+	}
+}
+
+// An unknown channel token inside a rule refuses the WHOLE update — the header included —
+// rather than saving the header and then failing on the rules.
+//
+// 🔴 THE HARNESS CANNOT SEE THIS ONE. Its unknown-reference property runs over fields
+// declared RequiredRef, and `rules` is Clearable: a null on it is legal, so declaring it as
+// a reference would make the harness assert the opposite of the contract. The reference
+// lives one level down, inside a list element, which is a shape the field table has no way
+// to spell — so the property is driven here instead of being assumed covered.
+func TestUpdatePolicyUnknownChannelTokenRefusesTheWholeUpdate(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "smtp-ops", ChannelType: ChannelTypeSMTP, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
+		Token: "ops-policy", Name: strPtr("Original"), Enabled: true,
+		Rules: []*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-ops"}},
+	}); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	// The request also renames the policy, so "nothing was written" is an observation
+	// rather than a tautology about a request that asked for nothing else.
+	if _, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Renamed"),
+		Rules: OptionalNotificationRuleListOf([]*NotificationRuleCreateRequest{
+			{Severity: "MAJOR", ChannelToken: "does-not-exist"},
+		}),
+	}); err == nil {
+		t.Fatal("a rule naming an unknown channel was accepted, leaving a rule that routes nowhere")
+	}
+
+	found, err := api.NotificationPoliciesByToken(ctx, []string{"ops-policy"})
+	if err != nil || len(found) != 1 {
+		t.Fatalf("reload: err=%v rows=%d", err, len(found))
+	}
+	if got := found[0].Name.String; got != "Original" {
+		t.Errorf("the refused update still renamed the policy to %q", got)
+	}
+	if len(found[0].Rules) != 1 || found[0].Rules[0].Severity != "CRITICAL" {
+		t.Fatalf("the refused update disturbed the rule set: %+v", found[0].Rules)
 	}
 }
 

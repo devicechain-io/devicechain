@@ -3,30 +3,47 @@
 
 package model
 
-import "testing"
+import (
+	"strings"
+	"testing"
 
-// WHICH RECORD AN UPDATE WRITES.
-//
-// Both mutations here still take their create input, so each carries the token
-// twice — once as the argument that says which record, once inside the payload —
-// and the two could disagree. They took OPPOSITE rules, for a reason that is about
-// the entity rather than about tidiness:
-//
-//   - A CHANNEL rename is intended and pinned (TestUpdateChannelRenamePreservesSecret).
-//     Its delivery secret is keyed by the channel's immutable id, and a policy's rules
-//     store ChannelId and resolve the token only at write time, so a rename orphans
-//     nothing. It takes the RENAME rule: only a BLANK new token is refused.
-//   - A POLICY rename is pinned by nothing and referenced by nothing. It takes the
-//     RECONCILE: the argument names the record, a disagreeing payload token is
-//     refused, an empty one is ignored.
-//
-// What both had in common was the defect: the payload token was written straight
-// onto the row, so an empty one — legal, since `token: String!` admits "" — left a
-// live record addressable by nothing, and the mutation returned success.
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+)
 
-// The headline case, and the one that shipped. `newTestApi` registers the production
-// token-grammar callback, which does NOT catch this: the write succeeded.
-func TestUpdateChannel_ABlankPayloadTokenIsRefused(t *testing.T) {
+// WHICH RECORD AN UPDATE WRITES, AND HOW A CHANNEL MOVES.
+//
+// Both update mutations here used to take their create input, so each carried the token
+// twice — once as the argument that says which record, once inside the payload — and the
+// two could disagree. They took OPPOSITE rules for that disagreement, and the split was
+// about the entity rather than about tidiness: a CHANNEL rename was intended and pinned,
+// a POLICY rename was pinned by nothing and referenced by nothing.
+//
+// # 🔴 THE DISAGREEMENT IS NOW UNREPRESENTABLE, AND THE TWO POLICY TESTS ARE GONE
+//
+// Both inputs are dedicated *UpdateRequests carrying no token at all. The policy's
+// reconcile rule (dcgraphql.ErrPayloadTokenDisagrees) therefore has nothing left to
+// govern in this service, and the two tests that drove it — a disagreeing payload token
+// refused, an empty one read as "unspecified" — would now be asserting the behaviour of a
+// field that does not exist. Deleting them rather than rewriting them against the new
+// shape is deliberate: there is no request they could send.
+//
+// What replaces the claim structurally is the guard in
+// partial_update_guard_test.go, which asks the request TYPE whether it carries a Token
+// field, so a token reintroduced into either input fails on the day it is added. The rule
+// itself is still exercised exhaustively in core (graphql.TestErrPayloadTokenDisagrees,
+// TestErrRenameTokenUnusable).
+//
+// # What stays here is the CHANNEL rename, which survived rather than being deleted
+//
+// It moved to its own mutation instead of riding a payload token. The three rules below
+// are that mutation's whole contract, and the first is the defect that shipped: `token:
+// String!` admits "", and the blank used to be written straight onto the row, leaving a
+// live channel addressable by nothing and returning success.
+
+// A blank new token is refused. `newToken: String!` admits "", and the token GRAMMAR does
+// not catch a whitespace-only one — that is the hole the original defect went through, so
+// whitespace is driven alongside the empty string rather than assumed to be covered.
+func TestRenameChannel_ABlankNewTokenIsRefused(t *testing.T) {
 	for _, blank := range []string{"", "   ", "\t"} {
 		t.Run("blank="+blank, func(t *testing.T) {
 			api := newTestApi(t)
@@ -37,10 +54,8 @@ func TestUpdateChannel_ABlankPayloadTokenIsRefused(t *testing.T) {
 				t.Fatalf("create: %v", err)
 			}
 
-			if _, err := api.UpdateNotificationChannel(ctx, "chan-a", &NotificationChannelCreateRequest{
-				Token: blank, ChannelType: ChannelTypeWebhook, Name: strPtr("Renamed"), Enabled: true,
-			}); err == nil {
-				t.Fatalf("a blank payload token %q was accepted", blank)
+			if _, err := api.RenameNotificationChannel(ctx, "chan-a", blank); err == nil {
+				t.Fatalf("a blank new token %q was accepted", blank)
 			}
 			rows, err := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
 			if err != nil || len(rows) != 1 {
@@ -53,10 +68,10 @@ func TestUpdateChannel_ABlankPayloadTokenIsRefused(t *testing.T) {
 	}
 }
 
-// THE COUNTERWEIGHT. The refusal above must not have been bought by removing the
-// rename. (TestUpdateChannelRenamePreservesSecret covers the secret; this covers the
-// rename itself reaching the row.)
-func TestUpdateChannel_ADifferingTokenStillRenames(t *testing.T) {
+// THE COUNTERWEIGHT. The refusal above must not have been bought by refusing every
+// rename. (TestRenameChannelPreservesSecret covers the secret surviving; this covers the
+// rename reaching the row at all.)
+func TestRenameChannel_ADifferingTokenMovesTheRecord(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
@@ -64,69 +79,156 @@ func TestUpdateChannel_ADifferingTokenStillRenames(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := api.UpdateNotificationChannel(ctx, "chan-a", &NotificationChannelCreateRequest{
-		Token: "chan-b", ChannelType: ChannelTypeWebhook, Enabled: true,
-	}); err != nil {
+	renamed, err := api.RenameNotificationChannel(ctx, "chan-a", "chan-b")
+	if err != nil {
 		t.Fatalf("a rename was refused: %v", err)
+	}
+	if renamed.Token != "chan-b" {
+		t.Fatalf("the returned channel still reads %q", renamed.Token)
 	}
 	rows, err := api.NotificationChannelsByToken(ctx, []string{"chan-b"})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("the renamed channel is not findable: err=%v rows=%d", err, len(rows))
 	}
+	if old, _ := api.NotificationChannelsByToken(ctx, []string{"chan-a"}); len(old) != 0 {
+		t.Fatalf("the old token still resolves to %d channels", len(old))
+	}
 }
 
-// A policy takes the reconcile. TWO rows, because with one the assertion that the
-// other was untouched is vacuous.
-func TestUpdatePolicy_ADisagreeingPayloadTokenIsRefused(t *testing.T) {
+// Renaming to the token the channel already has is an idempotent no-op SUCCESS, so a
+// retry after a partial failure is safe rather than a not-found or a self-collision.
+func TestRenameChannel_TheSameTokenIsANoOpSuccess(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
-	for _, tok := range []string{"pol-a", "pol-b"} {
-		if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
-			Token: tok, Name: strPtr("Original " + tok), Enabled: true,
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Name: strPtr("Original"), Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	same, err := api.RenameNotificationChannel(ctx, "chan-a", "chan-a")
+	if err != nil {
+		t.Fatalf("renaming to the current token was refused: %v", err)
+	}
+	if same.Token != "chan-a" || same.Name.String != "Original" {
+		t.Fatalf("the no-op did not return the record: %+v", same)
+	}
+	rows, err := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("expected exactly one channel after the no-op: err=%v rows=%d", err, len(rows))
+	}
+}
+
+// A token already held by ANOTHER of the tenant's channels is refused by name, before the
+// unique index has to. Two rows, because with one the assertion that the other survived
+// unchanged would be vacuous.
+//
+// 🔴 The SQLite fixture does not create the Postgres partial unique index (see
+// newTestApi), so nothing here would fail without the explicit check — which is exactly
+// why the check exists rather than being left to the constraint. Its message is asserted
+// too: a collision surfacing as a driver error names a column and an index, not the thing
+// the caller did wrong.
+func TestRenameChannel_ATakenTokenIsRefusedByName(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	for _, tok := range []string{"chan-a", "chan-b"} {
+		if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+			Token: tok, ChannelType: ChannelTypeWebhook, Name: strPtr("Original " + tok), Enabled: true,
 		}); err != nil {
 			t.Fatalf("create %q: %v", tok, err)
 		}
 	}
 
-	if _, err := api.UpdateNotificationPolicy(ctx, "pol-a", &NotificationPolicyCreateRequest{
-		Token: "pol-b", Name: strPtr("Hijacked"), Enabled: true,
-	}); err == nil {
-		t.Fatal("an update whose payload named a different policy was accepted")
+	err := func() error {
+		_, err := api.RenameNotificationChannel(ctx, "chan-a", "chan-b")
+		return err
+	}()
+	if err == nil {
+		t.Fatal("renaming onto a token another channel holds was accepted")
 	}
-	for _, tok := range []string{"pol-a", "pol-b"} {
-		rows, err := api.NotificationPoliciesByToken(ctx, []string{tok})
+	if !strings.Contains(err.Error(), "already in use") {
+		t.Errorf("the refusal does not say the token is taken: %v", err)
+	}
+	for _, tok := range []string{"chan-a", "chan-b"} {
+		rows, err := api.NotificationChannelsByToken(ctx, []string{tok})
 		if err != nil || len(rows) != 1 {
-			t.Fatalf("%s missing after a refused update: err=%v rows=%d", tok, err, len(rows))
+			t.Fatalf("%s missing after a refused rename: err=%v rows=%d", tok, err, len(rows))
 		}
 		if got := rows[0].Name.String; got != "Original "+tok {
-			t.Errorf("the refused update still changed %s: name = %q", tok, got)
+			t.Errorf("the refused rename still changed %s: name = %q", tok, got)
 		}
 	}
 }
 
-// …and an empty payload token is "unspecified" rather than a request to blank the row.
-func TestUpdatePolicy_AnEmptyPayloadTokenDoesNotBlankTheRow(t *testing.T) {
+// Renaming a channel that does not exist is a not-found, not a silent create and not a
+// success that wrote nothing. The no-op branch above returns early, so this pins that it
+// returns early on the LOADED record rather than on the tokens matching.
+func TestRenameChannel_AnUnknownTokenIsNotFound(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
-	if _, err := api.CreateNotificationPolicy(ctx, &NotificationPolicyCreateRequest{
-		Token: "pol-a", Name: strPtr("Original"), Enabled: true,
+	for _, newToken := range []string{"no-such-token", "chan-b"} {
+		if _, err := api.RenameNotificationChannel(ctx, "no-such-token", newToken); err == nil {
+			t.Fatalf("renaming the unknown token to %q succeeded", newToken)
+		}
+	}
+	if rows, _ := api.NotificationChannelsByToken(ctx, []string{"chan-b"}); len(rows) != 0 {
+		t.Fatalf("a refused rename created %d channels", len(rows))
+	}
+}
+
+// A tenant's rename cannot see another tenant's tokens, in either direction: the
+// collision check is tenant-scoped like every other read, so tenant A renaming onto a
+// token tenant B holds must SUCCEED (the token is unique per tenant, not per instance),
+// and must not touch B's channel.
+func TestRenameChannel_TheCollisionCheckIsTenantScoped(t *testing.T) {
+	api := newTestApi(t)
+	ctxA, ctxB := tenantCtx("A"), tenantCtx("B")
+
+	if _, err := api.CreateNotificationChannel(ctxA, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create in A: %v", err)
+	}
+	if _, err := api.CreateNotificationChannel(ctxB, &NotificationChannelCreateRequest{
+		Token: "shared", ChannelType: ChannelTypeSMTP, Name: strPtr("B's channel"), Enabled: true,
+	}); err != nil {
+		t.Fatalf("create in B: %v", err)
+	}
+
+	if _, err := api.RenameNotificationChannel(ctxA, "chan-a", "shared"); err != nil {
+		t.Fatalf("A was refused a token only B holds: %v", err)
+	}
+	rowsB, err := api.NotificationChannelsByToken(ctxB, []string{"shared"})
+	if err != nil || len(rowsB) != 1 {
+		t.Fatalf("B's channel is gone: err=%v rows=%d", err, len(rowsB))
+	}
+	if rowsB[0].Name.String != "B's channel" {
+		t.Fatalf("A's rename reached B's row: %+v", rowsB[0])
+	}
+}
+
+// An update cannot move a channel's identity at all, because the input has no token to
+// carry one. This is the structural half of the claim above, asserted where a reader of
+// the rename tests will look for it: the compiler is what enforces it, so the test that
+// says so is the one that would stop compiling if a Token field came back.
+func TestUpdateChannel_CannotMoveTheToken(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-
-	if _, err := api.UpdateNotificationPolicy(ctx, "pol-a", &NotificationPolicyCreateRequest{
-		Name: strPtr("Renamed"), Enabled: true,
+	if _, err := api.UpdateNotificationChannel(ctx, "chan-a", &NotificationChannelUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Renamed"),
 	}); err != nil {
-		t.Fatalf("an update with no payload token was refused: %v", err)
+		t.Fatalf("update: %v", err)
 	}
-	rows, err := api.NotificationPoliciesByToken(ctx, []string{"pol-a"})
-	if err != nil || len(rows) != 1 {
-		t.Fatalf("the policy is no longer findable by its own token: err=%v rows=%d", err, len(rows))
+	rows, err := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
+	if err != nil || len(rows) != 1 || rows[0].Token != "chan-a" {
+		t.Fatalf("the channel's token moved under an update: err=%v rows=%d", err, len(rows))
 	}
-	if rows[0].Token != "pol-a" {
-		t.Fatalf("token moved to %q", rows[0].Token)
-	}
-	if got := rows[0].Name.String; got != "Renamed" {
-		t.Fatalf("the edit did not apply: name = %q", got)
+	if rows[0].Name.String != "Renamed" {
+		t.Fatalf("the edit did not apply: name = %q", rows[0].Name.String)
 	}
 }
