@@ -712,12 +712,16 @@ unset _cv
 #                  `analytics_<53 x's>y` becomes the role for `<53 x's>`. Measured:
 #                  a NOTICE, and a reader for a DIFFERENT tenant. This one does not
 #                  fail safe.
-#   analytics_reader  the surface's own group role. Declared here it would be given
-#                  LOGIN, and its name matches the reader prefix.
+#   a group role   the surface's own group roles. Declared here one would be given
+#                  LOGIN, and both names match the reader prefix. There are TWO of
+#                  them since position became its own grant, and the second is the
+#                  one an edit will forget: `analytics_location_reader` with LOGIN
+#                  resolves to a tenant called `location_reader`.
 rejects timescale_analytics_readers '[{name="bi_acme",connection_limit=5}]'
 rejects timescale_analytics_readers '[{name="analytics_",connection_limit=5}]'
 rejects timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",connection_limit=5}]'
 rejects timescale_analytics_readers '[{name="analytics_reader",connection_limit=5}]'
+rejects timescale_analytics_readers '[{name="analytics_location_reader",connection_limit=5}]'
 
 # 🔴 THE COUNTERWEIGHT, and the length one is why it is not decoration: a bound
 # written `< 63` or applied to the tenant id rather than the role name refuses the
@@ -726,6 +730,12 @@ rejects timescale_analytics_readers '[{name="analytics_reader",connection_limit=
 accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,password_secret="analytics-acme-credentials"}]'
 accepts timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",connection_limit=1}]'
 accepts timescale_analytics_readers '[]'
+# The position opt-in is a real field on the object, in both states. Without these the
+# name refusals above would pass just as well against a variable that never gained it —
+# and a reader declared with reads_location would then be refused as a TYPE error, at
+# apply time, for a key the documentation tells the operator to write.
+accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=true}]'
+accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=false}]'
 
 # The per-store objects the modules actually receive. Null on a normal install —
 # and this is the assertion that fails if a future edit makes "restore" a flag

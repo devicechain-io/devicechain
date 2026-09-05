@@ -225,7 +225,28 @@ const (
 	AlarmEvents         = "alarm-events"
 	RaiseAlarm          = "raise-alarm"
 	FailedDecode        = "failed-decode"
-	FailedEvents        = "failed-events"
+
+	// FailedEvents carries an event the resolve/persist pipeline could not process:
+	// device-management publishes one when resolution fails, event-management when
+	// the message will not unmarshal or the row will not insert.
+	//
+	// 🔴 IT IS WRITE-ONLY TODAY, AND SAYING SO HERE IS THE POINT OF THIS COMMENT.
+	// Grep the backend for this constant and every hit is NewWriter — two of them.
+	// Nothing subscribes, nothing stores it, no console surface reads it, and there
+	// is no reconciler that works it off. A record published here is retained for the
+	// cold tier's window and then expires unread.
+	//
+	// So it is a REPORT, not a queue, and it must not be described as a dead-letter
+	// queue in comments or in prose. The platform does have one of those —
+	// DeadLetters below, whose letters user-management stores and command-delivery
+	// reads back — and the distinction is exactly the one an operator needs: work in
+	// DeadLetters can be recovered, and an event reported here cannot. The
+	// operator-visible signal for a persistence failure is the producing service's
+	// log line and its RED metrics counter.
+	//
+	// Giving it a consumer is open work, not something this comment forecloses; what
+	// it forecloses is a reader inferring one from the vocabulary.
+	FailedEvents = "failed-events"
 
 	// DeadLetters is the platform's one sink for work a consumer accepted and then gave
 	// up on (ADR-024) — a detection's actions that could not be dispatched, an alarm

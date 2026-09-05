@@ -62,12 +62,39 @@ const (
 // a message about the role rather than about the test.
 var analyticsITRoles = []string{
 	AnalyticsReaderRole,
+	AnalyticsLocationReaderRole,
 	AnalyticsRolePrefix + tenantA,
 	AnalyticsRolePrefix + tenantB,
 	// A member of the group whose name carries no tenant. It exists to prove the
 	// fail-closed direction: reader_tenant() returns NULL, so it reads nothing rather
 	// than everything.
 	"bi_tool_without_a_tenant",
+}
+
+// analyticsITPositionRoles are the login roles this suite ALSO puts in the position
+// group — the ones an operator would have declared with `reads_location = true`.
+//
+// 🔴 tenantB's READER IS DELIBERATELY ABSENT, and that absence is a fixture rather than
+// an oversight: it is the one role in the suite modelling an ordinary BI reader — granted
+// the surface and NOT granted position — so it is what the position boundary is measured
+// against. Every other role sweeps all seven views, so all of them have to be able to
+// read all seven.
+var analyticsITPositionRoles = map[string]bool{
+	AnalyticsRolePrefix + tenantA: true,
+	"bi_tool_without_a_tenant":    true,
+}
+
+// analyticsViewsGrantedTo names the views one group role holds SELECT on. A sweep over
+// ALL views is wrong for a role deliberately not in every group: the read would fail on
+// permissions, which reads in the output as a leak check that could not run.
+func analyticsViewsGrantedTo(group string) []string {
+	names := make([]string, 0, len(analyticsViews))
+	for _, v := range analyticsViews {
+		if v.group == group {
+			names = append(names, v.name)
+		}
+	}
+	return names
 }
 
 // analyticsHarness migrates a fresh instance, seeds two tenants into every hypertable,
@@ -149,14 +176,24 @@ func measurementValue(tenant string) float64 {
 func createAnalyticsITRoles(t *testing.T, sys *gorm.DB) {
 	t.Helper()
 	dropAnalyticsITRoles(t, sys)
-	require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q NOLOGIN", AnalyticsReaderRole)).Error)
+	for _, group := range analyticsGroupRoles() {
+		require.NoErrorf(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q NOLOGIN", group)).Error,
+			"create group role %s", group)
+	}
 	for _, role := range analyticsITRoles {
-		if role == AnalyticsReaderRole {
+		if isAnalyticsGroupRole(role) {
 			continue
 		}
 		require.NoErrorf(t, sys.Exec(fmt.Sprintf(
 			"CREATE ROLE %q LOGIN PASSWORD '%s' CONNECTION LIMIT 4 IN ROLE %q",
 			role, analyticsITPassword, AnalyticsReaderRole)).Error, "create %s", role)
+		// The position group is joined SEPARATELY, exactly as the deployment does it:
+		// membership in the general group is unconditional, membership in this one is
+		// the operator's per-reader decision.
+		if analyticsITPositionRoles[role] {
+			require.NoErrorf(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q",
+				AnalyticsLocationReaderRole, role)).Error, "grant position group to %s", role)
+		}
 	}
 	t.Cleanup(func() { dropAnalyticsITRoles(t, sys) })
 }
@@ -295,14 +332,29 @@ func TestIntegrationAnalyticsReaderCannotBecomeAnotherIdentity(t *testing.T) {
 	require.Equalf(t, tenantA, *tenant,
 		"becoming the group role changed which tenant the session resolves to (%q)", *tenant)
 
-	// What it reads must be unchanged too — its own tenant, no more and no less.
-	for _, view := range AnalyticsViewNames() {
+	// What it reads must not WIDEN either — its own tenant, no more.
+	//
+	// The sweep is over the views the ASSUMED role holds, because privileges are checked
+	// against current_user while the tenant predicate keys on session_user: after SET
+	// ROLE to the general group, position is refused. That is the split behaving
+	// correctly and it is asserted below rather than merely worked around — SET ROLE can
+	// narrow what a session reaches, and must never widen it.
+	for _, view := range analyticsViewsGrantedTo(AnalyticsReaderRole) {
 		visible := tenantsVisible(t, conn, view)
 		require.Lenf(t, visible, 1, "%s widened after SET ROLE: %v", view, visible)
 		require.Containsf(t, visible, tenantA, "%s narrowed after SET ROLE: %v", view, visible)
 	}
+	_, err = conn.Exec(ctx, fmt.Sprintf(`SELECT 1 FROM %q."location_events"`, AnalyticsSchema))
+	require.Error(t, err,
+		"SET ROLE to the general group kept position access, so the position grant is not "+
+			"actually checked against the role in effect")
+
 	_, err = conn.Exec(ctx, "RESET ROLE")
 	require.NoError(t, err)
+	// And the reader gets its own position access back — proof the line above measured
+	// the assumed role rather than a reader that never had position at all.
+	require.Len(t, tenantsVisible(t, conn, "location_events"), 1,
+		"RESET ROLE did not restore the declared location reader's own access")
 
 	// The other two identity doors — both must be refused outright.
 	_, err = conn.Exec(ctx, fmt.Sprintf("SET ROLE %q", AnalyticsRolePrefix+tenantB))
@@ -328,7 +380,10 @@ func TestIntegrationAnalyticsReaderCannotBecomeAnotherIdentity(t *testing.T) {
 	require.Nilf(t, groupTenant,
 		"the group role resolves to a tenant of its own (%v), which every reader is a member of",
 		groupTenant)
-	for _, view := range AnalyticsViewNames() {
+	// Swept over the views this group actually holds, not all seven: it is not in the
+	// position group, so location_events would fail on PERMISSIONS here — an error that
+	// would read in the output as this check passing when it had not run.
+	for _, view := range analyticsViewsGrantedTo(AnalyticsReaderRole) {
 		require.Emptyf(t, tenantsVisible(t, group, view),
 			"%s returned rows to the group role itself", view)
 	}
@@ -806,4 +861,244 @@ func TestIntegrationAnalyticsSurfaceIsReRunnable(t *testing.T) {
 	require.NoError(t, execAnalyticsSurface(sys), "the surface DDL is not re-runnable")
 	require.NoError(t, execAnalyticsSurface(sys))
 	require.Equal(t, before, tenantsVisible(t, conn, "measurement_events"))
+}
+
+// TestIntegrationOrdinaryReaderCannotReadPosition is the acceptance test for the
+// authority split, run where it can actually fail.
+//
+// The platform separates location:read from event:read — position is a distinct
+// authority, deliberately held out of the read-only viewer baseline. This surface had no
+// authority model at all, so declaring ANY BI reader handed it lat/lon/speed/heading.
+//
+// A SQL session carries no claims, so the authority is expressed as a grant on a second
+// group role. tenantB's reader is a member of the general group only, which is what an
+// operator gets by default; tenantA's is a member of both, which is what
+// `reads_location = true` produces.
+func TestIntegrationOrdinaryReaderCannotReadPosition(t *testing.T) {
+	analyticsHarness(t)
+	ctx := context.Background()
+
+	ordinary := connectAs(t, AnalyticsRolePrefix+tenantB)
+
+	// It reads the rest of the surface — so a failure below is the position grant and
+	// not a broken reader, a broken harness, or a role that was never granted anything.
+	require.Len(t, tenantsVisible(t, ordinary, "measurement_events"), 1,
+		"the ordinary reader cannot read telemetry either, so the position check proves nothing")
+
+	// And it reads the base envelope, which is the boundary the GraphQL side draws: the
+	// `events` query returns a location event's envelope under plain event:read, because
+	// a base event carries no coordinates. Hiding that here would be STRICTER than the
+	// authority being mirrored, and stricter is still wrong.
+	var envelopes int
+	require.NoError(t, ordinary.QueryRow(ctx, fmt.Sprintf(
+		`SELECT count(*) FROM %q."events"`, AnalyticsSchema)).Scan(&envelopes))
+	require.Positive(t, envelopes,
+		"the ordinary reader cannot see that events occurred at all")
+
+	// The position view is refused. Asserted on the PRIVILEGE as well as on the query,
+	// because "the SELECT failed" has other causes — a missing view would satisfy it
+	// while meaning something entirely different.
+	_, err := ordinary.Exec(ctx, fmt.Sprintf(
+		`SELECT latitude, longitude FROM %q."location_events"`, AnalyticsSchema))
+	require.Error(t, err, "an ordinary BI reader read device positions")
+	require.Contains(t, strings.ToLower(err.Error()), "permission denied",
+		"the position read failed for some reason other than the grant: %v", err)
+}
+
+// The other half, and the reason the fix is a MOVE rather than a deletion: a reader the
+// operator declared for position does read it, and reads only its own tenant's. A surface
+// where nobody can read position would pass the test above and would not be the same
+// product.
+func TestIntegrationDeclaredLocationReaderReadsItsOwnPositions(t *testing.T) {
+	analyticsHarness(t)
+	ctx := context.Background()
+
+	reader := connectAs(t, AnalyticsRolePrefix+tenantA)
+
+	visible := tenantsVisible(t, reader, "location_events")
+	require.Lenf(t, visible, 1, "the location view exposed %d tenants: %v", len(visible), visible)
+	require.Contains(t, visible, tenantA)
+	require.Positive(t, visible[tenantA])
+
+	// The coordinates themselves come back, not merely the rows: a projection that
+	// dropped the position columns would satisfy the count above.
+	var lat, lon float64
+	require.NoError(t, reader.QueryRow(ctx, fmt.Sprintf(
+		`SELECT latitude, longitude FROM %q."location_events" LIMIT 1`, AnalyticsSchema)).
+		Scan(&lat, &lon))
+	require.InDelta(t, 1.0, lat, 1e-9)
+	require.InDelta(t, 2.0, lon, 1e-9)
+}
+
+// 🔴 THE CONVERGENCE LEG, AND IT IS THE ONE THAT DECIDES WHETHER THE FIX REACHES ANYONE.
+// Every database that has run the first version of this surface holds SELECT on
+// analytics.location_events for analytics_reader. A reconciler that only ever GRANTS
+// would move a fresh install onto the new boundary and leave every existing one exactly
+// as it was — the hole closed in the repository and open in production.
+//
+// The control comes first: hand the general group the grant an upgrade is carrying,
+// prove the ordinary reader can then read position, and only then boot.
+func TestIntegrationStalePositionGrantIsRevokedOnBoot(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	reader := connectAs(t, AnalyticsRolePrefix+tenantB)
+
+	position := fmt.Sprintf(`SELECT count(*) FROM %q."location_events"`, AnalyticsSchema)
+	var n int
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"the ordinary reader could already read position")
+
+	// 🔴 THE CONTROL: exactly the grant an upgraded install is carrying.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON %q.%q TO %q`,
+		AnalyticsSchema, "location_events", AnalyticsReaderRole)).Error)
+	require.NoError(t, reader.QueryRow(ctx, position).Scan(&n))
+	require.Positivef(t, n,
+		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
+
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"a boot left the general reader group holding position")
+
+	// Ask the catalog too. "The SELECT failed" is weaker than it reads — a dropped view
+	// fails it as well — and the privilege is the thing being converged.
+	var granted bool
+	require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
+		AnalyticsReaderRole, fmt.Sprintf("%s.%s", AnalyticsSchema, "location_events")).
+		Scan(&granted).Error)
+	require.False(t, granted,
+		"the general reader group still holds SELECT on the position view after a boot")
+
+	// And the boot did not take away what the groups are supposed to hold. A revoke that
+	// converged by removing everything would satisfy every assertion above.
+	require.Len(t, tenantsVisible(t, reader, "measurement_events"), 1,
+		"the boot revoked the ordinary reader's telemetry access")
+	require.Len(t, tenantsVisible(t, connectAs(t, AnalyticsRolePrefix+tenantA), "location_events"), 1,
+		"the boot revoked the declared location reader's position access")
+}
+
+// 🔴 THE GRANT DOES NOT HAVE TO BE MADE TO THE GROUP TO BE A LEAK, AND THE FIRST VERSION
+// OF THIS CHANGE ONLY CONVERGED THE GROUPS. The reconciler skipped past a per-tenant
+// reader once its AREA privileges were revoked, so a direct grant on the position view —
+// the obvious thing a hand does during an investigation — outlived every boot.
+//
+// Before the position split that was invisible, because every reader held every view
+// anyway. This change is what makes the surface schema a boundary, so it is this change
+// that owes the convergence.
+func TestIntegrationDirectPositionGrantToAReaderIsRevokedOnBoot(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	role := AnalyticsRolePrefix + tenantB
+	reader := connectAs(t, role)
+
+	position := fmt.Sprintf(`SELECT count(*) FROM %q."location_events"`, AnalyticsSchema)
+	var n int
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"the ordinary reader could already read position")
+
+	// 🔴 THE CONTROL: granted to the READER by name, not to its group.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON %q.%q TO %q`,
+		AnalyticsSchema, "location_events", role)).Error)
+	require.NoError(t, reader.QueryRow(ctx, position).Scan(&n))
+	require.Positivef(t, n,
+		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
+
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"a boot left a per-tenant reader holding position by a direct grant")
+
+	var granted bool
+	require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
+		role, fmt.Sprintf("%s.%s", AnalyticsSchema, "location_events")).Scan(&granted).Error)
+	require.False(t, granted, "the reader still holds SELECT on the position view after a boot")
+
+	// The rest of its access is untouched — a convergence that revoked everything would
+	// satisfy every line above and break the feature.
+	require.Len(t, tenantsVisible(t, reader, "measurement_events"), 1,
+		"the boot revoked the reader's telemetry access along with the stray grant")
+}
+
+// The same leak through the grantee that is not a role. PUBLIC was converged on the area
+// schema only, so `GRANT SELECT ON analytics.location_events TO PUBLIC` handed position to
+// every login on the instance, permanently — the widest form of the same defect, and the
+// one no reconciler that walks pg_roles can see.
+func TestIntegrationPositionGrantToPublicIsRevokedOnBoot(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	reader := connectAs(t, AnalyticsRolePrefix+tenantB)
+
+	position := fmt.Sprintf(`SELECT count(*) FROM %q."location_events"`, AnalyticsSchema)
+	var n int
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"the ordinary reader could already read position")
+
+	// 🔴 THE CONTROL.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON %q.%q TO PUBLIC`,
+		AnalyticsSchema, "location_events")).Error)
+	require.NoError(t, reader.QueryRow(ctx, position).Scan(&n))
+	require.Positivef(t, n,
+		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
+
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+
+	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
+		"a boot left PUBLIC holding position on the read surface")
+
+	var granted bool
+	require.NoError(t, sys.Raw(`SELECT has_table_privilege('public', ?, 'SELECT')`,
+		fmt.Sprintf("%s.%s", AnalyticsSchema, "location_events")).Scan(&granted).Error)
+	require.False(t, granted, "PUBLIC still holds SELECT on the position view after a boot")
+
+	require.Len(t, tenantsVisible(t, reader, "measurement_events"), 1,
+		"the boot revoked the reader's telemetry access along with the PUBLIC grant")
+}
+
+// 🔴 THE AREA-SCHEMA BACKSTOP, MEASURED AGAINST THE ROLE THE COMMENT NAMES. analytics.go
+// says every enumerated role is converged "because a grant made directly to a per-tenant
+// role would not be caught by converging the groups alone" — and until this test existed
+// that sentence had no measurement behind it: the existing convergence test grants the
+// stray access to the GROUP role, so a version that skipped per-tenant readers passed
+// every gate.
+//
+// Row-level security is unavailable here, so this revoke is the only thing between a
+// hand-granted SELECT on the raw hypertables and every tenant's rows.
+func TestIntegrationDirectAreaGrantToAReaderIsRevokedOnBoot(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	role := AnalyticsRolePrefix + tenantA
+	reader := connectAs(t, role)
+
+	crossTenant := fmt.Sprintf(`SELECT count(DISTINCT tenant_id) FROM %q."measurement_events"`,
+		AnalyticsAreaSchema)
+	var n int
+	require.Error(t, reader.QueryRow(ctx, crossTenant).Scan(&n),
+		"the reader could already reach the area schema")
+
+	// 🔴 THE CONTROL: granted to the READER by name. Both halves are needed — USAGE
+	// without SELECT fails the query too, so granting only one would produce a passing
+	// "leak" that never leaked.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`,
+		AnalyticsAreaSchema, role)).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON ALL TABLES IN SCHEMA %q TO %q`,
+		AnalyticsAreaSchema, role)).Error)
+	require.NoError(t, reader.QueryRow(ctx, crossTenant).Scan(&n))
+	require.Equalf(t, 2, n,
+		"the control did not leak, so the boot below would prove nothing (saw %d tenants)", n)
+
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+
+	require.Error(t, reader.QueryRow(ctx, crossTenant).Scan(&n),
+		"a boot left a per-tenant reader holding privileges on the area schema")
+
+	// The privilege itself, not one query's worth of it: USAGE without SELECT fails the
+	// query above, so a boot that took back only half would satisfy the line above while
+	// leaving the reader one GRANT from every tenant.
+	var usage bool
+	require.NoError(t, sys.Raw(`SELECT has_schema_privilege(?, ?, 'USAGE')`,
+		role, AnalyticsAreaSchema).Scan(&usage).Error)
+	require.Falsef(t, usage, "%q still holds USAGE on %q after a boot", role, AnalyticsAreaSchema)
+
+	require.Len(t, tenantsVisible(t, reader, "measurement_events"), 1,
+		"the boot revoked the reader's own surface access along with the stray grant")
 }

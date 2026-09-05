@@ -56,10 +56,16 @@ func TestEveryAnalyticsViewCarriesTheTenantPredicate(t *testing.T) {
 // schema is not a nicety; it is the boundary. A GRANT written here by accident would be
 // the whole leak.
 func TestAnalyticsGrantsNeverTouchTheAreaSchema(t *testing.T) {
-	grants := grantStatements(AnalyticsReaderRole)
-	if len(grants) != len(analyticsViews)+1 {
-		t.Fatalf("expected one USAGE grant plus one per view (%d), got %d",
-			len(analyticsViews)+1, len(grants))
+	grants := make([]string, 0)
+	for _, group := range analyticsGroupRoles() {
+		grants = append(grants, grantStatements(group)...)
+	}
+	// One USAGE grant per group role, plus exactly one SELECT per view. Counted across
+	// ALL groups rather than one, because the views are split between them now: a
+	// per-group count would be satisfied by a view that is granted twice or not at all.
+	if want := len(analyticsViews) + len(analyticsGroupRoles()); len(grants) != want {
+		t.Fatalf("expected one USAGE grant per group role plus one grant per view (%d), got %d",
+			want, len(grants))
 	}
 	for _, stmt := range grants {
 		if strings.Contains(stmt, AnalyticsAreaSchema) {
@@ -104,12 +110,16 @@ func TestReaderTenantIsDerivedFromSessionUser(t *testing.T) {
 	if strings.Contains(fn, "current_setting") {
 		t.Error("reader_tenant() reads a session setting, which a reader can set to any tenant it likes")
 	}
-	// The group role's own name matches the reader prefix, so without an explicit
-	// exclusion it resolves to the tenant "reader" — a legal tenant token.
-	if !strings.Contains(fn, AnalyticsReaderRole) {
-		t.Errorf("reader_tenant() does not exclude the group role %q, which resolves to the "+
-			"tenant %q:\n%s", AnalyticsReaderRole,
-			strings.TrimPrefix(AnalyticsReaderRole, AnalyticsRolePrefix), fn)
+	// EVERY group role's name matches the reader prefix, so without an explicit
+	// exclusion analytics_reader resolves to the tenant "reader" and
+	// analytics_location_reader to "location_reader" — both legal tenant tokens. The
+	// loop is over analyticsGroupRoles rather than a written-out pair, so a third group
+	// role added there is checked here without anyone remembering to.
+	for _, group := range analyticsGroupRoles() {
+		if !strings.Contains(fn, group) {
+			t.Errorf("reader_tenant() does not exclude the group role %q, which resolves to the "+
+				"tenant %q:\n%s", group, strings.TrimPrefix(group, AnalyticsRolePrefix), fn)
+		}
 	}
 	// The offset must skip exactly the prefix, or a reader named analytics_acme reads a
 	// tenant called "_acme" (or "cme") and matches nothing — which fails safe but silently.

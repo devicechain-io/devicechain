@@ -30,7 +30,7 @@ want, because it is already bucketed and is cheap to scan over long ranges.
 | `analytics.events` | The base event envelope: device, type, times, source |
 | `analytics.measurement_events` | Named numeric readings, with unit and data type |
 | `analytics.measurement_rollups` | Per-minute sum / min / max / count per device and metric |
-| `analytics.location_events` | Positions, with elevation, accuracy, speed and heading |
+| `analytics.location_events` | **Positions** — latitude, longitude, elevation, accuracy, speed, heading. Requires the position grant; see [Position is a separate grant](#position-is-a-separate-grant) |
 | `analytics.alert_events` | Device-reported alerts |
 | `analytics.state_change_events` | The connect/disconnect timeline |
 | `analytics.event_anchors` | The relationship anchors stamped on each event at write time |
@@ -86,6 +86,53 @@ Apply. The role appears, joins the reader group, and can connect. Nothing needs 
 
 To rotate the password, change it in the Secret; to revoke access, remove the entry and apply.
 
+## Position is a separate grant
+
+A reader declared as above reads telemetry, alerts, the connect/disconnect timeline and the event
+envelopes — **but not device positions**. Latitude, longitude, elevation, accuracy, speed and
+heading are behind a second grant, and you turn it on per reader:
+
+```hcl
+timescale_analytics_readers = [
+  {
+    name             = "analytics_acme"
+    connection_limit = 5
+    password_secret  = "analytics-acme-credentials"
+    reads_location   = true
+  },
+]
+```
+
+Apply, and the reader can query `analytics.location_events`. Without it, that one view returns
+`permission denied` and every other view is unaffected.
+
+This is not extra caution applied to BI; it is the platform's own line. Reading where a device **is**
+is a separate permission from reading what it **measures** everywhere else in DeviceChain — a
+vehicle's or a person's track is a different kind of fact from a temperature series, so position is
+deliberately absent from the read-only baseline and is only ever held by a deliberate grant. A SQL
+session cannot be asked what permissions it holds; it authenticates as a role and carries nothing
+else. So the permission is expressed as the only thing a database can express — a grant, held by a
+second group role the reader joins when you say so.
+
+What an ordinary reader keeps is the **envelope**: `analytics.events` carries every event including
+location ones, so it can still see that a location event occurred, from which device and when. It
+just cannot see where.
+
+:::tip Which readers need it
+Fleet, logistics, field-service and asset-tracking dashboards do. A metrics or alerting dashboard
+usually does not — and a reader that does not need position is one fewer credential whose loss
+discloses somebody's movements. Turn it on where the dashboard genuinely plots a map or computes a
+distance.
+:::
+
+:::note Upgrading an existing install
+If you declared readers before this split existed, they had position. On the first restart after
+upgrading, the event store takes that grant back from every reader you have not marked
+`reads_location = true` — a dashboard that plots positions will start returning `permission denied`
+until you set it. That convergence is deliberate: the grant is re-derived from your declaration on
+every boot rather than accumulated.
+:::
+
 ## Connecting a BI tool
 
 Point the tool at the event store as an ordinary PostgreSQL database:
@@ -131,13 +178,21 @@ override either. A role whose name carries no recognised tenant resolves to noth
 rows — the failure direction is always "sees nothing", never "sees everything".
 
 **A reader holds no privilege on the underlying tables.** It cannot reach the raw hypertables by
-name at all, which is also why it is read-only: it has `SELECT` on seven views and nothing else, so
-there is no write privilege to exercise. That is a grant, not a setting — nothing a client can turn
-off.
+name at all, which is also why it is read-only: it has `SELECT` on the views it was granted and
+nothing else, so there is no write privilege to exercise. That is a grant, not a setting — nothing a
+client can turn off. It is also how position is separated: a reader without `reads_location` holds
+no privilege on `analytics.location_events`, so the coordinates are unreachable rather than
+filtered.
 
 **Both layers are re-established every time the event store starts.** The views are rebuilt and the
 privileges re-converged on each boot, so neither a privilege granted by hand during an investigation
 nor a view edited during one quietly outlives it. A restart is a repair.
+
+That covers the position grant specifically, and in every direction it can be widened: a `GRANT` on
+`analytics.location_events` made to a reader by name, to the general reader group, or to `PUBLIC` is
+taken back on the next boot. What a reader ends up holding is derived from your declaration each
+time, never accumulated — which is also why removing `reads_location` genuinely removes access
+rather than leaving the last grant in place.
 
 **Connections are capped per role, and the cap binds.** `connection_limit` is enforced at
 authentication: past it, the connection is refused. This is what stops an analytics consumer from
@@ -179,8 +234,11 @@ assumption that every one of those connections may be running a long query.
 - **Query the rollup, not the raw table, for anything over a long range.** It is a continuous
   aggregate: the work is already done, and scanning a month of it is cheap where scanning a month
   of raw measurements is not.
-- **Give each consumer its own role.** Two tools sharing one role share its connection limit, and
-  you cannot revoke one without revoking both.
+- **A tenant gets one reader role, and every tool for that tenant shares it.** The role name *is*
+  the tenant, so `acme` has exactly one legal reader name and there is no second one to declare —
+  a deployment that tries is refused. Plan for that: two tools on one tenant share the connection
+  limit, share the position decision, and cannot be revoked separately. Size `connection_limit` for
+  all of them together, and set `reads_location` if *any* of them needs a map.
 - **A reader survives a schema change but does not automatically gain from one.** The views expose
   a fixed set of columns; a column added to the platform later appears on the analytics surface
   when it is deliberately added there, not before.

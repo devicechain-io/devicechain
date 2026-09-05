@@ -38,10 +38,11 @@ import (
 //
 //  1. **Grants.** The read role holds no privilege whatsoever on the
 //     "event-management" schema — not even USAGE — so the hypertables and the
-//     continuous aggregate are unreachable by name. It holds SELECT on the views
-//     below and nothing else, which is also what makes it read-only: there is no
-//     INSERT/UPDATE/DELETE privilege to exercise. ReconcileAnalyticsSurface converges
-//     this on every boot, in both directions.
+//     continuous aggregate are unreachable by name. It holds SELECT on the views its
+//     groups declare and nothing else, which is also what makes it read-only: there is
+//     no INSERT/UPDATE/DELETE privilege to exercise. ReconcileAnalyticsSurface converges
+//     this on every boot, in both directions — and "the views its groups declare" is
+//     load-bearing rather than a hedge; see the position section below.
 //
 //  2. **A tenant predicate compiled into each view**, keyed on `session_user` — the
 //     identity the session AUTHENTICATED as. `SET ROLE` cannot move it, and the one
@@ -55,6 +56,42 @@ import (
 //     but every per-tenant reader is provisioned `IN ROLE analytics_reader`, and
 //     membership carries the SET option by default. See createReaderTenantFnStmt for
 //     the measurement.
+//
+// # 🔴 POSITION IS A SEPARATE GRANT, BECAUSE IT IS A SEPARATE AUTHORITY EVERYWHERE ELSE
+//
+// The platform splits `location:read` from `event:read` deliberately: knowing WHERE a
+// vehicle or a person is differs in kind from knowing how warm it is, and location:read is
+// held out of the read-only viewer baseline so it is only ever carried by explicit grant
+// (backend/core/auth, and the gate on the locationEvents query).
+//
+// The boundary that split actually draws is narrower than "location events are secret",
+// and getting it wrong in either direction is easy. Measured against the GraphQL resolvers
+// rather than assumed: the `events` query returns the ENVELOPE of a location event —
+// device, event type, times, source — under plain event:read, because a base event carries
+// no coordinates at all. What location:read gates is the POSITION VALUES: latitude,
+// longitude, elevation, accuracy, speed, heading, which live only on location_events.
+//
+// This surface had no notion of that. One grant carried every view, so declaring any BI
+// reader handed it lat/lon/speed/heading — a capability the same tenant's own role model
+// refuses to hand out with event:read. And a SQL session cannot be asked which authorities
+// it holds: there are no claims here, only a role.
+//
+// So the authority is expressed the one way a database can express it — as a SEPARATE
+// GRANT, held by a second group role:
+//
+//	analytics_reader           every view except location_events
+//	analytics_location_reader  location_events, and nothing else
+//
+// A reader is a member of the first, and of the second only if the operator declared it so
+// (deploy/opentofu, `reads_location`). The tenant filter is unchanged and still applies to
+// both, because it is compiled into the view rather than attached to a role: a location
+// reader reads its own tenant's positions and no one else's.
+//
+// The envelope stays reachable to an ordinary reader through `analytics.events`, which
+// carries every event type including LOCATION — so "a location event occurred at this time
+// from this device" is not what the second grant protects, exactly as on the GraphQL side.
+// That symmetry is the point: the two surfaces must not disagree about what position
+// access means.
 //
 // # 🔴 WHY THERE IS NO ROW-LEVEL SECURITY HERE, WHICH IS NOT THE OBVIOUS ANSWER
 //
@@ -112,6 +149,25 @@ const (
 	// has no readers — and it is reported rather than assumed.
 	AnalyticsReaderRole = "analytics_reader"
 
+	// AnalyticsLocationReaderRole is the second NOLOGIN group role: the one carrying
+	// POSITION. It holds SELECT on analytics.location_events and on nothing else, so a
+	// reader that is not a member of it reads every other view and no coordinates.
+	//
+	// 🔴 A SECOND GROUP ROLE IS THE ONLY PLACE THIS CAN LIVE, and that is a statement
+	// about what an operator can express rather than a preference. A BI reader is
+	// declared in the deployment (OpenTofu), not in the tenant's role model, so it
+	// carries no authorities and there is nothing at query time to check: "just check
+	// location:read" is not available on this surface. What a database CAN express is
+	// membership, and membership is what the operator already declares — so the
+	// authority becomes a grant, and the operator's expression of it becomes one boolean
+	// on the reader they were already writing down.
+	//
+	// It is created by the database cluster alongside the other group role, for the same
+	// reason: the platform's application role holds no CREATEROLE, and its absence is
+	// reported rather than assumed. An install whose cluster predates it simply has no
+	// location readers, which is the fail-closed direction.
+	AnalyticsLocationReaderRole = "analytics_location_reader"
+
 	// AnalyticsRolePrefix is the naming convention that carries a reader's tenant.
 	// A role named "analytics_acme" reads tenant "acme" and nothing else.
 	//
@@ -122,10 +178,13 @@ const (
 	// a cross-tenant read with extra steps. `session_user` is the one identity in
 	// the session a client cannot choose — not `current_user`, which SET ROLE moves.
 	//
-	// 🔴 THE GROUP ROLE'S OWN NAME MATCHES THIS PREFIX, which is why the derivation
-	// excludes it explicitly: without that, `analytics_reader` resolves to the tenant
-	// `reader`, and `reader` is a legal tenant token under core.ValidateToken. The
-	// deployment refuses it as a reader name for the same reason.
+	// 🔴 EVERY GROUP ROLE'S OWN NAME MATCHES THIS PREFIX, which is why the derivation
+	// excludes them explicitly: without that, `analytics_reader` resolves to the tenant
+	// `reader` and `analytics_location_reader` to `location_reader`, both legal tenant
+	// tokens under core.ValidateToken. The deployment refuses either as a reader name for
+	// the same reason. The exclusion is a LIST rather than a single name because there
+	// are now two group roles, and a third added later must be added there too — see
+	// analyticsGroupRoles.
 	AnalyticsRolePrefix = "analytics_"
 
 	// AnalyticsAreaSchema is the schema the read role must never hold a privilege on.
@@ -153,6 +212,14 @@ type analyticsView struct {
 	source string
 	// columns is the frozen projection, in the source relation's column order.
 	columns []string
+	// group is the NOLOGIN group role granted SELECT on this view, and it is how the
+	// position authority is expressed here (see the file header). It is a required field
+	// with no default on purpose: a view whose group is empty is granted to nobody —
+	// fail-closed, but silently unreadable — while a view that DEFAULTED to the general
+	// reader group would widen the surface by omission, which is exactly how
+	// location_events came to be readable by every reader.
+	// analyticsViewsDeclareTheirGrantee refuses either.
+	group string
 }
 
 // analyticsViews is the read surface: the six event hypertables plus the
@@ -172,6 +239,10 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "event_id", "device_token", "event_type",
 			"occurred_time", "source", "alt_id", "processed_time",
 		},
+		// The base envelope carries no coordinates, so a LOCATION-typed row here says
+		// only that a location event happened — which is what plain event:read returns on
+		// the GraphQL side too. It stays on the general reader group deliberately.
+		group: AnalyticsReaderRole,
 	},
 	{
 		name:   "location_events",
@@ -184,6 +255,13 @@ var analyticsViews = []analyticsView{
 			// and an upgraded one alike.
 			"accuracy", "speed", "heading",
 		},
+		// 🔴 THE ONLY VIEW ON THE POSITION GROUP, and the six columns above are why:
+		// latitude, longitude, elevation, accuracy, speed and heading are the values
+		// location:read exists to gate. The columns are NOT removed from the view —
+		// removing them would put position out of reach of every BI tool, and CREATE OR
+		// REPLACE VIEW cannot drop a column anyway, so an upgraded install would refuse
+		// to converge. The GRANT is what moves.
+		group: AnalyticsLocationReaderRole,
 	},
 	{
 		name:   "measurement_events",
@@ -192,6 +270,7 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "event_id", "payload_id", "device_token", "event_type",
 			"occurred_time", "name", "value", "classifier", "unit", "data_type",
 		},
+		group: AnalyticsReaderRole,
 	},
 	{
 		name:   "alert_events",
@@ -200,6 +279,7 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "event_id", "payload_id", "device_token", "event_type",
 			"occurred_time", "type", "level", "message", "source",
 		},
+		group: AnalyticsReaderRole,
 	},
 	{
 		name:   "event_anchors",
@@ -208,6 +288,7 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "event_id", "device_token", "event_type",
 			"occurred_time", "anchor_type", "anchor_token",
 		},
+		group: AnalyticsReaderRole,
 	},
 	{
 		name:   "state_change_events",
@@ -216,6 +297,7 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "event_id", "device_token", "event_type",
 			"occurred_time", "state", "reason", "session_id",
 		},
+		group: AnalyticsReaderRole,
 	},
 	{
 		name:   "measurement_rollups",
@@ -224,6 +306,7 @@ var analyticsViews = []analyticsView{
 			"tenant_id", "device_token", "event_type", "name", "bucket",
 			"sum_value", "min_value", "max_value", "count_value",
 		},
+		group: AnalyticsReaderRole,
 	},
 }
 
@@ -256,20 +339,74 @@ const readerTenantSearchPath = "search_path=pg_catalog"
 // stores it. Shared by the DDL and the integrity check so the two cannot drift: a
 // check that compares against its own idea of the body is checking itself.
 func readerTenantBody() string {
-	// The group-role name is compared as a SQL string LITERAL, so it is single-quoted.
-	// %q would render Go's double quotes, which PostgreSQL reads as an IDENTIFIER — the
-	// statement then fails with `column "analytics_reader" does not exist`, at migration
-	// time, on a fresh install only.
+	// The group-role names are compared as SQL string LITERALS, so they are
+	// single-quoted. %q would render Go's double quotes, which PostgreSQL reads as an
+	// IDENTIFIER — the statement then fails with `column "analytics_reader" does not
+	// exist`, at migration time, on a fresh install only.
+	//
+	// It is a NOT IN over analyticsGroupRoles rather than a single <>, because there are
+	// two group roles and both match the reader prefix: analytics_location_reader would
+	// otherwise resolve to the tenant `location_reader`. Building the list from the same
+	// function the reconciler grants through is what stops a third group role from being
+	// added to one and not the other.
+	quoted := make([]string, 0, len(analyticsGroupRoles()))
+	for _, role := range analyticsGroupRoles() {
+		quoted = append(quoted, "'"+strings.ReplaceAll(role, "'", "''")+"'")
+	}
 	return fmt.Sprintf(`
 		SELECT CASE
-			WHEN session_user::text <> '%s'
+			WHEN session_user::text NOT IN (%s)
 			 AND session_user::text LIKE '%s=_%%' ESCAPE '='
 			THEN substring(session_user::text from %d)
 		END
 	`,
-		strings.ReplaceAll(AnalyticsReaderRole, "'", "''"),
+		strings.Join(quoted, ", "),
 		strings.TrimSuffix(AnalyticsRolePrefix, "_"),
 		len(AnalyticsRolePrefix)+1)
+}
+
+// analyticsViewsDeclareTheirGrantee checks that every view names a group role that
+// actually exists in analyticsGroupRoles.
+//
+// 🔴 IT REFUSES SILENCE IN BOTH DIRECTIONS, AND THAT IS THE POINT. A view whose group is
+// empty is granted to nobody — safe, but silently unreadable, which an operator
+// experiences as "the BI tool sees no rows" with nothing anywhere saying why. A view
+// naming a group role that is not converged is worse: it looks deliberate and is never
+// granted at all. Neither is visible in the schema, in the golden, or in any query — the
+// grants are stripped from the dump — so this is the only place either can be caught.
+func analyticsViewsDeclareTheirGrantee() error {
+	for _, v := range analyticsViews {
+		if v.group == "" {
+			return fmt.Errorf("the %q analytics view declares no grantee group role", v.name)
+		}
+		if !isAnalyticsGroupRole(v.group) {
+			return fmt.Errorf("the %q analytics view is granted to %q, which is not one of the "+
+				"surface's group roles", v.name, v.group)
+		}
+	}
+	return nil
+}
+
+// analyticsGroupRoles is the ordered set of NOLOGIN group roles the surface grants
+// through. It is the single list every other part of this file derives from — the
+// identity function's exclusion, the role query, and the grant loop — so a group role
+// added here cannot be forgotten in one of the three.
+//
+// Order is fixed rather than incidental: it reaches the reader_tenant() body, which the
+// integrity check compares byte for byte against pg_proc.prosrc.
+func analyticsGroupRoles() []string {
+	return []string{AnalyticsReaderRole, AnalyticsLocationReaderRole}
+}
+
+// isAnalyticsGroupRole reports whether a role name found in pg_roles is one of the group
+// roles rather than a per-tenant reader.
+func isAnalyticsGroupRole(role string) bool {
+	for _, group := range analyticsGroupRoles() {
+		if role == group {
+			return true
+		}
+	}
+	return false
 }
 
 // createReaderTenantFnStmt defines the function every view's predicate calls.
@@ -337,18 +474,146 @@ func (v analyticsView) dropViewStmt() string {
 	return fmt.Sprintf("DROP VIEW IF EXISTS %q.%q;", AnalyticsSchema, v.name)
 }
 
-// grantStatements returns the privileges an analytics reader must hold, for the
-// named role. USAGE on the surface schema and SELECT on its views; nothing else, and
+// grantStatements returns the privileges one GROUP ROLE must hold: USAGE on the surface
+// schema and SELECT on the views that declare it as their grantee. Nothing else, and
 // specifically nothing on the area schema.
+//
+// 🔴 IT IS FILTERED BY GROUP, AND THAT FILTER IS THE POSITION AUTHORITY. A version of
+// this that granted every view to every group role would compile, pass every shape test
+// about predicates and columns, and silently restore the hole the split exists to close —
+// so the filter is asserted directly (TestPositionIsGrantedOnlyToTheLocationGroup) rather
+// than inferred from the surface reading correctly.
+//
+// USAGE on the schema goes to both groups. It carries no rows on its own — a role with
+// USAGE and no SELECT can name the schema and read nothing out of it — and withholding it
+// from the position group would break a reader that is a member of ONLY that group, which
+// is a configuration the operator is allowed to write.
 func grantStatements(role string) []string {
 	stmts := []string{
 		fmt.Sprintf("GRANT USAGE ON SCHEMA %q TO %q;", AnalyticsSchema, role),
 	}
 	for _, v := range analyticsViews {
+		if v.group != role {
+			continue
+		}
 		stmts = append(stmts, fmt.Sprintf("GRANT SELECT ON %q.%q TO %q;",
 			AnalyticsSchema, v.name, role))
 	}
 	return stmts
+}
+
+// revokeSurfaceStatements returns the privileges a grantee must not hold DIRECTLY on the
+// SURFACE schema, so the grants beside it are a full convergence rather than an addition.
+//
+// 🔴 IT EXISTS BECAUSE AN UPGRADED INSTALL ALREADY HOLDS THE GRANT BEING REMOVED. Every
+// database that has run this service since the surface shipped has SELECT on
+// analytics.location_events granted to analytics_reader. A reconciler that only ever
+// GRANTS converges a fresh install onto the new boundary and leaves every existing one
+// exactly as it was — the hole closed in the repository and open in production, which is
+// the failure mode this whole file is written around. Revoking first makes the boundary a
+// state each boot converges to rather than a change the code once made.
+//
+// 🔴 IT RUNS FOR EVERY GRANTEE, NOT ONLY THE GROUP ROLES, AND THE FIRST VERSION OF THIS
+// CHANGE GOT THAT WRONG. It sat below the `continue` that skips per-tenant readers, and
+// PUBLIC was converged on the area schema only — so `GRANT SELECT ON
+// analytics.location_events TO analytics_bravo`, or the same grant TO PUBLIC, survived
+// every boot and handed an ordinary reader position. Measured, control first: both leaked
+// before the boot and both still leaked after it.
+//
+// That was harmless before the position split, because every reader already held every
+// view; it is THIS change that turns the surface schema into a boundary, and a boundary
+// that is only ever widened is not one. It is also what the documentation now promises on
+// the very page that introduces the position grant — "a restart is a repair".
+//
+// Both the schema and its tables are taken back. A per-tenant reader needs no direct
+// privilege here at all: it reads through membership in a group role, so anything it
+// holds by name was granted by a hand this reconciler is supposed to undo. The group
+// roles get theirs straight back from grantStatements, which is why the revoke can be
+// unconditional rather than clever.
+//
+// The grantee arrives RENDERED — a quoted identifier, or the PUBLIC keyword — for the
+// same reason revokeAreaStatements takes one: PUBLIC is a keyword, and `FROM "public"`
+// names a role that normally does not exist, so a helper that quoted for itself would be
+// silently wrong for the one grantee every login inherits from.
+func revokeSurfaceStatements(grantee string) []string {
+	return []string{
+		fmt.Sprintf("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA %q FROM %s;",
+			AnalyticsSchema, grantee),
+		fmt.Sprintf("REVOKE ALL PRIVILEGES ON SCHEMA %q FROM %s;",
+			AnalyticsSchema, grantee),
+	}
+}
+
+// analyticsGrantee is one identity the reconciler converges: how it is written in SQL,
+// and which role (if any) it is granted the surface back for.
+//
+// The two fields are not redundant. `token` is a rendered SQL grantee, because PUBLIC
+// cannot be quoted; `grantRole` is the bare role name grantStatements needs, and is EMPTY
+// for everything that gets nothing back — PUBLIC and every per-tenant reader. Keeping
+// "what is revoked" and "what is granted" as separate fields of one value is what lets
+// the convergence be one ordered list per identity instead of a loop with two exceptions
+// in it.
+type analyticsGrantee struct {
+	token     string
+	grantRole string
+}
+
+// convergeStatements is the full, ORDERED convergence for one grantee: everything it must
+// not hold, then everything it must.
+//
+// 🔴 THE ORDER IS THE POINT AND IT IS ASSERTED, not left to the reading. Revoke first, so
+// a boot that is going to fail fails with the dangerous privilege already gone rather than
+// still in place. It is a pure function returning statements rather than a loop issuing
+// them so that ordering is a UNIT-testable property: a version that granted before it
+// revoked used to be caught only by a live database, which is a gate that does not run in
+// CI.
+func convergeStatements(g analyticsGrantee) []string {
+	stmts := revokeAreaStatements(g.token)
+	stmts = append(stmts, revokeSurfaceStatements(g.token)...)
+	if g.grantRole != "" {
+		stmts = append(stmts, grantStatements(g.grantRole)...)
+	}
+	return stmts
+}
+
+// granteeFor builds the convergence target for one role found in pg_roles: a group role
+// gets its declared views back, a per-tenant reader gets nothing back and reads through
+// its membership.
+func granteeFor(role string) analyticsGrantee {
+	g := analyticsGrantee{token: quoteIdent(role)}
+	if isAnalyticsGroupRole(role) {
+		g.grantRole = role
+	}
+	return g
+}
+
+// analyticsGrantees is a boot's convergence PLAN: every identity whose privileges are
+// re-derived, in the order they are re-derived, given the roles found in pg_roles.
+//
+// 🔴 IT IS A PURE FUNCTION SO THAT "WHO GETS CONVERGED" IS TESTABLE WITHOUT A DATABASE,
+// and that is a direct response to two mutants that survived every gate this repo runs in
+// CI. Skipping per-tenant readers, and converging PUBLIC on the area schema only, were
+// both caught by nothing but the integration suite — which executes against a real
+// Postgres on a maintainer's machine and in NO CI job, because the schema differ dumps
+// `--no-privileges` and can see no ACL at all. A property whose only instrument does not
+// run is a property nothing is holding.
+//
+// PUBLIC comes FIRST and unconditionally. A grant to PUBLIC is readable by every login on
+// the instance, present or future, so its removal cannot be conditional on this surface
+// happening to have a reader today — which is why it is in the plan rather than in a
+// branch beside it.
+//
+// Every enumerated role is in the plan, group or not. A per-tenant reader reads through
+// membership, so anything it holds BY NAME was granted by a hand this reconciler exists to
+// undo — on the area schema, where it would reach every tenant's raw rows, and on the
+// surface schema, where a direct grant of the position view walks around the split.
+func analyticsGrantees(roles []string) []analyticsGrantee {
+	plan := make([]analyticsGrantee, 0, len(roles)+1)
+	plan = append(plan, analyticsGrantee{token: publicGrantee})
+	for _, role := range roles {
+		plan = append(plan, granteeFor(role))
+	}
+	return plan
 }
 
 // revokeAreaStatements returns the privileges an analytics reader must NOT hold.
@@ -382,16 +647,35 @@ func revokeAreaStatements(role string) []string {
 	}
 }
 
-// analyticsRolesQuery finds every role that participates in the read surface: the
-// group role and every login role carrying the naming convention. Both are converged,
-// because a grant made directly to a per-tenant role would not be caught by
-// converging the group alone.
+// analyticsRolesQuery finds every role that participates in the read surface: the group
+// roles and every login role carrying the naming convention. All are converged, because a
+// grant made directly to a per-tenant role would not be caught by converging the groups
+// alone.
+//
+// The group roles are named explicitly even though both happen to match the prefix LIKE
+// below. That redundancy is deliberate: the prefix is a naming convention for READERS, so
+// a future group role that did not follow it would silently drop out of the convergence —
+// including out of the area-schema revoke, which is the one thing standing between a stray
+// grant and every tenant's rows.
 //
 // The prefix is passed as a bound parameter with an explicit ESCAPE so an underscore
 // in AnalyticsRolePrefix matches literally rather than as LIKE's single-character
 // wildcard.
-const analyticsRolesQuery = `SELECT rolname FROM pg_roles ` +
-	`WHERE rolname = ? OR rolname LIKE ? ESCAPE '=' ORDER BY rolname`
+func analyticsRolesQuery() string {
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(analyticsGroupRoles())), ", ")
+	return fmt.Sprintf(`SELECT rolname FROM pg_roles `+
+		`WHERE rolname IN (%s) OR rolname LIKE ? ESCAPE '=' ORDER BY rolname`, placeholders)
+}
+
+// analyticsRolesQueryArgs binds analyticsRolesQuery: the group roles, then the reader
+// prefix pattern, in the order the placeholders appear.
+func analyticsRolesQueryArgs() []any {
+	args := make([]any, 0, len(analyticsGroupRoles())+1)
+	for _, role := range analyticsGroupRoles() {
+		args = append(args, role)
+	}
+	return append(args, analyticsRolePattern())
+}
 
 // analyticsRolePattern renders the LIKE pattern matching every per-tenant reader.
 func analyticsRolePattern() string {
@@ -426,6 +710,12 @@ func analyticsRolePattern() string {
 // it is reported and startup continues. A failed rebuild or REVOKE is different —
 // each leaves a way to read another tenant's rows — so both refuse the boot.
 func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
+	// Checked before the lock is taken, because it is a property of this BUILD rather
+	// than of the database: a view with no grantee is a mistake made in this file, and
+	// nothing a database round trip could add would change the answer.
+	if err := analyticsViewsDeclareTheirGrantee(); err != nil {
+		return err
+	}
 	return mgr.WithAdvisoryLock(ctx, rdb.AdvisoryLockKey(analyticsLockName), func() error {
 		db := mgr.DB(core.WithSystemContext(ctx))
 
@@ -478,49 +768,37 @@ func ReconcileAnalyticsSurface(ctx context.Context, mgr *rdb.RdbManager) error {
 		}
 
 		var roles []string
-		if err := db.Raw(analyticsRolesQuery, AnalyticsReaderRole, analyticsRolePattern()).
+		if err := db.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).
 			Scan(&roles).Error; err != nil {
 			return fmt.Errorf("listing the analytics reader roles: %w", err)
 		}
 
-		// 🔴 PUBLIC IS ALWAYS CONVERGED, EVEN WITH NO READERS, and that is not
-		// symmetry for its own sake. A grant to PUBLIC on the area schema is readable
-		// by every login on the instance, present or future, so its removal cannot be
-		// conditional on this surface happening to have a reader today.
-		for _, stmt := range revokeAreaStatements(publicGrantee) {
-			if err := db.Exec(stmt).Error; err != nil {
-				return fmt.Errorf("revoking PUBLIC's privileges on the %q schema: %w",
-					AnalyticsAreaSchema, err)
+		// The plan decides WHO is converged and the statements decide WHAT to; both are
+		// pure functions, so both are testable without a database. This loop only
+		// executes them, in order, and stops at the first refusal — a boot that is
+		// going to fail must fail with the dangerous privilege already gone.
+		granted := 0
+		for _, g := range analyticsGrantees(roles) {
+			for _, stmt := range convergeStatements(g) {
+				if err := db.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("converging %s's privileges on the read surface: %w",
+						g.token, err)
+				}
+			}
+			if g.grantRole != "" {
+				granted++
 			}
 		}
 
 		if len(roles) == 0 {
-			// Not an error, and said at INFO with the role name in it because the
-			// operator's next question is always "what am I missing".
-			log.Info().Str("groupRole", AnalyticsReaderRole).Str("schema", AnalyticsSchema).
+			// Not an error, and said at INFO with the role names in it because the
+			// operator's next question is always "what am I missing". It comes AFTER
+			// the loop because PUBLIC is converged whether or not this surface has a
+			// reader today — see analyticsGrantees.
+			log.Info().Strs("groupRoles", analyticsGroupRoles()).Str("schema", AnalyticsSchema).
 				Msg("No analytics reader role exists, so the SQL/BI read surface has no readers. " +
-					"Create the group role on the database cluster to enable it.")
+					"Create the group roles on the database cluster to enable it.")
 			return nil
-		}
-
-		granted := 0
-		for _, role := range roles {
-			// Revoke FIRST. If the boot is going to fail, it must fail with the
-			// dangerous privilege already gone rather than still in place.
-			for _, stmt := range revokeAreaStatements(quoteIdent(role)) {
-				if err := db.Exec(stmt).Error; err != nil {
-					return fmt.Errorf("revoking %q's privileges on the %q schema: %w",
-						role, AnalyticsAreaSchema, err)
-				}
-			}
-			if role == AnalyticsReaderRole {
-				for _, stmt := range grantStatements(role) {
-					if err := db.Exec(stmt).Error; err != nil {
-						return fmt.Errorf("granting the analytics read surface to %q: %w", role, err)
-					}
-				}
-				granted++
-			}
 		}
 
 		log.Info().Int("roles", len(roles)).Int("granted", granted).
