@@ -260,37 +260,18 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 			return nil, errZeroEntryTime("location")
 		}
 		parents = append(parents, &request.Event)
-		// Every stored field of the fix takes part in the row's identity, including
-		// the three that arrived later. A fix is not identified by position alone: two
-		// readings at the same coordinates with different reported accuracy or heading
-		// are different readings, and leaving those out of the hash would let
-		// ON CONFLICT DO NOTHING silently swallow the second one.
-		//
-		// 🔴 THE FIELD NAMES BELOW ARE FROZEN. json.Marshal writes them into the
-		// preimage, so they are part of a content-addressed identity rather than local
-		// style — renaming one changes every location row's payload_id. That is not a
-		// cosmetic diff: the same fix redelivered across the deploy boundary hashes
-		// differently, misses the idempotency index, and inserts a duplicate row. If a
-		// name here ever has to change, it is a data migration, not a rename.
-		//
-		// The same applies to the VALUES, and Occurred changed once: it used to be the
-		// envelope's time and is now the sample's own. An event published before that
-		// change and redelivered after it therefore hashes differently and inserts a
-		// duplicate row. The window is one redelivery interval, it was taken knowingly
-		// pre-GA, and it is recorded here so the next value change is recognised for
-		// what it is.
-		entry, cerr := canonicalPayloadEntry(struct {
-			Lat, Lon, Elev           *float64
-			Accuracy, Speed, Heading *float64
-			Occurred                 time.Time
-		}{request.Latitude, request.Longitude, request.Elevation,
-			request.Accuracy, request.Speed, request.Heading, request.EntryOccurredTime})
+		// The row's identity is derived from the frozen preimage in
+		// model/payload_identity.go, which is the one definition of it — the live
+		// measurement subscription derives the same identity for a reading it streams
+		// rather than stores, and two copies of a content-addressed preimage is two
+		// answers waiting to disagree.
+		payloadId, cerr := DeriveLocationPayloadId(request)
 		if cerr != nil {
-			return nil, fmt.Errorf("canonicalizing a LocationEvent for its payload identity: %w", cerr)
+			return nil, cerr
 		}
 		created = append(created, &LocationEvent{
 			EventId:      request.EventId,
-			PayloadId:    DerivePayloadId(request.EventId, entry),
+			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.EntryOccurredTime,
@@ -337,19 +318,13 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			return nil, errZeroEntryTime("measurement")
 		}
 		parents = append(parents, &request.Event)
-		entry, cerr := canonicalPayloadEntry(struct {
-			Name           string
-			Value          *float64
-			Classifier     *uint
-			Unit, DataType *string
-			Occurred       time.Time
-		}{request.Name, request.Value, request.Classifier, request.Unit, request.DataType, request.EntryOccurredTime})
+		payloadId, cerr := DeriveMeasurementPayloadId(request)
 		if cerr != nil {
-			return nil, fmt.Errorf("canonicalizing a MeasurementEvent for its payload identity: %w", cerr)
+			return nil, cerr
 		}
 		created = append(created, &MeasurementEvent{
 			EventId:      request.EventId,
-			PayloadId:    DerivePayloadId(request.EventId, entry),
+			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.EntryOccurredTime,
@@ -395,19 +370,13 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 			return nil, errZeroEntryTime("alert")
 		}
 		parents = append(parents, &request.Event)
-		entry, cerr := canonicalPayloadEntry(struct {
-			Type     string
-			Level    uint32
-			Message  string
-			Source   string
-			Occurred time.Time
-		}{request.Type, request.Level, request.Message, request.Source, request.EntryOccurredTime})
+		payloadId, cerr := DeriveAlertPayloadId(request)
 		if cerr != nil {
-			return nil, fmt.Errorf("canonicalizing a AlertEvent for its payload identity: %w", cerr)
+			return nil, cerr
 		}
 		created = append(created, &AlertEvent{
 			EventId:      request.EventId,
-			PayloadId:    DerivePayloadId(request.EventId, entry),
+			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
 			EventType:    request.EventType,
 			OccurredTime: request.EntryOccurredTime,

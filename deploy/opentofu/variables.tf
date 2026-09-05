@@ -885,6 +885,27 @@ variable "timescale_analytics_readers" {
                          it; CloudNativePG reconciles the role to match. The
                          password is deliberately not a variable here -- putting
                          it in this file would put it in OpenTofu state.
+      reads_location     OPTIONAL, defaults to false. Whether this reader can read
+                         device POSITIONS -- latitude, longitude, elevation,
+                         accuracy, speed, heading.
+
+    🔴 POSITION IS OFF BY DEFAULT, AND THAT IS THE PLATFORM'S OWN BOUNDARY RATHER
+    THAN CAUTION APPLIED HERE. Everywhere else, reading where a device IS is a
+    separate authority from reading what it MEASURES: knowing a vehicle's or a
+    person's location differs in kind from knowing how warm it is, so that authority
+    is deliberately absent from the read-only viewer baseline and is only ever held
+    by explicit grant. This surface had no notion of it, so declaring any BI reader
+    handed it every tracked position.
+
+    A SQL session cannot be asked which authorities it holds -- it authenticates as
+    a role and carries nothing else -- so the authority is a GRANT: position lives on
+    a second group role, and `reads_location` is what puts this reader in it. The
+    tenant filter is unchanged either way; a location reader reads its own tenant's
+    positions and nobody else's.
+
+    What an ordinary reader keeps is the base event envelope, which carries no
+    coordinates. It can still see THAT a location event occurred, from which device
+    and when -- the same line the API draws.
 
     Nothing further is needed: the role is a member of the reader group, which the
     event store grants the read surface to on every boot.
@@ -902,6 +923,7 @@ variable "timescale_analytics_readers" {
     name             = string
     connection_limit = number
     password_secret  = optional(string, "")
+    reads_location   = optional(bool, false)
   }))
   default = []
 
@@ -922,11 +944,16 @@ variable "timescale_analytics_readers" {
   }
 
   validation {
-    # The group role is not a reader. Declaring it here would give it LOGIN and a password,
+    # Neither group role is a reader. Declaring one here would give it LOGIN and a password,
     # and a role that can start a session is one whose own name the tenant derivation has to
     # keep refusing — a boundary better kept out of reach than kept correct.
-    condition     = alltrue([for r in var.timescale_analytics_readers : r.name != "analytics_reader"])
-    error_message = "analytics_reader is the read surface's group role, not a reader. Declaring it here would give it LOGIN; name the reader after its tenant instead."
+    #
+    # 🔴 BOTH NAMES ARE LISTED, and the second is the one that will be forgotten: it arrived
+    # with the position split, it matches the reader prefix exactly as the first does, and
+    # `analytics_location_reader` given LOGIN would resolve to a tenant called
+    # `location_reader` — a legal tenant token.
+    condition     = alltrue([for r in var.timescale_analytics_readers : !contains(["analytics_reader", "analytics_location_reader"], r.name)])
+    error_message = "analytics_reader and analytics_location_reader are the read surface's group roles, not readers. Declaring either here would give it LOGIN; name the reader after its tenant instead."
   }
 }
 

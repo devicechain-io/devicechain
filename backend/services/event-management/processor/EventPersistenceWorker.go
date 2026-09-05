@@ -69,9 +69,22 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 
 // ErrDeterministic marks a persistence failure that no amount of redelivery can
 // fix — bad data, such as a non-numeric measurement or location value — so the
-// event is dead-lettered on the first failure rather than retried (left unacked) to
+// event is abandoned on the first failure rather than retried (left unacked) to
 // the delivery cap (ADR-024). A transient failure (e.g. a DB blip) is not wrapped and
 // keeps the retry path.
+//
+// 🔴 "ABANDONED", NOT "DEAD-LETTERED", AND THE DIFFERENCE IS THAT NOTHING DRAINS
+// failed-events. The platform HAS a dead-letter sink — streams.DeadLetters, whose
+// letters user-management stores and command-delivery reads back — and this is not
+// it. streams.FailedEvents has exactly two references in the backend, and both are
+// NewWriter (this service and device-management): no consumer, no store, no console
+// surface. So an event that lands there is retained for the stream's cold-tier
+// window and then expires unread, and the operator-visible record of the failure is
+// the log line and the RED metrics counter, not a queue anyone can work off.
+//
+// That is a real gap rather than a naming quibble, and it is recorded here instead
+// of being papered over: the vocabulary is the only thing that told a reader a queue
+// existed to be drained.
 var ErrDeterministic = errors.New("deterministic persistence failure")
 
 // classifyPersistFailure re-classifies a database error that no redelivery can fix.
@@ -310,22 +323,22 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 	if !ok {
 		return nil, core.ErrNoTenant
 	}
-	payloadBytes, perr := json.Marshal(event.Payload)
-	if perr != nil {
-		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", perr)
+	eventId, ierr := model.DeriveEventIdForPayload(tenant, &pevent, event.Payload)
+	if ierr != nil {
+		return nil, ierr
 	}
-	pevent.EventId = model.DeriveEventId(tenant, &pevent, payloadBytes)
+	pevent.EventId = eventId
 	// All of a single message's inserts run inside one transaction so the
 	// message's events are persisted all-or-nothing (ADR-022 E5): a mid-message
 	// failure rolls the whole message back rather than leaving some rows
-	// committed while the message routes to the failed/dead-letter path. The
+	// committed while the message routes to the failed-events path. The
 	// transaction handle (tx) carries the tenant-scoped ctx, so the global
 	// tenant-scope create callback still fires on every batched insert.
 	var results *EventPersistenceResults
 	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
 		// Idempotent ingestion: a redelivered resolved event carrying an
 		// alternateId that was already persisted is a no-op, so the at-least-once
-		// consume path (ADR-022 Wave-2 redelivery/DLQ) does not double-write. The
+		// consume path (ADR-022 Wave-2 redelivery) does not double-write. The
 		// (tenant_id, alt_id, occurred_time) partial unique index is the backstop
 		// for a concurrent-redelivery race; this check skips the common sequential
 		// case without erroring. Events without an alternateId are not deduped.
@@ -347,7 +360,7 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		// but these four returned a BARE error, which the dispatch below classifies by
 		// its default branch as transient. So the event was redelivered until it burned
 		// its whole MaxDeliver budget and was then filed as a downstream API failure
-		// rather than as invalid data. Wrapping ErrDeterministic dead-letters it on the
+		// rather than as invalid data. Wrapping ErrDeterministic gives up on it on the
 		// first delivery, with the right reason attached.
 		var perr error
 		switch event.EventType {
@@ -458,7 +471,8 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			event, err := dmproto.UnmarshalResolvedEvent(unpersisted.Value)
 			if err != nil {
 				ep.Invalid(err, unpersisted)
-				// Terminal: routed to the failed-events DLQ, so ack to drop it.
+				// Terminal: reported on the failed-events stream (which nothing
+				// consumes — see ErrDeterministic), so ack to drop it.
 				unpersisted.Ack()
 				done(core.ResultInvalid)
 				continue
@@ -475,8 +489,10 @@ func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
 				err = classifyPersistFailure(err)
 				// A deterministic failure (bad data) can never succeed on redelivery,
-				// so dead-letter it on the first failure (ADR-024). A transient
-				// failure is retried via redelivery up to the cap, then dead-lettered.
+				// so give up on the first failure (ADR-024). A transient failure is
+				// retried via redelivery up to the cap and then given up on the same
+				// way. Both report the event on the failed-events stream, which is a
+				// report and not a queue — see ErrDeterministic.
 				switch {
 				case errors.Is(err, ErrDeterministic):
 					ep.Failed(tenant, uint(dmproto.FailureReason_Invalid), *event, err, unpersisted.CorrelationID())

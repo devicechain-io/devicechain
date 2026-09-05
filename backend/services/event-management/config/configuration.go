@@ -43,7 +43,14 @@ type EventManagementConfiguration struct {
 type LifecycleConfiguration struct {
 	// ChunkIntervalHours sizes new hypertable chunks (set_chunk_time_interval). It
 	// affects only chunks created after startup; existing chunks keep their interval.
-	// Unset (0) defaults to 24h.
+	//
+	// Unset (0) defaults to 24h, and writing `chunkIntervalHours: 0` in the document
+	// means exactly the same thing as omitting the key — "use the default", not
+	// "no chunking". There is no pointer here to tell the two apart, and none is
+	// wanted: unlike CompressAfterDays and LocationRetentionDays, a chunk interval
+	// has no meaningful "off" state for an explicit 0 to select, so the two cases
+	// have the same correct answer. Only a NEGATIVE value is a mistake, and Validate
+	// is where it is refused.
 	ChunkIntervalHours int
 
 	// CompressAfterDays enables lossless columnar compression on chunks older than
@@ -114,6 +121,23 @@ func (c *EventManagementConfiguration) ApplyDefaults() {
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects
 // nonsensical data-lifecycle values so a typo cannot produce a broken or
 // data-destroying policy (fail closed).
+//
+// 🔴 IT RUNS AFTER ApplyDefaults, WHICH DECIDES WHAT EACH CHECK BELOW CAN ACTUALLY
+// SEE. core.LoadConfiguration defaults first and validates second — deliberately, so
+// that defaults are authoritative regardless of which keys the document supplied — so
+// any field ApplyDefaults fills has already had its zero value replaced by the time a
+// check here looks at it. Read every bound below as being about the DEFAULTED value,
+// not the document's.
+//
+// The two are not the same thing, and reading them as the same thing is how a check
+// gets written that cannot fire. ChunkIntervalHours is the case in point: `<= 0` looks
+// like it refuses a zero, and it can never see one, because 0 was already replaced
+// with DefaultChunkIntervalHours. That is the intended behaviour rather than a hole —
+// 0 means "use the default" for this field (see LifecycleConfiguration) — so the check
+// is kept as the floor it really is: it refuses a NEGATIVE interval, which is the typo
+// there is no sensible reading of. It also still covers a caller that builds the
+// struct itself and validates without defaulting, which is why it is `<= 0` and not
+// `< 0`.
 func (c *EventManagementConfiguration) Validate() error {
 	if c.Lifecycle.ChunkIntervalHours <= 0 {
 		return fmt.Errorf("lifecycle.chunkIntervalHours must be positive, got %d", c.Lifecycle.ChunkIntervalHours)

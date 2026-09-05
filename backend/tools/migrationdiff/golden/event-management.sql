@@ -12,7 +12,7 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  LANGUAGE sql STABLE
  AS $$
  SELECT CASE
- WHEN session_user::text <> 'analytics_reader'
+ WHEN session_user::text NOT IN ('analytics_reader', 'analytics_location_reader')
  AND session_user::text LIKE 'analytics=_%' ESCAPE '='
  THEN substring(session_user::text from 11)
  END

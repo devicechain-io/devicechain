@@ -6,19 +6,44 @@ package graphql
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
-// eventKey builds a stable synthetic id for an event from its composite key
-// (the event tables use (deviceToken, eventType, occurredTime) as their natural
-// key rather than a surrogate id column).
-func eventKey(deviceToken string, eventType int64, occurredTime time.Time) string {
-	return fmt.Sprintf("%s:%d:%d", deviceToken, eventType, occurredTime.UnixNano())
+// eventId renders a stored row's own identity as a GraphQL ID.
+//
+// 🔴 IT IS THE SURROGATE, NOT THE NATURAL KEY, AND THAT IS THE WHOLE POINT. Every
+// `id` on this schema used to be built from (deviceToken, eventType, occurredTime),
+// described in this very comment as the tables' "natural key rather than a surrogate
+// id column". That tuple is exactly what event_id and payload_id were introduced to
+// replace, because it is not an identity: see model/events.go, where the same tuple
+// made two envelopes collapse into one and left a payload row's parentage ambiguous.
+//
+// For measurementEvents it did not even need a corner case. One sample's measurements
+// are stored one row per name, all carrying the sample's DeviceToken, EventType and
+// occurred time — so a device reporting `temp` and `humidity` at one instant returned
+// two nodes with an IDENTICAL `ID!` on the ordinary path. Nothing in the schema, the
+// resolvers or the tests noticed, and the blast radius was limited only by the console
+// using a hand-rolled client with no normalized cache: any consumer that keys by id (a
+// normalizing cache, an SDK, an agent) silently collapses the rows into one.
+//
+// A base event is addressed by event_id; a payload row by payload_id, its OWN identity,
+// because a batch's rows all share one event_id.
+//
+// It returns an error rather than an empty string for an id-less row, and the callers
+// propagate it. An `ID!` that is "" is not a degraded id, it is the same collision in a
+// new costume — and every row read from storage has a NOT NULL id, so the only way to
+// reach this is a row synthesized in memory without one. Failing here is what stopped
+// exactly that from shipping on the live subscription path.
+func eventId(id []byte) (gql.ID, error) {
+	if len(id) == 0 {
+		return "", fmt.Errorf("event row has no identity to expose as an id")
+	}
+	return gql.ID(hex.EncodeToString(id)), nil
 }
 
 // Converts a *uint to a string pointer (graphql ids are strings).
@@ -48,8 +73,8 @@ type EventResolver struct {
 	C context.Context
 }
 
-func (r *EventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
+func (r *EventResolver) Id() (gql.ID, error) {
+	return eventId(r.M.EventId)
 }
 
 func (r *EventResolver) DeviceToken() string {
@@ -139,8 +164,8 @@ type LocationEventResolver struct {
 	C context.Context
 }
 
-func (r *LocationEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
+func (r *LocationEventResolver) Id() (gql.ID, error) {
+	return eventId(r.M.PayloadId)
 }
 
 func (r *LocationEventResolver) DeviceToken() string {
@@ -205,8 +230,8 @@ type MeasurementEventResolver struct {
 	C context.Context
 }
 
-func (r *MeasurementEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
+func (r *MeasurementEventResolver) Id() (gql.ID, error) {
+	return eventId(r.M.PayloadId)
 }
 
 func (r *MeasurementEventResolver) DeviceToken() string {
@@ -315,8 +340,8 @@ type AlertEventResolver struct {
 	C context.Context
 }
 
-func (r *AlertEventResolver) Id() gql.ID {
-	return gql.ID(eventKey(r.M.DeviceToken, int64(r.M.EventType), r.M.OccurredTime))
+func (r *AlertEventResolver) Id() (gql.ID, error) {
+	return eventId(r.M.PayloadId)
 }
 
 func (r *AlertEventResolver) DeviceToken() string {

@@ -34,7 +34,7 @@ rangos largos.
 | `analytics.events` | El sobre base del evento: dispositivo, tipo, tiempos, origen |
 | `analytics.measurement_events` | Lecturas numéricas con nombre, con unidad y tipo de dato |
 | `analytics.measurement_rollups` | Suma / mín. / máx. / recuento por minuto, por dispositivo y métrica |
-| `analytics.location_events` | Posiciones, con elevación, precisión, velocidad y rumbo |
+| `analytics.location_events` | **Posiciones** — latitud, longitud, elevación, precisión, velocidad y rumbo. Requiere la concesión de posición; véase [La posición es una concesión aparte](#la-posicion-es-una-concesion-aparte) |
 | `analytics.alert_events` | Alertas reportadas por el dispositivo |
 | `analytics.state_change_events` | La línea temporal de conexión/desconexión |
 | `analytics.event_anchors` | Los anclajes de relación estampados en cada evento al escribirlo |
@@ -93,6 +93,55 @@ Aplique. El rol aparece, se une al grupo de lectores y puede conectarse. No hay 
 Para rotar la contraseña, cámbiela en el Secret; para revocar el acceso, elimine la entrada y
 aplique.
 
+## La posición es una concesión aparte {#la-posicion-es-una-concesion-aparte}
+
+Un lector declarado como arriba lee telemetría, alertas, la línea temporal de conexión/desconexión y
+los sobres de los eventos — **pero no las posiciones de los dispositivos**. La latitud, la longitud,
+la elevación, la precisión, la velocidad y el rumbo están detrás de una segunda concesión, y usted la
+activa por lector:
+
+```hcl
+timescale_analytics_readers = [
+  {
+    name             = "analytics_acme"
+    connection_limit = 5
+    password_secret  = "analytics-acme-credentials"
+    reads_location   = true
+  },
+]
+```
+
+Aplique, y el lector podrá consultar `analytics.location_events`. Sin ello, esa vista concreta
+devuelve `permission denied` y ninguna otra vista se ve afectada.
+
+Esto no es una cautela añadida para BI; es la propia línea de la plataforma. Leer **dónde está** un
+dispositivo es un permiso distinto de leer **qué mide** en todo DeviceChain — el recorrido de un
+vehículo o de una persona es un hecho de otra naturaleza que una serie de temperaturas, así que la
+posición queda deliberadamente fuera del conjunto básico de solo lectura y solo se tiene por
+concesión explícita. A una sesión SQL no se le puede preguntar qué permisos tiene; se autentica como
+un rol y no lleva nada más. De modo que el permiso se expresa de la única forma en que una base de
+datos puede expresarlo — como una concesión, sostenida por un segundo rol de grupo al que el lector
+se une cuando usted lo indica.
+
+Lo que un lector ordinario conserva es el **sobre**: `analytics.events` contiene todos los eventos,
+incluidos los de ubicación, así que sigue pudiendo ver que ocurrió un evento de ubicación, de qué
+dispositivo y cuándo. Simplemente no puede ver dónde.
+
+:::tip Qué lectores lo necesitan
+Los paneles de flotas, logística, servicio de campo y seguimiento de activos, sí. Un panel de
+métricas o de alertas normalmente no — y un lector que no necesita la posición es una credencial
+menos cuya pérdida revela los movimientos de alguien. Actívelo donde el panel realmente dibuje un
+mapa o calcule una distancia.
+:::
+
+:::note Actualizar una instalación existente
+Si declaró lectores antes de que existiera esta separación, tenían la posición. En el primer
+reinicio tras la actualización, el almacén de eventos retira esa concesión a todo lector que usted no
+haya marcado con `reads_location = true` — un panel que dibuje posiciones empezará a devolver
+`permission denied` hasta que lo configure. Esa convergencia es deliberada: la concesión se vuelve a
+derivar de su declaración en cada arranque, en lugar de acumularse.
+:::
+
 ## Conectar una herramienta de BI
 
 Apunte la herramienta al almacén de eventos como a cualquier base de datos PostgreSQL:
@@ -141,13 +190,22 @@ lee cero filas — la dirección del fallo es siempre «no ve nada», nunca «lo
 
 **Un lector no tiene ningún privilegio sobre las tablas subyacentes.** No puede alcanzar las
 hipertablas en bruto ni siquiera por su nombre, que es también la razón por la que es de solo
-lectura: tiene `SELECT` sobre siete vistas y nada más, así que no hay ningún privilegio de escritura
-que ejercer. Eso es una concesión de permisos, no un ajuste — nada que un cliente pueda desactivar.
+lectura: tiene `SELECT` sobre las vistas que se le concedieron y nada más, así que no hay ningún
+privilegio de escritura que ejercer. Eso es una concesión de permisos, no un ajuste — nada que un
+cliente pueda desactivar. Es también como se separa la posición: un lector sin `reads_location` no
+tiene ningún privilegio sobre `analytics.location_events`, de modo que las coordenadas quedan
+inalcanzables en lugar de filtradas.
 
 **Ambas capas se restablecen cada vez que arranca el almacén de eventos.** Las vistas se
 reconstruyen y los privilegios se vuelven a converger en cada arranque, de modo que ni un permiso
 concedido a mano durante una investigación ni una vista editada durante una le sobreviven en
 silencio. Un reinicio es una reparación.
+
+Eso cubre en concreto la concesión de posición, y en todas las direcciones en que puede ampliarse:
+un `GRANT` sobre `analytics.location_events` hecho a un lector por su nombre, al grupo general de
+lectores o a `PUBLIC` se retira en el siguiente arranque. Lo que un lector acaba teniendo se deriva
+de su declaración cada vez, nunca se acumula — que es también por qué quitar `reads_location` retira
+el acceso de verdad, en lugar de dejar en pie la última concesión.
 
 **Las conexiones están limitadas por rol, y el límite obliga.** `connection_limit` se aplica en la
 autenticación: superado, la conexión se rechaza. Esto es lo que impide que un consumidor analítico
@@ -191,8 +249,12 @@ suponiendo que cada una de esas conexiones puede estar ejecutando una consulta l
 - **Consulte la agregación, no la tabla en bruto, para cualquier rango largo.** Es una agregación
   continua: el trabajo ya está hecho, y recorrer un mes de ella es barato mientras que recorrer un
   mes de mediciones en bruto no lo es.
-- **Dé a cada consumidor su propio rol.** Dos herramientas que comparten un rol comparten su límite
-  de conexiones, y no se puede revocar una sin revocar la otra.
+- **Cada inquilino tiene un rol de lector, y todas sus herramientas lo comparten.** El nombre del
+  rol *es* el inquilino, así que `acme` tiene exactamente un nombre de lector legal y no hay un
+  segundo que declarar — un despliegue que lo intente es rechazado. Cuente con ello: dos
+  herramientas de un mismo inquilino comparten el límite de conexiones, comparten la decisión sobre
+  la posición y no se pueden revocar por separado. Dimensione `connection_limit` para todas ellas
+  juntas, y active `reads_location` si *alguna* de ellas necesita un mapa.
 - **Un lector sobrevive a un cambio de esquema pero no gana nada de él automáticamente.** Las vistas
   exponen un conjunto fijo de columnas; una columna añadida a la plataforma más tarde aparece en la
   superficie analítica cuando se añade allí deliberadamente, no antes.

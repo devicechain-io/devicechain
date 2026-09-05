@@ -701,18 +701,31 @@ module "cnpg_tsdb" {
   # surface to this role at boot; without the role there is nothing to grant to,
   # and adding the first reader would then need a restart of event-management as
   # well as an apply. Declared always, adding a reader is one apply.
+  # 🔴 TWO GROUP ROLES, BECAUSE POSITION IS A SEPARATE AUTHORITY. analytics_reader
+  # holds the surface; analytics_location_reader holds the one view carrying
+  # latitude/longitude/elevation/accuracy/speed/heading. A reader joins the first
+  # unconditionally and the second only where the operator wrote reads_location = true,
+  # which is the one place a SQL session can carry an authority at all: it has no
+  # claims, only a role. Both are declared on every install for the same reason the
+  # first always was — event-management grants to them at boot, and a group created
+  # later would need a restart as well as an apply.
   extra_roles = concat(
     [{
       name     = "analytics_reader"
       login    = false
       in_roles = []
+      },
+      {
+        name     = "analytics_location_reader"
+        login    = false
+        in_roles = []
     }],
     [for r in var.timescale_analytics_readers : {
       name                 = r.name
       login                = true
       connection_limit     = r.connection_limit
       password_secret_name = r.password_secret
-      in_roles             = ["analytics_reader"]
+      in_roles             = r.reads_location ? ["analytics_reader", "analytics_location_reader"] : ["analytics_reader"]
     }]
   )
   reserved_application_connections = var.timescale_analytics_reserved_connections
