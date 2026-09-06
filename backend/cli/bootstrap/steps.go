@@ -685,9 +685,17 @@ func buildFrontend(ctx context.Context, root string, st *State) error {
 // would surface ten minutes into a bootstrap, after every ko build, which is the
 // worst possible moment to learn about a typo.
 //
-// 🔑 `default`, NOT `bridge`. buildkit accepts only default|host|none and rejects
+// 🔑 `default`, NOT `bridge`. BuildKit accepts only default|host|none and rejects
 // `bridge` outright — the obvious spelling for "docker's ordinary networking" is
 // the one that does not work, which is why it is named in the error.
+//
+// The accepted set is BuildKit's, and that is stated precisely rather than as
+// "docker's": with DOCKER_BUILDKIT=0 the legacy builder does accept `bridge`
+// (measured). Refusing it anyway is the deliberate call — docker 23+ builds with
+// BuildKit unless it is switched off, so accepting a value that works only on an
+// opted-out builder would trade a clear message now for an obscure failure later.
+// A legacy-builder user who genuinely wants it still has `up.sh`, which passes the
+// value straight through.
 func dockerBuildNetwork() (string, error) {
 	network := os.Getenv(dockerBuildNetEnv)
 	if network == "" {
@@ -701,12 +709,18 @@ func dockerBuildNetwork() (string, error) {
 	if network == "bridge" {
 		hint = ` (buildkit rejects "bridge"; docker's ordinary networking is "default")`
 	}
-	return "", fmt.Errorf("%s=%q is not a docker build network mode%s; use default, host or none",
+	return "", fmt.Errorf("%s=%q is not a BuildKit network mode%s; use default, host or none",
 		dockerBuildNetEnv, network, hint)
 }
 
-// dockerBuildNetEnv is the override deploy/local/build-images.sh reads under the
-// same name, so one spelling covers both developer paths.
+// dockerBuildNetEnv is the override deploy/local/build-images.sh and
+// deploy/local/bounce.sh read under the same name, so one spelling covers every
+// LOCAL path that builds this image. CI and the release pipeline build the same
+// Dockerfile on their own runners and read nothing here — see build-images.sh.
+//
+// The literal is asserted as a literal in the tests, not through this constant: a
+// test that reaches the environment through the name under test cannot notice the
+// name moving, which is precisely how the split this function closes would reopen.
 const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 
 // removeLocalRegistry force-removes the shared local registry container. Used by

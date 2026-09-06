@@ -48,11 +48,15 @@ PLATFORM=${PLATFORM:-linux/amd64}
 # and rejects `bridge` outright with "network mode ... not supported by buildkit". The
 # obvious spelling is the one that does not work, which is why it is named here.
 #
-# THREE PLACES BUILD THIS IMAGE and all three read this variable under this name:
-# here, bounce.sh, and dcctl's own --build path (bootstrap.dockerBuildNetwork).
+# THREE LOCAL-DEVELOPMENT PLACES BUILD THIS IMAGE and all three read this variable
+# under this name: here, bounce.sh, and dcctl's own --build path
+# (bootstrap.dockerBuildNetwork). Local-development is the scope, per the paragraph
+# above: release.yml builds the same Dockerfile through docker/build-push-action on
+# a GitHub runner and reads nothing here, which is why "all three" is not "all four".
 # dcctl's was added late -- it passed no --network at all, so `up.sh BUILD_IMAGES=1`
 # worked on the host below while `dcctl bootstrap --dev` died in `npm ci`. If you
-# change what this defaults to, change it in the Go too, or that split comes back.
+# change what this defaults to, change it in the Go too, or that split comes back;
+# a test in backend/cli/bootstrap reads THIS FILE to check the two still agree.
 DOCKER_BUILD_NET=${DOCKER_BUILD_NET:-host}
 export KO_CONFIG_PATH="$ROOT/.ko.yaml"   # pins the chainguard distroless base
 
