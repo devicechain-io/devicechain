@@ -47,6 +47,12 @@ PLATFORM=${PLATFORM:-linux/amd64}
 # classic path does not. 🔴 `default`, NOT `bridge`: buildkit accepts only default|host|none
 # and rejects `bridge` outright with "network mode ... not supported by buildkit". The
 # obvious spelling is the one that does not work, which is why it is named here.
+#
+# THREE PLACES BUILD THIS IMAGE and all three read this variable under this name:
+# here, bounce.sh, and dcctl's own --build path (bootstrap.dockerBuildNetwork).
+# dcctl's was added late -- it passed no --network at all, so `up.sh BUILD_IMAGES=1`
+# worked on the host below while `dcctl bootstrap --dev` died in `npm ci`. If you
+# change what this defaults to, change it in the Go too, or that split comes back.
 DOCKER_BUILD_NET=${DOCKER_BUILD_NET:-host}
 export KO_CONFIG_PATH="$ROOT/.ko.yaml"   # pins the chainguard distroless base
 

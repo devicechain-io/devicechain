@@ -600,6 +600,11 @@ func ensureLocalRegistry(ctx context.Context, st *State) error {
 // operator, pushing to ImageRegistry at ImageVersion. --bare names each image
 // exactly REGISTRY/<area>:TAG, matching what the chart and operator deploy pull.
 func buildImages(ctx context.Context, root string, st *State) error {
+	// Checked here rather than in buildFrontend, which runs last: see
+	// dockerBuildNetwork for why an unusable value must not wait for it.
+	if _, err := dockerBuildNetwork(); err != nil {
+		return err
+	}
 	koConfig := filepath.Join(root, ".ko.yaml")
 	build := func(moduleDir, imageName string) error {
 		cmd := exec.CommandContext(ctx, "ko", "build", "--bare",
@@ -646,13 +651,63 @@ func buildImages(ctx context.Context, root string, st *State) error {
 // it to the local registry at the same registry/tag the services use, so the
 // chart's default frontend image (registry/frontend:tag) resolves.
 func buildFrontend(ctx context.Context, root string, st *State) error {
+	network, err := dockerBuildNetwork()
+	if err != nil {
+		return err
+	}
 	image := fmt.Sprintf("%s/frontend:%s", st.ImageRegistry, st.ImageVersion)
 	frontendDir := filepath.Join(root, "frontend")
-	if err := run(ctx, "docker", "build", "-t", image, frontendDir); err != nil {
+	if err := run(ctx, "docker", "build", "--network="+network, "-t", image, frontendDir); err != nil {
 		return err
 	}
 	return run(ctx, "docker", "push", image)
 }
+
+// dockerBuildNetwork resolves the network mode for the frontend image build,
+// honouring DOCKER_BUILD_NET and defaulting to host.
+//
+// 🔴 THIS DEFAULT IS NOT A PREFERENCE, AND ITS ABSENCE HERE IS WHAT THIS FUNCTION
+// EXISTS TO FIX. deploy/local/build-images.sh has carried --network=host since it
+// was written, with the measurement behind it in a comment: on at least one WSL2
+// host, `npm ci` inside a container on docker's default BRIDGE network fails with
+// ECONNRESET reproducibly — 3/3, not a flake — while the same install succeeds on
+// the host and succeeds in a container with --network=host. MTU, conntrack and npm
+// socket concurrency were each measured and ruled out.
+//
+// dcctl's --build path was doing the same docker build with no --network at all,
+// so the two developer paths diverged on the one host where the difference decides
+// whether a bootstrap completes: `deploy/local/up.sh BUILD_IMAGES=1` worked and
+// `dcctl bootstrap --dev` — the zero-config path a newcomer is steered to — died in
+// `npm ci`. Whatever build-images.sh needs, this needs, for the same reason.
+//
+// The value is validated before the first image is built rather than at the point
+// of use, because the frontend is built LAST: an unusable value discovered here
+// would surface ten minutes into a bootstrap, after every ko build, which is the
+// worst possible moment to learn about a typo.
+//
+// 🔑 `default`, NOT `bridge`. buildkit accepts only default|host|none and rejects
+// `bridge` outright — the obvious spelling for "docker's ordinary networking" is
+// the one that does not work, which is why it is named in the error.
+func dockerBuildNetwork() (string, error) {
+	network := os.Getenv(dockerBuildNetEnv)
+	if network == "" {
+		return "host", nil
+	}
+	switch network {
+	case "default", "host", "none":
+		return network, nil
+	}
+	hint := ""
+	if network == "bridge" {
+		hint = ` (buildkit rejects "bridge"; docker's ordinary networking is "default")`
+	}
+	return "", fmt.Errorf("%s=%q is not a docker build network mode%s; use default, host or none",
+		dockerBuildNetEnv, network, hint)
+}
+
+// dockerBuildNetEnv is the override deploy/local/build-images.sh reads under the
+// same name, so one spelling covers both developer paths.
+const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 
 // removeLocalRegistry force-removes the shared local registry container. Used by
 // destroy --purge-registry; best-effort (a missing container is fine).
