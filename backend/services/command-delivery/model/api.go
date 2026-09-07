@@ -189,6 +189,20 @@ type Api struct {
 	// duplicate, so an Api built by literal must not register anything. Every recorder
 	// tolerates a nil receiver — see NewBatchMetrics.
 	BatchMetrics *BatchMetrics
+	// Nudger, when set, is told which device a freshly created command was queued for,
+	// so the delivery path can dispatch it without waiting for the sweep's next tick.
+	//
+	// 🔴 NIL IS OFF, AND OFF IS A SUPPORTED CONFIGURATION, NOT A DEGRADED ONE. Every
+	// command then reaches SENT on the sweep exactly as it did before the nudge existed;
+	// the only thing lost is the latency the nudge buys. It is nil in every test that
+	// builds an Api by literal, and it is nil in a binary whose processor has not been
+	// constructed yet — which is why nudgeDispatch checks rather than assuming.
+	//
+	// 🔴 IT IS DELIBERATELY REACHED ONLY FROM CreateCommand. CreateCommandBatch inserts
+	// through CreateInBatches (insertBatchCommands) and never through CreateCommand, so a
+	// fleet write of 50,000 devices issues NO nudges — see the comment there, which is the
+	// standing record of a property that could otherwise change silently.
+	Nudger CommandNudger
 }
 
 // NewApi creates a new API instance.
@@ -241,6 +255,9 @@ type CommandDeliveryApi interface {
 	CommandsByToken(ctx context.Context, tokens []string) ([]*Command, error)
 	Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error)
 	PendingCommands(ctx context.Context) ([]*Command, error)
+	// QueuedCommandsForDevice reads the front of one device's QUEUED backlog, oldest
+	// first — the dispatch nudge's read.
+	QueuedCommandsForDevice(ctx context.Context, deviceToken string, limit int) ([]*Command, error)
 	// TrySweepLock serializes the expiry + redelivery sweep across replicas.
 	TrySweepLock(ctx context.Context, fn func() error) (bool, error)
 }
@@ -433,6 +450,12 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		return nil, rejected(RejectTokenInUse,
 			"command token %q is already in use", request.Token)
 	}
+	// A row was inserted, so this device may have work that can go out now rather than on
+	// the sweep's next tick. The nudge decides nothing here: it is handed the DEVICE and
+	// the far side re-reads that device's queued backlog under the same gates the sweep
+	// applies. It never blocks, never errors, and is dropped under load — see
+	// nudgeDispatch and processor.dispatchNudger.
+	api.nudgeDispatch(ctx, created)
 	return created, nil
 }
 

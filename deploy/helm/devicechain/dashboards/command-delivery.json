@@ -68,7 +68,7 @@
   "timezone": "",
   "title": "DeviceChain — Command Delivery",
   "uid": "dc-command-delivery-ops",
-  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the dispatch sweep's claim outcomes, and the presence gate's holds. The instance picker is driven by claims_lost rather than by a batch counter, because the batch counters are label vectors that export nothing until the first fleet write — picking one of those would leave the dashboard unable to name an instance that has only ever sent single commands. Note the two naming eras: the six original counters carry a historical command_delivery_ stutter in their metric names and the batch counters do not.",
+  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the claim outcomes of both dispatch paths (the periodic sweep and the enqueue-time nudge), and the presence gate's holds. The instance picker is driven by claims_lost rather than by a batch counter, because the batch counters are label vectors that export nothing until the first fleet write — picking one of those would leave the dashboard unable to name an instance that has only ever sent single commands. Note the two naming eras: the six original counters carry a historical command_delivery_ stutter in their metric names and the batch counters do not.",
   "version": 1,
   "weekStart": "",
   "panels": [
@@ -812,7 +812,7 @@
       "id": 15,
       "type": "stat",
       "title": "Claims lost /s",
-      "description": "Dispatches abandoned because another dispatcher claimed the command first. Expected and harmless during a rolling update — the claim is what stops two pods physically actuating the same device twice. Sustained on a steady-state instance, it means two sweeps are running concurrently.",
+      "description": "Dispatches abandoned because another dispatcher claimed the command first, across both dispatch paths. Expected and harmless — the claim is a compare-and-set, and it is what stops two dispatchers physically actuating the same device twice. A standing rate is NORMAL here now that the enqueue-time nudge dispatches alongside the sweep: the two racing for one row is the design, not a fault. Read the by-path breakdown below rather than this total, and treat losses on one path with no matching traffic on the other as the shape worth investigating.",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -991,7 +991,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "Claim contention and undeliverable commands",
-      "description": "Lost claims (another dispatcher got there first) alongside commands the transport cannot carry. Lost claims should track rollouts; undeliverable should track profile changes.",
+      "description": "Lost claims BY DISPATCH PATH (another dispatcher got there first) alongside commands the transport cannot carry. The sweep is the periodic pass; the nudge is the dispatch issued when a command is enqueued. Both series moving together is the two paths racing for the same rows, which is expected and safe. One path losing claims while the other is silent is not: that is a dispatcher racing something other than its counterpart. Undeliverable should track profile changes.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1009,8 +1009,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_claims_lost_total{namespace=\"$namespace\"}[5m]))",
-          "legendFormat": "claims lost /s"
+          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_claims_lost_total{namespace=\"$namespace\"}[5m])) by (path)",
+          "legendFormat": "claims lost /s ({{path}})"
         },
         {
           "refId": "B",
