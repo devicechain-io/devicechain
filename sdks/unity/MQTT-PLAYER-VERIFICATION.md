@@ -165,6 +165,46 @@ Measured on a live bring-up, 4/4. Two things that result establishes, neither of
 A and C are the load-bearing pair: A alone would score identically against a validator that simply
 returned `true`.
 
+### …then prove the CREDENTIAL, with `DeviceChain.Sdk.AuthProbe`
+
+TrustProbe connects with a bogus credential, so the best outcome it can report is a refusal. That
+settles TLS and settles the refusal path, and it says nothing about whether the callout **accepts**
+a credential the platform actually minted. Nothing in CI can settle that either — the real-broker
+rung runs a broker with no callout configured, and an authless broker neither refuses nor accepts.
+
+`AuthProbe` is the other half. It takes a real device and drives the whole loop:
+
+```bash
+dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.AuthProbe -- \
+    /tmp/ca.pem devicechain <tenant> <deviceToken> <credentialId>
+```
+
+Resolve the two identifiers the way a scene does — `devicesByExternalId` for the addressing token,
+then `deviceCredentialsByToken`; for an `ACCESS_TOKEN` credential the `credentialId` **is** the
+bearer. `dcctl sim create <name> --manifest sitepulse` provisions a device and the low-fuel rule if
+you have no other one to hand.
+
+| exit | meaning |
+| --- | --- |
+| 0 | all four stages passed, or 1-3 passed with `waitSeconds 0` |
+| 1 | a stage failed — the output says which, classified on the exception TYPE chain |
+| 3 | connected, subscribed and published, but no command arrived |
+
+**Exit 3 is an outcome, not a failure**, and usually means the instance has no DETECT rule for the
+metric, or the rule is already latched from an earlier crossing and will not fire again until it
+re-arms. Stages 1-3 having passed is the useful half: the SDK authenticated and the telemetry
+landed.
+
+🔴 **Run it once with a deliberately wrong `credentialId` too.** A success proves nothing on its own
+— the same pass would be scored by a rig that accepted anything — and the refusal is what makes it
+evidence. Same shape as A/C above. Measured 2026-09-07 against a live bring-up: the real credential
+reached `SUCCESSFUL` end to end, and one character changed in the credential produced
+`NotAuthorized` at CONNACK.
+
+🔴 **This rig runs on CoreCLR, so it says nothing about IL2CPP** — the boundary the table above
+draws. It tells you the PLATFORM is ready before you spend editor time, which is exactly the
+sequencing rule this page opens with. It does not shorten §3.
+
 ## 1. Stage the assemblies
 
 ```bash
