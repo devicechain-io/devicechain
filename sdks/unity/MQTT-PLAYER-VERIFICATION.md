@@ -179,15 +179,19 @@ dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.AuthProbe -- \
     /tmp/ca.pem devicechain <tenant> <deviceToken> <credentialId>
 ```
 
-Resolve the two identifiers the way a scene does — `devicesByExternalId` for the addressing token,
-then `deviceCredentialsByToken`; for an `ACCESS_TOKEN` credential the `credentialId` **is** the
-bearer. `dcctl sim create <name> --manifest sitepulse` provisions a device and the low-fuel rule if
-you have no other one to hand.
+Resolve the two identifiers the way a scene does: `devicesByExternalId` gives the addressing token,
+then **`deviceCredentials(criteria: {device: "<token>", credentialType: "ACCESS_TOKEN", enabled: true, pageNumber: 1, pageSize: 10})`**
+gives the credential. 🔑 Not `deviceCredentialsByToken` — that takes the CREDENTIAL's own token, and
+`type Device` exposes no credentials field, so holding a device token leaves you nothing to pass it.
+For an `ACCESS_TOKEN` credential the `credentialId` **is** the bearer.
+`dcctl sim create <name> --manifest sitepulse` provisions a device and the low-fuel rule if you have
+no other one to hand.
 
 | exit | meaning |
 | --- | --- |
-| 0 | all four stages passed, or 1-3 passed with `waitSeconds 0` |
-| 1 | a stage failed — the output says which, classified on the exception TYPE chain |
+| 0 | all four stages passed, or 1-3 passed with `waitSeconds 0` — **and the control held** |
+| 1 | a stage failed, or the control did not hold |
+| 2 | usage: a bad argument, an unreadable CA, an identifier that cannot form a client id |
 | 3 | connected, subscribed and published, but no command arrived |
 
 **Exit 3 is an outcome, not a failure**, and usually means the instance has no DETECT rule for the
@@ -195,11 +199,17 @@ metric, or the rule is already latched from an earlier crossing and will not fir
 re-arms. Stages 1-3 having passed is the useful half: the SDK authenticated and the telemetry
 landed.
 
-🔴 **Run it once with a deliberately wrong `credentialId` too.** A success proves nothing on its own
-— the same pass would be scored by a rig that accepted anything — and the refusal is what makes it
-evidence. Same shape as A/C above. Measured 2026-09-07 against a live bring-up: the real credential
-reached `SUCCESSFUL` end to end, and one character changed in the credential produced
-`NotAuthorized` at CONNACK.
+**The negative control runs by itself, inside the same process.** Every exit path re-connects with one
+character changed in the credential and requires a refusal; if the broker *accepts* it, the run reports
+`1` and says the result above is vacuous, because it would score identically against a broker with no
+auth callout configured — which is exactly what the SDK's own real-broker test rig runs. Same shape as
+A/C above, and it is built in rather than described here for the reason A/C are: a control you have to
+remember is a control most people skip.
+
+🔴 **This rig cannot see whether the platform ACCEPTED the response.** The SDK publishes it
+fire-and-forget, so a response that never left, one the platform refused, and one it took all look
+identical from the device. A full pass means *a command arrived and the handler answered it* — read the
+command row to close the loop: it must be `SUCCESSFUL` and carry a `respondedTime`.
 
 🔴 **This rig runs on CoreCLR, so it says nothing about IL2CPP** — the boundary the table above
 draws. It tells you the PLATFORM is ready before you spend editor time, which is exactly the

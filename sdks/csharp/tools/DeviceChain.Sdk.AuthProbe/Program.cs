@@ -101,7 +101,18 @@ internal static class Program
             return 2;
         }
 
-        byte[] pinnedCa = File.ReadAllBytes(args[0]);
+        byte[] pinnedCa;
+        try
+        {
+            pinnedCa = File.ReadAllBytes(args[0]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // A stack trace here reads as a defect in the rig rather than a mistyped path.
+            Console.Error.WriteLine($"cannot read the pinned CA at \"{args[0]}\": {ex.Message}");
+            return 2;
+        }
+
         string instanceId = args[1], tenant = args[2], deviceToken = args[3], credentialId = args[4];
         string host = args.Length > 5 ? args[5] : "localhost";
         int waitSeconds = 90;
@@ -112,12 +123,34 @@ internal static class Program
                 Console.Error.WriteLine($"waitSeconds must be a whole number of seconds, got \"{args[6]}\"");
                 return 2;
             }
+            // Refused rather than clamped: a negative value went on to build a CancellationTokenSource
+            // that was already cancelled (or threw outright), and the resulting cancellation was then
+            // reported as a broker refusal -- a mistyped argument wearing a platform failure's clothes.
+            if (waitSeconds < 0)
+            {
+                Console.Error.WriteLine($"waitSeconds cannot be negative, got {waitSeconds}; use 0 to skip stage 4");
+                return 2;
+            }
+        }
+
+        // DevicePlane throws on a token that cannot form a client id. Catching it here distinguishes
+        // "you typed the identifier wrong" from "the platform said no", which otherwise both surface
+        // as a crash before any stage has run.
+        string clientId;
+        try
+        {
+            clientId = DevicePlane.DeviceClientId(instanceId, tenant, deviceToken);
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"cannot build a client id from ({instanceId}, {tenant}, {deviceToken}): {ex.Message}");
+            return 2;
         }
 
         var brokerUri = new Uri($"ssl://{host}:1883");
         Console.WriteLine($"broker      : {brokerUri}");
         Console.WriteLine($"pinned CA   : {args[0]} ({pinnedCa.Length} bytes)");
-        Console.WriteLine($"client id   : {DevicePlane.DeviceClientId(instanceId, tenant, deviceToken)}");
+        Console.WriteLine($"client id   : {clientId}");
         Console.WriteLine($"username    : {DevicePlane.ConnectUsername(tenant, credentialId)}");
         Console.WriteLine($"events topic: {DevicePlane.EventsTopic(instanceId, tenant, deviceToken)}");
         Console.WriteLine($"cmds topic  : {DevicePlane.CommandsTopic(instanceId, tenant, deviceToken)}");
@@ -142,6 +175,41 @@ internal static class Program
         }
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(waitSeconds + 120));
+
+        // Every terminal path routes through this, so no run can report a pass without the control
+        // having held. It returns the caller's code when the bogus credential was refused, and 1 when
+        // it was ACCEPTED -- because at that point the run proves nothing about authentication and
+        // reporting it as a pass would be worse than reporting nothing.
+        async Task<int> FinishAsync(int codeIfControlHolds)
+        {
+            Console.WriteLine("[control] the same connect with ONE character changed in the credential");
+            bool refused;
+            try
+            {
+                refused = await RefusesABogusCredentialAsync(
+                    brokerUri, pinnedCa, instanceId, tenant, deviceToken, credentialId, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ⚠️  control could not be run ({ex.GetType().Name}: {ex.Message}).");
+                Console.WriteLine("     Treating that as a FAILED control: an unrun control is not a passed one.");
+                return 1;
+            }
+
+            if (!refused)
+            {
+                Console.WriteLine("  ❌ THE BROKER ACCEPTED A CREDENTIAL THAT DOES NOT EXIST.");
+                Console.WriteLine("     Everything above is therefore vacuous -- it would score identically");
+                Console.WriteLine("     against a broker with no auth callout configured at all, which is");
+                Console.WriteLine("     exactly what the SDK's own test rig runs. Check that the callout is");
+                Console.WriteLine("     wired and that device-management is answering it.");
+                return 1;
+            }
+
+            Console.WriteLine("  ✅ refused, so the acceptance above was earned and not vacuous");
+            Console.WriteLine();
+            return codeIfControlHolds;
+        }
 
         Console.WriteLine("[1/4] CONNECT   TLS handshake, then the auth callout's verdict");
         Console.WriteLine("[2/4] SUBSCRIBE the per-device command grant the callout minted");
@@ -184,8 +252,12 @@ internal static class Program
         {
             Console.WriteLine("[4/4] SKIPPED   waitSeconds = 0");
             Console.WriteLine();
-            Console.WriteLine("Stages 1-3 passed: this SDK authenticated against the real callout and its telemetry landed.");
-            return 0;
+            Console.WriteLine("Stages 1-3 passed: this SDK authenticated against the real callout and the broker");
+            Console.WriteLine("PUBACKed its measurement. 🔑 A PUBACK is the BROKER taking ownership, not the platform");
+            Console.WriteLine("accepting the event -- decode, device attribution and the ingest gate all run after it,");
+            Console.WriteLine("and a rejection there is invisible on MQTT. Only stage 4 firing proves the event landed.");
+            Console.WriteLine();
+            return await FinishAsync(0);
         }
 
         Console.WriteLine($"[4/4] AWAIT     the platform's own sendCommand, up to {waitSeconds}s");
@@ -196,28 +268,105 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine($"  ⏳ NO COMMAND within {waitSeconds}s — reported as its own outcome, not a failure.");
-            Console.WriteLine("     Stages 1-3 still passed, so the SDK and the device plane are fine.");
+            Console.WriteLine("     Stages 1-3 still passed, so the connect, the grant and the PUBACK are fine.");
             Console.WriteLine("     Look at the DETECT rule, the alarm, and the command row before suspecting either:");
             Console.WriteLine($"     an instance with no rule for {Metric} has nothing to send, and a rule already");
             Console.WriteLine("     latched by an earlier crossing fires once and not again until it re-arms.");
-            return 3;
+            Console.WriteLine("     A command key the profile does not declare also lands here: the enqueue");
+            Console.WriteLine("     gate rejects it and REACT dead-letters, so nothing ever reaches the device.");
+            Console.WriteLine();
+            return await FinishAsync(3);
         }
 
-        // The response is published from the handler's continuation; give it room to reach the
-        // broker before the session is disposed out from under it.
-        await Task.Delay(TimeSpan.FromSeconds(2), cts.Token);
-        Console.WriteLine($"  [{elapsed.ElapsedMilliseconds,6}ms] ✅ command answered");
+        // The response is published from the handler's continuation. Give it room to reach the broker
+        // before `await using` disposes the session, because DisposeAsync cancels the very token the
+        // response publish runs under.
+        //
+        // 🔴 THIS DELAY IS NOT AN OBSERVATION, AND THE BANNER BELOW SAYS SO. PublishResponseAsync
+        // returns silently when the connection is gone and CATCHES EVERY EXCEPTION from the QoS-1
+        // publish (by design -- the broker redelivers the command and the cached outcome answers it).
+        // So from here a response that was PUBACKed, one that failed, and one that was never attempted
+        // are indistinguishable. Claiming "answered" would be the rig reporting a pass it did not earn,
+        // which is the exact defect it exists to catch elsewhere.
+        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+        Console.WriteLine($"  [{elapsed.ElapsedMilliseconds,6}ms] ✅ command RECEIVED and the handler answered it");
         Console.WriteLine();
-        Console.WriteLine("ALL FOUR STAGES PASSED — the loop closed through the platform.");
-        Console.WriteLine("🔴 Confirm the platform AGREES before believing it: the command row must read");
-        Console.WriteLine("   SUCCESSFUL with a respondedTime. This rig reports what the DEVICE did; a");
-        Console.WriteLine("   response the platform rejects leaves the row in SENT and looks identical here.");
-        return 0;
+        Console.WriteLine("STAGES 1-4 PASSED at the device: connected, granted, published, and a command arrived.");
+        Console.WriteLine();
+        Console.WriteLine("🔴 THE LOOP IS NOT CLOSED UNTIL THE PLATFORM SAYS SO, AND THIS RIG CANNOT SEE THAT.");
+        Console.WriteLine("   The SDK publishes the response fire-and-forget, so a response that never left,");
+        Console.WriteLine("   one the platform refused, and one it accepted all look identical from here.");
+        Console.WriteLine("   Read the command row: it must be SUCCESSFUL and carry a respondedTime.");
+        Console.WriteLine("   Anything else -- still SENT, or FAILED -- means the answer did not land, and");
+        Console.WriteLine("   the device end of this run was fine regardless.");
+        Console.WriteLine();
+        return await FinishAsync(0);
     }
 
-    // Classify on the exception TYPE CHAIN. An AuthenticationException anywhere in it means the
-    // TLS handshake itself failed; its absence means the handshake completed and we got far enough
-    // to be answered -- which makes it an auth or grant problem, an entirely different fix.
+    // The negative control, run IN PROCESS after the positive so a lockout cannot poison it.
+    //
+    // 🔴 WITHOUT THIS THE WHOLE RIG IS UNFALSIFIABLE. Stage 1 asks only for a Success CONNACK, and an
+    // authless broker -- which is exactly what the SDK's own real-broker test rung runs -- answers
+    // Success to anything at all. So a green run against a misconfigured cluster would print "the auth
+    // callout accepted a real credential" when there was no callout to accept it. TrustProbe carries
+    // its control inside the run for the same reason (its case C, the wrong CA); a control described in
+    // a runbook is a control most people skip.
+    //
+    // The discriminator is one mutated character, so everything else -- host, CA, client id grammar,
+    // topic shape -- is held identical and only the credential differs. A distinct client-id
+    // discriminator keeps it from colliding with the real session.
+    private static async Task<bool> RefusesABogusCredentialAsync(
+        Uri brokerUri, byte[] pinnedCa, string instanceId, string tenant,
+        string deviceToken, string credentialId, CancellationToken cancellationToken)
+    {
+        string bogus = MutateLastCharacter(credentialId);
+        var options = new MqttSessionOptions(brokerUri, instanceId, tenant, deviceToken, bogus)
+        {
+            Trust = MqttTrust.PinnedCa(pinnedCa),
+            ClientIdDiscriminator = "authprobe-control",
+        };
+
+        await using var session = new MqttDeviceSession(options);
+        try
+        {
+            await session.StartAsync((_, _) => Task.FromResult(CommandOutcome.Succeeded()), cancellationToken);
+        }
+        catch (MqttConnectionException)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    // Flip the last character within its own alphabet, so the result stays the same length and shape
+    // as a real credential id and can only differ in VALUE. A shorter or malformed string risks being
+    // refused by a length or grammar check before the credential is ever looked up, which would make
+    // the control pass for the wrong reason.
+    private static string MutateLastCharacter(string credentialId)
+    {
+        if (credentialId.Length == 0)
+        {
+            return "0";
+        }
+        char last = credentialId[^1];
+        char replacement = last switch
+        {
+            >= '0' and <= '8' => (char)(last + 1),
+            '9' => '0',
+            >= 'a' and <= 'e' => (char)(last + 1),
+            'f' => 'a',
+            _ => last == 'z' ? 'y' : (char)(last + 1),
+        };
+        return credentialId[..^1] + replacement;
+    }
+
+    // Classify on the EXCEPTION TYPE, using the vocabulary the SDK already types. An earlier
+    // version of this had two buckets -- "TLS failed" and "everything else is auth" -- which
+    // misreported the three commonest local failures. A connection refused (no port-forward), a
+    // DNS failure and a black-holed port all landed in the auth bucket and printed "TLS completed"
+    // for a handshake that never started, sending the reader to device-management's logs for a
+    // problem that never reached the cluster. That is the same defect as the classifier that
+    // matched the substring "SSL" -- a wrong instrument, one layer up.
     private static string Classify(Exception ex)
     {
         for (Exception? e = ex; e is not null; e = e.InnerException)
@@ -229,9 +378,32 @@ internal static class Program
                        "   an IP literal: the broker leaf carries no IP SAN, so 127.0.0.1 is a name mismatch.";
             }
         }
-        return "❌ REFUSED AT CONNECT OR SUBSCRIBE — TLS completed, so the chain is fine.\n" +
-               "   This is the auth callout rejecting the credential, or the minted grant refusing the\n" +
-               "   subscribe. Every callout failure returns the same opaque message by design, so\n" +
-               "   diagnose from the device-management logs, not from this client.";
+
+        return ex switch
+        {
+            MqttConnectRefusedException =>
+                "❌ REFUSED AT CONNACK — TLS completed, so the chain is fine. The auth callout rejected\n" +
+                "   the credential, or refused the client id. Every callout failure returns the same\n" +
+                "   opaque message by design, so diagnose from the device-management logs.\n" +
+                "   🔑 A common cause is passing the device's externalId where its addressing TOKEN is\n" +
+                "      wanted: both are grammar-valid, so the client id builds and the callout refuses it.",
+
+            MqttSubscribeRefusedException =>
+                "❌ SUBSCRIBE REFUSED — connected and authenticated, but the minted grant does not cover\n" +
+                "   the command topic. This is the grant, not the credential.",
+
+            OperationCanceledException =>
+                "❌ NO ANSWER within the operation timeout — nothing refused us, nothing answered.\n" +
+                "   A black-holed port or a broker that is not listening looks like this.",
+
+            MqttConnectionException =>
+                "❌ COULD NOT REACH THE BROKER — the connection never got far enough to be refused.\n" +
+                "   Connection refused, DNS, or no route. Check the port is published:\n" +
+                "     docker inspect <instance>-control-plane --format '{{json .NetworkSettings.Ports}}' | grep 31883\n" +
+                "   🔑 kind fixes port mappings at CREATE time — a cluster predating the map shows a\n" +
+                "      perfect Service and a dead route.",
+
+            _ => "❌ FAILED before the device plane answered — see the exception chain below.",
+        };
     }
 }
