@@ -167,8 +167,8 @@ that does not require one — except the TTL, which records `TIMEOUT`.
 That is the same mislabel `PARKED` exists to remove, arriving by a different road, so the
 platform closes it the same way. A background pass looks for commands that have been sitting
 in `SENT` with no outcome for longer than the platform could still have been working on them
-— derived from the messaging layer's own retry budget, about five and a half minutes today,
-not a number chosen by hand. Those it can safely re-arm become `PARKED`, and are delivered on
+— derived from the messaging layer's own retry budget and the slowest delivery sweep an
+operator may configure, about ten minutes today, not a number chosen by hand. Those it can safely re-arm become `PARKED`, and are delivered on
 the device's next wake like any other parked command.
 
 Two limits are worth knowing, because both are deliberate:

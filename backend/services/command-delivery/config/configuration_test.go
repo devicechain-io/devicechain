@@ -137,3 +137,75 @@ func TestDeliveryMachineryReserveValidation(t *testing.T) {
 	tooLarge.ApplyDefaults()
 	assert.Error(t, tooLarge.Validate())
 }
+
+// The sweep cadence gets the same fail-safe direction as everything above it: the
+// harmless-looking value lands on the default. Zero seconds is not "as fast as possible",
+// and a sweep that never runs stops expiring commands as well as dispatching them, so
+// there is deliberately no configured value meaning "off".
+func TestSweepIntervalFlooredWhenNonPositive(t *testing.T) {
+	empty := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
+	assert.Equal(t, DefaultSweepIntervalSeconds, empty.SweepIntervalSeconds)
+
+	for _, v := range []int{0, -1} {
+		cfg := &CommandDeliveryConfiguration{SweepIntervalSeconds: v}
+		cfg.ApplyDefaults()
+		assert.Equal(t, DefaultSweepIntervalSeconds, cfg.SweepIntervalSeconds,
+			"a missing or zero interval must mean the platform default, NEVER a zero-second tick")
+	}
+}
+
+// Bounded at BOTH ends, because the two ends refuse different mistakes: below the floor the
+// pass becomes a spin against the advisory lock, and above the ceiling it delays expiry —
+// not merely dispatch — so a command's terminal state drifts with it.
+func TestSweepIntervalValidation(t *testing.T) {
+	kept := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: 5}
+	kept.ApplyDefaults()
+	assert.Equal(t, 5, kept.SweepIntervalSeconds, "a configured interval must survive defaulting")
+	assert.NoError(t, kept.Validate())
+
+	// 🔴 BOTH ENDPOINTS MUST BE ACCEPTED, and this is not pedantry: the bounds are
+	// documented inclusive, and the CEILING is the value StrandedSentGrace derives from,
+	// so an operator setting exactly the documented maximum being refused would be a
+	// contradiction between the knob and the constant built on it. An off-by-one in
+	// either comparison passes every other test in this file.
+	for _, endpoint := range []int{MinSweepIntervalSeconds, MaxSweepIntervalSeconds} {
+		cfg := &CommandDeliveryConfiguration{
+			DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: endpoint,
+		}
+		cfg.ApplyDefaults()
+		assert.Equal(t, endpoint, cfg.SweepIntervalSeconds)
+		assert.NoError(t, cfg.Validate(), "the documented bounds are INCLUSIVE; %d was refused", endpoint)
+	}
+
+	// 🔑 THE FLOOR CHECK IS ONLY REACHABLE BECAUSE THE FLOOR IS ABOVE 1. ApplyDefaults maps
+	// every non-positive value onto the default, so Validate's lower bound can fire only
+	// for a value between 1 and the floor. With a floor of 1 that range is empty and this
+	// assertion would be guarding nothing -- which is what an earlier version of this test
+	// admitted by wrapping itself in `if MinSweepIntervalSeconds > 1`, a condition that was
+	// false. A test that skips itself is not a test.
+	tooFast := &CommandDeliveryConfiguration{
+		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MinSweepIntervalSeconds - 1,
+	}
+	tooFast.ApplyDefaults()
+	assert.Equal(t, MinSweepIntervalSeconds-1, tooFast.SweepIntervalSeconds,
+		"a positive sub-floor value must survive defaulting so Validate is the thing that refuses it")
+	assert.Error(t, tooFast.Validate())
+
+	tooSlow := &CommandDeliveryConfiguration{
+		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MaxSweepIntervalSeconds + 1,
+	}
+	tooSlow.ApplyDefaults()
+	assert.Error(t, tooSlow.Validate(),
+		"an over-long interval delays expiry, not just dispatch, and is refused rather than clamped")
+}
+
+// 🔴 THE KNOB MUST REJECT WHAT THE TYPED LOADER REJECTS. Fail-closed is the repo rule, and
+// a config key that only exists in the struct would be silently ignored by an operator's
+// YAML -- the value would read as applied and the default would still be in force.
+func TestSweepKeysAreAcceptedFromYaml(t *testing.T) {
+	cfg := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"sweepIntervalSeconds": 5}`), cfg))
+	assert.Equal(t, 5, cfg.SweepIntervalSeconds, "sweepIntervalSeconds did not reach the struct")
+	assert.NoError(t, cfg.Validate())
+}

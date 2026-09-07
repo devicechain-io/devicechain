@@ -236,6 +236,16 @@ func (f *fakeApi) MarkUndeliverable(_ context.Context, id uint, reason string) (
 	return true, nil
 }
 
+// sweepLockAttempts reads the counter under the mutex that guards it, for tests that
+// observe it from a goroutine other than the one sweeping. Reading the field directly
+// across goroutines is a data race the race detector would report -- and CI runs no
+// -race, so it would simply be wrong in silence.
+func (f *fakeApi) sweepLockAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lockAttempts
+}
+
 func (f *fakeApi) TrySweepLock(_ context.Context, fn func() error) (bool, error) {
 	f.mu.Lock()
 	f.lockAttempts++

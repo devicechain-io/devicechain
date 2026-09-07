@@ -77,6 +77,13 @@ type CommandDeliveryProcessor struct {
 	ClaimsLost     prometheus.Counter
 	ClaimsStranded prometheus.Counter
 
+	// SweepInterval is the operator-configured cadence of the delivery sweep. ZERO MEANS
+	// "use the platform default" — read it through sweepInterval, never directly, for the
+	// same reason the fields below carry that warning: this struct is exported and
+	// assembled by literal in places the constructor never runs, so a zero here is an
+	// unset field and not an operator asking for a zero-second tick.
+	SweepInterval time.Duration
+
 	// Presence answers, for a batch of one tenant's devices, whether dispatching to
 	// each is worth doing right now. MAY BE NIL — read it through presenceStates, never
 	// directly.
@@ -273,6 +280,14 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 	for _, batch := range groupByTenant(pending, cproc.tenantDeleted) {
 		cproc.deliverTenantBatch(ctx, batch)
 	}
+}
+
+// sweepInterval is the configured cadence, falling back to the platform default.
+func (cproc *CommandDeliveryProcessor) sweepInterval() time.Duration {
+	if cproc.SweepInterval > 0 {
+		return cproc.SweepInterval
+	}
+	return config.DefaultSweepIntervalSeconds * time.Second
 }
 
 // tenantBatch is one tenant's slice of a sweep tick.
@@ -730,6 +745,28 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 	}
 }
 
+// runSweepTicker drives the expiry + delivery sweep on the configured cadence until the
+// processor is asked to stop.
+//
+// Extracted from ExecuteStart so the cadence is OBSERVABLE. Inline, the only thing a test
+// could reach was sweepInterval() itself — and an accessor returning the configured value
+// while the ticker was built from the package default would have scored exactly the same,
+// which is the shape where a helper is certified and its one caller is not.
+func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.sweepInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.sweepLocked(ctx)
+		}
+	}
+}
+
 // Initialize the component.
 func (cproc *CommandDeliveryProcessor) Initialize(ctx context.Context) error {
 	return cproc.lifecycle.Initialize(ctx)
@@ -765,19 +802,8 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 		}
 	}()
 
-	// Background expiry + redelivery ticker.
-	go func() {
-		ticker := time.NewTicker(config.RedeliveryInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.sweepLocked(ctx)
-			}
-		}
-	}()
+	// Background expiry + delivery ticker.
+	go cproc.runSweepTicker(ctx)
 
 	// The hold-reconcile net, on its own slower ticker. It is deliberately NOT folded
 	// into the sweep above: the sweep's cadence is chosen for delivery latency, and a
