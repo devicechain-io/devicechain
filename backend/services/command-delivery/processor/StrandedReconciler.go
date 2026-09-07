@@ -46,7 +46,7 @@ import (
 // from its visible consequence, so being conservative costs a little latency on a rare
 // path, while being short races the messaging layer on every one.
 //
-// 🔴 THE POINT OF DERIVING IT IS THAT THE DRIFT WOULD OTHERWISE BE SILENT. Writing 330s
+// 🔴 THE POINT OF DERIVING IT IS THAT THE DRIFT WOULD OTHERWISE BE SILENT. Writing 600s
 // here as a literal would keep working — wrongly — after any of those three values
 // changed: raising AckWait would make this pass start parking commands the broker was
 // still redelivering, and nothing would fail, log, or alert. The reading would just

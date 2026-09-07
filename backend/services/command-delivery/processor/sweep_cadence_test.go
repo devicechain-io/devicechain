@@ -31,6 +31,73 @@ func TestConfiguredSweepIntervalIsReturned(t *testing.T) {
 	}
 }
 
+// 🔴 THE SURVIVOR A REVIEW FOUND, AND THE ONE THAT ACTUALLY CRASHES THE PROCESS.
+//
+// Every test above passes against a runSweepTicker that reads cproc.SweepInterval DIRECTLY
+// instead of through the accessor -- because every one of them SETS the field. The field's
+// own doc says to read it through sweepInterval precisely because a zero means "unset", and
+// time.NewTicker(0) PANICS. The panic happens in the sweep goroutine, so it takes the
+// process down, and nothing in the suite ran the ticker with the field unset.
+//
+// main.go always sets it today, so production is safe; the constructor does not, and every
+// test literal leaves it zero. This is the test that makes the accessor load-bearing rather
+// than decorative.
+func TestTheTickerRunsWithAnUnsetInterval(t *testing.T) {
+	api := &fakeApi{lockAvailable: true}
+	proc := procWith(api, &recordingWriter{})
+	proc.quit = make(chan struct{})
+	// Deliberately NOT setting SweepInterval: that is the whole case.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		// A panic here fails the test rather than only killing the goroutine, which is
+		// what a bare `go proc.runSweepTicker(ctx)` would do -- the process would die and
+		// the failure would be attributed to whatever ran next.
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("runSweepTicker panicked with an unset interval: %v "+
+					"(the ticker is not going through sweepInterval)", r)
+			}
+			close(done)
+		}()
+		proc.runSweepTicker(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSweepTicker did not return")
+	}
+}
+
+// The other half of stopping. TestTheTickerStopsWhenCancelled exercises ctx only, and the
+// two other tickers in this processor rely on `quit` EXCLUSIVELY -- so a loop that dropped
+// its quit arm would look correct here while diverging from its siblings.
+func TestTheTickerStopsOnQuit(t *testing.T) {
+	api := &fakeApi{lockAvailable: true}
+	proc := procWith(api, &recordingWriter{})
+	proc.SweepInterval = 20 * time.Millisecond
+	proc.quit = make(chan struct{})
+
+	done := make(chan struct{})
+	go func() {
+		proc.runSweepTicker(context.Background())
+		close(done)
+	}()
+
+	time.Sleep(60 * time.Millisecond)
+	close(proc.quit)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSweepTicker did not return after quit was closed")
+	}
+}
+
 // 🔑 THE DISCRIMINATOR. The test above passes against a ticker built from the package
 // constant — the accessor would be right and its only caller wrong, which is the shape
 // where a helper is certified and the call site is not. This one runs the ticker and

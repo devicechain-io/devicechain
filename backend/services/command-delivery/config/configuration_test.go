@@ -164,16 +164,33 @@ func TestSweepIntervalValidation(t *testing.T) {
 	assert.Equal(t, 5, kept.SweepIntervalSeconds, "a configured interval must survive defaulting")
 	assert.NoError(t, kept.Validate())
 
+	// 🔴 BOTH ENDPOINTS MUST BE ACCEPTED, and this is not pedantry: the bounds are
+	// documented inclusive, and the CEILING is the value StrandedSentGrace derives from,
+	// so an operator setting exactly the documented maximum being refused would be a
+	// contradiction between the knob and the constant built on it. An off-by-one in
+	// either comparison passes every other test in this file.
+	for _, endpoint := range []int{MinSweepIntervalSeconds, MaxSweepIntervalSeconds} {
+		cfg := &CommandDeliveryConfiguration{
+			DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: endpoint,
+		}
+		cfg.ApplyDefaults()
+		assert.Equal(t, endpoint, cfg.SweepIntervalSeconds)
+		assert.NoError(t, cfg.Validate(), "the documented bounds are INCLUSIVE; %d was refused", endpoint)
+	}
+
+	// 🔑 THE FLOOR CHECK IS ONLY REACHABLE BECAUSE THE FLOOR IS ABOVE 1. ApplyDefaults maps
+	// every non-positive value onto the default, so Validate's lower bound can fire only
+	// for a value between 1 and the floor. With a floor of 1 that range is empty and this
+	// assertion would be guarding nothing -- which is what an earlier version of this test
+	// admitted by wrapping itself in `if MinSweepIntervalSeconds > 1`, a condition that was
+	// false. A test that skips itself is not a test.
 	tooFast := &CommandDeliveryConfiguration{
 		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MinSweepIntervalSeconds - 1,
 	}
 	tooFast.ApplyDefaults()
-	// ApplyDefaults floors non-positives, so reach the refusal with an explicitly out-of-range
-	// value rather than one defaulting rescues -- otherwise this asserts nothing.
-	tooFast.SweepIntervalSeconds = MinSweepIntervalSeconds - 1
-	if MinSweepIntervalSeconds > 1 {
-		assert.Error(t, tooFast.Validate())
-	}
+	assert.Equal(t, MinSweepIntervalSeconds-1, tooFast.SweepIntervalSeconds,
+		"a positive sub-floor value must survive defaulting so Validate is the thing that refuses it")
+	assert.Error(t, tooFast.Validate())
 
 	tooSlow := &CommandDeliveryConfiguration{
 		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MaxSweepIntervalSeconds + 1,

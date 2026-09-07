@@ -21,19 +21,36 @@ const (
 	// on [0, interval] and an operator watching a command sit for half a minute is
 	// watching this number.
 	//
-	// Lowering it is cheaper than it looks, and the reason is a property of the read
-	// rather than of the clock: the sweep selects QUEUED alone against a partial index
-	// keyed (status, id), so a tick is a direct seek into the QUEUED partition with no
-	// sort and no HELD rows touched. On an idle fleet it finds nothing, and finding
-	// nothing costs the same whether a fleet has ten devices or fifty thousand. What a
-	// faster tick does buy is more advisory-lock round trips, which is why this has a
-	// floor rather than being unbounded.
+	// 🔴 LOWERING IT IS NOT FREE, AND THE HALF THAT COSTS IS NOT THE HALF YOU WOULD
+	// EXPECT. The DELIVERY read is cheap and stays cheap: it selects QUEUED alone against
+	// a partial index keyed (status, id), so it is a direct seek into the QUEUED partition
+	// with no sort and no HELD rows touched, and an idle fleet of any size reads nothing.
+	//
+	// But a TICK is not only that read. sweepLocked runs ExpireStale FIRST, and that query
+	// is `status NOT IN (terminal) AND <expiry predicate> AND id > cursor` -- and NO INDEX
+	// IN THIS TABLE CONTAINS expires_at, so it walks the whole non-terminal set, HELD rows
+	// included. That is precisely the set an offline fleet's backlog accumulates in. So the
+	// per-tick cost scales with the BACKLOG, and halving the interval doubles that walk.
+	//
+	// What that means for an operator: on an instance with a small backlog, turning this
+	// down is close to free and buys latency directly. On one with a large withheld
+	// backlog it is not, and the honest fix for latency there is a dispatch on enqueue
+	// rather than a faster poll.
 	DefaultSweepIntervalSeconds = 30
 
-	// MinSweepIntervalSeconds floors the sweep cadence. Below about a second the pass
-	// stops being a sweep and becomes a spin against the lock, and the right answer for
-	// latency at that point is a dispatch on enqueue, not a faster poll.
-	MinSweepIntervalSeconds = 1
+	// MinSweepIntervalSeconds floors the sweep cadence.
+	//
+	// 🔑 IT IS A GUARD AGAINST A PATHOLOGICAL VALUE, NOT A RECOMMENDATION. Two costs
+	// compound below it: every tick is a TrySweepLock round trip per replica, and every
+	// tick is the unindexed expiry walk described above. Five seconds bounds that
+	// amplification to six times the default's while still allowing most of the latency
+	// win an operator would come here for.
+	//
+	// It is deliberately ABOVE 1. A floor of 1 would be unreachable code: ApplyDefaults
+	// maps every non-positive value onto the default, so Validate's lower bound can only
+	// ever fire for a value between 1 and the floor, and a floor of 1 leaves that range
+	// empty -- a check that cannot fail, guarding nothing.
+	MinSweepIntervalSeconds = 5
 
 	// MaxSweepIntervalSeconds ceilings it. An over-long interval is refused rather than
 	// accepted because this sweep is not only a delivery path: it is also what expires
@@ -60,10 +77,17 @@ const (
 	// commands abandoned in SENT.
 	//
 	// 🔑 SLOWER THAN THE HOLD RECONCILER, BECAUSE WHAT IT WAITS FOR IS SLOWER. A row is
-	// not even eligible until it has been in SENT for StrandedSentGrace (330s today), so
-	// ticking faster than that would mostly re-ask a question whose answer cannot have
-	// changed. This is a floor under a failure that is already minutes to hours from its
-	// visible consequence; there is no latency to win.
+	// not eligible until it has been in SENT for StrandedSentGrace (600s today). This is a
+	// floor under a failure that is already minutes to hours from its visible consequence;
+	// there is no latency to win by ticking faster.
+	//
+	// ⚠️ An earlier version of this note argued that ticking faster than the grace "would
+	// mostly re-ask a question whose answer cannot have changed". That was never quite
+	// right and is now plainly wrong: eligibility is per-row against each row's own
+	// sent_time, so rows cross the horizon continuously and no pass re-asks the same
+	// question. What this cadence actually bounds is how long a newly-eligible row waits
+	// (at most one tick) and how fast the cursored 500-row walk drains a backlog. A
+	// cadence shorter than the grace is therefore sensible, not redundant.
 	//
 	// ⚠️ It is deliberately NOT derived from StrandedSentGrace even though it is close to
 	// it. They are independent: the grace period is a correctness bound (act no sooner
@@ -221,11 +245,17 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	// the advisory lock; above the ceiling it delays expiry, not just dispatch, so a
 	// command's terminal state drifts with it.
 	//
-	// 🔴 THE CEILING IS ALSO A CORRECTNESS BOUND, NOT ONLY AN ERGONOMIC ONE.
-	// processor.StrandedSentGrace derives from MaxSweepIntervalSeconds so that its
-	// horizon covers the longest sweep gap the service will accept. Raising this ceiling
-	// without re-reading that derivation would let the stranded pass start parking
-	// commands the sweep has simply not reached yet.
+	// 🔴 THE CEILING IS ALSO A CORRECTNESS BOUND, NOT ONLY AN ERGONOMIC ONE, THOUGH NOT
+	// IN THE DIRECTION IT FIRST APPEARS. processor.StrandedSentGrace is a const EXPRESSION
+	// over MaxSweepIntervalSeconds, so raising this ceiling raises that horizon WITH it,
+	// automatically -- which is the whole point of deriving rather than writing a number.
+	// Raising it therefore cannot make the stranded pass park commands too early; what it
+	// does is lengthen stranded DETECTION, since a row waits the longer horizon before it
+	// is eligible at all.
+	//
+	// The thing that would leave the horizon short is REPLACING that term -- deriving the
+	// grace from the default, say -- and TestStrandedGraceCoversTheSlowestPermittedSweep
+	// is what catches that.
 	if c.SweepIntervalSeconds < MinSweepIntervalSeconds || c.SweepIntervalSeconds > MaxSweepIntervalSeconds {
 		return fmt.Errorf("sweepIntervalSeconds must be between %d and %d (got %d)",
 			MinSweepIntervalSeconds, MaxSweepIntervalSeconds, c.SweepIntervalSeconds)
