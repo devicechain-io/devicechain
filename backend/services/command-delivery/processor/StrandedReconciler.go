@@ -26,11 +26,25 @@ import (
 //   - messaging.MaxDeliver * messaging.AckWait is the longest the broker can still be
 //     redelivering the dispatch — JetStream holds an unacked message for AckWait before
 //     handing it to someone else, MaxDeliver times over.
-//   - config.RedeliveryInterval adds the one sweep tick that can elapse before the
+//   - config.MaxSweepIntervalSeconds adds the one sweep tick that can elapse before the
 //     platform next looks at the row at all.
 //
 // Anything inside that window is a command still being worked on, and parking it would
-// race the very machinery that is about to resolve it. Today the sum is 330s.
+// race the very machinery that is about to resolve it. Today the sum is 600s.
+//
+// 🔴 THE SECOND TERM IS THE SWEEP'S CEILING, NOT ITS DEFAULT, AND THAT IS THE WHOLE
+// REASON THIS STILL HOLDS. The sweep cadence became operator-configurable; deriving this
+// from the DEFAULT would have made the drift below silent in a new way -- an operator who
+// raised the interval to two minutes would leave this horizon ninety seconds short, and
+// the pass would start parking commands the sweep had simply not reached yet. Nothing
+// would fail or log; a correct-looking constant would just quietly stop covering the
+// window it names.
+//
+// Deriving from the ceiling makes the bound hold for EVERY configuration the service will
+// accept, at the cost of waiting longer than strictly necessary at the default. That trade
+// is the right way round: this is a FLOOR on a failure that is already minutes to hours
+// from its visible consequence, so being conservative costs a little latency on a rare
+// path, while being short races the messaging layer on every one.
 //
 // 🔴 THE POINT OF DERIVING IT IS THAT THE DRIFT WOULD OTHERWISE BE SILENT. Writing 330s
 // here as a literal would keep working — wrongly — after any of those three values
@@ -41,7 +55,7 @@ import (
 // ⚠️ It is a FLOOR on staleness, never a ceiling: the row's own TTL still governs when it
 // expires, and this pass must never race ExpireStale. It does not, by construction — the
 // default TTL is days and this horizon is minutes.
-const StrandedSentGrace = messaging.MaxDeliver*messaging.AckWait + config.RedeliveryInterval*time.Second
+const StrandedSentGrace = messaging.MaxDeliver*messaging.AckWait + config.MaxSweepIntervalSeconds*time.Second
 
 // strandedPageSize bounds one stranded-reconcile pass's read of the in-flight set.
 //

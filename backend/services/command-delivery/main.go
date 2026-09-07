@@ -112,6 +112,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
 		presenceReader(infra), deadWriter)
+	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
+	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
+	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
+	// the manager itself is not created until LATER in that same function, so the package
+	// variable is still nil while those assignments run. It compiles, it reads as
+	// consistent with its neighbours, and it dies on startup.
+	//
+	// Floored positive by ApplyDefaults, so what lands here is always usable and never the
+	// "unset" zero the field treats as "use the platform default".
+	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
+
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

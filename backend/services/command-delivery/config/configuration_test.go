@@ -137,3 +137,58 @@ func TestDeliveryMachineryReserveValidation(t *testing.T) {
 	tooLarge.ApplyDefaults()
 	assert.Error(t, tooLarge.Validate())
 }
+
+// The sweep cadence gets the same fail-safe direction as everything above it: the
+// harmless-looking value lands on the default. Zero seconds is not "as fast as possible",
+// and a sweep that never runs stops expiring commands as well as dispatching them, so
+// there is deliberately no configured value meaning "off".
+func TestSweepIntervalFlooredWhenNonPositive(t *testing.T) {
+	empty := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), empty))
+	assert.Equal(t, DefaultSweepIntervalSeconds, empty.SweepIntervalSeconds)
+
+	for _, v := range []int{0, -1} {
+		cfg := &CommandDeliveryConfiguration{SweepIntervalSeconds: v}
+		cfg.ApplyDefaults()
+		assert.Equal(t, DefaultSweepIntervalSeconds, cfg.SweepIntervalSeconds,
+			"a missing or zero interval must mean the platform default, NEVER a zero-second tick")
+	}
+}
+
+// Bounded at BOTH ends, because the two ends refuse different mistakes: below the floor the
+// pass becomes a spin against the advisory lock, and above the ceiling it delays expiry —
+// not merely dispatch — so a command's terminal state drifts with it.
+func TestSweepIntervalValidation(t *testing.T) {
+	kept := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: 5}
+	kept.ApplyDefaults()
+	assert.Equal(t, 5, kept.SweepIntervalSeconds, "a configured interval must survive defaulting")
+	assert.NoError(t, kept.Validate())
+
+	tooFast := &CommandDeliveryConfiguration{
+		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MinSweepIntervalSeconds - 1,
+	}
+	tooFast.ApplyDefaults()
+	// ApplyDefaults floors non-positives, so reach the refusal with an explicitly out-of-range
+	// value rather than one defaulting rescues -- otherwise this asserts nothing.
+	tooFast.SweepIntervalSeconds = MinSweepIntervalSeconds - 1
+	if MinSweepIntervalSeconds > 1 {
+		assert.Error(t, tooFast.Validate())
+	}
+
+	tooSlow := &CommandDeliveryConfiguration{
+		DefaultCommandTTLSeconds: 3600, SweepIntervalSeconds: MaxSweepIntervalSeconds + 1,
+	}
+	tooSlow.ApplyDefaults()
+	assert.Error(t, tooSlow.Validate(),
+		"an over-long interval delays expiry, not just dispatch, and is refused rather than clamped")
+}
+
+// 🔴 THE KNOB MUST REJECT WHAT THE TYPED LOADER REJECTS. Fail-closed is the repo rule, and
+// a config key that only exists in the struct would be silently ignored by an operator's
+// YAML -- the value would read as applied and the default would still be in force.
+func TestSweepKeysAreAcceptedFromYaml(t *testing.T) {
+	cfg := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"sweepIntervalSeconds": 5}`), cfg))
+	assert.Equal(t, 5, cfg.SweepIntervalSeconds, "sweepIntervalSeconds did not reach the struct")
+	assert.NoError(t, cfg.Validate())
+}
