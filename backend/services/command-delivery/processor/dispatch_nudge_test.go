@@ -587,6 +587,20 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 			proc.NudgeMetrics.Applied != nil)
 	}
 
+	// 🔴 THE FIELDS BEING NON-NIL IS NOT THE SAME AS THE QUEUE HOLDING THEM, and the
+	// difference is invisible without this: NudgeMetrics is passed BY VALUE, so a
+	// constructor handing newDispatchNudger an empty struct — or simply built before the
+	// fields were assigned — leaves `requested` and `dropped` frozen at zero in the shipped
+	// binary while `declined` and `applied` (read from the processor) still move. The
+	// counters the author's own doc calls the ones that make this path visible would be the
+	// two that never move. Asserted below, after a real nudge, rather than here.
+	if got := testutil.CollectAndCount(proc.ClaimsLost); got != 2 {
+		t.Fatalf("claims_lost exports %d series, want 2 (sweep and nudge, pre-initialised). "+
+			"A CounterVec gathers nothing until a label is first used, and the chart's dashboard "+
+			"drives its instance picker off this counter — an instance that has never lost a "+
+			"claim would name no instance at all", got)
+	}
+
 	proc.nudger.Start()
 	defer proc.nudger.Stop()
 	nudger.NudgeDevice("acme", "dev-1")
@@ -600,6 +614,16 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 			if reads[0].tenant != "acme" || reads[0].deviceToken != "dev-1" {
 				t.Fatalf("the nudge must reach the drain with its tenant and device intact, got %+v",
 					reads[0])
+			}
+			// The queue must be holding the PROCESSOR'S counters, not a copy of an empty
+			// struct. Requested is incremented inside the queue, so a zero here means the
+			// queue was handed metrics the processor does not own -- the shipped binary
+			// would run with `requested` and `dropped` permanently at zero while the two
+			// counters read from the processor kept moving, which reads as a healthy path
+			// doing no work.
+			if got := testutil.ToFloat64(proc.NudgeMetrics.Requested); got != 1 {
+				t.Fatalf("nudges_requested = %v after one nudge, want 1: the queue is not "+
+					"incrementing the processor's own counters", got)
 			}
 			return
 		}

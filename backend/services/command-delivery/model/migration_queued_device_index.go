@@ -18,8 +18,9 @@ import (
 // LIMIT 2`, and the key (tenant_id, device_token, id) serves it end to end: two equality
 // columns narrow to one device inside one tenant, and `id` then supplies the ORDER BY as
 // an ordered index scan, so the LIMIT stops the scan rather than truncating a sorted
-// result. That LIMIT is small and the read runs on the ENQUEUE path — once per created
-// command — so the difference between stopping after two index entries and sorting a
+// result. That LIMIT is small and the read runs once per created command — on a nudge
+// worker, never on the enqueue path itself, which is the point of the queue: CreateCommand
+// hands over a device and returns without waiting for any of this — so the difference between stopping after two index entries and sorting a
 // device's history is the difference between a nudge that is free and one that taxes every
 // create.
 //

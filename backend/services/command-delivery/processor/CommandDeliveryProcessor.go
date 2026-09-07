@@ -306,6 +306,24 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	// is constructed and never started must not leak workers.
 	cproc.nudger = newDispatchNudger(cproc, cproc.NudgeMetrics)
 
+	// 🔴 EXPORT BOTH PATHS AT ZERO, BEFORE EITHER HAS LOST A CLAIM. A CounterVec gathers
+	// NOTHING until a label combination is first used, and this counter is not only read
+	// by an operator: the chart's dashboard drives its instance picker off
+	// label_values(command_delivery_claims_lost_total, namespace), chosen precisely
+	// BECAUSE it was a plain counter that exports from registration while the batch
+	// counters are vectors that stay empty until the first fleet write.
+	//
+	// Turning it into a vector without this loop would hand it exactly the defect it was
+	// picked to avoid — on any instance that has never lost a claim, which after B2's
+	// stand-down is the ordinary state, the picker would name no instance at all and the
+	// board would be unusable. It also makes "one path losing while the other is silent"
+	// readable, since a silent path is then a zero series rather than no series.
+	for _, path := range []dispatchPath{pathSweep, pathNudge} {
+		if cproc.ClaimsLost != nil {
+			cproc.ClaimsLost.WithLabelValues(string(path))
+		}
+	}
+
 	if dead != nil {
 		cproc.dead = deadletter.NewSink(dead, func(error) { incr(cproc.ResponsesDeadLetterLost, 1) })
 	}
@@ -361,15 +379,34 @@ func (cproc *CommandDeliveryProcessor) Nudger() model.CommandNudger {
 // its own: a second way to put a message on a device's subject would be a second way to
 // actuate hardware, and the claim would no longer be standing in front of it.
 //
-// 🔴 IT DISPATCHES ONLY WHEN THE DEVICE HAS EXACTLY ONE QUEUED COMMAND, AND THAT RULE IS
-// THE REORDER FIX. Per-device ordering is a delivery guarantee — a firmware update is a
-// sequence whose order IS its meaning — and while both paths order by id, two dispatchers
-// walking one backlog can still interleave BETWEEN rows: the sweep publishes row 1 while
-// the nudge, holding a newer read, publishes row 2, and the device receives them in the
-// wrong order with nothing in either path having done anything wrong. So the nudge refuses
-// to reason about the interleaving and declines instead. What it gives up is a case it was
-// never for; what it keeps is the case that matters — one command to an idle device, which
-// is console dispatch and every REACT send-command.
+// 🔴 IT DISPATCHES ONLY WHEN THE DEVICE HAS EXACTLY ONE QUEUED COMMAND, WHICH CLOSES THE
+// REORDER BETWEEN ROWS BOTH PATHS CAN SEE. Per-device ordering is a delivery guarantee — a
+// firmware update is a sequence whose order IS its meaning — and while both paths order by
+// id, two dispatchers walking one backlog can still interleave BETWEEN rows: the sweep
+// publishes row 1 while the nudge, holding a newer read, publishes row 2, and the device
+// receives them in the wrong order with nothing in either path having done anything wrong.
+// So the nudge refuses to reason about the interleaving and declines instead. What it gives
+// up is a case it was never for; what it keeps is the case that matters — one command to an
+// idle device, which is console dispatch and every REACT send-command.
+//
+// ⚠️ IT IS NOT A TOTAL ORDER GUARANTEE, AND THE GAP IS WORTH NAMING RATHER THAN IMPLYING
+// OTHERWISE. The probe selects QUEUED, so a row the sweep has CLAIMED but not yet published
+// is invisible to it, and a newer command's probe then reads "sole" and proceeds. Two
+// interleavings follow, and only the second is reachable in practice:
+//
+//   - claim then a slow publish: the nudge must still do its probe, a presence read and its
+//     own claim before publishing, so the sweep would have to stall between MarkSent and the
+//     publish for longer than all of that. Scheduler-sized; practically closed.
+//   - claim, publish FAILS, ReleaseClaim: the older row sits in SENT for the whole failed
+//     publish — seconds, up to the JetStream ack timeout — and a newer command nudged inside
+//     that window goes out first. This one is NEW with the nudge: before it, the sweep
+//     re-read the backlog in id order and the older row went first.
+//
+// That residue is the same in-flight window MarkSentByToken already documents for
+// double-publish, and closing it would need the claim to be visible to the probe — which is
+// its own change. An older HELD or PARKED row is likewise invisible here, but it was equally
+// invisible to the sweep (sweepableStatusStrings is QUEUED alone), so that is pre-existing
+// rather than widened.
 //
 // 🔑 THE SOLE-COMMAND TEST IS THE WORKER'S OWN READ, NOT SOMETHING THE ENQUEUE DECIDED. A
 // count taken inside CreateCommand would be stale by the time a worker acted on it, and

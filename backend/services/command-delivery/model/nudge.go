@@ -64,8 +64,11 @@ const NudgeProbeLimit = 2
 // benign and worth stating: an expired-but-not-yet-swept QUEUED row still counts as a
 // second queued command, so the nudge stands down. Standing down is always safe.
 //
-// It builds on api.RDB.DB(ctx) exactly as PendingCommands and DrainableCommands do, so
-// the dc:tenant_query scope callback injects the tenant predicate. 🔴 deviceToken is a
+// It builds on api.RDB.DB(ctx) so the dc:tenant_query scope callback injects the tenant
+// predicate, exactly as DrainableCommands does. 🔴 PendingCommands is NOT the precedent
+// here and citing it would mislead: the sweep calls it under core.WithSystemContext, which
+// the callback deliberately skips so one read can cross tenants. This read is tenant-scoped
+// and must stay that way. 🔴 deviceToken is a
 // filter INSIDE that fence and never a substitute for it: device tokens are unique per
 // tenant, not per instance.
 //

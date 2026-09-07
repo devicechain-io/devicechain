@@ -455,6 +455,19 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// the far side re-reads that device's queued backlog under the same gates the sweep
 	// applies. It never blocks, never errors, and is dropped under load — see
 	// nudgeDispatch and processor.dispatchNudger.
+	//
+	// 🔴 ITS POSITION IS LOAD-BEARING: THIS IS AFTER THE TRANSACTION COMMITS, NOT INSIDE IT.
+	// The worker reads the row back on ANOTHER CONNECTION, so under READ COMMITTED it cannot
+	// see an uncommitted insert. Nudging from inside the transaction therefore races the
+	// commit: whenever the worker wins, its probe finds nothing, it declines
+	// `nothing_queued`, and the command waits for the sweep exactly as if the feature were
+	// not there. Nothing errors and nothing logs — the only trace is a decline counter that
+	// looks like ordinary contention.
+	//
+	// ⚠️ NO TEST CATCHES THIS, AND IT IS NOT AN OVERSIGHT. The model suite runs on a single
+	// in-memory SQLite connection, which cannot exhibit cross-connection visibility at all,
+	// so a move inside the transaction stays green. If this call is ever relocated, the
+	// check has to be a live Postgres one.
 	api.nudgeDispatch(ctx, created)
 	return created, nil
 }

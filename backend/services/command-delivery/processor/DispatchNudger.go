@@ -204,9 +204,10 @@ func (n *dispatchNudger) Stop() {
 
 // run is one worker.
 //
-// 🔴 IT CHECKS stop FIRST AND SEPARATELY. A single select over both channels would pick
-// randomly between a ready stop and a ready queue, so a shutdown behind a full queue would
-// take an unbounded number of extra dispatches to be noticed. Draining what is buffered is
+// 🔴 IT CHECKS stop FIRST AND SEPARATELY. A single select over both channels picks
+// uniformly between a ready stop and a ready queue, so a shutdown behind a full queue would
+// take an unbounded number of extra dispatches to be noticed in the worst case — one extra
+// per worker in expectation, which is the honest figure, but nothing bounds the tail. Draining what is buffered is
 // explicitly NOT wanted at shutdown: every buffered nudge is a row the sweep will dispatch
 // anyway, and publishing during a rolling restart is the one thing worth avoiding.
 func (n *dispatchNudger) run() {
