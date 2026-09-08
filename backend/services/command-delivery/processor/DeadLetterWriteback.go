@@ -306,8 +306,9 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 	// a visible no-op rather than a quiet one — the recoverable direction to be wrong in.
 	if !e.Reason.WorkWasAttempted() {
 		log.Info().Str("tenant", tenant).Str("command", e.Reference).Str("reason", string(e.Reason)).
-			Msg("Leaving a command alone: its dead letter records a response the platform " +
-				"declined to write, not one it failed to write.")
+			Msg("Leaving a command alone: its dead letter does not record a response the " +
+				"platform attempted to write and lost, so there is nothing to settle. The " +
+				"reason is on the record; an unrecognised one reaches here too.")
 		w.notActionable.Inc()
 		w.ack(msg)
 		return

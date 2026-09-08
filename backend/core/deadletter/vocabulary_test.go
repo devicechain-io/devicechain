@@ -6,22 +6,26 @@ package deadletter
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// 🔴 THE TABLE IS THE POINT, AND IT IS HAND-WRITTEN ON PURPOSE. WorkWasAttempted decides
-// whether a consumer may SETTLE state — mark a command lost, an alarm undelivered — so a
-// reason nobody classified must not acquire an answer by default. Go cannot enumerate a
-// const group, so the only way to assert "every declared Reason has a deliberate answer"
-// is to declare them here, against their VALUES: a table derived from the switch would
-// agree with the switch no matter what the switch said.
+// 🔴 THE COMPLETENESS CHECK READS THE CONST BLOCK, NOT A SECOND COPY OF IT. WorkWasAttempted
+// decides whether a consumer may SETTLE state, so a Reason nobody classified must not acquire
+// an answer by default — and a guard that compares a hand-written table against a hand-written
+// count cannot see that happen: it fails only when someone edits the TABLE, which is precisely
+// the edit a person who forgot about this file did not make. The declared set is therefore
+// parsed out of deadletter.go, so the thing being counted is the thing that actually moves.
 //
-// Adding a Reason to the const block therefore has two visible consequences rather than
-// none. It is missing from this table, which the completeness check below fails on; and
-// until it is added to Reason.Valid it is refused by Envelope.Validate at the producer,
-// so it cannot reach a consumer unclassified in the first place.
+// The EXPECTATIONS stay hand-written, and that half is deliberate. A table derived from the
+// switch would agree with the switch no matter what the switch said; what the scan supplies is
+// the set that must be covered, not the answers.
 func TestWorkWasAttemptedClassifiesEveryDeclaredReason(t *testing.T) {
 	classified := map[Reason]bool{
 		// The write was attempted to the redelivery cap and never landed: the work is
@@ -34,7 +38,16 @@ func TestWorkWasAttemptedClassifiesEveryDeclaredReason(t *testing.T) {
 		ReasonShed: false,
 	}
 
-	for r, want := range classified {
+	declared := declaredConstants(t, vocabularySource, "Reason")
+	for _, value := range declared {
+		r := Reason(value)
+		want, covered := classified[r]
+		if !covered {
+			t.Errorf("reason %q is declared in %s and this test does not classify it: whether a "+
+				"new way of giving up settles state has to be answered deliberately, and "+
+				"WorkWasAttempted answers false for it by default", r, vocabularySource)
+			continue
+		}
 		if got := r.WorkWasAttempted(); got != want {
 			t.Errorf("reason %q: WorkWasAttempted() = %v, want %v — a consumer that settles "+
 				"state on a dead letter acts on exactly this answer", r, got, want)
@@ -45,13 +58,88 @@ func TestWorkWasAttemptedClassifiesEveryDeclaredReason(t *testing.T) {
 		}
 	}
 
-	// The completeness check. It is written against the count so that adding a fourth
-	// reason to the const block without classifying it here fails rather than passes
-	// quietly with three of four covered.
-	if len(classified) != 3 {
-		t.Fatalf("this table classifies %d reasons; a reason was added or removed without "+
-			"deciding whether it settles state", len(classified))
+	// The other direction: a reason removed from the const block must not linger here, or the
+	// table starts describing a vocabulary that no longer exists.
+	for r := range classified {
+		if !slices.Contains(declared, string(r)) {
+			t.Errorf("this test classifies %q, which is no longer declared in %s", r, vocabularySource)
+		}
 	}
+}
+
+// Kinds() is what dcctl's `--kind` help offers and Kind.Valid is what Envelope.Validate
+// enforces; both read allKinds, so both are wrong together the moment a Kind is declared and
+// not registered there. Read from the const block for the same reason the Reason check is.
+func TestEveryDeclaredKindIsOfferedAndValid(t *testing.T) {
+	offered := Kinds()
+	for _, value := range declaredConstants(t, vocabularySource, "Kind") {
+		if !slices.Contains(offered, value) {
+			t.Errorf("kind %q is declared in %s but not in allKinds, so dcctl's --kind help "+
+				"tells an operator a real filter value does not exist", value, vocabularySource)
+		}
+		if !Kind(value).Valid() {
+			t.Errorf("kind %q is declared in %s but Kind.Valid rejects it, so Envelope.Validate "+
+				"refuses a letter its producer is entitled to write", value, vocabularySource)
+		}
+	}
+}
+
+// vocabularySource is the file the two vocabularies are declared in. Named once so a rename
+// breaks the scan loudly at one place rather than silently narrowing it at several.
+const vocabularySource = "deadletter.go"
+
+// declaredConstants returns every string constant declared with the named type in path,
+// including the untyped continuations of a typed const block — which is how Go lets a group
+// share the type written once on its first spec.
+//
+// 🔴 A SCAN THAT FINDS NOTHING WOULD PASS EVERY CHECK ABOVE VACUOUSLY, so an empty result is
+// a failure of the instrument, reported as one.
+func declaredConstants(t *testing.T, path, typeName string) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("cannot parse the %s vocabulary at %s: %v", typeName, path, err)
+	}
+
+	var values []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		// Within one const block the type carries forward from the last spec that named
+		// one, so track it across specs rather than reading each in isolation.
+		typed := false
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if vs.Type != nil {
+				id, ok := vs.Type.(*ast.Ident)
+				typed = ok && id.Name == typeName
+			}
+			if !typed {
+				continue
+			}
+			for _, value := range vs.Values {
+				lit, ok := value.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				unquoted, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unreadable %s literal %s in %s: %v", typeName, lit.Value, path, err)
+				}
+				values = append(values, unquoted)
+			}
+		}
+	}
+	if len(values) == 0 {
+		t.Fatalf("found no %s constants in %s; the scan is broken, not the vocabulary",
+			typeName, path)
+	}
+	return values
 }
 
 // The weakest possible mutant of the positive list is `default: return true`, which is
@@ -67,19 +155,6 @@ func TestAnUnclassifiedReasonNeverSettlesState(t *testing.T) {
 		if r.WorkWasAttempted() {
 			t.Errorf("reason %q reports that work was attempted, so a consumer would settle "+
 				"state on a letter nobody classified; the list must be positive", r)
-		}
-	}
-}
-
-// Kinds() is what dcctl's `--kind` help offers, and Validate is what decides whether a
-// letter carrying one of those values can be written at all. If they disagree, an operator
-// is offered a filter for a kind no producer is allowed to emit, or a producer emits a kind
-// the filter never offers.
-func TestEveryOfferedKindIsValid(t *testing.T) {
-	for _, k := range Kinds() {
-		if !Kind(k).Valid() {
-			t.Errorf("kind %q is offered by Kinds() but rejected by Kind.Valid, so dcctl "+
-				"offers a filter value Envelope.Validate refuses to write", k)
 		}
 	}
 }

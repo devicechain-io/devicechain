@@ -108,19 +108,25 @@ func Kinds() []string {
 
 // Valid reports whether k is one of the declared kinds.
 //
-// 🔑 A POSITIVE SWITCH, NOT A CHECK AGAINST allKinds, AND NOT A SKIP LIST. Kind is a
-// closed vocabulary because it is a metric label and a query filter, and a value outside
-// it is not a harmless typo: it marshals, it lands in an indexed column, and it is then
-// invisible to every reader that offers the vocabulary — dcctl's `--kind` help among them.
-// A record of a failure that the one surface built to find failures cannot show is worse
-// than no record, because the operator sees a complete-looking list.
+// 🔑 MEMBERSHIP OF allKinds, NOT A THIRD HAND-COPY OF THE SAME FOUR NAMES. It is positive
+// in the sense that matters — an unlisted value is false, never "assumed fine" — while
+// leaving the vocabulary written down once for both the readers that OFFER it and the
+// writers that are checked against it. A switch here would have been a second list to keep
+// in step with the first, and a list-of-a-list is wrong the first time the set grows.
+//
+// Why it is checked at all: Kind is closed because it is a metric label and a query filter,
+// and a value outside it is not a harmless typo. It marshals, it lands in an indexed
+// column, and it is then invisible to every reader that offers the vocabulary — dcctl's
+// `--kind` help among them. A record of a failure that the one surface built to find
+// failures cannot show is worse than no record, because the operator sees a
+// complete-looking list.
 func (k Kind) Valid() bool {
-	switch k {
-	case KindDetectionAction, KindNotification, KindCommandResponse, KindConnectorDispatch:
-		return true
-	default:
-		return false
+	for _, declared := range allKinds {
+		if k == declared {
+			return true
+		}
 	}
+	return false
 }
 
 // Reason is why it was given up on, bounded for the same reasons Kind is.
@@ -160,14 +166,27 @@ func (r Reason) Valid() bool {
 // WorkWasAttempted reports whether the giving-up service actually ATTEMPTED this work and
 // lost it, as opposed to declining it before any attempt.
 //
-// 🔴 A CONSUMER THAT SETTLES STATE ON THE STRENGTH OF A DEAD LETTER — marking a command
-// lost, an alarm undelivered — MUST ACT ONLY WHEN THIS IS TRUE. Kind says what the work
-// WAS; it does not say whether anything was lost, and reading it as though it did is how
-// a letter recording a DECLINED write becomes the platform performing that write. That
-// happened: a device's answer to a command the platform had returned to the queue was
-// dead-lettered as unprocessable, and a consumer filtering on Kind alone stamped FAILED on
-// a row the sweep had meanwhile re-dispatched — so the device's real answer to the new
-// dispatch arrived on a terminal row and was discarded as late.
+// 🔴 IT IS A VETO, NOT A LICENCE, AND THE ASYMMETRY IS DELIBERATE. False means DO NOT SETTLE:
+// the producer declined before attempting, so a consumer that marks work lost on the strength
+// of the letter would be recording a loss that did not happen. True does not mean "settle" —
+// it means the letter is not disqualified on this axis, and the consumer still owns the
+// question of what its own Kind's letters imply.
+//
+// Reading Kind alone is what this exists to stop. Kind says what the work WAS; it does not
+// say whether anything was lost, and treating it as though it did is how a letter recording
+// a DECLINED write becomes the platform performing that write. That happened: a device's
+// answer to a command the platform had returned to the queue was dead-lettered as
+// unprocessable, and a consumer filtering on Kind alone stamped FAILED on a row the sweep had
+// meanwhile re-dispatched — so the device's real answer to the new dispatch arrived on a
+// terminal row and was discarded as late.
+//
+// 🔑 A KIND WHOSE DECLINED LETTERS ARE THEMSELVES GENUINE LOSSES NEEDS ITS OWN ANSWER, NOT A
+// WIDER TRUE HERE. KindNotification is the worked example: an unprocessable notification would
+// mean the alarm reached nobody and never will, which is exactly the letter such a consumer
+// SHOULD act on — and this method would answer false for it, correctly, because the send was
+// never attempted. The two questions are different, and the fix is a Kind-specific rule at that
+// consumer rather than promoting a reason here, which would silently re-arm every other
+// consumer. No producer emits that letter today; the next author should know the shape anyway.
 //
 // 🔑 A POSITIVE LIST: an explicit case per reason that returns true, and a default of
 // false. A new Reason is a new way of giving up, and whether it settles anything has to be
