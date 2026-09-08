@@ -42,7 +42,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
@@ -266,7 +265,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Msg("Built an inert (no-credential) LwM2M CoAP/DTLS transport; it serves the health probe only and takes no leadership lease.")
 	}
 
-	http.Handle("/metrics", promhttp.Handler())
+	// The microservice's own handler, not promhttp.Handler(): every metric this
+	// service constructs is registered on a registry the Microservice owns, and
+	// promhttp.Handler() gathers prometheus.DefaultGatherer and nothing else, so it
+	// would answer 200 with all of them missing. MetricsHandler gathers both.
+	http.Handle("/metrics", Microservice.MetricsHandler())
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if Microservice.Readiness.Ready() && !Microservice.Readiness.Draining() {

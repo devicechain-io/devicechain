@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,34 +19,19 @@ import (
 // a mounted volume/PVC, laid out by the full object key. It has no public path —
 // reads are served through the caller's authorizing proxy (Open); URL is
 // unsupported. Content-Type is not persisted; Info infers it from the key's
-// extension (a consumer that needs an exact type encodes it in the Key.ID
-// extension — e.g. branding stores logos as "{uuid}.png").
+// extension via the closed assetContentTypes table in blob.go (a consumer that
+// needs an exact type encodes it in the Key.ID extension — e.g. branding stores
+// logos as "{uuid}.png"; anything the table does not name reads back as
+// defaultContentType).
 type filesystemStore struct {
 	root       string
 	instanceID string
 }
 
-// defaultContentType is reported for an object whose key extension maps to no known
-// MIME type. A generic asset served with this type downloads rather than executes.
-const defaultContentType = "application/octet-stream"
-
 // tempPrefix is the in-flight temp-file prefix for the atomic write. It starts with
 // a dot, which validateSegment forbids as a leading char in an object id, so a temp
 // file can never collide with (or be dereferenced as) a real object.
 const tempPrefix = ".put-"
-
-func init() {
-	// Register the asset MIME types the branding read proxy relies on so the
-	// inferred Content-Type is deterministic regardless of the container image's
-	// /etc/mime.types (mime.TypeByExtension otherwise consults it — non-hermetic).
-	// A static type here is a programming error caught by tests, so errors are
-	// ignored.
-	_ = mime.AddExtensionType(".png", "image/png")
-	_ = mime.AddExtensionType(".jpg", "image/jpeg")
-	_ = mime.AddExtensionType(".jpeg", "image/jpeg")
-	_ = mime.AddExtensionType(".webp", "image/webp")
-	_ = mime.AddExtensionType(".svg", "image/svg+xml")
-}
 
 // NewFilesystemStore builds a filesystem-backed Store rooted at cfg.Directory and
 // prefixing every key with instanceID. The root is created if absent. It is
@@ -117,11 +101,9 @@ func (s *filesystemStore) Put(ctx context.Context, key Key, r io.Reader, opts Pu
 	if err != nil {
 		return Ref{}, err
 	}
-	// The filesystem backend does not persist Content-Type — it infers it from the
-	// id extension on read. A declared type that CONTRADICTS the extension would
-	// therefore serve one type here and (after a migration) the declared type on a
-	// cloud backend, so reject the contradiction up front. A declared type with no
-	// inferable extension is allowed (nothing to contradict).
+	// Refuse a declared type that contradicts the id extension, up front. Both
+	// backends do this; see checkContentTypeMatchesExt for why, and for what the
+	// invariant does and does not cover.
 	if err := checkContentTypeMatchesExt(key.ID, opts.ContentType); err != nil {
 		return Ref{}, err
 	}
@@ -254,35 +236,10 @@ func (s *filesystemStore) Delete(ctx context.Context, ref Ref) error {
 	return nil
 }
 
-// checkContentTypeMatchesExt fails closed when a declared Content-Type contradicts
-// the type the id's extension infers, so the filesystem backend (which serves the
-// inferred type) and a cloud backend (which serves the declared type) cannot end
-// up serving the same object as two different types. It compares base media types
-// only (ignoring parameters like charset). An empty declared type, or an extension
-// that infers nothing, is not a contradiction and is allowed.
-func checkContentTypeMatchesExt(id, declared string) error {
-	if declared == "" {
-		return nil
-	}
-	inferred := mime.TypeByExtension(filepath.Ext(id))
-	if inferred == "" {
-		return nil
-	}
-	declaredBase, _, derr := mime.ParseMediaType(declared)
-	inferredBase, _, ierr := mime.ParseMediaType(inferred)
-	if derr != nil || ierr != nil {
-		return nil // a malformed declared type is not treated as a contradiction here
-	}
-	if !strings.EqualFold(declaredBase, inferredBase) {
-		return fmt.Errorf("blob: content type %q contradicts the %q extension type %q", declared, filepath.Ext(id), inferredBase)
-	}
-	return nil
-}
-
 // infoFor builds Info from a stat result, inferring Content-Type from the key's
 // extension (the filesystem backend persists none of its own).
 func infoFor(key string, fi os.FileInfo) Info {
-	ct := mime.TypeByExtension(filepath.Ext(key))
+	ct := inferContentType(filepath.Ext(key))
 	if ct == "" {
 		ct = defaultContentType
 	}

@@ -33,7 +33,7 @@ import (
 const partialUpdateTenant = "acme"
 
 // newPartialUpdateApi builds a SQLite-backed Api migrated for one family. The database
-// half — the named shared-cache DSN, the pool close, the token-grammar registration,
+// half — the named shared-cache DSN, the pool close, the four callback registrations,
 // and the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 //
 // 🔴 THE SECRET STORE IS PART OF THE FIXTURE, NOT AN EXTRA. A provider's API key is

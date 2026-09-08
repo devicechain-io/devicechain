@@ -206,6 +206,17 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 		return nil, err
 	}
 
+	// Attach the device the record points at, AFTER the transaction so no write can
+	// go through the association. The row is created with the association omitted —
+	// only DeviceId is stored — so without this the returned record carries a nil
+	// Device, and every reader of the mutation's response sees a DIFFERENT
+	// replacement record than deviceReplacements returns for the same row, which
+	// Preloads it. The SDL declares `device: Device!`, so the resolver cannot answer
+	// null there and hands back a zero-valued Device instead: an empty token, which
+	// is a plausible value that is wrong rather than an error. The device is already
+	// in hand here, so the honest answer costs nothing.
+	replacement.Device = device
+
 	return &DeviceReplaceResult{
 		Device:             device,
 		Replacement:        replacement,
