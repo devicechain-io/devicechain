@@ -1198,13 +1198,23 @@ func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (
 // where an operator reads the cause; this column says the part the tenant needs, which is
 // that the outcome the device reported is not recoverable.
 //
-// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, AND THAT IS WHAT LETS THE WRITE-BACK
-// FILTER ON KIND ALONE. The consumer settles any command-response dead letter, whatever
-// Reason it carries; today the only producer writes ReasonExhausted, but an unprocessable
-// one would settle the same command through the same call. A sentence claiming the answer
-// was retried "after every attempt" would then be a statement about a retry that never
-// happened — so the claim is left out rather than guarded by a Reason check that a second
-// producer would have to remember to keep in step with.
+// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, so it stays true for any letter that
+// reaches it. A sentence claiming the answer was retried "after every attempt" would be a
+// statement about a retry that has not necessarily happened.
+//
+// 🔴 AN EARLIER VERSION OF THIS COMMENT DREW THE OPPOSITE CONCLUSION — THAT SAYING NOTHING
+// ABOUT THE CAUSE IS WHAT LETS THE WRITE-BACK FILTER ON KIND ALONE, AND THAT A REASON CHECK
+// WAS THE FRAGILE OPTION. It named the exact sequence that followed: "an unprocessable one
+// would settle the same command through the same call". A second producer duly appeared —
+// the response consumer records an answer it DECLINED to write, for a command that had been
+// returned to the queue — and Kind-alone settling stamped FAILED on that command once the
+// sweep re-dispatched it, discarding the device's real answer to the new dispatch.
+//
+// What the wording of this constant can do is stay honest whatever letter arrives. What it
+// cannot do is decide whether a letter should settle a command at all: that is a property
+// of the letter's Reason, and DeadLetterWriteback now acts only on ReasonExhausted, as a
+// positive list rather than a skip — see the gate in its Handle for why the direction
+// matters.
 const ResponseLostReason = "the device answered this command and the platform could not " +
 	"record the answer; the outcome it reported is not recoverable"
 
@@ -1588,12 +1598,25 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 			// duplicate response the fast path above returns, and handled the same way.
 			return current, nil
 		}
-		// 🔑 THE STATUS IS IN THE MESSAGE BECAUSE IT IS THE ONLY THING THAT SEPARATES THE
-		// TWO CAUSES. QUEUED says a dispatch was released and this is probably its answer;
-		// HELD says the platform is waiting on presence. An operator reading a dead letter
-		// cannot re-derive either one — by the time it is read the row has moved.
-		return nil, fmt.Errorf("%w: device %q answered command %q, which is %s",
-			ErrCommandNotAnswerable, responder, commandToken, current.Status)
+		// 🔑 BOTH STATUSES ARE IN THE MESSAGE, AND ONE OF THEM WOULD CONTRADICT IT. The
+		// status at the write is what separates the causes an operator acts on — QUEUED
+		// says a dispatch was released and this is probably its answer, HELD says the
+		// platform is waiting on presence — and neither can be re-derived later, because by
+		// the time the dead letter is read the row has moved again.
+		//
+		// 🔴 THE STATUS NOW CAN BE AN ANSWERABLE ONE, WHICH IS WHY IT IS NOT REPORTED
+		// ALONE. If a dispatcher re-claims the row between the failed UPDATE and this
+		// re-read, `current` reads SENT — and a message saying a command "is not in a state
+		// a response can settle, which is SENT" contradicts itself for whoever reads it.
+		//
+		// 🔑 REFUSING IS STILL RIGHT IN THAT CASE, AND DELIBERATELY SO. A SENT row here is
+		// a NEW dispatch under a new nonce; this answer belongs to the one that was
+		// released. Accepting it because the row happens to be answerable again would
+		// settle the second dispatch with the first dispatch's answer, which is the precise
+		// mis-filing ErrCommandNotAnswerable's own note gives as the reason not to retry.
+		return nil, fmt.Errorf("%w: device %q answered command %q, which the platform was not "+
+			"holding for it: the command read %s when the answer was written and reads %s now",
+			ErrCommandNotAnswerable, responder, commandToken, found.Status, current.Status)
 	}
 	return api.loadCommand(ctx, found.ID)
 }

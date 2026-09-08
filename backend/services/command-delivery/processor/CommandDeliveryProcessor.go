@@ -886,6 +886,16 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		// redelivery usually meets the same refusal, and when it does not it is because the
 		// row has been re-dispatched meanwhile — so it would settle the new dispatch with the
 		// old dispatch's answer.
+		//
+		// ⚠️ "NOT RETRIED" IS A DECISION THIS CODE MAKES, NOT AN INVARIANT IT ENFORCES, and
+		// the distinction is worth writing down rather than leaving to be assumed. Nothing
+		// here can prevent a redelivery: the ack below can fail, and JetStream will then
+		// deliver the message again whatever this branch decided. That redelivery meets
+		// whatever state the row is in by then — including a re-dispatched SENT row, which
+		// it would settle with this answer. What bounds it is that the window is small and
+		// the outcome is the one already described above, not a guard. The same is true of
+		// every `_ = msg.Ack()` in this file; it is called out here because the sentence
+		// above would otherwise read as a promise.
 		if errors.Is(err, model.ErrCommandNotAnswerable) {
 			incr(cproc.ResponsesNotAnswerable, 1)
 			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).

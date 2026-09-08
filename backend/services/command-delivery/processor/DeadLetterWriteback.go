@@ -87,6 +87,16 @@ type DeadLetterWriteback struct {
 	// notOurs counts letters for other kinds of work. Every producer shares one stream,
 	// so most of what arrives here belongs to somebody else.
 	notOurs prometheus.Counter
+	// notActionable counts command-response letters this consumer deliberately leaves
+	// alone: their reason says the platform DECLINED to write the answer rather than tried
+	// and failed, so there is no lost outcome for MarkResponseLost to record.
+	//
+	// 🔑 IT IS COUNTED RATHER THAN QUIETLY ACKED BECAUSE THE REASON GATE IS FAIL-CLOSED. A
+	// reason nobody has considered here lands in this bucket, and a silent bucket is how a
+	// letter that SHOULD settle a command would go unnoticed — the gap this whole consumer
+	// exists to close, restored without a symptom. A rising rate on an unfamiliar reason is
+	// the signal to decide what that reason ought to do.
+	notActionable prometheus.Counter
 	// unreadable counts letters this consumer cannot act on at all — no parseable tenant,
 	// a body that is not an envelope, or an envelope naming no command. They are ACKED,
 	// because no redelivery makes a malformed message parse.
@@ -142,6 +152,12 @@ func NewDeadLetterWriteback(ms *core.Microservice, reader messaging.MessageReade
 		notOurs: ms.NewCounter("command_dead_letters_not_ours_total",
 			"Dead letters read from the shared stream that describe some other kind of work. "+
 				"Acked and ignored — every producer writes to one stream.", nil),
+		notActionable: ms.NewCounter("command_response_lost_not_actionable_total",
+			"Dead-lettered command responses this consumer left alone because their reason says "+
+				"the platform declined to write the answer rather than tried and failed. Nothing "+
+				"is settled: there is no lost outcome to record, and the command named may still "+
+				"be live. A rising rate on a reason nobody expected is worth looking at, because "+
+				"this gate is deliberately closed by default.", nil),
 		unreadable: ms.NewCounter("command_dead_letters_unreadable_total",
 			"Dead letters this consumer could not act on — no parseable tenant, a body that is "+
 				"not an envelope, or an envelope naming no command. Acked and counted rather "+
@@ -262,6 +278,36 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 	// renamed, and the symptom would be the original defect returning.
 	if e.Kind != deadletter.KindCommandResponse {
 		w.notOurs.Inc()
+		w.ack(msg)
+		return
+	}
+	// 🔴 THE REASON DECIDES WHETHER THERE IS ANYTHING TO SETTLE, AND KIND ALONE CANNOT.
+	// Kind says what the work WAS; Reason says what the producer DID about it, and only one
+	// reason means "the answer is lost". ReasonExhausted does: the write was attempted to
+	// the redelivery cap and never landed, so the command is genuinely unanswerable and
+	// must stop reading as in flight. Every other reason describes a write that was never
+	// attempted — the producer looked at the command and declined — so the answer is not
+	// lost in the way MarkResponseLost's FAILED and its error text assert.
+	//
+	// 🔴 SETTLING ONE OF THOSE STAMPS FAILED ON A LIVE COMMAND. A response to a command
+	// that had been returned to the queue is recorded here as ReasonUnprocessable; by the
+	// time this consumer reads it the sweep may have re-dispatched that command, so the row
+	// is SENT again and DOES match MarkResponseLost's predicate. The write lands, the
+	// command reads FAILED, and the device's real answer to the new dispatch then arrives
+	// on a terminal row and is dropped as late. Recording that the platform declined to
+	// write must not become the platform writing.
+	//
+	// 🔑 A POSITIVE LIST, NOT A SKIP OF THE ONE REASON THAT EXISTS TODAY, AND THE DIRECTION
+	// IS THE WHOLE POINT. A new reason means a new way of giving up, and the question
+	// "should this settle a command?" has to be answered deliberately for each one. Written
+	// as a skip, a reason nobody thought about here would settle commands by default —
+	// which is exactly how this defect arrived. Written this way it is a counted no-op
+	// until someone decides otherwise, which is the recoverable direction to be wrong in.
+	if e.Reason != deadletter.ReasonExhausted {
+		log.Info().Str("tenant", tenant).Str("command", e.Reference).Str("reason", string(e.Reason)).
+			Msg("Leaving a command alone: its dead letter records a response the platform " +
+				"declined to write, not one it failed to write.")
+		w.notActionable.Inc()
 		w.ack(msg)
 		return
 	}

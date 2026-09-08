@@ -126,9 +126,9 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 		t.Fatal("this response must not stop the consumer loop")
 	}
 
-	// 🔴 THE ANSWER IS RECORDED. A dead letter is the only place it can now live: it cannot
-	// be written against a command the platform still intends to deliver, and it must not
-	// simply evaporate.
+	// 🔴 THE ANSWER IS RECORDED. A dead letter is the only place it can now live: this
+	// consumer will not write it against a command the platform still intends to deliver,
+	// and it must not simply evaporate.
 	if len(dead.msgs) != 1 {
 		t.Fatalf("wrote %d dead letters, want 1; the device's answer was discarded", len(dead.msgs))
 	}
@@ -170,6 +170,12 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 	// carried: nothing in the response envelope names the dispatch it is answering. Settling
 	// the command here would mean reporting an actuation complete on the strength of the
 	// device's word alone, which is the hole the answerable set was made positive to close.
+	//
+	// 🔑 THIS IS ABOUT THIS CALL, NOT ABOUT THE COMMAND'S FUTURE. The letter written above
+	// reaches DeadLetterWriteback, which settles commands from letters — so "nothing can
+	// write this answer against a live command" is a claim about two consumers, not one, and
+	// it is the write-back's reason gate that makes it true. See
+	// TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle.
 	after := loadByToken(t, api, ctx, "cmd-1")
 	if after.Status != model.CommandQueued.String() {
 		t.Fatalf("status = %s, want QUEUED unchanged", after.Status)
@@ -246,4 +252,162 @@ func loadByToken(t *testing.T, api *model.Api, ctx context.Context, token string
 func statusOf(t *testing.T, api *model.Api, ctx context.Context, token string) string {
 	t.Helper()
 	return loadByToken(t, api, ctx, token).Status
+}
+
+// TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle closes the loop the
+// test above leaves open, and it is about the SECOND consumer of the letter.
+//
+// 🔴 A DEAD LETTER IS NOT INERT HERE. DeadLetterWriteback reads the same stream and, for
+// any command-response letter, calls MarkResponseLost — which drives a SENT or PARKED row
+// to FAILED. That is right for the letter it was built for: the redelivery cap gave up on
+// a write, so the command is genuinely unanswerable and must stop reading as in flight.
+//
+// It is WRONG for the letter written when the platform declined to write at all. The
+// sequence needs nothing exotic:
+//
+//  1. publish reports an error, ReleaseClaim returns the command to QUEUED;
+//  2. the device answers, and the answer is recorded as a letter rather than written;
+//  3. the sweep re-dispatches the command — the device actuates a SECOND time — so the
+//     row is SENT again, under a new nonce;
+//  4. the letter is consumed, matches the SENT row, and stamps FAILED.
+//
+// The device's real answer to the second dispatch then arrives on a terminal row and is
+// dropped as late. The command ends FAILED, unanswered, having run twice. That is the
+// mis-filing the response consumer refuses by not retrying — reached through the other
+// door.
+//
+// 🔑 IT IS NOT ONLY A RACE. A write-back that lands before the re-dispatch is a harmless
+// no-op (the control below), so ordinarily the letter wins in milliseconds. It loses
+// whenever the letter is redelivered late — a transient database error leaves it unacked
+// for AckWait, which is longer than a sweep tick — and it needs no race at all if the row
+// is re-claimed between the failed UPDATE and its re-read. A disposition that depends on
+// winning a race is not a disposition, so this is fixed at the reason, not at the timing.
+func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing.T) {
+	api := realApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{
+		Token: "cmd-1", DeviceToken: "pump-1", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand: %v", err)
+	}
+	if err := procWith(api, &failingWriter{err: errors.New("publish acknowledgement timed out")}).
+		deliverCommand(ctx, created, pathSweep); err == nil {
+		t.Fatal("premise lost: the publish was expected to report an error")
+	}
+
+	dead := &deadRecorder{}
+	consumer := &CommandDeliveryProcessor{
+		Api:                    api,
+		area:                   "command-delivery",
+		dead:                   deadletter.NewSink(dead, func(error) {}),
+		ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_wb_total"}),
+		CommandResponsesReader: &oneMessageReader{
+			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
+				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
+		},
+	}
+	consumer.ProcessMessage(context.Background())
+	if len(dead.msgs) != 1 {
+		t.Fatalf("premise lost: wrote %d letters, want 1", len(dead.msgs))
+	}
+
+	// Step 3: the sweep re-dispatches. This is the second actuation, and asserting it is
+	// what makes the final state a lie rather than merely a wrong status.
+	requeued := loadByToken(t, api, ctx, "cmd-1")
+	redispatch := &recordingWriter{}
+	if err := procWith(api, redispatch).deliverCommand(ctx, requeued, pathSweep); err != nil {
+		t.Fatalf("re-dispatch: %v", err)
+	}
+	if redispatch.count() != 1 {
+		t.Fatalf("premise lost: the command was published %d times on re-dispatch", redispatch.count())
+	}
+	if got := statusOf(t, api, ctx, "cmd-1"); got != model.CommandSent.String() {
+		t.Fatalf("premise lost: after re-dispatch the command is %s, want SENT", got)
+	}
+
+	// Step 4: the letter this run actually produced, on the stream the write-back reads.
+	// The REAL bytes, not a reconstruction — a hand-built envelope here would stop
+	// measuring what the producer writes the day the two drift apart.
+	w := newTestWriteback(t, api)
+	ack := &countingAck{}
+	w.Handle(messaging.NewConsumedMessage(messaging.ScopedSubject("inst", "acme", "dead-letters"),
+		dead.msgs[0].Value, 1, nil, ack))
+
+	after := loadByToken(t, api, ctx, "cmd-1")
+	if after.Status == model.CommandFailed.String() {
+		t.Fatalf("the write-back stamped FAILED on a command that had just been dispatched again; "+
+			"its device's real answer will now be dropped as late (error=%q)", after.Error.String)
+	}
+	if after.Status != model.CommandSent.String() {
+		t.Fatalf("status = %s, want SENT left alone", after.Status)
+	}
+	if ack.acks != 1 {
+		t.Fatalf("acks = %d, want 1; the letter must not stay on the stream", ack.acks)
+	}
+}
+
+// TestTheWritebackStillSettlesAnExhaustedLetter is the counterweight, and without it the
+// test above is satisfied by a write-back that settles nothing at all — which would
+// silently restore the gap that consumer was built to close.
+//
+// Same command, same SENT row, same call. The one difference is the letter's REASON:
+// exhausted means the platform tried to record the answer and could not, so the command is
+// genuinely unanswerable and must stop reading as in flight.
+func TestTheWritebackStillSettlesAnExhaustedLetter(t *testing.T) {
+	api := realApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{
+		Token: "cmd-1", DeviceToken: "pump-1", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand: %v", err)
+	}
+	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep); err != nil {
+		t.Fatalf("deliverCommand: %v", err)
+	}
+
+	w := newTestWriteback(t, api)
+	ack := &countingAck{}
+	w.Handle(letter(t, "acme", responseLetter("cmd-1"), 1, ack))
+
+	after := loadByToken(t, api, ctx, "cmd-1")
+	if after.Status != model.CommandFailed.String() {
+		t.Fatalf("status = %s, want FAILED; a command whose answer was lost must stop reading "+
+			"as in flight, which is the whole reason this consumer exists", after.Status)
+	}
+	if after.Error.String != model.ResponseLostReason {
+		t.Fatalf("error = %q, want the lost-response reason", after.Error.String)
+	}
+}
+
+// TestTheWritebackIsANoOpBeforeTheRedispatch is the control the reading of the race
+// depends on: while the command is still QUEUED the write-back misses its predicate and
+// does nothing, whatever reason the letter carries. It is here so the fix above cannot be
+// mistaken for the reason the ordinary case is safe — it was already safe, by timing, and
+// timing is what the fix removes the dependence on.
+func TestTheWritebackIsANoOpBeforeTheRedispatch(t *testing.T) {
+	api := realApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{
+		Token: "cmd-1", DeviceToken: "pump-1", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand: %v", err)
+	}
+	if err := procWith(api, &failingWriter{err: errors.New("publish acknowledgement timed out")}).
+		deliverCommand(ctx, created, pathSweep); err == nil {
+		t.Fatal("premise lost: the publish was expected to report an error")
+	}
+
+	w := newTestWriteback(t, api)
+	w.Handle(letter(t, "acme", responseLetter("cmd-1"), 1, &countingAck{}))
+
+	if got := statusOf(t, api, ctx, "cmd-1"); got != model.CommandQueued.String() {
+		t.Fatalf("status = %s, want QUEUED; a queued command is not one the platform has "+
+			"given up on delivering", got)
+	}
 }

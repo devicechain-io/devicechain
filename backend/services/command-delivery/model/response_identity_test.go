@@ -238,3 +238,66 @@ func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
 		t.Fatal("premise lost: the hook never fired, so nothing raced the write")
 	}
 }
+
+// TestMarkResponseRefusesARowReclaimedUnderTheReRead covers the interleaving where the
+// re-read finds an ANSWERABLE status, which is the one case where the refusal has to
+// explain itself carefully.
+//
+// The row is QUEUED when the write runs, so the write matches nothing. Before the re-read,
+// a dispatcher claims it — the sweep re-dispatching a command that a failed publish
+// returned to the queue. `current` therefore reads SENT.
+//
+// 🔑 IT IS STILL REFUSED, AND THAT IS THE DELIBERATE CALL. The SENT the re-read sees is a
+// NEW dispatch under a new nonce; this answer belongs to the one that was released.
+// Accepting it because the row is answerable again would settle the second dispatch with
+// the first dispatch's answer — the same mis-filing that makes retrying this message wrong.
+//
+// 🔴 AND THE MESSAGE MUST NOT CONTRADICT ITSELF. Reporting only the status NOW would read
+// "not in a state a response can settle ... which is SENT" to whoever opens the dead letter.
+func TestMarkResponseRefusesARowReclaimedUnderTheReRead(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	id := seedWithStatus(t, api, ctx, "reclaimed", CommandQueued)
+
+	// Fire once AFTER the failed UPDATE, which is the only window that produces this
+	// state: a query hook would fire around the reads instead, on either side of it.
+	reclaimed := false
+	const hook = "test:reclaim_after_the_write"
+	db := api.RDB.Database
+	if err := db.Callback().Update().After("gorm:update").Register(hook, func(*gorm.DB) {
+		if reclaimed {
+			return
+		}
+		reclaimed = true
+		if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
+			t.Errorf("re-claiming under the re-read: claimed=%v err=%v", claimed, err)
+		}
+	}); err != nil {
+		t.Fatalf("registering the re-claim hook: %v", err)
+	}
+	defer func() {
+		if err := db.Callback().Update().Remove(hook); err != nil {
+			t.Errorf("removing the re-claim hook: %v", err)
+		}
+	}()
+
+	_, err := api.MarkResponse(ctx, "reclaimed", "d", true, nil, nil)
+	if !errors.Is(err, ErrCommandNotAnswerable) {
+		t.Fatalf("MarkResponse err = %v, want ErrCommandNotAnswerable; this answer belongs to "+
+			"the dispatch that was released, not to the one now in flight", err)
+	}
+	if !reclaimed {
+		t.Fatal("premise lost: the hook never fired, so nothing re-claimed the row")
+	}
+	// Both statuses, or the sentence argues against itself.
+	if !strings.Contains(err.Error(), CommandQueued.String()) ||
+		!strings.Contains(err.Error(), CommandSent.String()) {
+		t.Fatalf("MarkResponse err = %q; it must name the status at the write (QUEUED) as well "+
+			"as the one now (SENT), or it reads as refusing an answerable command", err)
+	}
+	// The re-claim stands: nothing about the refusal may disturb the dispatch in flight.
+	if got := loadOrFail(t, api, ctx, id); got.Status != CommandSent.String() {
+		t.Fatalf("status = %s, want SENT; the refusal must not touch the new dispatch", got.Status)
+	}
+}
