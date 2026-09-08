@@ -6,7 +6,7 @@ description: The instance-wide settings an operator edits, what each one accepts
 # System Settings
 
 A **system setting** is one instance-wide value an operator sets once, for every tenant. There are
-three of them, they live under **Settings** in the admin console, and each sits *below* whatever a
+four of them, they live under **Settings** in the admin console, and each sits *below* whatever a
 tenant configures for itself — a tenant that sets nothing gets the instance default, and a tenant
 that sets its own value never sees it.
 
@@ -15,13 +15,14 @@ that sets its own value never sees it.
 | `basemap.default` | The map tiles every tenant starts with | [Basemaps](./basemaps.md) |
 | `branding.default` | The instance's title, logo and palette | [White-labeling](./white-labeling.md) |
 | `entity.token_masks` | The shape of every token the console mints | below |
+| `locale.default` | The language the console opens in | below |
 
 Reading a setting needs no special authority beyond being signed in. Writing one requires
 `settings:write`, which is an operator-level authority and not part of any tenant role.
 
 ## What every settings write is subject to {#settings-write-rules}
 
-Three rules apply to all three keys, in this order:
+Three rules apply to all four keys, in this order:
 
 1. **The value must be under 64 KB.** Over that, the write is refused with the byte count. This
    bounds the whole JSON document, not any one field inside it — which matters most for
@@ -31,7 +32,7 @@ Three rules apply to all three keys, in this order:
    bound applies instead, which works out to roughly 48 KB of image. The console steers you to an
    `https` URL at this tier for exactly that reason.
 2. **The value must be valid JSON.**
-3. **The key must be one of the three above.** The vocabulary is closed: writing an unrecognised
+3. **The key must be one of the four above.** The vocabulary is closed: writing an unrecognised
    key is refused rather than creating a setting. There is no way to add one from the API.
 
 Each key then applies its own validation, which the pages linked in the table describe.
@@ -84,3 +85,34 @@ A mask decides what the console *offers*. A token typed by hand, or sent by an i
 API, is subject only to the token grammar — masks are not enforced on the write path, and changing
 one does not affect entities that already exist.
 :::
+
+## Default language {#locale-default}
+
+`locale.default` decides the language the console opens in, for people who have not picked one for
+themselves. Its value is a [BCP-47](https://www.rfc-editor.org/info/bcp47) language tag in a JSON
+string — `"en"`, `"es"`, `"pt-BR"` — or **`null`**, which is what it ships as.
+
+`null` is not "unset". It is the value that means *no instance-wide default: let each viewer's
+browser decide*, and it is the reason the shipped console still follows a Spanish browser out of
+the box. Setting a tag here overrides that for everyone who has not chosen; clearing the field in
+the console stores `null` again.
+
+It is the bottom of four tiers, and the order is worth knowing before you set it, because this
+setting is the only one of the four whose effect a *user* can override:
+
+1. a language the person picked from the switcher, which nothing here changes
+2. the tenant's own default, set under **Settings → Language** by a tenant admin
+3. the languages the viewer's browser asks for
+4. English
+
+So a tag here moves only the people in tiers 3 and 4 — and if you set one, colleagues who have
+already used the switcher will not see it change. That is deliberate, and it is the usual reason a
+change here "does not work".
+
+The tag is checked for **shape**, not for whether this build ships that language: an unknown but
+well-formed tag is stored and simply has no effect until its catalog exists. The console warns you
+when you type one. A tag must be stored in canonical form (`es-MX`, not `es-mx`), and a blank
+string is refused — use `null`.
+
+A regional tag falls back to its base language, so `es-MX` renders Spanish on a build that ships
+only `es`.

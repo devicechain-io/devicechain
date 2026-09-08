@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -57,6 +58,51 @@ type ProvisioningProfileCreateRequest struct {
 	Enabled        bool
 	ExpiresAt      *string
 	Metadata       *string
+}
+
+// A PARTIAL update to a provisioning profile: omit a field to leave the stored value
+// alone, send null to clear a nullable one, send a value to set it. There is no Token —
+// the profile is identified by the mutation's `token` argument.
+//
+// 🔴 ProvisionSecret is the field this conversion protects. Under the full-replace shape
+// an edit that changed nothing but the NAME had to restate the shared secret the whole
+// fleet presents, and one that did not blanked it — after which every device in that
+// fleet failed to self-register, with a 200 on the edit that broke them.
+//
+// # 🔴 credentialType is absent, and the reason is the same one that removes an immutable field
+//
+// A provisioning profile records which credential type it mints, and today
+// provisionableCredentialType admits exactly one value: ACCESS_TOKEN. Create refuses
+// anything else, so every stored value is ACCESS_TOKEN, so an update naming the field can
+// only restate what is there (a no-op) or name something the check refuses (an error).
+// That is the same shape as EntityGroup's memberType, and it gets the same answer: the
+// field is not in the input.
+//
+// The difference from memberType is that this one is a CURRENT limit rather than an
+// identity property — minting MQTT_BASIC or X509 is a later onboarding slice — and adding
+// an optional field back to an input is additive. So this is a removal that reverses
+// cleanly on the day a second type becomes mintable, not a decision about the entity.
+//
+// The full-replace shape it replaces did something worse than any of that: it read a nil
+// CredentialType as "use the create-time default", so an edit that changed only the name
+// RESET the credential type of every device the profile went on to provision.
+type ProvisioningProfileUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// ProvisionKey and ProvisionSecret are the credentials a fleet presents, both on
+	// NOT NULL columns: a blank either side authenticates nothing, so both refuse a null.
+	ProvisionKey    dcgraphql.OptionalString
+	ProvisionSecret dcgraphql.OptionalString
+	// Strategy is a NOT NULL vocabulary column.
+	Strategy dcgraphql.OptionalString
+	// DeviceTypeToken is stamped onto auto-created devices; the FK is NOT NULL, so a
+	// null is refused and an unknown token refuses the whole update.
+	DeviceTypeToken dcgraphql.OptionalString
+	Enabled         dcgraphql.OptionalBool
+	// ExpiresAt is an RFC3339 timestamp on a nullable column: null (or an empty string)
+	// means "never expires".
+	ExpiresAt dcgraphql.OptionalString
+	Metadata  dcgraphql.OptionalString
 }
 
 // ProvisioningProfile carries the shared key+secret a fleet presents to

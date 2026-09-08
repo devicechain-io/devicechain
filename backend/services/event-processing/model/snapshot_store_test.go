@@ -131,3 +131,77 @@ func TestSnapshotStoreRefusesBackwardSeq(t *testing.T) {
 		t.Fatalf("equal-seq re-commit rejected: %v", err)
 	}
 }
+
+// Reset is the ONE write in this store that moves a checkpoint backward on purpose, and it
+// is issued from inside a leadership term BUILD — after the lease is acquired, before the
+// term is live, across a restore, three view builds and a whole replay. That is a long
+// enough window to lose the lease in, and a warm standby means there is a successor
+// waiting to take it.
+//
+// 🔑 THE ORACLE IS THE ROW, NOT THE ERROR. A refusal that still deleted would satisfy an
+// error-only assertion while destroying the successor's checkpoint — which is not merely
+// state: it is the monotonic FLOOR every other guard in this file compares against.
+func TestResetRefusesToClearACheckpointThatHasMovedOn(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	wm := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	// The row this replica restored from.
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 40, Watermark: wm, Payload: []byte("mine")}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// The successor takes the partition and commits while we are still building our term.
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 77, Watermark: wm, Payload: []byte("theirs")}); err != nil {
+		t.Fatalf("successor save: %v", err)
+	}
+
+	err := store.Reset(ctx, "singleton", 40)
+	if !errors.Is(err, ErrResetRaced) {
+		t.Fatalf("Reset against a row that has moved returned %v, want ErrResetRaced", err)
+	}
+
+	got, ok, err := store.Load(ctx, "singleton")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok {
+		t.Fatal("the successor's checkpoint was DELETED by a replica that had lost the " +
+			"partition; the row is the monotonic floor every other split-brain guard compares against")
+	}
+	if got.StreamSeq != 77 || !bytes.Equal(got.Payload, []byte("theirs")) {
+		t.Fatalf("the successor's row was mutated: %+v", got)
+	}
+}
+
+// The counterweight, and without it the guard above is satisfied by a Reset that refuses
+// everything — which would turn the re-created/truncated-stream recovery into a permanent
+// term-build failure and a crash-looping pod.
+//
+// The row the caller actually read is still deleted, which is the whole reason Reset
+// exists: a snapshot ahead of the stream head cannot be walked forward, and Save's
+// monotonic guard is precisely what stops it being overwritten.
+func TestResetClearsTheCheckpointItRead(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	wm := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 40, Watermark: wm, Payload: []byte("mine")}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.Reset(ctx, "singleton", 40); err != nil {
+		t.Fatalf("Reset against the row it read: %v", err)
+	}
+	if _, ok, err := store.Load(ctx, "singleton"); err != nil || ok {
+		t.Fatalf("the stale row survived its own reset: ok=%v err=%v", ok, err)
+	}
+}
+
+// A partition with no row at all resets cleanly rather than erroring: two replicas can
+// reach the same conclusion about the same truncated stream, and the second must not turn
+// a completed recovery into a term-build failure.
+func TestResetOfAnAbsentCheckpointIsANoOp(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.Reset(context.Background(), "singleton", 0); err != nil {
+		t.Fatalf("Reset with no row present: %v", err)
+	}
+}

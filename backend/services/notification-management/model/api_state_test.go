@@ -212,9 +212,22 @@ func tokensOf(states []*NotificationState) []string {
 	return out
 }
 
-// PruneClearedStates removes only rows cleared before the cutoff, tenant-scoped; a
-// recently-cleared or never-cleared row survives.
-func TestPruneClearedStates(t *testing.T) {
+// PruneResolvedStates removes rows whose terminal stamps are all older than the cutoff,
+// tenant-scoped; a recently-resolved or still-open row survives.
+//
+// 🔴 THE acked-old CASE IS THE DEFECT. The prune used to filter on cleared_at alone, and
+// markTerminal writes a tombstone row for EVERY acknowledged or cleared alarm in every
+// tenant — including tenants with no policies at all, because the row closes an ordering
+// race rather than recording a page. An alarm a human acknowledged and that then stopped
+// on its own, with no CLEARED ever arriving, was therefore settled forever, excluded from
+// escalation, and matched by no prune predicate: one immortal row per such alarm, for the
+// life of the instance.
+//
+// The acked-old-cleared-new case is the counterweight that keeps the widening honest: it
+// would pass just as well under "prune anything with any terminal stamp older than the
+// cutoff", which would cut a row's grace window short whenever its two stamps straddle
+// the cutoff.
+func TestPruneResolvedStates(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	now := time.Now().UTC()
@@ -222,27 +235,64 @@ func TestPruneClearedStates(t *testing.T) {
 	// Old cleared → pruned.
 	mustRecord(t, api, ctx, "old-cleared", now.Add(-10*24*time.Hour))
 	mustClear(t, api, ctx, "old-cleared", now.Add(-8*24*time.Hour))
+	// Old acknowledged, never cleared → pruned. This is the class that used to be immortal.
+	mustRecord(t, api, ctx, "old-acked", now.Add(-10*24*time.Hour))
+	mustAck(t, api, ctx, "old-acked", now.Add(-8*24*time.Hour))
+	// Acknowledged before the cutoff but cleared after it → survives its full grace window.
+	mustRecord(t, api, ctx, "acked-old-cleared-new", now.Add(-10*24*time.Hour))
+	mustAck(t, api, ctx, "acked-old-cleared-new", now.Add(-8*24*time.Hour))
+	mustClear(t, api, ctx, "acked-old-cleared-new", now.Add(-time.Minute))
 	// Recently cleared → survives.
 	mustRecord(t, api, ctx, "new-cleared", now.Add(-time.Hour))
 	mustClear(t, api, ctx, "new-cleared", now.Add(-time.Minute))
-	// Never cleared → survives.
+	// Recently acknowledged → survives.
+	mustRecord(t, api, ctx, "new-acked", now.Add(-time.Hour))
+	mustAck(t, api, ctx, "new-acked", now.Add(-time.Minute))
+	// Still open → survives.
 	mustRecord(t, api, ctx, "active", now.Add(-time.Hour))
 
 	before := now.Add(-7 * 24 * time.Hour)
-	removed, err := api.PruneClearedStates(ctx, before)
+	removed, err := api.PruneResolvedStates(ctx, before)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2 (the old cleared row AND the old acknowledged-only row, "+
+			"which a cleared_at-only predicate would leave in the table forever)", removed)
+	}
+	for _, tok := range []string{"old-cleared", "old-acked"} {
+		if states, _ := api.NotificationStatesByAlarmToken(ctx, []string{tok}); len(states) != 0 {
+			t.Fatalf("%s not pruned", tok)
+		}
+	}
+	for _, tok := range []string{"acked-old-cleared-new", "new-cleared", "new-acked", "active"} {
+		if states, _ := api.NotificationStatesByAlarmToken(ctx, []string{tok}); len(states) != 1 {
+			t.Fatalf("%s should survive", tok)
+		}
+	}
+}
+
+// A tenant's prune must not reach another tenant's rows: the sweep runs per tenant and
+// leans entirely on the rdb tenant-scope predicate to keep each delete local.
+func TestPruneResolvedStatesIsTenantScoped(t *testing.T) {
+	api := newTestApi(t)
+	now := time.Now().UTC()
+	for _, tenant := range []string{"A", "B"} {
+		ctx := tenantCtx(tenant)
+		mustRecord(t, api, ctx, "old-acked", now.Add(-10*24*time.Hour))
+		mustAck(t, api, ctx, "old-acked", now.Add(-8*24*time.Hour))
+	}
+
+	before := now.Add(-7 * 24 * time.Hour)
+	removed, err := api.PruneResolvedStates(tenantCtx("A"), before)
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
 	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
+		t.Fatalf("removed = %d, want 1: tenant A's prune must not reach tenant B's row", removed)
 	}
-	if states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"old-cleared"}); len(states) != 0 {
-		t.Fatalf("old-cleared not pruned")
-	}
-	for _, tok := range []string{"new-cleared", "active"} {
-		if states, _ := api.NotificationStatesByAlarmToken(ctx, []string{tok}); len(states) != 1 {
-			t.Fatalf("%s should survive", tok)
-		}
+	if states, _ := api.NotificationStatesByAlarmToken(tenantCtx("B"), []string{"old-acked"}); len(states) != 1 {
+		t.Fatal("tenant B's row was pruned by tenant A's sweep")
 	}
 }
 
@@ -280,5 +330,13 @@ func mustClear(t *testing.T, api *Api, ctx context.Context, token string, at tim
 	t.Helper()
 	if err := api.MarkCleared(ctx, token, "k", "CRITICAL", at); err != nil {
 		t.Fatalf("clear %s: %v", token, err)
+	}
+}
+
+// mustAck stamps an acknowledgement or fails the test.
+func mustAck(t *testing.T, api *Api, ctx context.Context, token string, at time.Time) {
+	t.Helper()
+	if err := api.MarkAcknowledged(ctx, token, "k", "CRITICAL", at); err != nil {
+		t.Fatalf("ack %s: %v", token, err)
 	}
 }

@@ -21,13 +21,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -62,7 +60,7 @@ var (
 	Manager       *host.Manager
 	NatsManager   *messaging.NatsManager
 	Lease         *messaging.DistributedLease
-	httpServer    *http.Server
+	httpServer    *core.HttpServer
 
 	// leaderGauge is 1 while this replica holds the lease and is connecting sources,
 	// 0 while it is a warm standby (ADR-070 A6 observability).
@@ -172,16 +170,29 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Manager = host.NewManager(clients)
 	log.Info().Int("sources", len(clients)).Msg("Built Sparkplug source connections.")
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if Microservice.Readiness.Ready() && !Microservice.Readiness.Draining() {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-	})
+	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
+	// registerHttpRoutes for why it is here and not where the server starts.
+	registerHttpRoutes()
 	return nil
+}
+
+// registerHttpRoutes mounts this service's HTTP surface — /healthz, /readyz and
+// /metrics — on the microservice's OWN mux rather than on http.DefaultServeMux.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS.
+// RegisterProbes goes through ServeMux.Handle, which panics on a duplicate pattern,
+// and LifecycleComponent's contract says ExecuteStart "may happen on startup or after
+// stop" — so registering from the start path turns a lifecycle restart into a crash.
+// Initialize runs once, which is what makes this the safe half.
+//
+// 🔴 It is also a named function rather than a line inside the initializer so a test
+// can drive the REGISTRATION ITSELF. A test that called RegisterProbes on its own
+// would be asserting against its own copy of the wiring: it would keep passing if this
+// went back to http.Handle on the default mux, which is the exact regression the
+// switchover has to prevent. The uncovered remainder is one line — that the initializer
+// calls this — because the initializer needs config, credentials and a broker.
+func registerHttpRoutes() {
+	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
 // resolveSources turns each configured source into a resolved Host Application
@@ -370,15 +381,36 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	} else {
 		Manager.Start()
 	}
-	Microservice.MarkReady(nil)
+	// NO VALIDATOR, DELIBERATELY. This service's HTTP surface is /healthz, /readyz and
+	// /metrics; edge nodes authenticate at the MQTT gateway and nothing here verifies a
+	// JWT, so there is no token for a validator to check. See lwm2m-ingest, which says the
+	// same thing for the same reason.
+	Microservice.MarkReadyWithoutAuthSurface()
 
-	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
-	go func() {
-		log.Info().Int("port", httpPort).Msg("Starting Sparkplug ingest HTTP server.")
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("Sparkplug ingest HTTP server exited with error.")
-		}
-	}()
+	return startHttpServer(httpPort)
+}
+
+// startHttpServer builds this service's HTTP server over the microservice's own mux
+// and starts it, returning any bind failure.
+//
+// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
+// pull in opposite directions:
+//
+//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
+//     this runs again after a stop. The routes are registered once, in the initialize
+//     phase.
+//   - It builds a new server because an http.Server cannot be restarted: Shutdown
+//     latches its shuttingDown flag permanently, so reusing one would bind and then
+//     serve nothing.
+//
+// The port is a parameter so a test can ask for an ephemeral one rather than racing
+// whatever holds 8080.
+func startHttpServer(port int32) error {
+	httpServer = Microservice.NewHttpServer(port)
+	if err := httpServer.Start(); err != nil {
+		return err
+	}
+	log.Info().Str("addr", httpServer.Addr()).Msg("Started Sparkplug ingest HTTP server.")
 	return nil
 }
 
@@ -408,18 +440,35 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 	}
 }
 
+// leaseTerm is the narrow slice of *messaging.Lease that a leadership term drives.
+// It exists so the term's teardown ORDERING — join the renewer, THEN release — can
+// be exercised deterministically by a unit test with a fake lease, the way
+// lwm2m-ingest's serveServer lets its serve supervision be tested with a fake
+// transport. *messaging.Lease satisfies it.
+type leaseTerm interface {
+	Epoch() uint64
+	KeepAlive(ctx context.Context, interval time.Duration) error
+	Release() error
+}
+
 // serveAsLeader connects every source and holds them until the lease is definitively
 // lost (KeepAlive returns ErrNotHolder) or the service is shutting down (ctx). On
-// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills) and
-// release the lease so a standby can take over. KeepAlive runs on its OWN goroutine so
-// no processing stall can starve renewal (ADR-070 M4).
-func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
+// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills),
+// join the renewer, and release the lease so a standby can take over. KeepAlive runs
+// on its OWN goroutine so no processing stall can starve renewal (ADR-070 M4).
+func serveAsLeader(ctx context.Context, lease leaseTerm) {
 	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired Sparkplug leadership; connecting sources.")
 	setLeader(true)
 
 	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// keepAliveDone closes when the renewer has stopped. The release below does not
+	// depend on that to order its revision CAS — Lease.Release serializes against an
+	// in-flight Renew itself — but the teardown still joins on it so the term's
+	// goroutines do not outlive the term. See the join in the teardown.
+	keepAliveDone := make(chan struct{})
 	go func() {
+		defer close(keepAliveDone)
 		if errors.Is(lease.KeepAlive(leaderCtx, leaseRenewInterval), messaging.ErrNotHolder) {
 			log.Error().Msg("Lost the Sparkplug leadership lease; self-evicting.")
 			cancel()
@@ -429,8 +478,20 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	Manager.Start()
 	<-leaderCtx.Done()
 
+	// The teardown order is the whole of it, and it matches DETECT's endTerm.
+	// 1. Stop everything that reads or writes: the sources announce OFFLINE and
+	//    disconnect, so past this point nothing is still ingesting for this term.
 	setLeader(false)
 	Manager.Stop()
+	// 2. Join the renewer BEFORE releasing. The revision CAS is NOT what this buys any
+	//    more: Lease.Release serializes itself against an in-flight Renew, so the
+	//    ordering holds whether or not a caller joins first. What the join buys is that
+	//    no goroutine from this term outlives the term — leaderCtx is already cancelled
+	//    here, so this waits only for the renewer to observe that and stop, and past
+	//    this point nothing from the term is still running or still logging against a
+	//    partition a successor may already own.
+	<-keepAliveDone
+	// 3. Release last, once nothing can still be writing to the entry.
 	if err := lease.Release(); err != nil {
 		log.Warn().Err(err).Msg("Error releasing the Sparkplug lease (it will age out via its TTL).")
 	}

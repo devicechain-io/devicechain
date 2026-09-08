@@ -13,15 +13,23 @@ import (
 // TestOnlyInstanceWideEvidenceStartsADrain. Releasing a fleet writes two durable events
 // per device to undo, so the evidence has to be about the INSTANCE, not about this
 // replica. A written `enabled: false` and a missing system-account credential are
-// configuration — every replica reads the same values and reaches the same conclusion. A
-// failed dial or a failed subscription is one replica's bad luck while its peers may be
-// reading advisories perfectly well.
+// configuration — every replica reads the same values and reaches the same conclusion.
+//
+// An unreachable broker is here too, and it is the one worth stating: the dial retries for
+// systemAccountConnectWait before it reports failure, so this reason means the system
+// account was unreachable for that whole window, which is a broker that is down or a
+// credential the broker refuses — both instance-wide. The MQTT gateway is in that same
+// broker, so an unreachable one also means no device is connected through it.
+//
+// A failed subscription on a CONNECTED conn stays replica-local: its peers may be reading
+// advisories perfectly well.
 func TestOnlyInstanceWideEvidenceStartsADrain(t *testing.T) {
-	for _, r := range []presence.TapOffReason{presence.TapOffDisabled, presence.TapOffNoSystemCredential} {
+	for _, r := range []presence.TapOffReason{presence.TapOffDisabled, presence.TapOffNoSystemCredential,
+		presence.TapOffBrokerUnreachable} {
 		require.True(t, reasonIsInstanceWide(r), "reason %s should start a drain", r)
 	}
 	for _, r := range []presence.TapOffReason{presence.TapOffNoGatewaySource, presence.TapOffNoServiceAuth,
-		presence.TapOffBrokerUnreachable, presence.TapOffSubscribeFailed} {
+		presence.TapOffSubscribeFailed} {
 		require.False(t, reasonIsInstanceWide(r), "reason %s must not start a drain", r)
 	}
 	// Every declared reason is classified — a new one added without a decision here would
@@ -48,20 +56,22 @@ func TestDrainPreconditionsAreCheckedNotInferred(t *testing.T) {
 		ds     = "device-state"
 		port   = uint32(8080)
 	)
-	require.True(t, drainEndpointsReady(src, secret, um, ds, port), "the fully-configured case must be ready")
+	require.True(t, drainEndpointsReady(src, secret, um, port, ds, port), "the fully-configured case must be ready")
 
 	// Each field is independently load-bearing: the drain emits under the source name,
 	// mints a token with the secret, enumerates tenants through user-management and reads
-	// the projection from device-state.
+	// the projection from device-state. BOTH endpoints are a host AND a port — a zero port
+	// renders "http://host:0/graphql", which fails every call rather than being absent.
 	cases := map[string]bool{
-		"no gateway source":     drainEndpointsReady("", secret, um, ds, port),
-		"no service secret":     drainEndpointsReady(src, "", um, ds, port),
-		"no user-management":    drainEndpointsReady(src, secret, "", ds, port),
-		"no device-state host":  drainEndpointsReady(src, secret, um, "", port),
-		"no device-state port":  drainEndpointsReady(src, secret, um, ds, 0),
-		"nothing configured":    drainEndpointsReady("", "", "", "", 0),
-		"only the source":       drainEndpointsReady(src, "", "", "", 0),
-		"everything but source": drainEndpointsReady("", secret, um, ds, port),
+		"no gateway source":       drainEndpointsReady("", secret, um, port, ds, port),
+		"no service secret":       drainEndpointsReady(src, "", um, port, ds, port),
+		"no user-management host": drainEndpointsReady(src, secret, "", port, ds, port),
+		"no user-management port": drainEndpointsReady(src, secret, um, 0, ds, port),
+		"no device-state host":    drainEndpointsReady(src, secret, um, port, "", port),
+		"no device-state port":    drainEndpointsReady(src, secret, um, port, ds, 0),
+		"nothing configured":      drainEndpointsReady("", "", "", 0, "", 0),
+		"only the source":         drainEndpointsReady(src, "", "", 0, "", 0),
+		"everything but source":   drainEndpointsReady("", secret, um, port, ds, port),
 	}
 	for name, ready := range cases {
 		require.False(t, ready, "%s: the drain reported itself ready without what it needs", name)

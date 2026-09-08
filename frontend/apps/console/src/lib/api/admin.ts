@@ -124,16 +124,18 @@ const TENANTS = graphql(`
       aiExternalEnabled
       aiInferenceRequestsPerMinute
       aiInferenceBurst
-      # 🔴 Selected so the edit form can ROUND-TRIP them. updateTenant is a full replace
-      # of the governance fields — an omitted override is written as NULL, not left alone
-      # — so a field this query does not read back is a field the next save silently
-      # clears, however unrelated the edit that triggered it.
+      # 🔴 Selected so the edit form can SHOW them — and, because TenantForm restates
+      # every field it renders on every save, so it can carry them over rather than
+      # sending a null for a value it never read.
       #
-      # This applies to EVERY governance override above, not only the two written
-      # beneath it. The rule was first written here for heldCommandCeiling and
-      # shedPriority was left out for a release, which is exactly the failure it
-      # describes; the compile-time gate is Required<AdminTenantUpdateRequest> on
-      # updateTenant, and this comment is the reason that gate exists.
+      # This used to be the only thing standing between an unrelated edit and an erased
+      # ceiling: updateTenant was a full replace, so a field this query did not read back
+      # was a field the next save silently cleared. It was first written here for
+      # heldCommandCeiling with shedPriority left out for a release, which is exactly the
+      # failure it describes. The server now leaves an omitted field alone, so the
+      # failure mode is bounded to the fields the form does render — but a form that
+      # renders a field it cannot read back still shows a blank and then clears it, so
+      # every override above stays selected.
       heldCommandCeiling
       shedPriority
       geoFencePositionCeiling
@@ -292,19 +294,17 @@ const UPDATE_TENANT_TIER = graphql(`
   }
 `);
 
-// Update a tier. NOTE the asymmetry the server enforces (AdminTenantTierUpdateRequest):
-// name/description are a full replace, but config is a PATCH — omitting it leaves the
-// tier's settings alone, and only an explicit "{}" clears them. A rename that dropped
-// config would silently re-price every tenant at the tier within a minute, so callers
-// editing settings must send config explicitly.
-// Gated like updateTenant — see the Required<…> note above createTenant. `config` is
-// the exception the note does not cover: it is a PATCH here, not part of the replace,
-// so `null` means "leave the tier's settings alone" rather than "clear them". Naming it
-// is still required, because a caller that forgot it was the likelier accident and a
-// silent re-pricing is the costlier one.
+// A PARTIAL update: an omitted field is left alone, an explicit `null` clears it, a
+// value sets it.
+//
+// The asymmetry this used to carry is gone. `config` alone used to be a patch while
+// name/description were a full replace, because a rename that dropped config would
+// silently re-price every tenant at the tier within a minute — too destructive to reach
+// by omission. Every field has the absent state now, so config needs no exception, and
+// `null` on it means "clear the tier's settings" rather than "leave them alone".
 export async function updateTenantTier(
   token: string,
-  request: Required<AdminTenantTierUpdateRequest>,
+  request: AdminTenantTierUpdateRequest,
 ): Promise<AdminTenantTierDetail> {
   const data = await gql('user-management/admin', UPDATE_TENANT_TIER, { token, request }, { identity: true });
   return data.updateTenantTier;
@@ -657,13 +657,14 @@ const UPDATE_ROLE = graphql(`
   }
 `);
 
-// Also a full replace (the server writes the whole row) — see the Required<…> note
-// above createTenant. Small today, which is exactly the state the tenant request was in
-// before it grew the field that got erased.
+// A PARTIAL update, addressed by the (scope, token) PAIR — a role's identity is both,
+// so "operator" at system scope and "operator" at tenant scope are different roles.
+// An omitted field is left alone; `authorities: null` (or `[]`) empties the set, which
+// the server allows here because createRole allows a role that grants nothing.
 export async function updateRole(
   scope: string,
   token: string,
-  request: Required<AdminRoleUpdateRequest>,
+  request: AdminRoleUpdateRequest,
 ): Promise<AdminRole> {
   const data = await gql('user-management/admin', UPDATE_ROLE, { scope, token, request }, { identity: true });
   return data.updateRole;
@@ -713,32 +714,32 @@ const CREATE_TENANT = graphql(`
   }
 `);
 
-// 🔴 `Required<…>` is not decoration: it makes an OMITTED field a compile error.
+// 🔴 `Required<…>` IS STILL ON CREATE AND IS DELIBERATELY OFF THE UPDATES.
 //
-// updateTenant is a full replace of the tenant's governance overrides — an omitted
-// field is written as NULL, not left alone — so a caller that forgets one does not
-// "leave it alone", it CLEARS it, with a success toast and nothing on screen that
-// changed. That is how shedPriority was erased on every unrelated tenant edit for a
-// release: the registry families got this same gate in the metadata-wipe arc, and
-// the admin plane never did.
+// It makes an OMITTED field a compile error, and it was put on the update wrappers
+// because updateTenant was a FULL REPLACE: an omitted override was written as NULL, so
+// a caller that forgot one did not "leave it alone", it CLEARED it, with a success
+// toast and nothing on screen that changed. That is how shedPriority was erased on
+// every unrelated tenant edit for a release.
 //
-// Required<> forces every key to be NAMED, and — because it strips `undefined` along
-// with the `?` — to be named with a real value or an explicit `null`. Codegen emits
-// these as `?: T | null | undefined`, so `Required<…>` narrows them to `T | null`;
-// `shedPriority: undefined` does NOT compile. Callers therefore say "clear this"
-// rather than omitting the key, which is the truth about a full replace anyway.
+// The server no longer works that way. An omitted field now leaves the stored value
+// alone and only an explicit `null` clears it, so `Required<…>` on an update would be
+// the opposite of a safety gate: it would make a PARTIAL update — the whole point of
+// the conversion — unexpressible from this SDK, and it would turn the newly SAFE
+// failure mode (a field the console does not know about is left alone) back into a
+// compile error demanding the caller state a value for something it cannot see.
 //
-// What it still cannot force is the right VALUE: `null` compiles, and `null` is
-// exactly the erasure this gate exists to prevent. So the compile gate proves the
-// caller CONSIDERED every field, never that it carried one over. That residue is what
-// TenantForm.test.tsx covers, by loading a tenant that HAS an override, editing
-// something unrelated, and asserting the value survives. The two gates are
-// complements, not alternatives — neither is sufficient.
+// It stays on CREATE, where the reasoning is unchanged and is its own: a create has no
+// stored value to preserve, so an omission is a field that never gets set, and forcing
+// the form to name all of them is what stops a new override shipping with a blank the
+// operator was never shown. Note the asymmetry is now real rather than incidental —
+// TenantForm builds a payload for both paths, so the create gate is also what keeps the
+// shared object honest.
 //
-// Create takes it too. Create is not a full replace, so an omission merely fails to
-// set rather than erasing — but the form builds ONE payload for both paths, so a
-// field missing on create is the same missing field on update, and gating only the
-// destructive path would let the shared object drift out from under it.
+// 🔴 WHAT NEITHER GATE EVER PROVED IS THE RIGHT VALUE, and that has not changed: `null`
+// compiles, and `null` is still the erasure. TenantForm.test.tsx is what covers it, by
+// loading a tenant that HAS an override, editing something unrelated, and asserting the
+// value survives — and it is now the load-bearing one of the two.
 export async function createTenant(request: Required<AdminTenantCreateRequest>): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', CREATE_TENANT, { request }, { identity: true });
   return data.createTenant;
@@ -775,10 +776,12 @@ const UPDATE_TENANT = graphql(`
   }
 `);
 
-// Full replace — see the Required<…> note above createTenant.
+// A PARTIAL update: an omitted field is left alone, an explicit `null` clears it, a
+// value sets it. Not `Required<…>` — see the note above createTenant for why that gate
+// belongs on create and would defeat this one.
 export async function updateTenant(
   token: string,
-  request: Required<AdminTenantUpdateRequest>,
+  request: AdminTenantUpdateRequest,
 ): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', UPDATE_TENANT, { token, request }, { identity: true });
   return data.updateTenant;

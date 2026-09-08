@@ -35,17 +35,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
+	"github.com/devicechain-io/dc-user-management/purge"
 )
 
 const (
@@ -112,6 +116,19 @@ func seedTenant(t *testing.T, db *gorm.DB, tenant string, base int) {
 	               (id, tenant_id, token, device_id, credential_type, credential_id)
 	             VALUES (?, ?, ?, ?, 'token', ?)`,
 		base+4, tenant, tenant+"-cred", base+3, tenant+"-cid")
+
+	// 🔴 THE JOURNAL HAS TO BE SEEDED BY HAND, and until it was, this drill certified
+	// the ADR-077 retention without a single row to retain. Every other row here is
+	// written by raw INSERT, which bypasses the GORM callbacks — so no audit row is ever
+	// generated, and a redaction that did nothing would pass every assertion below.
+	// Two schemas, because the journal is core-owned and exists in all ten; both columns
+	// that can name a person, because a redaction covering one reads as settled.
+	for _, schema := range []string{"user-management", "device-management"} {
+		mustExec(t, db, fmt.Sprintf(`INSERT INTO %q.audit_events
+		       (occurred_time, tenant_id, category, actor, table_name, operation, entity_pk, entity_label, rows_affected)
+		     VALUES (now(), ?, 'mutation', ?, 'devices', 'create', '1', ?, 1)`, schema),
+			tenant, tenant+"@example.test", tenant+"-jane-doe")
+	}
 
 	mustExec(t, db, `INSERT INTO "event-processing".device_rosters
 	               (tenant, device_token, profile_token, expected_since, deleted, last_event_at)
@@ -206,6 +223,17 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	mustExec(t, db, `DELETE FROM "user-management".iam_identities WHERE id = ?`, sharedIdentityID)
 	mustExec(t, db, `DELETE FROM "user-management".iam_roles WHERE id = ?`, sharedRoleID)
 
+	// 🔴 THE JOURNAL HAS TO BE CLEARED BY HAND, and the reason is the change under test.
+	// The preamble above resets by SWEEPING, which worked for every table while every
+	// table was deleted. audit_events is now RETAINED — the sweep empties two columns and
+	// keeps the row — so a second run of this drill found three journal rows where it
+	// asserts one, having reset everything else perfectly. Any harness that leans on the
+	// sweep to reset state has the same problem the day a table becomes retained.
+	for _, a := range areas {
+		mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id IN (?, ?)`, a.name),
+			victim, bystander)
+	}
+
 	seedShared(t, db)
 	seedTenant(t, db, victim, 1000)
 	seedTenant(t, db, bystander, 2000)
@@ -280,6 +308,27 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 		"the entry must still name the store that erases it; an unnamed one is an unfalsifiable "+
 			"claim that something, somewhere, handles it")
 
+	// 🔴 THE JOURNAL IS THE ONE THING THE SWEEP KEEPS, and both halves of that are the
+	// decision. Sweeping it would destroy the evidence that the deletion happened;
+	// keeping it whole would retain the tenant's people by name past the erasure that
+	// record certifies. Asserting only that the rows survive would pass with the
+	// identifiers intact, and asserting only that the names are gone would pass with the
+	// rows deleted — so both are checked, in both schemas, for the victim.
+	for _, schema := range []string{"user-management", "device-management"} {
+		tbl := fmt.Sprintf("%q.audit_events", schema)
+		assert.Equalf(t, int64(1), count(t, db, tbl, "tenant_id = ?", victim),
+			"%s dropped the victim's journal row: the erasure has no evidence", schema)
+		assert.Zerof(t, count(t, db, tbl,
+			"tenant_id = ? AND (actor <> '' OR entity_label <> '')", victim),
+			"%s's retained journal still names the victim's people after their erasure", schema)
+
+		// The bystander is the control for both: a redaction with no tenant predicate,
+		// and a sweep that took everything, each satisfy the two assertions above.
+		assert.Equalf(t, int64(1), count(t, db, tbl,
+			"tenant_id = ? AND actor <> '' AND entity_label <> ''", bystander),
+			"%s redacted a tenant nobody deleted", schema)
+	}
+
 	// The victim is gone everywhere.
 	for _, c := range tenantRowCounts() {
 		assert.Zerof(t, count(t, db, c.table, c.where, victim), "%s still holds the victim", c.label)
@@ -320,6 +369,8 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 
 	clean, err := tenantpurge.Residue(ctx, db, plan, victim)
 	require.NoError(t, err)
+	assert.Zerof(t, clean.Retained(), "the re-verify found a retained row still naming someone: %+v",
+		clean.Redacted)
 	assert.Zerof(t, clean.Rows, "the residual scan found the swept tenant still present: %+v",
 		clean.Tables)
 
@@ -406,4 +457,265 @@ func TestTheDetectPartitionQueryRunsOnTheRealSchema(t *testing.T) {
 	require.Contains(t, ids, "drill-partition",
 		"the query ran but did not return a row that is demonstrably in the table, so it is "+
 			"reading something other than the DETECT checkpoint")
+}
+
+// TestTheFenceExistsInEveryAreaAndIsPlantedAndLifted drives the ADR-077 erasure fence
+// against a database with every area migrated into it.
+//
+// 🔴 THIS IS THE ONLY PLACE THE FENCE'S CENTRAL CLAIM CAN BE CHECKED. The unit tests
+// prove the callback refuses a write when a row stands; they cannot prove the row can be
+// stood in the first place, because that depends on core having created purged_tenants in
+// EVERY functional area's schema. An area missing the table would leave its writes
+// unfenced while every unit test stayed green, and the coordinator's fail-closed
+// derivation would only discover it during a real customer's deletion.
+//
+// It also pins the direction the plant and the lift move: a planted fence has a null
+// completed_at (it stands), and a lifted one does not (a successor at the released token
+// can write). Asserting only that the rows exist would pass with the two swapped.
+func TestTheFenceExistsInEveryAreaAndIsPlantedAndLifted(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	plan, err := tenantpurge.Classify(ctx, db)
+	require.NoError(t, err)
+
+	const fenced = "fence-drill-tenant"
+	epoch := time.Now().UTC().Add(-time.Hour)
+
+	// 🔴 START FROM A KNOWN-EMPTY STATE, IN EVERY SCHEMA. A first draft cleaned up only
+	// user-management and only at the end, which left a standing fence in the other nine
+	// and a fresh epoch each run — so the second run of this test saw three rows where it
+	// asserts one, and the drill went red on a defect that was entirely the test's. The
+	// preamble of the sweep test above exists for the same reason.
+	clearFences := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), fenced)
+		}
+	}
+	clearFences()
+	t.Cleanup(clearFences)
+
+	schemas, err := tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err, "the fence could not be planted against a real migrated database")
+
+	// The area set is derived from the plan, so assert it against the areas this harness
+	// knows it migrated rather than against itself.
+	require.Len(t, schemas, len(areas),
+		"the fence was planted in %d schema(s) but this database holds %d functional areas — "+
+			"an unfenced area is one whose writes keep being accepted after it acks swept",
+		len(schemas), len(areas))
+	for _, a := range areas {
+		assert.Containsf(t, schemas, a.name, "%s was not fenced", a.name)
+	}
+
+	standing := func(schema string) (total, open int64) {
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*), count(*) FILTER (WHERE completed_at IS NULL) FROM %q.%s WHERE token = ?`,
+			schema, rdb.FenceTable), fenced).Row().Scan(&total, &open))
+		return
+	}
+
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s carries %d fence rows, want exactly one", a.name, total)
+		assert.Equalf(t, int64(1), open, "%s's fence is not standing, so writes for a purged "+
+			"tenant would be admitted there while the sweep ran", a.name)
+	}
+
+	// Planting is idempotent: every pass plants, and a second pass must not double the row.
+	_, err = tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err, "planting is not idempotent, so every pass after the first errors")
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s gained a second row from the second plant", a.name)
+		assert.Equalf(t, int64(1), open, "%s's fence closed on a re-plant", a.name)
+	}
+
+	require.NoError(t, tenantpurge.LiftFence(ctx, db, plan, fenced, time.Now().UTC(), nil))
+	for _, a := range areas {
+		total, open := standing(a.name)
+		assert.Equalf(t, int64(1), total, "%s gained a row from the lift", a.name)
+		assert.Zerof(t, open, "%s's fence is still standing after completion, so a successor "+
+			"tenant at the released token could never write and nothing would say why", a.name)
+	}
+
+	// 🔴 A LIFTED FENCE IS RE-OPENED BY THE NEXT PLANT. Lifting happens immediately before
+	// the token is released, so anything that fails in between leaves a purge running with
+	// its fences down — and a plant that treated the completed row as "already there"
+	// would leave that area unfenced for every remaining pass.
+	_, err = tenantpurge.PlantFence(ctx, db, plan, fenced, epoch, time.Now().UTC(), nil)
+	require.NoError(t, err)
+	for _, a := range areas {
+		_, open := standing(a.name)
+		assert.Equalf(t, int64(1), open, "%s's fence was not re-opened after a lift, so a purge "+
+			"that failed between lifting and completing would run on unfenced areas", a.name)
+	}
+}
+
+// drillDatabase adapts the drill's gorm handle to the purge store's Database interface.
+// The handle is already in whatever context the store hands it; the drill has no
+// per-request scope of its own.
+type drillDatabase struct{ db *gorm.DB }
+
+func (d drillDatabase) DB(ctx context.Context) *gorm.DB { return d.db.WithContext(ctx) }
+
+// TestTheRelationalStorePlantsItsFenceWhenItSweeps closes the one hole the fence's own
+// tests leave open.
+//
+// 🔴 A MUTATION FOUND THIS: deleting the PlantFence call from Relational.Erase left every
+// test in the tree green. The direct test above proves the fence CAN be planted; nothing
+// proved the store that sweeps a tenant's rows is the thing that plants it. That is the
+// wiring, and it is the half that can be removed by accident — the mechanism keeps
+// working, in a package nobody calls, while every purge acks "swept" over an area whose
+// writes were never stopped.
+//
+// It sweeps a tenant with no rows on purpose. What is under test is not the delete — the
+// test above this one covers that exhaustively — it is that the pass plants before it
+// sweeps, which has to hold on a pass that finds nothing as much as on one that does.
+func TestTheRelationalStorePlantsItsFenceWhenItSweeps(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const fenced = "fence-wiring-tenant"
+	clear := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), fenced)
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+
+	// No precondition: the interlock is user-management's, and iam_tenants holds no row
+	// for this token. What is under test is the plant, not the guard on it.
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	if _, err := store.Erase(ctx, fenced, time.Now().UTC().Add(-time.Hour)); err != nil {
+		require.NoError(t, err)
+	}
+
+	for _, a := range areas {
+		var open int64
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*) FROM %q.%s WHERE token = ? AND completed_at IS NULL`,
+			a.name, rdb.FenceTable), fenced).Row().Scan(&open))
+		assert.Equalf(t, int64(1), open, "the relational store swept %s without fencing it, so "+
+			"its writes for this tenant were never stopped while the sweep ran", a.name)
+	}
+
+	// 🔴 AND BOTH ENDS CARRY THE PRECONDITION, which a mutation showed nothing pinned. A
+	// lift misdirected at a live token takes down the fence protecting a purge that is
+	// still running; the guard that stops it is a parameter, and a parameter passed as nil
+	// looks exactly like one passed correctly at every call site.
+	refused := errors.New("that token names a live tenant")
+	guarded := purge.NewRelational("rdb", drillDatabase{db},
+		func(string) tenantpurge.Precondition { return func(*gorm.DB) error { return refused } })
+	require.ErrorIs(t, guarded.LiftFence(ctx, fenced, time.Now().UTC()), refused,
+		"the store lifted a fence over a refusing precondition")
+	if _, err := guarded.Erase(ctx, fenced, time.Now().UTC()); !errors.Is(err, refused) {
+		t.Fatalf("the store planted over a refusing precondition: %v", err)
+	}
+
+	// And the store lifts what it planted, through the same wiring.
+	require.NoError(t, store.LiftFence(ctx, fenced, time.Now().UTC()))
+	for _, a := range areas {
+		var open int64
+		require.NoError(t, db.Raw(fmt.Sprintf(
+			`SELECT count(*) FROM %q.%s WHERE token = ? AND completed_at IS NULL`,
+			a.name, rdb.FenceTable), fenced).Row().Scan(&open))
+		assert.Zerof(t, open, "%s's fence outlived the store's own lift", a.name)
+	}
+}
+
+// TestTheSweepRetainsAndRedactsTheJournalThroughTheStore drives the retention through
+// the store that performs it, on a real migrated schema.
+//
+// The store's REFUSAL when a retained row still names someone is not driven here, and
+// that is a property of the mechanism rather than a gap left open: a row still carrying
+// an identifier at scan time is one that landed between the redaction and the read, and a
+// pass that runs both back to back cannot be made to produce one. The scan is exercised
+// directly in core/tenantpurge and the decision in purge.retainedError.
+func TestTheSweepRetainsAndRedactsTheJournalThroughTheStore(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const tenant = "retention-drill-tenant"
+	const bystander = "retention-drill-bystander"
+	clear := func() {
+		for _, a := range areas {
+			for _, tok := range []string{tenant, bystander} {
+				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tok)
+				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tok)
+			}
+		}
+	}
+	clear()
+	t.Cleanup(clear)
+
+	for _, tok := range []string{tenant, bystander} {
+		mustExec(t, db, `INSERT INTO "user-management".audit_events
+		       (occurred_time, tenant_id, category, actor, operation, entity_label, rows_affected)
+		     VALUES (now(), ?, 'mutation', ?, 'create', ?, 1)`, tok, tok+"@example.test", tok+"-jane")
+	}
+
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	if _, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour)); err != nil {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, int64(1),
+		count(t, db, `"user-management".audit_events`, "tenant_id = ?", tenant),
+		"the journal row was swept, so the erasure has no evidence")
+	assert.Zero(t, count(t, db, `"user-management".audit_events`,
+		"tenant_id = ? AND (actor <> '' OR entity_label <> '')", tenant),
+		"the retained journal still names the erased tenant's people")
+
+	// The control: a redaction with no tenant predicate satisfies both assertions above.
+	assert.Equal(t, int64(1), count(t, db, `"user-management".audit_events`,
+		"tenant_id = ? AND actor <> '' AND entity_label <> ''", bystander),
+		"the store redacted a tenant nobody deleted")
+}
+
+// TestTheStoreRefusesToAckWhenTheRedactionDidNotTake drives the store's own reading of
+// the retained scan, on a real migrated schema.
+//
+// 🔴 IT NEEDS A TRIGGER, AND THAT IS THE POINT. The store sweeps and then scans in one
+// pass, so a straggler inserted beforehand is simply redacted by the pass that would have
+// caught it — which is why the branch had no test at all and a mutation disabling it
+// survived. A BEFORE UPDATE trigger that puts the old value back makes the redaction a
+// no-op, so the scan finds exactly what it exists to find: a retained row that still names
+// someone after the erasure the deletion record is about to certify.
+func TestTheStoreRefusesToAckWhenTheRedactionDidNotTake(t *testing.T) {
+	db, ctx := drillConn(t)
+
+	const tenant = "redaction-failure-tenant"
+	clear := func() {
+		for _, a := range areas {
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tenant)
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tenant)
+		}
+	}
+	clear()
+	mustExec(t, db, `DROP TRIGGER IF EXISTS dc_drill_block_redaction ON "user-management".audit_events`)
+	t.Cleanup(func() {
+		mustExec(t, db, `DROP TRIGGER IF EXISTS dc_drill_block_redaction ON "user-management".audit_events`)
+		clear()
+	})
+
+	mustExec(t, db, `INSERT INTO "user-management".audit_events
+	       (occurred_time, tenant_id, category, actor, operation, entity_label, rows_affected)
+	     VALUES (now(), ?, 'mutation', 'jane@example.test', 'create', 'jane-doe', 1)`, tenant)
+
+	mustExec(t, db, `CREATE OR REPLACE FUNCTION dc_drill_keep_actor() RETURNS trigger AS $$
+	    BEGIN NEW.actor := OLD.actor; RETURN NEW; END; $$ LANGUAGE plpgsql`)
+	mustExec(t, db, `CREATE TRIGGER dc_drill_block_redaction BEFORE UPDATE
+	    ON "user-management".audit_events FOR EACH ROW EXECUTE FUNCTION dc_drill_keep_actor()`)
+
+	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
+	_, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	require.Error(t, err, "the store acked while a retained row still named the erased tenant's people")
+	assert.Contains(t, err.Error(), "still name someone")
+	assert.NotContains(t, err.Error(), "still writing",
+		"the refusal reads as a failed delete, which sends an operator looking for a service to stop")
+
+	// The control: with the trigger gone, the identical pass acks. Without it, a store
+	// that refused everything would satisfy the assertion above.
+	mustExec(t, db, `DROP TRIGGER dc_drill_block_redaction ON "user-management".audit_events`)
+	_, err = store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	require.NoError(t, err, "the store refuses a pass whose redaction did take")
 }

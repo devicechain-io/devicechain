@@ -3,7 +3,11 @@
 
 package tenantpurge
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
+)
 
 // Exemption excuses one table from the sweep, with the reason recorded next to it.
 //
@@ -201,6 +205,9 @@ func exemptionFor(t Table) (Exemption, bool) {
 	if e, ok := migrationTableExemption(t); ok {
 		return e, true
 	}
+	if e, ok := fenceTableExemption(t); ok {
+		return e, true
+	}
 	for _, e := range exemptions {
 		if e.Schema == t.Schema && e.Name == t.Name {
 			return e, true
@@ -222,4 +229,97 @@ func migrationTableExemption(t Table) (Exemption, bool) {
 		Reason: "gormigrate bookkeeping: one row per applied migration id, for this functional " +
 			"area. Records schema history, never tenant data.",
 	}, true
+}
+
+// fenceTableExemption covers the second table every area carries: the ADR-077 erasure
+// fence, created by core in each schema it manages (see rdb.PurgedTenant).
+//
+// 🔑 THE HONEST PART IS THAT THIS TABLE DOES NAME A TENANT. It is exempt anyway, and not
+// because the token in it is unimportant — it is the same identifier the deletion record
+// deliberately retains, on the same reasoning: a record certifying that a tenant's data
+// was erased cannot certify anything if it may not say whose. What it holds is evidence
+// OF the erasure, not any of the data erased. There is no measurement, no device, no
+// address and no name in it; the columns are a token, the purge cut, and two timestamps.
+//
+// 🔴 SWEEPING IT WOULD DELETE THE FENCE MID-PURGE. The fence is planted before the sweep
+// precisely so writes stop while the sweep runs; a sweep that then deleted it would
+// re-open the area on its own last statement, and every subsequent pass would repeat the
+// cycle while reporting the area clean. The row is not left behind either — the pass that
+// releases the token stamps it completed, which is what lets a successor at that token
+// write. That is the mechanism, not an omission from it.
+func fenceTableExemption(t Table) (Exemption, bool) {
+	if t.Name != rdb.FenceTable {
+		return Exemption{}, false
+	}
+	return Exemption{
+		Schema: t.Schema, Name: t.Name, Class: ClassExempt,
+		Reason: "the ADR-077 erasure fence for this functional area: one row per purge of a " +
+			"token, carrying the token, the purge epoch and when the fence was planted and " +
+			"lifted. It is evidence OF an erasure and holds none of the data erased. Sweeping " +
+			"it would delete, inside the sweep's own transaction, the fence that stops writes " +
+			"arriving while the sweep runs.",
+	}, true
+}
+
+// Redaction keeps a table's rows and destroys the identifiers in them, for a table the
+// platform has decided to RETAIN through a purge.
+//
+// It is a different kind of statement from an Exemption and lives in its own type for
+// that reason. An exemption says "this table holds nothing of the tenant's". A redaction
+// says the opposite — the table holds the tenant's personal data, the rows are being kept
+// on purpose, and here is exactly which columns stop carrying anyone's identity.
+type Redaction struct {
+	// Name is the table name, matched exactly, in any schema.
+	Name string
+	// Columns are emptied for the purged tenant's rows. Every one of them must be
+	// nullable or defaulted; the purge writes the empty string, not NULL, so the value
+	// reads back through every existing surface exactly as an unset one always has.
+	Columns []string
+	// Reason says what is retained and why, and what the redaction costs.
+	Reason string
+}
+
+// redactionFor returns the redaction covering a table, if one exists.
+//
+// 🔴 IT MATCHES IN ANY SCHEMA, like the migration-bookkeeping and fence rules, because
+// audit_events is core-owned and exists in every functional area's schema. A per-schema
+// list would be ten entries that have to be extended when an area is added — and the area
+// that got missed would keep its tenants' emails through every erasure, with the coverage
+// gate green because the catalog can explain that table perfectly well.
+func redactionFor(t Table) (Redaction, bool) {
+	for _, r := range redactions {
+		if r.Name == t.Name {
+			return r, true
+		}
+	}
+	return Redaction{}, false
+}
+
+// redactions is every table kept through a purge with its identifiers destroyed.
+//
+// 🔴 THE RULE FOR ADDING TO THIS LIST: a redaction is a decision to RETAIN a tenant's
+// rows past their erasure, so it needs a reason that says what the retained row is
+// evidence OF. If the answer is "nothing in particular", the table wants ClassDirect and
+// the sweep. And the columns must be exhaustive: a redaction that covers one of two
+// channels is worse than none, because it reads as the question having been settled.
+var redactions = []Redaction{
+	{
+		Name:    "audit_events",
+		Columns: []string{"actor", "entity_label"},
+		Reason: "the audit journal is retained through a purge because it is the evidence that " +
+			"the deletion happened — sweeping it destroys the record of the erasure it is part of. " +
+			"Both columns that CARRY a person's name are emptied: `actor` is the acting JWT's username, " +
+			"which for every human token IS the email; `entity_label` is documented as a token, name " +
+			"or email, and really carries both — an identity row's label IS its email, and the " +
+			"customer-chosen tokens promoted from TokenReference across ~26 models are routinely " +
+			"people's and companies' names. What survives is the SHAPE of the activity: when, which " +
+			"table, which operation, how many rows. What is destroyed cannot be recovered: the " +
+			"columns are written empty rather than hashed, because an email is a low-entropy " +
+			"enumerable space and a digest of one is reversible by anyone holding a user list. " +
+			"Two bounds, so this is not read as more than it is: `entity_pk` still points at the " +
+			"row that changed, and for a profile edit that row is an identity, which survives the " +
+			"purge deliberately — so an operator who can read both can still join them. And a " +
+			"purge selects on `tenant_id`, so the auth rows written before a tenant is chosen, " +
+			"which carry an email and no tenant, are reached by no tenant's deletion at all.",
+	},
 }

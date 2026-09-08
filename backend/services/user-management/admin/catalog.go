@@ -5,6 +5,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
+	"github.com/devicechain-io/dc-user-management/patch"
 	"gorm.io/gorm"
 )
 
@@ -60,12 +63,29 @@ type RoleInput struct {
 	Authorities []string
 }
 
-// RoleMutableInput is the data to update a role: its identity (scope, token) is
-// fixed, only the name/description/authorities change.
-type RoleMutableInput struct {
-	Name        string
-	Description string
-	Authorities []string
+// RoleUpdateRequest is the data to update a role: its identity (scope, token) is
+// fixed and carried by the mutation's own arguments, so it is not representable here.
+//
+// Every field carries the platform's three update states — absent leaves the stored
+// value alone, an explicit null clears it, a value sets it. It replaces a
+// RoleMutableInput of plain strings and a plain slice, which had only two states and
+// therefore erased any field the caller did not restate.
+type RoleUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Authorities REPLACES the role's authority set wholesale when sent; an explicit
+	// null and an empty list both empty it, which for a list are one request spelled
+	// two ways (see dcgraphql.OptionalStringList).
+	//
+	// 🔴 EMPTYING IT IS DELIBERATELY ALLOWED, and the reason is that the create path
+	// allows it: `createRole(request: {scope:"tenant", token:"observer", authorities: []})`
+	// has always been legal, and a role granting nothing is a real thing an operator
+	// builds — a placeholder a membership can hold while its capabilities are decided.
+	// Refusing it on update only would make a role reachable by creation and
+	// uncorrectable afterwards, which is the shape a partial update exists to remove.
+	// Contrast an OAuth client's scopes and redirect URIs, which the create path
+	// REQUIRES and which UpdateOAuthClient therefore refuses to empty.
+	Authorities dcgraphql.OptionalStringList
 }
 
 // ListRoles returns the role catalog, optionally filtered to a scope.
@@ -95,22 +115,35 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 	return s.iam.RoleByScopeToken(ctx, scope, in.Token)
 }
 
-// UpdateRole replaces a role's name/description/authorities.
-func (s *Service) UpdateRole(ctx context.Context, scope, token string, in RoleMutableInput) (*iam.Role, error) {
+// UpdateRole applies a partial update to the role named by (scope, token).
+//
+// 🔴 scope AND token TOGETHER NAME THE ROW, and neither is representable in the
+// request — roles are scoped, so "operator" at system scope and "operator" at tenant
+// scope are two different roles with two different authority vocabularies. The
+// conversion must not change which one is addressed: both still come from the
+// mutation's own arguments, and loadRole still looks the row up by the pair.
+//
+// The authority check runs on the RESULTING set rather than on what the caller sent,
+// because under a partial update those are not the same list: a request that renames
+// the role and says nothing about authorities must still leave a valid role behind.
+// Validating first, then mutating, then writing is what makes an unknown authority
+// refuse the whole update rather than half-apply it.
+func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *RoleUpdateRequest) (*iam.Role, error) {
 	rs, err := parseScope(scope)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateAuthorities(rs, in.Authorities); err != nil {
 		return nil, err
 	}
 	r, err := s.loadRole(ctx, rs, token)
 	if err != nil {
 		return nil, err
 	}
-	r.Name = rdb.NullStrOf(&in.Name)
-	r.Description = rdb.NullStrOf(&in.Description)
-	r.Authorities = in.Authorities
+	authorities := request.Authorities.ApplyTo(r.Authorities)
+	if err := validateAuthorities(rs, authorities); err != nil {
+		return nil, err
+	}
+	r.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(r.Name)))
+	r.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(r.Description)))
+	r.Authorities = authorities
 	if err := s.iam.UpdateRole(ctx, r); err != nil {
 		return nil, err
 	}
@@ -290,19 +323,95 @@ type TenantInput struct {
 	AiExternalEnabled *bool
 }
 
-// TenantMutableInput is the data to update a tenant: its token is fixed.
-type TenantMutableInput struct {
-	Name string
-	// TierToken is required on update too, and re-tiering a tenant is a legitimate,
-	// live operation (ADR-065 decision 14: settings-only — nothing durable is keyed
-	// on the tier, so it needs no flush or drain and converges on core/governance's
-	// 60s TTL). Required rather than optional-means-unchanged because this input is
-	// a full replace of the mutable fields, not a patch: an omitted tier here would
-	// be indistinguishable from "clear it", which the FK forbids anyway.
-	TierToken string
-	Config    map[string]any
-	GovernanceOverrides
-	AiExternalEnabled *bool
+// TenantUpdateRequest is the data to update a tenant: its token is fixed and carried
+// by the mutation's own argument.
+//
+// # 🔴 THE GOVERNANCE OVERRIDES ARE FLATTENED HERE RATHER THAN EMBEDDED, AND nil NO
+// LONGER MEANS TWO THINGS
+//
+// GovernanceOverrides (which TenantInput still embeds, because a create has nothing to
+// preserve) carries eleven *float64 / *int fields where nil already means something
+// load-bearing: "this tenant declares no override — fall back to its tier, then to the
+// platform default, and NEVER to unlimited" (ADR-023). Under the full-replace shape
+// that pointer had to carry ABSENT and CLEARED at once, so it could not distinguish
+// "say nothing about the ingest ceiling" from "remove the ingest ceiling override" —
+// which meant every update that did not restate an override removed it.
+//
+// Each is an Optional* here, so all three states survive to storage:
+//
+//	omitted        leave the tenant's override exactly as it is, set or absent
+//	explicit null  REMOVE the override, so the tenant falls back to its tier then the
+//	               platform default — never to zero, and never to unlimited
+//	a value        set the override to it
+//
+// The eleven are flattened rather than held in an embedded struct because the
+// exhaustiveness guard and the graphql-go input packer both walk the request type's
+// exported fields, and an embedded struct is one field to each of them: the packer
+// would have nowhere to put `ingestBurst`, and the guard would report the embedded
+// struct as a field that cannot tell absent from null. governanceFor below is what
+// keeps the shared GovernanceOverrides validate/applyTo pair as the single place the
+// rules live.
+type TenantUpdateRequest struct {
+	Name dcgraphql.OptionalString
+	// TierToken re-packages the tenant, which is a legitimate live operation (ADR-065
+	// decision 14: settings-only — nothing durable is keyed on the tier, so it needs no
+	// flush or drain and converges on core/governance's 60s TTL).
+	//
+	// It is OPTIONAL and folded with ApplyToRequired: omitted keeps the tenant at its
+	// current tier, a token re-tiers it, and an explicit null is REFUSED because the FK
+	// is NOT NULL and there is no un-tiered tenant. It used to be a required `String!`,
+	// on the reasoning that "an omitted tier would be indistinguishable from clear it" —
+	// which was true only of the full-replace shape this replaces. Under three states
+	// they are distinguishable, so the reasoning dissolves and the requirement with it:
+	// forcing every rename to restate the tier is how a console that has not loaded the
+	// tier list re-tiers a tenant by accident.
+	TierToken dcgraphql.OptionalString
+	// Config is the freeform JSON object, as a string. Absent leaves it alone; a null
+	// (or an empty string, which is the same request a form sends) clears it; an object
+	// replaces it wholesale. Under the full-replace shape an omitted config CLEARED it,
+	// so renaming a tenant dropped its config.
+	Config dcgraphql.OptionalString
+
+	IngestMessagesPerSecond   dcgraphql.OptionalFloat64
+	IngestBurst               dcgraphql.OptionalInt32
+	OutboundMessagesPerSecond dcgraphql.OptionalFloat64
+	OutboundBurst             dcgraphql.OptionalInt32
+	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6), a nullable
+	// column where null and false both mean "not opted in" (fail-closed). Clearable,
+	// unlike the required booleans elsewhere on the platform: null is a state the column
+	// genuinely holds and the read path renders.
+	AiExternalEnabled            dcgraphql.OptionalBool
+	AiInferenceRequestsPerMinute dcgraphql.OptionalFloat64
+	AiInferenceBurst             dcgraphql.OptionalInt32
+	ShedPriority                 dcgraphql.OptionalInt32
+	HeldCommandCeiling           dcgraphql.OptionalInt32
+	GeoFencePositionCeiling      dcgraphql.OptionalInt32
+	GeoFenceCeiling              dcgraphql.OptionalInt32
+	GeoFencePositionBudget       dcgraphql.OptionalInt32
+}
+
+// governanceFor folds every override in this request onto the tenant's CURRENT values,
+// producing the set the update should leave behind. It is what lets the request keep
+// three states per field while validate() and applyTo() stay the single statement of
+// what an override may be and which column it lands in.
+//
+// 🔴 IT FOLDS ONTO t RATHER THAN BUILDING FROM THE REQUEST ALONE, and that is the whole
+// point: a request naming only `name` produces a GovernanceOverrides identical to what
+// the tenant already holds, so applyTo rewrites the same values instead of eleven NULLs.
+func (r *TenantUpdateRequest) governanceFor(t *iam.Tenant) GovernanceOverrides {
+	return GovernanceOverrides{
+		IngestMessagesPerSecond:      r.IngestMessagesPerSecond.ApplyTo(t.IngestMessagesPerSecond),
+		IngestBurst:                  patch.IntPtr(r.IngestBurst, t.IngestBurst),
+		OutboundMessagesPerSecond:    r.OutboundMessagesPerSecond.ApplyTo(t.OutboundMessagesPerSecond),
+		OutboundBurst:                patch.IntPtr(r.OutboundBurst, t.OutboundBurst),
+		AiInferenceRequestsPerMinute: r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
+		AiInferenceBurst:             patch.IntPtr(r.AiInferenceBurst, t.AiInferenceBurst),
+		ShedPriority:                 patch.IntPtr(r.ShedPriority, t.ShedPriority),
+		HeldCommandCeiling:           patch.IntPtr(r.HeldCommandCeiling, t.HeldCommandCeiling),
+		GeoFencePositionCeiling:      patch.IntPtr(r.GeoFencePositionCeiling, t.GeoFencePositionCeiling),
+		GeoFenceCeiling:              patch.IntPtr(r.GeoFenceCeiling, t.GeoFenceCeiling),
+		GeoFencePositionBudget:       patch.IntPtr(r.GeoFencePositionBudget, t.GeoFencePositionBudget),
+	}
 }
 
 func validateRateOverride(field string, v *float64) error {
@@ -409,30 +518,82 @@ func (s *Service) resolveTier(ctx context.Context, token string) (*iam.TenantTie
 	return tier, err
 }
 
-// UpdateTenant replaces a tenant's name, tier, config, and governance overrides. A
-// nil override field clears it (reverting the tenant to the platform default), so
-// the update is a full replace of the mutable fields, not a partial patch.
-func (s *Service) UpdateTenant(ctx context.Context, token string, in TenantMutableInput) (*iam.Tenant, error) {
-	if err := in.validate(); err != nil {
-		return nil, err
-	}
-	tier, err := s.resolveTier(ctx, in.TierToken)
-	if err != nil {
-		return nil, err
-	}
+// UpdateTenant applies a partial update to a tenant: an omitted field leaves the stored
+// value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 EVERY DECISION IS MADE BEFORE THE FIRST ASSIGNMENT, so a refused request writes
+// nothing. A tenant is where the platform's ceilings live, and half-applying an update
+// that then failed on an unknown tier would leave a tenant metered at limits nobody
+// chose, with a caller who was told the update failed.
+//
+// The governance overrides are validated as the RESULTING set (see governanceFor), not
+// as what the caller sent: under a partial update those differ, and it is the resulting
+// row that has to be a legal one.
+func (s *Service) UpdateTenant(ctx context.Context, token string, request *TenantUpdateRequest) (*iam.Tenant, error) {
 	t, err := s.loadTenant(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	t.Name = rdb.NullStrOf(&in.Name)
+
+	overrides := request.governanceFor(t)
+	if err := overrides.validate(); err != nil {
+		return nil, err
+	}
+
+	// The tier the tenant currently sits at, so an OMITTED tierToken keeps it. Preloaded
+	// by TenantByToken; a tenant reaching here without one has a broken NOT NULL FK, and
+	// resolveTier's "tierToken is required" refusal is the loud, fail-closed reading —
+	// never a silent re-tier to whatever id happens to be in the row.
+	currentTier := ""
+	if t.Tier != nil {
+		currentTier = t.Tier.Token
+	}
+	tierToken, err := request.TierToken.ApplyToRequired("tierToken", currentTier)
+	if err != nil {
+		return nil, err
+	}
+	tier, err := s.resolveTier(ctx, tierToken)
+	if err != nil {
+		return nil, err
+	}
+
+	config := t.Config
+	if request.Config.Set {
+		if config, err = ParseConfigJSON(request.Config.Value); err != nil {
+			return nil, err
+		}
+	}
+
+	t.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(t.Name)))
 	t.TierID = tier.ID
-	t.Config = in.Config
-	t.AiExternalEnabled = in.AiExternalEnabled
-	in.applyTo(t)
+	t.Config = config
+	t.AiExternalEnabled = request.AiExternalEnabled.ApplyTo(t.AiExternalEnabled)
+	overrides.applyTo(t)
 	if err := s.iam.UpdateTenant(ctx, t); err != nil {
 		return nil, err
 	}
 	return s.iam.TenantByToken(ctx, token)
+}
+
+// ParseConfigJSON decodes an optional JSON object string into a config map, the one way
+// this service reads a `config:` field on either the create or the update path.
+//
+// A nil pointer, an empty string and "{}" all yield a NIL map — the three spellings of
+// "this record declares no config" a caller can send, folded to one so the column holds
+// NULL rather than an empty document in some of them and NULL in others. A non-object or
+// malformed JSON is an error, never a silently empty map.
+func ParseConfigJSON(s *string) (map[string]any, error) {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil, nil
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(*s), &cfg); err != nil {
+		return nil, fmt.Errorf("config must be a JSON object: %w", err)
+	}
+	if len(cfg) == 0 {
+		return nil, nil
+	}
+	return cfg, nil
 }
 
 // SetTenantEnabled enables or disables a tenant.
@@ -502,33 +663,36 @@ type TierInput struct {
 	Color string
 }
 
-// TierMutableInput is the data to update a tier: its token is fixed. Everything
-// else is editable, deliberately — packaging is data, not a code deploy (decision
-// 4), and what a tier includes is a product decision that changes.
+// TierUpdateRequest is the data to update a tier: its token is fixed and carried by the
+// mutation's own argument. Everything else is editable, deliberately — packaging is
+// data, not a code deploy (decision 4), and what a tier includes is a product decision
+// that changes.
 //
-// Name and Description are a full replace, matching the tenant inputs above: an
-// omitted one is cleared. CONFIG IS NOT — it is an explicit patch, and the
-// asymmetry is deliberate.
+// # THE ASYMMETRY THIS TYPE USED TO CARRY IS GONE, BECAUSE IT WAS THE MISSING STATE
 //
-// Clearing a name is cosmetic and instantly visible. Clearing Config silently
-// re-prices every tenant at the tier: they fall back to the platform default within
-// core/governance's 60s TTL, with no error and no log. Under a full-replace rule,
-// `updateTenantTier(token:"gold", request:{name:"Gold Plus"})` — a mutation that
-// states only a rename — would drop every gold tenant from 2000/s to 1000/s. That is
-// too destructive to be reachable by omission, so nil means "leave it alone" and an
-// explicit empty map means "clear it".
-type TierMutableInput struct {
-	Name        string
-	Description string
-	// Config replaces the tier's settings when non-nil; nil leaves them unchanged.
-	// A non-nil empty map clears them (re-inheriting the platform default), so
-	// "clear" stays expressible — just never by accident.
-	Config *map[string]any
-	// Color is a full replace like Name, not a patch like Config: it is presentation, so
-	// clearing it (to "") is cosmetic and instantly visible, never a silent re-pricing.
-	// A palette token or "" (iam.ValidTierColor). DisplayOrder is not here — it is set
-	// by ReorderTenantTiers, never by editing one tier in isolation.
-	Color string
+// Under the full-replace shape, name and description were cleared by omission while
+// Config alone was a hand-rolled patch (`*map[string]any`: nil left it alone, a non-nil
+// empty map cleared it). That exception existed for a real reason — clearing a name is
+// cosmetic, while clearing config silently re-prices every tenant at the tier, dropping
+// them to the platform default within core/governance's 60s TTL with no error and no
+// log, so `updateTenantTier(token:"gold", request:{name:"Gold Plus"})` would have
+// re-priced every gold tenant. What it actually wanted was the ABSENT state, and one
+// field got a bespoke version of it while the others went without.
+//
+// Every field now has it, so config needs no exception: omitted leaves it alone,
+// explicit null (or "" or "{}") clears it, an object replaces it.
+type TierUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Config is the tier's settings blob as a JSON object string, validated against the
+	// ADR-065 key registry when supplied.
+	Config dcgraphql.OptionalString
+	// Color is a palette token (iam.ValidTierColor) or "" for no pill. Its column is NOT
+	// NULL with a default of '', so "" is a value it genuinely holds and an explicit null
+	// writes that rather than being refused — see patch.EmptiableString for why this is
+	// not ApplyToRequired. DisplayOrder is not here: it is set by ReorderTenantTiers,
+	// never by editing one tier in isolation.
+	Color dcgraphql.OptionalString
 }
 
 // ListTenantTiers returns the tier catalog (ADR-065).
@@ -570,34 +734,42 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 	return s.iam.TenantTierByToken(ctx, in.Token)
 }
 
-// UpdateTenantTier replaces a tier's name and description, and replaces its config
-// only when one is supplied (see TierMutableInput: config is a patch, precisely so a
-// rename cannot silently re-price every tenant at the tier).
+// UpdateTenantTier applies a partial update to a tier: an omitted field leaves the
+// stored value alone, an explicit null clears it, a value sets it.
 //
 // Editing a tier changes behavior for EVERY tenant at it, live and with no deploy.
 // That is the point of an entity rather than an enum, but it is a wide blast radius
 // on a running system and a commercial act — hence the audit trail (ADR-065
 // consequences). It needs no flush: nothing durable is keyed on the tier, so the
 // change converges on core/governance's 60s TTL (decision 14).
-func (s *Service) UpdateTenantTier(ctx context.Context, token string, in TierMutableInput) (*iam.TenantTier, error) {
-	if in.Config != nil {
-		if err := iam.ValidateTierConfig(*in.Config); err != nil {
-			return nil, err
-		}
-	}
-	if !iam.ValidTierColor(in.Color) {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, in.Color)
-	}
+//
+// Everything is decided before the first assignment, so an unknown color or an invalid
+// config key refuses the whole update — a tier half-re-priced is a tier nobody chose.
+func (s *Service) UpdateTenantTier(ctx context.Context, token string, request *TierUpdateRequest) (*iam.TenantTier, error) {
 	t, err := s.loadTier(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	t.Name = rdb.NullStrOf(&in.Name)
-	t.Description = rdb.NullStrOf(&in.Description)
-	t.Color = in.Color
-	if in.Config != nil {
-		t.Config = *in.Config
+
+	color := patch.EmptiableString(request.Color, t.Color)
+	if !iam.ValidTierColor(color) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, color)
 	}
+
+	config := t.Config
+	if request.Config.Set {
+		if config, err = ParseConfigJSON(request.Config.Value); err != nil {
+			return nil, err
+		}
+		if err := iam.ValidateTierConfig(config); err != nil {
+			return nil, err
+		}
+	}
+
+	t.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(t.Name)))
+	t.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(t.Description)))
+	t.Color = color
+	t.Config = config
 	if err := s.iam.UpdateTenantTier(ctx, t); err != nil {
 		return nil, err
 	}

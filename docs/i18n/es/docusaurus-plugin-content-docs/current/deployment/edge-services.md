@@ -43,10 +43,9 @@ porque un líder que ha perdido el arrendamiento se autoexpulsa solo cuando su s
 advierte, y aun entonces todavía tiene que deshacer su estado de broker o de DTLS. Está acotada, no
 eliminada, y **nada valla las escrituras de un líder obsoleto en estas dos vías**: el arrendamiento
 lleva su época, pero ninguna vía de ingesta rechaza en función de ella. El chart, por su parte, se
-niega a renderizar cualquiera de las dos áreas con más de una réplica **junto a su estrategia
-`Recreate` predeterminada**; pero `strategy` es un valor por área que se puede sobrescribir, así que
-cambiarlo a `RollingUpdate` desactiva esa comprobación y el área se renderizará con cualquier número
-de réplicas. No lo haga.
+niega a renderizar cualquiera de las dos áreas con más de una réplica, y ese rechazo está ligado
+**al área en sí**, no a la estrategia de despliegue con la que esté configurada: cambiar `strategy`
+a `RollingUpdate` no lo esquiva.
 
 :::warning Ningún servicio de ingesta recibe un presupuesto de interrupción de pods
 El chart omite el presupuesto de interrupción para cualquier área que se ejecute con una sola réplica,
@@ -206,22 +205,45 @@ Hay dos formas de que ocurra.
 #### Una fuente libera sus propios dispositivos cuando se apaga
 
 Cuando la presencia MQTT afirmada por el broker se niega a arrancar porque se **desactivó
-deliberadamente** o porque **falta la credencial de cuenta de sistema de NATS**, `event-sources`
-recorre los dispositivos que aún tiene afirmados y los libera.
+deliberadamente**, porque **falta la credencial de cuenta de sistema de NATS** o porque **no se
+consigue alcanzar el broker**, `event-sources` recorre los dispositivos que aún tiene afirmados y los
+libera.
 
-Son dos de las seis razones por las que la toma puede no arrancar, y la línea es deliberada: ambas son
-configuración, así que todas las réplicas de la instancia leen los mismos valores y llegan a la misma
-conclusión — la liberación es la instancia hablando, no una réplica adivinando. Un fallo al marcar o
-al suscribirse es mala suerte de esa réplica en concreto, sus pares pueden estar leyendo los avisos
-perfectamente, y liberar una flota entera con esa evidencia desharía algo que nunca estuvo roto. Las
-seis ponen `presence_tap_off{reason}` de todos modos, que es cómo se distingue cuál se tiene.
+Son tres de las seis razones por las que la toma puede no arrancar, y la línea es deliberada. Las dos
+primeras son configuración, así que todas las réplicas de la instancia leen los mismos valores y
+llegan a la misma conclusión — la liberación es la instancia hablando, no una réplica adivinando.
+
+La tercera es evidencia de otro tipo, y conviene decir qué significa en realidad. La toma da treinta
+segundos a su conexión para alcanzar el broker antes de darlo por inalcanzable, así que esta razón es
+medio minuto sin conexión con la cuenta de sistema, no un intento fallido: un broker caído, o una
+credencial que el broker rechaza. La pasarela MQTT vive en ese mismo broker, así que mientras esté
+inalcanzable no hay ningún dispositivo conectado por ella — la liberación no es una suposición sobre
+la flota, es la única lectura compatible con que el broker no esté.
+
+Es además la única de las tres cuya verdad puede cambiar con el pod ya en marcha, así que es la única
+que sigue preguntando. **Cada pasada de liberación vuelve a marcar primero contra la cuenta de
+sistema, la primera incluida. Si el broker responde, no se libera nada: el servicio termina y el pod
+se reinicia**, y el reemplazo marca contra el broker con normalidad y ejecuta su toma. Un broker que
+vuelve aparece por tanto como un reinicio de pod, no como una flota de dispositivos liberados. Sin
+eso la liberación seguiría sin más: la pasada recorre lo que esté afirmado *ahora* según el intervalo
+de reconciliación, así que con pares que siguen afirmando, las dos se turnarían sobre cada fila
+indefinidamente, y en el hueco entre ambas el barrido de inactividad marcaría fuera de línea a los
+dispositivos conectados pero silenciosos.
+
+Lo que **no** libera es una suscripción que falla sobre una conexión que sí alcanzó el broker —esa sí
+es mala suerte de esa réplica en concreto, sus pares pueden estar leyendo los avisos perfectamente— y
+las dos razones que significan que esta instancia no tiene toma que ejecutar: ninguna fuente apuntando
+al broker de la plataforma, y ninguna configuración de llamadas entre servicios. Las seis ponen
+`presence_tap_off{reason}` de todos modos, que es cómo se distingue cuál se tiene.
 
 Tres propiedades de la liberación automática conviene conocerlas antes de depender de ella:
 
-- **Una credencial ausente espera dos minutos primero.** Un arranque inicial acuña esa credencial en
-  la misma ejecución que pone en marcha los servicios, así que un valor ausente puede ser simplemente
-  una carrera con la ejecución que lo está creando. Un `enabled: false` escrito es inequívoco, y actúa
-  de inmediato.
+- **Una credencial ausente y un broker inalcanzable esperan dos minutos primero.** Un arranque inicial
+  acuña esa credencial y renueva el broker en la misma ejecución que pone en marcha los servicios, así
+  que cualquiera de los dos puede ser simplemente una carrera con esa ejecución y no una condición
+  permanente. Un `enabled: false` escrito es inequívoco, y actúa de inmediato. Para el broker la
+  espera es además una **comprobación** —véase más arriba—; para la credencial no puede serlo, porque
+  la configuración se lee una sola vez al arrancar y un cambio renueva el pod.
 - **Necesita una fuente de pasarela y configuración de llamadas entre servicios propias**: algo bajo
   lo que emitir, y una manera de enumerar inquilinos y leer la proyección. Sin eso no se ejecuta en
   absoluto. Registra que no lo hizo y apunta a la puerta manual, que entonces es la única.
@@ -299,6 +321,52 @@ El cruce entre inquilinos está cerrado en ambas vías —un publicador nunca pu
 inquilino—, pero si la identidad de dispositivo dentro del inquilino le importa, impóngala con
 credenciales por cliente y permisos de topic **en su propio broker**, que es donde vive realmente esa
 frontera.
+:::
+
+:::danger Tres identificadores, tres funciones — y en estos transportes ninguno es el que usted escribió
+Todo dispositivo en un transporte de borde lleva **tres** identificadores que cumplen tres funciones
+distintas. Es fácil confundirlos porque dos parecen nombres y el tercero es generado. Aclárelos antes
+de aprovisionar, porque los fallos son todos silenciosos o engañosos.
+
+**1. El ancla de pertenencia a inquilino** — lo que decide a qué inquilino pertenecen los datos. En
+Sparkplug es la **conexión de broker**; en LwM2M es la **identidad PSK autenticada**. Nunca nada que
+venga en el mensaje. Tratado más arriba.
+
+**2. La clave de resolución del dispositivo** — lo que decide *qué dispositivo*. En ambos transportes
+de borde es el **id externo** del dispositivo, y no es algo que el dispositivo elija:
+
+- En Sparkplug es la cadena `group/node[/device]` del topic, p. ej. `plant-a/line-3/press-1`.
+- En LwM2M es el id externo que usted escribió **junto a la identidad PSK en la configuración del
+  servicio** — no el nombre de endpoint (`ep`) que envía el dispositivo. `ep` se registra en el log y
+  por lo demás se ignora. Un dispositivo cuyo firmware envía `ep=urn:imei:35…` nunca será emparejado
+  por él, y nada se lo indicará.
+
+**3. El token del dispositivo** — lo que la consola, la API y todos los eventos usan realmente. Es
+**generado**, no elegido: el id externo contiene con frecuencia `/`, `.`, espacios o caracteres no
+ASCII, nada de lo cual puede contener un token. Así, `plant-a/line-3/press-1` se convierte en algo
+como `sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` en LwM2M). El sufijo desambigua dos ids
+externos que de otro modo se reducirían a la misma cadena.
+
+**La consecuencia práctica, y es peor de lo que parece:** un dispositivo aprovisionado
+automáticamente llega **sin nombre alguno**. El registro lleva solo el token, el id externo y el tipo
+de dispositivo, así que la lista de dispositivos de la consola lo muestra bajo su token generado
+`sp-…` / `lw-…` con un `—` en la columna Nombre. No hay nada ahí por lo que reconocerlo.
+
+Y no puede buscarlo. **La lista de dispositivos de la consola no tiene caja de búsqueda** —es un
+listado paginado sin más de Estado, Token, Nombre, Tipo, Descripción y Creado, sin columna de id
+externo— y la búsqueda de dispositivos de la API solo admite número de página, tamaño de página y
+tipo de dispositivo. Así que:
+
+- **En la consola**, localícelo por su token. El token generado incrusta el id externo
+  (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), así que paginar la lista y leer la
+  columna del token es toda la técnica.
+- **Por la API**, use `devicesByExternalId`, que recibe ids externos exactos y devuelve los
+  dispositivos. Es una consulta de coincidencia exacta, no una búsqueda: sin prefijos ni subcadenas.
+  Nada en la consola la invoca, así que esta vía es solo de API.
+
+Cuando un dispositivo no aparezca en absoluto, revise el identificador 2 antes de sospechar del
+transporte — en LwM2M en particular, una identidad PSK equivocada falla en el handshake DTLS, antes
+del registro, y el rechazo deliberadamente no le dice nada.
 :::
 
 ## LwM2M: lo que un operador debe saber
@@ -517,6 +585,7 @@ rasparla.
 | `observe_establish_refused_total` | Un Observe que el dispositivo rechazó o que falló por otra causa. **El síntoma del cliente solo 1.0**: ese cliente responde al Observe SenML con `4.06` y nunca notifica. |
 | `notify_unknown_content_format_total` | Telemetría que llega en un formato que no se decodifica — un dispositivo que *sí* notifica, de forma indescifrable. Cero para un cliente solo 1.0. |
 | `notify_decode_failures_total` / `notify_samples_truncated_total` | Cargas útiles malformadas o demasiado grandes. |
+| `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Lecturas que traía un Notify y que no produjeron ninguna medición. **Que no sean numéricas es normal**: una lectura IPSO booleana o de texto es un dispositivo funcionando bien, y este contador es lo que distingue ese caso del de un dispositivo que se ha quedado callado, que desde aquí se ve igual. Los otros dos son fallos de firmware: un valor que resolvió a infinito o NaN, y una lectura sin ruta de recurso. |
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |

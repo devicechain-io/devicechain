@@ -19,25 +19,25 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
-import type { WidgetInstance } from '@devicechain/dashboards';
+import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
 
 afterEach(cleanup);
 
-function mapWidget(options: Record<string, unknown>): WidgetInstance {
+function widget(options: Record<string, unknown>, type: WidgetType = 'map'): WidgetInstance {
   // A real layout rather than a cast: `as WidgetInstance` on a wrong shape compiles
   // happily and would leave this suite testing a widget the renderer could not place.
   return {
     id: 'w1',
-    type: 'map',
+    type,
     layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 4, z: 0 } },
     options,
   };
 }
 
-function renderPanel(options: Record<string, unknown>) {
+function renderPanel(options: Record<string, unknown>, type: WidgetType = 'map') {
   render(
     <WidgetConfigPanel
-      widget={mapWidget(options)}
+      widget={widget(options, type)}
       datasource={undefined}
       onChange={vi.fn()}
       onDatasource={vi.fn()}
@@ -85,6 +85,18 @@ describe('a map widget tile source without its credit line', () => {
   // Whitespace is not a tile source anywhere else in this feature; it is not one here.
   it('treats a whitespace-only tile URL as absent', () => {
     renderPanel({ tileUrl: '   ' });
+    expect(warning()).toBeNull();
+  });
+
+  // 🔴 THE OTHER SUBJECT CONTROL. Which widget this warning belongs to is decided from the
+  // option schema — "does this type declare both halves of the tile pair?" — rather than
+  // from a `type === 'map'` test, so that a second map widget cannot ship without it. That
+  // makes the reverse worth pinning: a leftover `tileUrl` on a widget that reads no tiles
+  // is a stray key for the publish validator to report, not a licence problem to warn
+  // about, and a condition that had quietly become "the options are present" would say so
+  // on every widget on the board.
+  it('is not raised for a widget that reads no tiles, whatever its options carry', () => {
+    renderPanel({ tileUrl: 'https://tiles.example.com/{z}/{x}/{y}.png' }, 'gauge');
     expect(warning()).toBeNull();
   });
 });

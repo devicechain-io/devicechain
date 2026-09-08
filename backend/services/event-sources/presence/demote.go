@@ -84,15 +84,18 @@ type DemoterMetrics struct {
 const demoteRate = 25
 
 // SettleWindow is how long the drain waits before its first pass when the tap is off for a
-// reason that could plausibly be a half-written configuration.
+// reason that could plausibly be a transient of the run that is starting the instance.
 //
-// 🔑 IT APPLIES TO ONE BAIL PATH ONLY. `enabled: false` is a written value — Enabled is a
-// *bool precisely so false is distinguishable from unset — so an operator who wrote it
-// meant it and the drain acts immediately. A MISSING system-account credential is the
-// ambiguous one: a bring-up mints it in the same run that starts the services, so an
-// absent value can simply be a race with the run that is creating it, and demoting a whole
-// fleet on the strength of a value that appears ninety seconds later would be a
-// self-inflicted outage of exactly the kind this arc exists to prevent.
+// 🔑 IT APPLIES TO THE AMBIGUOUS REASONS ONLY. `enabled: false` is a written value —
+// Enabled is a *bool precisely so false is distinguishable from unset — so an operator who
+// wrote it meant it and the drain acts immediately. A MISSING system-account credential is
+// ambiguous: a bring-up mints it in the same run that starts the services, so an absent
+// value can simply be a race with the run that is creating it, and demoting a whole fleet
+// on the strength of a value that appears ninety seconds later would be a self-inflicted
+// outage of exactly the kind this arc exists to prevent. An UNREACHABLE BROKER is ambiguous
+// for the same reason and on the same clock: the bring-up rolls the NATS StatefulSet
+// alongside the Deployments, so a pod that could not reach the system account for its whole
+// startup window may be looking at a broker that is thirty seconds from being back.
 const SettleWindow = 120 * time.Second
 
 // Demoter hands a source's asserted device-state rows back to inferred presence.
@@ -221,12 +224,12 @@ type DemoteRunner interface {
 }
 
 // StartDelayFor is how long the drain waits before its FIRST pass, given why the tap is
-// off. Only a missing system-account credential gets the settle window; see SettleWindow.
-// The jitter is added in both cases and is the caller's to choose — it spreads the first
-// pass across replicas that all restarted together, which is every replica of an instance
-// whose configuration just changed.
+// off. A missing system-account credential and an unreachable broker get the settle window;
+// see SettleWindow. The jitter is added in every case and is the caller's to choose — it
+// spreads the first pass across replicas that all restarted together, which is every
+// replica of an instance whose configuration just changed.
 func StartDelayFor(reason TapOffReason, jitter time.Duration) time.Duration {
-	if reason == TapOffNoSystemCredential {
+	if reason == TapOffNoSystemCredential || reason == TapOffBrokerUnreachable {
 		return SettleWindow + jitter
 	}
 	return jitter

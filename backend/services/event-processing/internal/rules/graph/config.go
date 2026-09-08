@@ -361,6 +361,10 @@ type actionConfig struct {
 	Action string `json:"action"` // "raiseAlarm" | "sendCommand" | "httpCall" | "publish"
 	// raiseAlarm
 	AlarmKey string `json:"alarmKey,omitempty"`
+	// AlarmKeyTemplate renders the alarm key per detection instead of stating it literally
+	// (rules.RaiseAlarmAction.AlarmKeyTemplate). Mutually exclusive with AlarmKey — rules.validateReact
+	// rejects both, so the canvas and the form are refused identically.
+	AlarmKeyTemplate string `json:"alarmKeyTemplate,omitempty"`
 	// sendCommand
 	Command string `json:"command,omitempty"`
 	Payload string `json:"payload,omitempty"`
@@ -394,12 +398,12 @@ func (c actionConfig) checkVariant() error {
 			return set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
 				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionSendCommand:
-			return set(c.AlarmKey) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
+			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
 				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionHTTPCall:
-			return set(c.AlarmKey) || set(c.Command) || set(c.Payload) || set(c.ConnectorRef) || set(c.PayloadTemplate)
+			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ConnectorRef) || set(c.PayloadTemplate)
 		case rules.ActionPublish:
-			return set(c.AlarmKey) || set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) ||
+			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) ||
 				len(c.Headers) > 0 || set(c.BodyTemplate) || set(c.SecretRef)
 		default:
 			return false // unknown action: buildAction's default returns the "unknown action" error
@@ -427,7 +431,8 @@ func buildAction(n Node) (rules.Action, error) {
 	}
 	switch rules.ActionType(c.Action) {
 	case rules.ActionRaiseAlarm:
-		return rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{AlarmKey: c.AlarmKey}}, nil
+		return rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{
+			AlarmKey: c.AlarmKey, AlarmKeyTemplate: c.AlarmKeyTemplate}}, nil
 	case rules.ActionSendCommand:
 		return rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: c.Command, Payload: c.Payload}}, nil
 	case rules.ActionHTTPCall:

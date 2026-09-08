@@ -59,7 +59,7 @@ func (r *CommandDefinitionResolver) CommandKey() string {
 	return r.M.CommandKey
 }
 
-// ParameterSchema is the ordered []CommandParameter contract as a JSON string; the
+// ParameterSchema is the ordered []ParameterSpec contract as a JSON string; the
 // console parses it to render the command form. Nil when the command declares no
 // structured arguments.
 func (r *CommandDefinitionResolver) ParameterSchema() *string {

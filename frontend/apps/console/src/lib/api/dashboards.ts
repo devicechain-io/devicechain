@@ -14,6 +14,7 @@ import type {
   DashboardsQuery,
   DashboardQuery,
   DashboardVersionsQuery,
+  DashboardUpdateRequest,
 } from '@/gql/dashboard-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -107,17 +108,28 @@ export async function createDashboard(opts: {
   return data.createDashboard;
 }
 
-// The editor persists a full definition snapshot (ADR-039). updateDashboard is a
-// full replacement — name/description are sent alongside so a save never wipes
-// either field; the caller passes the values it isn't editing back verbatim.
-// expectedUpdatedAt is an optimistic-concurrency precondition (ADR-039 versioning):
-// pass the updatedAt the editor loaded so a save fails (CONFLICT) if another writer
-// changed the dashboard since. It returns the new updatedAt so the caller can
-// advance its baseline for the next save.
+// updateDashboard is a PARTIAL update (ADR-039): a field this request omits is left
+// exactly as it is stored, a field it sends is written, and an explicit null clears it.
+// The `token` argument is the only thing that names the dashboard — DashboardUpdateRequest
+// carries no token, so a request cannot name a second one.
+//
+// 🔴 THE THREE STATES ARE SPELLED BY `undefined` / `null` / A VALUE, AND THE DIFFERENCE
+// MATTERS. Leaving a key off (or passing undefined) means "leave it alone"; passing null
+// means "clear it". The previous shape collapsed the two — it defaulted every missing
+// field to null, so a caller that did not mention `description` CLEARED it and got a 200
+// for doing so. That is the full replace this conversion removes, and re-adding a `?? null`
+// below would quietly bring it back.
+//
+// `definition` is the exception: the server refuses an explicit null on it, because a
+// dashboard with no definition is not a thing. Omit it to keep the stored document.
+//
+// expectedUpdatedAt is an optimistic-concurrency precondition: pass the updatedAt the
+// editor loaded so a save fails (CONFLICT) if another writer changed the dashboard since.
+// It returns the new updatedAt so the caller can advance its baseline for the next save.
 const UPDATE_DASHBOARD = graphql(`
   mutation UpdateDashboard(
     $token: String!
-    $request: DashboardCreateRequest!
+    $request: DashboardUpdateRequest!
     $expectedUpdatedAt: String
   ) {
     updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
@@ -132,17 +144,19 @@ export async function updateDashboard(
   input: {
     name?: string | null;
     description?: string | null;
-    definition: string;
+    definition?: string;
     expectedUpdatedAt?: string | null;
   },
 ): Promise<{ token: string; updatedAt: string | null }> {
+  // Built key by key rather than as an object literal: only the fields the caller
+  // actually named reach the wire, which is what makes the omitted ones survive.
+  const request: DashboardUpdateRequest = {};
+  if (input.name !== undefined) request.name = input.name;
+  if (input.description !== undefined) request.description = input.description;
+  if (input.definition !== undefined) request.definition = input.definition;
+
   const data = await gql('dashboard-management', UPDATE_DASHBOARD, {
-    request: {
-      token,
-      name: input.name ?? null,
-      description: input.description ?? null,
-      definition: input.definition,
-    },
+    request,
     token,
     expectedUpdatedAt: input.expectedUpdatedAt ?? null,
   });

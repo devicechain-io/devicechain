@@ -317,13 +317,19 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 	// claims the row into SENT, publishes, the device answers — and then a REDELIVERED
 	// claim from that same dispatch executes against the answered row.
 	//
-	// 🔴 THIS USED TO RESPOND TO A QUEUED ROW, WHICH CANNOT HAPPEN. Every dispatcher
-	// claims before it publishes, so no device has been told anything while the row is
-	// still QUEUED and no answer can precede the claim. The old arrangement was a
-	// shorter way to reach the same write, but it staged a state the platform never
-	// produces — and once a response must come from a state a dispatcher actually held
-	// (answerableStatusStrings), staging it stopped being a shortcut and started being
-	// a fiction the test would have failed on.
+	// 🔴 THIS USED TO RESPOND TO A QUEUED ROW, WHICH IS NOT THE RACE BEING MEASURED. Every
+	// dispatcher claims before it publishes, so within a single dispatch no answer can
+	// precede the claim. The old arrangement was a shorter way to reach the same write, but
+	// it staged a state this race never passes through — and once a response must come from
+	// a state a dispatcher actually held (answerableStatusStrings), staging it stopped being
+	// a shortcut and started being a fiction the test would have failed on.
+	//
+	// ⚠️ AN EARLIER VERSION OF THIS COMMENT SAID A DEVICE CAN NEVER HAVE BEEN TOLD ANYTHING
+	// WHILE THE ROW IS QUEUED, AND THAT IS FALSE. ReleaseClaim returns a row that WAS
+	// dispatched to QUEUED whenever the publish reports an error, and a publish error is not
+	// proof the message did not arrive. That sequence is what MarkResponse's
+	// ErrCommandNotAnswerable exists for; it is a different race from this one and is
+	// covered in response_identity_test.go rather than here.
 	if _, claimed, err := api.MarkSent(ctx, created.ID); err != nil || !claimed {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}

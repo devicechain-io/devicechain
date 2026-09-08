@@ -67,6 +67,13 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # Same reasoning as the guard above, and the same blast radius: this builds the
+      # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
+      # the `cli` job after every image has already been pushed. The self-test is the
+      # part that runs on every PR.
+      - name: release-notes header self-test
+        run: hack/build-release-notes-header.sh --self-test
+
       # The govulncheck wrapper decides which findings are allowed to pass. Its
       # allowlist is the one place in CI where a known vulnerability is waved
       # through on purpose, so proving the checker can still fail — on an
@@ -95,18 +102,69 @@ jobs:
           echo "services=$services" >> "$GITHUB_OUTPUT"
           echo "Services: $services"
 
+      # The toolchain is needed for `go list -m` below and for nothing else in this
+      # job, so the build cache is off: this job compiles nothing, so there is no build
+      # output worth persisting, and restoring/saving an entry here would only spend
+      # time and cache quota on something no other job can use — the `go` matrix keys
+      # its caches per module. (It is NOT off because the cache step would fail; it
+      # would not. See the cache-dependency-path note in the `go` job for what setup-go
+      # actually does when a cache path resolves to nothing.)
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      # Self-test first, as with every guard in this workflow. The cross-check below
+      # is only worth having while its second reader can be shown to read correctly —
+      # and a parser that returns a plausible-looking count for a file it misparsed is
+      # exactly the failure this pair exists to catch.
+      - name: workspace-module reader self-test
+        run: hack/list-workspace-modules.sh --self-test
+
       - name: Discover Go modules
         id: mod
         run: |
-          # Full set of Go module dirs = non-service modules + discovered services.
-          # Derived by finding every dir that holds a go.mod under the known roots.
-          modules="$(
-            for d in backend/cli backend/core backend/k8s backend/edge/*/ backend/services/*/ backend/sims/*/ backend/tools/*/; do
-              [ -f "${d%/}/go.mod" ] && echo "${d%/}"
-            done | jq -R . | jq -s -c .
-          )"
+          # 🔴 DERIVED FROM go.work, NOT FROM A GLOB OF DIRECTORY NAMES. The glob this
+          # replaced was backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}, which
+          # is a hand-maintained restatement of the workspace that nothing kept in step
+          # with it — and it had already drifted: `deploy` (deploy/assets.go, the module
+          # that embeds the chart and the OpenTofu tree into dcctl) is a workspace member
+          # that matched no pattern, so NO job in this workflow built, vetted, tested or
+          # scanned it. The failure is silent in the worst way: the matrix simply has one
+          # fewer entry, every job it does run is green, and nothing anywhere says a
+          # module went unexamined.
+          #
+          # `go list -m` reads go.work, so a module is covered the moment it joins the
+          # workspace rather than the moment somebody remembers this list. It is the same
+          # derivation the codeql workflow and the full-sweep in CLAUDE.md already use,
+          # which is why those two DID cover deploy while this workflow did not.
+          modules="$(go list -m -f '{{.Dir}}' | sed "s|^${PWD}/||" | jq -R . | jq -s -c .)"
+
+          # 🔴 THE GUARD, because the failure mode of a DERIVED matrix is different from
+          # the failure mode of a hard-coded one. An empty or truncated list does not
+          # fail: `strategy.matrix` over zero entries runs zero jobs, every one of them
+          # "succeeds" by not existing, and the `go` job reports green having compiled
+          # nothing at all. So the count is cross-checked against a SECOND, independent
+          # reader of the same file — hack/list-workspace-modules.sh, a plain awk over
+          # go.work's `use` directives that needs no toolchain and shares no code with
+          # the go command. Two readers disagreeing is the only cheap signal that one of
+          # them silently dropped something.
+          #
+          # It is a script rather than an awk one-liner inline here because the
+          # one-liner was WRONG: it read only the parenthesised `use (...)` block, so a
+          # single-line `use ./backend/tools/x` — valid syntax — counted as zero and a
+          # perfectly good go.work failed this check. The script parses both forms and
+          # its --self-test pins them.
+          want="$(hack/list-workspace-modules.sh | wc -l)"
+          got="$(echo "$modules" | jq 'length')"
+          if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+            echo "::error::module discovery disagrees with go.work: go list -m gave $got, go.work declares $want."
+            echo "$modules" | jq -r '.[]'
+            exit 1
+          fi
+
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
-          echo "Modules: $modules"
+          echo "Modules ($got): $modules"
 
       - name: Build image-smoke module list
         id: smoke
@@ -152,7 +210,30 @@ jobs:
           # race, so its build cache was almost never persisted and it recompiled Bento
           # cold on nearly every run. A per-module key gives each entry its own cache to
           # restore from.
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          #
+          # 🔴 go.mod IS LISTED ALONGSIDE go.sum BECAUSE NOT EVERY WORKSPACE MODULE
+          # HAS A go.sum. `deploy` requires nothing at all — a three-line go.mod and no
+          # go.sum, because there are no hashes to record — so with go.sum alone the
+          # pattern set resolves to zero files.
+          #
+          # 🔴 AND WHAT THAT COSTS IS A WARNING AND AN UNCACHED BUILD, NOT A RED MATRIX
+          # ENTRY. The stronger claim ("a hard error") was written here first and is
+          # wrong, which is worth recording because it was wrong in the direction that
+          # would have made this line look urgent for the wrong reason. setup-go's
+          # cache-restore does throw when hashFiles comes back empty (`Some specified
+          # paths were not resolved, unable to cache dependencies.`), but at the pinned
+          # v7 commit its entrypoint WRAPS that call in try/catch and downgrades it to
+          # `core.warning`, and the post/save step returns early on an empty key. So
+          # `deploy` would have gone yellow and recompiled cold on every run, silently,
+          # while the job still reported success.
+          #
+          # That silent-and-slow failure is the one this fixes. Every module has a
+          # go.mod by definition, so listing it makes the set always resolve; the two
+          # are hashed together so the key stays per-module, and go.mod moving is
+          # precisely when dependencies changed anyway.
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.mod
+            ${{ matrix.module }}/go.sum
 
       - name: gofmt
         working-directory: ${{ matrix.module }}
@@ -292,12 +373,17 @@ jobs:
       # with no change to this repo. That is the point of it — a newly published
       # advisory against a dependency we already ship is exactly the news we want.
       #
-      # COVERAGE GAP, stated rather than left to be inferred from a green run: this
-      # rides the discover matrix, which globs backend/{cli,core,k8s,edge/*,
-      # services/*,sims/*,tools/*} — 21 modules. `deploy` is the 22nd workspace
-      # module (deploy/assets.go) and no CI job builds, vets or tests it, so it is
-      # not scanned here either. The codeql workflow DOES cover it, because that one
-      # builds from `go list -m` and so follows go.work rather than a glob.
+      # COVERAGE, stated rather than left to be inferred from a green run: this rides
+      # the discover matrix, which is now derived from go.work, so every workspace
+      # module is scanned — including `deploy`, which the previous directory glob
+      # missed entirely.
+      #
+      # 🔴 SCANNING `deploy` BUYS NOTHING ON THE VULNERABILITY SIDE, AND SAYING SO IS
+      # THE POINT. Its go.mod requires nothing, so govulncheck has no dependency graph
+      # to resolve and its green result is vacuous by construction — it is not evidence
+      # that the module is clean, only that there was nothing to be dirty. What adding
+      # deploy to the matrix genuinely buys is build, vet and test coverage. Do not
+      # read this step's green on that module as scanning coverage that was gained.
       - name: govulncheck (reachable vulnerabilities)
         run: hack/govulncheck.sh "${{ matrix.module }}"
 
@@ -426,6 +512,23 @@ jobs:
         # "other", so the panel that answers WHY fleet writes are being refused
         # quietly stops naming it. Nothing goes red at runtime.
         run: hack/check-rejection-code-labels.sh
+
+      - name: partial-update guard wiring self-test
+        run: hack/check-partial-update-guards.sh --self-test
+
+      - name: every update* surface wires both partial-update guards
+        # Two per-service Go guards protect the three-state update semantic
+        # (omitted leaves a field alone, explicit null clears, a value sets):
+        # one reflects over a service's Api, the other walks its served schema
+        # for SDL defaults — a default makes every update OMITTING that field
+        # write it, and is only reachable once an input has been converted.
+        #
+        # Neither can see a module that calls neither of them. A service added
+        # with an `updateThing` mutation and no partial-update test has a fully
+        # green suite and no coverage at all, and the observation that would
+        # catch it is about a module's ABSENCE — so it is asked of the tree here
+        # rather than from inside any module.
+        run: hack/check-partial-update-guards.sh
 
   # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
@@ -585,6 +688,32 @@ jobs:
           -ignore '**/migrationdiff/golden/*.sql'
           -f hack/license-header.txt backend sdks
 
+      # The step above proves every SOURCE FILE says Apache-2.0. Nothing proved that
+      # the ECOSYSTEM agrees — GitHub runs its own detector over LICENSE and publishes
+      # one value from it, and that value is what the `license:` search filter, the repo
+      # sidebar and every downstream SBOM actually read. A LICENSE it cannot match
+      # yields NOASSERTION: the project drops out of license search and records as
+      # unlicensed, with the file sitting in the tree looking correct and no header
+      # check anywhere going red. A comparable project in this space is in exactly that
+      # state today. See hack/check-detected-license.sh for why this asks GitHub rather
+      # than running a detector locally, and what that costs.
+      #
+      # Self-test first, as with every guard here. A network check whose only evidence
+      # is "it was green today" has never been shown to fail, and this one's failure
+      # modes are mostly ABSENCES — a 404, an outage, a rate-limit HTML body — each of
+      # which reads exactly like a clean answer if the status is not checked apart from
+      # the body.
+      - name: detected-license guard self-test
+        run: hack/check-detected-license.sh --self-test
+
+      - name: GitHub still detects this repository as Apache-2.0
+        env:
+          # Read-only; the workflow's top-level `contents: read` is all the license
+          # endpoint needs. Passed explicitly so the request is authenticated and rides
+          # the per-repo rate limit rather than the shared anonymous one.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: hack/check-detected-license.sh
+
   # ---------------------------------------------------------------------------
   # Workflow hygiene: the CI configuration is itself un-gated code.
   #
@@ -668,6 +797,18 @@ jobs:
           REQUIRE_LIVENESS: '1'
         run: hack/check-ko-base-pin.sh
 
+      # Every setup-go must take its version from go.work, not a module go.mod.
+      # setup-go pins GOTOOLCHAIN=local, so a module's LANGUAGE floor (routinely
+      # lower than the workspace's) installs a toolchain that `go build` inside
+      # the workspace then refuses. ko-base-image.yml was the one workflow of
+      # nineteen doing that, and it failed silently every week for three weeks
+      # because its only consumer is the 40-day liveness window above.
+      - name: go-version source guard self-test
+        run: hack/check-go-version-source.sh --self-test
+
+      - name: every setup-go takes its version from go.work
+        run: hack/check-go-version-source.sh
+
       # The default basemap is the OpenStreetMap standard tile layer, whose usage
       # policy needs a Referer from browser clients. Adding a restrictive
       # Referrer-Policy is a one-line hardening that breaks nothing HERE and
@@ -740,6 +881,20 @@ jobs:
       # That decays silently as files move, and a stale map is worse than none.
       - name: Feature drafts still match the tree
         run: hack/check-docs-drafts-rot.sh
+
+      # Third guard, same rule: prove it can go red before trusting it green. This
+      # one compares two file listings, and a listing built from the wrong path is
+      # empty — which compares equal to another empty listing and reports parity.
+      - name: Locale-parity guard self-test
+        run: hack/check-docs-locale-parity.sh --self-test
+
+      # Docusaurus falls back to the English page when a translation is missing, so
+      # an untranslated page ships as a clean build and a Spanish reader silently
+      # gets English — no broken link, no warning. The cost lands at the release
+      # tag, where `docs:version` freezes one snapshot per locale: drift at that
+      # moment is frozen into a shipped version rather than fixed by writing a page.
+      - name: Translated docs match English file-for-file
+        run: hack/check-docs-locale-parity.sh
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -823,10 +978,19 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # i18n gate (ADR-066): the console's eslint `no-literal-string` rule fails
-      # on any hard-coded user-facing string, keeping the app fully externalized
-      # into the react-i18next catalogs. Only apps/console defines a lint script,
-      # so `--workspaces --if-present` runs exactly that gate.
+      # i18n gate (ADR-066): eslint's `no-literal-string` rule fails on any
+      # hard-coded user-facing string, keeping each app fully externalized into its
+      # react-i18next catalogs. BOTH front-end apps define a `lint` script now —
+      # apps/console and apps/dashboard (the /dash viewer) — and each carries its own
+      # flat config, because the two have different JSX vocabularies.
+      #
+      # 🔴 `--if-present` IS THE HOLE THIS STEP ONCE HAD, and it is worth naming
+      # because nothing in the log would ever have shown it. /dash had no i18n at all
+      # — no catalogs, no dependency, no lint script — and a workspace with no script
+      # is SKIPPED silently, which reads in the log exactly like a workspace that
+      # passed. So a step named "i18n gate" reported success while checking one of the
+      # two apps. A new app is in the same position the day it is created: adding the
+      # script is what enrols it, and nothing here will say that it has not.
       - name: Lint (i18n no-literal-string gate)
         run: npm run lint
 
@@ -1021,6 +1185,28 @@ jobs:
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
 
+      # The egress drift check needs a Go toolchain as well as helm: it compares the
+      # COMPILED deny table against the RENDERED policy, so it runs two small commands
+      # out of backend/core rather than scraping either source file. Reading the sources
+      # is what made the previous version of that check unable to see a template edit.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # The tenant-egress boundary is written twice — in Go for the paths that have a
+      # dialer, in the chart's NetworkPolicy for the three that do not — and nothing at
+      # compile or render time relates the two. This fails when they drift, which is
+      # otherwise silent and always in the widening direction. --self-test first, so its
+      # green is known to be a green that could have been red: four arms — two tamper the
+      # real chart and render it, one tampers the Go EXTRACTION (not the Go source, which
+      # it does not claim to), and one asserts the two sides are gathered independently,
+      # so a gate comparing the chart with itself cannot pass.
+      - name: egress deny-list drift check
+        run: |
+          hack/check-egress-ranges.sh --self-test
+
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 
@@ -1184,6 +1370,29 @@ jobs:
         #
         # It also covers telemetry and ingest-only, which were rendered by nothing.
         run: hack/check-profile-workloads.sh
+
+      - name: OAuth discovery routing
+        # An MCP client's discovery walk is three requests, each derived from a string a
+        # service handed it, and nothing inside a service can tell whether the URL it
+        # published reaches anything. The ingress decides that, in another language in
+        # another directory — and the reference client aborts the whole walk on the FIRST
+        # error, so one unrouted hop ends discovery rather than degrading it.
+        #
+        # All three were broken at once with every service test green: the endpoint was
+        # mounted at /mcp while the ingress delivered the advertised /api/mcp as "/" (an
+        # unauthenticated 404); the challenge advertised a path only the console matched;
+        # and the authorization-server metadata, whose location a path-carrying issuer
+        # puts under /.well-known/, was matched by the console too — which answers 200
+        # with index.html, so the client reports a decode failure rather than a routing
+        # problem. Package tests drive handlers directly and can see none of it.
+        #
+        # Expectations come from the RENDERED identifiers and from the suffix constants
+        # read out of the Go source, not from constants restated in the script, so moving
+        # either side without moving the other fails here.
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-oauth-discovery-routing.sh
+          hack/check-oauth-discovery-routing.sh --self-test
 
   # ---------------------------------------------------------------------------
   # OpenTofu: format, init (no backend), validate.

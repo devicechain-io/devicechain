@@ -39,6 +39,7 @@ var (
 	CommandResponsesReader   messaging.MessageReader
 	DeviceCommandsWriter     messaging.MessageWriter
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
+	DeadLetterWriteback      *processor.DeadLetterWriteback
 )
 
 func main() {
@@ -96,16 +97,77 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// offboarded customer's hardware, which nothing else on this path would prevent: the
 	// sweep loads QUEUED commands cross-tenant under a system context, and a command
 	// enqueued before the delete is still queued after it.
+	// The ADR-024 arm. A device's answer that could not be recorded used to end as a log
+	// line, leaving its command looking unanswered with nothing to say the device had in
+	// fact replied. Built here so a deployment that cannot create the stream fails at
+	// startup, beside every other stream this service needs, rather than at the first
+	// failure — the one moment the arm has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
-		presenceReader(infra))
+		presenceReader(infra), deadWriter)
+	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
+	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
+	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
+	// the manager itself is not created until LATER in that same function, so the package
+	// variable is still nil while those assignments run. It compiles, it reads as
+	// consistent with its neighbours, and it dies on startup.
+	//
+	// Floored positive by ApplyDefaults, so what lands here is always usable and never the
+	// "unset" zero the field treats as "use the platform default".
+	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
+
+	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
+	// queue, whose workers dispatch that device's backlog through the same gates the sweep
+	// applies. Without it nothing dispatches until the next tick, so QUEUED -> SENT is
+	// uniform on [0, sweepInterval] — a command an operator issues from the console sits
+	// for half the interval on average, with the platform idle the whole time.
+	//
+	// 🔴 SET HERE FOR THE REASON THE LINE ABOVE IS, AND THE OTHER HALF OF THE SAME TRAP.
+	// The processor does not exist until this callback runs, so binding the nudger beside
+	// the Api.* assignments in afterMicroserviceInitialized — where it belongs by
+	// appearance — would bind a nil. Api is created there and is live by the time this
+	// runs, so this is the one window where both ends exist.
+	//
+	// A nil nudger would be safe (the nudge is simply off and every command waits for the
+	// sweep), which is exactly why the wiring is worth stating: nothing else would fail.
+	Api.Nudger = CommandDeliveryProcessor.Nudger()
+
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// The other half of that arm: writing the dead letter stops the MESSAGE going round
+	// forever, and this stops the COMMAND reading as though it were still in flight. It
+	// consumes the same stream the writer above publishes to, so a response the platform
+	// gave up on settles its command minutes later — against a database that has had time
+	// to come back, which a write issued from inside the original failure would not have.
+	//
+	// 🔴 BUILT HERE, INSIDE THE CALLBACK, NOT MERELY ITS READER. This function runs in the
+	// NatsManager's ExecuteSTART, not its Initialize, so a component constructed out in
+	// afterMicroserviceInitialized would capture a nil reader by value and panic on its
+	// first read. That defect nearly shipped in the identity service's dead-letter
+	// consumer and nothing in the test estate would have caught it, because nothing
+	// exercises main.go's wiring. Its constructor refuses a nil reader for the same
+	// reason: a wiring mistake must stop the service starting, never turn into a consumer
+	// that reads everything and writes nothing.
+	deadReader, err := nmgr.NewReader(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+	DeadLetterWriteback, err = processor.NewDeadLetterWriteback(Microservice, deadReader, Api,
+		core.NewNoOpLifecycleCallbacks())
+	if err != nil {
+		return err
+	}
+	return DeadLetterWriteback.Initialize(context.Background())
 }
 
 // presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
@@ -336,13 +398,27 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the dead-letter write-back. After the nats manager, whose create callback
+	// builds it — it does not exist until that has run.
+	err = DeadLetterWriteback.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the dead-letter write-back before the broker it reads from and the database it
+	// writes to, in the reverse of the start order.
+	err := DeadLetterWriteback.Stop(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Stop command delivery processor.
-	err := CommandDeliveryProcessor.Stop(ctx)
+	err = CommandDeliveryProcessor.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -370,8 +446,14 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	// Terminate the dead-letter write-back before the nats manager it reads through.
+	err := DeadLetterWriteback.Terminate(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Terminate nats manager.
-	err := NatsManager.Terminate(ctx)
+	err = NatsManager.Terminate(ctx)
 	if err != nil {
 		return err
 	}

@@ -8,11 +8,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/smtp"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 )
@@ -22,7 +22,26 @@ import (
 // is the SMTP password (used only when a username is configured). It speaks SMTP
 // directly (net/smtp) rather than through smtp.SendMail so it can honor the context
 // deadline on every step and support implicit TLS as well as STARTTLS.
-type smtpAdapter struct{}
+type smtpAdapter struct {
+	// guard is the tenant-egress boundary this adapter dials through, carrying the
+	// operator's allowed destinations. nil means the fail-closed default with no
+	// allowances — a wiring mistake narrows the boundary, never removes it.
+	guard *egress.Guard
+}
+
+// egressGuard returns the configured guard, or a no-allowance one.
+//
+// 🔴 Judge this on where SMTP CREDENTIALS go, not only on what SSRF reaches. The default
+// security mode is STARTTLS, negotiated after the greeting, and "none" is cleartext — so
+// a channel pointed at an attacker-chosen host hands over the configured username and
+// password. The failure here is credential disclosure, not request forgery, which is why
+// the fallback is a real guard rather than a bare dialer.
+func (a *smtpAdapter) egressGuard() *egress.Guard {
+	if a.guard == nil {
+		return egress.NewGuard(nil)
+	}
+	return a.guard
+}
 
 // smtpConfig is the SMTP channel's connection settings (the channel's non-secret
 // Config JSON). Security selects the transport: "starttls" (default) upgrades a
@@ -54,15 +73,8 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 	if len(recipients) == 0 {
 		return fmt.Errorf("smtp channel %q has no recipients", channel.Token)
 	}
-	// Reject CR/LF in the envelope so a crafted from/recipient (tenant-authored config)
-	// cannot inject additional SMTP headers (e.g. a hidden Bcc).
-	if err := ensureNoCRLF("from", cfg.From); err != nil {
+	if err := ensureHeaderSafe(cfg.From, recipients, msg); err != nil {
 		return err
-	}
-	for _, rcpt := range recipients {
-		if err := ensureNoCRLF("recipient", rcpt); err != nil {
-			return err
-		}
 	}
 
 	client, err := a.dial(ctx, cfg)
@@ -122,7 +134,12 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 // hang a dispatch worker (and thus shutdown) against a black-hole endpoint.
 func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	// The host comes from the channel's Config JSON, so it is tenant-supplied and until
+	// now was dialed with no address check of any kind — an SMTP channel pointed at
+	// 169.254.169.254 was a connection to the instance metadata service. The guard runs
+	// inside the dialer's Control hook, on the address the kernel is about to connect to,
+	// which is the only placement a DNS answer cannot get between.
+	conn, err := a.egressGuard().Dialer().DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
 	}
@@ -145,8 +162,34 @@ func (a *smtpAdapter) dial(ctx context.Context, cfg *smtpConfig) (*smtp.Client, 
 	return client, nil
 }
 
+// ensureHeaderSafe rejects a CR/LF in ANY value this adapter interpolates into the
+// message's headers — the envelope from, every recipient, and the subject — because a
+// line break in any of them opens the same hole: the remainder of the value is parsed as
+// a new header, so a hidden Bcc rides out with the alarm.
+//
+// 🔴 THE SUBJECT IS IN THIS LIST BECAUSE IT IS THE ONE THAT WAS MISSING, and it was
+// missing for the most dangerous reason: it looked safe from somewhere else. The subject
+// is rendered from the alarm's key and severity, and an alarm key is grammar-checked in
+// event-processing, two services away, at the moment a rule renders it. That check is
+// real and it is why no crafted subject can reach here today — but it is enforced in a
+// different binary by a different team's code, and nothing in THIS service would notice
+// if it were relaxed, moved, or routed around by a future producer of alarm events. The
+// local check costs a string scan on a path that already dials a network socket; the
+// distant invariant it duplicates costs nothing to lose silently.
+func ensureHeaderSafe(from string, recipients []string, msg *RenderedNotification) error {
+	if err := ensureNoCRLF("from", from); err != nil {
+		return err
+	}
+	for _, rcpt := range recipients {
+		if err := ensureNoCRLF("recipient", rcpt); err != nil {
+			return err
+		}
+	}
+	return ensureNoCRLF("subject", msg.Subject)
+}
+
 // ensureNoCRLF rejects a value containing a carriage return or line feed, which in an
-// SMTP envelope field would let tenant-authored config inject extra headers.
+// SMTP header would let the remainder of the value be parsed as an extra header.
 func ensureNoCRLF(field, value string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("smtp %s %q contains a line break", field, value)

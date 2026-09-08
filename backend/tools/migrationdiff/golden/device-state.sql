@@ -16,6 +16,8 @@ ALTER TABLE ONLY "device-state".latest_locations ALTER COLUMN id SET DEFAULT nex
 ALTER TABLE ONLY "device-state".latest_measurements
  ADD CONSTRAINT latest_measurements_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-state".latest_measurements ALTER COLUMN id SET DEFAULT nextval('"device-state".latest_measurements_id_seq'::regclass);
+ALTER TABLE ONLY "device-state".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_device-state_device_states_deleted_at" ON "device-state".device_states USING btree (deleted_at);
 CREATE INDEX "idx_device-state_latest_locations_deleted_at" ON "device-state".latest_locations USING btree (deleted_at);
 CREATE INDEX "idx_device-state_latest_locations_tenant_id" ON "device-state".latest_locations USING btree (tenant_id);
@@ -109,6 +111,12 @@ CREATE TABLE "device-state".latest_measurements (
  occurred_time timestamp with time zone NOT NULL,
  unit text,
  data_type character varying(32)
+);
+CREATE TABLE "device-state".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE UNIQUE INDEX idx_device_state_tenant_token ON "device-state".device_states USING btree (tenant_id, device_token);
 CREATE UNIQUE INDEX idx_latest_location_tenant_device ON "device-state".latest_locations USING btree (tenant_id, device_token);

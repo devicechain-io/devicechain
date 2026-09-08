@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/admin"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 )
@@ -53,6 +54,17 @@ func TestAdminQueriesFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	_, err = r.OauthClients(ctx)
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	// 🔴 EVERY READ RESOLVER, NOT THE THREE THAT EXISTED WHEN THIS WAS WRITTEN. A mutation
+	// removing the Authorize call from the dead-letter resolvers survived this test, which
+	// enumerates rather than sweeps — so a resolver added later is unguarded here by
+	// default, which is the wrong default for the file whose subject is defence in depth.
+	_, err = r.DeadLetters(ctx, struct{ Criteria deadLetterCriteriaInput }{
+		Criteria: deadLetterCriteriaInput{PageNumber: 1, PageSize: 10}})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.DeadLetter(ctx, struct{ Id gql.ID }{Id: gql.ID("1")})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 }
 
@@ -181,7 +193,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	_, err = r.UpdateTenantTier(bare, struct {
 		Token   string
-		Request adminTenantTierUpdateInput
+		Request admin.TierUpdateRequest
 	}{})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 	_, err = r.DeleteTenantTier(bare, struct{ Token string }{})
@@ -195,7 +207,7 @@ func TestAdminTenantTierFailClosed(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.UpdateTenantTier(limited, struct {
 		Token   string
-		Request adminTenantTierUpdateInput
+		Request admin.TierUpdateRequest
 	}{})
 	assert.ErrorIs(t, err, auth.ErrForbidden)
 	_, err = r.DeleteTenantTier(limited, struct{ Token string }{})

@@ -5,6 +5,8 @@ package processor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -263,5 +265,61 @@ func TestProfileActiveFromFact(t *testing.T) {
 		if _, ok := profileActiveFromFact("acme", &dmmodel.DetectionRulesPublishedEvent{ProfileVersionToken: bad}); ok {
 			t.Fatalf("malformed version token %q must be skipped", bad)
 		}
+	}
+}
+
+// 🔴 A FENCE REFUSAL MUST NOT BE RETRIED, and this loop is where retrying it would be
+// catastrophic rather than merely wasteful. persistBeforeAck blocks the goroutine it runs
+// on, and that goroutine serves every tenant on the instance — so one deleted tenant's
+// rule or roster fact would stop rule publishes and roster changes platform-wide for the
+// whole purge (twelve hours at the default token hold), with nothing but log lines to show
+// it. The broker's own purge then removes the message from under the loop, so it could
+// never drain even in principle.
+func TestAFenceRefusalIsDroppedRatherThanRetriedForever(t *testing.T) {
+	rp := newTestProcessor(nil, nil, 1)
+	calls := 0
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- rp.persistBeforeAck("a rule fact for a deleted tenant", func() error {
+			calls++
+			return fmt.Errorf("upserting the roster row: %w", rdb.ErrTenantPurged)
+		})
+	}()
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("the fact was left unacked, so it redelivers into the same refusal forever")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("persistBeforeAck is still retrying a refusal that stands for the whole purge; " +
+			"this goroutine serves every tenant")
+	}
+	if calls != 1 {
+		t.Fatalf("the refusal was attempted %d times, want once", calls)
+	}
+}
+
+// The counterweight: an ordinary failure — a store that is briefly down — must still be
+// retried, because that is the durability property this loop exists for. Without it, a
+// persistBeforeAck that returned true on every error would pass the test above.
+func TestAnOrdinaryFailureIsStillRetried(t *testing.T) {
+	rp := newTestProcessor(nil, nil, 1)
+	calls := 0
+
+	ok := rp.persistBeforeAck("a rule fact during a database blip", func() error {
+		calls++
+		if calls < 3 {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+
+	if !ok {
+		t.Fatal("a recoverable failure ended the loop")
+	}
+	if calls != 3 {
+		t.Fatalf("the loop gave up after %d attempts; a transient failure must be retried", calls)
 	}
 }

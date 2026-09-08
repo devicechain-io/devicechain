@@ -260,12 +260,32 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 	return true, nil
 }
 
-// DeleteDevice deletes a device, cascade-removing its credentials (ADR-014) and
-// every relationship edge it participates in (its assignments, ADR-013).
+// DeleteDevice deletes a device, cascade-removing its credentials (ADR-014), its
+// replacement journal (ADR-074) and every relationship edge it participates in (its
+// assignments, ADR-013).
+//
+// 🔴 THE REPLACEMENT JOURNAL IS PART OF THE CASCADE, AND LEAVING IT OUT DID NOT LOOK
+// LIKE A BUG. device_replacements carries a foreign key to devices, so without this
+// a device that has ever been replaced could not be deleted at all: Postgres refuses
+// the parent delete with a raw `FOREIGN KEY constraint failed`, which surfaces to the
+// caller as a database error rather than as ErrEntityInUse — a device permanently
+// undeletable for a reason the API cannot explain.
+//
+// It went unnoticed because every fixture in this package ran sqlite with foreign
+// keys OFF, where the same sequence passes. That is the "fixture more permissive than
+// production" shape again; replacementTestApi now sets PRAGMA foreign_keys = ON so the
+// harness sees what Postgres enforces.
+//
+// The journal goes WITH the device rather than holding it back. It is a record ABOUT
+// this device — it names no other entity, and the tenant purge already erases it with
+// the tenant — so there is nothing for it to outlive.
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) error {
-			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceCredential{}).Error
+			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceCredential{}).Error; err != nil {
+				return err
+			}
+			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error
 		})
 }
 
@@ -277,9 +297,45 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 // --- Assets --------------------------------------------------------------------
 
 // DeleteAssetType deletes an asset type. Refused while any asset references it.
+//
+// The type's published version history (ADR-072) goes WITH it, in the same
+// transaction. asset_type_versions carries a foreign key to asset_types, so without
+// this an asset type that has ever been published could not be deleted at all:
+// Postgres refuses the parent delete with a raw constraint error, which reaches the
+// caller as a database fault rather than as ErrEntityInUse — the identical shape as
+// the device-replacement journal, and invisible in a fixture running sqlite with
+// foreign keys off. assetPropertyTestApi turns them on for exactly that reason.
+//
+// The versions do not hold the type back the way an asset does. A version is a
+// record ABOUT this type, addressed only through it, so there is nothing for it to
+// outlive; an ASSET is an independent entity that would be left describing a type
+// that no longer exists, which is why that one is still a refusal.
 func (api *Api) DeleteAssetType(ctx context.Context, token string) (bool, error) {
-	return deleteParentType(ctx, api, (*Api).AssetTypesByToken,
-		func(m *AssetType) uint { return m.ID }, &AssetType{}, token, &Asset{}, "asset_type_id")
+	matches, err := api.AssetTypesByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
+	}
+	if len(matches) == 0 {
+		return false, nil
+	}
+	at := matches[0]
+	n, err := api.countReferencing(ctx, &Asset{}, "asset_type_id", at.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w: %d asset(s) reference asset type %q", ErrEntityInUse, n, token)
+	}
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := deleteAssetTypeVersions(tx, at.ID); err != nil {
+			return err
+		}
+		return tx.Unscoped().Where("token = ?", token).Delete(&AssetType{}).Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // DeleteAsset deletes an asset and its relationship edges.

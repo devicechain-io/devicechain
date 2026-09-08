@@ -208,6 +208,13 @@ var tableSweepExemptions = map[string]string{
 	"event-processing.audit_events": "same mechanism: event-processing's tenant-plane mutations are " +
 		"draftDetectionRuleFromText and a stream subscription, neither of which is an entity write.",
 
+	// ---- the record of things that did NOT happen -----------------------------
+	"user-management.dead_letters": "a row here means a consumer accepted a message and then " +
+		"failed to complete it after every delivery attempt. The drill exercises the platform " +
+		"WORKING, so an empty table is the correct outcome — and a drill that produced one would " +
+		"be reporting a defect in something else, not coverage of this. It carries tenant_id and " +
+		"is swept by the ordinary tenant purge like any other tenant-bearing table.",
+
 	// ---- runtime state of a delivery mechanism -------------------------------
 	"notification-management.notification_states": "escalation state for a notification the policy has " +
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +

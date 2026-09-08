@@ -165,6 +165,23 @@ func requestArg(vars map[string]any) map[string]any {
 	return req
 }
 
+// updateArgs returns an update's payload and the token ARGUMENT that names the record.
+//
+// 🔴 THE ARGUMENT IS WHERE THE TOKEN COMES FROM, and this fake used to read it out of the
+// payload — which was possible only because the update inputs then shared their create
+// shape. They no longer carry a token at all, so a fake still reading `request.token`
+// would file every update under the empty string and report a converged draft that had
+// not moved. The fake is stricter than it was, and matches the server it stands in for.
+func updateArgs(vars map[string]any) (map[string]any, string) {
+	req := requestArg(vars)
+	if _, ok := req["token"]; ok {
+		panic("an update request carried a token: the dedicated update inputs have no such " +
+			"field, so the real server would reject this request outright")
+	}
+	token, _ := vars["token"].(string)
+	return req, token
+}
+
 func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[string]any, int) {
 	switch {
 	case strings.Contains(query, "login("):
@@ -256,20 +273,20 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 		f.metrics[str(r, "token")] = fakeMetric{str(r, "name"), str(r, "dataType"), str(r, "unit")}
 		return map[string]any{"createMetricDefinition": map[string]any{"token": str(r, "token")}}, 0
 	case strings.Contains(query, "updateMetricDefinition"):
-		r := requestArg(vars)
+		r, token := updateArgs(vars)
 		f.updates++
-		f.metrics[str(r, "token")] = fakeMetric{str(r, "name"), str(r, "dataType"), str(r, "unit")}
-		return map[string]any{"updateMetricDefinition": map[string]any{"token": str(r, "token")}}, 0
+		f.metrics[token] = fakeMetric{str(r, "name"), str(r, "dataType"), str(r, "unit")}
+		return map[string]any{"updateMetricDefinition": map[string]any{"token": token}}, 0
 
 	case strings.Contains(query, "createCommandDefinition"):
 		r := requestArg(vars)
 		f.commands[str(r, "token")] = fakeCommand{str(r, "commandKey"), str(r, "name"), str(r, "parameterSchema")}
 		return map[string]any{"createCommandDefinition": map[string]any{"token": str(r, "token")}}, 0
 	case strings.Contains(query, "updateCommandDefinition"):
-		r := requestArg(vars)
+		r, token := updateArgs(vars)
 		f.updates++
-		f.commands[str(r, "token")] = fakeCommand{str(r, "commandKey"), str(r, "name"), str(r, "parameterSchema")}
-		return map[string]any{"updateCommandDefinition": map[string]any{"token": str(r, "token")}}, 0
+		f.commands[token] = fakeCommand{str(r, "commandKey"), str(r, "name"), str(r, "parameterSchema")}
+		return map[string]any{"updateCommandDefinition": map[string]any{"token": token}}, 0
 
 	case strings.Contains(query, "createDetectionRule"):
 		r := requestArg(vars)
@@ -277,11 +294,11 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 		f.rules[str(r, "token")] = fakeRule{str(r, "name"), str(r, "definition"), enabled}
 		return map[string]any{"createDetectionRule": map[string]any{"token": str(r, "token")}}, 0
 	case strings.Contains(query, "updateDetectionRule"):
-		r := requestArg(vars)
+		r, token := updateArgs(vars)
 		enabled, _ := r["enabled"].(bool)
 		f.updates++
-		f.rules[str(r, "token")] = fakeRule{str(r, "name"), str(r, "definition"), enabled}
-		return map[string]any{"updateDetectionRule": map[string]any{"token": str(r, "token")}}, 0
+		f.rules[token] = fakeRule{str(r, "name"), str(r, "definition"), enabled}
+		return map[string]any{"updateDetectionRule": map[string]any{"token": token}}, 0
 	}
 	return nil, 0
 }

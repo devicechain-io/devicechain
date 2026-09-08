@@ -83,7 +83,11 @@ describe('the checked-in /dash samples', () => {
     it.each(files)('%s loads and rebinds the board', (file) => {
       const definitionText = read(fixture);
       const result = loadDashboard(definitionText, read(join(SAMPLES, board, file)));
-      if ('error' in result) throw new Error(`${board}/${file}: ${result.error}`);
+      // The error is a code, not a sentence, so it is stringified rather than
+      // interpolated — `${result.error}` would report "[object Object]".
+      if ('error' in result) {
+        throw new Error(`${board}/${file}: ${JSON.stringify(result.error)}`);
+      }
       const { definition, manifest } = result.loaded;
 
       // Every slot the sample names must be one the board declares, AT THE KIND THE
@@ -137,9 +141,23 @@ describe('the checked-in /dash samples', () => {
 // ---- loadDashboard's own failure modes ------------------------------------------
 //
 // The samples above only ever exercise the success path. These are what a person
-// pasting the WRONG thing hits, and every one of them is a returned message rather
-// than a throw, because Load renders the string and has no error boundary of its own.
+// pasting the WRONG thing hits, and every one of them is a returned VALUE rather than
+// a throw, because Load renders it inline and has no error boundary of its own.
 
+// 🔴 THESE ASSERT ON A CODE, NOT ON ENGLISH — AND THE REASON IS A DEFECT THEY WERE
+// PREVIOUSLY REWARDING.
+//
+// Three of the tests below used to match the returned English: `/^Definition: /`,
+// `'too large'`, `'"zone" was ignored'`. That made them a lock on the app staying
+// monolingual — localizing load.ts reddened them, and the cheapest way to green them
+// again is to leave those six strings in English, which looks like tidiness and is the
+// bug. So loadDashboard now returns a LoadError code and these assert on THAT: the
+// classification is what this module owns, and it is stable across every locale.
+//
+// A code is a weaker claim than a sentence, so it is not the whole substitute. What
+// makes it sufficient is that i18n/loadError.test.ts covers the other half — every code
+// reaching a catalog key, and every key resolving to real text in every shipped locale.
+// Asserting a code here and nothing there would be the actual regression.
 describe('loadDashboard', () => {
   const board = JSON.stringify({ schemaVersion: 1, title: 'T', widgets: [] });
 
@@ -151,37 +169,61 @@ describe('loadDashboard', () => {
     ['refused by the parser', JSON.stringify({ schemaVersion: 1, widgets: 'nope' })],
   ])('reports a definition %s', (_label, text) => {
     const result = loadDashboard(text, '');
-    expect('error' in result && result.error).toMatch(/^Definition: /);
+    // The parser's own diagnostic rides along untranslated; that it is a non-empty
+    // string is the claim, not what it says.
+    expect('error' in result && result.error).toMatchObject({ code: 'definitionInvalid' });
+    expect('error' in result && (result.error as { detail: string | null }).detail).toEqual(
+      expect.any(String),
+    );
   });
 
   it('refuses a paste over the server cap without parsing it', () => {
     const result = loadDashboard('x'.repeat(MAX_PASTE_BYTES + 1), '');
-    expect('error' in result && result.error).toContain('too large');
+    // 🔴 The distinct code is the whole point of this test: an over-cap paste must be
+    // refused BEFORE parsing, so reporting it as a generic parse failure would be
+    // indistinguishable from having parsed a megabyte on the main thread.
+    expect('error' in result && result.error).toEqual({ code: 'definitionTooLarge' });
   });
 
-  it('reports a manifest that is not JSON', () => {
-    expect('error' in loadDashboard(board, '{nope')).toBe(true);
+  it('reports a manifest that is not JSON, and blames the MANIFEST', () => {
+    // 🔴 Which of the two boxes is at fault is the only thing this failure is for, and
+    // both boxes take JSON — so the code is the claim, not just the presence of an
+    // error. The previous version asserted only `'error' in result`, which a definition
+    // failure would have satisfied just as well.
+    const result = loadDashboard(board, '{nope');
+    expect('error' in result && result.error).toMatchObject({ code: 'manifestInvalid' });
   });
 
   it('refuses a manifest that is not an object of slot → binding', () => {
     for (const text of ['[]', 'null', '"a string"', '7']) {
       const result = loadDashboard(board, text);
-      expect('error' in result, `manifest ${text} was accepted`).toBe(true);
+      expect('error' in result && result.error, `manifest ${text} was accepted`).toEqual({
+        code: 'manifestNotObject',
+      });
     }
   });
 
   // The one that matters most: parseBindingManifest DROPS a malformed entry and
   // returns the rest, so without the count a typo'd binding would render as an
   // unexplained empty widget instead of an error.
-  it('reports entries the manifest parser dropped', () => {
+  it('reports entries the manifest parser dropped, BY NAME', () => {
     const result = loadDashboard(board, JSON.stringify({ zone: { kind: 'device' } }));
-    expect('error' in result && result.error).toContain('"zone" was ignored');
+    // Naming the slots is the substance — a count alone would leave the viewer hunting
+    // through their own paste — so the list is asserted, not just the code.
+    expect('error' in result && result.error).toEqual({
+      code: 'manifestDropped',
+      slots: ['zone'],
+    });
   });
 
   it('accepts an empty manifest as no overrides', () => {
     for (const text of ['', '   ', '{}']) {
       const result = loadDashboard(board, text);
-      if ('error' in result) throw new Error(`manifest ${JSON.stringify(text)}: ${result.error}`);
+      // JSON.stringify, like the samples gate above — `${result.error}` renders
+      // "[object Object]", which reports nothing about why the manifest was refused.
+      if ('error' in result) {
+        throw new Error(`manifest ${JSON.stringify(text)}: ${JSON.stringify(result.error)}`);
+      }
       expect(result.loaded.manifest).toEqual({});
     }
   });

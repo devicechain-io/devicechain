@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -135,15 +136,21 @@ func TestTheCapOverridesReachTheTenantRow(t *testing.T) {
 // TestTheServiceRefusesAnOverLargeCapEndToEnd is the test that proves the DOOR is closed, not
 // merely that a helper would close it.
 //
-// GovernanceOverrides is EMBEDDED in TenantInput and TenantMutableInput, and neither declares a
-// validate() of its own — so `in.validate()` in CreateTenant and UpdateTenant is the promoted
-// GovernanceOverrides.validate(). That is load-bearing and invisible: the day someone adds a
-// `func (in TenantInput) validate() error` to check, say, the token, it SHADOWS the promoted
-// method, every governance check silently stops running, and TestBothCapDoorsAgree above keeps
-// passing because it calls the shadowed method directly.
+// GovernanceOverrides is EMBEDDED in TenantInput, which declares no validate() of its own — so
+// `in.validate()` in CreateTenant is the promoted GovernanceOverrides.validate(). That is
+// load-bearing and invisible: the day someone adds a `func (in TenantInput) validate() error` to
+// check, say, the token, it SHADOWS the promoted method, every governance check silently stops
+// running, and TestBothCapDoorsAgree above keeps passing because it calls the shadowed method
+// directly.
 //
-// So this drives the real service, through the real store, and asserts the refusal comes out of
-// the mutation an operator actually calls.
+// TenantUpdateRequest reaches the same validator by a different road — it holds the eleven
+// overrides as three-state fields and folds them onto the tenant's current values through
+// governanceFor, then validates THAT — which is its own way to lose the check: a field dropped
+// from governanceFor is simply never examined. Either road failing is a cap an operator can set
+// and that is never enforced.
+//
+// So this drives the real service, through the real store, on BOTH doors, and asserts the refusal
+// comes out of the mutation an operator actually calls.
 func TestTheServiceRefusesAnOverLargeCapEndToEnd(t *testing.T) {
 	s := newTestService(t)
 	seedTiers(t, s)
@@ -168,17 +175,17 @@ func TestTheServiceRefusesAnOverLargeCapEndToEnd(t *testing.T) {
 	require.NotNil(t, created.GeoFencePositionBudget)
 	require.Equal(t, ok, *created.GeoFencePositionBudget)
 
-	// And the update door, which is the one that matters more: it is a full replace, so it is
-	// the mutation an operator reaches for repeatedly.
-	_, err = s.UpdateTenant(ctx, "bounded", TenantMutableInput{
-		TierToken:           iam.TierGoldToken,
-		GovernanceOverrides: GovernanceOverrides{GeoFenceCeiling: intp(governance.MaxGeoFenceCeiling + 1)},
+	// And the update door, which is the one that matters more: it is the mutation an operator
+	// reaches for repeatedly. Note it names ONLY the offending cap — under the partial update
+	// there is nothing else to restate, so the refusal cannot be attributed to some other field.
+	_, err = s.UpdateTenant(ctx, "bounded", &TenantUpdateRequest{
+		GeoFenceCeiling: dcgraphql.OptionalInt32Of(int32(governance.MaxGeoFenceCeiling + 1)),
 	})
 	require.Error(t, err, "updateTenant admitted a fence count above the platform maximum")
 	require.Contains(t, err.Error(), iam.GeoFenceCeilingConfigKey)
 
 	// A refused update must not have written anything — the tenant keeps the budget it had,
-	// rather than being left half-updated with its other caps cleared by the full replace.
+	// rather than being left half-updated.
 	after, err := s.iam.TenantByToken(ctx, "bounded")
 	require.NoError(t, err)
 	require.NotNil(t, after.GeoFencePositionBudget,

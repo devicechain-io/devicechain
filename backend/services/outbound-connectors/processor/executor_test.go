@@ -17,7 +17,8 @@ import (
 )
 
 func newTestExecutor(store *fakeSecretStore) *Executor {
-	return NewExecutor(NewSecretResolver(store), nil, 10*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 10*time.Second)
+	return e
 }
 
 // TestExecuteHTTPCallSuccess sends the rendered payload, presents the resolved secret as a Bearer

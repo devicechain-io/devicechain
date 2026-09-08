@@ -20,6 +20,7 @@ import { graphql } from '@/gql/device-management';
 import type {
   GeoFencesQuery,
   GeoFenceCreateRequest,
+  GeoFenceUpdateRequest,
   GeoFenceSetSnapshotQuery,
 } from '@/gql/device-management/graphql';
 
@@ -105,7 +106,7 @@ export async function createGeoFence(request: GeoFenceCreateRequest): Promise<Ge
 }
 
 const UPDATE_GEO_FENCE = graphql(`
-  mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {
+  mutation UpdateGeoFence($token: String!, $request: GeoFenceUpdateRequest!) {
     updateGeoFence(token: $token, request: $request) {
       id
       token
@@ -120,41 +121,29 @@ const UPDATE_GEO_FENCE = graphql(`
 `);
 
 /**
- * 🔴 A FULL REPLACE. `request` carries every field, so a caller that builds it
- * from partial form state blanks whatever it left out — the geometry included.
- * One form state, one save.
+ * A PARTIAL update: a field this request does not name keeps its stored value, and
+ * `geometry` — which a fence cannot be without — refuses an explicit null.
  *
- * The `token` argument is the EXISTING token; `request.token` is the one to
- * store, so a rename is expressible. The console does not offer one (the token
- * field is fixed on edit, as it is for every other registry family), but the
- * asymmetry is the API's, not a mistake here.
+ * 🔴 THE REQUEST CARRIES NO token, and that is the immutability rule rather than a
+ * convenience. Detection rules name fences by token inside compiled predicates this
+ * service cannot rewrite, so a rename would leave every one of them naming nothing.
+ * The server used to refuse a differing payload token; the input now has nowhere to
+ * write one, which is the same rule with no guard to go stale.
  */
 export async function updateGeoFence(
   token: string,
-  request: Required<GeoFenceCreateRequest>,
+  request: GeoFenceUpdateRequest,
 ): Promise<GeoFence> {
   const data = await gql('device-management', UPDATE_GEO_FENCE, { token, request });
   return data.updateGeoFence;
 }
 
-// The projection of everything a fence already is, for an editor that edits only
-// some of it. The geofence form was the one that FOUND the full-replace defect and
-// carried metadata by hand from the start — this exists so it stays carried by the
-// compiler instead: returning `Required<…>` means the next field added to
-// GeoFenceCreateRequest breaks here rather than beginning to be erased.
-//
-// `geometry` is preserved like the rest even though the form always overrides it.
-// It is the field with the most to lose, and a projection that quietly left a hole
-// where the biggest one goes would be a strange thing to reach for next time.
-export function geoFencePreserved(f: GeoFence): Required<GeoFenceCreateRequest> {
-  return {
-    token: f.token,
-    name: f.name ?? null,
-    description: f.description ?? null,
-    geometry: f.geometry,
-    metadata: f.metadata ?? null,
-  };
-}
+// 🔴 geoFencePreserved IS GONE, AND ITS ABSENCE IS THE POINT. It projected everything
+// a fence already was so an editor that touched three fields did not erase the fourth —
+// a workaround for updateGeoFence being a full replace. The server now leaves what a
+// request does not name alone, so re-sending the stored metadata is no longer a
+// safeguard: it is a write of a value the caller never looked at, over whatever the
+// value has become since the form was opened. Not sending it is strictly safer.
 
 const DELETE_GEO_FENCE = graphql(`
   mutation DeleteGeoFence($token: String!) {

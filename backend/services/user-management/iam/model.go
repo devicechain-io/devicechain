@@ -115,10 +115,17 @@ const SuperuserRoleToken = "superuser"
 // within a tenant — seeded for the superuser's scaffold membership.
 const TenantAdminRoleToken = "tenant-admin"
 
-// ViewerRoleToken is the well-known tenant role granting read access to all
-// domain objects. Its authorities mirror the read-only baseline every enabled
-// tenant member receives by default (see identity.viewerAuthorities); it is kept
-// in the catalog so the access is visible/assignable in the admin console.
+// ViewerRoleToken is the well-known tenant role carrying the read-only baseline every
+// enabled tenant member receives by default (see identity.viewerAuthorities). It is kept
+// in the catalog so that access is visible and assignable in the admin console.
+//
+// 🔴 NOT "read access to all domain objects", which is what this said. Several reads are
+// deliberately outside the baseline — location:read most pointedly, so that knowing where
+// a vehicle or a person is can be granted separately — along with notification:read,
+// connector:read and audit:read. Reading a device CREDENTIAL is outside it too, by a
+// different route: those queries are gated on device:write, because for an access token
+// the readable credential id IS the bearer. The list is the definition; this sentence
+// cannot be, which is why it now points at the list instead of restating it.
 const ViewerRoleToken = "viewer"
 
 // Role is a globally-defined, named bundle of authorities. Uniqueness is the
@@ -329,6 +336,24 @@ type Tenant struct {
 	BasemapCenterLon   *float64
 	BasemapZoom        *float64
 
+	// The tenant's DEFAULT LOCALE (ADR-066 sub-workstream d): the language its console
+	// opens in for a user who has not picked one. Same cascading-column pattern as the
+	// branding and basemap blocks above — nil means "inherit the operator's
+	// `locale.default` setting" — and resolved onto the same self-scoped `tenant` query.
+	//
+	// 🔴 It is a DEFAULT, not a setting, and the console's precedence is where that
+	// distinction lives: an explicit user choice beats it, it beats the browser's
+	// advertised languages, and `en` catches whatever falls through. So this never
+	// takes a language away from a user who has chosen one — it only answers the
+	// question for the user who has not, which used to be answered by whatever their
+	// browser happened to advertise.
+	//
+	// A BCP-47 tag ("en", "es", "pt-BR"), validated by the locale package at the mint
+	// point. It is deliberately NOT checked against the console's shipped catalogs —
+	// that list lives with the catalogs; see the locale package for why mirroring it
+	// here would be the wrong direction to fail in.
+	Locale *string
+
 	// Per-tenant external-AI consent (ADR-056 §6, an ADR-023 governance flag). Gates
 	// whether THIS tenant's data — NL rule-authoring prompts + the device schema they
 	// carry — may be routed to an EXTERNAL frontier model by the ai-inference service.
@@ -445,10 +470,14 @@ func (OAuthClient) TableName() string { return "iam_oauth_clients" }
 func (c OAuthClient) IsConfidential() bool { return c.SecretHash != "" }
 
 // AuditLabel implements rdb.AuditLabeler: label an audited iam row with its
-// human-facing, non-sensitive identifier — a role/tenant token, a client_id, or
-// an identity's email — so an audit view can show "iam_roles operator" rather than
-// "#3". (Membership has no single natural label and is left to fall back to its
-// pk.)
+// human-facing identifier — a role/tenant token, a client_id, or an identity's
+// email — so an audit view can show "iam_roles operator" rather than "#3".
+// (Membership has no single natural label and is left to fall back to its pk.)
+//
+// 🔴 THE IDENTITY'S LABEL IS AN EMAIL, so this is not the "non-sensitive" set the
+// comment used to call it. It is the most direct of the journal's two personal-data
+// channels, and it is why the ADR-077 purge empties entity_label rather than
+// retaining the journal whole.
 func (r Role) AuditLabel() string        { return r.Token }
 func (t Tenant) AuditLabel() string      { return t.Token }
 func (t TenantTier) AuditLabel() string  { return t.Token }

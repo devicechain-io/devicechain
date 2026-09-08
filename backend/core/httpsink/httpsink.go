@@ -10,20 +10,35 @@
 //   - a no-redirect policy, forced onto whatever client Send uses (even a caller-
 //     supplied one), so an external endpoint cannot 3xx the request onto an internal
 //     target;
+//
 //   - reserved-header dropping, so tenant-supplied headers cannot forge the auth
 //     header or the internal X-DC-* service identity;
+//
 //   - http/https-only targets, with URL-embedded credentials redacted from errors;
+//
 //   - response-body suppression when a credential is presented via Request.Secret,
 //     so a hostile endpoint cannot reflect the Authorization header back into our
 //     logs. (Present credentials through Secret/Auth — NOT by stuffing a raw token
 //     into Headers, which is not covered by suppression.)
 //
-// It is NOT a complete SSRF firewall: it does not resolve or filter destination IPs
-// (private-range / link-local / DNS-rebinding defense is the caller's job), and it
-// does not restrict the HTTP method (method policy is caller-owned). It is
+//   - a destination-address boundary: DefaultClient dials through egress.Guard, which
+//     refuses a private, loopback, link-local or cloud-metadata address at the moment
+//     the kernel is about to connect to it. That placement is the point — checking the
+//     hostname and then dialing it leaves a window in which DNS can answer differently,
+//     and the window cannot be closed by checking harder.
+//
+// It still does not restrict the HTTP method (method policy is caller-owned). It is
 // deliberately transport-agnostic: the caller owns its own config shape, payload
 // construction, and error-context wrapping; this package owns the mechanics that must
 // be identical everywhere.
+//
+// 🔴 A caller that supplies its OWN client supplies its own transport, and therefore
+// its own dialer. Send forces the redirect policy onto such a client but CANNOT force
+// the transport — replacing it would silently discard the caller's timeouts and
+// connection pooling, and there is no way to tell a test's httptest client from a
+// production one that has quietly lost its guard. So: pass nil in production, and treat
+// a non-nil client as an explicit statement that the caller has taken responsibility
+// for where the connection goes.
 package httpsink
 
 import (
@@ -34,6 +49,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/egress"
 )
 
 // noRedirect is the redirect policy every httpsink request runs under: a 3xx is
@@ -43,9 +60,23 @@ import (
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // DefaultClient is the shared production HTTP client for outbound delivery, used when
-// Send is called with a nil client. Callers bound each request with a context
-// deadline rather than a client Timeout, so none is set.
-var DefaultClient = &http.Client{CheckRedirect: noRedirect}
+// Send is called with a nil client. Callers bound each request with a context deadline
+// rather than a client Timeout, so none is set.
+//
+// It dials through an egress guard with NO allowances, which is the fail-closed default
+// on purpose: every future caller that passes nil inherits the boundary without having
+// to know it exists. The alternative — leaving DefaultClient unguarded and installing
+// the guard at the two call sites that exist today — puts the security property in the
+// place a third call site will forget to look.
+//
+// 🔴 The guard is NOT installed on http.DefaultTransport, and must never be. Service-to-
+// service calls, the JWKS fetch and the governance resolvers all dial private ClusterIPs
+// legitimately, and some of them run in the same process as tenant egress. A global
+// install would break the platform rather than secure it.
+var DefaultClient = &http.Client{
+	CheckRedirect: noRedirect,
+	Transport:     egress.NewGuard(nil).Transport(),
+}
 
 // IsReservedHeader reports whether a caller/tenant-supplied header name is one the
 // sink controls or that carries internal service identity, and so must never be
@@ -70,6 +101,40 @@ const idempotencyHeader = "X-DC-Idempotency-Key"
 type Auth struct {
 	Header string
 	Scheme string
+}
+
+// Validate reports whether the auth header is one this sink will write.
+//
+// 🔴 This is NOT IsReservedHeader, and the difference is the whole reason it exists.
+// IsReservedHeader rejects Authorization — which is the legitimate DEFAULT here, the
+// header the zero Auth uses. Reusing it would refuse the common case. What must be
+// refused is the internal service identity: an X-DC-* header carrying a tenant-supplied
+// secret value.
+//
+// The hole this closes: Send writes the auth header AFTER the reserved-header drop loop,
+// so it never passed through that filter, and nothing validated it at authoring time
+// either. A notification channel configured with authHeader "X-DC-Service-Secret" and a
+// secret holding the real service secret would send it as the service-identity header —
+// which, combined with a URL aimed at user-management's mint endpoint, is a path to a
+// service token. The address half of that is now refused by the egress guard; this is the
+// other half, and it should not depend on the first one holding.
+//
+// It ERRORS rather than dropping. Dropping would ship the payload to a tenant's endpoint
+// with no credential at all — a different defect, and a silent one: the endpoint would
+// reject it, the operator would see delivery failures, and nothing would say why.
+func (a Auth) Validate() error {
+	if a.Header == "" {
+		// The zero value, meaning "Authorization: Bearer <secret>". Nothing tenant-supplied.
+		return nil
+	}
+	if err := ValidateHeader(a.Header, a.Scheme); err != nil {
+		return err
+	}
+	if strings.HasPrefix(http.CanonicalHeaderKey(a.Header), "X-Dc-") {
+		return fmt.Errorf("auth header %q is reserved: X-DC-* headers carry internal service identity "+
+			"and must not be settable from configuration", a.Header)
+	}
+	return nil
 }
 
 // HeaderValue resolves the header name and value that carry secret. With the zero
@@ -204,6 +269,13 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 		httpReq.Header.Set(k, v)
 	}
 	if req.Secret != "" {
+		// Checked HERE as well as at authoring time, deliberately. This is the point of
+		// use, and it is the only place that sees every caller — a stored config written
+		// before the authoring check existed, or by a service that forgot to call it,
+		// reaches the wire through this line and nowhere else.
+		if err := req.Auth.Validate(); err != nil {
+			return err
+		}
 		name, value := req.Auth.HeaderValue(req.Secret)
 		httpReq.Header.Set(name, value)
 	}

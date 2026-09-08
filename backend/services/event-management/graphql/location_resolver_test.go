@@ -39,6 +39,11 @@ const (
 
 var fixtureOccurred = time.Date(2026, 8, 9, 14, 32, 17, 123456789, time.UTC)
 
+// fixturePayloadId is the row's own identity — the thing `id` is now built from.
+// Written as literal bytes rather than derived, so the assertion below compares the
+// resolver's output against something that does not go through the resolver.
+var fixturePayloadId = []byte{0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04}
+
 // newLocationResolver wraps a model in the resolver under test.
 //
 // S and C are left nil on purpose. None of the accessors exercised here touches
@@ -53,6 +58,10 @@ func newLocationResolver(m model.LocationEvent) *LocationEventResolver {
 // its own distinct value.
 func locationFixture() model.LocationEvent {
 	return model.LocationEvent{
+		// A stored row always carries its own identity (payload_id is NOT NULL), and
+		// the fixture carries one for the same reason: `id` resolves from it, so a
+		// fixture without one would exercise the failure path instead of the read.
+		PayloadId:    fixturePayloadId,
 		DeviceToken:  "gps-tracker-7",
 		EventType:    esmodel.Location,
 		OccurredTime: fixtureOccurred,
@@ -165,9 +174,30 @@ func TestLocationEventNonNumericAccessors(t *testing.T) {
 	require.NotNil(t, occurred, "OccurredTime() must not be nil for a real timestamp")
 	assert.Equal(t, fixtureOccurred.Format(time.RFC3339Nano), *occurred, "OccurredTime() must return the occurred time")
 
-	// Id is the composite key those three fields form; it is what a client uses to
-	// address the reading, so a swap inside it is as damaging as one in a value.
-	assert.Equal(t, gql.ID(eventKey("gps-tracker-7", int64(esmodel.Location), fixtureOccurred)), r.Id())
+	// Id is the ROW's own identity, not the (device, type, time) tuple it used to be
+	// built from — that tuple is shared by every payload row of one sample, so it
+	// could never address a reading. It is what a client uses to address the reading,
+	// so a swap inside it is as damaging as one in a value.
+	id, err := r.Id()
+	require.NoError(t, err, "a row carrying a payload id must resolve one")
+	assert.Equal(t, gql.ID("deadbeef01020304"), id,
+		"id must be the row's payload_id, rendered as hex")
+	assert.NotContains(t, string(id), "gps-tracker-7",
+		"id must no longer be built from the device token")
+}
+
+// The counterweight to the assertion above: an id-less row is REFUSED rather than
+// resolved to an empty ID!. Without this, the fix for the duplicate-id defect would
+// have a hole exactly the shape of the defect — every row missing an id sharing one
+// value ("") — and the only rows that can reach it are the ones synthesized in
+// memory, which is where the bug lived.
+func TestLocationEventWithNoPayloadIdIsRefused(t *testing.T) {
+	m := locationFixture()
+	m.PayloadId = nil
+
+	_, err := newLocationResolver(m).Id()
+
+	require.Error(t, err, "a row with no identity must not resolve to an empty ID!")
 }
 
 // A zero occurred time is absent, not the Unix epoch.

@@ -119,12 +119,15 @@ evaluate() {
 # install_govulncheck: fetch the pinned tool, with retries.
 # ---------------------------------------------------------------------------
 # `go install <tool>@<version>` is a network fetch through proxy.golang.org plus a
-# verification against sum.golang.org, and this line runs TWENTY-ONE TIMES per CI
-# run — once per module in the go matrix, on twenty-one separate runners, each with
-# a cold tool cache. So a Go-infrastructure blip that would be a rounding error
-# against a single fetch gets twenty-one chances to land, and when it lands it reds
-# `main` over nothing anybody changed. On 2026-08-27 sum.golang.org returned
-# INTERNAL_ERROR intermittently and did exactly that three times in one day, each
+# verification against sum.golang.org, and this line runs ONCE PER WORKSPACE MODULE
+# per CI run — one matrix entry each, on that many separate runners, each with a cold
+# tool cache. (No count is written here on purpose: the matrix is derived from
+# go.work, so the number moves whenever a module joins, and the figure this comment
+# used to name had already drifted below the real one.) So a Go-infrastructure blip
+# that would be a rounding error against a single fetch gets that many chances to
+# land, and when it lands it reds `main` over nothing anybody changed. On 2026-08-27
+# sum.golang.org returned INTERNAL_ERROR intermittently and did exactly that three
+# times in one day, each
 # time costing a person the work of establishing that the tree was fine.
 #
 # The gate next door already retries for the same reason: the operand image build in

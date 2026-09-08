@@ -44,6 +44,17 @@ type Result struct {
 	// carried on every result so a caller cannot report a complete erasure without
 	// first having to look at what was left behind.
 	Deferred []Entry
+
+	// Redacted lists every table whose rows were KEPT with their identifiers destroyed —
+	// rows redacted when this came from Sweep, rows STILL CARRYING an identifier when it
+	// came from Residue.
+	//
+	// 🔴 IT IS A SEPARATE FIELD BECAUSE Tables CANNOT CARRY IT HONESTLY. That field means
+	// "deleted" on one side of the call and "still present" on the other, and a redacted
+	// row is neither: it is a row deliberately still present whose contents changed.
+	// Folding the count in would make a successful retention read to Residue's caller as
+	// a failed erasure, turning the correct outcome into a permanently stuck purge.
+	Redacted []TableResult
 }
 
 // Complete reports whether the sweep erased everything it found, i.e. whether nothing
@@ -166,6 +177,48 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Prec
 				res.Rows += out.RowsAffected
 			}
 		}
+
+		// The retained tables, in the same transaction as the deletes. Either the
+		// tenant's rows are gone and its identifiers are destroyed, or nothing moved —
+		// a redaction that committed while the sweep rolled back would leave a journal
+		// that could no longer say who did what, over data still present.
+		for _, e := range plan.OfClass(ClassRedacted) {
+			where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
+			if err != nil {
+				return err
+			}
+			sets := make([]string, 0, len(e.Redact))
+			setArgs := make([]any, 0, len(e.Redact))
+			carrying := make([]string, 0, len(e.Redact))
+			for _, col := range e.Redact {
+				sets = append(sets, fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(col)))
+				setArgs = append(setArgs, "")
+				carrying = append(carrying, fmt.Sprintf("%s <> ''", rdb.QuoteIdentifier(col)))
+			}
+			// 🔴 THE UPDATE EXCLUDES ROWS IT HAS ALREADY EMPTIED, and that clause is what
+			// makes the count mean anything. A purge sweeps on every pass, and without it
+			// this statement would rewrite the tenant's whole journal every minute for
+			// twelve hours and report a non-zero figure forever — so "identifiers
+			// destroyed on this pass" would be indistinguishable from "identifiers
+			// destroyed at some point", which is the number the deletion record cites.
+			//
+			// It is NOT what keeps the purge completable, and reading it that way would
+			// be the dangerous mistake: the settle window is restarted by Outcome.Rows,
+			// which carries the DELETE count alone (purge/coordinator.go, eraseOne). A
+			// redaction that ran forever would waste work and lie in the ledger; it would
+			// not stall the erasure. Both are worth fixing, only one is worth fearing.
+			out := tx.Exec(fmt.Sprintf("UPDATE %s SET %s WHERE %s AND (%s)",
+				e.Table.quoted(), strings.Join(sets, ", "), where, strings.Join(carrying, " OR ")),
+				append(setArgs, args...)...)
+			if out.Error != nil {
+				return fmt.Errorf("redacting %s: %w", e.Table, out.Error)
+			}
+			if out.RowsAffected > 0 {
+				res.Redacted = append(res.Redacted, TableResult{
+					Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: out.RowsAffected,
+				})
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -221,7 +274,54 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Resul
 			res.Rows += n
 		}
 	}
+
+	// 🔴 A RETAINED TABLE NEEDS ITS OWN RE-VERIFY, and counting its rows would be the
+	// wrong question — they are supposed to be there. What is checked is that none of
+	// them still carries an identifier. Without this the redaction is the one step in
+	// the whole purge that grades itself: the UPDATE reports a row count, and a row
+	// count is exactly what a WHERE clause that selected the wrong rows also produces.
+	for _, e := range plan.OfClass(ClassRedacted) {
+		if len(e.Redact) == 0 {
+			return res, fmt.Errorf("%s is classified redacted but names no columns to empty, so "+
+				"the purge would report its identifiers destroyed having touched nothing", e.Table)
+		}
+		where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
+		if err != nil {
+			return res, err
+		}
+		carrying := make([]string, 0, len(e.Redact))
+		for _, col := range e.Redact {
+			// A bare `<> ''` is right, and it is worth saying why rather than reaching for
+			// coalesce. `NULL <> ''` evaluates to NULL, so a NULL is not counted — and
+			// "not counted" is the correct answer for a column holding no identifier.
+			// Both spellings of absent, the empty string this purge writes and the NULL a
+			// row may always have carried, read as clean because they ARE clean.
+			carrying = append(carrying, fmt.Sprintf("%s <> ''", rdb.QuoteIdentifier(col)))
+		}
+		var n int64
+		q := db.WithContext(ctx).Raw(fmt.Sprintf("SELECT count(*) FROM %s WHERE %s AND (%s)",
+			e.Table.quoted(), where, strings.Join(carrying, " OR ")), args...).Scan(&n)
+		if q.Error != nil {
+			return res, fmt.Errorf("residual identifier scan %s: %w", e.Table, q.Error)
+		}
+		if n > 0 {
+			res.Redacted = append(res.Redacted, TableResult{
+				Table: e.Table, Class: e.Class, Origin: e.Origin, Rows: n})
+		}
+	}
 	return res, nil
+}
+
+// Retained reports whether a residual scan found rows still carrying an identifier in a
+// table the purge keeps. It is deliberately not folded into Rows: a caller reading Rows
+// is asking "did the deletes take", and a caller reading this is asking "did the
+// retention keep its promise". Both must be false for an area to ack.
+func (r Result) Retained() int64 {
+	var n int64
+	for _, t := range r.Redacted {
+		n += t.Rows
+	}
+	return n
 }
 
 // checkSweepable rejects the three ways a caller can ask for something destructive and
@@ -287,7 +387,13 @@ func tenantPredicate(idx map[Table]Entry, t Table, tenant string, depth int) (st
 	}
 
 	switch e.Class {
-	case ClassDirect:
+	// A redacted table is selected exactly as a direct one is — it has a tenant column,
+	// which is why an exemption could never have covered it — and differs only in what
+	// the statement built around this predicate does with the rows it finds.
+	case ClassDirect, ClassRedacted:
+		if e.Column == "" {
+			return "", nil, fmt.Errorf("%s is %s but carries no tenant column", t, e.Class)
+		}
 		return fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(e.Column)), []any{tenant}, nil
 
 	case ClassTransitive:

@@ -11,7 +11,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Logo } from '@/components/brand/Logo';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { GraphQLRequestError } from '@devicechain/client';
+import { signInErrorKey } from '@/i18n/signInError';
 import type { IdentityAuth } from '@/lib/api/user-management';
 
 // Login is two-step (ADR-033): authenticate the email/password to get an identity
@@ -39,8 +39,12 @@ export default function LoginPage() {
     return <Navigate to="/" replace />;
   }
 
-  const failure = (err: unknown, badCreds: string) =>
-    setError(err instanceof GraphQLRequestError ? badCreds : t('serverUnreachable'));
+  // Which of the two things went wrong is NOT decided here — see i18n/signInError.ts.
+  // The question "did the server evaluate this and say no, or did we never get an
+  // answer?" has exactly one right predicate over the SDK's throw shapes, and the
+  // obvious ones (the error class; the class plus a non-zero status) both report an
+  // outage as a bad password.
+  const failure = (err: unknown, rejectedKey: string) => setError(t(signInErrorKey(err, rejectedKey)));
 
   const enterTenant = async (auth: IdentityAuth, tenant: string) => {
     await selectTenant(auth.identityToken, tenant);
@@ -76,7 +80,7 @@ export default function LoginPage() {
       setSubmitting(false);
     } catch (err) {
       // The backend deliberately doesn't distinguish bad-email vs bad-password.
-      failure(err, t('invalidCredentials'));
+      failure(err, 'login:invalidCredentials');
       setSubmitting(false);
     }
   };
@@ -88,7 +92,7 @@ export default function LoginPage() {
     try {
       await enterTenant(identity, tenant);
     } catch (err) {
-      failure(err, t('enterTenantFailed'));
+      failure(err, 'login:enterTenantFailed');
       setSubmitting(false);
     }
   };

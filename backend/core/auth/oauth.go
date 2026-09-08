@@ -18,8 +18,8 @@ import (
 // document advertises and the authorize/token endpoints validate against.
 const (
 	// ScopeReadOnly names the general read-only observability surface: reads of
-	// devices, events, state, commands and alarms — the same SURFACE the console's
-	// viewer baseline covers.
+	// devices, events, state, commands, alarms and dashboards — the same SURFACE the
+	// console's viewer baseline covers.
 	//
 	// 🔴 "The same surface" is not "the same list", and the two must not be re-fused.
 	// viewerAuthorities (user-management/identity) is a GRANT — every enabled tenant
@@ -86,6 +86,16 @@ var scopeAllowances = map[string][]string{
 		string(StateRead),
 		string(CommandRead),
 		string(AlarmRead),
+		// Added with the viewer baseline, which this ceiling is kept equal to. Note
+		// what that does to sessions authorized BEFORE it, since ScopeLocation above
+		// records the same mechanism as a defect: RefreshOAuth re-caps against the
+		// CURRENT allowance, so an existing "read-only" session gains dashboard reads
+		// on its next refresh with no new consent step. That was unacceptable for
+		// position — a record of where a person has been — and is acceptable here,
+		// because a dashboard is the tenant's own saved arrangement of data the same
+		// token could already read. The distinction is the subject matter, not the
+		// mechanism, so it is written down rather than assumed.
+		string(DashboardRead),
 	},
 	ScopeLocation: {
 		string(LocationRead),
@@ -123,7 +133,7 @@ func ScopeAllowance(scope string) ([]string, bool) {
 // PERSON has been. A scope with no description here renders as its bare token, which is
 // the old behaviour rather than a crash, so ScopeDescription is total.
 var scopeDescriptions = map[string]string{
-	ScopeReadOnly: "Read your devices, their current state, their telemetry, their alarms and the commands sent to them.",
+	ScopeReadOnly: "Read your devices, their current state, their telemetry, their alarms, the commands sent to them, and your dashboards.",
 	ScopeLocation: "Read where your devices have been — their reported position history, not just where they are now.",
 }
 

@@ -98,10 +98,16 @@ func NewGraphQLProjectionReader(client adapter.GraphQLClient, url string) *Graph
 // declare every asserted device on the instance dead.
 //
 // The residual case, stated because it is a real if narrow one: a device's row records
-// the source of the last event that touched it (device-state/model/api.go:133-135), so
-// an MQTT-connected device that also posts over HTTP has its row attributed to the HTTP
-// source and is invisible here. It is then never repaired — but also never wrongly
-// killed, which is the direction to fail in.
+// the source of the last event that touched it (the Source merge in
+// device-state/model/api.go's Api.MergeDeviceState), so an MQTT-connected device that also
+// posts over HTTP has its row attributed to the HTTP source and is invisible here. It is
+// then never repaired — but also never wrongly killed, which is the direction to fail in.
+//
+// 🔑 CITED BY SYMBOL, NOT BY LINE. This claim, and the two in advisory.go and
+// reconcile.go, each carried a file:line that had DRIFTED onto unrelated code — one
+// pointed at a longitude merge — while the claims themselves stayed true. A citation that
+// silently becomes wrong is worse than none: a reader who follows it and finds nothing
+// concludes the sentence is stale.
 // 🔴 A FAILURE PART-WAY THROUGH THE WALK FAILS THE WHOLE READ. Keeping the pages already
 // collected would look like a kindness and is the opposite: this map is one side of a
 // DIFF, and a device missing from it because its page was never fetched is

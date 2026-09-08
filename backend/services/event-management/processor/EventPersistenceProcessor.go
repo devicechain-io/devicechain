@@ -79,6 +79,18 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.Mess
 	return eproc
 }
 
+// marshalFailedEvent encodes a failed event for publication. It is a variable rather
+// than a direct call to proto.MarshalFailedEvent so its FAILURE can be exercised.
+//
+// 🔴 THE BRANCH IT FEEDS IS OTHERWISE UNREACHABLE, WHICH IS HOW A BUG LIVED IN IT.
+// PFailedEvent carries only scalars, so proto.Marshal has nothing to reject and the
+// error return is dead in practice — and an error path no test can enter is an error
+// path nobody reads carefully. This one fell through without a return and published a
+// message with a nil Value; nothing could have caught that, because nothing could make
+// the marshal fail. The seam is one line and it turns the branch's behaviour into a
+// property the suite asserts rather than one a reviewer has to take on trust.
+var marshalFailedEvent = proto.MarshalFailedEvent
+
 // Handle case where event failed to process.
 func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) bool {
 	item, more := <-eproc.failed
@@ -86,9 +98,19 @@ func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) 
 		log.Debug().Str("message", item.event.Message).Str("error", item.event.Error).Msg("received failed event")
 
 		// Marshal event message to protobuf.
-		bytes, err := proto.MarshalFailedEvent(&item.event)
+		//
+		// 🔴 A FAILED MARSHAL STOPS HERE RATHER THAN FALLING THROUGH. Without the
+		// return, `bytes` is nil and the publish below still happens — an empty record
+		// on the failed-events subject, carrying the reason in its key and nothing a
+		// reader could decode. That is worse than publishing nothing, because the only
+		// signal a consumer gets is a record it cannot parse, while the line saying why
+		// is on a pod's stdout. OnFailedEvent, the sibling callback that marshals the
+		// resolved event, already publishes nothing in this case; this is the same
+		// decision written the same way, so the two cannot disagree.
+		bytes, err := marshalFailedEvent(&item.event)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to marshal event to protobuf")
+			return false
 		}
 
 		// Create and deliver message on the failed event's tenant subject. Stamp

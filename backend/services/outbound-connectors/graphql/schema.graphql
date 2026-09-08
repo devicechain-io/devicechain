@@ -41,15 +41,37 @@ type Connector {
     hasSecret: Boolean!
 }
 
-# Data required to create or update a connector. `secret` is write-only: omit it on
-# update to preserve the stored credential, send a value to replace it, or send an
-# empty string to clear it. On create, omit or empty means no credential.
+# Data required to create a connector. `secret` is write-only; omitting it (or sending
+# an empty string) means no credential.
 input ConnectorCreateRequest {
     token: String!
     name: String
     description: String
     type: String!
     config: String!
+    secret: String
+}
+
+# Fields to change on an existing connector's draft. Every field is three-state: OMIT
+# it to leave the stored value alone, send NULL to clear it, or send a value to set it.
+#
+# It carries no token. The mutation's own `token` argument names the connector, and a
+# connector is renamed through renameConnector — where the new token can mean only one
+# thing.
+input ConnectorUpdateRequest {
+    name: String
+    description: String
+    # The connector kind. It cannot be cleared: a null is refused rather than stored as
+    # a kind nothing can dispatch. Changing it re-validates the STORED config against
+    # the new kind, so a re-point that leaves the config unusable is refused at the
+    # write instead of at send time.
+    type: String
+    # The opaque per-type connection config (a JSON object). It cannot be cleared
+    # either — there is no configuration-less connector to fall back to.
+    config: String
+    # The write-only outbound credential. Omit it to PRESERVE the stored one (it can
+    # never be read back to resend), send a value to ROTATE it, or send null — or an
+    # empty string — to DELETE it.
     secret: String
 }
 
@@ -100,11 +122,18 @@ type Query {
 type Mutation {
     # Create a new connector (draft).
     createConnector(request: ConnectorCreateRequest!): Connector!
-    # Update the connector (draft) with the given (current) token. When
-    # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition: the
-    # update fails (CONFLICT) if the connector's updatedAt has changed since (a
-    # concurrent edit). Pass the updatedAt the caller last read.
-    updateConnector(token: String!, request: ConnectorCreateRequest!, expectedUpdatedAt: String): Connector!
+    # Partially update the connector (draft) with the given (current) token: an omitted
+    # field is left alone, an explicit null clears it. When expectedUpdatedAt is
+    # supplied it is an optimistic-concurrency precondition: the update fails (CONFLICT)
+    # if the connector's updatedAt has changed since (a concurrent edit). Pass the
+    # updatedAt the caller last read.
+    updateConnector(token: String!, request: ConnectorUpdateRequest!, expectedUpdatedAt: String): Connector!
+    # Rename a connector. A blank newToken is refused; renaming to the token the
+    # connector already has is an idempotent success; a token another connector holds is
+    # refused by name. The credential is keyed by the connector's immutable id, so a
+    # rename keeps it bound — but a rule's connector reference names the TOKEN, so a
+    # rename means the rules pointing at it must be re-pointed too.
+    renameConnector(token: String!, newToken: String!): Connector!
     # Freeze the current draft {type, config} into a new immutable version (N+1).
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
     # updateConnector: publish fails (CONFLICT) if the draft changed since.

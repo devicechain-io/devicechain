@@ -4,8 +4,11 @@
 package model
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // A device-type-scoped policy is skipped by the dispatcher, so accepting one
@@ -90,11 +93,42 @@ func TestDeviceTypeScopedPolicyIsRefused(t *testing.T) {
 		}
 	})
 
-	t.Run("update is refused too", func(t *testing.T) {
-		// The gate has to cover update as well — otherwise a tenant-wide policy can
-		// be scoped after the fact and go quiet.
-		if _, err := api.UpdateNotificationPolicy(ctx, "tenant-wide", scoped("tenant-wide", strPtr("thermostat-v3"))); err == nil {
-			t.Fatal("updating a policy to be device-type-scoped succeeded; it must be refused")
+	// 🔴 THE UPDATE PATH IS COVERED BY THE SCHEMA NOW, NOT BY A REFUSAL, AND THAT IS WHY
+	// THE SUBTEST THAT DROVE IT IS GONE RATHER THAN REWRITTEN.
+	//
+	// The gate used to have to cover update as well, or a tenant-wide policy could be
+	// scoped after the fact and go quiet. NotificationPolicyUpdateRequest carries no
+	// deviceTypeToken at all: the field's only accepted value was "unset", and every
+	// stored policy is already unset because the create path above is the only thing that
+	// writes one. So there is no update request that can scope a policy — a caller who
+	// sends the field gets an unknown-input-field error from the schema, which is a
+	// refusal a test cannot drive through the Api.
+	//
+	// The check below is what keeps that claim honest without a request to send: a scoped
+	// update is unrepresentable only while the update input has no such field, and
+	// TestUpdatePolicy_TheUpdateInputCannotScopeAPolicy asserts exactly that against the
+	// TYPE. Kept here, beside the create refusal, because this file is where someone
+	// re-adding device-type scoping will look.
+	t.Run("update cannot scope a policy at all", func(t *testing.T) {
+		if _, ok := reflect.TypeOf(NotificationPolicyUpdateRequest{}).FieldByName("DeviceTypeToken"); ok {
+			t.Fatal("NotificationPolicyUpdateRequest has a DeviceTypeToken field again. It is not " +
+				"enough to re-add it: the dispatcher still skips a device-type-scoped policy, so " +
+				"the update path needs validateDeviceTypeScoping wired back in and driven here, " +
+				"or a scoped policy writes successfully and delivers nothing")
+		}
+		// The counterweight: a plain update of the same policy still works, so the
+		// unrepresentability above was not bought by the update path being broken.
+		if _, err := api.UpdateNotificationPolicy(ctx, "tenant-wide", &NotificationPolicyUpdateRequest{
+			Name: dcgraphql.OptionalStringOf("Still editable"),
+		}); err != nil {
+			t.Fatalf("an ordinary update of the tenant-wide policy was refused: %v", err)
+		}
+		found, err := api.NotificationPoliciesByToken(ctx, []string{"tenant-wide"})
+		if err != nil || len(found) != 1 {
+			t.Fatalf("reload: err=%v rows=%d", err, len(found))
+		}
+		if found[0].DeviceTypeToken.Valid {
+			t.Errorf("an update gave the policy a device-type scope of %q", found[0].DeviceTypeToken.String)
 		}
 	})
 }

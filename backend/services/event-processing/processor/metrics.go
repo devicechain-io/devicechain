@@ -32,6 +32,8 @@ type detectMetrics struct {
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
+	isLeader            prometheus.Gauge
+	detectLive          prometheus.Gauge
 
 	// Slice-8 consumer-lag gauges (ADR-051 observability thread; the operations board's #1
 	// "falling behind" signal). These exist because the derived-at-the-dashboard alternative does
@@ -109,6 +111,13 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload.", nil),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint.", nil),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup.", nil),
+		// Leadership (ADR-070). Two gauges rather than one, because the interesting
+		// failure is a pod that HAS the partition and is not detecting on it: a term
+		// build runs a snapshot restore, three view builds and a full replay, and a
+		// single "am I the leader" series cannot tell that apart from a healthy leader.
+		// isLeader goes up at ACQUIRE so a long build does not read as leaderless.
+		isLeader:   ms.NewGauge("detect_is_leader", "1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build.", nil),
+		detectLive: ms.NewGauge("detect_live", "1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired.", nil),
 
 		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal).", nil),
 		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work).", nil),
@@ -185,6 +194,8 @@ type reactMetrics struct {
 	permanentlyRejected *prometheus.CounterVec
 	orphan              prometheus.Counter
 	poisonDropped       prometheus.Counter
+	deadLettered        prometheus.Counter
+	deadLetterLost      prometheus.Counter
 }
 
 // newReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
@@ -200,7 +211,9 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
-		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch).", nil),
+		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness.", nil),
+		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024).", nil),
+		deadLetterLost:      ms.NewCounter("react_events_dead_letter_lost_total", "Derived events that could be neither dispatched NOR dead-lettered — the write to the dead-letter stream failed on a delivery that will not repeat. This is the one outcome on this path where work is silently gone, and it is the reason the counter exists separately from the one above.", nil),
 	}
 }
 
@@ -252,6 +265,24 @@ func (m *reactMetrics) recordPoisonDropped() {
 		return
 	}
 	m.poisonDropped.Inc()
+}
+
+// recordDeadLettered records one derived event written to the dead-letter stream.
+func (m *reactMetrics) recordDeadLettered() {
+	if m == nil {
+		return
+	}
+	m.deadLettered.Inc()
+}
+
+// recordDeadLetterLost records one derived event that could be neither dispatched nor
+// dead-lettered. It is counted apart from the one above because it is the only outcome on
+// this path where the work is gone with no record of it anywhere.
+func (m *reactMetrics) recordDeadLetterLost() {
+	if m == nil {
+		return
+	}
+	m.deadLetterLost.Inc()
 }
 
 // setRulesActive publishes the loaded rule count (called once at startup wiring).
@@ -479,4 +510,25 @@ func (m *fenceGeometryMetrics) recordFenceGeometryCache(hits, misses, evictions 
 		m.fenceGeometryCacheEvictions.Add(float64(evictions))
 	}
 	m.fenceGeometryCacheVertices.Set(float64(vertices))
+}
+
+// setLeader publishes whether this replica holds the DETECT partition lease. It is
+// raised at ACQUIRE, not at the end of the term build: a build can take a snapshot
+// restore plus a full replay, and a leaderless alert firing through all of it would
+// be indistinguishable from a real outage.
+func (m *detectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader)) }
+
+// setDetectLive publishes whether this replica is actually CONSUMING. Paired with
+// setLeader it names the one state neither gauge can express alone — leader, but
+// wedged in a term build — which is otherwise a silent stall on a pod whose every
+// health signal is green. The chart's DetectLeaderIsNotConsuming rule is the pair's
+// consumer, and it ANDs a checkpoint term so a long replay (which checkpoints as it
+// goes) does not trip it.
+func (m *detectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
+
+func boolGauge(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }

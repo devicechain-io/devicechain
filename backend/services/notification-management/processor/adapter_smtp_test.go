@@ -75,3 +75,56 @@ func TestBuildEmailHeadersAndCRLF(t *testing.T) {
 		t.Fatalf("missing header/body separator")
 	}
 }
+
+// 🔴 THE SUBJECT IS A HEADER TOO, AND IT WAS THE ONE WITH NO LOCAL GUARD.
+//
+// buildEmail interpolates Subject straight into a "Subject: %s\r\n" line, so a CR/LF in it
+// ends the header and starts another — a hidden Bcc riding out with every alarm. from and
+// every recipient were guarded; the subject was not.
+//
+// 🔑 IT IS CURRENTLY UNREACHABLE, AND THAT IS WHY IT NEEDS THE CHECK. The subject is
+// rendered from the alarm's severity and key, and an alarm key is grammar-checked in
+// event-processing — a different service, a different binary — at the moment a rule renders
+// it. So no crafted subject can arrive here today. Nothing in THIS service would notice if
+// that grammar were relaxed, moved, or bypassed by a new producer of alarm events, and a
+// guarantee whose only enforcement is two services away with nothing local to catch its
+// removal is precisely the shape that keeps burning this codebase. The check costs a string
+// scan on a path that is about to open a TCP connection.
+func TestASubjectWithALineBreakIsRefused(t *testing.T) {
+	clean := &RenderedNotification{Subject: "[CRITICAL] Alarm raised: over-temp on Device 7"}
+	if err := ensureHeaderSafe("alarms@example.com", []string{"ops@x.com"}, clean); err != nil {
+		t.Fatalf("a well-formed message was rejected: %v", err)
+	}
+
+	for _, bad := range []string{
+		"[CRITICAL] alarm\r\nBcc: exfil@evil.example",
+		"[CRITICAL] alarm\nX-Injected: yes",
+	} {
+		msg := &RenderedNotification{Subject: bad}
+		err := ensureHeaderSafe("alarms@example.com", []string{"ops@x.com"}, msg)
+		if err == nil {
+			t.Fatalf("a subject containing a line break was accepted: %q", bad)
+		}
+		if !strings.Contains(err.Error(), "subject") {
+			t.Fatalf("the refusal must name the offending field so an operator can find it, got %v", err)
+		}
+	}
+}
+
+// The envelope fields the guard already covered, kept as one enumeration so a future edit
+// cannot quietly drop one of the three. All three reach the same header block.
+func TestEveryInterpolatedHeaderFieldIsGuarded(t *testing.T) {
+	const injected = "x\r\nBcc: exfil@evil.example"
+	msg := &RenderedNotification{Subject: "ok"}
+
+	if err := ensureHeaderSafe(injected, []string{"ops@x.com"}, msg); err == nil {
+		t.Fatal("a from with a line break was accepted")
+	}
+	if err := ensureHeaderSafe("alarms@example.com", []string{"ops@x.com", injected}, msg); err == nil {
+		t.Fatal("a recipient with a line break was accepted")
+	}
+	if err := ensureHeaderSafe("alarms@example.com", []string{"ops@x.com"},
+		&RenderedNotification{Subject: injected}); err == nil {
+		t.Fatal("a subject with a line break was accepted")
+	}
+}

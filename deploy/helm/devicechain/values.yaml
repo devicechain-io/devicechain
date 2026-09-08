@@ -270,6 +270,29 @@ instance:
         # form its KEK). DR: losing this key loses every stored secret — back up the
         # rendered instance Secret.
         rootKey: ""
+      egress:
+        # Destinations a TENANT-configured webhook, httpCall action or SMTP relay is
+        # allowed to reach even though the egress boundary would otherwise refuse them
+        # (ADR-023). The boundary refuses private, loopback, link-local, CGNAT and cloud
+        # metadata addresses at the moment the connection is dialled, on the resolved IP
+        # — which is the only place a DNS answer cannot change underneath the check.
+        #
+        # Empty (the default) means no exemptions: fail closed.
+        #
+        # 🔴 Grant /32s. In Kubernetes the smallest CIDR that reaches ONE in-cluster
+        # relay is often the whole Service CIDR, and granting that re-opens every private
+        # address for every tenant — which is the entire boundary. The usual legitimate
+        # need is a single in-cluster SMTP relay, and a single address expresses it.
+        #
+        # This cannot express a hostname. The check runs on the address at dial time and
+        # a name is not available there; that is deliberate, because a name-based check
+        # is exactly what a DNS answer can walk around.
+        #
+        # A malformed entry fails the service at startup rather than being skipped: an
+        # allowance that was silently dropped would read as configured and behave as
+        # though it were not.
+        allowedDestinations: []
+        # - "10.42.0.17/32"   # the in-cluster SMTP relay
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos today; firmware/OTA + exports later, ADR-058).
@@ -611,6 +634,91 @@ serviceAccount:
   name: ""
   automountToken: false
 
+# NetworkPolicy for the tenant-egress paths a Go dialer cannot reach.
+#
+# Three of the six outbound paths — MQTT, Kafka and AWS SNS/SQS — are built inside an
+# embedded stream engine that exposes no dialer, so the address check that guards the two
+# HTTP paths and SMTP cannot be applied to them. And for Kafka no address check would
+# suffice even with a dialer: the client dials the bootstrap broker and then registers
+# whatever addresses that broker returns in its metadata, so the tenant's own broker picks
+# the second hop. Only the network layer sees that.
+#
+# 🔴 OFF BY DEFAULT, AND READ THIS BEFORE TURNING IT ON.
+#
+# A NetworkPolicy is an ordinary API object that every cluster accepts and only a
+# policy-enforcing CNI acts on; `kubectl get netpol` shows it either way. Check yours
+# before treating this as a control — and note that a local kind cluster DOES enforce it
+# (kindnetd has shipped kube-network-policies since kind v0.24), so this is not a
+# production-only concern and a wrong rule will break your development cluster too.
+#
+# 🔴 A wrong rule HANGS rather than failing. Traffic a policy denies is dropped, not
+# refused, so a peer missing from the lists below shows up as dispatches that time out —
+# and, for the user-management peer, as a pod that never becomes ready and does not say
+# why. The defaults enumerate everything outbound-connectors needs.
+networkPolicy:
+  enabled: false
+  # Labels selecting the namespace that holds NATS and PostgreSQL. The OpenTofu-created
+  # infrastructure namespace carries the pair below. If you brought your own, set this to
+  # whatever labels your namespace actually has — an empty selector is refused at render
+  # time rather than silently denying the database.
+  infrastructureNamespaceSelector:
+    devicechain.io/component: infrastructure
+  # Labels selecting the namespace that serves cluster DNS. Kubernetes 1.21+ labels every
+  # namespace with kubernetes.io/metadata.name automatically, so this needs no changes on
+  # a stock cluster.
+  dnsNamespaceSelector:
+    kubernetes.io/metadata.name: kube-system
+  # 🔴 THE DENY LIST IS NOT HERE, AND THAT IS DELIBERATE.
+  #
+  # The address space a tenant destination may not reach is written in the body of
+  # templates/networkpolicy.yaml and rendered as the `except` entries of two wide
+  # ipBlocks, so the policy permits the public internet and nothing else. (It lived
+  # briefly in a named template in _helpers.tpl; a parent chart can override one of
+  # those, which would have restored the very widening this move exists to prevent.) It used to be `blockedIPv4Ranges` / `blockedIPv6Ranges` right here, and
+  # that was a defect: Helm REPLACES a list rather than merging it, so one plausible
+  # override — `--set networkPolicy.blockedIPv4Ranges={1.2.3.4/32}`, or the same in a
+  # values file — rendered a policy whose only exception was that one address. It passed
+  # every render-time guard, the API server accepted it, and it permitted all of
+  # 10.0.0.0/8 including the instance metadata service, while still looking like a
+  # control. Setting either key now fails schema validation rather than quietly widening
+  # the boundary.
+  #
+  # That list must agree with the Go guard's deny table (backend/core/egress/ranges.go),
+  # and hack/check-egress-ranges.sh fails the build when they drift — it compares the
+  # RENDERED policy against the compiled Go table. Two halves of one boundary written in
+  # two languages, with nothing at compile or render time relating them, is exactly the
+  # pair that goes quietly out of step. To permit a specific destination, use
+  # additionalAllowedCidrs below; to narrow the boundary, change both halves in one commit
+  # and let the gate prove they still agree.
+  # Extra destinations to permit, as CIDRs. Two reasons you may need this, and the first
+  # one is the likeliest way this policy breaks a cluster:
+  #
+  # 🔴 SERVICE ClusterIPs. This policy reaches NATS, PostgreSQL and user-management with
+  # namespace and pod selectors, which match POD addresses. Whether that is enough depends
+  # on where your CNI evaluates egress relative to kube-proxy's DNAT. Evaluated AFTER
+  # (Calico's usual behaviour) the destination is already the pod IP and the selectors
+  # match. Evaluated BEFORE, the destination is still the Service ClusterIP, which matches
+  # no pod selector and sits inside the blocked private ranges — so every database
+  # and service-token call is dropped, and dropped traffic HANGS rather than failing. The
+  # symptom is a pod that never becomes ready, with nothing saying why.
+  #
+  # If that is your CNI, add your Service CIDR here (kubeadm's default is 10.96.0.0/12).
+  # Note what that costs: it permits the whole Service CIDR, so a tenant connector aimed
+  # at any in-cluster Service is admitted too. It is the same trade as the Go guard's
+  # allowed destinations, and the same advice — narrow it if you can.
+  #
+  # The second reason is an off-cluster dependency on a private address: a tenant's MQTT
+  # or Kafka broker, or a webhook endpoint, on a peered VPC.
+  #
+  # 🔴 NOT a mail relay, though an earlier version of this comment said so. SMTP is
+  # notification-management's path, and this policy selects only outbound-connectors, so
+  # nothing here affects mail. An in-cluster or peered relay that the Go guard would
+  # refuse is permitted with instance.config.infrastructure.egress.allowedDestinations,
+  # which is the knob for that; adding it here would do nothing for mail and would open
+  # outbound-connectors' tenant paths toward the relay for no reason.
+  additionalAllowedCidrs: []
+  # - "10.96.0.0/12"    # the Service CIDR, if your CNI evaluates egress pre-DNAT
+
 # E7: PodDisruptionBudget per enabled area so a node drain cannot evict every
 # replica at once. Only emitted for areas with replicas > 1 (a PDB on a single
 # replica would block voluntary drains). Set exactly one of minAvailable /
@@ -701,6 +809,25 @@ functionalAreas:
     #                             # lifetime (12h). Lowering it lets a deleted tenant's
     #                             # name be reused sooner and narrows the guarantee that
     #                             # its successor inherits nothing. Negative is rejected.
+    #
+    # Dead-letter store. Four consumers write to a shared stream when they accept a
+    # message and then give up on it — a detection whose actions could not be
+    # dispatched, an alarm that reached nobody, a device answer that could not be
+    # recorded, an alarm edge that could not be applied. This service drains that
+    # stream into a queryable table, readable on /admin/graphql.
+    #
+    # Nothing replays a dead letter. The record exists so a failure is visible and
+    # diagnosable; the consequences of the failure itself stand either way.
+    #   config:
+    #     deadLetters:
+    #       retentionDays: 30     # how long a record is kept, from when the platform
+    #                             # gave up. It MUST exceed 7 — the stream it drains
+    #                             # ages out at seven days, and the store exists to
+    #                             # outlive it, so a shorter retention is rejected at
+    #                             # load rather than silently buying nothing.
+    #       sweepSeconds: 3600    # how often the retention sweep runs. A negative value
+    #                             # disables it: the table then grows, which is visible,
+    #                             # rather than something being lost, which is not.
   device-management:
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
@@ -764,11 +891,25 @@ functionalAreas:
     # freeze them (ADR-067 demotion). Every device this source has ASSERTED is walked
     # back to INFERRED at 25/s, asserting nothing about connectivity — which is what
     # hands them back to the inactivity sweep and to their own data events. The same
-    # happens when the system-account credential goes missing, after a 120s settle
-    # window (a bring-up mints it in the run that starts the services, so an absent
-    # value can be a race). The other bail paths do NOT release: a failed dial or
-    # subscription is one replica's bad luck, not the instance's configuration. Release
-    # those by hand with `dcctl presence demote`.
+    # happens when the system-account credential goes missing, and when the broker
+    # itself cannot be reached, each after a 120s settle window — a bring-up mints the
+    # credential and rolls the broker in the same run that starts the services, so
+    # either can be a race with that run rather than a standing condition. An
+    # unreachable broker is the instance's condition rather than one replica's: the
+    # MQTT gateway lives in that same broker, so while it is unreachable no device is
+    # connected through it either.
+    #
+    # 🔑 FOR THE BROKER CASE THE WINDOW IS A RE-CHECK, NOT JUST A WAIT, and that is what
+    # keeps the release from outliving the outage. Every pass first re-dials the system
+    # account; if it answers, this pod does not release anything — it EXITS so the
+    # kubelet restarts it and the tap comes up normally. Expect a pod restart, not a
+    # release, when a broker comes back. The other two release paths cannot re-check:
+    # both are configuration read once at startup, so the pod is replaced rather than
+    # repaired, which is what their window waits for.
+    #
+    # The remaining bail paths do NOT release: no gateway source, no service-to-service
+    # calls, and a subscription that fails on a connection that DID reach the broker.
+    # Release those by hand with `dcctl presence demote`.
     #
     # reconcileSeconds is not a backstop knob. A graceful broker restart emits NO
     # disconnect notices for the connections it was holding, so this pass is the only
@@ -849,19 +990,61 @@ functionalAreas:
     # worst outcome — a lagging writer clobbering a newer checkpoint — but does NOT by
     # itself make split-brain safe.
     #
-    # So this area deploys with strategy Recreate (during a ROLLOUT all old pods stop before
-    # any new pod starts — no old+new overlap that a rolling update would otherwise cause) and
-    # stays at replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly
-    # runs two engines (the ReplicaSet replaces a deleted pod immediately), which the app-level
-    # fence handles (monotonic snapshot Save + detectStaleOwner). Do NOT raise replicas past 1
-    # (a Recreate with 2 replicas runs 2 permanent writers; the template fails the render) until
-    # the intra-Instance tenant-sharded DETECT fleet lands (post-GA, ADR-052).
+    # So this area SHIPS with strategy Recreate (during a ROLLOUT all old pods stop before any
+    # new pod starts — no old+new overlap that a rolling update would otherwise cause) and
+    # replicas:1. Recreate covers rollouts only; an eviction / node drain still briefly runs two
+    # pods (the ReplicaSet replaces a deleted pod immediately).
     #
-    # Operational note: during a Recreate rollout the event-processing Service has no ready
-    # endpoint (old-pod stop + new-pod snapshot replay + startupProbe). Publishing a device
-    # profile that has ENABLED detection rules calls event-processing's validateDetectionRules
-    # synchronously and fails CLOSED on transport error (ADR-044 sync gate), so such publishes
-    # error for the rollout window — expected; retry after the new pod is Ready.
+    # A WARM STANDBY IS NOW SUPPORTED, and it is the one way to raise replicas here. Set BOTH:
+    #
+    #   replicas: 2
+    #   strategy: RollingUpdate
+    #
+    # The extra replicas are standbys, not writers. Exactly one replica holds the partition
+    # lease at a time; the others report Ready, serve GraphQL, park their stream readers, refuse
+    # their own checkpoints, and refuse to answer for the partition's tenant state — then take
+    # the partition when it frees up, without the pod cold start. Raising replicas WITHOUT
+    # moving off Recreate fails the render, because Recreate stops every pod before starting
+    # any: the standby would be down exactly when it was needed.
+    #
+    # What a standby does NOT save is the term build. It holds no engine and no restored
+    # snapshot (pre-restoring would mean reading a snapshot the leader is writing), so a
+    # takeover still pays the restore, the projection catch-up, the view builds and the replay.
+    # What it saves is the pod start, the connections and the rule-registry load — and, on an
+    # eviction or node drain, it removes the wait for a replacement pod to be SCHEDULED.
+    #
+    # This is not the tenant-sharded DETECT fleet (post-GA, ADR-052), which is about running
+    # several ACTIVE partitions. Here there is still exactly one partition and one writer.
+    #
+    # THAT EVICTION OVERLAP IS NOW HANDLED BY A PARTITION LEASE, not by the app-level fence
+    # (ADR-070). The engine takes a lease before it reads any state and consults it on every
+    # message and every checkpoint, so a pod that has lost the partition stops fetching, stops
+    # acking and stops publishing. The monotonic snapshot Save and detectStaleOwner are still
+    # there and still load-bearing, but they are now the BACKSTOP rather than the handler: what
+    # they could never cover is an old pod's already-fetched batch redelivering after AckWait
+    # (60s) to a new leader that has replayed past it, which acks it away unapplied.
+    #
+    # Consequence to know about: a NATS outage longer than the lease TTL (30s) now ends the
+    # term and rebuilds it, where before the client rode the outage out transparently. A
+    # rebuild costs a snapshot restore, three view builds and a replay; the logs say which
+    # happened. This is the trade for the overlap being closed.
+    #
+    # Operational note: during a Recreate rollout at replicas:1 the event-processing Service
+    # has no ready endpoint between the old pod stopping and the new one passing its
+    # startupProbe. Publishing a device profile that has ENABLED detection rules calls
+    # event-processing's validateDetectionRules synchronously and fails CLOSED on transport
+    # error (ADR-044 sync gate), so such publishes error for that window — expected; retry once
+    # the new pod is Ready. A warm standby (above) removes this window: the standby is already
+    # Ready and serving GraphQL, so the Service keeps an endpoint throughout.
+    #
+    # 🔴 READY IS NOT "DETECTION IS LIVE", AND NEITHER IS THE STARTUP PROBE A BOUND ON IT. The
+    # probe polls /readyz, which reports the auth gate and never sees this processor — so
+    # neither a handover wait nor a term build is measured against any probe budget. Detection
+    # resumes when a replica has acquired the partition and rebuilt its term (a restore, a
+    # projection catch-up, three view builds and a replay), plus — when the previous owner's
+    # release cannot be proven — a handover wait bounded by the lease TTL. Watch
+    # devicechain_eventprocessing_detect_is_leader and detect_live, not readiness, and note
+    # both are read as a MAX across pods precisely because a standby reports 0 for each.
     replicas: 1
     strategy: Recreate
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
@@ -898,6 +1081,57 @@ functionalAreas:
     # still starts and serves its metadata (it fetches JWKS in the background), but no
     # client can obtain a token until the AS is enabled — a separate, deliberate
     # switch, since setting the issuer changes the `iss` claim of EVERY minted token.
+    #
+    # ONE SERVING POD, and the render refuses more. mcp holds each connected client's
+    # protocol session in memory on the pod that created it; sessions are not shared and
+    # the Service does no affinity, so a second replica answers roughly half of every
+    # client's requests "session not found" rather than sharing the load. It is not a
+    # lease case — the state is per-client, not per-partition — so scaling it out means
+    # moving sessions off the pod, not adding a lock.
+    #
+    # resourceUrl doubles as the ENDPOINT a client posts to, not just an identifier: the
+    # /api/<area> ingress rule strips its prefix and the service mounts the MCP handler
+    # at its root, so <origin>/api/mcp is both the audience tokens are bound to and the
+    # URL that answers. The protected-resource metadata for it is served at
+    # <origin>/.well-known/oauth-protected-resource/api/mcp — the well-known segment goes
+    # BETWEEN the host and the path, which is the location a client builds for itself —
+    # and the chart renders a dedicated, rewrite-free Ingress for that whole well-known
+    # namespace.
+    #
+    # 🔴 UNDER AN INGRESS, THE OVERRIDE IS NOT A FREE CHOICE, AND THE RENDER NOW SAYS SO.
+    # Every route is keyed on ingress.host, and the endpoint route is keyed on the area
+    # name, so the only identifier this chart actually routes is the derived one. An
+    # override pointing anywhere else used to render cleanly and produce an instance
+    # whose tokens are bound to an address that answers nothing. It is refused now,
+    # with one exception: a LOOPBACK address, which is the shape that made the override
+    # worth having — mcp reached by port-forward rather than through the ingress, where
+    # no rule applies and none is needed.
+    #
+    # Discovery does not finish here. The document above names user-management as the
+    # authorization server, and a client then fetches THAT server's metadata at
+    # <origin>/.well-known/oauth-authorization-server/api/user-management. The chart
+    # routes it — but only once auth.issuerUrl is set on user-management (see below),
+    # because until then there is no authorization server to route to.
+    #
+    # 🔴 replicas IS PINNED HERE FOR THE SAME REASON sparkplug-ingest AND lwm2m-ingest
+    # PIN THEIRS: mcp can only run one serving pod, the template fails the render
+    # otherwise, and an area that cannot scale must not be left inheriting the GLOBAL
+    # replicas. It was, and the cost was not theoretical — `--set replicas=2` is the
+    # zero-downtime recipe this chart's own README and the published upgrade guide both
+    # give, and with mcp enabled (profile `full`) it aborted the render for the whole
+    # release rather than for the one area that cannot take it. Pinning it here means the
+    # global setting means what it says everywhere it can; the area guard in
+    # deployment.yaml stays as the backstop for anyone who sets THIS value above 1.
+    #
+    # strategy IS PINNED FOR THE SAME REASON, and pinning replicas without it would have
+    # left the defect half-fixed. The default RollingUpdate carries maxSurge:1, so every
+    # mcp rollout stands the new pod up BEFORE retiring the old one — two serving pods,
+    # which is exactly the condition described above, arriving on every deploy rather than
+    # only when someone scales. Recreate takes a brief gap instead: mcp sessions do not
+    # survive a restart either way, so the gap costs what the surge would have cost anyway,
+    # without the window where half of every client's requests miss their session.
+    replicas: 1
+    strategy: Recreate
     config: {}
       # resourceUrl: https://<host>/api/mcp
       # issuerUrl: https://<host>/api/user-management
@@ -989,9 +1223,13 @@ functionalAreas:
     # makes REPLACEMENT safe — a new pod cannot serve until it holds the lease, so
     # there is never a window with two Hosts on the broker — it does not make a warm
     # standby correct. Single ownership here is a correctness property of the
-    # Sparkplug Host, not a limitation waiting on a feature. Do NOT raise replicas
-    # past 1 (a Recreate with 2 replicas runs two permanent Hosts; the template fails
-    # the render), mirroring event-processing above.
+    # Sparkplug Host, not a limitation waiting on a feature. This is where this area
+    # DIVERGES from event-processing above, which now does support a warm standby.
+    #
+    # replicas MUST be 1 and the template fails the render otherwise, whatever the
+    # strategy says. That guard is keyed on the AREA, not on Recreate: before, this
+    # area was protected only by its strategy, so pairing RollingUpdate with
+    # replicas:2 rendered cleanly and produced two Sparkplug Hosts.
     replicas: 1
     strategy: Recreate
     config: {}
@@ -1033,8 +1271,12 @@ functionalAreas:
     # binder before the new one binds). The ADR-070 fenced lease HAS landed and gates
     # SERVING — only the leader binds the socket — which makes replacement safe but does
     # NOT make a second replica useful: a standby that also bound the socket would
-    # silently receive and drop the share of datagrams the Service sprayed at it. Do NOT
-    # raise replicas past 1 (the template fails the render).
+    # silently receive and drop the share of datagrams the Service sprayed at it.
+    #
+    # replicas MUST be 1 and the template fails the render otherwise, whatever the
+    # strategy says. That guard is keyed on the AREA, not on Recreate: before, this area
+    # was protected only by its strategy, so pairing RollingUpdate with replicas:2
+    # rendered cleanly and produced a second binder dropping the datagrams sent to it.
     replicas: 1
     strategy: Recreate
     # The device-facing CoAPS port is UDP (CoAP over DTLS), so it is declared with an

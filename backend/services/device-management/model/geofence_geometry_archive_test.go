@@ -162,8 +162,7 @@ func TestEditingOneFenceArchivesOnlyTheNewGeometry(t *testing.T) {
 	}
 
 	// One edit, to a geometry none of the four already has.
-	if _, err := api.UpdateGeoFence(ctx, "yard-0", &GeoFenceCreateRequest{
-		Token: "yard-0", Geometry: polygonGeometry(9.5, 0, 1, 0, 1, 1, 9.5, 0)}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, "yard-0", geoFenceEdit(polygonGeometry(9.5, 0, 1, 0, 1, 1, 9.5, 0))); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if n := len(archivedBlobs(t, api, ctx)); n != 5 {

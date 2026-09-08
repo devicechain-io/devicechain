@@ -250,6 +250,9 @@ func newGatedHarness(t *testing.T, limiter ingestLimiter) (*Manager, *fakeIngest
 		SamplesTruncated:        prometheus.NewCounter(prometheus.CounterOpts{Name: "samples_truncated"}),
 		IngestDropped:           prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_dropped"}),
 		ActiveObservations:      prometheus.NewGauge(prometheus.GaugeOpts{Name: "active_observations"}),
+		RecordsNonNumeric:       prometheus.NewCounter(prometheus.CounterOpts{Name: "records_non_numeric"}),
+		RecordsNonFinite:        prometheus.NewCounter(prometheus.CounterOpts{Name: "records_non_finite"}),
+		RecordsUnnamed:          prometheus.NewCounter(prometheus.CounterOpts{Name: "records_unnamed"}),
 	}
 	m := NewManager(ing, limiter, metrics, Options{
 		Now:            func() time.Time { return time.Unix(1_700_000_500, 0).UTC() },

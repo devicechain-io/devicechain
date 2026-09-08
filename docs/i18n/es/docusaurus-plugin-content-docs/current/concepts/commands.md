@@ -74,7 +74,13 @@ Estos estados significan que el comando aún no ha terminado:
 
 Estos son terminales, y nada sale de un estado terminal:
 
-- **`SUCCESSFUL`** / **`FAILED`** — el dispositivo informó el resultado.
+- **`SUCCESSFUL`** / **`FAILED`** — el dispositivo informó el resultado. `FAILED` es
+  también lo que la plataforma registra cuando no puede completar un comando ella misma:
+  cuando el transporte del dispositivo no puede llevar comandos en absoluto, y cuando un
+  dispositivo sí respondió pero la plataforma no pudo registrar la respuesta tras todos
+  los intentos. En ambos casos el campo `error` del comando dice cuál fue, de modo que un
+  `FAILED` del lado de la plataforma nunca se confunde con un fallo informado por el
+  dispositivo.
 - **`TIMEOUT`** — se despachó y el dispositivo nunca respondió.
 - **`EXPIRED`** — su TTL transcurrió antes de que llegara a ningún dispositivo.
 - **`CANCELLED`** — un operador o un inquilino lo canceló.
@@ -173,8 +179,9 @@ ninguna salida que no exija uno — salvo el TTL, que registra `TIMEOUT`.
 Esa es la misma etiqueta errónea que `PARKED` existe para eliminar, llegando por otro camino,
 así que la plataforma la cierra de la misma manera. Un proceso en segundo plano busca comandos
 que lleven en `SENT` sin desenlace más tiempo del que la plataforma podría haber seguido
-trabajando en ellos — derivado del propio presupuesto de reintentos de la capa de mensajería,
-unos cinco minutos y medio hoy, no una cifra elegida a mano. Los que puede rearmar con
+trabajando en ellos — derivado del propio presupuesto de reintentos de la capa de mensajería
+y del barrido de entrega más lento que un operador puede configurar, unos diez minutos hoy,
+no una cifra elegida a mano. Los que puede rearmar con
 seguridad pasan a `PARKED`, y se entregan en el próximo despertar del dispositivo como
 cualquier otro comando aparcado.
 
@@ -256,7 +263,12 @@ a posteriori.
 **Solo el dispositivo puede informar éxito.** `SUCCESSFUL` y un `FAILED` informado por el
 dispositivo son los dos desenlaces que solo él puede producir; cualquier otro terminal lo
 escribe la plataforma por su cuenta — `TIMEOUT`, `EXPIRED`, `CANCELLED`, o un `FAILED`
-registrado porque el transporte no puede llevar el comando en absoluto. Informar el resultado
+registrado porque el transporte no puede llevar el comando en absoluto, o porque llegó la
+respuesta de un dispositivo y no se pudo registrar contra el comando. Este último caso
+deliberadamente no es `TIMEOUT`: el dispositivo sí respondió, así que culparlo te llevaría
+a inspeccionar hardware que funciona. El campo `error` del comando indica que la respuesta
+se perdió, y el resultado que el dispositivo informó no es recuperable — si importa,
+vuelve a preguntarle al dispositivo. Informar el resultado
 es la mitad del contrato que le corresponde al dispositivo — ver
 [Responder a un comando](../guides/connecting-a-device.md#responding-to-a-command). Un
 dispositivo que nunca responde deja sus comandos en `SENT` hasta que su TTL los convierte

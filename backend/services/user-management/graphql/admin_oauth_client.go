@@ -103,13 +103,9 @@ type adminOAuthClientCreateInput struct {
 	Confidential *bool
 }
 
-// adminOAuthClientUpdateInput mirrors AdminOAuthClientUpdateRequest.
-type adminOAuthClientUpdateInput struct {
-	Name         *string
-	Description  *string
-	RedirectUris []string
-	Scopes       []string
-}
+// The update input's resolver-local mirror is gone: UpdateOauthClient takes
+// admin.OAuthClientUpdateRequest directly, so there is no flattening hop for a state to
+// be lost in. See the note where adminRoleUpdateInput used to be.
 
 // CreateOauthClient registers an OAuth client (requires client:write). For a
 // confidential client the response carries the one-time cleartext secret.
@@ -143,21 +139,19 @@ func (r *AdminResolver) RotateOauthClientSecret(ctx context.Context, args struct
 	return wrapOAuthClientSecret(c, secret, err)
 }
 
-// UpdateOauthClient replaces a client's mutable fields by clientId (requires
-// client:write).
+// UpdateOauthClient applies a partial update to a client by clientId (requires
+// client:write): an omitted field leaves the stored value alone, an explicit null clears
+// it, a value sets it. Emptying either allowlist is refused — see
+// admin.OAuthClientUpdateRequest for why those two lists are not clearable when a role's
+// authorities are.
 func (r *AdminResolver) UpdateOauthClient(ctx context.Context, args struct {
 	ClientId string
-	Request  adminOAuthClientUpdateInput
+	Request  admin.OAuthClientUpdateRequest
 }) (*AdminOAuthClientResolver, error) {
 	if err := auth.Authorize(ctx, auth.ClientWrite); err != nil {
 		return nil, err
 	}
-	c, err := r.getAdminService(ctx).UpdateOAuthClient(ctx, args.ClientId, admin.OAuthClientMutableInput{
-		Name:         strOrEmpty(args.Request.Name),
-		Description:  strOrEmpty(args.Request.Description),
-		RedirectURIs: args.Request.RedirectUris,
-		Scopes:       args.Request.Scopes,
-	})
+	c, err := r.getAdminService(ctx).UpdateOAuthClient(ctx, args.ClientId, &args.Request)
 	return wrapOAuthClient(c, err)
 }
 

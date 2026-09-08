@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	util "github.com/devicechain-io/dc-microservice/graphql"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/glebarez/sqlite"
@@ -65,6 +65,22 @@ func secretValue(t *testing.T, api *Api, ctx context.Context, token string) stri
 
 const mqttConfig = `{"urls":["tcp://broker:1883"],"topic":"alerts"}`
 
+// connectorEdit builds an update naming a new type and config and NOTHING else. Every
+// other field — name, description, the write-only secret — is ABSENT, which under the
+// three-state semantic means "leave it alone".
+//
+// 🔴 IT EXISTS TO KEEP WHAT A TEST LEAVES ABSENT VISIBLE. Under the full-replace input
+// these call sites restated `token` and every field they were not exercising, because
+// omitting one CLEARED it. The two readings now differ, and a helper naming the one
+// shape that dominates this file means a call site doing anything more has to spell the
+// literal out — so the extra field is the thing that stands out.
+func connectorEdit(connectorType ConnectorType, config string) *ConnectorUpdateRequest {
+	return &ConnectorUpdateRequest{
+		Type:   dcgraphql.OptionalStringOf(string(connectorType)),
+		Config: dcgraphql.OptionalStringOf(config),
+	}
+}
+
 // TestConnectorCrud exercises create -> read -> update -> delete.
 func TestConnectorCrud(t *testing.T) {
 	api := newTestApi(t)
@@ -85,12 +101,9 @@ func TestConnectorCrud(t *testing.T) {
 	require.Len(t, found, 1)
 	assert.JSONEq(t, mqttConfig, string(found[0].Config))
 
-	// Update replaces type + config.
-	_, err = api.UpdateConnector(ctx, "pager", &ConnectorCreateRequest{
-		Token:  "pager",
-		Type:   string(ConnectorTypeKafka),
-		Config: `{"addresses":["k:9092"],"topic":"t"}`,
-	}, nil)
+	// A partial update naming type + config re-points the draft.
+	_, err = api.UpdateConnector(ctx, "pager",
+		connectorEdit(ConnectorTypeKafka, `{"addresses":["k:9092"],"topic":"t"}`), nil)
 	require.NoError(t, err)
 	found, err = api.ConnectorsByToken(ctx, []string{"pager"})
 	require.NoError(t, err)
@@ -179,30 +192,50 @@ func TestConnectorSecretRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", secretValue(t, api, ctx, "c"))
 
-	// Update with a nil secret PRESERVES it (write-only; caller can't read it back).
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig, Secret: nil,
-	}, nil)
+	// An update that never mentions the secret PRESERVES it (write-only; the caller
+	// cannot read it back to resend it).
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorUpdateRequest{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret", secretValue(t, api, ctx, "c"))
 
-	// Update with a value REPLACES it.
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig, Secret: strp("rotated"),
+	// A value ROTATES it.
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("rotated"),
 	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "rotated", secretValue(t, api, ctx, "c"))
 
-	// Update with an explicit empty string CLEARS it.
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig, Secret: strp(""),
+	// 🔴 AN EXPLICIT NULL CLEARS IT, and that spelling is NEW. Under the old pointer the
+	// clear was the empty STRING, because a pointer had no third state to give it; null
+	// now means what it means on every other field on the platform.
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorUpdateRequest{
+		Secret: dcgraphql.ClearedString(),
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "", secretValue(t, api, ctx, "c"))
+
+	// …and the empty string still clears, so a caller who spells it the old way is not
+	// silently left with a live credential. Re-seal first, or this asserts nothing.
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf("re-sealed"),
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "re-sealed", secretValue(t, api, ctx, "c"),
+		"precondition: the empty-string clear below proves nothing against an absent secret")
+	_, err = api.UpdateConnector(ctx, "c", &ConnectorUpdateRequest{
+		Secret: dcgraphql.OptionalStringOf(""),
 	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "", secretValue(t, api, ctx, "c"))
 }
 
 // TestSecretSurvivesTokenRename verifies the credential is keyed by immutable id, so a
-// token rename in the same update keeps it bound (no orphaning).
+// rename keeps it bound (no orphaning).
+//
+// 🔴 IT IS RE-POINTED AT renameConnector RATHER THAN DELETED. The rename used to live
+// in updateConnector's payload token, and this test is the only evidence that moving it
+// to its own mutation did not orphan the credential — deleting it would have removed
+// the proof while leaving the claim standing.
 func TestSecretSurvivesTokenRename(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -210,9 +243,7 @@ func TestSecretSurvivesTokenRename(t *testing.T) {
 		Token: "old", Type: string(ConnectorTypeMQTT), Config: mqttConfig, Secret: strp("keep"),
 	})
 	require.NoError(t, err)
-	_, err = api.UpdateConnector(ctx, "old", &ConnectorCreateRequest{
-		Token: "new", Type: string(ConnectorTypeMQTT), Config: mqttConfig, Secret: nil,
-	}, nil)
+	_, err = api.RenameConnector(ctx, "old", "new")
 	require.NoError(t, err)
 	assert.Equal(t, "keep", secretValue(t, api, ctx, "new"))
 }
@@ -302,9 +333,7 @@ func TestConnectorVersioning(t *testing.T) {
 
 	// Edit the draft, then publish again -> version 2.
 	kafkaCfg := `{"addresses":["k:9092"],"topic":"t"}`
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: kafkaCfg,
-	}, nil)
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeKafka, kafkaCfg), nil)
 	require.NoError(t, err)
 	v2, err := api.PublishConnector(ctx, "c", nil, nil, "bob", nil)
 	require.NoError(t, err)
@@ -340,9 +369,7 @@ func TestOptimisticConcurrency(t *testing.T) {
 	require.NoError(t, err)
 
 	stale := "2000-01-01T00:00:00Z"
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
-	}, &stale)
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeMQTT, mqttConfig), &stale)
 	require.ErrorIs(t, err, ErrConflict)
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "alice", &stale)
 	require.ErrorIs(t, err, ErrConflict)
@@ -355,10 +382,8 @@ func TestOptimisticConcurrency(t *testing.T) {
 	// by under a second passed a check that looked airtight from either side alone.
 	reloaded, err := api.ConnectorsByToken(ctx, []string{"c"})
 	require.NoError(t, err)
-	current := *util.FormatTime(reloaded[0].UpdatedAt)
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
-	}, &current)
+	current := *dcgraphql.FormatTime(reloaded[0].UpdatedAt)
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeKafka, `{"addresses":["k:9092"],"topic":"t"}`), &current)
 	require.NoError(t, err)
 	found, err := api.ConnectorsByToken(ctx, []string{"c"})
 	require.NoError(t, err)
@@ -398,16 +423,12 @@ func TestOptimisticConcurrencyIsSubSecond(t *testing.T) {
 		"negative control: under the old whole-second layout these must be the same string, "+
 			"otherwise this test is not exercising the lost-update window at all")
 
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
-	}, util.FormatTime(stale))
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeKafka, `{"addresses":["k:9092"],"topic":"t"}`), dcgraphql.FormatTime(stale))
 	require.ErrorIs(t, err, ErrConflict,
 		"a precondition stale by less than a second must be refused")
 
 	// And the real value still succeeds, so the check rejects staleness rather than everything.
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
-	}, util.FormatTime(actual))
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeKafka, `{"addresses":["k:9092"],"topic":"t"}`), dcgraphql.FormatTime(actual))
 	require.NoError(t, err)
 }
 
@@ -432,9 +453,7 @@ func TestLatestPublishedConnector(t *testing.T) {
 	// Publish v1 (mqtt), edit to kafka, publish v2 → latest must be v2 (kafka).
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "alice", nil)
 	require.NoError(t, err)
-	_, err = api.UpdateConnector(ctx, "c", &ConnectorCreateRequest{
-		Token: "c", Type: string(ConnectorTypeKafka), Config: `{"addresses":["k:9092"],"topic":"t"}`,
-	}, nil)
+	_, err = api.UpdateConnector(ctx, "c", connectorEdit(ConnectorTypeKafka, `{"addresses":["k:9092"],"topic":"t"}`), nil)
 	require.NoError(t, err)
 	_, err = api.PublishConnector(ctx, "c", nil, nil, "bob", nil)
 	require.NoError(t, err)

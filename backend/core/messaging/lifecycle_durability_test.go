@@ -35,12 +35,17 @@ import (
 
 // areaSeq makes every FunctionalArea in this file unique within the test binary.
 //
-// NewNatsManager registers stream metrics through promauto against the GLOBAL
-// default registry, so constructing two managers with the same area panics with
-// "duplicate metrics collector registration". A fixed area would therefore work
-// under `go test` and panic under `-count=2`, which is the kind of test that passes
-// until someone reruns it. It is also the reason every other broker test in this
-// package builds a struct literal instead of calling the constructor.
+// ⚠️ IT IS NO LONGER LOAD-BEARING, AND THE REASON IT WAS IS WORTH KEEPING STRAIGHT.
+// NewNatsManager used to register its stream metrics on the process-global default
+// registry, keyed by the functional area, so two managers sharing an area panicked
+// with "duplicate metrics collector registration" — a test that worked under
+// `go test` and blew up under `-count=2`. A Microservice now registers into a
+// registry it owns, so a fixed area is safe; TestTwoManagersOnOneAreaCoexist in
+// nats_manager_registry_test.go is what says so.
+//
+// What is left is presentational: unique areas keep each test's durable names, stream
+// names and log lines attributable to the test that produced them when the whole
+// package's output is read as one stream.
 var areaSeq atomic.Int64
 
 // uniqueArea returns a per-run area name. The durability test needs the SAME area
@@ -88,8 +93,9 @@ func testMicroservice(t *testing.T, srv *natsserver.Server, area string) *core.M
 	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = addr.IP.String()
 	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(addr.Port)
 	// Readers gate reads on auth being live; nothing here exercises auth, so open the
-	// gate rather than let every read block on a validator this test never installs.
-	ms.Readiness.MarkReady(nil)
+	// gate rather than let every read block on a validator this test never installs. The
+	// gate REFUSES a bare nil validator, so this states the intent instead of passing one.
+	ms.Readiness.MarkReadyWithoutAuthSurface()
 	return ms
 }
 

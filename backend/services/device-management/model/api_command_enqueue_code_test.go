@@ -55,7 +55,7 @@ func TestEnqueueVerdictCarriesAStableCode(t *testing.T) {
 	t.Run("a payload that violates the parameter schema", func(t *testing.T) {
 		api := newEnqueueTestApi(t)
 		seedDeviceWithCommands(t, api, ctx, "dev-typed", []*CommandDefinition{
-			defWithSchema(t, "drive", []CommandParameter{
+			defWithSchema(t, "drive", []ParameterSpec{
 				{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)},
 			}),
 		})

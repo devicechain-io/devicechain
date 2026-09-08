@@ -52,17 +52,16 @@ cd "$ROOT"
 # `/backend/core` so they compare directly against Dependabot's leading-slash paths.
 # go.work is parsed rather than `go list -m` so the gate needs no toolchain and can
 # be wired into any job.
+#
+# 🔴 THE PARSE ITSELF LIVES IN ONE PLACE, hack/list-workspace-modules.sh, AND THAT IS
+# THE FIX FOR A REAL BUG RATHER THAN TIDINESS. The awk that used to sit here handled
+# only the parenthesised `use (...)` block, so a single-line `use ./backend/tools/x` —
+# valid go.work syntax — parsed as no module at all. Here that would silently drop a
+# module out of the coverage comparison (the direction that does not announce itself);
+# in ci.yml, where a second copy of the same awk cross-checked `go list -m`, it made a
+# VALID go.work fail the build. One reader, one self-test, both callers.
 workspace_modules() {
-  awk '
-    /^use[[:space:]]*\(/ { inuse = 1; next }
-    inuse && /^\)/       { inuse = 0; next }
-    inuse {
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-      if ($0 == "" || $0 ~ /^\/\//) next
-      sub(/^\./, "")
-      print
-    }
-  ' "${1:-go.work}"
+  "$ROOT/hack/list-workspace-modules.sh" "${1:-$ROOT/go.work}" | sed 's|^\.||'
 }
 
 # Every npm tree in the repo, one per lockfile, normalised to a leading slash so the
@@ -220,14 +219,18 @@ if [ "${1:-}" = "--self-test" ]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
 
+  # drdrill is declared with the SINGLE-LINE `use` form on purpose: every case below
+  # asserts on drdrill, so a reader that handled only the parenthesised block would
+  # make case 1 fail rather than pass quietly with one fewer module in the comparison.
   cat > "$tmp/go.work" <<'EOF'
 go 1.26.5
 
 use (
 	./backend/core
 	./backend/services/device-management
-	./backend/tools/drdrill
 )
+
+use ./backend/tools/drdrill
 EOF
 
   # 1. A module no pattern covers — the failure that actually happened.

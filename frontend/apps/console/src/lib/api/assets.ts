@@ -7,8 +7,12 @@ import { graphql } from '@/gql/device-management';
 import type {
   AssetsQuery,
   AssetTypesQuery,
+  AssetTypeVersionsQuery,
+  ActiveAssetTypeVersionQuery,
   AssetTypeCreateRequest,
   AssetCreateRequest,
+  AssetTypeUpdateRequest,
+  AssetUpdateRequest,
 } from '@/gql/device-management/graphql';
 import {
   listEntityGroups,
@@ -18,6 +22,7 @@ import {
   deleteEntityGroup,
   type EntityGroup,
   type GroupFormRequest,
+  type EntityGroupUpdateRequest,
 } from './device-management';
 
 // Public types are derived from the generated operation results so they always
@@ -32,7 +37,12 @@ export type AssetGroup = EntityGroup;
 
 // Re-export the generated request inputs so forms can type their request objects
 // without reaching into the generated module directly.
-export type { AssetTypeCreateRequest, AssetCreateRequest };
+export type {
+  AssetTypeCreateRequest,
+  AssetCreateRequest,
+  AssetTypeUpdateRequest,
+  AssetUpdateRequest,
+};
 
 // ── Assets ──────────────────────────────────────────────────────────────
 
@@ -45,6 +55,7 @@ const ASSETS = graphql(`
         name
         description
         metadata
+        properties
         createdAt
         assetType {
           id
@@ -86,6 +97,7 @@ const ASSET_BY_TOKEN = graphql(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -113,6 +125,7 @@ const CREATE_ASSET = graphql(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -133,13 +146,14 @@ export async function createAsset(request: AssetCreateRequest): Promise<Asset> {
 }
 
 const UPDATE_ASSET = graphql(`
-  mutation UpdateAsset($token: String!, $request: AssetCreateRequest) {
+  mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
     updateAsset(token: $token, request: $request) {
       id
       token
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -154,39 +168,22 @@ const UPDATE_ASSET = graphql(`
   }
 `);
 
-// 🔴 `Required<…>` is not decoration: it makes the OMISSION a compile error.
-// The update is a full replace, so the defect this whole file guards against is a
-// caller that simply does not mention a field. Typing the parameter as the plain
-// request — where every field is optional — is what let that compile. Requiring
-// every key forces each caller to say what it wants done with each one, and
-// `…Preserved(entity)` is how it says "leave this as it was".
-export async function updateAsset(token: string, request: Required<AssetCreateRequest>): Promise<Asset> {
+// updateAsset is a PARTIAL update: pass only the fields being changed. An omitted
+// field is left alone, an explicit null clears it.
+//
+// 🔴 Callers must NOT carry forward the fields they do not edit. The `assetPreserved`
+// projection that used to sit here was the right fix for a full replace and is the
+// WRONG one now: a form that re-sends fields it never showed is writing them back
+// from a snapshot it read minutes ago, so two operators on two tabs each silently
+// overwrite the other. Absence is the carry-forward.
+export async function updateAsset(
+  token: string,
+  request: AssetUpdateRequest,
+): Promise<Asset> {
   const data = await gql('device-management', UPDATE_ASSET, { token, request });
   return data.updateAsset;
 }
 
-// 🔴 An asset update is a FULL REPLACE: the stored record is rebuilt from the
-// request, so a field the request omits is DELETED. Every edit therefore starts
-// from this projection of what the entity already is, and overrides only what the
-// form edits. The `Required<…>` RETURN TYPE is the gate that keeps it honest — add a
-// field to the schema and codegen widens the request type, which breaks this
-// function until someone decides what an edit should do with it. Without that,
-// the new field would simply start being erased, silently and successfully.
-//
-// assetTypeToken is deliberately NOT preserved here: it is a required field of the
-// form, so every caller supplies it and the request type refuses to compile
-// without it. Defaulting it would only be a way to send a wrong one.
-export function assetPreserved(a: Asset): Required<Omit<AssetCreateRequest, 'assetTypeToken'>> {
-  // `?? null` rather than `?? undefined`: for a full replace an explicit null and
-  // an omitted field both land as a nil *string server-side, and null is the one
-  // that says so out loud.
-  return {
-    token: a.token,
-    name: a.name ?? null,
-    description: a.description ?? null,
-    metadata: a.metadata ?? null,
-  };
-}
 
 const DELETE_ASSET = graphql(`
   mutation DeleteAsset($token: String!) {
@@ -215,6 +212,8 @@ const ASSET_TYPES = graphql(`
         borderColor
         imageUrl
         metadata
+        propertySchema
+        activeVersion
         createdAt
       }
       pagination {
@@ -254,6 +253,8 @@ const ASSET_TYPE_BY_TOKEN = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -277,6 +278,8 @@ const CREATE_ASSET_TYPE = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -288,7 +291,7 @@ export async function createAssetType(request: AssetTypeCreateRequest): Promise<
 }
 
 const UPDATE_ASSET_TYPE = graphql(`
-  mutation UpdateAssetType($token: String!, $request: AssetTypeCreateRequest) {
+  mutation UpdateAssetType($token: String!, $request: AssetTypeUpdateRequest!) {
     updateAssetType(token: $token, request: $request) {
       id
       token
@@ -300,6 +303,8 @@ const UPDATE_ASSET_TYPE = graphql(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
   }
@@ -307,29 +312,12 @@ const UPDATE_ASSET_TYPE = graphql(`
 
 export async function updateAssetType(
   token: string,
-  request: Required<AssetTypeCreateRequest>,
+  request: AssetTypeUpdateRequest,
 ): Promise<AssetType> {
   const data = await gql('device-management', UPDATE_ASSET_TYPE, { token, request });
   return data.updateAssetType;
 }
 
-// The asset-type counterpart of assetPreserved: an asset-type update is a full
-// replace too, and this form edits only name + description while the Appearance
-// tab edits only icon + colors. Each starts from here so the other's fields — and
-// the imageUrl and metadata no console form edits at all — survive the save.
-export function assetTypePreserved(at: AssetType): Required<AssetTypeCreateRequest> {
-  return {
-    token: at.token,
-    name: at.name ?? null,
-    description: at.description ?? null,
-    icon: at.icon ?? null,
-    backgroundColor: at.backgroundColor ?? null,
-    foregroundColor: at.foregroundColor ?? null,
-    borderColor: at.borderColor ?? null,
-    imageUrl: at.imageUrl ?? null,
-    metadata: at.metadata ?? null,
-  };
-}
 
 const DELETE_ASSET_TYPE = graphql(`
   mutation DeleteAssetType($token: String!) {
@@ -351,6 +339,199 @@ export const listAssetGroups = (opts: { pageNumber: number; pageSize: number }) 
 export const getAssetGroup = (token: string) => getEntityGroupOfType(token, 'asset');
 export const createAssetGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'asset' });
-export const updateAssetGroup = (token: string, request: Required<GroupFormRequest>) =>
-  updateEntityGroup(token, { ...request, memberType: 'asset' });
+export const updateAssetGroup = (token: string, request: EntityGroupUpdateRequest) =>
+  updateEntityGroup(token, request);
 export const deleteAssetGroup = deleteEntityGroup;
+
+// ── Asset hierarchy (parent/child over the relationship graph) ──────────────
+// The hierarchy is not a column on Asset: it is an edge of the reserved
+// "contains" relationship type, which the backend auto-provisions per tenant.
+// These operations are the whole of the console's dealings with it — nothing here
+// hand-builds a containment edge, so the structural contract the server enforces
+// (one parent, no cycle, both ends assets, bounded depth) is the only thing
+// shaping the tree.
+
+const ASSET_PARENT = graphql(`
+  query AssetParent($token: String!) {
+    assetParent(token: $token) {
+      id
+      token
+      name
+    }
+  }
+`);
+
+// The asset directly above this one, or null when it is a root. A root is the
+// normal state for most assets, so null here is an answer and not a failure.
+export async function getAssetParent(token: string) {
+  const data = await gql('device-management', ASSET_PARENT, { token });
+  return data.assetParent ?? null;
+}
+
+const ASSET_ANCESTORS = graphql(`
+  query AssetAncestors($token: String!) {
+    assetAncestors(token: $token) {
+      id
+      token
+      name
+    }
+  }
+`);
+
+// The path to the root, NEAREST ANCESTOR FIRST — the order a breadcrumb is built
+// from. It is not reversed here, so the array matches what the server documents;
+// the panel that renders root-first reverses a copy.
+export async function listAssetAncestors(token: string) {
+  const data = await gql('device-management', ASSET_ANCESTORS, { token });
+  return data.assetAncestors;
+}
+
+const ASSET_CHILDREN = graphql(`
+  query AssetChildren($parentToken: String, $pagination: PaginationInput!) {
+    assetChildren(parentToken: $parentToken, pagination: $pagination) {
+      results {
+        id
+        token
+        name
+        assetType {
+          id
+          token
+          name
+          icon
+          backgroundColor
+          foregroundColor
+          borderColor
+        }
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// A page of the assets directly below a parent, or the tree's ROOTS when
+// parentToken is null. One call for both, because a tree browser asks the same
+// question at every level.
+export async function listAssetChildren(
+  parentToken: string | null,
+  pagination: { pageNumber: number; pageSize: number },
+) {
+  const data = await gql('device-management', ASSET_CHILDREN, {
+    parentToken: parentToken ?? undefined,
+    pagination,
+  });
+  return data.assetChildren;
+}
+
+const SET_ASSET_PARENT = graphql(`
+  mutation SetAssetParent($childToken: String!, $parentToken: String!) {
+    setAssetParent(childToken: $childToken, parentToken: $parentToken) {
+      id
+      token
+    }
+  }
+`);
+
+// Place an asset under a parent, replacing whatever parent it had. The server
+// refuses a self-parent, a cycle and an over-deep tree; the caller surfaces the
+// message rather than pre-checking, so the console and the API can never disagree
+// about what is legal.
+export async function setAssetParent(childToken: string, parentToken: string) {
+  const data = await gql('device-management', SET_ASSET_PARENT, { childToken, parentToken });
+  return data.setAssetParent;
+}
+
+const CLEAR_ASSET_PARENT = graphql(`
+  mutation ClearAssetParent($childToken: String!) {
+    clearAssetParent(childToken: $childToken)
+  }
+`);
+
+// Detach an asset from its parent, making it a root. Its own children travel with
+// it — this moves one edge, not a subtree.
+export async function clearAssetParent(childToken: string): Promise<boolean> {
+  const data = await gql('device-management', CLEAR_ASSET_PARENT, { childToken });
+  return data.clearAssetParent;
+}
+
+// ── Asset-type property contract versions ─────────────────────────────────
+//
+// An asset type's property schema is a versioned tenant resource: the schema on the
+// type is the DRAFT, publishing freezes it, and an asset is validated against the
+// type's ACTIVE published version. These four operations are the console's half of
+// that — the same draft/publish/rollback shape a device profile and a dashboard have.
+
+export type AssetTypeVersion = AssetTypeVersionsQuery['assetTypeVersions'][number];
+
+const ASSET_TYPE_VERSIONS = graphql(`
+  query AssetTypeVersions($token: String!) {
+    assetTypeVersions(token: $token) {
+      version
+      label
+      description
+      publishedAt
+      publishedBy
+      propertySchema
+    }
+  }
+`);
+
+export async function listAssetTypeVersions(token: string): Promise<AssetTypeVersion[]> {
+  const data = await gql('device-management', ASSET_TYPE_VERSIONS, { token });
+  return data.assetTypeVersions;
+}
+
+const ACTIVE_ASSET_TYPE_VERSION = graphql(`
+  query ActiveAssetTypeVersion($token: String!) {
+    activeAssetTypeVersion(token: $token) {
+      version
+      label
+      publishedAt
+      propertySchema
+    }
+  }
+`);
+
+// The contract an asset of this type is validated against right now, or null when the
+// type has never been published. It is read from its own door rather than picked out
+// of the version list by matching AssetType.activeVersion, which would put a second
+// implementation of "which one is active" in the client.
+export async function getActiveAssetTypeVersion(
+  token: string,
+): Promise<ActiveAssetTypeVersionQuery['activeAssetTypeVersion']> {
+  const data = await gql('device-management', ACTIVE_ASSET_TYPE_VERSION, { token });
+  return data.activeAssetTypeVersion;
+}
+
+const PUBLISH_ASSET_TYPE = graphql(`
+  mutation PublishAssetType($token: String!, $label: String, $description: String) {
+    publishAssetType(token: $token, label: $label, description: $description) {
+      version
+    }
+  }
+`);
+
+export async function publishAssetType(
+  token: string,
+  label?: string,
+  description?: string,
+): Promise<number> {
+  const data = await gql('device-management', PUBLISH_ASSET_TYPE, { token, label, description });
+  return data.publishAssetType.version;
+}
+
+const ROLLBACK_ASSET_TYPE = graphql(`
+  mutation RollbackAssetType($token: String!, $version: Int!) {
+    rollbackAssetType(token: $token, version: $version) {
+      token
+      activeVersion
+    }
+  }
+`);
+
+export async function rollbackAssetType(token: string, version: number): Promise<void> {
+  await gql('device-management', ROLLBACK_ASSET_TYPE, { token, version });
+}

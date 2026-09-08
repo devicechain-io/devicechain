@@ -21,22 +21,34 @@ import (
 type NotificationManagementConfiguration struct {
 	RdbConfiguration config.MicroserviceDatastoreConfiguration
 
-	// DeliverySeconds bounds a single channel delivery attempt (one SMTP send or
-	// webhook POST): the adapter runs on a background context (drain-on-shutdown), so
-	// a hung endpoint must not stall graceful shutdown. Unset (0) defaults to 10s. The
-	// worst-case whole-dispatch time (DeliveryAttempts × DeliverySeconds + backoff) is
-	// kept comfortably under the consumer's 60s AckWait so a slow-but-progressing
-	// dispatch never trips a redelivery of the message it is still working.
+	// DeliverySeconds bounds a single channel delivery ATTEMPT (one SMTP send or one
+	// webhook POST): the adapter runs on a background context (drain-on-shutdown), so a
+	// hung endpoint must not stall graceful shutdown. Unset (0) defaults to 10s.
+	//
+	// 🔴 IT DOES NOT BOUND THE DISPATCH, and this comment used to say it did. One channel
+	// costs DeliveryAttempts of these plus the backoffs between them, and an alarm's
+	// dispatch walks every channel its tenant's policies matched, one after another — so
+	// the whole-dispatch time is that per-channel figure times however many channels
+	// matched, which no tunable here caps. Two slow-but-alive channels was already enough
+	// to run past the consumer's AckWait, which redelivered the message to a second worker
+	// that started again from channel one and paged the same human twice.
+	//
+	// What keeps the dispatch inside AckWait is a DEADLINE on the dispatch itself
+	// (processor.dispatchBudget, derived from messaging.AckWait), not this number. The
+	// arithmetic tying the two together is pinned by a test rather than asserted here, so
+	// a change to either fails loudly: see processor.perChannelWorstCase and
+	// TestDispatchBudgetFitsUnderAckWait.
 	DeliverySeconds int
 	// DeliveryAttempts is how many times the dispatcher tries a single channel before
 	// giving up on it (the adapter owns its own retry, ADR-017 Notifier contract).
 	// Unset (0) defaults to 3; a value of 1 disables in-dispatch retry.
 	DeliveryAttempts int
-	// StateRetentionSeconds is how long a cleared per-alarm NotificationState row is
-	// kept before the retention sweep prunes it. Escalation is settled once an alarm
-	// clears, so the row is only kept for a grace window; pruning stops the per-alarm
-	// state from asymptotically becoming an alarm index in the wrong service (the
-	// ADR-041 history-home concern). Unset (0) defaults to 7d.
+	// StateRetentionSeconds is how long a RESOLVED per-alarm NotificationState row is
+	// kept before the retention sweep prunes it. Escalation is settled once an alarm is
+	// acknowledged OR cleared — either stamp makes the row resolved — so the row is only
+	// kept for a grace window; pruning stops the per-alarm state from asymptotically
+	// becoming an alarm index in the wrong service (the ADR-041 history-home concern).
+	// Unset (0) defaults to 7d.
 	StateRetentionSeconds int
 	// RetentionSweepSeconds is how often the retention sweep runs. Unset (0) defaults
 	// to hourly; a negative value disables the sweep.

@@ -297,11 +297,44 @@ func (c *Coordinator) PurgeTenant(ctx context.Context, tenant *iam.Tenant) error
 		return nil
 	}
 
+	// 🔴 LIFT THE FENCES BEFORE RELEASING THE TOKEN, NOT AFTER. Completion is the act
+	// that makes the token reusable, and every area's erasure fence refuses writes for
+	// the token while it stands — so a token released ahead of the lift would belong to a
+	// successor that could never write, with nothing missing anywhere to explain it. The
+	// other order fails safely: a crash between the two leaves the fences down while the
+	// token is still reserved, which is exactly the state the token hold has already
+	// established is safe.
+	//
+	// A store that cannot lift its fence blocks the purge. It is not a partial success to
+	// record: this pass has not established that the areas are reopenable, and the next
+	// pass will try again with the token still held.
+	if err := c.liftFences(ctx, t.Token); err != nil {
+		return err
+	}
+
 	if err := c.iam.CompleteTenantPurge(sys, t, rec, total, c.now()); err != nil {
 		return fmt.Errorf("completing the purge of %q: %w", t.Token, err)
 	}
 	log.Info().Str("tenant", t.Token).Time("epoch", epoch).Int64("rows", total).
 		Msg("Tenant purge complete; token released")
+	return nil
+}
+
+// liftFences lifts every erasure fence a store planted, so a successor tenant at the
+// released token can write. Stores that plant no fence are not asked.
+func (c *Coordinator) liftFences(ctx context.Context, tenant string) error {
+	for _, store := range c.stores {
+		lifter, ok := store.(FenceLifter)
+		if !ok {
+			continue
+		}
+		if err := lifter.LiftFence(ctx, tenant, c.now()); err != nil {
+			return fmt.Errorf("refusing to complete the purge of %q: %s could not lift its "+
+				"erasure fence, and releasing the token behind a standing fence would leave the "+
+				"successor unable to write with nothing missing to say why: %w",
+				tenant, store.Name(), err)
+		}
+	}
 	return nil
 }
 

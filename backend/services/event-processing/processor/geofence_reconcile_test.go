@@ -17,6 +17,7 @@ import (
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	dccore "github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // These cover the fault NO event-driven feed can repair: a geofence-set publish that is LOST.
@@ -127,8 +128,8 @@ func editedYard(t *testing.T) (*dmmodel.Api, *fenceFactWriter) {
 		Token: "yard", Geometry: fenceBox(0, 0, 1, 1)}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceCreateRequest{
-		Token: "yard", Geometry: fenceBox(0, 0, 20, 20)}); err != nil {
+	if _, err := api.UpdateGeoFence(dmCtx, "yard", &dmmodel.GeoFenceUpdateRequest{
+		Geometry: dcgraphql.OptionalStringOf(fenceBox(0, 0, 20, 20))}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	// Both versions really were minted AND really were handed to the publisher. The fault under

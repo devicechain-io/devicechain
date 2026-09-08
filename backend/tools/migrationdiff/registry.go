@@ -23,6 +23,23 @@ import (
 type area struct {
 	name       string
 	migrations []*gormigrate.Migration
+
+	// extraSchemas names any OTHER Postgres schema this area's chain creates, so the
+	// golden covers it too.
+	//
+	// 🔴 IT EXISTS BECAUSE THE DUMP IS SCOPED TO `--schema <area name>`, WHICH MAKES A
+	// SCHEMA CREATED UNDER ANOTHER NAME INVISIBLE TO THE ONLY GATE THAT EXERCISES
+	// MIGRATIONS AT ALL. That is not hypothetical: event-management's chain builds an
+	// `analytics` schema whose view bodies ARE the tenant boundary for every direct
+	// Postgres/BI connection. Without this field a later migration could rewrite one of
+	// those bodies — dropping the tenant predicate, say — and `verify` would report
+	// every area green, because it would never have looked.
+	extraSchemas []string
+}
+
+// schemas is every Postgres schema this area's golden covers, area schema first.
+func (a area) schemas() []string {
+	return append([]string{a.name}, a.extraSchemas...)
 }
 
 // areas is every service that owns a migration chain, in a stable order. This is the
@@ -32,14 +49,19 @@ type area struct {
 // changes — the same entry now points at the baseline, and `verify` proves it
 // reproduces the golden the incremental chain produced.
 var areas = []area{
-	{"ai-inference", aiinference.Migrations},
-	{"command-delivery", commanddelivery.Migrations},
-	{"dashboard-management", dashboardmanagement.Migrations},
-	{"device-management", devicemanagement.Migrations},
-	{"device-state", devicestate.Migrations},
-	{"event-management", eventmanagement.Migrations},
-	{"event-processing", eventprocessing.Migrations},
-	{"notification-management", notificationmanagement.Migrations},
-	{"outbound-connectors", outboundconnectors.Migrations},
-	{"user-management", usermanagement.Migrations},
+	{name: "ai-inference", migrations: aiinference.Migrations},
+	{name: "command-delivery", migrations: commanddelivery.Migrations},
+	{name: "dashboard-management", migrations: dashboardmanagement.Migrations},
+	{name: "device-management", migrations: devicemanagement.Migrations},
+	{name: "device-state", migrations: devicestate.Migrations},
+	// `analytics` is the read-only SQL/BI surface event-management's chain builds
+	// (backend/services/event-management/model/analytics.go). It is a schema of its own
+	// precisely so a reader granted USAGE on it still has no route to the area schema —
+	// which means the golden has to follow it there, or the tenant boundary for every
+	// direct Postgres connection would be the one thing this gate never dumps.
+	{name: "event-management", migrations: eventmanagement.Migrations, extraSchemas: []string{"analytics"}},
+	{name: "event-processing", migrations: eventprocessing.Migrations},
+	{name: "notification-management", migrations: notificationmanagement.Migrations},
+	{name: "outbound-connectors", migrations: outboundconnectors.Migrations},
+	{name: "user-management", migrations: usermanagement.Migrations},
 }

@@ -33,6 +33,10 @@ import (
 // post-GA tenant-sharded fleet can checkpoint per shard without a schema change.
 const singletonPartition = "singleton"
 
+// DetectTermGate carries the current leadership term from the processor to the
+// durables it gates. See processor.TermGate.
+var DetectTermGate *processor.TermGate
+
 var (
 	Microservice  *core.Microservice
 	Configuration *config.EventProcessingConfiguration
@@ -108,10 +112,24 @@ func parseConfiguration() error {
 
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
+	// The leadership gate every DETECT durable below is created with (ADR-070). It is
+	// built FIRST and shared, because a reader's gate predicate is fixed at creation
+	// and the processor that will lead with these readers does not exist yet. Closed
+	// until a term is acquired, so none of them consumes in the window between process
+	// start and the first acquisition.
+	DetectTermGate = processor.NewTermGate()
+	gated := messaging.ReaderWithTermGate(DetectTermGate.Held)
+
 	// Reader for resolved events (wildcard across tenants). This is a third,
 	// independent consumer fanning out alongside event-management (persistence) and
 	// device-state (projection) — event-processing's DETECT tap (ADR-051).
-	revents, err := nmgr.NewReader(streams.ResolvedEvents)
+	//
+	// 🔴 EVERY DETECT DURABLE IS TERM-GATED, NOT JUST THIS ONE. The fact consumers
+	// persist and ack per message with no checkpoint gate of their own, and the leader
+	// has no periodic reconcile for the registry, the attribute view or dead-man
+	// arming — only the fence view sweeps. So a fact a zombie acks after the new
+	// leader's catch-up is invisible until that leader restarts.
+	revents, err := nmgr.NewReader(streams.ResolvedEvents, gated)
 	if err != nil {
 		return err
 	}
@@ -134,7 +152,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// not the finite-retention fact stream — so a rule survives a restart however long ago it
 	// was published; the fact stream is only the live delta transport. A re-seen fact is an
 	// idempotent upsert, so any replay/live overlap is harmless.
-	ruleReader, err := nmgr.NewReader(streams.DetectionRulesPublished)
+	ruleReader, err := nmgr.NewReader(streams.DetectionRulesPublished, gated)
 	if err != nil {
 		return err
 	}
@@ -144,18 +162,18 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// event-management's) removes a deleted device's roster entry. Each consumer persists to its
 	// durable projection before acking, so the arming survives a restart independent of the
 	// finite-retention fact streams. This slice lands the projections; slice 4c-2b-2 arms off them.
-	rosterReader, err := nmgr.NewReader(streams.DeviceRoster)
+	rosterReader, err := nmgr.NewReader(streams.DeviceRoster, gated)
 	if err != nil {
 		return err
 	}
-	entityDeletedReader, err := nmgr.NewReader(streams.EntityDeleted)
+	entityDeletedReader, err := nmgr.NewReader(streams.EntityDeleted, gated)
 	if err != nil {
 		return err
 	}
 	// Dynamic-threshold fact reader (ADR-051 slice 4c-3): the numeric, platform-set device
 	// attributes a detection rule can read a threshold from. Its consumer persists each into the
 	// DeviceAttribute projection before acking; the eval that reads it is slice 4c-3b-2.
-	attributeReader, err := nmgr.NewReader(streams.DeviceAttribute)
+	attributeReader, err := nmgr.NewReader(streams.DeviceAttribute, gated)
 	if err != nil {
 		return err
 	}
@@ -166,7 +184,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// containment predicate then resolves from memory and the loop never blocks on a read back
 	// into device-management. The startup reconcile (FenceSets, below) is the other half — the
 	// stream carries only changes from now on, so without it a restart would be blind.
-	fenceReader, err := nmgr.NewReader(streams.GeoFenceSetManifest)
+	fenceReader, err := nmgr.NewReader(streams.GeoFenceSetManifest, gated)
 	if err != nil {
 		return err
 	}
@@ -202,6 +220,19 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg, core.NewNoOpLifecycleCallbacks())
+	// Leadership (ADR-070): DETECT fetches, acks, checkpoints and publishes only
+	// inside a held term. The chart already deploys this area as replicas:1 with
+	// strategy Recreate, so on a ROLLOUT the old pod is gone before this one starts
+	// and the first acquisition is immediate. What the lease adds is the case Recreate
+	// cannot cover — an eviction, a node drain or a manual delete, where two pods do
+	// briefly coexist and the old one's in-flight batch would otherwise redeliver, 60
+	// seconds later, to a leader that has already replayed past it and will ack it away.
+	detectLease, err := nmgr.NewDistributedLease(messaging.DefaultLeaseTTL)
+	if err != nil {
+		return err
+	}
+	ResolvedEventsProcessor.Lease = detectLease
+	ResolvedEventsProcessor.Gate = DetectTermGate
 	ResolvedEventsProcessor.RuleUpdatesReader = ruleReader
 	ResolvedEventsProcessor.RuleStore = DetectRuleStore
 	// Dead-man read-model wiring (ADR-051 slice 4c-2b): the consumers persist the roster and
@@ -310,8 +341,18 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	// The ADR-024 arm. A detection whose actions cannot be dispatched used to end as a log
+	// line and a counter; it is now written where it can be inspected. The writer is built
+	// here rather than inside the dispatcher so a deployment that could not create it
+	// fails at startup, next to every other stream this service needs, rather than at the
+	// first failure — which is the one moment the arm has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
-		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate)
+		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
+		deadWriter)
 	return nil
 }
 
@@ -501,12 +542,20 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
 		return err
 	}
-	// AFTER the processor, never before: the responder marshals every eviction onto the
-	// single-writer loop, and BOTH the loop and the context that bounds the wait for it are
-	// created by Start. A request arriving before that would not merely wait — EvictTenant
-	// selects on rp.procCtx.Done(), and procCtx is nil until Start, so the handler goroutine
-	// would panic on a nil context and take the process down. The ordering is what makes that
-	// unreachable; it is not a latency preference.
+	// AFTER the processor, never before, and the reason has changed shape now that Start no
+	// longer blocks on the first leadership term.
+	//
+	// It is no longer a claim that the loop is running when the responder appears — with a
+	// warm standby (ADR-070) it usually is not, and the responder answers that honestly
+	// (processor.errNoTermHeld). What the ordering still guarantees is that the processor's
+	// FIELDS are wired: EvictTenant reads rp.procCtx and sends on rp.tenantPurges, and a
+	// request that arrived before Initialize/Start had run would select on a nil context and
+	// take the process down. Initialize mints the context and the constructor makes the
+	// channel, both of which are done by here.
+	//
+	// It also still means a request cannot reach a replica whose GraphQL and NATS managers
+	// are not up, which is what makes the answer — refusal or eviction — a considered one
+	// rather than an artefact of half-built wiring.
 	TenantPurgeResponder = processor.NewTenantPurgeResponder(NatsManager.Conn(),
 		Microservice.InstanceId, ResolvedEventsProcessor)
 	if err := TenantPurgeResponder.Start(); err != nil {

@@ -15,10 +15,10 @@ import (
 // they sit under the issuer URL (the cluster ingress strips the functional-area
 // prefix, so <issuer>/oauth/authorize reaches the service as /oauth/authorize).
 const (
-	// MetadataPath is the RFC 8414 Authorization-Server Metadata document. It is
-	// served at the issuer-suffixed location (<issuer>/.well-known/...), the form
-	// OAuth/MCP clients probe first.
-	MetadataPath  = "/.well-known/oauth-authorization-server"
+	// MetadataPath is the RFC 8414 Authorization-Server Metadata document, at the
+	// location for an issuer that carries NO path — and the suffix MetadataPathFor
+	// builds the path-carrying location from.
+	MetadataPath  = auth.AuthorizationServerMetadataSuffix
 	AuthorizePath = "/oauth/authorize"
 	TokenPath     = "/oauth/token"
 	// UserinfoPath is the OIDC-style userinfo endpoint (advertised as
@@ -77,6 +77,43 @@ func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_basic", "client_secret_post"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
+	}
+}
+
+// MetadataPathFor is the local path RFC 8414 §3.1 requires the metadata document to
+// be served at for a given issuer: the suffix INSERTED between the host and the
+// issuer's path.
+//
+// 🔴 THIS IS THE LOCATION A CLIENT ACTUALLY ASKS FOR, and for a path-carrying issuer
+// it is NOT MetadataPath. This instance's issuer is https://<host>/api/user-management
+// whenever the AS is on, so a client's first request is
+// /.well-known/oauth-authorization-server/api/user-management — and the MCP reference
+// client aborts discovery on the first error rather than trying its later fallbacks,
+// so this location failing is the whole flow failing, not a degraded path. It shares
+// coreauth.WellKnownPath with the MCP resource server's equivalent because the two
+// RFCs specify word-for-word the same construction.
+func MetadataPathFor(issuer string) string {
+	return auth.WellKnownPath(MetadataPath, issuer)
+}
+
+// RegisterMetadataHandlers mounts the RFC 8414 document at every location a client
+// may ask for it: the path-inserted location for this issuer, and the bare suffix.
+//
+// 🔴 IT IS A FUNCTION SO THAT A TEST CAN DRIVE THE ACTUAL MUX. This used to be two
+// lines in main.go, and main.go is reached by no test in this repository — which is
+// precisely how the service came to serve its most important discovery document at
+// one path while clients asked for another, with every package here green. The
+// registration is the thing that was wrong, so the registration is the thing under
+// test.
+//
+// The bare suffix is kept for a path-less issuer (where it IS the location) and for a
+// client that appends rather than inserts; the conditional avoids registering one
+// pattern twice, which ServeMux panics on.
+func RegisterMetadataHandlers(mux *http.ServeMux, issuer string) {
+	h := AuthorizationServerMetadataHandler(issuer)
+	mux.Handle(MetadataPath, h)
+	if p := MetadataPathFor(issuer); p != MetadataPath {
+		mux.Handle(p, h)
 	}
 }
 

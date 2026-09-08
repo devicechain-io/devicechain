@@ -1,0 +1,232 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . -}}
+{{- $np := .Values.networkPolicy -}}
+{{- $infra := $root.Values.instance.config.infrastructure -}}
+{{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- if not (has "outbound-connectors" $areas) -}}
+{{- fail "networkPolicy.enabled is set, but outbound-connectors is not among the enabled functional areas. The policy exists to bound that one service's tenant-configured broker and cloud egress; with the area absent it would select no pods and quietly protect nothing. Enable the area (profile 'full', or --enable-area outbound-connectors), or set networkPolicy.enabled=false." -}}
+{{- end -}}
+{{/*
+  The address space a tenant destination may not reach.
+
+  🔴 WRITTEN HERE, IN THE BODY OF THIS TEMPLATE, AND BOTH HALVES OF THAT MATTER.
+
+  Not in values, because a Helm list is REPLACED wholesale rather than merged: as
+  `networkPolicy.blockedIPv4Ranges` one plausible `--set` — or the same in a values
+  file, the path the README recommends — rendered a policy whose only exception was
+  the operator's one address, permitting all of 10.0.0.0/8 and the instance metadata
+  service while passing every guard here and satisfying the API server.
+
+  And not in a named template either, which is where they went first. Helm named
+  templates are GLOBAL: a parent chart that defines the same name wins over a
+  subchart's, so a wrapper chart could have restored exactly that widening through a
+  door values.schema.json cannot see and the drift gate never renders. A subchart's
+  template FILE cannot be replaced that way, so the lists live in one.
+
+  🔴 THE SELECTORS ARE STILL `include`s, AND THAT IS A RESIDUAL RATHER THAN AN OVERSIGHT.
+  devicechain.areaLabels is a named template, so a parent chart can redefine it and rewrite
+  both the podSelector and the user-management peer of this policy. It is not inlined the way
+  the lists are because the Deployment uses the same helper, so an override moves the workload
+  labels and the policy's selectors together and they still match. That makes it operator
+  authorship rather than a slip — but it is a fourth way this object can differ from what the
+  drift gate rendered, and the gate renders the chart standalone, so it cannot see it.
+
+  🔴 KEEP THESE IN STEP WITH backend/core/egress/ranges.go. hack/check-egress-ranges.sh
+  compares the RENDERED policy against that table as the compiled package reports it,
+  so a change to either side fails CI until the other follows. One prefix is
+  deliberately absent — the IPv4-mapped range — because Kubernetes refuses a mapped
+  address inside an ipBlock and the whole policy is then invalid; the gate derives that
+  exception from the address itself rather than from a list, so nothing here declares it.
+*/}}
+{{- $blockedIPv4 := list
+    "0.0.0.0/8"
+    "10.0.0.0/8"
+    "100.64.0.0/10"
+    "127.0.0.0/8"
+    "169.254.0.0/16"
+    "172.16.0.0/12"
+    "192.0.0.0/24"
+    "192.0.2.0/24"
+    "192.88.99.0/24"
+    "192.168.0.0/16"
+    "198.18.0.0/15"
+    "198.51.100.0/24"
+    "203.0.113.0/24"
+    "224.0.0.0/4"
+    "240.0.0.0/4"
+    "168.63.129.16/32"
+-}}
+{{- $blockedIPv6 := list
+    "::1/128"
+    "::/128"
+    "64:ff9b:1::/48"
+    "100::/64"
+    "100:0:0:1::/64"
+    "2001:2::/48"
+    "2001:db8::/32"
+    "3fff::/20"
+    "5f00::/16"
+    "fc00::/7"
+    "fe80::/10"
+    "ff00::/8"
+-}}
+{{- if not $blockedIPv4 -}}
+{{- fail "The chart's IPv4 egress deny table rendered empty. That list is what the policy refuses; empty renders an ipBlock allowing all of 0.0.0.0/0, so the object would be created, would look like a control, and would permit every private address including the instance metadata service. It is written in the body of templates/networkpolicy.yaml and is not settable per deployment; if you are seeing this, that template has been edited." -}}
+{{- end -}}
+{{- if not $blockedIPv6 -}}
+{{- fail "The chart's IPv6 egress deny table rendered empty. That list is what the policy refuses over IPv6; empty renders an ipBlock allowing all of ::/0. It is written in the body of templates/networkpolicy.yaml and is not settable per deployment; if you are seeing this, that template has been edited." -}}
+{{- end -}}
+{{- if not $np.dnsNamespaceSelector -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.dnsNamespaceSelector is empty. An empty selector matches EVERY namespace, so the DNS rule would permit port 53 to anything in the cluster. Set it to the labels on the namespace running your cluster DNS (a stock cluster uses kubernetes.io/metadata.name: kube-system)." -}}
+{{- end -}}
+{{- if not $np.infrastructureNamespaceSelector -}}
+{{- fail "networkPolicy.enabled is set but networkPolicy.infrastructureNamespaceSelector is empty. That selector is how outbound-connectors is allowed to reach NATS and PostgreSQL; with it empty the policy would deny both, and a denied connection in Kubernetes BLACKHOLES rather than refusing — the service would hang on every dispatch instead of failing, and its readiness would not tell you why. Set it to the labels on the namespace holding your NATS and PostgreSQL (the OpenTofu-created one carries devicechain.io/component: infrastructure)." -}}
+{{- end -}}
+# ---------------------------------------------------------------------------
+# Egress boundary for outbound-connectors (ADR-060, ADR-023).
+#
+# WHY THIS EXISTS AND WHY IT IS SEPARATE FROM THE GO GUARD.
+#
+# Tenant-configured destinations reaching a private address are refused in
+# core/egress, inside the dialer's Control hook, for the two HTTP paths and
+# SMTP. That covers three of the six egress paths. The other three — MQTT,
+# Kafka and AWS SNS/SQS — are built inside embedded Bento from YAML, and
+# Bento's StreamBuilder exposes no dialer to hook. paho, sarama and the AWS
+# SDK each have a dialer seam; Bento sets none of them.
+#
+# And for Kafka no address check would suffice even with a dialer: sarama dials
+# the bootstrap broker and then registers whatever addresses that broker returns
+# in its metadata response, so the tenant's own broker chooses the second hop.
+# Only the network layer sees that one.
+#
+# 🔴 IT ONLY DOES ANYTHING IF YOUR CNI ENFORCES POLICY — AND ON A LOCAL KIND
+# CLUSTER IT DOES.
+#
+# A NetworkPolicy is an API object every cluster accepts and only a
+# policy-enforcing CNI acts on; `kubectl get netpol` shows it either way. kind's
+# default CNI enforces it: kindnetd has shipped kube-network-policies since kind
+# v0.24, and a bring-up here has `table inet kindnet-network-policies` in its
+# nftables. So this is NOT inert on a developer's cluster — a peer missing from
+# the rules below will blackhole there exactly as it would in production.
+#
+# An earlier version of this file said the opposite, and every consequence
+# below was written backwards as a result.
+#
+# What HAS been validated, and how. Validity: this policy is accepted by a real
+# API server (kubectl apply --dry-run=server), and the version before it was
+# rejected — an IPv4-mapped prefix in the v6 except list made the whole object
+# invalid, so enabling the feature failed the Helm release outright. A
+# CLIENT-side dry-run does not catch that class; it accepts all three invalid
+# forms we tried. So CI does the server-side one, on the kind cluster the
+# upgrade gate already stands up.
+#
+# Behaviour: exercised on a kindnet-enforcing cluster with this policy applied.
+# Every peer below stayed reachable (DNS in-cluster and external, NATS, Postgres,
+# user-management by name and by ClusterIP, the public internet), the metadata
+# addresses were dropped (169.254.169.254, Azure 168.63.129.16, Alibaba
+# 100.100.100.200), and a rollout of the real deployment under the policy came up
+# Ready with JWKS fetched. What that run ALSO found is recorded in the chart
+# README: the infrastructure rule is namespace-wide on these two ports, so a
+# second datastore in that namespace is reachable even though the intent excludes
+# it. Narrowing it needs a pod selector per datastore and a values contract for
+# bring-your-own infrastructure, which is not in this change.
+#
+# 🔴 A WRONG RULE HANGS RATHER THAN FAILS. Traffic denied by a policy is
+# dropped, not refused, so a missing peer below shows up as a dispatch that
+# times out — and for the JWKS peer in particular, as a pod that never becomes
+# ready and does not say why. Every peer this service needs is enumerated
+# below; if you narrow them, narrow them knowing that.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $root.Values.instance.id }}-outbound-connectors-egress
+  namespace: {{ $root.Values.instance.id }}
+  labels:
+    {{- include "devicechain.areaLabels" (dict "root" $root "area" "outbound-connectors") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "devicechain.areaLabels" (dict "root" $root "area" "outbound-connectors") | nindent 6 }}
+  # Egress only. This deliberately states no Ingress rules: adding policyTypes
+  # Ingress with no rules would deny the Prometheus scrape and the API route,
+  # which is a different decision from the one this object is making.
+  policyTypes:
+    - Egress
+  egress:
+    # DNS. Every peer below is a name, so this is load-bearing for all of them —
+    # and it is the rule most often forgotten, because a cluster without it fails
+    # in a way that looks like every dependency is down at once.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $np.dnsNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # NATS and PostgreSQL. Ports come from the instance config rather than being
+    # written here, so a port change in one place cannot leave the policy behind.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $np.infrastructureNamespaceSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $infra.nats.port }}
+        - protocol: TCP
+          port: {{ $root.Values.instance.config.persistence.rdb.configuration.port }}
+
+    # user-management, in this same namespace: the service-token mint, the
+    # governance GraphQL read, and JWKS. All three ride one port.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "devicechain.areaLabels" (dict "root" $root "area" "user-management") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.service.port }}
+
+    {{- with $np.additionalAllowedCidrs }}
+    # Operator-declared exceptions. Most often the Service CIDR, for a CNI that evaluates
+    # egress before kube-proxy's DNAT and therefore sees a ClusterIP where the selectors
+    # above expect a pod address.
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+
+    # Tenant destinations: the public internet, and nothing else. The `except`
+    # list is the same address space core/egress refuses in the dialer, so the
+    # two boundaries agree rather than each covering a different half.
+    #
+    # The lists are written at the top of this file rather than in values or in a
+    # named template — see the note there for why each of those was wrong.
+    # hack/check-egress-ranges.sh compares this RENDERED output against the Go deny
+    # table, so the two lists cannot drift apart without CI saying so. It pins the
+    # rest of this object against a golden file, because comparing the prefixes says
+    # nothing about whether the policy around them still enforces anything.
+    #
+    # Note what this ALSO blocks, deliberately: the cluster's own pod and service
+    # CIDRs sit inside these ranges, so a tenant connector pointed at another
+    # service in this cluster is dropped here even though the rules above permit
+    # the three peers this service legitimately talks to. That asymmetry is the
+    # entire point.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range $blockedIPv4 }}
+              - {{ . | quote }}
+              {{- end }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- range $blockedIPv6 }}
+              - {{ . | quote }}
+              {{- end }}
+{{- end }}

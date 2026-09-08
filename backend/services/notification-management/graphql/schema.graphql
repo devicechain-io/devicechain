@@ -52,10 +52,8 @@ type NotificationChannel {
     metadata: String
 }
 
-# Data required to create or update a delivery channel. `secret` is write-only:
-# on create it sets the secret; on UPDATE a null secret LEAVES THE EXISTING SECRET
-# UNCHANGED (it cannot be read back to resend), while a non-null value replaces it
-# and an empty string clears it.
+# Data required to CREATE a delivery channel. `secret` is write-only: it sets the
+# channel's delivery secret, which is never returned on read.
 input NotificationChannelCreateRequest {
     token: String!
     name: String
@@ -64,6 +62,30 @@ input NotificationChannelCreateRequest {
     config: String
     secret: String
     enabled: Boolean!
+    metadata: String
+}
+
+# Fields to change on an existing delivery channel. Every field is OPTIONAL and carries
+# three states: OMIT it to leave the stored value alone, send it as `null` to clear it,
+# or send a value to set it. Nothing you do not mention is written.
+#
+# There is no `token` here. The mutation's own `token` argument names the channel, and a
+# channel is RENAMED through renameNotificationChannel, which says so in its name.
+#
+# `channelType` and `enabled` cannot be cleared: they are required, so `null` on either
+# is refused rather than written as "" or false — a channel that routes nowhere, or one
+# silently disabled, is an alert nobody receives.
+#
+# `secret` is write-only and cannot be read back to re-send, so OMITTING it PRESERVES the
+# stored secret. Sending `null` — or an empty string, which has always meant this —
+# CLEARS it; sending a value rotates it.
+input NotificationChannelUpdateRequest {
+    name: String
+    description: String
+    channelType: String
+    config: String
+    secret: String
+    enabled: Boolean
     metadata: String
 }
 
@@ -132,8 +154,7 @@ input NotificationRuleCreateRequest {
     recipients: String
 }
 
-# Data required to create or update a routing policy together with its full rule
-# set (rules replaces any existing rules on update).
+# Data required to CREATE a routing policy together with its full rule set.
 input NotificationPolicyCreateRequest {
     token: String!
     name: String
@@ -147,9 +168,46 @@ input NotificationPolicyCreateRequest {
     escalateAfterSeconds: Int
     maxEscalations: Int
     enabled: Boolean!
-    # The policy's full rule set; pass [] for a policy with no rules yet. On update
-    # this replaces any existing rules.
+    # The policy's full rule set; pass [] for a policy with no rules yet.
     rules: [NotificationRuleCreateRequest!]!
+    metadata: String
+}
+
+# Fields to change on an existing routing policy. Every field is OPTIONAL and carries
+# three states: OMIT it to leave the stored value alone, send it as `null` to clear it,
+# or send a value to set it. Nothing you do not mention is written.
+#
+# There is no `token` here: the mutation's own `token` argument names the policy. A
+# policy has no rename mutation — nothing keys on a policy's token — so to move one,
+# create the new policy and delete the old.
+#
+# `deviceTypeToken` is absent on purpose. A non-empty value is refused at write (the
+# dispatcher skips a device-type-scoped policy rather than applying it tenant-wide), so
+# every stored policy's is unset and the field would have no request it could accept
+# other than a no-op. It stays on the create input, where the refusal explains itself,
+# and returns here with the dispatcher change that honours it.
+#
+# `enabled` cannot be cleared: `null` is refused rather than written as false, because a
+# silently disabled policy stops delivering and reports success.
+input NotificationPolicyUpdateRequest {
+    name: String
+    description: String
+    throttleSeconds: Int
+    escalateAfterSeconds: Int
+    maxEscalations: Int
+    enabled: Boolean
+    # The policy's rule set, and the only field here whose three states collapse to two:
+    # OMIT it and the stored rules are untouched, ids and all; send `null` OR `[]` and
+    # the policy is left with no rules; send a list and it replaces the stored set
+    # wholesale. A list has no third stored outcome — "cleared" and "set to []" are one
+    # rule set with nothing in it — and `[]` is the spelling a form with nothing selected
+    # actually sends, so both are honoured.
+    #
+    # Send the WHOLE request as one variable — `request: $request` — and leave out the
+    # keys you are not changing. Binding a variable per field instead (`request: { rules:
+    # $r }`) cannot express "omitted": an unsupplied `$r` arrives as an explicit null, and
+    # for this field that empties the policy's whole rule set and returns success.
+    rules: [NotificationRuleCreateRequest!]
     metadata: String
 }
 
@@ -222,12 +280,21 @@ type Query {
 type Mutation {
     # Delivery channels.
     createNotificationChannel(request: NotificationChannelCreateRequest!): NotificationChannel!
-    updateNotificationChannel(token: String!, request: NotificationChannelCreateRequest!): NotificationChannel!
+    updateNotificationChannel(token: String!, request: NotificationChannelUpdateRequest!): NotificationChannel!
+    # Moves a channel to a new token, and the only way a channel's token changes. The
+    # delivery secret is keyed by the channel's immutable id and a policy's rules store
+    # that id rather than the token, so a rename orphans nothing.
+    #
+    # A blank `newToken` (empty or whitespace-only) is refused: it would leave a live
+    # channel addressable by nothing. `newToken` equal to the current token is an
+    # idempotent no-op that returns the channel, so a retry is safe. A `newToken` already
+    # held by another of your channels is refused by name.
+    renameNotificationChannel(token: String!, newToken: String!): NotificationChannel!
     deleteNotificationChannel(token: String!): Boolean!
 
     # Routing policies.
     createNotificationPolicy(request: NotificationPolicyCreateRequest!): NotificationPolicy!
-    updateNotificationPolicy(token: String!, request: NotificationPolicyCreateRequest!): NotificationPolicy!
+    updateNotificationPolicy(token: String!, request: NotificationPolicyUpdateRequest!): NotificationPolicy!
     deleteNotificationPolicy(token: String!): Boolean!
 }
 

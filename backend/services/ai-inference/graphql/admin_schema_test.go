@@ -100,7 +100,7 @@ func TestAdminPlaneCarriesTheWholeProviderSurface(t *testing.T) {
 	assert.Equal(t,
 		[]string{"clearAiFunctionModel", "clearAiTierDefault", "createAiProvider",
 			"deleteAiProvider", "grantAiProviderToTenant", "grantAiProviderToTier",
-			"revokeAiProviderFromTenant", "revokeAiProviderFromTier",
+			"renameAiProvider", "revokeAiProviderFromTenant", "revokeAiProviderFromTier",
 			"setAiFunctionModel", "setAiTierDefault", "testAiProvider", "updateAiProvider"},
 		fieldNames(t, schema, "mutationType"))
 }
@@ -229,9 +229,12 @@ func TestAdminResolversFailClosed(t *testing.T) {
 
 	_, err = r.UpdateAiProvider(ctx, struct {
 		Token             string
-		Request           model.AIProviderCreateRequest
+		Request           model.AIProviderUpdateRequest
 		ExpectedUpdatedAt *string
 	}{Token: "x"})
+	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
+
+	_, err = r.RenameAiProvider(ctx, struct{ Token, NewToken string }{Token: "x", NewToken: "y"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 
 	ok, err := r.DeleteAiProvider(ctx, struct{ Token string }{Token: "x"})

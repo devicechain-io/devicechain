@@ -163,6 +163,8 @@ graphql(`
       centerLon
       zoom
     }
+    locale
+    localeOverride
   }
 `);
 
@@ -276,6 +278,34 @@ export async function setTenantBasemap(
   return data.setTenantBasemap;
 }
 
+// The tenant's DEFAULT language: its own override folded over the operator's
+// `locale.default`. A BCP-47 tag, or null when neither tier sets one.
+//
+// 🔴 A DEFAULT, not the language in effect. It is rung 2 of four — an explicit user
+// choice beats it, it beats the browser's advertised languages, and English catches
+// the rest — and the only thing that applies it is applyTenantDefaultLocale, called
+// once from TenantProvider. Reading this value anywhere else to decide what language
+// something is in would skip rung 1 and re-language a user who has chosen.
+export type TenantLocale = CurrentTenant['locale'];
+
+// Self-service default language for the caller's OWN tenant (requires locale:write —
+// NOT branding:write, because this re-languages the console for every member who has
+// not chosen otherwise). Passing null clears the override, re-inheriting the operator
+// default. Returns the tenant with a freshly-resolved locale for an immediate cache
+// write.
+const SET_TENANT_LOCALE = graphql(`
+  mutation SetTenantLocale($locale: String) {
+    setTenantLocale(locale: $locale) {
+      ...TenantFields
+    }
+  }
+`);
+
+export async function setTenantLocale(locale: string | null): Promise<CurrentTenant> {
+  const data = await gql('user-management', SET_TENANT_LOCALE, { locale });
+  return data.setTenantLocale;
+}
+
 // uploadTenantLogo uploads a raster logo file to the object store (ADR-058 Tier-1)
 // and points the tenant's branding_logo at it. It POSTs the raw bytes to the
 // authorizing endpoint with the caller's access token (the server sniffs the real
@@ -320,8 +350,8 @@ export async function getCurrentUser(): Promise<CurrentUser> {
 // Self-service edit of the signed-in user's display name (email is fixed).
 
 const UPDATE_PROFILE = graphql(`
-  mutation UpdateProfile($firstName: String, $lastName: String) {
-    updateProfile(firstName: $firstName, lastName: $lastName) {
+  mutation UpdateProfile($request: ProfileUpdateRequest!) {
+    updateProfile(request: $request) {
       email
       firstName
       lastName
@@ -329,13 +359,22 @@ const UPDATE_PROFILE = graphql(`
   }
 `);
 
+// A partial update on a dedicated input, like every other update on the platform: an
+// omitted field is left alone, and a `null` — or an empty string, which is what the form
+// sends for a name the user cleared — sets it to empty.
+//
+// 🔴 THE `?? null` IS DELIBERATE AND IS NOT THE PARTIAL-UPDATE ESCAPE HATCH. This is the
+// profile FORM's client: it renders both names, so on save it states both, and a field
+// the user emptied has to be sent as something rather than omitted. Passing the request
+// through would let a caller omit a key and mean "leave it alone" — correct, but it is a
+// capability this one screen has no use for and the coercion here is what keeps
+// `firstName: undefined` from silently becoming that.
 export async function updateProfile(input: {
   firstName?: string | null;
   lastName?: string | null;
 }): Promise<CurrentUser> {
   const data = await gql('user-management', UPDATE_PROFILE, {
-    firstName: input.firstName ?? null,
-    lastName: input.lastName ?? null,
+    request: { firstName: input.firstName ?? null, lastName: input.lastName ?? null },
   });
   return data.updateProfile;
 }

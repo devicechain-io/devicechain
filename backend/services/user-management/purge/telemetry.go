@@ -141,6 +141,28 @@ func (t *Telemetry) Erase(ctx context.Context, tenant string, epoch time.Time) (
 	return t.rel.Erase(ctx, tenant, epoch)
 }
 
+// LiftFence lifts the telemetry cluster's fence, behind the same two questions Erase
+// asks. Both answers mean the same thing here: this instance has no telemetry schema, so
+// no fence was ever planted and there is nothing to lift. Treating either as an error
+// would wedge completion permanently on the ingest-only profile — the same defect this
+// store already shipped once and now guards against on the erase side.
+func (t *Telemetry) LiftFence(ctx context.Context, tenant string, at time.Time) error {
+	if err := t.guest.Connect(ctx); err != nil {
+		if rdb.IsMissingDatabase(err) {
+			return nil
+		}
+		return err
+	}
+	exists, err := t.hasOwningSchema(ctx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	return t.rel.LiftFence(ctx, tenant, at)
+}
+
 // telemetrySchema is the functional-area schema event-management creates on the telemetry
 // cluster. It is named here rather than derived because this store IS the one dedicated to
 // that cluster — the schema's absence is the only runtime signal an instance gives that the

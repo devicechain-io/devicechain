@@ -14,12 +14,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RetentionSweeper periodically prunes cleared per-alarm NotificationState rows
-// (ADR-017 N.C). Once an alarm clears its escalation is settled, so its state row is
-// only kept for a grace window; without pruning, one permanent row per alarm-ever-
-// raised would asymptotically turn the per-alarm state into an alarm index in the
-// wrong service (the ADR-041 history-home concern). This is the maintenance backstop
+// RetentionSweeper periodically prunes RESOLVED per-alarm NotificationState rows
+// (ADR-017 N.C). Once an alarm is acknowledged or cleared its escalation is settled, so
+// its state row is only kept for a grace window; without pruning, one permanent row per
+// alarm-ever-raised would asymptotically turn the per-alarm state into an alarm index in
+// the wrong service (the ADR-041 history-home concern). This is the maintenance backstop
 // that keeps the table bounded.
+//
+// Resolved means EITHER terminal stamp, not just cleared. A tombstone row is written for
+// every acknowledged or cleared alarm in every tenant — including tenants with no
+// notification policies, since the row closes an ordering race rather than recording a
+// page — so a sweep that only recognized cleared_at left every acknowledged-but-never-
+// cleared alarm in the table for the life of the instance. See Api.PruneResolvedStates.
 //
 // It is cross-tenant maintenance, so it lists tenants under a system context and then
 // prunes each under that tenant's context (so the rdb tenant-scope predicate keeps
@@ -114,7 +120,7 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) {
 			return
 		default:
 		}
-		removed, err := s.Api.PruneClearedStates(core.WithTenant(ctx, tenant), before)
+		removed, err := s.Api.PruneResolvedStates(core.WithTenant(ctx, tenant), before)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: prune failed")
 			continue

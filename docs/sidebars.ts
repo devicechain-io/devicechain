@@ -32,6 +32,13 @@ import type { SidebarsConfig } from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   docs: [
     'intro',
+    // Second, immediately after the introduction and ahead of Concepts, because a
+    // first-time reader who wants a working device should not have to walk the
+    // architecture to find the page that gives them one. Listed as a bare doc id
+    // rather than wrapped in a category: a category needs its label translated in
+    // i18n/es/.../current.json, while a doc's label comes from its own front
+    // matter, which the Spanish page already carries.
+    'quickstart/first-device',
     {
       type: 'category',
       label: 'Concepts',

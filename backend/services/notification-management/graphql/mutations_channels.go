@@ -25,10 +25,11 @@ func (r *SchemaResolver) CreateNotificationChannel(ctx context.Context, args str
 	return &NotificationChannelResolver{M: *created, S: r, C: ctx}, nil
 }
 
-// UpdateNotificationChannel updates a delivery channel by token.
+// UpdateNotificationChannel applies a partial update to a delivery channel: a field the
+// request omits is left alone, an explicit null clears it, a value sets it.
 func (r *SchemaResolver) UpdateNotificationChannel(ctx context.Context, args struct {
 	Token   string
-	Request model.NotificationChannelCreateRequest
+	Request model.NotificationChannelUpdateRequest
 }) (*NotificationChannelResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
@@ -39,6 +40,24 @@ func (r *SchemaResolver) UpdateNotificationChannel(ctx context.Context, args str
 		return nil, err
 	}
 	return &NotificationChannelResolver{M: *updated, S: r, C: ctx}, nil
+}
+
+// RenameNotificationChannel moves a delivery channel to a new token. It takes the same
+// authority as an update — a rename is an edit of the channel, not a new kind of act, and
+// inventing a second authority for it would give a deployment two answers to one question.
+func (r *SchemaResolver) RenameNotificationChannel(ctx context.Context, args struct {
+	Token    string
+	NewToken string
+}) (*NotificationChannelResolver, error) {
+	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
+		return nil, err
+	}
+	api := r.GetApi(ctx)
+	renamed, err := api.RenameNotificationChannel(ctx, args.Token, args.NewToken)
+	if err != nil {
+		return nil, err
+	}
+	return &NotificationChannelResolver{M: *renamed, S: r, C: ctx}, nil
 }
 
 // DeleteNotificationChannel hard-deletes a delivery channel by token. It fails if

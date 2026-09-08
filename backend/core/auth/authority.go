@@ -249,9 +249,15 @@ const (
 	NotificationRead  Authority = "notification:read"
 	NotificationWrite Authority = "notification:write"
 
-	// Audit journal read (ADR-019). Gates the read-side query over the append-only
-	// audit_events table; the journal is written by construction and is never
-	// mutated through the API, so there is no audit:write.
+	// Audit journal read (ADR-019). Gates the read-side query over the audit_events
+	// table; the journal is written by construction and is never mutated through the
+	// API, so there is no audit:write.
+	//
+	// "Never through the API" is the exact claim, and it is narrower than the
+	// "append-only" this used to say. The ADR-077 tenant purge UPDATEs the journal —
+	// it empties the two columns that name a person for a deleted tenant, keeping the
+	// row as the evidence of the erasure. That is the only writer, it runs under a
+	// system context inside the sweep's own transaction, and no authority reaches it.
 	AuditRead Authority = "audit:read"
 
 	// System settings (user-management settings API, ADR-042 P2). Instance-global,
@@ -296,6 +302,27 @@ const (
 	// restyles the logo could read the map key, and whoever configures maps could
 	// restyle the console. Separating them costs one constant and one vocabulary entry.
 	BasemapWrite Authority = "basemap:write"
+
+	// Tenant default-locale self-service (user-management, ADR-066 sub-workstream d).
+	// Gates the self-scoped setTenantLocale mutation — a tenant declaring the language
+	// its console opens in for members who have not chosen one. Reads need no
+	// authority, exactly as for branding and basemap: the resolved locale rides the
+	// self-scoped `tenant` query and is applied to every member's shell, so gating the
+	// read would leave the console in the wrong language for precisely the people the
+	// default exists for.
+	//
+	// 🔴 Its own authority rather than a fold into branding:write, following the
+	// basemap precedent above — but the reason is DIFFERENT and weaker, and that is
+	// worth stating rather than borrowing. basemap:write is separate because the tile
+	// URL carries a CREDENTIAL, so sharing a grant would leak a secret. Nothing here is
+	// secret. What is here is BLAST RADIUS: this one value re-languages the console for
+	// every member of the tenant who has not made an explicit choice, which is a
+	// different kind of act from restyling a logo and plausibly belongs to different
+	// people (an ops admin owns the brand; whoever runs the regional team owns the
+	// language). Folding it into branding:write would make each grant imply the other
+	// and delete that choice for every operator; separating them costs one constant and
+	// one vocabulary entry, and an instance that wants them together grants both.
+	LocaleWrite Authority = "locale:write"
 
 	// AI inference provider administration (ai-inference, ADR-056). Gates the
 	// INSTANCE-scoped, operator-managed AIProvider CRUD — the registered inference
@@ -400,6 +427,7 @@ var vocabulary = map[Authority]Tiers{
 	ConnectorWrite:    tenant,
 	BrandingWrite:     tenant,
 	BasemapWrite:      tenant,
+	LocaleWrite:       tenant,
 	// audit:read is the one DUAL-tier authority, and it has to be: two different
 	// resolvers on two different planes gate on it. A tenant reads its own journal on
 	// device-management's data plane (tenant-tier), and an operator reads the instance

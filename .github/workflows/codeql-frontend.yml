@@ -1,0 +1,106 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# CodeQL for the frontend (javascript-typescript).
+#
+# WHY THIS IS A SEPARATE WORKFLOW AND NOT A JOB IN codeql.yml.
+#
+# Two reasons, and the second is the one that decided it.
+#
+#  1. The two analyses share nothing. The Go job is built around
+#     `build-mode: manual` and a traced full-workspace compile with its own
+#     module enumeration; this one extracts from source and needs no toolchain,
+#     no dependency install and no build. Folding them into one matrix would
+#     mean every step carrying `if: matrix.language == ...`, which is a matrix
+#     in name only and hides which steps belong to which analysis.
+#
+#  2. 🔴 `on.<event>.paths` is a WORKFLOW-level filter, not a job-level one.
+#     Adding the frontend's extensions to codeql.yml's `paths:` was the obvious
+#     way to make this run — and it would have meant every frontend-only pull
+#     request also paying for the Go analysis, which measures 8-10 minutes,
+#     while every Go-only pull request paid for this one. Neither job is in the
+#     required-check set, so that is wasted minutes rather than blocked merges;
+#     it is still a cost with nothing bought. Two workflows each carry their own
+#     filter and the waste disappears.
+#
+# WHY javascript-typescript AND NOT csharp (Derek, 2026-09-04). The console
+# holds auth tokens and `/dash` is a reference external embedder with its own
+# login, so the frontend is real trust-boundary surface and CodeQL's JS rules —
+# XSS, injection, prototype pollution — bite on exactly that. The C# SDK is a
+# client library its consumers compile themselves; there is no server-side trust
+# boundary in it for those rules to find, and a scanner whose output nobody
+# triages is worse than none. That is a decision, not an oversight; revisit it
+# if the SDK ever grows a server component.
+#
+# 🔴 NOT in the required-checks set, for the same reason the Go analysis is not:
+# a slow or flaky analysis in that set blocks merges for reasons that have
+# nothing to do with the change under review.
+name: "CodeQL frontend"
+
+on:
+  push:
+    branches: [main]
+
+  pull_request:
+    branches: [main]
+    paths:
+      # Listed by extension rather than by directory, so a file living somewhere
+      # unexpected is still caught — the same exhaustive-by-construction
+      # argument codeql.yml makes for `**/*.go`.
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.mjs"
+      - "**/*.cjs"
+      - "**/package.json"
+      - "**/package-lock.json"
+      # A change to the analysis itself must re-run the analysis. Without this,
+      # editing these files is the one change guaranteed not to be tested.
+      - ".github/workflows/codeql-frontend.yml"
+      - ".github/codeql/frontend-config.yml"
+
+  schedule:
+    # Weekly, Wednesday 05:47 UTC — half an hour after codeql.yml's Go run, so
+    # the two do not contend for a runner. A scheduled run matters even though
+    # this also runs per-PR: new QUERIES ship continuously, so unchanged code
+    # gets re-analyzed against rules that did not exist when it merged. It is
+    # also the backstop for the `paths` filter above, which is not evaluated for
+    # scheduled events.
+    - cron: "47 5 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-frontend:
+    name: Analyze frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write # upload results — required for every CodeQL workflow
+      packages: read # fetch CodeQL packs
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # No dependency install. `build-mode: none` extracts from source, and
+      # `npm ci` would only add node_modules — which CodeQL excludes anyway — at
+      # the cost of several minutes and a network dependency that can fail.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          config-file: .github/codeql/frontend-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          category: "/language:javascript-typescript"

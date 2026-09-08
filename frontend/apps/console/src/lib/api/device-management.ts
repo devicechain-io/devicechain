@@ -10,21 +10,27 @@ import type {
   DeviceTypeCreateRequest,
   DeviceTypeUpdateRequest,
   DeviceCreateRequest,
+  DeviceUpdateRequest,
   DeviceBulkCreateRequest,
   EntityGroupsQuery,
   EntityGroupCreateRequest,
+  EntityGroupUpdateRequest,
   DeviceProfilesQuery,
   DeviceProfileByTokenQuery,
   DeviceProfileVersionsQuery,
   DeviceProfileCreateRequest,
+  DeviceProfileUpdateRequest,
   MetricDefinitionsQuery,
   MetricDefinitionCreateRequest,
+  MetricDefinitionUpdateRequest,
   CommandDefinitionsQuery,
   DeviceCommandVocabularyQuery,
   DeviceLocationDeclarationQuery,
   CommandDefinitionCreateRequest,
+  CommandDefinitionUpdateRequest,
   DetectionRulesQuery,
   DetectionRuleCreateRequest,
+  DetectionRuleUpdateRequest,
   ScopeGroupsQuery,
   EntityGroupVersionsQuery,
   DeviceGroupTargetsQuery,
@@ -73,12 +79,18 @@ export type {
   DeviceTypeCreateRequest,
   DeviceTypeUpdateRequest,
   DeviceCreateRequest,
+  DeviceUpdateRequest,
   DeviceBulkCreateRequest,
   EntityGroupCreateRequest,
+  EntityGroupUpdateRequest,
   DeviceProfileCreateRequest,
+  DeviceProfileUpdateRequest,
   MetricDefinitionCreateRequest,
+  MetricDefinitionUpdateRequest,
   CommandDefinitionCreateRequest,
+  CommandDefinitionUpdateRequest,
   DetectionRuleCreateRequest,
+  DetectionRuleUpdateRequest,
 };
 
 // ── Devices ─────────────────────────────────────────────────────────────
@@ -203,7 +215,7 @@ export async function createDevices(request: DeviceBulkCreateRequest): Promise<{
 }
 
 const UPDATE_DEVICE = graphql(`
-  mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {
+  mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
     updateDevice(token: $token, request: $request) {
       id
       token
@@ -225,35 +237,22 @@ const UPDATE_DEVICE = graphql(`
   }
 `);
 
-// 🔴 `Required<…>` is not decoration: it makes the OMISSION a compile error. The
-// update is a full replace, so the defect this guards against is a caller that
-// simply does not mention a field — which the plain request type, where every
-// field is optional, compiles happily. See areaPreserved for the whole argument.
+// updateDevice is a PARTIAL update: pass only the fields being changed. An omitted
+// field is left alone, an explicit null clears it.
+//
+// 🔴 Callers must NOT carry forward the fields they do not edit. The `devicePreserved`
+// projection that used to sit here was the right fix for a full replace and is the
+// WRONG one now: a form that re-sends fields it never showed is writing them back
+// from a snapshot it read minutes ago, so two operators on two tabs each silently
+// overwrite the other. Absence is the carry-forward.
 export async function updateDevice(
   token: string,
-  request: Required<DeviceCreateRequest>,
+  request: DeviceUpdateRequest,
 ): Promise<Device> {
   const data = await gql('device-management', UPDATE_DEVICE, { token, request });
   return data.updateDevice;
 }
 
-// 🔴 A device update is a FULL REPLACE, so a field the request omits is DELETED.
-// externalId is the one that hurts most here: it is the handle an external system
-// correlates this device by, no console form edits it, and renaming a device used
-// to erase it — the device kept working and simply stopped being findable from
-// wherever it came from. The `Required<…>` return type is the gate; see areaPreserved.
-//
-// deviceTypeToken is not preserved: the form always supplies it, and the request
-// type refuses to compile without it.
-export function devicePreserved(d: Device): Required<Omit<DeviceCreateRequest, 'deviceTypeToken'>> {
-  return {
-    token: d.token,
-    name: d.name ?? null,
-    description: d.description ?? null,
-    externalId: d.externalId ?? null,
-    metadata: d.metadata ?? null,
-  };
-}
 
 const DELETE_DEVICE = graphql(`
   mutation DeleteDevice($token: String!) {
@@ -543,7 +542,7 @@ export async function createEntityGroup(request: EntityGroupCreateRequest): Prom
 }
 
 const UPDATE_ENTITY_GROUP = graphql(`
-  mutation UpdateEntityGroup($token: String!, $request: EntityGroupCreateRequest) {
+  mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
     updateEntityGroup(token: $token, request: $request) {
       id
       token
@@ -561,34 +560,23 @@ const UPDATE_ENTITY_GROUP = graphql(`
   }
 `);
 
+/**
+ * A PARTIAL update: a field this request does not name keeps its stored value, an
+ * explicit null clears it.
+ *
+ * 🔴 THE REQUEST CARRIES NO token, memberType OR membershipMode, and it is the input
+ * type — not this function — that says so. All three are identity: a rename would
+ * strand every reference held by token, a member-family change would leave the group
+ * collecting a family its members do not belong to, and a static/dynamic conversion
+ * would orphan its members. The server used to refuse each of those; now there is no
+ * request that expresses one.
+ */
 export async function updateEntityGroup(
   token: string,
-  request: EntityGroupCreateRequest,
+  request: EntityGroupUpdateRequest,
 ): Promise<EntityGroup> {
   const data = await gql('device-management', UPDATE_ENTITY_GROUP, { token, request });
   return data.updateEntityGroup;
-}
-
-// 🔴 A group update is a full replace over every field the request names, so a
-// group form that sent only token/name/description erased the group's appearance
-// and its metadata on every rename. What it does NOT erase is membershipMode and
-// selector: the server keeps those off the request entirely — mode is immutable
-// and a selector is only replaced when one is sent — which is why a dynamic
-// group's CEL predicate survived this and its metadata did not. GroupFormRequest
-// omits all three, so returning `Required<GroupFormRequest>` is the gate over
-// exactly the fields a form is allowed to write.
-export function groupPreserved(g: EntityGroup): Required<GroupFormRequest> {
-  return {
-    token: g.token,
-    name: g.name ?? null,
-    description: g.description ?? null,
-    icon: g.icon ?? null,
-    backgroundColor: g.backgroundColor ?? null,
-    foregroundColor: g.foregroundColor ?? null,
-    borderColor: g.borderColor ?? null,
-    imageUrl: g.imageUrl ?? null,
-    metadata: g.metadata ?? null,
-  };
 }
 
 const DELETE_ENTITY_GROUP = graphql(`
@@ -610,8 +598,8 @@ export const listDeviceGroups = (opts: { pageNumber: number; pageSize: number })
 export const getDeviceGroup = (token: string) => getEntityGroupOfType(token, 'device');
 export const createDeviceGroup = (request: GroupFormRequest) =>
   createEntityGroup({ ...request, memberType: 'device' });
-export const updateDeviceGroup = (token: string, request: Required<GroupFormRequest>) =>
-  updateEntityGroup(token, { ...request, memberType: 'device' });
+export const updateDeviceGroup = (token: string, request: EntityGroupUpdateRequest) =>
+  updateEntityGroup(token, request);
 export const deleteDeviceGroup = deleteEntityGroup;
 
 // A device group as the command-batch target picker needs it (ADR-061 / ADR-043).
@@ -745,8 +733,21 @@ export async function createDeviceProfile(
   return data.createDeviceProfile;
 }
 
+// updateDeviceProfile is a PARTIAL update. Every field is three-state: leave it
+// `undefined` to say nothing about it (the stored value is kept), pass `null` to clear
+// it, or pass a value to set it.
+//
+// 🔴 `undefined` AND `null` ARE NOW DIFFERENT REQUESTS, and `location` is why this
+// matters most. It is the profile's position declaration, no console form edits it, and
+// the previous full-replace input made OMITTING it the clear — so an operator editing a
+// profile's name silently un-declared position for every device built on it, and the
+// only visible consequence was that fleet's map surfaces going quiet. That is why this
+// file used to carry deviceProfilePreserved(), which rebuilt the whole request from the
+// loaded profile on every save. Omission now preserves, so the workaround is gone with
+// the hazard — do NOT reintroduce `?? null`, which would turn "unchanged" back into
+// "clear this".
 const UPDATE_DEVICE_PROFILE = graphql(`
-  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {
+  mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileUpdateRequest!) {
     updateDeviceProfile(token: $token, request: $request) {
       id
       token
@@ -767,38 +768,33 @@ const UPDATE_DEVICE_PROFILE = graphql(`
 
 export async function updateDeviceProfile(
   token: string,
-  request: Required<DeviceProfileCreateRequest>,
+  request: DeviceProfileUpdateRequest,
 ): Promise<DeviceProfile> {
   const data = await gql('device-management', UPDATE_DEVICE_PROFILE, { token, request });
   return data.updateDeviceProfile;
 }
 
-// 🔴 The one on this request that is not a string: `location`, the profile's
-// position declaration. It is replaced wholesale like every other field, and the
-// schema says so in as many words — "leaving it out of an update clears an
-// existing declaration". No console form edits it today, which is exactly why it
-// has to be carried: a declaration authored over the API would otherwise be
-// cleared by an operator renaming the profile, and the only visible consequence
-// would be a device's position surfaces quietly disappearing.
-//
-// The declaration is rebuilt field by field rather than spread. It is the one
-// field here that is an OBJECT, and the shape read back is a query result while
-// the shape sent is an input — they line up today, and `...p.location` would keep
-// compiling right up until they stop.
-export function deviceProfilePreserved(p: DeviceProfile): Required<DeviceProfileCreateRequest> {
-  return {
-    token: p.token,
-    name: p.name ?? null,
-    description: p.description ?? null,
-    category: p.category ?? null,
-    metadata: p.metadata ?? null,
-    location: p.location
-      ? {
-          expectedAccuracyMeters: p.location.expectedAccuracyMeters ?? null,
-          expectedUpdateIntervalSeconds: p.location.expectedUpdateIntervalSeconds ?? null,
-        }
-      : null,
-  };
+// renameDeviceProfile changes a profile's token and nothing else. It is the capability
+// updateDeviceProfile's payload token used to carry: a blank newToken is refused,
+// renaming to the current token is an idempotent success, and a token another profile
+// holds is refused by name. It is REFUSED outright once the profile has been published
+// or adopted by a device type — from that point the token is the key published rules
+// are filed under and rostered devices are tracked by.
+const RENAME_DEVICE_PROFILE = graphql(`
+  mutation RenameDeviceProfile($token: String!, $newToken: String!) {
+    renameDeviceProfile(token: $token, newToken: $newToken) {
+      id
+      token
+    }
+  }
+`);
+
+export async function renameDeviceProfile(
+  token: string,
+  newToken: string,
+): Promise<{ token: string }> {
+  const data = await gql('device-management', RENAME_DEVICE_PROFILE, { token, newToken });
+  return data.renameDeviceProfile;
 }
 
 const DELETE_DEVICE_PROFILE = graphql(`
@@ -932,7 +928,7 @@ export async function createMetricDefinition(request: MetricDefinitionCreateRequ
 }
 
 const UPDATE_METRIC_DEFINITION = graphql(`
-  mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionCreateRequest) {
+  mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionUpdateRequest!) {
     updateMetricDefinition(token: $token, request: $request) {
       id
       token
@@ -942,7 +938,7 @@ const UPDATE_METRIC_DEFINITION = graphql(`
 
 export async function updateMetricDefinition(
   token: string,
-  request: Required<MetricDefinitionCreateRequest>,
+  request: MetricDefinitionUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_METRIC_DEFINITION, { token, request });
 }
@@ -1084,7 +1080,7 @@ export async function createCommandDefinition(
 }
 
 const UPDATE_COMMAND_DEFINITION = graphql(`
-  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {
+  mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionUpdateRequest!) {
     updateCommandDefinition(token: $token, request: $request) {
       id
       token
@@ -1094,7 +1090,7 @@ const UPDATE_COMMAND_DEFINITION = graphql(`
 
 export async function updateCommandDefinition(
   token: string,
-  request: Required<CommandDefinitionCreateRequest>,
+  request: CommandDefinitionUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_COMMAND_DEFINITION, { token, request });
 }
@@ -1210,7 +1206,7 @@ export async function createDetectionRule(request: DetectionRuleCreateRequest): 
 }
 
 const UPDATE_DETECTION_RULE = graphql(`
-  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+  mutation UpdateDetectionRule($token: String!, $request: DetectionRuleUpdateRequest!) {
     updateDetectionRule(token: $token, request: $request) {
       id
       token
@@ -1220,7 +1216,7 @@ const UPDATE_DETECTION_RULE = graphql(`
 
 export async function updateDetectionRule(
   token: string,
-  request: Required<DetectionRuleCreateRequest>,
+  request: DetectionRuleUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_DETECTION_RULE, { token, request });
 }

@@ -19,6 +19,14 @@ export type ConnectorSearchCriteria = {
   type?: string | null | undefined;
 };
 
+export type ConnectorUpdateRequest = {
+  config?: string | null | undefined;
+  description?: string | null | undefined;
+  name?: string | null | undefined;
+  secret?: string | null | undefined;
+  type?: string | null | undefined;
+};
+
 export type ConnectorsQueryVariables = Exact<{
   criteria: ConnectorSearchCriteria;
 }>;
@@ -47,12 +55,20 @@ export type CreateConnectorMutation = { createConnector: { token: string } };
 
 export type UpdateConnectorMutationVariables = Exact<{
   token: string;
-  request: ConnectorCreateRequest;
+  request: ConnectorUpdateRequest;
   expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
 export type UpdateConnectorMutation = { updateConnector: { token: string, updatedAt: string | null } };
+
+export type RenameConnectorMutationVariables = Exact<{
+  token: string;
+  newToken: string;
+}>;
+
+
+export type RenameConnectorMutation = { renameConnector: { token: string, updatedAt: string | null } };
 
 export type ConnectorVersionsQueryVariables = Exact<{
   token: string;
@@ -149,7 +165,7 @@ export const CreateConnectorDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateConnectorMutation, CreateConnectorMutationVariables>;
 export const UpdateConnectorDocument = new TypedDocumentString(`
-    mutation UpdateConnector($token: String!, $request: ConnectorCreateRequest!, $expectedUpdatedAt: String) {
+    mutation UpdateConnector($token: String!, $request: ConnectorUpdateRequest!, $expectedUpdatedAt: String) {
   updateConnector(
     token: $token
     request: $request
@@ -160,6 +176,14 @@ export const UpdateConnectorDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateConnectorMutation, UpdateConnectorMutationVariables>;
+export const RenameConnectorDocument = new TypedDocumentString(`
+    mutation RenameConnector($token: String!, $newToken: String!) {
+  renameConnector(token: $token, newToken: $newToken) {
+    token
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<RenameConnectorMutation, RenameConnectorMutationVariables>;
 export const ConnectorVersionsDocument = new TypedDocumentString(`
     query ConnectorVersions($token: String!) {
   connectorVersions(token: $token) {

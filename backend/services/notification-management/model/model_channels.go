@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/datatypes"
@@ -69,14 +70,14 @@ func ChannelSecretRef(ctx context.Context, id uint) (secrets.SecretRef, error) {
 	return secrets.SecretRef{Scope: secrets.ScopeTenant, Tenant: tenant, Name: ChannelSecretName(id)}, nil
 }
 
-// NotificationChannelCreateRequest is the data required to create or update a
-// channel. Config is a JSON document (validated well-formed on write; deep
-// per-adapter validation lands with the adapter in N.C). Secret is write-only:
-// on create it sets the secret; on update a nil Secret LEAVES THE EXISTING SECRET
-// UNCHANGED (so editing a channel's other fields does not require re-entering the
-// password), while a non-nil Secret replaces it — an explicit empty string clears
-// it. This preserve-on-omit semantics is a deliberate improvement over the device
-// credential update (which nulls the secret when omitted).
+// NotificationChannelCreateRequest is the data required to CREATE a channel. Config is
+// a JSON document (validated well-formed on write; deep per-adapter validation lands
+// with the adapter in N.C). Secret is write-only: on create it sets the secret, and a
+// nil or empty Secret stores none.
+//
+// It is no longer the update input. NotificationChannelUpdateRequest is, and it carries
+// no token: a channel's RENAME is its own mutation now (RenameNotificationChannel), so
+// the two tokens that used to disagree inside one payload cannot both exist.
 type NotificationChannelCreateRequest struct {
 	Token       string
 	Name        *string
@@ -86,6 +87,46 @@ type NotificationChannelCreateRequest struct {
 	Secret      *string
 	Enabled     bool
 	Metadata    *string
+}
+
+// NotificationChannelUpdateRequest is the three-state update input: an OMITTED field
+// leaves the stored value alone, an explicit NULL clears it, and a value sets it. The
+// folds live in core's graphql package (ApplyTo for a nullable column, ApplyToRequired
+// for one that cannot be cleared).
+//
+// It carries NO Token. A channel's token moves through RenameNotificationChannel, which
+// says what it is doing in its own name; an update input carrying a second token could
+// only ever disagree with the argument that names the record.
+//
+// # 🔴 THE SECRET'S THIRD STATE IS NEW, AND IT IS A CLEAR
+//
+// Under the create input, `secret` had two reachable meanings on update: nil PRESERVED
+// (you cannot read a secret back to re-send it) and a non-nil value replaced, with the
+// empty string as the only way to remove one. That made the field the exact inverse of
+// every other field on the same request — null preserves, "" destroys — which is a trap
+// worth a warning box in the API reference.
+//
+// Three states remove the inversion instead of documenting it:
+//
+//	ABSENT   -> the stored secret is PRESERVED (unchanged from before)
+//	NULL     -> the stored secret is CLEARED   (the operation "" used to be the only
+//	            spelling of; now it is spelled the way every other field spells it)
+//	""       -> also cleared, unchanged from before, so a client that already sends the
+//	            empty string to remove a secret keeps working
+//	"value"  -> the secret is rotated to that value
+//
+// Both spellings of the clear are honoured because a secret is the one field where
+// getting this wrong is silent: a channel whose delivery credential quietly went missing
+// keeps its config, keeps returning success on every edit, and stops authenticating at
+// the moment an alarm needed to reach a human.
+type NotificationChannelUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	ChannelType dcgraphql.OptionalString
+	Config      dcgraphql.OptionalString
+	Secret      dcgraphql.OptionalString
+	Enabled     dcgraphql.OptionalBool
+	Metadata    dcgraphql.OptionalString
 }
 
 // NotificationChannelSearchCriteria locates channels by optional type/enabled

@@ -235,20 +235,29 @@ func (w *cancellingWaiter) Wait(ctx context.Context) error {
 	return nil
 }
 
-// TestStartDelayAppliesOnlyToTheAmbiguousReason. A written `enabled: false` is a decision
+// TestStartDelayAppliesOnlyToTheAmbiguousReasons. A written `enabled: false` is a decision
 // an operator made — Enabled is a *bool precisely so false is distinguishable from unset —
-// so waiting on it would only delay a repair. A MISSING system-account credential is the
-// ambiguous one: a bring-up mints it in the same run that starts the services, so an absent
+// so waiting on it would only delay a repair. A MISSING system-account credential is
+// ambiguous: a bring-up mints it in the same run that starts the services, so an absent
 // value can be a race with the run creating it, and demoting a fleet on the strength of a
-// value that appears ninety seconds later would be a self-inflicted outage.
-func TestStartDelayAppliesOnlyToTheAmbiguousReason(t *testing.T) {
+// value that appears ninety seconds later would be a self-inflicted outage. An UNREACHABLE
+// BROKER is ambiguous on the same clock and for the same reason — the bring-up rolls the
+// NATS StatefulSet alongside the Deployments — so it waits too.
+func TestStartDelayAppliesOnlyToTheAmbiguousReasons(t *testing.T) {
 	const jitter = 7 * time.Second
+	// 🔴 THE EXPECTED VALUES ARE LITERALS, NOT `SettleWindow + jitter`. Built from the
+	// constant they are checking, they agree with it wherever it moves — including to
+	// zero, which turns the settle window into no window at all and lets a fleet be
+	// released the instant a bring-up races its own broker roll. The number is published
+	// as two minutes in the concept page, the deployment page and the chart, so it is
+	// asserted here the way a reader would check it.
 	require.Equal(t, jitter, StartDelayFor(TapOffDisabled, jitter))
-	require.Equal(t, SettleWindow+jitter, StartDelayFor(TapOffNoSystemCredential, jitter))
+	require.Equal(t, 2*time.Minute+jitter, StartDelayFor(TapOffNoSystemCredential, jitter))
+	require.Equal(t, 2*time.Minute+jitter, StartDelayFor(TapOffBrokerUnreachable, jitter))
 	// The remaining reasons never start a drain at all, but the function is total and must
 	// not accidentally hand one of them the settle window if that ever changes.
 	for _, r := range []TapOffReason{TapOffNoGatewaySource, TapOffNoServiceAuth,
-		TapOffBrokerUnreachable, TapOffSubscribeFailed} {
+		TapOffSubscribeFailed} {
 		require.Equal(t, jitter, StartDelayFor(r, jitter), "reason %s", r)
 	}
 }

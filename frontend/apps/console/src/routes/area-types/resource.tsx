@@ -9,7 +9,6 @@ import {
   getAreaType,
   createAreaType,
   updateAreaType,
-  areaTypePreserved,
   deleteAreaType,
   type AreaType,
 } from '@/lib/api/areas';
@@ -41,12 +40,10 @@ export const areaTypeResource: RegistryResource<AreaType> = {
       entityType="area-type"
       create={(req) => createAreaType(req)}
       update={(token, req) =>
-        // RegistryTypeForm calls update only when editing, so at is set. The
-        // appearance fields were already carried by hand here; areaTypePreserved
-        // adds the imageUrl and metadata that were not, and makes the next field
-        // added to the schema a compile error rather than a silent deletion.
+        // A partial update: this form edits name and description, so it sends name
+        // and description. The appearance fields, the imageUrl and the metadata are
+        // untouched because they are not mentioned.
         updateAreaType(token, {
-          ...areaTypePreserved(at!),
           name: req.name,
           description: req.description,
         })
@@ -58,10 +55,8 @@ export const areaTypeResource: RegistryResource<AreaType> = {
   renderDetailExtra: (at, reload) => (
     <TypeAppearanceForm
       entity={at}
-      // The appearance tab edits icon + colors; everything else — name,
-      // description, imageUrl, metadata — has to be carried, or saving a colour
-      // deletes it.
-      update={(req) => updateAreaType(at.token, { ...areaTypePreserved(at), ...req })}
+      // The appearance form edits icon and colors, and sends only those.
+      update={(req) => updateAreaType(at.token, req)}
       onSaved={reload}
     />
   ),

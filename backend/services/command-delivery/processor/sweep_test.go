@@ -67,6 +67,13 @@ type fakeApi struct {
 	// the ordinary case; a test stages CANCELLED to exercise the called-off-batch branch.
 	parkLandsOn model.CommandStatus
 
+	// The dispatch nudge's half: the rows a per-device read may answer with, what the
+	// reads asked for, and an error to stage a read failure. Empty by default, so every
+	// test about the sweep is unaffected by a path it is not about.
+	queuedRows    []*model.Command
+	queuedReads   []queuedRead
+	queuedReadErr error
+
 	lockAttempts    int
 	pendingReads    int
 	expireCalls     int
@@ -236,6 +243,16 @@ func (f *fakeApi) MarkUndeliverable(_ context.Context, id uint, reason string) (
 	return true, nil
 }
 
+// sweepLockAttempts reads the counter under the mutex that guards it, for tests that
+// observe it from a goroutine other than the one sweeping. Reading the field directly
+// across goroutines is a data race the race detector would report -- and CI runs no
+// -race, so it would simply be wrong in silence.
+func (f *fakeApi) sweepLockAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lockAttempts
+}
+
 func (f *fakeApi) TrySweepLock(_ context.Context, fn func() error) (bool, error) {
 	f.mu.Lock()
 	f.lockAttempts++
@@ -252,6 +269,50 @@ func (f *fakeApi) PendingCommands(context.Context) ([]*model.Command, error) {
 	defer f.mu.Unlock()
 	f.pendingReads++
 	return f.pending, nil
+}
+
+// queuedRead is one QueuedCommandsForDevice call, recorded whole. The TENANT is half the
+// record: the read is tenant-fenced in production by the scope callback reading the
+// context, so a fake that discarded it would let a nudge that never established a tenant
+// score exactly the same as one that did.
+type queuedRead struct {
+	tenant      string
+	deviceToken string
+	limit       int
+}
+
+// QueuedCommandsForDevice answers from f.queuedRows, FILTERING as the real query does:
+// this device only, QUEUED only, oldest first, and no more rows than the caller asked for.
+//
+// 🔴 EVERY ONE OF THOSE FILTERS IS LOAD-BEARING IN A FAKE, AND THE LIMIT MOST OF ALL. The
+// nudge's sole-queued-command rule is expressed as "did the read come back with more than
+// one row", so a fake that ignored the limit would answer two rows however small a probe
+// the production code asked for — and NudgeProbeLimit could be cut to 1, which really does
+// make a busy device look idle, with every test still green. A fake that returned its whole
+// set regardless of status or device would be worse still: the B2 stand-down would then
+// pass against a query that selected the wrong rows entirely.
+func (f *fakeApi) QueuedCommandsForDevice(ctx context.Context, deviceToken string, limit int) ([]*model.Command, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tenant, _ := core.TenantFromContext(ctx)
+	f.queuedReads = append(f.queuedReads, queuedRead{tenant: tenant, deviceToken: deviceToken, limit: limit})
+	if f.queuedReadErr != nil {
+		return nil, f.queuedReadErr
+	}
+	rows := make([]*model.Command, 0, limit)
+	for _, cmd := range f.queuedRows {
+		if cmd.DeviceToken != deviceToken {
+			continue
+		}
+		if cmd.Status != "" && cmd.Status != model.CommandQueued.String() {
+			continue
+		}
+		if len(rows) == limit {
+			break
+		}
+		rows = append(rows, cmd)
+	}
+	return rows, nil
 }
 
 func (f *fakeApi) ExpireStale(context.Context, time.Time) (int64, map[string]int64, error) {
@@ -580,7 +641,7 @@ func TestConstructorWiresBothDeliveryGates(t *testing.T) {
 
 	proc := NewCommandDeliveryProcessor(ms, nil, writer, core.NewNoOpLifecycleCallbacks(), api,
 		func(tenant string) bool { return tenant == "acme" },
-		absentReader{"dev-c2"})
+		absentReader{"dev-c2"}, nil)
 
 	// Drive the real sweep rather than reading the fields back: a field being set proves
 	// assignment, not that the delivery path consults what was assigned.

@@ -12,17 +12,22 @@ el operador y todas las cargas de trabajo de servicio— con un solo comando:
 dcctl bootstrap local my-instance
 ```
 
-`dcctl` es un **binario autocontenido**. La configuración de infraestructura de
+`dcctl` lleva su propio **contenido**: la configuración de infraestructura de
 OpenTofu, el chart de Helm y los manifiestos del operador están todos incrustados
-en él, así que no necesitas un checkout del árbol de código fuente, `git`,
-`kubectl`, `kustomize` ni `helm` en tu máquina —solo `dcctl` y un clúster donde
-desplegar.
+en él, así que nunca necesitas un checkout del árbol de código fuente ni `git`
+para desplegar.
+
+Lo que no lleva son las **herramientas**. `bootstrap` ejecuta `docker`, `kubectl`,
+`helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y en el proveedor
+`local` también `kind`. Comprueba que estén todos antes de empezar y se detiene si
+falta alguno, así que instálalos primero —la lista completa, y para qué se usa
+cada uno, está en [Prerrequisitos](#prerequisites).
 
 :::note Estado
 DeviceChain está en fase previa al lanzamiento (pre-release). `dcctl bootstrap local`
-está implementado y validado de extremo a extremo en Kubernetes local (kind). El
-proveedor `gcp` y la creación automática de clúster local son mejoras planificadas
-—consulta [Prerrequisitos](#prerequisites).
+está implementado y validado de extremo a extremo en Kubernetes local (kind), y crea
+el clúster de kind por ti si no hay ninguno en marcha —te pregunta antes, salvo que
+pases `--yes`. El proveedor `gcp` es una mejora planificada.
 :::
 
 ## Qué hace

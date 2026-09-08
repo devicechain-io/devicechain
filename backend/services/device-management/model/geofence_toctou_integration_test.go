@@ -195,9 +195,7 @@ func TestTOCTOUAnUpdateIsMeteredAgainstWhatItCommitsOver(t *testing.T) {
 	// THE COUNTERWEIGHT, FIRST. With nothing racing it, the same replacement SUCCEEDS — it is not
 	// growth against the stored 1024, and a grandfathered fence must stay editable. Without this
 	// the refusal below would be satisfied by an update that simply always fails.
-	if _, err := api.UpdateGeoFence(ctx, token, &GeoFenceCreateRequest{
-		Token: token, Geometry: replacement,
-	}); err != nil {
+	if _, err := api.UpdateGeoFence(ctx, token, geoFenceEdit(replacement)); err != nil {
 		t.Fatalf("an uncontended replacement of a grandfathered fence, at the same position count, "+
 			"was refused: %v. The ceiling refuses GROWTH, not size", err)
 	}
@@ -226,9 +224,7 @@ func TestTOCTOUAnUpdateIsMeteredAgainstWhatItCommitsOver(t *testing.T) {
 	type outcome struct{ err error }
 	done := make(chan outcome, 1)
 	go func() {
-		_, err := api.UpdateGeoFence(ctx, token, &GeoFenceCreateRequest{
-			Token: token, Geometry: ringOf(fencePositions, 0.03),
-		})
+		_, err := api.UpdateGeoFence(ctx, token, geoFenceEdit(ringOf(fencePositions, 0.03)))
 		done <- outcome{err: err}
 	}()
 

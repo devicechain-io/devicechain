@@ -62,5 +62,16 @@ var (
 		// fence set in a DETECT process serving every tenant. The costs are stated once, in
 		// core/governance; this comment deliberately does not retell them.
 		NewTenantGeoFenceCapsMigration(),
+		// ADR-024 the dead-letter store: the queryable record of work a consumer
+		// accepted and gave up on. It lives here, on the operator plane, so the read
+		// surface never has to answer whether a per-entry failure reason is safe to
+		// show a tenant.
+		NewDeadLettersMigration(),
+		// The per-tenant default LOCALE: the language a tenant's console opens in for a
+		// user who has not chosen one. Rung 2 of the console's precedence — it beats the
+		// browser's advertised languages and loses to an explicit user choice — which
+		// moves "what language do we work in?" off every individual browser and onto the
+		// tenant that has the answer.
+		NewTenantLocaleMigration(),
 	}
 )

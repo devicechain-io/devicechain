@@ -60,6 +60,23 @@ import (
 // The interface is small on purpose. A store is asked to erase and to say what it still
 // holds; it is never asked whether it is done, because a store grading itself is the
 // thing the coordinator's settle window exists to distrust.
+// FenceLifter is implemented by a store that plants an ADR-077 erasure fence and can
+// therefore lift it.
+//
+// 🔑 IT IS A SEPARATE, OPTIONAL INTERFACE RATHER THAN A METHOD ON Store, because most
+// stores have no fence to lift and a no-op implementation on each of them would be four
+// places where "does nothing" and "forgot to do it" look identical. A store that plants a
+// fence declares it here; the coordinator asks every store and lifts every fence that
+// answers, before it releases the token.
+//
+// 🔴 A FAILURE TO LIFT MUST BLOCK COMPLETION, and the coordinator treats it that way.
+// The failure direction matters more than it looks: an unlifted fence with the token
+// still held is a purge that retries next pass, while a released token behind a standing
+// fence is a live tenant that can never write and no row missing to say why.
+type FenceLifter interface {
+	LiftFence(ctx context.Context, tenant string, at time.Time) error
+}
+
 type Store interface {
 	// Name keys this store's line in the deletion record's ledger. It is PERSISTED, so
 	// renaming one orphans the history of every purge that used the old name.

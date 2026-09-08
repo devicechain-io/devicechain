@@ -15,7 +15,7 @@ func str(v string) *string   { return &v }
 
 // defWithSchema builds a CommandDefinition whose ParameterSchema column holds the
 // JSON encoding of the given descriptors (nil for a definition with no schema).
-func defWithSchema(t *testing.T, key string, params []CommandParameter) *CommandDefinition {
+func defWithSchema(t *testing.T, key string, params []ParameterSpec) *CommandDefinition {
 	t.Helper()
 	def := &CommandDefinition{CommandKey: key}
 	if params != nil {
@@ -32,73 +32,73 @@ func defWithSchema(t *testing.T, key string, params []CommandParameter) *Command
 func TestValidateParameterSchema(t *testing.T) {
 	cases := []struct {
 		name   string
-		schema []CommandParameter
+		schema []ParameterSpec
 		ok     bool
 	}{
 		{"empty schema", nil, true},
-		{"simple scalar", []CommandParameter{{Name: "speed", DataType: MetricInt}}, true},
+		{"simple scalar", []ParameterSpec{{Name: "speed", DataType: MetricInt}}, true},
 		{
 			"all scalar types",
-			[]CommandParameter{
+			[]ParameterSpec{
 				{Name: "a", DataType: MetricDouble}, {Name: "b", DataType: MetricInt},
 				{Name: "c", DataType: MetricBoolean}, {Name: "d", DataType: MetricString},
 			}, true,
 		},
-		{"empty name", []CommandParameter{{DataType: MetricInt}}, false},
+		{"empty name", []ParameterSpec{{DataType: MetricInt}}, false},
 		{
 			"duplicate name",
-			[]CommandParameter{{Name: "x", DataType: MetricInt}, {Name: "x", DataType: MetricString}}, false,
+			[]ParameterSpec{{Name: "x", DataType: MetricInt}, {Name: "x", DataType: MetricString}}, false,
 		},
-		{"invalid data type", []CommandParameter{{Name: "x", DataType: "WIDGET"}}, false},
-		{"scalar missing data type", []CommandParameter{{Name: "x"}}, false},
+		{"invalid data type", []ParameterSpec{{Name: "x", DataType: "WIDGET"}}, false},
+		{"scalar missing data type", []ParameterSpec{{Name: "x"}}, false},
 		{
 			"bounds on non-numeric",
-			[]CommandParameter{{Name: "x", DataType: MetricString, MinValue: f64(0)}}, false,
+			[]ParameterSpec{{Name: "x", DataType: MetricString, MinValue: f64(0)}}, false,
 		},
 		{
 			"min greater than max",
-			[]CommandParameter{{Name: "x", DataType: MetricInt, MinValue: f64(10), MaxValue: f64(1)}}, false,
+			[]ParameterSpec{{Name: "x", DataType: MetricInt, MinValue: f64(10), MaxValue: f64(1)}}, false,
 		},
 		{
 			"default violates bounds",
-			[]CommandParameter{{Name: "x", DataType: MetricInt, MaxValue: f64(10), Default: str("50")}}, false,
+			[]ParameterSpec{{Name: "x", DataType: MetricInt, MaxValue: f64(10), Default: str("50")}}, false,
 		},
 		{
 			"valid default within bounds",
-			[]CommandParameter{{Name: "x", DataType: MetricInt, MinValue: f64(0), MaxValue: f64(10), Default: str("5")}}, true,
+			[]ParameterSpec{{Name: "x", DataType: MetricInt, MinValue: f64(0), MaxValue: f64(10), Default: str("5")}}, true,
 		},
 		{
 			"object with children",
-			[]CommandParameter{{Name: "pt", Kind: CommandParamObject, Parameters: []CommandParameter{
+			[]ParameterSpec{{Name: "pt", Kind: ParameterSpecObject, Parameters: []ParameterSpec{
 				{Name: "lat", DataType: MetricDouble}, {Name: "lon", DataType: MetricDouble},
 			}}}, true,
 		},
 		{
 			"object declaring scalar constraint",
-			[]CommandParameter{{Name: "pt", Kind: CommandParamObject, DataType: MetricInt}}, false,
+			[]ParameterSpec{{Name: "pt", Kind: ParameterSpecObject, DataType: MetricInt}}, false,
 		},
 		{
 			"scalar nesting children",
-			[]CommandParameter{{Name: "x", DataType: MetricInt, Parameters: []CommandParameter{{Name: "y", DataType: MetricInt}}}}, false,
+			[]ParameterSpec{{Name: "x", DataType: MetricInt, Parameters: []ParameterSpec{{Name: "y", DataType: MetricInt}}}}, false,
 		},
 		{
 			"nested duplicate is caught",
-			[]CommandParameter{{Name: "pt", Kind: CommandParamObject, Parameters: []CommandParameter{
+			[]ParameterSpec{{Name: "pt", Kind: ParameterSpecObject, Parameters: []ParameterSpec{
 				{Name: "lat", DataType: MetricDouble}, {Name: "lat", DataType: MetricDouble},
 			}}}, false,
 		},
-		{"unknown kind", []CommandParameter{{Name: "x", Kind: "ARRAY", DataType: MetricInt}}, false},
-		{"int enum valid", []CommandParameter{{Name: "g", DataType: MetricInt, Enum: []string{"1", "2"}}}, true},
-		{"int enum non-int entry", []CommandParameter{{Name: "g", DataType: MetricInt, Enum: []string{"1", "two"}}}, false},
-		{"string enum ok", []CommandParameter{{Name: "s", DataType: MetricString, Enum: []string{"a", "b"}}}, true},
-		{"enum on boolean rejected", []CommandParameter{{Name: "b", DataType: MetricBoolean, Enum: []string{"true"}}}, false},
+		{"unknown kind", []ParameterSpec{{Name: "x", Kind: "ARRAY", DataType: MetricInt}}, false},
+		{"int enum valid", []ParameterSpec{{Name: "g", DataType: MetricInt, Enum: []string{"1", "2"}}}, true},
+		{"int enum non-int entry", []ParameterSpec{{Name: "g", DataType: MetricInt, Enum: []string{"1", "two"}}}, false},
+		{"string enum ok", []ParameterSpec{{Name: "s", DataType: MetricString, Enum: []string{"a", "b"}}}, true},
+		{"enum on boolean rejected", []ParameterSpec{{Name: "b", DataType: MetricBoolean, Enum: []string{"true"}}}, false},
 		{
 			"default outside enum rejected",
-			[]CommandParameter{{Name: "g", DataType: MetricString, Enum: []string{"a", "b"}, Default: str("c")}}, false,
+			[]ParameterSpec{{Name: "g", DataType: MetricString, Enum: []string{"a", "b"}, Default: str("c")}}, false,
 		},
 		{
 			"default in enum ok",
-			[]CommandParameter{{Name: "g", DataType: MetricString, Enum: []string{"a", "b"}, Default: str("a")}}, true,
+			[]ParameterSpec{{Name: "g", DataType: MetricString, Enum: []string{"a", "b"}, Default: str("a")}}, true,
 		},
 	}
 	for _, tc := range cases {
@@ -115,11 +115,11 @@ func TestValidateParameterSchema(t *testing.T) {
 }
 
 func TestValidateCommandPayload(t *testing.T) {
-	schema := []CommandParameter{
+	schema := []ParameterSpec{
 		{Name: "speed", DataType: MetricInt, Required: true, MinValue: f64(0), MaxValue: f64(100)},
 		{Name: "gear", DataType: MetricString, Enum: []string{"low", "high"}},
 		{Name: "engage", DataType: MetricBoolean},
-		{Name: "target", Kind: CommandParamObject, Parameters: []CommandParameter{
+		{Name: "target", Kind: ParameterSpecObject, Parameters: []ParameterSpec{
 			{Name: "lat", DataType: MetricDouble, Required: true},
 			{Name: "lon", DataType: MetricDouble, Required: true},
 		}},
@@ -179,12 +179,12 @@ func TestValidateCommandPayloadFreeForm(t *testing.T) {
 		t.Fatalf("no-schema definition must accept an empty payload, got: %v", err)
 	}
 
-	optional := defWithSchema(t, "ping", []CommandParameter{{Name: "note", DataType: MetricString}})
+	optional := defWithSchema(t, "ping", []ParameterSpec{{Name: "note", DataType: MetricString}})
 	if err := ValidateCommandPayload(optional, nil); err != nil {
 		t.Fatalf("empty payload with only optional params should pass, got: %v", err)
 	}
 
-	required := defWithSchema(t, "set", []CommandParameter{{Name: "value", DataType: MetricInt, Required: true}})
+	required := defWithSchema(t, "set", []ParameterSpec{{Name: "value", DataType: MetricInt, Required: true}})
 	if err := ValidateCommandPayload(required, nil); err == nil {
 		t.Fatalf("empty payload with a required param should be rejected")
 	}
@@ -201,7 +201,7 @@ func TestValidateCommandPayloadFreeForm(t *testing.T) {
 // Numeric enums compare by value, so 1.50 satisfies an entry "1.5" and 10 an
 // entry "10".
 func TestValidateCommandPayloadNumericEnum(t *testing.T) {
-	def := defWithSchema(t, "tune", []CommandParameter{
+	def := defWithSchema(t, "tune", []ParameterSpec{
 		{Name: "ratio", DataType: MetricDouble, Enum: []string{"1.5", "2.0"}},
 		{Name: "level", DataType: MetricInt, Enum: []string{"1", "10"}},
 	})

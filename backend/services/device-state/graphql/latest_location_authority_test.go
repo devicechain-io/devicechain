@@ -30,6 +30,7 @@ import (
 // device, its telemetry history, its live state, its commands and its alarms.
 var viewerBaseline = []auth.Authority{
 	auth.DeviceRead, auth.EventRead, auth.StateRead, auth.CommandRead, auth.AlarmRead,
+	auth.DashboardRead,
 }
 
 // locationTestCtx builds a context carrying a REAL sqlite-backed device-state Api and a

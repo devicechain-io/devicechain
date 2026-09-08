@@ -194,8 +194,9 @@ func TestWhatDoesNotDrivePresence(t *testing.T) {
 // subscribed device holds a long-lived connection; a one-shot publisher connects
 // beside it with a discriminator and hangs up. If that death drove presence, the
 // device would flip asserted-offline while its real session is up — and an asserted
-// row is not resurrected by data events (device-state/model/api.go:196), so it would
-// stay wrong until the device reconnected entirely.
+// row is not resurrected by data events (the freshness branch in Api.MergeDeviceState
+// guards on PresenceSourceAsserted, device-state/model/api.go), so it would stay wrong
+// until the device reconnected entirely.
 func TestASideConnectionCannotKillALiveDevice(t *testing.T) {
 	sideDeath := strings.Replace(disconnectAdvisory,
 		`"client_id": "inst-1:acme:sensor-001"`, `"client_id": "inst-1:acme:sensor-001:pub"`, 1)

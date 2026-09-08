@@ -137,7 +137,7 @@ func assertPlanIsPopulated(plan *tenantpurge.Plan, selected []area) error {
 // report prints the classification, area by area, so a reviewer can see what the purge
 // believes about each schema rather than only whether it passed.
 func report(plan *tenantpurge.Plan) {
-	type counts struct{ direct, transitive, exempt, deferred, external, unclassified int }
+	type counts struct{ direct, transitive, exempt, deferred, external, redacted, unclassified int }
 	perSchema := map[string]*counts{}
 	schemas := []string{}
 	for _, e := range plan.Entries {
@@ -158,28 +158,32 @@ func report(plan *tenantpurge.Plan) {
 			c.deferred++
 		case tenantpurge.ClassExternal:
 			c.external++
+		case tenantpurge.ClassRedacted:
+			c.redacted++
 		default:
 			c.unclassified++
 		}
 	}
 	sort.Strings(schemas)
 
-	fmt.Printf("%-24s %8s %11s %7s %9s %9s %13s\n",
-		"area", "direct", "transitive", "exempt", "deferred", "external", "unclassified")
+	fmt.Printf("%-24s %8s %11s %7s %9s %9s %9s %13s\n",
+		"area", "direct", "transitive", "exempt", "deferred", "external", "redacted", "unclassified")
 	total := counts{}
 	for _, s := range schemas {
 		c := perSchema[s]
-		fmt.Printf("%-24s %8d %11d %7d %9d %9d %13d\n",
-			s, c.direct, c.transitive, c.exempt, c.deferred, c.external, c.unclassified)
+		fmt.Printf("%-24s %8d %11d %7d %9d %9d %9d %13d\n",
+			s, c.direct, c.transitive, c.exempt, c.deferred, c.external, c.redacted, c.unclassified)
 		total.direct += c.direct
 		total.transitive += c.transitive
 		total.exempt += c.exempt
 		total.deferred += c.deferred
 		total.external += c.external
+		total.redacted += c.redacted
 		total.unclassified += c.unclassified
 	}
-	fmt.Printf("%-24s %8d %11d %7d %9d %9d %13d\n",
-		"TOTAL", total.direct, total.transitive, total.exempt, total.deferred, total.external, total.unclassified)
+	fmt.Printf("%-24s %8d %11d %7d %9d %9d %9d %13d\n",
+		"TOTAL", total.direct, total.transitive, total.exempt, total.deferred, total.external,
+		total.redacted, total.unclassified)
 
 	// Deferred tables are printed in full rather than counted. They are the tables that
 	// hold tenant data the purge does not erase, and a number in a column is exactly how
@@ -188,6 +192,18 @@ func report(plan *tenantpurge.Plan) {
 		fmt.Printf("\n%d table(s) hold tenant data the purge does NOT erase:\n", len(deferred))
 		for _, e := range deferred {
 			fmt.Printf("  %s\n      %s\n", e.Table, e.Reason)
+		}
+	}
+
+	// Redacted tables are printed in full, and they are the one class that is neither
+	// good news nor bad: the rows are KEPT on purpose. What has to stay visible is which
+	// columns stop carrying anyone's identity, because a retention whose redaction
+	// silently narrowed to one column would look identical here to one that did not.
+	if redacted := plan.OfClass(tenantpurge.ClassRedacted); len(redacted) > 0 {
+		fmt.Printf("\n%d table(s) are RETAINED through a purge with their identifiers destroyed:\n",
+			len(redacted))
+		for _, e := range redacted {
+			fmt.Printf("  %s  [emptied: %s]\n      %s\n", e.Table, strings.Join(e.Redact, ", "), e.Reason)
 		}
 	}
 

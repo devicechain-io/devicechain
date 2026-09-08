@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Cpu,
   Filter,
+  Languages,
   Layers,
   LayoutDashboard,
   LayoutGrid,
@@ -159,6 +160,10 @@ const NAV: NavNode[] = [
       // "basemap" everywhere precision matters — the authority, the GraphQL field,
       // the docs page — because a nav label is wayfinding and an identifier is not.
       { labelKey: 'map', href: '/basemap', icon: Map, requires: 'basemap:write' },
+      // The tenant's DEFAULT language — a third separate grant for the same reason
+      // the first two are separate, so the group keeps working at every combination:
+      // one authority shows one child, none hides Settings entirely.
+      { labelKey: 'language', href: '/locale', icon: Languages, requires: 'locale:write' },
     ],
   },
   // Inference providers for NL→rule authoring (ADR-056) are NOT here: they are

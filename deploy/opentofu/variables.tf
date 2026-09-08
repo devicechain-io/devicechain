@@ -124,12 +124,12 @@ variable "nats_jetstream_storage" {
     on control-plane streams that never hold more than a few MiB.
 
     The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB, 8 control-plane streams at 128 MiB, and the capture stream at
-    256 MiB reserve 8448Mi (8.25Gi). The MQTT gateway's own streams — which
+    streams at 1 GiB, 10 control-plane streams at 128 MiB, and the capture stream at
+    256 MiB reserve 8704Mi (8.5Gi). The MQTT gateway's own streams — which
     nats-server creates UNBOUNDED, and which the platform bounds at startup so they
     cannot eat the rest — add 384Mi. The KV buckets are bounded on the same principle
     (see kv.All): 4 State buckets at 128Mi + 6 Cache buckets at 64Mi reserve a
-    further 896Mi. Total reserved: exactly 9.5Gi.
+    further 896Mi. Total reserved: 9.75Gi.
 
     Why 16Gi and not 12Gi, which also "fits": at 12Gi the ceiling is 10Gi, leaving
     512Mi unreserved — which is EXACTLY the headroom floor the budget test asserts,
@@ -858,6 +858,127 @@ variable "timescale_password" {
   type        = string
   default     = "devicechain"
   sensitive   = true
+}
+
+variable "timescale_analytics_readers" {
+  description = <<-EOT
+    Read-only SQL/BI login roles on the event store -- the roles a Metabase,
+    Grafana or Power BI connection authenticates as.
+
+    Telemetry already lives in a Postgres-speaking database with continuous
+    aggregates, so a BI tool needs no export and no second store. What it needs is
+    a role that is safe to hand out, and this is where one is declared.
+
+    🔴 THE ROLE NAME CARRIES THE TENANT, AND IT IS THE ONLY THING THAT DOES. A
+    role named `analytics_acme` reads tenant `acme`; the read surface derives that
+    from the connected role's own identity, which a client cannot change. Get the
+    name wrong and the role reads a different tenant's telemetry, or -- if no
+    tenant matches -- nothing at all. There is no second place to correct it.
+
+    Each entry:
+      name              must be `analytics_<tenant id>`
+      connection_limit   REQUIRED, above 0. These sessions come out of the same
+                         max_connections event-management's pool draws on, so an
+                         unlimited role can stall ingest without failing loudly.
+      password_secret    a kubernetes.io/basic-auth Secret in the platform
+                         namespace, holding `username` and `password`. YOU create
+                         it; CloudNativePG reconciles the role to match. The
+                         password is deliberately not a variable here -- putting
+                         it in this file would put it in OpenTofu state.
+      reads_location     OPTIONAL, defaults to false. Whether this reader can read
+                         device POSITIONS -- latitude, longitude, elevation,
+                         accuracy, speed, heading.
+
+    🔴 POSITION IS OFF BY DEFAULT, AND THAT IS THE PLATFORM'S OWN BOUNDARY RATHER
+    THAN CAUTION APPLIED HERE. Everywhere else, reading where a device IS is a
+    separate authority from reading what it MEASURES: knowing a vehicle's or a
+    person's location differs in kind from knowing how warm it is, so that authority
+    is deliberately absent from the read-only viewer baseline and is only ever held
+    by explicit grant. This surface had no notion of it, so declaring any BI reader
+    handed it every tracked position.
+
+    A SQL session cannot be asked which authorities it holds -- it authenticates as
+    a role and carries nothing else -- so the authority is a GRANT: position lives on
+    a second group role, and `reads_location` is what puts this reader in it. The
+    tenant filter is unchanged either way; a location reader reads its own tenant's
+    positions and nobody else's.
+
+    What an ordinary reader keeps is the base event envelope, which carries no
+    coordinates. It can still see THAT a location event occurred, from which device
+    and when -- the same line the API draws.
+
+    Nothing further is needed: the role is a member of the reader group, which the
+    event store grants the read surface to on every boot.
+
+    🔴 BI ACCESS IS OPERATOR-DECLARED, NOT TIER-GOVERNED, and that divergence is
+    deliberate rather than an omission. Every other per-tenant ceiling on this
+    platform cascades tenant override -> tier -> platform default and is resolved by
+    the enforcing service at request time. This one cannot be: the value is consumed
+    once, by the database, when the role is created — and the platform's application
+    role holds no CREATEROLE, so it could not apply a resolved value to a role even
+    if it read one. The ceiling therefore lives where it binds, and the render-time
+    check below is what keeps it honest.
+  EOT
+  type = list(object({
+    name             = string
+    connection_limit = number
+    password_secret  = optional(string, "")
+    reads_location   = optional(bool, false)
+  }))
+  default = []
+
+  validation {
+    condition     = alltrue([for r in var.timescale_analytics_readers : startswith(r.name, "analytics_") && length(r.name) > length("analytics_")])
+    error_message = "Every analytics reader must be named analytics_<tenant id>; the read surface derives the tenant from the role name and a role outside that convention reads nothing."
+  }
+
+  validation {
+    # 🔴 63 IS POSTGRESQL'S IDENTIFIER LIMIT, AND EXCEEDING IT IS SILENT. A longer name is
+    # TRUNCATED with a NOTICE, not refused — measured: `analytics_` + 53 x's + `y` (64
+    # bytes) becomes the 63-byte name, which is the role for the tenant `x`*53. So a reader
+    # declared for one tenant reads a DIFFERENT one, and every check downstream agrees it is
+    # correct, because by then the name really is the other tenant's. Tenant tokens are
+    # allowed 128 characters, so this is reachable rather than theoretical.
+    condition     = alltrue([for r in var.timescale_analytics_readers : length(r.name) <= 63])
+    error_message = "An analytics reader's role name must be at most 63 characters, which caps the tenant id at 53: PostgreSQL truncates a longer identifier instead of rejecting it, and the truncated name can be another tenant's reader."
+  }
+
+  validation {
+    # Neither group role is a reader. Declaring one here would give it LOGIN and a password,
+    # and a role that can start a session is one whose own name the tenant derivation has to
+    # keep refusing — a boundary better kept out of reach than kept correct.
+    #
+    # 🔴 BOTH NAMES ARE LISTED, and the second is the one that will be forgotten: it arrived
+    # with the position split, it matches the reader prefix exactly as the first does, and
+    # `analytics_location_reader` given LOGIN would resolve to a tenant called
+    # `location_reader` — a legal tenant token.
+    condition     = alltrue([for r in var.timescale_analytics_readers : !contains(["analytics_reader", "analytics_location_reader"], r.name)])
+    error_message = "analytics_reader and analytics_location_reader are the read surface's group roles, not readers. Declaring either here would give it LOGIN; name the reader after its tenant instead."
+  }
+}
+
+variable "timescale_analytics_reserved_connections" {
+  description = <<-EOT
+    Connections the platform itself must still be able to open on the event store
+    after every analytics reader has taken its limit.
+
+    Sized from the pools that actually exist rather than from a round number:
+    event-management is the only service holding a pool against this store, capped
+    at 20 (backend/core/rdb defaultMaxOpenConnections), and a RollingUpdate has two
+    of its pods alive at once. 40 is that, and it is what a render-time check keeps
+    available. Raise it before scaling event-management out, or the shortfall lands
+    on whichever connection is opened last -- normally the application's.
+
+    🔴 IT IS 20, NOT THE `maxConnections: 5` IN THE HELM VALUES, and the two are easy
+    to confuse because they sit under the same store. That key is the LEGACY
+    instance-level PostgresConfig.MaxConnections; backend/core/rdb/postgres.go states
+    it is subsumed by the per-microservice MaxOpen/MaxIdle and no longer drives the
+    pool. event-management sets neither, so poolSizing falls back to 20 — which is
+    what the pod logs on startup ("max_open_connections":20). Deriving this number
+    from the Helm value would under-reserve by a factor of four.
+  EOT
+  type        = number
+  default     = 40
 }
 
 variable "timescale_storage" {

@@ -214,8 +214,40 @@ func TestTheControlDocumentsMatchTheirMode(t *testing.T) {
 		t.Errorf("the modify document does not pass its request: %s", doc)
 	}
 	req, _ := mod.vars("tok")["req"].(map[string]any)
-	if req == nil || req["token"] != "tok" || req[mod.Field] != mod.Value {
-		t.Errorf("the modify request is %v, want the token plus %s=%q", req, mod.Field, mod.Value)
+	if req == nil || req[mod.Field] != mod.Value {
+		t.Errorf("the modify request is %v, want %s=%q", req, mod.Field, mod.Value)
+	}
+	// 🔴 The token belongs in the request only when the input DECLARES one, and both
+	// directions are wrong in a way that reads as a broken drill rather than a broken
+	// control: a create input rejects a request with no token, and a dedicated update
+	// input rejects one carrying an undeclared token. Whichever contract the control
+	// is on, the other shape is asserted absent as well as the right one present.
+	if mod.partialInput() {
+		if _, carried := req["token"]; carried {
+			t.Errorf("the modify request carries a token, which %s does not declare: %v", mod.Input, req)
+		}
+	} else if req["token"] != "tok" {
+		t.Errorf("the modify request omits the token %s requires: %v", mod.Input, req)
+	}
+}
+
+// partialInput must read the contract off the input type, and it is small enough to
+// check exhaustively. Without this, a helper that answered "partial" for everything
+// would silently stop sending the token on the controls that need it — and the drill
+// would report a control it could not arm, which reads like a platform failure.
+func TestPartialInputReadsTheContractOffTheInputType(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"AssetTypeUpdateRequest!", true},
+		{"AssetTypeUpdateRequest", true},
+		{"AssetTypeCreateRequest!", false},
+		{"", false},
+	} {
+		if got := (tamper{Input: tc.input}).partialInput(); got != tc.want {
+			t.Errorf("partialInput(%q) = %v, want %v", tc.input, got, tc.want)
+		}
 	}
 }
 

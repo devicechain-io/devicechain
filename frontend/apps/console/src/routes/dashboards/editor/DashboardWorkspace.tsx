@@ -249,17 +249,22 @@ function applyDatasource(
   return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements, ds.location));
 }
 
+// 🔴 THE EDITOR NO LONGER TAKES A `description`, AND THE ABSENCE IS THE FIX.
+//
+// It never edited one. It took the prop only so a save could send it back verbatim,
+// because updateDashboard was a full replace and a field left out was ERASED. Under
+// partial updates a field left out is left alone, so the safe thing to do with a value
+// this screen does not own is not to mention it — carrying it through would mean a save
+// writing a description read at mount over one someone else edited since.
 export function DashboardWorkspace({
   token,
   name,
-  description,
   updatedAt,
   loaded,
   resolver,
 }: {
   token: string;
   name: string | null;
-  description: string | null;
   updatedAt: string | null;
   loaded: DashboardDefinition;
   resolver: DeviceResolver;
@@ -391,12 +396,12 @@ export function DashboardWorkspace({
   const save = () => {
     const snapshot = working; // persist exactly what we serialize; later edits stay dirty
     setSaveState({ kind: 'saving' });
-    // name tracks the (editable) title so a save never orphans the list label;
-    // description is preserved verbatim (the editor doesn't edit it). expectedUpdatedAt
-    // is the optimistic-concurrency precondition — a stale one fails with CONFLICT.
+    // name tracks the (editable) title so a save never orphans the list label. The
+    // description is deliberately NOT named: the editor does not own it, and an omitted
+    // field is left exactly as stored. expectedUpdatedAt is the optimistic-concurrency
+    // precondition — a stale one fails with CONFLICT.
     updateDashboard(token, {
       name: snapshot.title || null,
-      description,
       definition: serializeDefinition(snapshot),
       expectedUpdatedAt,
     })

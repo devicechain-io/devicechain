@@ -27,6 +27,8 @@ ALTER TABLE ONLY "ai-inference".ai_providers ALTER COLUMN id SET DEFAULT nextval
 ALTER TABLE ONLY "ai-inference".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "ai-inference".audit_events ALTER COLUMN id SET DEFAULT nextval('"ai-inference".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "ai-inference".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "ai-inference".secrets
  ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "ai-inference".secrets ALTER COLUMN id SET DEFAULT nextval('"ai-inference".secrets_id_seq'::regclass);
@@ -130,6 +132,12 @@ CREATE TABLE "ai-inference".audit_events (
  entity_pk text,
  entity_label text,
  rows_affected bigint
+);
+CREATE TABLE "ai-inference".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE TABLE "ai-inference".secrets (
  id bigint NOT NULL,

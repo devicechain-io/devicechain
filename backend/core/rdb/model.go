@@ -22,26 +22,43 @@ type TenantScoped struct {
 }
 
 // Entity that is referenced by a token which may change over time. Uniqueness is
-// NOT declared here: a per-tenant partial unique index (ADR-042 P1) is created by
-// each service's migration via rdb.CreateTenantTokenIndex — token is unique within
-// a tenant among live (non-soft-deleted) rows, so tenants never collide and a
-// deleted token frees for reuse. A bare global UNIQUE(token) would do neither.
+// NOT declared here: a per-tenant partial unique index (ADR-042 P1) named
+// uix_<table>_tenant_token makes the token unique within a tenant among live
+// (non-soft-deleted) rows, so tenants never collide and a deleted token frees for
+// reuse. A bare global UNIQUE(token) would do neither.
+//
+// Each service's migration declares that index itself, against its own snapshot
+// struct — an index name and a WHERE predicate are schema, and a migration that
+// sourced them from core would start building something different on fresh installs
+// the day core changed. rdb.CreateTenantTokenIndex is the TEST fixture of the same
+// shape, for service unit tests that run on SQLite with no migration chain; it is
+// not the migration path.
 type TokenReference struct {
 	Token string `gorm:"index;not null;size:128"`
 }
 
-// AuditLabel implements AuditLabeler: the token is the human-facing, non-sensitive
-// identifier for any token-referenced entity, so the audit journal records it
-// alongside the (table, pk) reference. Every entity that embeds TokenReference
-// (the registry families) inherits this via promotion.
+// AuditLabel implements AuditLabeler: the token is the human-facing identifier for
+// any token-referenced entity, so the audit journal records it alongside the
+// (table, pk) reference. Every entity that embeds TokenReference (the registry
+// families) inherits this via promotion.
+//
+// 🔴 THAT PROMOTION IS WHY THE JOURNAL'S LABELS ARE PERSONAL DATA, and the count is
+// the argument: this one method puts a customer-chosen token into entity_label for
+// every model that embeds TokenReference — devices, assets, areas, geofences,
+// commands, dashboards, connectors, and customers, whose tokens are routinely a
+// person's or a company's name. Nothing constrains them beyond the token grammar.
+// The column is emptied for a purged tenant (see rdb.AuditEvent); do not re-describe
+// it as non-sensitive on the strength of it not being a credential.
 func (t TokenReference) AuditLabel() string { return t.Token }
 
 // Entity that carries an optional customer-owned external/business identifier
 // (ADR-049) — a VIN, serial, GS1 code, asset tag — distinct from the token. Unlike
 // the token it is opaque (no NATS/MQTT addressing grammar), not a credential, and
 // nullable; it exists only to be looked up by. Per-tenant uniqueness among live
-// rows WITH an id present is a partial unique index created by each service's
-// migration via rdb.CreateTenantExternalIdIndex (the token analog, ADR-042 P1).
+// rows WITH an id present is a partial unique index each service's migration
+// declares for itself (the token analog, ADR-042 P1);
+// rdb.CreateTenantExternalIdIndex is the test fixture of that shape, on the same
+// terms as rdb.CreateTenantTokenIndex above.
 type ExternalReference struct {
 	ExternalId sql.NullString `gorm:"index;size:256"`
 }

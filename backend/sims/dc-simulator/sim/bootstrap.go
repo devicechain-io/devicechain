@@ -389,7 +389,7 @@ const queryMetricDefinitionsByToken = `query($tokens:[String!]!){` +
 const mutationCreateMetricDefinition = `mutation($request:MetricDefinitionCreateRequest){` +
 	`createMetricDefinition(request:$request){token}}`
 
-const mutationUpdateMetricDefinition = `mutation($token:String!,$request:MetricDefinitionCreateRequest){` +
+const mutationUpdateMetricDefinition = `mutation($token:String!,$request:MetricDefinitionUpdateRequest!){` +
 	`updateMetricDefinition(token:$token,request:$request){token}}`
 
 // ensureMetricDefinition creates the metric when the profile's draft lacks it, and
@@ -419,7 +419,7 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 			} `json:"updateMetricDefinition"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateMetricDefinition,
-			map[string]any{"token": metricToken, "request": req}, &updated); err != nil {
+			map[string]any{"token": metricToken, "request": asUpdateRequest(req)}, &updated); err != nil {
 			return fmt.Errorf("updateMetricDefinition: %w", err)
 		}
 		log.Info().Str("token", metricToken).Str("profile", profileToken).Msg("updated metric definition")
@@ -454,7 +454,7 @@ func ensureMetricDefinition(ctx context.Context, rt *Runtime, profileToken strin
 const mutationCreateCommandDefinition = `mutation($request:CommandDefinitionCreateRequest){` +
 	`createCommandDefinition(request:$request){token}}`
 
-const mutationUpdateCommandDefinition = `mutation($token:String!,$request:CommandDefinitionCreateRequest){` +
+const mutationUpdateCommandDefinition = `mutation($token:String!,$request:CommandDefinitionUpdateRequest!){` +
 	`updateCommandDefinition(token:$token,request:$request){token}}`
 
 func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken string, c CommandSpec, profile *deviceProfileInfo) error {
@@ -481,7 +481,7 @@ func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken stri
 			} `json:"updateCommandDefinition"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateCommandDefinition,
-			map[string]any{"token": c.Token, "request": req}, &updated); err != nil {
+			map[string]any{"token": c.Token, "request": asUpdateRequest(req)}, &updated); err != nil {
 			return fmt.Errorf("updateCommandDefinition: %w", err)
 		}
 		log.Info().Str("token", c.Token).Str("profile", profileToken).Msg("updated command definition")
@@ -505,7 +505,7 @@ func ensureCommandDefinition(ctx context.Context, rt *Runtime, profileToken stri
 const mutationCreateDetectionRule = `mutation($request:DetectionRuleCreateRequest!){` +
 	`createDetectionRule(request:$request){token}}`
 
-const mutationUpdateDetectionRule = `mutation($token:String!,$request:DetectionRuleCreateRequest!){` +
+const mutationUpdateDetectionRule = `mutation($token:String!,$request:DetectionRuleUpdateRequest!){` +
 	`updateDetectionRule(token:$token,request:$request){token}}`
 
 func ensureDetectionRule(ctx context.Context, rt *Runtime, profileToken string, r DetectionRuleSpec, profile *deviceProfileInfo) error {
@@ -534,7 +534,7 @@ func ensureDetectionRule(ctx context.Context, rt *Runtime, profileToken string, 
 			} `json:"updateDetectionRule"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateDetectionRule,
-			map[string]any{"token": r.Token, "request": req}, &updated); err != nil {
+			map[string]any{"token": r.Token, "request": asUpdateRequest(req)}, &updated); err != nil {
 			return fmt.Errorf("updateDetectionRule: %w", err)
 		}
 		log.Info().Str("token", r.Token).Str("profile", profileToken).Msg("updated detection rule")
@@ -996,7 +996,13 @@ const mutationCreateDashboard = `mutation($request:DashboardCreateRequest!){` +
 // expectedUpdatedAt is omitted, so the update is UNCONDITIONAL (no optimistic-
 // concurrency precondition) — the sim owns its dashboard and always writes the
 // current spec, it isn't reconciling against a concurrent human editor.
-const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardCreateRequest!){` +
+//
+// 🔴 THE UPDATE TAKES A DIFFERENT INPUT FROM THE CREATE, and it carries no `token`.
+// updateDashboard is a partial update: the mutation's own `token` argument names the
+// dashboard, and a second one in the payload would be an undeclared field the schema
+// REFUSES (the unknown-input-field guard), so reusing the create request map here
+// would fail every sync rather than silently doing the wrong thing.
+const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardUpdateRequest!){` +
 	`updateDashboard(token:$token,request:$request){token}}`
 
 const mutationPublishDashboard = `mutation($token:String!){publishDashboard(token:$token){version}}`
@@ -1027,6 +1033,15 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 		"description": ds.Description,
 		"definition":  ds.Definition,
 	}
+	// The update input is the create one WITHOUT the token. Every field is named on
+	// purpose: the sim converges a dashboard onto its spec, so "leave it alone" is
+	// never what it means — a field omitted here would keep whatever an earlier run or
+	// a human editor left behind, which is the drift ensureDashboard exists to end.
+	updateReq := map[string]any{
+		"name":        ds.Name,
+		"description": ds.Description,
+		"definition":  ds.Definition,
+	}
 	if existing.Dashboard == nil {
 		var created struct {
 			CreateDashboard struct {
@@ -1045,7 +1060,7 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 			} `json:"updateDashboard"`
 		}
 		if err := rt.Session.Query(ctx, rt.Endpoints.DashboardMgmtGraphQL, mutationUpdateDashboard,
-			map[string]any{"token": ds.Token, "request": req}, &updated); err != nil {
+			map[string]any{"token": ds.Token, "request": updateReq}, &updated); err != nil {
 			return fmt.Errorf("updateDashboard: %w", err)
 		}
 		log.Info().Str("token", ds.Token).Msg("updated dashboard")
@@ -1076,4 +1091,28 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 	log.Info().Str("token", ds.Token).Int("version", published.PublishDashboard.Version).
 		Msg("published dashboard")
 	return nil
+}
+
+// asUpdateRequest turns a create request into an update request by dropping the token.
+//
+// 🔴 THE DROP IS REQUIRED, NOT TIDINESS. These three mutations take a dedicated
+// *UpdateRequest input which has no `token` member: the mutation's own argument names the
+// record, and an update cannot move it. Sending the create shape now fails the schema's
+// unknown-input-field check — which is the right direction to fail in, but only because
+// the check exists; without it the server would silently drop the field and the ensure
+// paths would look correct while being one silent difference away from wrong.
+//
+// The rest of the map is sent unchanged. Under three-state semantics that makes each of
+// these a FULL restatement — every field the bootstrap knows about is named — which is
+// exactly what an ensure path wants: it is converging the draft on what the scenario
+// declares, not editing one field of it.
+func asUpdateRequest(req map[string]any) map[string]any {
+	out := make(map[string]any, len(req))
+	for k, v := range req {
+		if k == "token" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }

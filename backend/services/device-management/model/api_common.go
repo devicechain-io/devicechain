@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -37,9 +38,11 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 	return created, nil
 }
 
-// UpdateEntityRelationshipType updates an existing relationship type by token.
+// UpdateEntityRelationshipType applies a PARTIAL update to a relationship type: a
+// field the caller did not name keeps its stored value, an explicit null clears a
+// nullable one, and `tracked` — which has no nullable reading — refuses a null.
 func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
-	request *EntityRelationshipTypeCreateRequest) (*EntityRelationshipType, error) {
+	request *EntityRelationshipTypeUpdateRequest) (*EntityRelationshipType, error) {
 	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -48,15 +51,20 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 	updated := matches[0]
-	updated.Token = request.Token
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	// Tracked resolves BEFORE anything is written, so a refused `tracked: null` refuses
+	// the whole update rather than applying the other fields first.
+	tracked, err := request.Tracked.ApplyToRequired("tracked", updated.Tracked)
+	if err != nil {
+		return nil, err
+	}
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-	updated.Tracked = request.Tracked
+	updated.Tracked = tracked
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
 	}
@@ -102,12 +110,34 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
-	rtmatches, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+	// A reserved type is auto-provisioned on first use, exactly as the bulk path
+	// does it. Without this a caller naming "contains" (or "member", or "assigned")
+	// before anything else in the tenant had used it got ErrRecordNotFound for a
+	// type the platform owns and would have created for them.
+	reserved, err := api.ensureReservedTypeByToken(ctx, request.RelationshipType)
 	if err != nil {
 		return nil, err
 	}
+	rtmatches := []*EntityRelationshipType{}
+	if reserved != nil {
+		rtmatches = append(rtmatches, reserved)
+	} else {
+		rtmatches, err = api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(rtmatches) == 0 {
 		return nil, gorm.ErrRecordNotFound
+	}
+
+	// The asset hierarchy's structural contract (ADR-072) is enforced HERE as well
+	// as in SetAssetParent, because this generic mutation can create a "contains"
+	// edge directly. An invariant checked only in the convenience door is an
+	// invariant with a public bypass. No-op for every other relationship type.
+	if err := api.admitContainmentEdge(api.RDB.DB(ctx), request.RelationshipType,
+		request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+		return nil, err
 	}
 
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)

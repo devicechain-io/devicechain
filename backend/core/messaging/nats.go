@@ -66,6 +66,44 @@ const (
 	// their dead-letter path (failed-events) on the final attempt rather than
 	// looping forever (ADR-022 review A4). Consumers compare Message.NumDelivered
 	// against this.
+	//
+	// 🔴 THIS IS ONE NUMBER FOR THE WHOLE PLATFORM, DELIBERATELY, AND MAKING IT VARY
+	// IS A BIGGER CHANGE THAN IT LOOKS. Per-consumer or per-tier retry tuning is the
+	// obvious next idea here — streams.Tier is right there, and a "cold" stream
+	// plausibly wants a different retry budget from a "hot" one. It was considered and
+	// declined, for two independent reasons, and the second is the one with teeth.
+	//
+	//  1. The server FREEZES a durable's config. Every field consumerConfig sets is
+	//     compared on AddConsumer, so varying one by tier does not reconfigure an
+	//     existing durable — it makes AddConsumer reject it and crash-loops startup on
+	//     any cluster that is not brand new. Whatever the tuning was worth, it is not
+	//     worth being a fresh-bring-up-only change to a running platform. (AckWait's
+	//     own comment says the same thing in more detail.)
+	//
+	//  2. 🔴 THE DEAD-LETTER ARMS READ THIS CONSTANT DIRECTLY, AND NOTHING WOULD CATCH
+	//     THEM READING A STALE ONE. Consumers across most of the service estate each
+	//     decide "this is the last attempt, write the dead letter now" with
+	//     `msg.NumDelivered >= messaging.MaxDeliver`, and then ack. No count or list of
+	//     them is written here on purpose — one was, it was wrong within the same PR
+	//     that added it (it said eight services and omitted device-management), and a
+	//     tally frozen in prose only ever drifts. Ask the tree:
+	//     `grep -rn 'messaging.MaxDeliver' --include='*.go' backend`. If a consumer's
+	//     actual MaxDeliver came from a tier while its arm kept comparing against this
+	//     package constant, the two would disagree — and the failure is silent in both
+	//     directions. Too low a constant dead-letters and acks a message the broker
+	//     would still have retried (a message lost to a transient outage). Too high a
+	//     constant means the arm never fires: the broker stops redelivering at ITS
+	//     limit and no dead letter is ever written, so the message vanishes with no
+	//     record. Neither shows up in the test estate, because every test of those arms
+	//     constructs the delivery count by hand rather than getting it from a broker.
+	//
+	// So the rule is: the consumer's view of its own retry budget and the consumer
+	// CONFIG must come from one place. Today they do, because there is exactly one
+	// place — this constant. Anyone introducing per-consumer or per-tier tuning owns
+	// making that still true by construction (a value carried ON the Message, or on a
+	// handle the arm already holds), not by remembering to update call sites.
+	// TestEveryStreamGetsTheSameRetryContract fails if the divergence is ever
+	// introduced silently.
 	MaxDeliver = 5
 
 	// readerMaxAckPending pins the consumer's max in-flight unacked messages. It
@@ -870,6 +908,9 @@ type natsReader struct {
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
+	// held, when set, is the leadership-term predicate this reader is gated on: no
+	// message is handed out unless it reports true. See ReaderWithTermGate.
+	held func() bool
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -889,6 +930,67 @@ type ReaderOption func(*natsReader)
 // its ack cursor persists, so a restart still resumes from the last ack, not the tail.
 func ReaderWithDeliverNew() ReaderOption {
 	return func(r *natsReader) { r.deliverNew = true }
+}
+
+// termGatePoll is how often a term-gated reader re-evaluates its predicate while
+// parked. The predicate is a pair of atomic loads, so this is cheap; it is a poll
+// rather than a condition variable because the thing being waited on can become
+// true again on its own — a renewal that lands after a broker blip re-opens the
+// window with no event to signal it.
+const termGatePoll = 50 * time.Millisecond
+
+// ReaderWithTermGate makes this reader consume ONLY while a leadership term is
+// held, evaluating the predicate on every ReadMessage before a message is handed
+// out — including one already sitting in the fetch buffer, which is why the check
+// precedes the pending pop rather than wrapping the Fetch.
+//
+// 🔴 THE PREDICATE IS LATE-BOUND ON PURPOSE. NewReader runs at service start, long
+// before any lease is acquired, so this takes a function rather than a value: the
+// closure reads whatever the caller's term currently is (typically an atomic
+// pointer to a messaging.Holder), and a reader created before the first term still
+// gates correctly on every term after it.
+//
+// 🔴 A CLOSED GATE BLOCKS; IT DOES NOT REPORT EOF. Every DETECT read loop treats
+// io.EOF as "shut down" and returns, so an EOF here would produce a leader that has
+// finished its term build, reports itself live, and reads nothing — a failure with
+// no symptom any liveness signal can see. Parking instead means the reader resumes
+// the moment ownership is re-confirmed, and the loops still unwind normally when
+// the TERM CONTEXT is cancelled, because that is the ctx passed to ReadMessage and
+// it surfaces as EOF at the top of the loop.
+func ReaderWithTermGate(held func() bool) ReaderOption {
+	return func(r *natsReader) { r.held = held }
+}
+
+// BindTerm attaches the pull subscription for a new leadership term. It is the
+// counterpart of UnbindTerm, and the split between them is not cosmetic.
+//
+// bind() unsubscribes and then makes three JetStream API calls, so calling it at
+// term END fails in precisely the outage that ended the term: each call times out,
+// bind returns an error, and the subscription pointer is left referring to a CLOSED
+// subscription. The next term's first Fetch then returns ErrSubscriptionClosed,
+// which ReadMessage maps to io.EOF, which every read loop treats as shutdown — a
+// term that builds cleanly, reports itself leader and live, and reads nothing.
+//
+// Doing the bind at term START instead puts that failure inside the term build,
+// where it is a term-build failure the caller's retry fuse already covers.
+func (r *natsReader) BindTerm() error { return r.bind() }
+
+// UnbindTerm drops the pull subscription at the end of a leadership term.
+//
+// This is what removes the reply-inbox interest, and that is the whole point: the
+// NATS connection is PROCESS-WIDE and survives the term, with an 8 MB reconnect
+// buffer, so a pull request issued just before a disconnect is flushed to the
+// server on reconnect and served — landing messages past the NEW leader's replay
+// head, which is the loss this gate exists to prevent. With the subscription gone
+// the server drops that request for want of interest (measured both ways).
+//
+// Unlike BindTerm this is purely local and succeeds while disconnected, which is
+// why it is safe on the loss path.
+func (r *natsReader) UnbindTerm() error {
+	if old := r.sub.Swap(nil); old != nil {
+		return old.Unsubscribe()
+	}
+	return nil
 }
 
 // consumerConfig is the durable pull-consumer configuration (A4) — explicit-ack so a
@@ -1284,8 +1386,35 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 				return Message{}, io.EOF
 			}
 		}
+		// Park while this replica does not own the partition (ADR-070). This sits
+		// BEFORE the pending pop deliberately: a term can end with up to a full fetch
+		// batch already buffered here, and handing those out would be exactly the
+		// single-writer violation the lease exists to prevent — the messages were
+		// fetched under our ownership but would be applied, published and acked under
+		// someone else's. Parking rather than returning EOF is explained on
+		// ReaderWithTermGate.
+		if r.held != nil && !r.held() {
+			select {
+			case <-ctx.Done():
+				return Message{}, io.EOF
+			case <-time.After(termGatePoll):
+			}
+			continue
+		}
 		if len(r.pending) == 0 {
-			msgs, err := r.sub.Load().Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
+			sub := r.sub.Load()
+			if sub == nil {
+				// UnbindTerm has run and BindTerm has not yet: we are between terms.
+				// The gate above normally covers this, but the two are set by different
+				// goroutines, so park here too rather than dereferencing nil.
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(termGatePoll):
+				}
+				continue
+			}
+			msgs, err := sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
 			if err != nil {
 				if errors.Is(err, nats.ErrTimeout) {
 					// An empty fetch. A run of them can also mean the consumer was

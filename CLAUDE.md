@@ -121,7 +121,7 @@ module, so the root-level forms do not do what they look like they do:
 
 - `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
   contain modules listed in go.work or their selected dependencies`. So does `./backend/...`: a
-  `./…` pattern has to start inside a module, and none of them spans all 22. (`go build all` does
+  `./…` pattern has to start inside a module, and no single one spans the workspace. (`go build all` does
   span them, but `all` in a workspace means every module *and every dependency*, so it builds the
   whole Bento tree to tell you about your own code. Not the gate you want.)
 - `gofmt -l .` from the root **prints 8 files** — all under `_legacy/`, the archived pre-migration
@@ -163,9 +163,13 @@ done
 exit "$rc"
 ```
 
-This sweep is a superset of the `go` CI job in one respect: `deploy` is a workspace module
-(`deploy/assets.go`), but CI's module discovery globs only `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
-so nothing in CI builds, vets or tests it.
+This sweep and the `go` CI job now cover the same set, and they do so for the same reason: both
+derive the module list from `go.work` rather than from a glob of directory names. That was not
+always true — CI's discovery used to glob `backend/{cli,core,k8s,edge/*,services/*,sims/*,tools/*}`,
+which silently omitted `deploy` (`deploy/assets.go`, the module embedding the chart and the
+OpenTofu tree into dcctl), so no CI job built, vetted, tested or scanned it. The one thing to know
+about the derived matrix: an empty or truncated module list would run *zero* jobs and report green,
+so the discover step cross-checks its count against a second, independent parse of `go.work`.
 
 Other areas:
 
@@ -217,6 +221,26 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
      failure. Consequence, deliberate and pre-GA only: an existing instance is **recreated**
      (`dcctl destroy` + `bootstrap`), not migrated onto a baseline.
 
+     🔴 **ONE baseline has been edited on purpose, and the bar it cleared is the rule, not the
+     exception.** event-management's could not survive its own replay, which pre-GA meant a
+     crash-loop with `destroy` + `bootstrap` as the remedy and after GA would have meant a
+     permanent trap — a released instance cannot be told to destroy itself. It was re-cut (#874),
+     and what made that legitimate is that the edit changed **re-runnability only**: `verify` and
+     `replay` together proved the resulting schema **byte-identical** on both Postgres majors
+     (normalized-identical, in this harness's sense), so no golden moved and no instance needed
+     recreating. That is the bar for the next one. An edit that changes what a fresh install
+     BUILDS is still the thing this rule exists to prevent, because it is silently rewritten for
+     new installs while every existing database looks healthy — prove the schema does not move, or
+     append instead.
+
+     🔴 **The bar is DDL-ONLY, and that restriction is not a formality.** `verify` compares
+     `pg_dump --schema-only`, so it **captures no ROWS** — the blind spot documented two
+     paragraphs below. A migration that SEEDS can therefore have its literals edited, pass
+     `verify` and `replay` cleanly, and still change what a fresh install ends up holding. If the
+     migration writes rows, the bar is not met by those two gates alone: it also needs its seed
+     test to show the values did not move (`user-management/schema/baseline_seed_test.go` is the
+     worked example), or it appends.
+
   `hack/migration-diff.sh verify` is the ONLY thing that exercises the migrations at all (the unit
   tests AutoMigrate live structs on SQLite and never run a chain). It runs in CI, on both supported
   Postgres majors. 🔴 **Know its one blind spot: it compares `pg_dump --schema-only`, so it captures no
@@ -229,6 +253,16 @@ cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && 
   backfills, or migration scaffolding for old shapes.
 - **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback
   rejects any tenant-scoped query with no tenant in context.
+- **Unimplemented must fail loudly — never return a plausible value.** A stub that returns a zero
+  value, `nil`, or "valid" is indistinguishable from a working implementation at every call site, so
+  the gap surfaces as wrong DATA rather than as a missing feature, far from the code that is
+  missing. The worked counter-example is in a dependency: `s2.Loop.Validate`'s crossing check is
+  commented out upstream behind a TODO, so it answers **valid** for a self-intersecting ring — and a
+  ring with no well-defined interior then answers containment confidently and arbitrarily. Nothing
+  about that answer looks wrong, which is why `core/geo/ring.go` exists to cover the hole. The shape
+  to copy is `connectorspec.ErrUnsupportedType`: a connector type may be a valid, creatable
+  vocabulary member whose output generator has not shipped in this build, and dispatching one is a
+  **terminal, dead-lettered** outcome — recognized but not executable — never a silent drop.
 - **Multi-tenancy:** a single shared set of services serves all tenants; isolation is enforced at the
   storage (`tenant_id` predicate) and messaging (per-tenant subjects) layers, not by per-tenant pods.
 

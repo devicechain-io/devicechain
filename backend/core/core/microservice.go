@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -50,6 +52,45 @@ type Microservice struct {
 
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
 	Readiness *ReadinessGate
+
+	// metricsReg is the registry every metric this microservice constructs is
+	// registered in, and it is a registry this microservice OWNS rather than the
+	// process-global default one.
+	//
+	// The registration key those constructors compose is
+	// devicechain_<MetricsSubsystem()>_<name>, and MetricsSubsystem() derives from an
+	// environment variable — so on a shared registry the key is ambient environment
+	// plus a caller-supplied string, and a duplicate is a MustRegister panic. That
+	// made "one Microservice per process, forever" an unstated invariant of a
+	// constructor whose name says otherwise, and it had already escaped the library:
+	// three places outside core had independently written a unique-area workaround to
+	// get around it.
+	//
+	// nil for a Microservice built as a struct literal instead of by NewMicroservice.
+	// See MetricsRegisterer for what that means and why it is the safe direction.
+	metricsReg *prometheus.Registry
+
+	// metricsHandedOut records that something has asked where to register, i.e. that a
+	// collector may already be sitting on whatever metricsReg was at the time. It is
+	// what lets UseMetricsRegistry REFUSE a late call instead of merely documenting
+	// that it must not happen.
+	//
+	// A late call is not a no-op, it is a SPLIT: a collector is registered where it was
+	// built and cannot be moved, so the metrics built before the swap stay on the old
+	// registry while the gatherer reads the new one. Called after NewMicroservice that
+	// strands the three readiness collectors — /metrics answers 200 with a missing
+	// `ready` gauge, which is the exact failure this registry ownership exists to close.
+	//
+	// Atomic because MetricsRegisterer is reachable from any goroutine that builds a
+	// metric, and an unsynchronized bool written from two of them is a data race.
+	metricsHandedOut atomic.Bool
+
+	// mux is the HTTP multiplexer this microservice owns, created on first use by
+	// Mux(). Lazily rather than in NewMicroservice so a Microservice built as a struct
+	// literal has one too — unlike the metrics registry above, a private mux carries no
+	// collision hazard, since each Microservice gets its own.
+	muxOnce sync.Once
+	mux     *http.ServeMux
 
 	// Observability metrics (E17). nil when the microservice was built without
 	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
@@ -154,6 +195,11 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 
 	// Create common tooling.
 	ms.Readiness = NewReadinessGate()
+
+	// This microservice's own metrics registry. It is created BEFORE the metrics
+	// below, because a metric constructed while this is nil is not registered
+	// anywhere and would be missing from /metrics with nothing to say so.
+	ms.metricsReg = prometheus.NewRegistry()
 
 	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
 	// plane is ready and counters for the background auth-gate attempts/failures,
@@ -331,7 +377,37 @@ func shutdownDrainDelay() time.Duration {
 }
 
 // Issue stop and terminate commands to microservice
-func (ms *Microservice) ShutDownNow() {
+//
+// It reports an ORDERLY stop (exit 0). A component that has decided the process is
+// no longer fit to run must call FailNow instead.
+func (ms *Microservice) ShutDownNow() { ms.shutDown(nil) }
+
+// FailNow tears the process down exactly as ShutDownNow does and then exits NON-ZERO.
+//
+// 🔴 IT EXISTS BECAUSE A COMPONENT THAT FAILS AFTER STARTUP HAD NO WAY TO SAY SO. A
+// failure during InitializeAndStart is returned, reported and exits 1; a failure a
+// minute later had only ShutDownNow, which reports an orderly stop. So a component
+// that had irrecoverably stopped doing its job could either keep a Ready pod alive
+// doing nothing, or exit 0 — indistinguishable from a rollout. DETECT losing its
+// leadership supervisor is the first real instance: with replicas:1 nothing else
+// takes the partition, so the pod must go away and be replaced rather than sit there.
+//
+// The distinction is worth being exact about, because the restartPolicy makes the
+// pod come back either way: what a non-zero status buys is REPORTING. Exit 0 looks
+// like an orderly stop to `kubectl get pods`, to a container-exit alert and to anyone
+// reading the event stream; exit 1 does not.
+//
+// err must be non-nil. A nil here would silently become an orderly stop, which is the
+// one thing a caller reaching for this method does not want.
+func (ms *Microservice) FailNow(err error) {
+	if err == nil {
+		err = errors.New("core: a component ended the process without saying why")
+	}
+	log.Error().Err(err).Msg("A component has declared this process unfit to continue; shutting down with a non-zero status.")
+	ms.shutDown(err)
+}
+
+func (ms *Microservice) shutDown(fatal error) {
 	// 🔴 A service that never finished starting has nothing to tear down and MUST NOT
 	// try. The lifecycle's own state guards do not stop it: a stop from Initialized is
 	// permitted, deliberately and for reasons lifecycle.go sets out, and Initialized is
@@ -374,7 +450,9 @@ func (ms *Microservice) ShutDownNow() {
 		// and no reason to sleep the window before exiting.
 		log.Warn().Msg("Asked to shut down before startup completed; nothing to tear down.")
 		ms.cancel()
-		ms.finished(nil)
+		// nil for a signal-driven stop, which is not this process's verdict on itself;
+		// non-nil when a component called FailNow, which is.
+		ms.finished(fatal)
 		return
 	case phaseStopping:
 		// A shutdown is already running. Teardown is not idempotent, and the outcome
@@ -423,7 +501,9 @@ func (ms *Microservice) ShutDownNow() {
 		return
 	}
 
-	ms.finished(nil)
+	// A clean teardown does not make a FailNow orderly: the reason the process is
+	// going away is the caller's error, not how well it packed up.
+	ms.finished(fatal)
 }
 
 // Wait for microservice to shut down, returning how it ended.
@@ -484,7 +564,7 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 
 // Create a new counter with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewCounter(name string, help string, labels []string) prometheus.Counter {
-	return promauto.NewCounter(prometheus.CounterOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewCounter(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -494,7 +574,7 @@ func (ms *Microservice) NewCounter(name string, help string, labels []string) pr
 
 // Create a new counter vector with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewCounterVec(name string, help string, labels []string) *prometheus.CounterVec {
-	return promauto.NewCounterVec(prometheus.CounterOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewCounterVec(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -504,7 +584,7 @@ func (ms *Microservice) NewCounterVec(name string, help string, labels []string)
 
 // Create a new gauge with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewGauge(name string, help string, labels []string) prometheus.Gauge {
-	return promauto.NewGauge(prometheus.GaugeOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewGauge(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -514,7 +594,7 @@ func (ms *Microservice) NewGauge(name string, help string, labels []string) prom
 
 // Create a new gauge vector with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewGaugeVec(name string, help string, labels []string) *prometheus.GaugeVec {
-	return promauto.NewGaugeVec(prometheus.GaugeOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,

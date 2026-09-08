@@ -75,6 +75,30 @@ func (r *AssetTypeResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
 }
 
+// PropertySchema returns the DRAFT property contract, or null when the type
+// declares none. MetadataStr is the generic *datatypes.JSON -> *string projection,
+// named for its first caller rather than for metadata.
+//
+// 🔴 It must keep null and `[]` apart. Null means "this type declares no contract",
+// under which its assets may carry no properties at all; an empty array means "this
+// type declares that its assets carry NOTHING", which once published REFUSES every
+// property. Collapsing either into the other here would make the two
+// indistinguishable to the console, which is the surface that has to explain the
+// difference to an author.
+func (r *AssetTypeResolver) PropertySchema() *string {
+	return util.MetadataStr(r.M.PropertySchema)
+}
+
+// ActiveVersion returns the published version this type's assets are validated
+// against, or null when it has never been published.
+func (r *AssetTypeResolver) ActiveVersion() *int32 {
+	if !r.M.ActiveVersion.Valid {
+		return nil
+	}
+	v := r.M.ActiveVersion.Int32
+	return &v
+}
+
 // ----------------------------------
 // Asset type search results resolver
 // ----------------------------------
@@ -146,6 +170,11 @@ func (r *AssetResolver) Description() *string {
 
 func (r *AssetResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
+}
+
+// Properties returns the asset's property document, or null when it carries none.
+func (r *AssetResolver) Properties() *string {
+	return util.MetadataStr(r.M.Properties)
 }
 
 func (r *AssetResolver) AssetType() *AssetTypeResolver {

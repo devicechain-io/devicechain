@@ -19,12 +19,14 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
+	"github.com/devicechain-io/dc-user-management/patch"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -443,6 +445,28 @@ func (m *Manager) SetTenantBasemap(ctx context.Context, token string, b basemap.
 	return m.iam.TenantByToken(ctx, token)
 }
 
+// SetTenantLocale writes the caller's own tenant default locale (ADR-066
+// sub-workstream d), keyed by the tenant token from the caller's access token — so it
+// is inherently self-scoped, exactly like SetTenantBranding and SetTenantBasemap
+// above. A nil locale CLEARS the column, re-inheriting the operator's
+// `locale.default`.
+//
+// One column rather than a block, so "full replace" and "partial update" are the same
+// operation here and the trap SetTenantBasemap documents cannot arise. What DOES carry
+// over is the reason nil is spelled as nil: the caller normalizes first, so a client
+// that means "clear this" by sending "" arrives here as nil rather than as a stored
+// blank that would win the cascade and mask the operator's default.
+func (m *Manager) SetTenantLocale(ctx context.Context, token string, l *string) (*iam.Tenant, error) {
+	t, err := m.iam.TenantByToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.iam.UpdateTenantFields(ctx, t, map[string]any{"locale": l}); err != nil {
+		return nil, err
+	}
+	return m.iam.TenantByToken(ctx, token)
+}
+
 // TenantByToken loads a tenant by its token (the tenant-unscoped control-plane
 // table). Exposed for the branding-logo HTTP handlers (ADR-058), which need the
 // caller's own tenant row to read/replace its object-store logo reference.
@@ -504,25 +528,55 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 	return m.iam.IdentityByEmail(ctx, email)
 }
 
-// UpdateProfile updates the signed-in identity's display name (first/last),
+// ProfileUpdateRequest is the self-service profile edit: the signed-in identity's
+// display name, and nothing else. Its email and credentials are immutable here, and the
+// identity itself is named by the caller's own token rather than by anything in the
+// payload — so editing someone else's profile is unrepresentable, not merely refused.
+//
+// This mutation was ALREADY effectively three-state before the conversion, through two
+// nullable inline arguments: a nil pointer left a field alone and a "" pointer cleared
+// it. What it was not was built on the shared mechanism — so nothing certified it, and
+// the exhaustiveness guard could not see it at all. The behaviour is preserved exactly:
+//
+//	omitted        leave the stored name alone
+//	""             set it to the empty string, which is how it has always been cleared
+//	explicit null  the same as "" — see below
+//	a value        set it
+//
+// 🔴 NULL AND "" AGREE HERE, AND THAT IS THE DECISION. The first_name / last_name
+// COLUMNS are nullable, but iam.Identity holds them as a bare `string`, which cannot
+// represent that null — so "" is the only empty this path can write and there is no third
+// stored outcome for null to map onto. patch.EmptiableString carries the reasoning, why
+// ApplyToRequired (which would REFUSE both) is the wrong fold here, and the honest fix
+// that is filed separately: the model, not the column, is what makes the null
+// unreachable. Under the old inline arguments `firstName: null` was indistinguishable
+// from omitting it; it now clears, which is the only reading that leaves "" and null
+// meaning one thing.
+type ProfileUpdateRequest struct {
+	FirstName dcgraphql.OptionalString
+	LastName  dcgraphql.OptionalString
+}
+
+// UpdateProfile applies a partial update to the signed-in identity's display name,
 // keyed by the email carried as the token subject. Email and credentials are not
 // affected — this is the self-service profile edit for a tenant user.
-func (m *Manager) UpdateProfile(ctx context.Context, email string, firstName, lastName *string) (*iam.Identity, error) {
+//
+// Only the columns the caller actually mentioned are written: the field map carries a
+// key per SET field, so an update naming neither name touches no column at all rather
+// than rewriting both from what it happened to load.
+func (m *Manager) UpdateProfile(ctx context.Context, email string, request *ProfileUpdateRequest) (*iam.Identity, error) {
 	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	// Only update the fields actually supplied: a nil pointer means "leave
-	// unchanged", so omitting lastName doesn't clear it (a "" pointer still
-	// clears it explicitly).
 	fields := map[string]any{}
-	if firstName != nil {
-		id.FirstName = *firstName
-		fields["first_name"] = *firstName
+	if request.FirstName.Set {
+		id.FirstName = patch.EmptiableString(request.FirstName, id.FirstName)
+		fields["first_name"] = id.FirstName
 	}
-	if lastName != nil {
-		id.LastName = *lastName
-		fields["last_name"] = *lastName
+	if request.LastName.Set {
+		id.LastName = patch.EmptiableString(request.LastName, id.LastName)
+		fields["last_name"] = id.LastName
 	}
 	if err := m.iam.UpdateIdentityFields(ctx, id, fields); err != nil {
 		return nil, err
@@ -657,16 +711,28 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *ia
 // holds only while this list stays free of write authorities —
 // TestViewerAuthoritiesAreReadOnly enforces it.
 //
-// This one list is the single source
-// of truth — it both backs the token-issuance grant (issueTenantTokens) and
-// seeds the built-in `viewer` role (re-synced from it on every startup, see
-// seed), so the access is visible in the admin catalog and can't drift.
+// This one list is the single source of truth: it backs the token-issuance grant
+// (issueTenantTokens) and seeds the built-in `viewer` role, which EnsureRole re-syncs
+// from it on every startup so the access is visible in the admin catalog.
+//
+// 🔴 "Can't drift" is what this comment used to say, and nothing enforces it. Seeding the
+// role from a truncated copy of this list leaves every test in this module green — the
+// tokens carry the baseline regardless, so only the admin catalog would lie about what a
+// viewer holds. Stated rather than asserted because it is a display defect, not an access
+// one; if that changes, it needs a test, not a firmer sentence.
 var viewerAuthorities = []string{
 	string(auth.DeviceRead),
 	string(auth.EventRead),
 	string(auth.StateRead),
 	string(auth.CommandRead),
 	string(auth.AlarmRead),
+	// A dashboard is a tenant's own saved arrangement of the data above, so a member
+	// who may read the data may open the view of it. Its absence here was an omission
+	// rather than a decision, and it had a visible cost: dashboard-management gates
+	// every read on dashboard:read, so an ordinary member — and every OAuth read-only
+	// token — opened the console or the /dash viewer and was refused by all three
+	// queries, with no role able to explain why.
+	string(auth.DashboardRead),
 }
 
 // unionStrings returns the de-duplicated union of two string slices, preserving

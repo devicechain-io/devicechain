@@ -303,11 +303,17 @@ describe('GeoFenceForm', () => {
 
   // ── 4. METADATA SURVIVES AN EDIT ──────────────────────────────────────────
   //
-  // 🔴 Same full-replace hazard as (1), from the other direction: the update
-  // request carries EVERY field, so metadata the form never displays is deleted
-  // the moment it is omitted. An operator renaming a fence would silently drop
-  // whatever an integration had attached to it.
-  it('carries existing metadata through an edit unchanged', async () => {
+  // 🔴 THE CLAIM IS UNCHANGED AND THE MECHANISM IS INVERTED, WHICH IS WHY THIS
+  // ASSERTION FLIPPED. Metadata the form never displays must survive an edit. It used
+  // to survive because the form RE-SENT it — updateGeoFence replaced every field it
+  // named, so an omitted one was a deleted one. The update is partial now, so a field
+  // the request does not name is left alone, and re-sending metadata would mean writing
+  // back a copy read when this form opened over whatever it has become since.
+  //
+  // So the test asserts the request does NOT carry it. A test still asserting the old
+  // shape would be demanding the client keep doing the risky thing, and would go green
+  // on exactly the regression that reintroduced it.
+  it('leaves metadata out of an edit, so the server keeps what it holds', async () => {
     const metadata = '{"site":"rome-yard","installedBy":"ops","costCentre":"CC-4417"}';
     render(<GeoFenceForm entity={fence({ metadata })} onDone={vi.fn()} />);
 
@@ -319,9 +325,11 @@ describe('GeoFenceForm', () => {
     expect((call[2] as { token: string }).token).toBe('yard-perimeter');
 
     const request = requestFrom(call);
-    expect(request.metadata).toBe(metadata);
-    // …and it was not preserved at the geometry's expense: the untouched ring
-    // goes back out intact, which is the other half of "full replace".
+    expect('metadata' in request).toBe(false);
+    // 🔴 THE COUNTERWEIGHT, and it is what keeps "omitted" from meaning "the form sends
+    // nothing at all". The ring the operator did not touch still goes out — geometry is
+    // a field this editor OWNS, and leaving it out would mean a fence could never be
+    // reshaped. Absence has to be selective to mean anything.
     expect(JSON.parse(request.geometry)).toEqual(JSON.parse(polygonDoc([OUTER_RING])));
   });
 

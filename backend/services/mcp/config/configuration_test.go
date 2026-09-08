@@ -20,6 +20,19 @@ func TestValidate(t *testing.T) {
 		{"query in resource rejected", "https://mcp.example.com?x=1", "https://as.example.com", true},
 		{"userinfo rejected", "https://u@mcp.example.com", "https://as.example.com", true},
 		{"relative rejected", "/mcp", "https://as.example.com", true},
+		// 🔴 A TRAILING SLASH IS A SECOND SPELLING OF ONE IDENTIFIER, AND EVERY
+		// COMPARISON DOWNSTREAM IS EXACT. The metadata LOCATION normalises it away
+		// (RFC 9728 §3.1 removes a terminating slash before inserting), but the
+		// document's `resource` field and the token `aud` keep it — so a client that
+		// found the document at the normalised location rejects it for naming a
+		// different resource, and the audience check would refuse the token too.
+		// Both fields are covered, because "the resource one is validated" is exactly
+		// the shape of gap this pair exists to close.
+		{"trailing slash in resource rejected", "https://mcp.example.com/api/mcp/", "https://as.example.com", true},
+		{"trailing slash in issuer rejected", "https://mcp.example.com", "https://as.example.com/user-management/", true},
+		// The counterweight: the same identifiers WITHOUT the slash still pass, so
+		// the rule above is rejecting the slash rather than the path.
+		{"the same identifiers without the slash are fine", "https://mcp.example.com/api/mcp", "https://as.example.com/user-management", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

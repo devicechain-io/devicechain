@@ -45,20 +45,26 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		"notification-management", "outbound-connectors", "ai-inference", "mcp",
 		"lwm2m-ingest", "sparkplug-ingest",
 	} {
-		// promauto registers into the default registerer, so gather from there.
-		// Each area yields distinct names (the area is the metric SUBSYSTEM), so
-		// building one per area in a single run does not collide.
-		m := newStreamMetrics(&core.Microservice{InstanceId: "test", FunctionalArea: area})
+		// A registry per area. A Microservice registers its metrics in a registry it
+		// owns, and a struct literal owns none — without this the gauges below are
+		// built unregistered and there is nothing to gather.
+		ms := &core.Microservice{InstanceId: "test", FunctionalArea: area}
+		reg := prometheus.NewRegistry()
+		ms.UseMetricsRegistry(reg)
+
+		m := newStreamMetrics(ms)
 		m.brokerClustered.Set(1)
 		m.replicasDesired.WithLabelValues("s").Set(1)
 		m.replicasActual.WithLabelValues("s").Set(1)
 		m.peersCurrent.WithLabelValues("s").Set(1)
 
-		families, err := prometheus.DefaultGatherer.Gather()
+		families, err := reg.Gather()
 		if err != nil {
 			t.Fatalf("gathering metrics for %q: %v", area, err)
 		}
-		// Only this area's families: the gatherer holds every area built so far.
+		// The prefix filter is what makes a gathered family evidence about THIS area:
+		// the claim under test is that the rendered name carries the area, so matching
+		// on the suffix alone would accept a name built from the wrong one.
 		want := "devicechain_" + strings.ReplaceAll(area, "-", "") + "_"
 		seen := map[string]string{}
 		for _, f := range families {

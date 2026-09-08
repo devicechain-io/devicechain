@@ -9,9 +9,64 @@ import (
 	"fmt"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
+
+// buildDeviceCredential validates a credential create request against an ALREADY
+// RESOLVED owning device and renders the row to insert. It performs no I/O, so the
+// whole of a credential's admission policy — the type vocabulary, the RFC3339
+// expiry parse, the metadata JSON check — is decided before any transaction opens.
+//
+// It exists so ReplaceDevice (ADR-074) admits a credential by exactly the same
+// rules as CreateDeviceCredential rather than by a second, quietly diverging copy.
+// That mattered enough to refactor for: the replacement path has to insert its
+// credential INSIDE the transaction that retires the outgoing ones, so it cannot
+// simply call CreateDeviceCredential, and hand-inlining the four checks is how the
+// two paths end up disagreeing about (say) whether "access_token" is a type.
+//
+// The row carries BOTH Device and DeviceId. The association is what
+// CreateDeviceCredential has always written through; DeviceId is what a caller that
+// omits the association (`Omit("Device")`, as the replacement transaction does)
+// writes instead. Setting both means neither caller has to reach around this
+// function to get a correct row.
+func buildDeviceCredential(device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
+	// Validate credential type against the known vocabulary.
+	if !CredentialType(request.CredentialType).Valid() {
+		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
+	}
+
+	// Parse optional expiration timestamp (RFC3339).
+	expiresAt := sql.NullTime{}
+	if request.ExpiresAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *request.ExpiresAt)
+		if err != nil {
+			return nil, err
+		}
+		expiresAt = sql.NullTime{Time: parsed, Valid: true}
+	}
+
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceCredential{
+		TokenReference: rdb.TokenReference{
+			Token: request.Token,
+		},
+		MetadataEntity: rdb.MetadataEntity{
+			Metadata: metadataJSON,
+		},
+		DeviceId:        device.ID,
+		Device:          device,
+		CredentialType:  request.CredentialType,
+		CredentialId:    request.CredentialId,
+		CredentialValue: rdb.NullStrOf(request.CredentialValue),
+		Enabled:         request.Enabled,
+		ExpiresAt:       expiresAt,
+	}, nil
+}
 
 // Create a new device credential.
 func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
@@ -23,38 +78,9 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	// Validate credential type against the known vocabulary.
-	if !CredentialType(request.CredentialType).Valid() {
-		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
-	}
-
-	// Parse optional expiration timestamp (RFC3339).
-	expiresAt := sql.NullTime{}
-	if request.ExpiresAt != nil {
-		parsed, err := time.Parse(time.RFC3339, *request.ExpiresAt)
-		if err != nil {
-			return nil, err
-		}
-		expiresAt = sql.NullTime{Time: parsed, Valid: true}
-	}
-
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	created, err := buildDeviceCredential(matches[0], request)
 	if err != nil {
 		return nil, err
-	}
-	created := &DeviceCredential{
-		TokenReference: rdb.TokenReference{
-			Token: request.Token,
-		},
-		MetadataEntity: rdb.MetadataEntity{
-			Metadata: metadataJSON,
-		},
-		Device:          matches[0],
-		CredentialType:  request.CredentialType,
-		CredentialId:    request.CredentialId,
-		CredentialValue: rdb.NullStrOf(request.CredentialValue),
-		Enabled:         request.Enabled,
-		ExpiresAt:       expiresAt,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -63,9 +89,11 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 	return created, nil
 }
 
-// Update an existing device credential.
+// UpdateDeviceCredential applies a PARTIAL update: a field the caller did not name keeps
+// its stored value — including the SECRET, which the full-replace shape blanked on every
+// edit that failed to restate it.
 func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
-	request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
+	request *DeviceCredentialUpdateRequest) (*DeviceCredential, error) {
 	matches, err := api.DeviceCredentialsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -73,46 +101,69 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-
-	// Validate credential type against the known vocabulary.
-	if !CredentialType(request.CredentialType).Valid() {
-		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
-	}
-
-	// Parse optional expiration timestamp (RFC3339).
-	expiresAt := sql.NullTime{}
-	if request.ExpiresAt != nil {
-		parsed, err := time.Parse(time.RFC3339, *request.ExpiresAt)
-		if err != nil {
-			return nil, err
-		}
-		expiresAt = sql.NullTime{Time: parsed, Valid: true}
-	}
-
-	// Update fields that changed.
 	updated := matches[0]
-	updated.Token = request.Token
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+
+	// Everything that can refuse resolves before anything is written, so a refused update
+	// leaves the credential exactly as the device last authenticated with it.
+	currentDeviceToken := ""
+	if updated.Device != nil {
+		currentDeviceToken = updated.Device.Token
+	}
+	repointTo, repoint, err := resolveRequiredTypeRef(request.DeviceToken, currentDeviceToken, "deviceToken")
 	if err != nil {
 		return nil, err
 	}
-	updated.Metadata = metadataJSON
-	updated.CredentialType = request.CredentialType
-	updated.CredentialId = request.CredentialId
-	updated.CredentialValue = rdb.NullStrOf(request.CredentialValue)
-	updated.Enabled = request.Enabled
-	updated.ExpiresAt = expiresAt
-
-	// Update owning device if changed. Guard for a nil Device by reloading.
-	if updated.Device == nil || request.DeviceToken != updated.Device.Token {
-		devices, err := api.DevicesByToken(ctx, []string{request.DeviceToken})
+	var device *Device
+	if repoint {
+		devices, err := api.DevicesByToken(ctx, []string{repointTo})
 		if err != nil {
 			return nil, err
 		}
 		if len(devices) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.Device = devices[0]
+		device = devices[0]
+	}
+	credentialType, err := request.CredentialType.ApplyToRequired("credentialType", updated.CredentialType)
+	if err != nil {
+		return nil, err
+	}
+	// The vocabulary check runs only when the caller named the type: an absent field has
+	// nothing to validate, and checking the stored value instead would refuse a metadata
+	// edit over a type the caller never sent.
+	if request.CredentialType.Set && !CredentialType(credentialType).Valid() {
+		return nil, fmt.Errorf("invalid credential type: %s", credentialType)
+	}
+	credentialId, err := request.CredentialId.ApplyToRequired("credentialId", updated.CredentialId)
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := request.Enabled.ApplyToRequired("enabled", updated.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt, err := request.ExpiresAt.ApplyToNullTime("expiresAt", updated.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+
+	updated.Metadata = metadataJSON
+	updated.CredentialType = credentialType
+	updated.CredentialId = credentialId
+	updated.CredentialValue = rdb.NullStrOf(request.CredentialValue.ApplyTo(dcgraphql.NullStr(updated.CredentialValue)))
+	updated.Enabled = enabled
+	updated.ExpiresAt = expiresAt
+	if device != nil {
+		updated.Device = device
+		// Belt-and-braces, and said so rather than left to look load-bearing: gorm's Save
+		// syncs a belongs-to FK from the association it is given, so a mutant deleting this
+		// line is behaviour-equivalent and survives on purpose. It is set anyway so the
+		// in-memory value handed back to the caller agrees with the row.
+		updated.DeviceId = device.ID
 	}
 
 	result := api.RDB.DB(ctx).Save(updated)

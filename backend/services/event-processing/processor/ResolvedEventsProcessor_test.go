@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -535,5 +536,106 @@ func TestReplayResetsWhenStreamBehindSnapshot(t *testing.T) {
 	// The stale row is cleared so the next checkpoint starts fresh.
 	if _, ok, _ := store.Load(ctx, "singleton"); ok {
 		t.Fatal("stale snapshot row should have been reset/deleted")
+	}
+}
+
+// The reset above is the ONLY write a term BUILD makes, and the build is long: a snapshot
+// restore, a fact-projection catch-up, three view builds and a whole replay. Under ADR-070
+// that is long enough to lose the partition inside, and with a warm standby there is a
+// successor waiting to take it — so the replica issuing this delete may no longer own the
+// row it is deleting.
+//
+// This is the COMPARE-AND-SWAP half: the successor has already committed, so the row is not
+// the one this replica read, and the delete must be refused. What the row protects is not
+// just the successor's state — it is the monotonic floor Save's split-brain guards compare
+// against, so a stray delete disarms them all.
+func TestATermBuildDoesNotClearACheckpointASuccessorHasAdvanced(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	p1 := newTestProcessor(store, nil, 100)
+	if err := p1.restore(ctx); err != nil {
+		t.Fatalf("p1 restore: %v", err)
+	}
+	for i := uint64(1); i <= 5; i++ {
+		p1.handle(msgAt(t, i, &fakeAck{}))
+	}
+	p1.checkpoint(ctx)
+
+	// This replica restores the row at seq 5 and starts building against a truncated stream.
+	p2 := newTestProcessor(store, nil, 100)
+	p2.Replay = &fakeReplayOpener{head: 2}
+	p2.cfg.Suffix = "resolved-events"
+	if err := p2.restore(ctx); err != nil {
+		t.Fatalf("p2 restore: %v", err)
+	}
+
+	// Meanwhile the partition changes hands and the successor commits.
+	if err := store.Save(ctx, &model.DetectSnapshot{
+		PartitionId: "singleton", StreamSeq: 42, Watermark: testBase, Payload: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("successor checkpoint: %v", err)
+	}
+
+	if err := p2.replayToHead(); !errors.Is(err, model.ErrResetRaced) {
+		t.Fatalf("replayToHead returned %v, want the reset to be refused as raced", err)
+	}
+	got, ok, err := store.Load(ctx, "singleton")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok || got.StreamSeq != 42 {
+		t.Fatalf("the successor's checkpoint was cleared by a replica that had lost the "+
+			"partition (ok=%v row=%+v); that row is the monotonic floor every split-brain "+
+			"guard in the store compares against", ok, got)
+	}
+}
+
+// The other half, and the one the compare-and-swap cannot see: the row has NOT moved,
+// because the successor has taken the partition and not yet committed anything. The
+// sequence still matches, so only ownership can refuse this — which is why the build asks
+// the term gate before it writes, exactly as checkpoint() does.
+//
+// Its counterweight is TestReplayResetsWhenStreamBehindSnapshot above: unleased, and it
+// must still clear the row. Without that pairing, a guard that refuses every reset would
+// pass here and turn the truncated-stream recovery into a permanently crash-looping pod.
+func TestALostTermDoesNotClearTheCheckpointItStillMatches(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	p1 := newTestProcessor(store, nil, 100)
+	if err := p1.restore(ctx); err != nil {
+		t.Fatalf("p1 restore: %v", err)
+	}
+	for i := uint64(1); i <= 5; i++ {
+		p1.handle(msgAt(t, i, &fakeAck{}))
+	}
+	p1.checkpoint(ctx)
+
+	p2 := newTestProcessor(store, nil, 100)
+	p2.Replay = &fakeReplayOpener{head: 2}
+	p2.cfg.Suffix = "resolved-events"
+	p2.Lease = &messaging.DistributedLease{}
+	p2.Gate = NewTermGate() // closed: the term was lost during the build
+	if err := p2.restore(ctx); err != nil {
+		t.Fatalf("p2 restore: %v", err)
+	}
+
+	if err := p2.replayToHead(); err == nil {
+		t.Fatal("a replica that lost its partition mid-build cleared the checkpoint anyway")
+	}
+	if _, ok, _ := store.Load(ctx, "singleton"); !ok {
+		t.Fatal("the checkpoint was deleted by a replica holding no term; the successor is " +
+			"leading from that row")
+	}
+
+	// Inside a HELD term the same build clears it, which is the recovery this path exists
+	// for — the leased processor must not be permanently unable to reset.
+	p2.Gate.Enter(func() bool { return true })
+	if err := p2.replayToHead(); err != nil {
+		t.Fatalf("the term holder could not reset a snapshot ahead of its stream: %v", err)
+	}
+	if _, ok, _ := store.Load(ctx, "singleton"); ok {
+		t.Fatal("the term holder's reset did not clear the stale row")
 	}
 }

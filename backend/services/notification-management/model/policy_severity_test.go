@@ -13,15 +13,27 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 )
 
-// policyWithSeverity is the smallest write that carries one rule at a given severity.
-// Both create and update take the same request shape, so one builder serves both and
-// the two paths cannot drift apart in the fixture.
+// policyWithSeverity is the smallest CREATE that carries one rule at a given severity,
+// and updateWithSeverity is its update counterpart. They build the same rule from the
+// same two arguments, so the fixture cannot drift between the two paths — which is the
+// property the vocabulary check depends on, since buildRules is a single choke point only
+// while both paths actually reach it.
 func policyWithSeverity(token, severity string) *NotificationPolicyCreateRequest {
 	return &NotificationPolicyCreateRequest{
 		Token:   token,
 		Enabled: true,
-		Rules:   []*NotificationRuleCreateRequest{{Severity: severity, ChannelToken: "smtp"}},
+		Rules:   []*NotificationRuleCreateRequest{ruleAtSeverity(severity)},
 	}
+}
+
+func updateWithSeverity(severity string) *NotificationPolicyUpdateRequest {
+	return &NotificationPolicyUpdateRequest{
+		Rules: OptionalNotificationRuleListOf([]*NotificationRuleCreateRequest{ruleAtSeverity(severity)}),
+	}
+}
+
+func ruleAtSeverity(severity string) *NotificationRuleCreateRequest {
+	return &NotificationRuleCreateRequest{Severity: severity, ChannelToken: "smtp"}
 }
 
 // The restated vocabulary equals device-management's declaration exactly.
@@ -117,11 +129,11 @@ func TestAnUnknownRuleSeverityIsRefused(t *testing.T) {
 		})
 
 		t.Run("update "+severity, func(t *testing.T) {
-			if _, err := api.UpdateNotificationPolicy(ctx, "live", policyWithSeverity("live", severity)); err == nil {
+			if _, err := api.UpdateNotificationPolicy(ctx, "live", updateWithSeverity(severity)); err == nil {
 				t.Fatalf("severity %q was accepted on update", severity)
 			}
-			// An update replaces the rule set wholesale, so a refusal that still cleared
-			// the old rules would leave the policy delivering nothing at all.
+			// An update that names a rule set replaces it wholesale, so a refusal that
+			// still cleared the old rules would leave the policy delivering nothing at all.
 			got, err := api.NotificationPoliciesByToken(ctx, []string{"live"})
 			if err != nil || len(got) != 1 {
 				t.Fatalf("reload after refused update: %v (%d policies)", err, len(got))

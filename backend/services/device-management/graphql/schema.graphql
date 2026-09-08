@@ -204,6 +204,38 @@ input MetricDefinitionCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# dataType is validated ONLY when the caller names it: an absent field has nothing to
+# validate, and checking the stored value instead would refuse a rename over a type the
+# caller never sent.
+input MetricDefinitionUpdateRequest {
+    # Re-points the definition at another device profile. Omit to keep the current one;
+    # null is refused (a metric with no profile is unreachable by any device), and an
+    # unknown token refuses the whole update.
+    deviceProfileToken: String
+    # Required and unclearable: a measurement event names the metric by this key.
+    metricKey: String
+    name: String
+    description: String
+    # Required and unclearable; validated against the metric type vocabulary when sent.
+    dataType: String
+    unit: String
+    minValue: Float
+    maxValue: Float
+    enum: String
+    descriptor: String
+    metadata: String
+}
+
 # Criteria used when searching for metric definitions.
 input MetricDefinitionSearchCriteria {
     pageNumber: Int!
@@ -354,6 +386,30 @@ input CommandDefinitionCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input CommandDefinitionUpdateRequest {
+    # Re-parents the definition. Null is refused, and an unknown token refuses the whole
+    # update. The command key's uniqueness is checked against the profile the definition
+    # ends up IN, not the one it is moving away from.
+    deviceProfileToken: String
+    # Required and unclearable; grammar-checked when sent.
+    commandKey: String
+    name: String
+    description: String
+    # Nullable: a command that takes no structured arguments is a real state, so null
+    # clears the schema back to that.
+    parameterSchema: String
+    metadata: String
+}
+
 # Criteria used when searching for command definitions.
 input CommandDefinitionSearchCriteria {
     pageNumber: Int!
@@ -421,6 +477,36 @@ input DetectionRuleCreateRequest {
     entityGroupVersion: Int
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input DetectionRuleUpdateRequest {
+    # Re-parents the rule. Null is refused; an unknown token refuses the whole update.
+    deviceProfileToken: String
+    name: String
+    description: String
+    # Required and unclearable: a rule with no definition detects nothing.
+    definition: String
+    # The canvas sidecar. Null DROPS it — what a form edit of a canvas-authored rule
+    # needs, since the graph is then stale. Omitting it KEEPS it.
+    authoringGraph: String
+    # Required and unclearable. Null is refused rather than read as false, which would
+    # park a live rule and report success.
+    enabled: Boolean
+    metadata: String
+    # The optional group scope. The two are folded independently and then validated as a
+    # PAIR against what the rule ends up with, so naming one without the other is refused
+    # rather than silently discarded. Null on either un-scopes the rule.
+    entityGroupToken: String
+    entityGroupVersion: Int
+}
+
 # Criteria used when searching for detection rules.
 input DetectionRuleSearchCriteria {
     pageNumber: Int!
@@ -468,7 +554,7 @@ type GeoFence implements Model & TokenReference & NamedEntity & MetadataEntity {
     metadata: String
 }
 
-# Data required to create or update a geofence. geometry is the JSON document described
+# Data required to create a geofence. geometry is the JSON document described
 # above; it is validated on write (kind, GeoJSON shape, coordinate ranges, and a vertex
 # bound). Two limits are enforced at authoring time because nothing downstream can see
 # them: a fence may carry at most 512 positions, and a tenant at most 100 fences. The
@@ -479,6 +565,31 @@ input GeoFenceCreateRequest {
     name: String
     description: String
     geometry: String!
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# A fence's token is IMMUTABLE — rules name fences by token, and a rename would leave
+# them naming nothing. Under this input a rename is unrepresentable rather than refused.
+# A caller who wants a different token creates the new fence FIRST and deletes the old
+# one after; doing it the other way round can forfeit grandfathered position headroom and
+# leave the fence unrecreatable.
+input GeoFenceUpdateRequest {
+    name: String
+    description: String
+    # Required and unclearable: a fence with no shape is not a fence. Omitting it leaves
+    # the shape alone, which is what makes a rename or a metadata edit exempt from the
+    # tenant's position ceiling — that ceiling refuses GROWTH, not size.
+    geometry: String
     metadata: String
 }
 
@@ -569,6 +680,34 @@ type GeoFenceGeometry {
     geometry: String!
 }
 
+# One alarm a bulk acknowledge did not act on, and why.
+type AlarmAckRefusal {
+    # The alarm this refusal is about, exactly as the caller spelled it.
+    token: String!
+    # The machine-readable classification. Branch on this, never on `reason`.
+    #
+    # ALARM_NOT_FOUND is the only value, and that is a fact about acknowledgment rather than an
+    # omission: acknowledgment is orthogonal to ACTIVE/CLEARED (either may be acknowledged) and
+    # is idempotent, so no alarm STATE refuses it. A token naming nothing is the whole failure
+    # space. Treat the field as an open vocabulary anyway.
+    code: String!
+    # Why it was refused, in client-safe terms.
+    reason: String!
+}
+
+# What one bulk acknowledge did.
+#
+# Every token the caller supplied appears in EXACTLY ONE of the two lists, so a selection can be
+# reconciled completely rather than inferred from a count.
+type BulkAcknowledgeAlarmsResult {
+    # The alarms that are now acknowledged — including any that ALREADY were, matching
+    # acknowledgeAlarm, which likewise returns an already-acknowledged alarm rather than
+    # treating the repeat as a failure.
+    acknowledged: [Alarm!]!
+    # The tokens that named no alarm. Empty for a clean request.
+    refusals: [AlarmAckRefusal!]!
+}
+
 # A raised alarm (ADR-041) — the operational alarm object. Raised when a DETECT rule's
 # condition fires (ADR-057, via the contributor-set integrator), keyed by (originator,
 # alarmKey): there is at most one live alarm per key, so re-crossings dedup into the
@@ -656,9 +795,10 @@ input EntityAttributeSearchCriteria {
     attrKeys: [String!]
 }
 
-# A row of the append-only audit journal (ADR-019). Captured by construction on
-# every entity mutation in this service; the journal is never mutated via the
-# API. Times are RFC3339 strings.
+# A row of the audit journal (ADR-019). Captured by construction on every entity
+# mutation in this service, and never mutated via the API. It is written to by
+# exactly one other path: deleting a tenant empties the fields that name a person,
+# keeping the row as the evidence of the deletion. Times are RFC3339 strings.
 type AuditEvent {
     id: ID!
     # RFC3339 time the audited statement committed.
@@ -675,8 +815,10 @@ type AuditEvent {
     # Primary key of the affected row when the statement targets a single row;
     # empty for a bulk/condition mutation (rowsAffected then conveys the scope).
     entityPk: String
-    # Human-facing, non-sensitive label of the affected row (e.g. its token),
-    # captured when the model provides one; null otherwise.
+    # Human-facing label of the affected row (e.g. its token), captured when the
+    # model provides one; null otherwise. It is emptied for a tenant that has been
+    # deleted: the journal is retained as the evidence of the deletion, and it does
+    # not keep the identifiers the deletion was of.
     entityLabel: String
     # Number of rows the audited statement affected.
     rowsAffected: Int!
@@ -774,8 +916,25 @@ input DeviceProfileCreateRequest {
     category: String
     metadata: String
     # Whether devices built on this profile report their own position, and what to
-    # expect of it. Replaced wholesale on update like every other field here, so
-    # leaving it out of an update clears an existing declaration.
+    # expect of it. Omit it for "these devices do not report their own position".
+    location: DeviceLocationDeclarationInput
+}
+
+# Fields to change on an existing device profile (ADR-045). Every field is
+# three-state: OMIT it to leave the stored value alone, send NULL to clear it, or
+# send a value to set it.
+#
+# It carries no token. The mutation's own `token` argument names the profile, and
+# a profile is renamed through renameDeviceProfile — where the new token can mean
+# only one thing.
+input DeviceProfileUpdateRequest {
+    name: String
+    description: String
+    category: String
+    metadata: String
+    # The position declaration. Omitting it PRESERVES the stored declaration; pass
+    # null to stop declaring that these devices report their own position. Sending
+    # `{}` is the distinct "reports position, no expectations stated" form.
     location: DeviceLocationDeclarationInput
 }
 
@@ -814,6 +973,28 @@ input DeviceCreateRequest {
     name: String
     description: String
     deviceTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to a device: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row. It used to be the payload token that named the
+# row, with the argument ignored, so a request whose two tokens disagreed silently
+# updated the device in the payload and returned it as though it were the one asked
+# for.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input DeviceUpdateRequest {
+    externalId: String
+    name: String
+    description: String
+    # Re-types the device. Omit to keep the current type. NULL IS REFUSED: a device
+    # with no type resolves no capability at all. An unknown token is refused, and
+    # the refusal is total.
+    deviceTypeToken: String
     metadata: String
 }
 
@@ -926,12 +1107,44 @@ type SelectorPreview {
     members: EntityGroupMemberSearchResults
 }
 
-# Data required to create or replace an entity group (ADR-061). membershipMode
-# defaults to "static"; selector is only permitted (and required) for "dynamic".
+# Data required to create an entity group (ADR-061). membershipMode defaults to
+# "static"; selector is only permitted (and required) for "dynamic".
+# Editing one afterwards is EntityGroupUpdateRequest.
 input EntityGroupCreateRequest {
     token: String!
     memberType: String!
     membershipMode: String
+    selector: String
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+#
+# memberType and membershipMode are absent for the same reason as token: all three are
+# IDENTITY. Changing the member family would leave the group collecting a family its
+# members do not belong to, and converting a static group to dynamic (or back) would
+# orphan its members. A field that can only ever be a no-op or an error does not belong
+# in an update input.
+input EntityGroupUpdateRequest {
+    # The CEL membership predicate, required (and only permitted) for a dynamic group. A
+    # provided selector is re-compiled and cost-gated before it replaces the stored one.
+    # Null is refused: a dynamic group with no selector matches nothing and cannot be
+    # repaired into a valid group.
     selector: String
     name: String
     description: String
@@ -1042,6 +1255,36 @@ input DeviceCredentialCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input DeviceCredentialUpdateRequest {
+    # Re-points the credential at another device. Null is refused; an unknown token
+    # refuses the whole update.
+    deviceToken: String
+    # Required and unclearable. credentialType is validated against the known vocabulary
+    # when sent; credentialId is what a device presents at connect time.
+    credentialType: String
+    credentialId: String
+    # The secret material, nullable — a credential type that carries no secret is a real
+    # state. OMITTING IT LEAVES THE SECRET IN PLACE, which is what makes editing anything
+    # else on a credential safe; the input this replaces blanked it on every such edit.
+    credentialValue: String
+    # Required and unclearable: null is refused rather than read as false, which would
+    # silently disable the credential and take the device offline at its next reconnect.
+    enabled: Boolean
+    # An RFC3339 timestamp. Null — or an empty string, which is what a cleared form field
+    # sends — means "never expires".
+    expiresAt: String
+    metadata: String
+}
+
 # Criteria used when searching for device credentials.
 input DeviceCredentialSearchCriteria {
     pageNumber: Int!
@@ -1056,6 +1299,92 @@ input DeviceCredentialSearchCriteria {
 type DeviceCredentialSearchResults {
     results: [DeviceCredential!]!
     pagination: SearchResultsPagination!
+}
+
+# One append-only record of a physical unit swap: the failed hardware was retired
+# and a new unit bound to the SAME logical device identity, so the device's events,
+# alarms, relationships, group membership and command vocabulary carry forward
+# unbroken. Written only by replaceDevice; there is no update or delete for it, and
+# it carries no token, so it cannot be re-pointed.
+type DeviceReplacement {
+    id: ID!
+    createdAt: String
+    # The logical identity that survived the swap - unchanged by the operation.
+    device: Device!
+    # When the replacement was applied, from the server's clock. Never caller-supplied.
+    occurredTime: String!
+    # The authenticated subject that performed the replacement, from the caller's
+    # token rather than the request body.
+    actor: String!
+    # The operator's free-text note ("water ingress", "RMA 41822").
+    reason: String
+    # The incoming physical unit's own identifier - a manufacturer serial or IMEI.
+    # Recorded here and deliberately NOT written onto the device's externalId, which
+    # is the stable business key of the logical thing and must survive a swap.
+    unitIdentifier: String
+    # Entity tokens of the credentials this replacement disabled. Tokens, never
+    # credential ids: for an ACCESS_TOKEN the credential id is the device's bearer.
+    retiredCredentialTokens: [String!]!
+    # Entity token of the credential minted for the incoming unit.
+    newCredentialToken: String!
+    newCredentialType: String!
+}
+
+# Criteria used when searching the device-replacement journal.
+input DeviceReplacementSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    # Narrow to one device by its token.
+    device: String
+}
+
+# Search results returned from a device-replacement query, newest first.
+type DeviceReplacementSearchResults {
+    results: [DeviceReplacement!]!
+    pagination: SearchResultsPagination!
+}
+
+# What a caller sends to swap the physical unit behind a device identity.
+#
+# It carries NO device identity fields, and that is the contract rather than an
+# omission: there is no token, externalId, device type or name here, so a
+# replacement cannot move the identity, the business key or the profile binding.
+# "Rotate credentials, not identity" is unrepresentable to violate, not merely
+# refused.
+input DeviceReplaceRequest {
+    # The surviving logical identity.
+    deviceToken: String!
+    # Credential type minted for the incoming unit. Defaults to ACCESS_TOKEN.
+    credentialType: String
+    # The identifier the new unit presents at connect time. Optional only for
+    # ACCESS_TOKEN, where the id is itself the bearer and a fresh random one is
+    # minted; required for every other type, since the server cannot invent a
+    # certificate thumbprint or an MQTT username.
+    credentialId: String
+    # Secret material for types that carry one separately (an MQTT password, a
+    # certificate PEM). Write-only, as on any credential.
+    credentialValue: String
+    # Entity token for the new credential row. A UUID is minted when absent.
+    credentialToken: String
+    # Optional expiry for the new credential (RFC3339).
+    expiresAt: String
+    reason: String
+    unitIdentifier: String
+}
+
+# What replaceDevice returns.
+type DeviceReplaceResult {
+    # The surviving identity, unchanged.
+    device: Device!
+    # The append-only record this call wrote.
+    replacement: DeviceReplacement!
+    # The credential minted for the incoming unit. This is the one moment the
+    # material the new unit must be programmed with is readable, which is why the
+    # mutation is gated on device:write like every other credential door.
+    newCredential: DeviceCredential!
+    # Entity tokens of the credentials this call disabled. Tokens only: the
+    # credential rows themselves stay behind the gated credential queries.
+    retiredCredentialTokens: [String!]!
 }
 
 # A device provisioning profile (ADR-012): the shared key+secret a fleet presents
@@ -1079,7 +1408,7 @@ type ProvisioningProfile implements Model & TokenReference & NamedEntity & Metad
     metadata: String
 }
 
-# Data required to create or update a provisioning profile.
+# Data required to create a provisioning profile.
 input ProvisioningProfileCreateRequest {
     token: String!
     name: String
@@ -1090,6 +1419,39 @@ input ProvisioningProfileCreateRequest {
     deviceTypeToken: String!
     credentialType: String
     enabled: Boolean!
+    expiresAt: String
+    metadata: String
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input ProvisioningProfileUpdateRequest {
+    name: String
+    description: String
+    # The credentials a fleet presents to self-register. Both are required and
+    # unclearable: a blank either side authenticates nothing. OMITTING provisionSecret
+    # LEAVES IT IN PLACE — the input this replaces blanked it on every edit that failed to
+    # restate it, after which the whole fleet failed to register.
+    provisionKey: String
+    provisionSecret: String
+    # Required and unclearable; validated against the strategy vocabulary when sent.
+    strategy: String
+    # Stamped onto auto-created devices. Null is refused; an unknown token refuses the
+    # whole update.
+    deviceTypeToken: String
+    # credentialType is deliberately absent. Provisioning can mint exactly one credential
+    # type today (ACCESS_TOKEN), so every stored value is that one and an update naming
+    # the field could only restate it or be refused — a field with no useful request does
+    # not belong in an update input. It returns additively when a second type is mintable.
+    enabled: Boolean
+    # An RFC3339 timestamp. Null or an empty string means "never expires".
     expiresAt: String
     metadata: String
 }
@@ -1156,6 +1518,33 @@ type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity &
     foregroundColor: String
     borderColor: String
     metadata: String
+    # The DRAFT property contract for assets of this type: a JSON array of typed
+    # field descriptors, in declaration order, or null when the type declares none.
+    # It is the same descriptor shape a command definition uses for its parameters.
+    # Editing it changes nothing an asset is validated against until the type is
+    # published.
+    propertySchema: String
+    # The published version assets of this type are validated against, or null when
+    # the type has never been published. An asset of an unpublished type may carry
+    # no properties at all.
+    activeVersion: Int
+}
+
+# An immutable published snapshot of an asset type's property contract. Assets are
+# validated against the type's ACTIVE version, never against its draft, so
+# publishing is what makes a contract binding. History is append-only; a rollback
+# re-points the active version without deleting anything.
+type AssetTypeVersion {
+    version: Int!
+    label: String
+    description: String
+    publishedAt: String!
+    publishedBy: String
+    # The frozen property contract this version publishes, in the same JSON form as
+    # AssetType.propertySchema. Unlike a device profile version's snapshot this IS
+    # exposed: an author needs to see what a version froze in order to decide whether
+    # to roll back to it.
+    propertySchema: String!
 }
 
 # Data required to create an asset type.
@@ -1169,6 +1558,37 @@ input AssetTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    # The draft property contract (see AssetType.propertySchema). Rejected if it is
+    # not a JSON array of descriptors, if it carries a key no descriptor declares
+    # (so a typo'd "maximum" is refused rather than dropped), or if it declares a
+    # contract nothing could satisfy — a duplicate name, an unknown data type, a
+    # default outside its own enum.
+    propertySchema: String
+}
+
+# A PARTIAL update to an asset type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AssetTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+    # Replaces the draft property contract wholesale; null withdraws it. Omit to
+    # leave the stored draft alone. It is validated the same way as on create, and a
+    # rejection writes nothing at all.
+    propertySchema: String
 }
 
 # Criteria used when searching for asset types.
@@ -1194,6 +1614,9 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     description: String
     assetType: AssetType!
     metadata: String
+    # The asset's property document: a JSON object whose keys are the properties its
+    # type's published contract declares. Null when the asset carries none.
+    properties: String
 }
 
 # Data required to create an asset.
@@ -1203,6 +1626,36 @@ input AssetCreateRequest {
     description: String
     assetTypeToken: String!
     metadata: String
+    # The asset's property document, validated against the asset type's ACTIVE
+    # PUBLISHED contract before anything is written. Refused when the type has no
+    # published contract, when a key is not declared, when a value does not fit its
+    # declared type/bounds/allowed values, or when a required property is missing —
+    # and the refusal is total, so no asset is created.
+    properties: String
+}
+
+# A PARTIAL update to an asset: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see AssetTypeUpdateRequest.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AssetUpdateRequest {
+    name: String
+    description: String
+    # Re-points the asset at a different asset type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every asset
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    assetTypeToken: String
+    metadata: String
+    # Replaces the asset's property document wholesale; null clears it. Omit to keep
+    # what is stored — but note that omitting it does NOT skip the check: a retype
+    # re-validates the properties the asset already carries against the contract of
+    # the type it is moving to, so an asset can never be left describing itself in a
+    # vocabulary its type does not declare.
+    properties: String
 }
 
 # Criteria used when searching for assets.
@@ -1248,6 +1701,27 @@ input CustomerTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to a customer type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input CustomerTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
 # Criteria used when searching for customer types.
 input CustomerTypeSearchCriteria {
     pageNumber: Int!
@@ -1279,6 +1753,24 @@ input CustomerCreateRequest {
     name: String
     description: String
     customerTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to a customer: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see CustomerTypeUpdateRequest.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input CustomerUpdateRequest {
+    name: String
+    description: String
+    # Re-points the customer at a different customer type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every customer
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    customerTypeToken: String
     metadata: String
 }
 
@@ -1325,6 +1817,27 @@ input AreaTypeCreateRequest {
     metadata: String
 }
 
+# A PARTIAL update to an area type: omit a field to leave it alone, send null to
+# clear it, send a value to set it. There is no `token` member — the mutation's own
+# `token` argument names the row, so a token move is unrepresentable. It used to be
+# the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the one in the payload.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AreaTypeUpdateRequest {
+    name: String
+    description: String
+    imageUrl: String
+    icon: String
+    backgroundColor: String
+    foregroundColor: String
+    borderColor: String
+    metadata: String
+}
+
 # Criteria used when searching for area types.
 input AreaTypeSearchCriteria {
     pageNumber: Int!
@@ -1356,6 +1869,24 @@ input AreaCreateRequest {
     name: String
     description: String
     areaTypeToken: String!
+    metadata: String
+}
+
+# A PARTIAL update to an area: omit a field to leave it alone, send null to clear
+# it, send a value to set it. There is no `token` member — see AreaTypeUpdateRequest.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the
+# field arrive already-populated for a caller who never sent it, which collapses
+# "omitted" back into "sent", and turns this input back into the full replace it
+# replaces.
+input AreaUpdateRequest {
+    name: String
+    description: String
+    # Re-points the area at a different area type. Omit to keep the current one.
+    # Unlike DeviceTypeUpdateRequest.profileToken, NULL IS REFUSED here: every area
+    # must reference a type, so "no type" is not a state it can be in. An unknown
+    # token is refused too, and the refusal is total — nothing is written.
+    areaTypeToken: String
     metadata: String
 }
 
@@ -1410,6 +1941,24 @@ input EntityRelationshipTypeCreateRequest {
     description: String
     metadata: String
     tracked: Boolean!
+}
+
+# A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
+# the stored value untouched, send null to clear it, send a value to set it.
+#
+# There is deliberately no `token` field — the record is identified by the mutation's
+# `token` argument, and an update cannot move it.
+#
+# 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
+# arrive already-populated for a caller who never sent it, which collapses "omitted" back
+# into "sent", and turns this input back into the full replace it replaces.
+input EntityRelationshipTypeUpdateRequest {
+    name: String
+    description: String
+    metadata: String
+    # Required and unclearable: null is refused rather than read as false, which would
+    # stop denormalizing this type's relationships onto events and report success.
+    tracked: Boolean
 }
 
 # Criteria used when searching for entity relationship types.
@@ -1634,7 +2183,7 @@ type Query {
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
-    # Query the append-only audit journal (ADR-019); tenant-scoped, newest first.
+    # Query the audit journal (ADR-019); tenant-scoped, newest first.
     auditEvents(criteria: AuditEventSearchCriteria!): AuditEventSearchResults!
     # Find devices by unique id.
     devicesById(ids: [ID!]!): [Device!]!
@@ -1664,6 +2213,19 @@ type Query {
     deviceCredentialsByToken(tokens: [String!]!): [DeviceCredential!]!
     # List device credentials that meet criteria.
     deviceCredentials(criteria: DeviceCredentialSearchCriteria!): DeviceCredentialSearchResults!
+    # List device-replacement records, newest first, optionally narrowed to one
+    # device. There is no by-id or by-token door: a replacement is never addressed
+    # on its own, only read as part of a device's history.
+    deviceReplacements(criteria: DeviceReplacementSearchCriteria!): DeviceReplacementSearchResults!
+    # The asset directly above this one in the hierarchy, or null when it is a
+    # root. A root is a normal state, not an error.
+    assetParent(token: String!): Asset
+    # The path from an asset to its root, NEAREST ANCESTOR FIRST - the order a
+    # breadcrumb is built from.
+    assetAncestors(token: String!): [Asset!]!
+    # A page of the assets directly below a parent. Omit parentToken to page the
+    # ROOTS of the tree; a tree browser asks the same question at every level.
+    assetChildren(parentToken: String, pagination: PaginationInput!): AssetSearchResults!
     # Find provisioning profiles by unique id.
     provisioningProfilesById(ids: [ID!]!): [ProvisioningProfile!]!
     # Find provisioning profiles by unique token.
@@ -1703,6 +2265,11 @@ type Query {
     assetsByToken(tokens: [String!]!): [Asset!]!
     # List assets that meet criteria.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
+    # An asset type's published property-contract versions, newest first.
+    assetTypeVersions(token: String!): [AssetTypeVersion!]!
+    # The version an asset of this type is currently validated against, or null when
+    # the type has never been published.
+    activeAssetTypeVersion(token: String!): AssetTypeVersion
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
@@ -1744,7 +2311,15 @@ type Mutation {
     # Create a new device profile (ADR-045).
     createDeviceProfile(request: DeviceProfileCreateRequest): DeviceProfile!
     # Update an existing device profile, located by the token argument (ADR-045).
-    updateDeviceProfile(token: String!, request: DeviceProfileCreateRequest): DeviceProfile!
+    # A partial update: an omitted field is left alone, an explicit null clears it.
+    updateDeviceProfile(token: String!, request: DeviceProfileUpdateRequest!): DeviceProfile!
+    # Rename a device profile. A blank newToken is refused; renaming to the token the
+    # profile already has is an idempotent success; a token another profile holds is
+    # refused by name. REFUSED outright once the profile has been published or adopted
+    # by a device type — from that point the token is the key published rules are filed
+    # under and rostered devices are tracked by, so a rename would silently stop
+    # detections and orphan dead-man entries.
+    renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
     # Delete a device profile (ADR-045). Refused while any device type references
     # it; its owned metric, command, and detection-rule definitions are cascade-removed.
     # Returns whether a row was deleted.
@@ -1758,19 +2333,19 @@ type Mutation {
     # Create a new metric definition.
     createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
     # Update an existing metric definition.
-    updateMetricDefinition(token: String!, request: MetricDefinitionCreateRequest): MetricDefinition!
+    updateMetricDefinition(token: String!, request: MetricDefinitionUpdateRequest!): MetricDefinition!
     # Delete a single metric definition.
     deleteMetricDefinition(token: String!): Boolean!
     # Create a new command definition.
     createCommandDefinition(request: CommandDefinitionCreateRequest): CommandDefinition!
     # Update an existing command definition.
-    updateCommandDefinition(token: String!, request: CommandDefinitionCreateRequest): CommandDefinition!
+    updateCommandDefinition(token: String!, request: CommandDefinitionUpdateRequest!): CommandDefinition!
     # Delete a single command definition.
     deleteCommandDefinition(token: String!): Boolean!
     # Create a new detection rule.
     createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
     # Update an existing detection rule.
-    updateDetectionRule(token: String!, request: DetectionRuleCreateRequest!): DetectionRule!
+    updateDetectionRule(token: String!, request: DetectionRuleUpdateRequest!): DetectionRule!
     # Delete a single detection rule.
     deleteDetectionRule(token: String!): Boolean!
     # Create a new geofence. Takes device:write AND location:read: a fence is a question about
@@ -1783,13 +2358,29 @@ type Mutation {
     # fence is the same question-shaping primitive as minting one. The request's `token` must
     # equal the `token` argument: a fence's token is immutable, because rules name fences by
     # token and this service cannot rewrite the rules that would be left naming nothing.
-    updateGeoFence(token: String!, request: GeoFenceCreateRequest!): GeoFence!
+    updateGeoFence(token: String!, request: GeoFenceUpdateRequest!): GeoFence!
     # Delete a single geofence. device:write alone — removing a fence constructs no question and
     # answers none, and delete-then-recreate is no way around the gate on creation.
     deleteGeoFence(token: String!): Boolean!
     # Acknowledge a raised alarm (operator action). The acknowledging identity is the
     # authenticated subject, recorded server-side — not a client-supplied value.
     acknowledgeAlarm(token: String!): Alarm!
+    # Acknowledge many raised alarms at once — the fan-out counterpart of acknowledgeAlarm, for
+    # an operator working through an alarm storm. Same authority, same transition, and the same
+    # server-side acknowledging identity.
+    #
+    # 🔑 IT IS PARTIAL. A token naming no alarm is REFUSED and named in `refusals`; every other
+    # alarm is still acknowledged. A stale selection is the normal case here — alarms are being
+    # erased and devices deleted while an operator works — so refusing the whole request over one
+    # vanished row would leave no way to make progress but to bisect the list by hand.
+    #
+    # 🔴 AN EMPTY LIST ACKNOWLEDGES NOTHING. It is not "all alarms" and never has been.
+    #
+    # At most 2000 tokens per request. Over that is a GraphQL ERROR rather than a refusal list:
+    # it is a fault in how the caller chunked its work, not a verdict about any alarm. Duplicate
+    # tokens are collapsed and both result lists come back in the order each token was first
+    # named, so the answer is a deterministic function of the request.
+    acknowledgeAlarms(tokens: [String!]!): BulkAcknowledgeAlarmsResult!
     # Clear a raised alarm (manual operator override).
     clearAlarm(token: String!): Alarm!
     # Set (upsert) an entity attribute.
@@ -1803,7 +2394,7 @@ type Mutation {
     # external-id templates and creates them all-or-nothing.
     createDevices(request: DeviceBulkCreateRequest!): [Device!]!
     # Update an existing device.
-    updateDevice(token: String!, request: DeviceCreateRequest): Device!
+    updateDevice(token: String!, request: DeviceUpdateRequest!): Device!
     # Delete a device, cascade-removing its credentials and relationship edges.
     deleteDevice(token: String!): Boolean!
     # Create a new entity group (ADR-061). A static group's members are managed over
@@ -1812,7 +2403,7 @@ type Mutation {
     createEntityGroup(request: EntityGroupCreateRequest): EntityGroup!
     # Update an existing entity group's presentation fields (member family + mode
     # are immutable).
-    updateEntityGroup(token: String!, request: EntityGroupCreateRequest): EntityGroup!
+    updateEntityGroup(token: String!, request: EntityGroupUpdateRequest!): EntityGroup!
     # Delete an entity group, its relationship edges, and its frozen versions.
     # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
     deleteEntityGroup(token: String!): Boolean!
@@ -1831,13 +2422,27 @@ type Mutation {
     # Create a new device credential.
     createDeviceCredential(request: DeviceCredentialCreateRequest): DeviceCredential!
     # Update an existing device credential.
-    updateDeviceCredential(token: String!, request: DeviceCredentialCreateRequest): DeviceCredential!
+    updateDeviceCredential(token: String!, request: DeviceCredentialUpdateRequest!): DeviceCredential!
     # Delete a single device credential.
     deleteDeviceCredential(token: String!): Boolean!
+    # Bind a NEW physical unit to an EXISTING logical device identity: retire every
+    # credential the outgoing unit could authenticate with, mint one for the
+    # incoming unit, and write an append-only record of the swap - all in one
+    # transaction. The device's history, alarms, relationships, group membership and
+    # command vocabulary carry forward because none of them are touched.
+    replaceDevice(request: DeviceReplaceRequest!): DeviceReplaceResult!
+    # Place an asset under a parent, replacing whatever parent it had. Refused when
+    # it would make an asset its own ancestor, give it a second parent, or push the
+    # tree past its depth limit. The asset's own children travel with it.
+    setAssetParent(childToken: String!, parentToken: String!): EntityRelationship!
+    # Detach an asset from its parent, making it a root. Its children travel with
+    # it. Reports whether an edge was removed, so "already a root" is
+    # distinguishable from "done".
+    clearAssetParent(childToken: String!): Boolean!
     # Create a new provisioning profile.
     createProvisioningProfile(request: ProvisioningProfileCreateRequest): ProvisioningProfile!
     # Update an existing provisioning profile.
-    updateProvisioningProfile(token: String!, request: ProvisioningProfileCreateRequest): ProvisioningProfile!
+    updateProvisioningProfile(token: String!, request: ProvisioningProfileUpdateRequest!): ProvisioningProfile!
     # Delete a single provisioning profile.
     deleteProvisioningProfile(token: String!): Boolean!
     # Open (or reopen) a possession claim on a device with a secret an eventual
@@ -1853,7 +2458,7 @@ type Mutation {
     # Create a new entity relationship type.
     createEntityRelationshipType(request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
     # Update an existing entity relationship type.
-    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeCreateRequest!): EntityRelationshipType!
+    updateEntityRelationshipType(token: String!, request: EntityRelationshipTypeUpdateRequest!): EntityRelationshipType!
     # Delete a relationship type. Refused while any edge still uses it.
     deleteEntityRelationshipType(token: String!): Boolean!
     # Create a new entity relationship.
@@ -1869,39 +2474,47 @@ type Mutation {
     # Create a new asset type.
     createAssetType(request: AssetTypeCreateRequest): AssetType!
     # Update an existing asset type.
-    updateAssetType(token: String!, request: AssetTypeCreateRequest): AssetType!
-    # Delete an asset type. Refused while any asset references it.
+    updateAssetType(token: String!, request: AssetTypeUpdateRequest!): AssetType!
+    # Delete an asset type. Refused while any asset references it; its published
+    # version history goes with it.
     deleteAssetType(token: String!): Boolean!
+    # Freeze an asset type's draft property contract into a new immutable version and
+    # make it the one its assets are validated against. Refused when the type has no
+    # draft contract to freeze.
+    publishAssetType(token: String!, label: String, description: String): AssetTypeVersion!
+    # Re-point an asset type's active version at an earlier published one. The draft
+    # is untouched and nothing is deleted, so it can be rolled forward again.
+    rollbackAssetType(token: String!, version: Int!): AssetType!
     # Create a new asset.
     createAsset(request: AssetCreateRequest): Asset!
     # Update an existing asset.
-    updateAsset(token: String!, request: AssetCreateRequest): Asset!
+    updateAsset(token: String!, request: AssetUpdateRequest!): Asset!
     # Delete an asset and its relationship edges.
     deleteAsset(token: String!): Boolean!
 
     # Create a new customer type.
     createCustomerType(request: CustomerTypeCreateRequest): CustomerType!
     # Update an existing customer type.
-    updateCustomerType(token: String!, request: CustomerTypeCreateRequest): CustomerType!
+    updateCustomerType(token: String!, request: CustomerTypeUpdateRequest!): CustomerType!
     # Delete a customer type. Refused while any customer references it.
     deleteCustomerType(token: String!): Boolean!
     # Create a new customer.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
-    updateCustomer(token: String!, request: CustomerCreateRequest): Customer!
+    updateCustomer(token: String!, request: CustomerUpdateRequest!): Customer!
     # Delete a customer and its relationship edges.
     deleteCustomer(token: String!): Boolean!
 
     # Create a new area type.
     createAreaType(request: AreaTypeCreateRequest): AreaType!
     # Update an existing area type.
-    updateAreaType(token: String!, request: AreaTypeCreateRequest): AreaType!
+    updateAreaType(token: String!, request: AreaTypeUpdateRequest!): AreaType!
     # Delete an area type. Refused while any area references it.
     deleteAreaType(token: String!): Boolean!
     # Create a new area.
     createArea(request: AreaCreateRequest): Area!
     # Update an existing area.
-    updateArea(token: String!, request: AreaCreateRequest): Area!
+    updateArea(token: String!, request: AreaUpdateRequest!): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
 }

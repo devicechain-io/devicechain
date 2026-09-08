@@ -23,7 +23,8 @@ type Documents = {
     "\n  query AiFunctions {\n    aiFunctions {\n      token\n      name\n      description\n    }\n  }\n": typeof types.AiFunctionsDocument,
     "\n  query AiFunctionAssignments($tenant: String!) {\n    aiFunctionAssignments(tenant: $tenant) {\n      function\n      provider {\n        token\n        name\n        enabled\n      }\n    }\n  }\n": typeof types.AiFunctionAssignmentsDocument,
     "\n  mutation CreateAiProvider($request: AiProviderCreateRequest!) {\n    createAiProvider(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateAiProviderDocument,
-    "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateAiProviderDocument,
+    "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateAiProviderDocument,
+    "\n  mutation RenameAiProvider($token: String!, $newToken: String!) {\n    renameAiProvider(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.RenameAiProviderDocument,
     "\n  mutation DeleteAiProvider($token: String!) {\n    deleteAiProvider(token: $token)\n  }\n": typeof types.DeleteAiProviderDocument,
     "\n  mutation GrantAiProviderToTier($tier: String!, $provider: String!) {\n    grantAiProviderToTier(tier: $tier, provider: $provider)\n  }\n": typeof types.GrantAiProviderToTierDocument,
     "\n  mutation RevokeAiProviderFromTier($tier: String!, $provider: String!) {\n    revokeAiProviderFromTier(tier: $tier, provider: $provider)\n  }\n": typeof types.RevokeAiProviderFromTierDocument,
@@ -42,7 +43,8 @@ const documents: Documents = {
     "\n  query AiFunctions {\n    aiFunctions {\n      token\n      name\n      description\n    }\n  }\n": types.AiFunctionsDocument,
     "\n  query AiFunctionAssignments($tenant: String!) {\n    aiFunctionAssignments(tenant: $tenant) {\n      function\n      provider {\n        token\n        name\n        enabled\n      }\n    }\n  }\n": types.AiFunctionAssignmentsDocument,
     "\n  mutation CreateAiProvider($request: AiProviderCreateRequest!) {\n    createAiProvider(request: $request) {\n      token\n    }\n  }\n": types.CreateAiProviderDocument,
-    "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateAiProviderDocument,
+    "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateAiProviderDocument,
+    "\n  mutation RenameAiProvider($token: String!, $newToken: String!) {\n    renameAiProvider(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n": types.RenameAiProviderDocument,
     "\n  mutation DeleteAiProvider($token: String!) {\n    deleteAiProvider(token: $token)\n  }\n": types.DeleteAiProviderDocument,
     "\n  mutation GrantAiProviderToTier($tier: String!, $provider: String!) {\n    grantAiProviderToTier(tier: $tier, provider: $provider)\n  }\n": types.GrantAiProviderToTierDocument,
     "\n  mutation RevokeAiProviderFromTier($tier: String!, $provider: String!) {\n    revokeAiProviderFromTier(tier: $tier, provider: $provider)\n  }\n": types.RevokeAiProviderFromTierDocument,
@@ -88,7 +90,11 @@ export function graphql(source: "\n  mutation CreateAiProvider($request: AiProvi
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderCreateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateAiProviderDocument;
+export function graphql(source: "\n  mutation UpdateAiProvider(\n    $token: String!\n    $request: AiProviderUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateAiProvider(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').UpdateAiProviderDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RenameAiProvider($token: String!, $newToken: String!) {\n    renameAiProvider(token: $token, newToken: $newToken) {\n      token\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RenameAiProviderDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

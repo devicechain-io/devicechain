@@ -13,6 +13,8 @@ ALTER TABLE ONLY "outbound-connectors".connectors
 ALTER TABLE ONLY "outbound-connectors".connectors ALTER COLUMN id SET DEFAULT nextval('"outbound-connectors".connectors_id_seq'::regclass);
 ALTER TABLE ONLY "outbound-connectors".outbound_connectors_migrations
  ADD CONSTRAINT outbound_connectors_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "outbound-connectors".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "outbound-connectors".secrets
  ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "outbound-connectors".secrets ALTER COLUMN id SET DEFAULT nextval('"outbound-connectors".secrets_id_seq'::regclass);
@@ -91,6 +93,12 @@ CREATE TABLE "outbound-connectors".connectors (
 );
 CREATE TABLE "outbound-connectors".outbound_connectors_migrations (
  id character varying(255) NOT NULL
+);
+CREATE TABLE "outbound-connectors".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE TABLE "outbound-connectors".secrets (
  id bigint NOT NULL,
