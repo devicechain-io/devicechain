@@ -798,6 +798,34 @@ func claimableStatusStrings() []string {
 // ResponsesRefused counter alongside, so the two stay tellable apart.
 var ErrResponderNotCommandOwner = errors.New("command response came from a device that does not own the command")
 
+// ErrCommandNotAnswerable is returned when a device's OWN answer names a command that is
+// neither terminal nor in a state a response may settle — in practice QUEUED or HELD, the
+// two live states no dispatcher is holding the row in.
+//
+// 🔴 IT EXISTS BECAUSE THE ALTERNATIVE WAS AN ANSWER THAT VANISHED WITH A SUCCESS REPORT.
+// MarkResponse's write is predicated on answerableStatusStrings(), and a non-match used to
+// be indistinguishable from a match: the function reloaded the row and returned it with a
+// nil error, so its consumer acked the message and counted it OK. The device's answer was
+// then gone, with nothing anywhere recording that it had arrived.
+//
+// 🔑 THE REACHABLE SEQUENCE IS AN ORDINARY PUBLISH FAILURE, NOT A PATHOLOGY. A dispatcher
+// claims the row (QUEUED -> SENT) and publishes; the publish reports an error; ReleaseClaim
+// correctly returns the row to QUEUED so it can be tried again. A publish error is not proof
+// nothing was delivered — a lost acknowledgement looks the same from here — so the device may
+// answer moments later, against a row that is now QUEUED.
+//
+// 🔴 IT IS TERMINAL FOR THE MESSAGE, NOT TRANSIENT, and the reason is worth stating because
+// "retry" is the instinctive reading. A redelivery finds one of two things. Usually the row
+// is still QUEUED and the refusal simply repeats, burning the delivery budget to reach the
+// same place. Worse, the sweep may have re-dispatched it meanwhile — and the row is then
+// SENT, so the redelivered message WOULD be accepted, settling the SECOND dispatch with the
+// FIRST dispatch's answer. Retrying does not recover the answer; it risks mis-filing it.
+//
+// The correct disposition is therefore to record it (a dead letter and a counter) and stop,
+// rather than to drop it or to write it against a command the platform still intends to
+// deliver.
+var ErrCommandNotAnswerable = errors.New("command response names a command that is not in a state a response can settle")
+
 // answerableStatusStrings is the wire form of the states in which a DEVICE RESPONSE may
 // settle a command: the states a dispatcher has held the row in for that device.
 //
@@ -1170,13 +1198,23 @@ func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (
 // where an operator reads the cause; this column says the part the tenant needs, which is
 // that the outcome the device reported is not recoverable.
 //
-// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, AND THAT IS WHAT LETS THE WRITE-BACK
-// FILTER ON KIND ALONE. The consumer settles any command-response dead letter, whatever
-// Reason it carries; today the only producer writes ReasonExhausted, but an unprocessable
-// one would settle the same command through the same call. A sentence claiming the answer
-// was retried "after every attempt" would then be a statement about a retry that never
-// happened — so the claim is left out rather than guarded by a Reason check that a second
-// producer would have to remember to keep in step with.
+// 🔑 IT SAYS NOTHING ABOUT *WHY* THE PLATFORM GAVE UP, so it stays true for any letter that
+// reaches it. A sentence claiming the answer was retried "after every attempt" would be a
+// statement about a retry that has not necessarily happened.
+//
+// 🔴 AN EARLIER VERSION OF THIS COMMENT DREW THE OPPOSITE CONCLUSION — THAT SAYING NOTHING
+// ABOUT THE CAUSE IS WHAT LETS THE WRITE-BACK FILTER ON KIND ALONE, AND THAT A REASON CHECK
+// WAS THE FRAGILE OPTION. It named the exact sequence that followed: "an unprocessable one
+// would settle the same command through the same call". A second producer duly appeared —
+// the response consumer records an answer it DECLINED to write, for a command that had been
+// returned to the queue — and Kind-alone settling stamped FAILED on that command once the
+// sweep re-dispatched it, discarding the device's real answer to the new dispatch.
+//
+// What the wording of this constant can do is stay honest whatever letter arrives. What it
+// cannot do is decide whether a letter should settle a command at all: that is a property
+// of the letter's Reason, and DeadLetterWriteback now acts only on ReasonExhausted, as a
+// positive list rather than a skip — see the gate in its Handle for why the direction
+// matters.
 const ResponseLostReason = "the device answered this command and the platform could not " +
 	"record the answer; the outcome it reported is not recoverable"
 
@@ -1463,9 +1501,25 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error)
 //
 // The write is a from-state-predicated conditional UPDATE (the same shape ExpireStale
 // uses), touching only the response columns — so a response and a racing MarkSent /
-// expire / cancel never clobber each other via a stale full-row Save. RowsAffected==0
-// means the row left the answerable set between the read and the write (a late or
-// duplicate response); the current row is returned unchanged.
+// expire / cancel never clobber each other via a stale full-row Save.
+//
+// 🔴 RowsAffected==0 IS TWO OUTCOMES, AND AN EARLIER VERSION OF THIS COMMENT NAMED ONLY
+// ONE. It said the row had "left the answerable set between the read and the write (a late
+// or duplicate response)" and returned it with a nil error — which is right for a row that
+// moved FORWARD to a terminal state, and wrong for a row that was never in the answerable
+// set at all, or that went BACK to being live. The second case is reachable through an
+// ordinary publish failure: ReleaseClaim returns a claimed row to QUEUED, and a device that
+// did receive the dispatch answers a moment later. Reporting that as success discarded the
+// answer with nothing recording it had arrived.
+//
+// So the non-match is now INSPECTED, and the two are separated by re-reading the row:
+//
+//   - terminal now -> benign. The command was settled between the read and the write, by a
+//     duplicate response, an expiry or a cancel. Same outcome as the fast path above: the
+//     current row is returned with no error.
+//   - still live -> ErrCommandNotAnswerable. A device answered a command no dispatcher is
+//     holding for it. Nothing is written — see that sentinel for why this is terminal for
+//     the message rather than something to retry.
 func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string, success bool,
 	payload *string, errMsg *string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{commandToken})
@@ -1520,10 +1574,49 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 	// AUTHORITATIVE guard and the in-process check is the fast path (see the terminal
 	// fast-path note above), and because the day a device_token update path does appear,
 	// the authority is already where it belongs instead of being remembered.
-	if res := api.RDB.DB(ctx).Model(&Command{}).
+	//
+	// 🔴 THAT SENTENCE USED TO BE AN ASSERTION THIS CODE DID NOT KEEP. A guard is only
+	// authoritative if its verdict is READ: this write inspected res.Error and never
+	// res.RowsAffected, so a predicate that matched nothing returned the reloaded row and a
+	// nil error — success, to every caller. It is the one write in this file that did not
+	// check (its eighteen siblings do), and the block below is what makes the claim true.
+	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("id = ? AND device_token = ? AND status IN ?", found.ID, responder, answerableStatusStrings()).
-		Updates(updates); res.Error != nil {
+		Updates(updates)
+	if res.Error != nil {
 		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		// Re-read rather than trusting `found`: the whole question is where the row is NOW,
+		// and `found` is the snapshot the predicate has already been shown to disagree with.
+		current, err := api.loadCommand(ctx, found.ID)
+		if err != nil {
+			return nil, err
+		}
+		if CommandStatus(current.Status).Terminal() {
+			// Settled between the read and the write. Indistinguishable from the late /
+			// duplicate response the fast path above returns, and handled the same way.
+			return current, nil
+		}
+		// 🔑 BOTH STATUSES ARE IN THE MESSAGE, AND ONE OF THEM WOULD CONTRADICT IT. The
+		// status at the write is what separates the causes an operator acts on — QUEUED
+		// says a dispatch was released and this is probably its answer, HELD says the
+		// platform is waiting on presence — and neither can be re-derived later, because by
+		// the time the dead letter is read the row has moved again.
+		//
+		// 🔴 THE STATUS NOW CAN BE AN ANSWERABLE ONE, WHICH IS WHY IT IS NOT REPORTED
+		// ALONE. If a dispatcher re-claims the row between the failed UPDATE and this
+		// re-read, `current` reads SENT — and a message saying a command "is not in a state
+		// a response can settle, which is SENT" contradicts itself for whoever reads it.
+		//
+		// 🔑 REFUSING IS STILL RIGHT IN THAT CASE, AND DELIBERATELY SO. A SENT row here is
+		// a NEW dispatch under a new nonce; this answer belongs to the one that was
+		// released. Accepting it because the row happens to be answerable again would
+		// settle the second dispatch with the first dispatch's answer, which is the precise
+		// mis-filing ErrCommandNotAnswerable's own note gives as the reason not to retry.
+		return nil, fmt.Errorf("%w: device %q answered command %q, which the platform was not "+
+			"holding for it: the command read %s when the answer was written and reads %s now",
+			ErrCommandNotAnswerable, responder, commandToken, found.Status, current.Status)
 	}
 	return api.loadCommand(ctx, found.ID)
 }
