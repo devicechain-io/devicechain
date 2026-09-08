@@ -951,10 +951,17 @@ func canonicalizePolygon2D(raw json.RawMessage) (json.RawMessage, int, error) {
 		// it describes bounds an area at all, and it is the same predicate the
 		// detection engine applies when it compiles the fence.
 		//
-		// 🔴 Placed HERE deliberately: after the range checks above, which is what
-		// keeps out-of-range degrees away from the spherical conversion, and after
-		// the position budget above, which is what keeps the quadratic scan off
-		// rings too big to store.
+		// 🔴 Placed HERE deliberately, but the reason is no longer that the checks
+		// above are load-bearing for it. ValidateClosedRing range-checks for itself
+		// now, so out-of-range degrees are kept away from the spherical conversion
+		// whichever order these run in. What the order buys is the MESSAGE: the
+		// checks above name the ring AND the position, where core/geo is handed one
+		// ring and can only say "position N". Running first is what keeps the better
+		// wording, and TestOutOfRangeGeometryCoordinatesNameTheirRingAndPosition
+		// is what notices if that stops being true.
+		//
+		// The position budget above is still a genuine precondition: it is what keeps
+		// the quadratic crossing scan off rings too big to store.
 		//
 		// Until this existed, a bow-tie saved cleanly and failed only later, when a
 		// rule named the fence — so the author learned at detection time about a
