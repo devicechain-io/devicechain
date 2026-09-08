@@ -180,6 +180,26 @@ type CommandDeliveryProcessor struct {
 	// someone for, and neither is visible anywhere else.
 	ResponsesRefused prometheus.Counter
 
+	// ResponsesNotAnswerable counts device responses that named a command the platform
+	// could not settle from: the responder OWNS the command, but the row is neither
+	// terminal nor in a state a dispatcher is holding it in — QUEUED or HELD.
+	//
+	// 🔴🔴 IT IS A PLAIN COUNTER, NOT A VECTOR, AND THAT IS THE POINT OF IT. A CounterVec
+	// gathers nothing until a label combination is first used, so on an instance where this
+	// has never happened there would be no series at all — and a rule alerting on it could
+	// not fire, on exactly the instances where the first occurrence is the thing worth
+	// hearing about. A plain counter is registered at construction and exports 0 from the
+	// first scrape, so "this has never happened" and "nothing is reporting" stay tellable
+	// apart. Same reasoning ClaimsLost's zero-warm loop below is written for.
+	//
+	// 🔑 IT IS NOT ResponsesRefused, and folding the two would lose the distinction that
+	// decides what to do about it. A refused response is a device answering for SOMEBODY
+	// ELSE'S command — an identity problem. This is the right device giving a real answer
+	// the platform has no live row to put it against, which is a DELIVERY problem: the
+	// ordinary way to reach it is a publish that reported an error, after which the command
+	// is returned to the queue while the device may already have run it.
+	ResponsesNotAnswerable prometheus.Counter
+
 	// dead records a device response that could not be recorded against its command
 	// (ADR-024). Nil when no dead-letter writer is configured, in which case the response
 	// is dropped as it was before.
@@ -281,6 +301,13 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 			"Device responses rejected because the publishing device does not own the command "+
 				"they name. Expected to be zero: either a device is answering for another device, "+
 				"or dispatch addressed a command to the wrong one", nil),
+		ResponsesNotAnswerable: ms.NewCounter("command_delivery_responses_not_answerable_total",
+			"Answers from a command's OWN device that named a command the platform could not "+
+				"settle from, because the row was queued or held rather than dispatched. The "+
+				"ordinary cause is a publish that reported an error and returned the command to "+
+				"the queue while the device had in fact received it, so a standing rate here also "+
+				"means those commands are being dispatched a second time. Each one is written to "+
+				"the dead-letter stream rather than dropped", nil),
 	}
 
 	cproc.NudgeMetrics = NudgeMetrics{
@@ -843,13 +870,47 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 			done(core.ResultInvalid)
 			return false
 		}
+		// The device owns the command, but the command is not in a state its answer can
+		// settle — the platform holds it QUEUED or HELD. TERMINAL, and RECORDED rather than
+		// dropped: this is a real answer from the right device, and the reason there is no
+		// live row to put it against is usually that a publish reported an error and the
+		// command was returned to the queue, which means it is also about to go out again.
+		//
+		// 🔴 IT IS DEAD-LETTERED WHERE THE REFUSED-RESPONSE PATH ABOVE IS NOT, and the
+		// difference is ownership. That path declines a claim from a device the command does
+		// not belong to, and filing it under the command's tenant would record one device's
+		// message as another's answer. Here the responder IS the command's device, so the
+		// letter says exactly what happened.
+		//
+		// 🔑 NOT RETRIED, AND THE REASON IS NOT ONLY COST. See ErrCommandNotAnswerable: a
+		// redelivery usually meets the same refusal, and when it does not it is because the
+		// row has been re-dispatched meanwhile — so it would settle the new dispatch with the
+		// old dispatch's answer.
+		if errors.Is(err, model.ErrCommandNotAnswerable) {
+			incr(cproc.ResponsesNotAnswerable, 1)
+			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
+				Str("correlation", msg.CorrelationID()).
+				Msg("A device answered a command the platform is not holding for it; recording the " +
+					"answer as a dead letter rather than discarding it.")
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonUnprocessable,
+				"a device answered a command the platform was not holding for it — the command had "+
+					"been returned to the queue or withheld — so the answer could not be recorded "+
+					"against it and the command may be dispatched again")
+			_ = msg.Ack()
+			done(core.ResultFailed)
+			return false
+		}
 		// Treat a failed persist as transient. Leave it unacked to retry until
 		// the redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
 				Msg("dead-lettering command response after maximum delivery attempts")
-			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err)
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonExhausted,
+				"a device answered a command and the answer could not be recorded against "+
+					"it after every attempt, so the command still looks unanswered")
 			_ = msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -1067,17 +1128,25 @@ func (cproc *CommandDeliveryProcessor) ExecuteTerminate(context.Context) error {
 // deadLetterResponse records a device's answer that could not be written against its
 // command.
 //
-// 🔴 IT RUNS ONLY AT THE REDELIVERY CAP, so no redelivery follows whatever this consumer
-// does; leaving the message unacked would strand it rather than buy another attempt. The
-// write gets bounded in-process retries (core/deadletter), and one that still fails is
-// counted as a LOSS.
+// 🔴 NEITHER CALLER IS FOLLOWED BY A REDELIVERY, so leaving the message unacked would
+// strand it rather than buy another attempt — both ack. One runs at the redelivery cap;
+// the other on an outcome that will not change if it is tried again. The write gets
+// bounded in-process retries (core/deadletter), and one that still fails is counted as a
+// LOSS.
 //
-// 🔑 THE REFUSED-RESPONSE PATH ABOVE IS NOT DEAD-LETTERED, and the distinction is the
-// point of having two. A response from a device that does not own the command is not work
+// 🔑 THE REASON AND SUMMARY ARE THE CALLER'S BECAUSE THE TWO CAUSES ARE NOT THE SAME
+// EVENT, and a shared "exhausted" would tell a reader of the letter the opposite of what
+// happened in one of them. ReasonExhausted means the platform tried and could not finish;
+// ReasonUnprocessable means it looked at the work and found something it can never
+// complete. A device answering a command that has been returned to the queue is the second:
+// no number of attempts would have recorded it.
+//
+// 🔑 THE REFUSED-RESPONSE PATH IS NOT DEAD-LETTERED AT ALL, and the distinction is the
+// point of having it. A response from a device that does not own the command is not work
 // the platform accepted and failed to finish — it is a claim it declined, and recording it
 // under the command's tenant would file another device's message as that command's answer.
 func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, msg messaging.Message,
-	command string, cause error) {
+	command string, cause error, reason deadletter.Reason, summary string) {
 	if cproc.dead == nil {
 		return
 	}
@@ -1086,11 +1155,10 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		detail = cause.Error()
 	}
 	err := cproc.dead.Write(ctx, deadletter.Envelope{
-		Kind:   deadletter.KindCommandResponse,
-		Reason: deadletter.ReasonExhausted,
-		Source: cproc.area,
-		Summary: "a device answered a command and the answer could not be recorded against " +
-			"it after every attempt, so the command still looks unanswered",
+		Kind:        deadletter.KindCommandResponse,
+		Reason:      reason,
+		Source:      cproc.area,
+		Summary:     summary,
 		Detail:      detail,
 		Attempts:    msg.NumDelivered,
 		Subject:     msg.Subject,
