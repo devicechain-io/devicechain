@@ -818,13 +818,14 @@ caveat above continues to apply to them and only to them.
 
 ### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
 
-`v0.15.0` is a plain `helm upgrade` from `v0.14.x`. Six new migrations run themselves as the
+`v0.15.0` is a plain `helm upgrade` from `v0.14.x`. The new migrations run themselves as the
 services start, there is nothing to recreate, and no data needs moving by hand.
 
 The breaking changes are in the **API** and in **outbound network access**, not in the upgrade
 itself. If you run the platform and drive it through the console, there is nothing here for you
-to do. The three sections below are for people who call the API directly, who send notifications
-through something inside their own network, or who run the MCP server.
+to do. The sections below are for people who call the API directly, who send notifications
+through something inside their own network, who run the MCP server, or who have customised
+`event-sources` configuration.
 
 #### Update operations no longer replace the whole record
 
@@ -910,11 +911,17 @@ Two changes need action, and one of them stops the service from starting:
   terminate ingress yourself, add a route** for the `/.well-known/` prefix that does not rewrite
   the path.
 
-#### One configuration key was removed
+#### Two configuration keys were removed, and they behave differently
 
-A `debug` key inside an `eventSources` entry is no longer accepted. Configuration is validated
-strictly, so leaving it in place **stops the service from starting** with an error naming the
-field. Remove it. This is the only key removed in this release.
+- **`debug`, inside an `eventSources` entry.** Configuration is validated strictly, so leaving
+  this in place **stops `event-sources` from starting**, with an error naming the field. Remove it.
+- **`inboundEventBatching` and its `maxBatchSize` / `batchTimeoutMs`.** This one is retired rather
+  than rejected: it is stripped at load with a warning, so the service starts normally. Remove it
+  at your convenience.
+
+The difference is not arbitrary — a key that is retired is one we can still recognise by name, so
+it can be dropped for you. A key nested inside a list entry cannot be, which is why the first one
+has to stop the service instead.
 
 #### Also in this release
 

@@ -873,15 +873,15 @@ derivación antigua, así que la advertencia anterior sigue aplicando a ellas y 
 
 ### v0.15.0 — las actualizaciones dejan de borrar lo que no envió {#v0150-upgrade}
 
-`v0.15.0` es una actualización `helm upgrade` normal desde `v0.14.x`. Seis migraciones nuevas se
+`v0.15.0` es una actualización `helm upgrade` normal desde `v0.14.x`. Las migraciones nuevas se
 ejecutan solas al arrancar los servicios, no hay nada que recrear y ningún dato debe moverse a
 mano.
 
 Los cambios incompatibles están en la **API** y en el **acceso de red saliente**, no en la
 actualización en sí. Si administra la plataforma y la maneja desde la consola, aquí no hay nada
 que deba hacer. Las secciones siguientes son para quienes llaman a la API directamente, quienes
-envían notificaciones a través de algo dentro de su propia red, o quienes ejecutan el servidor
-MCP.
+envían notificaciones a través de algo dentro de su propia red, quienes ejecutan el servidor MCP,
+o quienes han personalizado la configuración de `event-sources`.
 
 #### Las actualizaciones ya no reemplazan el registro completo
 
@@ -897,7 +897,7 @@ actualizar y renombrar son operaciones distintas, y ahora existen mutaciones `re
 para los cuatro tipos que lo necesitan. Por tanto, una aplicación que llame a la API directamente
 debe **quitar el nombre de sus peticiones de actualización y regenerar su código cliente.**
 
-**Una petición con la forma antigua se rechaza por completo**, con un error que nombra el campo
+**Una petición con la forma antigua se rechaza de plano**, con un error que nombra el campo
 que ya no se acepta. No se aplica a medias y no falla en silencio: se entera en la primera
 llamada, y no a partir de un registro que ha perdido la mitad de su contenido.
 
@@ -910,7 +910,7 @@ Tenga en cuenta que no todos los campos aceptan `null`: algunos son obligatorios
 un error específico. Son campos que nunca podrían borrarse legítimamente.
 :::
 
-:::danger Un detalle afilado que conviene conocer
+:::danger Un caso delicado que conviene conocer
 Si construye una petición de actualización enlazando una **variable distinta por campo**, una
 variable que no suministre llega como **null explícito** en lugar de como campo ausente — y null
 explícito significa *borra esto*. En el campo `rules` de una política de notificación eso vacía
@@ -965,29 +965,36 @@ Dos cambios requieren acción, y uno de ellos impide que el servicio arranque:
   una dirección que nunca terminaba de coincidir. Antes se aceptaba y luego fallaba de forma
   silenciosa; ahora falla de forma visible al arrancar. Quite la barra.
 - **Los metadatos de recurso protegido han cambiado de ubicación**, a la que define la
-  especificación, con el segmento well-known entre el host y la ruta. El chart la enruta por
+  especificación, con el segmento well-known entre el host y la ruta. El chart los enruta por
   usted. **Si usted mismo termina el ingress, añada una ruta** para el prefijo `/.well-known/` que
   no reescriba la ruta.
 
-#### Se ha eliminado una clave de configuración
+#### Se han eliminado dos claves de configuración, y se comportan de forma distinta
 
-La clave `debug` dentro de una entrada de `eventSources` ya no se acepta. La configuración se
-valida de forma estricta, así que dejarla **impide que el servicio arranque**, con un error que
-nombra el campo. Elimínela. Es la única clave eliminada en esta versión.
+- **`debug`, dentro de una entrada de `eventSources`.** La configuración se valida de forma
+  estricta, así que dejarla **impide que `event-sources` arranque**, con un error que nombra el
+  campo. Elimínela.
+- **`inboundEventBatching` y sus `maxBatchSize` / `batchTimeoutMs`.** Esta queda retirada, no
+  rechazada: se descarta al cargar la configuración con una advertencia, así que el servicio
+  arranca con normalidad. Elimínela cuando le venga bien.
+
+La diferencia no es arbitraria: una clave retirada es una que todavía podemos reconocer por su
+nombre, de modo que podemos descartarla por usted. Una clave anidada dentro de una entrada de una
+lista no lo es, y por eso la primera tiene que detener el servicio.
 
 #### También en esta versión
 
 Los comandos se despachan ahora en el momento en que se encolan, en lugar de esperar al siguiente
 barrido, y el intervalo de ese barrido es configurable si quiere cambiar cada cuánto se ejecuta la
-red de seguridad. Las cartas muertas se pueden leer y consultar, no solo contar. Hay una vista de
+red de seguridad. Los mensajes no entregados (dead letters) se pueden leer y consultar, no solo contar. Hay una vista de
 informes a la que puede apuntar una herramienta de BI. Los activos incorporan jerarquía
 padre/hijo y un contrato de propiedades documentado, los dispositivos incorporan una operación de
-sustitución, las alarmas incorporan confirmación masiva, y un inquilino puede elegir el idioma con
+sustitución, las alarmas incorporan reconocimiento masivo, y un inquilino puede elegir el idioma con
 el que abre su consola.
 
 Los paquetes npm publicados y el SDK para .NET/Unity no llevan cambios de código en esta versión.
 Ahora bien, si su propio código envía mutaciones de actualización a través de ellos, ese código sí
-es suyo para regenerar.
+tendrá que regenerarlo usted.
 
 ### La transición única a la ingesta duradera
 

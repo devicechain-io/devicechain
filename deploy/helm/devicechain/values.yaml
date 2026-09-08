@@ -1122,7 +1122,16 @@ functionalAreas:
     # release rather than for the one area that cannot take it. Pinning it here means the
     # global setting means what it says everywhere it can; the area guard in
     # deployment.yaml stays as the backstop for anyone who sets THIS value above 1.
+    #
+    # strategy IS PINNED FOR THE SAME REASON, and pinning replicas without it would have
+    # left the defect half-fixed. The default RollingUpdate carries maxSurge:1, so every
+    # mcp rollout stands the new pod up BEFORE retiring the old one — two serving pods,
+    # which is exactly the condition described above, arriving on every deploy rather than
+    # only when someone scales. Recreate takes a brief gap instead: mcp sessions do not
+    # survive a restart either way, so the gap costs what the surge would have cost anyway,
+    # without the window where half of every client's requests miss their session.
     replicas: 1
+    strategy: Recreate
     config: {}
       # resourceUrl: https://<host>/api/mcp
       # issuerUrl: https://<host>/api/user-management
