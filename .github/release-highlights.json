@@ -30,14 +30,9 @@
     "The other correction: there is no docs banner. Nothing under docs/ fetches releases.json.",
     "The website download menu is this file's only consumer.",
     "",
-    "🔴 ONE MORE THING, AND IT IS THE HUMAN HALF OF A GATE. For each highlight you write",
-    "above, ask: does this make a sentence on devicechain.io wrong? The site is a separate",
-    "repo, nothing in the release reads its prose, and it drifted for three releases before",
-    "anyone looked. hack/check-website-claims.sh catches what a machine can settle -- package",
-    "names, connector types, the rule-kind count, doc links -- and cannot see prose at all.",
-    "This question is the part it cannot do, it is scoped to the delta rather than the page,",
-    "and it belongs to whoever just wrote the highlights because they already know what",
-    "changed. Answering 'no site impact' is a perfectly good answer; not asking is not."
+    "For each highlight, ask whether it makes a sentence on the marketing site stale. The",
+    "site is a separate repository and nothing here reads its prose. Answering \"no site",
+    "impact\" is a fine answer; not asking is not."
   ],
   "version": "v0.15.0",
   "breaking": true,

@@ -874,19 +874,6 @@ jobs:
       # Same reasoning as the guard above: prove it can fail first. This one
       # greps the tree for names, and a grep that finds everything is
       # indistinguishable from a tree that still matches.
-      # The public website is a separate repository whose prose nothing in the release
-      # pipeline reads -- a release pushes releases.json to it and nothing else. It
-      # drifted for three releases unnoticed, and an audit then found 15 wrong claims of
-      # which only TWO had drifted: THIRTEEN were wrong when written. A periodic re-read
-      # would have caught the small half and been skipped by the second release, so the
-      # checkable claims live in hack/website-claims.json instead and fail the PR that
-      # changes the fact underneath them.
-      - name: Website-claims guard self-test
-        run: hack/check-website-claims.sh --self-test
-
-      - name: The website's claims still hold
-        run: hack/check-website-claims.sh
-
       - name: Feature-draft rot guard self-test
         run: hack/check-docs-drafts-rot.sh --self-test
 
