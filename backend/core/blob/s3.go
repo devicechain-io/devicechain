@@ -126,6 +126,10 @@ func (s *s3Store) Put(ctx context.Context, key Key, r io.Reader, opts PutOptions
 	if err != nil {
 		return Ref{}, err
 	}
+	// Same up-front refusal as the filesystem backend; see checkContentTypeMatchesExt.
+	if err := checkContentTypeMatchesExt(key.ID, opts.ContentType); err != nil {
+		return Ref{}, err
+	}
 	// Buffer bounded by the ceiling so we can enforce MaxSize and hand PutObject a
 	// known-length, seekable body (required for signing without a chunked upload).
 	bounded := opts.MaxSize > 0

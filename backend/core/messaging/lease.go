@@ -49,12 +49,11 @@ var (
 	// error is why it is a sentinel.
 	ErrLeaseHeld = errors.New("messaging: partition lease already held by another owner")
 	// ErrNotHolder is returned once this lease is DEFINITIVELY no longer ours — its
-	// validity window (last successful renewal + TTL) has elapsed, or a live read
-	// shows a different owner, or it was released. The caller must stop consuming
-	// and tear down its keyed state (ADR-070 M3 self-eviction), then RELEASE this
-	// lease and Acquire a fresh one to recover (Release clears our own now-stale
-	// entry so the re-Acquire is not blocked by it). A single failed Renew is NOT
-	// this: see Renew.
+	// validity window (last successful renewal + TTL) has elapsed, or it was released.
+	// The caller must stop consuming and tear down its keyed state (ADR-070 M3
+	// self-eviction), then RELEASE this lease and Acquire a fresh one to recover
+	// (Release clears our own now-stale entry so the re-Acquire is not blocked by it).
+	// A single failed Renew is NOT this: see Renew.
 	ErrNotHolder = errors.New("messaging: lease is no longer held by this owner")
 	// ErrStaleEpoch is returned by Fence.RejectIfStale for a downstream write whose
 	// epoch predates the newest owner seen for the partition (ADR-070 decision 4b).
@@ -166,9 +165,24 @@ func (l *DistributedLease) PriorOwnerReleasedCleanly(partition string) bool {
 }
 
 // Lease is one acquired ownership of a partition. It is safe for concurrent use by
-// a single KeepAlive renewer goroutine alongside a processing loop calling
-// AmITheHolder — do NOT call Renew from more than one goroutine (KeepAlive is that
-// goroutine).
+// a KeepAlive renewer goroutine alongside a processing loop gating on WatchHolder's
+// Holder.
+//
+// ONE renewer is the intended shape (KeepAlive is that goroutine), but since renewMu
+// began serializing the whole read-rev/write/store-rev sequence, that is DESIGN
+// INTENT rather than a correctness constraint: a second concurrent Renew now waits
+// and then reads the revision the first stored, so its CAS lands rather than losing
+// to a revision it never saw. This comment used to say "do NOT call Renew from more
+// than one goroutine" and meant it — before renewMu, two renewers could read the same
+// rev and one would take a CAS failure indistinguishable from a takeover.
+//
+// Holder.Held() is the ONLY supported way to ask "do I still own this?" on a
+// processing loop, and the reason is a performance one that a second, more obvious
+// spelling would quietly break: Held() answers from an atomic flag ANDed with the
+// validity window, so it never blocks and never makes a round trip, and a term
+// evaluates it once per message. A "just Get the key and compare" accessor reads
+// like the natural alternative and is not one — it puts a KV request on that path.
+// The Lease deliberately does not offer one.
 //
 // RELEASE AND RENEW ARE SERIALIZED HERE, NOT BY THE CALLER (renewMu). Both write
 // under a CAS on rev, and Renew necessarily performs its KV round trip holding the
@@ -207,17 +221,24 @@ type Lease struct {
 	// would stall every gated read for as long as that request takes — up to the NATS
 	// request timeout — on each renew.
 	//
-	// The claim is about the RENEW/RELEASE paths, not a blanket one about mu:
-	// AmITheHolder does hold mu across a KV Get. It has no production callers today —
-	// the operators gate on Holder.Held(), which is why that path is the one kept
-	// round-trip-free — but if it ever gains one, its Get belongs outside mu for the
-	// same reason the Update does.
+	// The claim is now unqualified — NO Lease method holds mu across a round trip —
+	// and what enforces it is a pair of tests rather than this comment. A Lease makes
+	// exactly two KV WRITES, the two named above, and there is one test per write:
+	// TestHeldDoesNotBlockOnARenewRoundTrip and TestHeldDoesNotBlockOnAReleaseRoundTrip
+	// park one each and assert Holder.Held() still answers while it is outstanding.
+	// Both fail if that write moves under mu. A third write added to this type needs
+	// its own park-and-answer case, or it is covered by review only.
+	//
+	// Writes, not round trips, is the right count to check against: WatchHolder and the
+	// rebind in Holder.run also make one (kv.Watch creates a consumer). Neither takes
+	// mu, so the claim above holds for them too — but a reader auditing "two" against
+	// the source should be counting the CAS writers, or the number will not add up.
 	//
 	// LOCK ORDER IS renewMu THEN mu, NEVER THE REVERSE. Only Renew and Release take
 	// renewMu, and each takes it first and releases it by defer; every other path
-	// (AmITheHolder, stillValid, Holder.Held) takes mu alone and never reaches for
-	// renewMu, so the two cannot cycle. A path holding mu across a round trip can
-	// therefore make a renewMu holder WAIT, but never deadlock it.
+	// (stillValid, Holder.Held) takes mu alone and never reaches for renewMu, so the
+	// two cannot cycle. Were a path ever to hold mu across a round trip it could make a
+	// renewMu holder WAIT, but still never deadlock it.
 	renewMu sync.Mutex
 
 	// afterUpdate, when non-nil, is called by Renew after the KV Update has RETURNED
@@ -300,8 +321,8 @@ func (lease *Lease) Renew() error {
 // once (which, together with re-Acquire hitting our own not-yet-expired entry,
 // would be a fleet-wide, TTL-long outage). Only once the window has elapsed with
 // no successful renewal is loss certain. On a genuine takeover, renewals keep
-// failing and this converges within one TTL; the processing loop's AmITheHolder
-// check catches a live takeover sooner.
+// failing and this converges within one TTL; the Holder watch (WatchHolder) sees a
+// successor's Put and flips the gate sooner.
 func (lease *Lease) KeepAlive(ctx context.Context, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -317,49 +338,13 @@ func (lease *Lease) KeepAlive(ctx context.Context, interval time.Duration) error
 	}
 }
 
-// AmITheHolder reports whether this lease still owns its partition. The active
-// owner must call it every read-loop iteration (or batch) and tear down its
-// consumer and keyed state the instant it returns false (ADR-070 M3): the epoch
-// fence stops a stale WRITE, but only self-eviction stops a zombie owner from
-// going on consuming half of a shared durable substream.
-//
-// A LIVE read that shows a different owner (or a vanished entry) is definitive
-// loss → false. A read we cannot complete (a NATS blip) is NOT: we still hold the
-// lease until our validity window elapses, so within it we report true — the same
-// ride-out KeepAlive does, and for the same reason. Only a transient failure PAST
-// the window reports loss.
-func (lease *Lease) AmITheHolder() (bool, error) {
-	lease.mu.Lock()
-	defer lease.mu.Unlock()
-	if lease.released {
-		return false, nil
-	}
-	entry, err := lease.kv.Get(lease.key)
-	if errors.Is(err, nats.ErrKeyNotFound) {
-		return false, nil // definitively gone (expired or deleted)
-	}
-	if err != nil {
-		// Transient: cannot confirm right now. We still hold it until the window
-		// elapses; past that, loss is certain.
-		if lease.stillValidLocked() {
-			return true, nil
-		}
-		return false, err
-	}
-	// Only our own uuid means we still hold it — and while we do, no one else could
-	// have Created (Create fails on an existing key), so no higher epoch exists.
-	return string(entry.Value()) == lease.holder, nil
-}
-
 // stillValid reports whether the lease is within its validity window: held, not
-// released, and last successfully renewed less than a TTL ago.
+// released, and last successfully renewed less than a TTL ago. It is the window half
+// of Holder.Held(), so it is evaluated per term-gated message: field reads under mu
+// only, no round trip.
 func (lease *Lease) stillValid() bool {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	return lease.stillValidLocked()
-}
-
-func (lease *Lease) stillValidLocked() bool {
 	return !lease.released && time.Since(lease.lastRenew) < lease.ttl
 }
 
@@ -369,10 +354,11 @@ func (lease *Lease) stillValidLocked() bool {
 // DistributedLock uses on release. It is idempotent (a second call is a no-op).
 //
 // Call it on BOTH the normal shutdown path and the self-eviction path (after
-// KeepAlive/AmITheHolder report loss): it clears our own now-stale entry so a
-// subsequent Acquire is not blocked by it. A returned error is informational —
-// our own hold is relinquished regardless; a transient delete failure leaves the
-// entry to age out via its TTL (the crash-path handover, no corruption).
+// KeepAlive returns ErrNotHolder or the Holder reports loss): it clears our own
+// now-stale entry so a subsequent Acquire is not blocked by it. A returned error is
+// informational — our own hold is relinquished regardless; a transient delete
+// failure leaves the entry to age out via its TTL (the crash-path handover, no
+// corruption).
 //
 // It is safe to call while a renewer is still running: renewMu makes it WAIT for an
 // in-flight Renew rather than deleting against the revision that renew is in the
@@ -481,6 +467,11 @@ type Holder struct {
 // we saw was ours AND we are inside the validity window. It is the predicate every
 // term-gated reader and the checkpoint path evaluate; it never blocks and never
 // performs a round trip, so it is safe to call per message.
+//
+// A term must tear down its consumer and its keyed state the instant this goes false
+// (ADR-070 M3 self-eviction), not merely stop writing: the epoch fence stops a stale
+// WRITE, but only self-eviction stops a zombie owner from going on CONSUMING half of
+// a shared durable substream, which no downstream fence can undo.
 func (h *Holder) Held() bool {
 	return h.mine.Load() && h.lease.stillValid()
 }

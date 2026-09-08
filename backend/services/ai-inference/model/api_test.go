@@ -41,7 +41,6 @@ func newTestApi(t *testing.T) *Api {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	// Run the REAL migrations (tables + every index + the grant FKs), then the tests
 	// below INSERT via the model types — so this also proves the migrations and the
 	// models agree on the table names ("ai_providers", "ai_provider_tier_grants",
@@ -63,6 +62,12 @@ func newTestApi(t *testing.T) *Api {
 // actually ships is what the tests build. It used to enumerate three constructors, and the
 // GA squash — which replaced them with a single baseline — is exactly the change that breaks
 // an enumeration.
+//
+// 🔴 THAT LIST ALREADY CARRIES core/secrets' SCHEMA — it is schema.Migrations[0] — so do not
+// run secrets.NewSecretStoreSchema() alongside this call. Both fixtures here used to, and
+// the second pass is an AutoMigrate over a table that already exists: gorm's migrator reads
+// its columns with a bare Table(name).Limit(1).Rows(), a statement the tenant-scope callback
+// cannot classify and now refuses outside a system context.
 func schemaMigrateAll(t *testing.T, db *gorm.DB) error {
 	t.Helper()
 	for _, m := range schema.Migrations {

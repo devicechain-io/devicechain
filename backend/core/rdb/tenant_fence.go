@@ -126,9 +126,18 @@ func RegisterTenantFence(db *gorm.DB) error {
 // registered on, so it cannot re-enter the chain it is part of.
 //
 // What it does not cover, said plainly rather than left to be discovered: a statement that
-// never builds a gorm schema. Raw Exec, and Create against a bare Table(...) with a map,
-// write rows without any callback running. The sweep itself is raw Exec, which is why it
-// still works — but it means the fence is a property of the ORM path, not of the database.
+// never builds a gorm schema. THIS fence cannot classify one — statementTenants has no
+// schema to read a tenant out of — so it does not act on it, and the sweep itself is raw
+// Exec, which is why the sweep still works. The fence is therefore a property of the ORM
+// path, not of the database.
+//
+// The OUTCOME for those statements is no longer uniform, and the difference is worth being
+// exact about. Raw Exec runs on gorm's Raw processor, where no callback of ours is
+// registered at all, so it writes its rows unchallenged. A Create against a bare Table(...)
+// with a map does reach a callback: the tenant-scope predicate one hook earlier now refuses
+// it outright with ErrUnscopedStatement (see RegisterTenantScoping), so under a tenant
+// context it never gets as far as this fence. What stays true is the sentence about THIS
+// callback — it still cannot classify that shape, and it is still not the thing stopping it.
 //
 // Going through gorm rather than issuing raw SQL on the connection pool is not
 // convenience. The table reference comes from the NamingStrategy, which is where the

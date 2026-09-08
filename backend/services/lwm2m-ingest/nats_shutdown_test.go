@@ -86,16 +86,16 @@ func TestMain(m *testing.M) {
 // identitySeq makes every microservice identity in this file unique within the test
 // binary.
 //
-// NewNatsManager registers the stream-metrics gauges through promauto against the
-// GLOBAL default registry, keyed by the functional area, and nothing unregisters
-// them — so two managers built with the same area panic with "duplicate metrics
-// collector registration". A fixed area would pass under `go test` and panic under
-// `-count=2`, which is the kind of test that works until someone reruns it. The
-// instance id rides along because it names the shared lease bucket, so a unique one
-// keeps each test's lease state to itself.
+// What it is still needed FOR is the lease: the instance id names the shared lease
+// bucket, so a unique one keeps each test's lease state to itself.
 //
-// core/messaging/lifecycle_durability_test.go carries the same helper for the same
-// reason; it lives in a _test.go file, so it is not reachable from here.
+// ⚠️ It was written for a second reason that no longer exists, and the difference is
+// worth stating. NewNatsManager used to register its stream-metrics gauges against the
+// process-global default registry, keyed by the functional area, so two managers built
+// with the same area panicked with "duplicate metrics collector registration" — a test
+// that passed under `go test` and blew up under `-count=2`. A Microservice registers
+// into a registry it owns now, so a fixed area is no longer a hazard, and this helper
+// no longer has to be re-derived by every service that writes its first such test.
 var identitySeq atomic.Int64
 
 func uniqueIdentity(prefix string) string {

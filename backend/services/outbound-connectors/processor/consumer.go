@@ -481,21 +481,36 @@ const connectorsArea = "outbound-connectors"
 
 // indexReasonFor maps this service's terminal outcome onto the platform's bounded reason vocabulary.
 //
+// 🔴 EVERY OUTCOME GETS AN EXPLICIT CASE, AND THE DEFAULT CLAIMS NOTHING. deadletter.ReasonExhausted
+// is not a neutral "says nothing about the cause" value: it is the one reason for which
+// Reason.WorkWasAttempted answers TRUE, which is what tells a consumer it may SETTLE state on the
+// letter. Returning it for an outcome nobody has classified is the skip-list shape that method's
+// contract forbids — an outcome added later would assert "we attempted this and lost it" on the
+// strength of nobody having thought about it. So the default returns a not-attempted reason and an
+// unclassified outcome is inert until someone classifies it.
+//
 // 🔑 THE RATE-SHED CASE IS WHY THIS IS NOT A ONE-LINER. A shed dispatch is not broken and was never
 // attempted — it is work a governed ceiling refused — so reporting it as "exhausted" would send an
 // operator to inspect a destination that is perfectly healthy, and reporting it as "unprocessable"
 // would call replayable work poison. It gets its own reason.
 func indexReasonFor(outcome string) deadletter.Reason {
 	switch outcome {
+	case outcomeDead:
+		// The only outcome here that describes attempted work: the send was made and remade to
+		// the redelivery cap and never succeeded.
+		return deadletter.ReasonExhausted
 	case outcomeRateLimited:
 		return deadletter.ReasonShed
-	case outcomeUnsupported, outcomeInvalid:
+	case outcomeUnsupported, outcomeInvalid, outcomeBlocked:
+		// All three are the producer looking at the dispatch and declining it. outcomeBlocked
+		// especially: the egress boundary refused the destination before a byte was written, so
+		// nothing was attempted and there is nothing for a consumer to settle.
 		return deadletter.ReasonUnprocessable
 	default:
-		// outcomeDead, and anything a later build adds without revisiting this: exhausted is the
-		// vocabulary's own "says nothing about the cause" value, which is the safe default for an
-		// outcome nobody has classified rather than a claim about it.
-		return deadletter.ReasonExhausted
+		// Anything a later build adds without revisiting this. Unprocessable is the honest
+		// not-attempted answer for an outcome that reached a terminal sink by a route nobody
+		// described — never exhausted, which would claim an attempt that may not have happened.
+		return deadletter.ReasonUnprocessable
 	}
 }
 
