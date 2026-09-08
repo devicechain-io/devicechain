@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -67,15 +68,48 @@ type CommandDeliveryProcessor struct {
 	TenantDeleted func(tenant string) bool
 
 	// ClaimsLost counts dispatches abandoned because another dispatcher claimed the
-	// command first, and ClaimsStranded counts commands left reading SENT because the
-	// publish failed AND the release failed too.
+	// command first, BY DISPATCH PATH, and ClaimsStranded counts commands left reading
+	// SENT because the publish failed AND the release failed too.
 	//
 	// 🔑 BOTH EXIST BECAUSE THEY USED TO BE SILENT. A lost claim was previously a
 	// zero-row update nobody looked at; a stranded row has no representation at all
 	// except a TIMEOUT that blames the device. Nil is tolerated (skipped) for the same
 	// reason TenantDeleted is: this struct is assembled by literal in tests.
-	ClaimsLost     prometheus.Counter
+	//
+	// 🔴🔴 THE path LABEL EXISTS BECAUSE THE DISPATCH NUDGE INVERTED THIS COUNTER'S
+	// MEANING, AND IT LANDED IN THE SAME CHANGE THAT INVERTED IT. Unlabelled, its reading
+	// was: "while nothing wrote HELD this could not happen at all, so a standing rate is
+	// the signal that two dispatch paths are overlapping." The nudge MAKES two dispatch
+	// paths the design — a nudge and a sweep tick racing for one row is the ordinary,
+	// correct case, and the CAS in MarkSent is what makes it safe — so a standing rate
+	// became normal and the overlap bug the counter was watching for became invisible
+	// underneath it. Labelling by path restores the signal: sweep-versus-nudge losses are
+	// the expected series, and a rate on ONE path with no traffic on the other is the
+	// shape that still means something is wrong. An unlabelled counter whose meaning is
+	// silently inverted by a feature is worse than no counter.
+	ClaimsLost     *prometheus.CounterVec
 	ClaimsStranded prometheus.Counter
+
+	// SweepInterval is the operator-configured cadence of the delivery sweep. ZERO MEANS
+	// "use the platform default" — read it through sweepInterval, never directly, for the
+	// same reason the fields below carry that warning: this struct is exported and
+	// assembled by literal in places the constructor never runs, so a zero here is an
+	// unset field and not an operator asking for a zero-second tick.
+	SweepInterval time.Duration
+
+	// holdInterval and strandedInterval are the cadences of the two reconcile passes,
+	// and ZERO MEANS "use the platform default" exactly as SweepInterval's zero does.
+	// Unlike SweepInterval there is no operator knob behind either — the constants in
+	// config are the only production values — so both are unexported, and the only thing
+	// that sets them is a test.
+	//
+	// 🔑 THEY EXIST FOR THE REASON runSweepTicker WAS EXTRACTED FROM ExecuteStart: a loop
+	// whose cadence nothing can reach is a loop whose SHUTDOWN nothing can drive. What has
+	// to hold at shutdown is that ExecuteStop does not return while one of these passes is
+	// still running, and a test cannot put a pass in flight at all if it must first wait
+	// out a two-minute tick.
+	holdInterval     time.Duration
+	strandedInterval time.Duration
 
 	// Presence answers, for a batch of one tenant's devices, whether dispatching to
 	// each is worth doing right now. MAY BE NIL — read it through presenceStates, never
@@ -161,6 +195,26 @@ type CommandDeliveryProcessor struct {
 	// someone for, and neither is visible anywhere else.
 	ResponsesRefused prometheus.Counter
 
+	// ResponsesNotAnswerable counts device responses that named a command the platform
+	// could not settle from: the responder OWNS the command, but the row is neither
+	// terminal nor in a state a dispatcher is holding it in — QUEUED or HELD.
+	//
+	// 🔴🔴 IT IS A PLAIN COUNTER, NOT A VECTOR, AND THAT IS THE POINT OF IT. A CounterVec
+	// gathers nothing until a label combination is first used, so on an instance where this
+	// has never happened there would be no series at all — and a rule alerting on it could
+	// not fire, on exactly the instances where the first occurrence is the thing worth
+	// hearing about. A plain counter is registered at construction and exports 0 from the
+	// first scrape, so "this has never happened" and "nothing is reporting" stay tellable
+	// apart. Same reasoning ClaimsLost's zero-warm loop below is written for.
+	//
+	// 🔑 IT IS NOT ResponsesRefused, and folding the two would lose the distinction that
+	// decides what to do about it. A refused response is a device answering for SOMEBODY
+	// ELSE'S command — an identity problem. This is the right device giving a real answer
+	// the platform has no live row to put it against, which is a DELIVERY problem: the
+	// ordinary way to reach it is a publish that reported an error, after which the command
+	// is returned to the queue while the device may already have run it.
+	ResponsesNotAnswerable prometheus.Counter
+
 	// dead records a device response that could not be recorded against its command
 	// (ADR-024). Nil when no dead-letter writer is configured, in which case the response
 	// is dropped as it was before.
@@ -172,6 +226,19 @@ type CommandDeliveryProcessor struct {
 	// the only outcome here where a device's answer disappears with no record of it.
 	ResponsesDeadLettered   prometheus.Counter
 	ResponsesDeadLetterLost prometheus.Counter
+
+	// NudgeMetrics measures the dispatch nudge — the second dispatch path, which puts a
+	// freshly enqueued command in front of a dispatcher without waiting for a sweep tick.
+	// Every field is nil-tolerant, like every counter above, because this struct is
+	// assembled by literal in tests. See NudgeMetrics for why each one is there.
+	NudgeMetrics NudgeMetrics
+
+	// nudger is the bounded queue behind that path. Unexported and built by the
+	// constructor: the queue's depth, drop policy and worker count are the design, not
+	// something a caller assembling this struct by literal should be able to restate. A
+	// literal-built processor has none, and NudgeDevice is nil-receiver safe so that the
+	// enqueue path is a no-op rather than a panic in that configuration.
+	nudger *dispatchNudger
 
 	// reconcileCursor is where the next reconcile pass resumes its walk of the withheld
 	// set. Per-pod and reset on restart, which merely restarts the walk — it is a
@@ -186,6 +253,13 @@ type CommandDeliveryProcessor struct {
 
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
+
+	// periodic tracks the background passes ExecuteStart launches, so ExecuteStop can
+	// WAIT for them rather than merely signalling them. Closing quit only asks a loop to
+	// stop; without the join, ExecuteStop returns while a pass is still mid-flight, and
+	// the caller (beforeMicroserviceStopped) goes straight on to close the database pool
+	// underneath it. See ExecuteStop.
+	periodic sync.WaitGroup
 }
 
 // NewCommandDeliveryProcessor creates a new command delivery processor.
@@ -207,8 +281,12 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		metrics:                ms.NewProcessorMetrics("response"),
 		TenantDeleted:          tenantDeleted,
 		Presence:               presenceReader,
-		ClaimsLost: ms.NewCounter("command_delivery_claims_lost_total",
-			"Dispatches abandoned because another dispatcher claimed the command first", nil),
+		ClaimsLost: ms.NewCounterVec("command_delivery_claims_lost_total",
+			"Dispatches abandoned because another dispatcher claimed the command first, by the "+
+				"dispatch path that lost. \"sweep\" is the periodic pass, \"nudge\" is the dispatch "+
+				"issued when a command is enqueued; the two racing for one row is expected and safe "+
+				"(the claim is a compare-and-set), so read a rate on one path with none on the other "+
+				"rather than the total", []string{"path"}),
 		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
 			"Commands left reading SENT because their publish failed and the release failed too. "+
 				"On LwM2M the stranded reconciler re-arms these; on MQTT they still expire as "+
@@ -245,6 +323,54 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 			"Device responses rejected because the publishing device does not own the command "+
 				"they name. Expected to be zero: either a device is answering for another device, "+
 				"or dispatch addressed a command to the wrong one", nil),
+		ResponsesNotAnswerable: ms.NewCounter("command_delivery_responses_not_answerable_total",
+			"Answers from a command's OWN device that named a command the platform could not "+
+				"settle from, because the row was queued or held rather than dispatched. The "+
+				"ordinary cause is a publish that reported an error and returned the command to "+
+				"the queue while the device had in fact received it, so a standing rate here also "+
+				"means those commands are being dispatched a second time. Each one is written to "+
+				"the dead-letter stream rather than dropped", nil),
+	}
+
+	cproc.NudgeMetrics = NudgeMetrics{
+		Requested: ms.NewCounter("command_delivery_nudges_requested_total",
+			"Dispatch nudges accepted onto the enqueue-time dispatch queue, one per command "+
+				"created through createCommand (a fleet batch issues none)", nil),
+		Dropped: ms.NewCounter("command_delivery_nudges_dropped_total",
+			"Dispatch nudges discarded because the queue was full. A LATENCY signal, not an error "+
+				"rate: the command still goes out on the delivery sweep, which is the net under "+
+				"every nudge", nil),
+		Declined: ms.NewCounterVec("command_delivery_nudges_declined_total",
+			"Dispatch nudges the drain refused to act on, by reason. A high and steady "+
+				"reason=\"not_sole\" rate is expected — the nudge stands down whenever a device has "+
+				"more than one queued command — and is not a fault", []string{"reason"}),
+		Applied: ms.NewCounter("command_delivery_nudges_applied_total",
+			"Dispatch nudges that found exactly one queued command and put it through the delivery "+
+				"gates. NOT a count of publishes: the presence gate may still hold or fail the "+
+				"command, exactly as it would on a sweep tick", nil),
+	}
+	// 🔴 THE NUDGER IS BUILT HERE AND STARTED IN ExecuteStart. Api.Nudger is bound to it
+	// while the service is still wiring up, so a command created before the processor
+	// starts must land in a buffer rather than on a nil interface — and a processor that
+	// is constructed and never started must not leak workers.
+	cproc.nudger = newDispatchNudger(cproc, cproc.NudgeMetrics)
+
+	// 🔴 EXPORT BOTH PATHS AT ZERO, BEFORE EITHER HAS LOST A CLAIM. A CounterVec gathers
+	// NOTHING until a label combination is first used, and this counter is not only read
+	// by an operator: the chart's dashboard drives its instance picker off
+	// label_values(command_delivery_claims_lost_total, namespace), chosen precisely
+	// BECAUSE it was a plain counter that exports from registration while the batch
+	// counters are vectors that stay empty until the first fleet write.
+	//
+	// Turning it into a vector without this loop would hand it exactly the defect it was
+	// picked to avoid — on any instance that has never lost a claim, which after B2's
+	// stand-down is the ordinary state, the picker would name no instance at all and the
+	// board would be unusable. It also makes "one path losing while the other is silent"
+	// readable, since a silent path is then a zero series rather than no series.
+	for _, path := range []dispatchPath{pathSweep, pathNudge} {
+		if cproc.ClaimsLost != nil {
+			cproc.ClaimsLost.WithLabelValues(string(path))
+		}
 	}
 
 	if dead != nil {
@@ -271,9 +397,150 @@ func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Contex
 		return
 	}
 	for _, batch := range groupByTenant(pending, cproc.tenantDeleted) {
-		cproc.deliverTenantBatch(ctx, batch)
+		cproc.deliverTenantBatch(ctx, batch, pathSweep)
 	}
 }
+
+// Nudger is the seam CreateCommand is bound to (model.CommandNudger). Wire it once the
+// processor exists; nothing else in this package hands the queue out.
+//
+// 🔴 IT RETURNS AN EXPLICIT nil RATHER THAN THE FIELD WHEN THERE IS NO QUEUE. `return
+// cproc.nudger` on a nil pointer produces a NON-NIL interface holding a nil pointer, so a
+// caller's `if proc.Nudger() != nil` would read true for a processor that has no queue at
+// all. Calling through it is harmless either way — NudgeDevice is nil-receiver safe — but a
+// nil check that cannot detect nil is the kind of thing a later reader builds on.
+func (cproc *CommandDeliveryProcessor) Nudger() model.CommandNudger {
+	if cproc.nudger == nil {
+		return nil
+	}
+	return cproc.nudger
+}
+
+// DrainDevice is the dispatch nudge's whole decision: one device, one tenant, dispatched
+// now rather than on the sweep's next tick — or declined.
+//
+// 🔴 WHY A SECOND DISPATCH PATH IS SAFE AT ALL, AND WHERE THE SAFETY ACTUALLY LIVES. It is
+// not the sweep lock: that exists to stop N replicas repeating one walk, and delivery is
+// documented as single-sweeper, NOT exactly-once (see sweepLocked). It is the CLAIM.
+// MarkSent is a compare-and-set that runs BEFORE the publish, so whichever of the two paths
+// reaches a row second matches zero rows, declines, and counts a lost claim. That is why
+// this must go through deliverTenantBatch/deliverCommand and must never grow a publish of
+// its own: a second way to put a message on a device's subject would be a second way to
+// actuate hardware, and the claim would no longer be standing in front of it.
+//
+// 🔴 IT DISPATCHES ONLY WHEN THE DEVICE HAS EXACTLY ONE QUEUED COMMAND, WHICH CLOSES THE
+// REORDER BETWEEN ROWS BOTH PATHS CAN SEE. Per-device ordering is a delivery guarantee — a
+// firmware update is a sequence whose order IS its meaning — and while both paths order by
+// id, two dispatchers walking one backlog can still interleave BETWEEN rows: the sweep
+// publishes row 1 while the nudge, holding a newer read, publishes row 2, and the device
+// receives them in the wrong order with nothing in either path having done anything wrong.
+// So the nudge refuses to reason about the interleaving and declines instead. What it gives
+// up is a case it was never for; what it keeps is the case that matters — one command to an
+// idle device, which is console dispatch and every REACT send-command.
+//
+// ⚠️ IT IS NOT A TOTAL ORDER GUARANTEE, AND THE GAP IS WORTH NAMING RATHER THAN IMPLYING
+// OTHERWISE. The probe selects QUEUED, so a row the sweep has CLAIMED but not yet published
+// is invisible to it, and a newer command's probe then reads "sole" and proceeds. Two
+// interleavings follow, and only the second is reachable in practice:
+//
+//   - claim then a slow publish: the nudge must still do its probe, a presence read and its
+//     own claim before publishing, so the sweep would have to stall between MarkSent and the
+//     publish for longer than all of that. Scheduler-sized; practically closed.
+//   - claim, publish FAILS, ReleaseClaim: the older row sits in SENT for the whole failed
+//     publish — seconds, up to the JetStream ack timeout — and a newer command nudged inside
+//     that window goes out first. This one is NEW with the nudge: before it, the sweep
+//     re-read the backlog in id order and the older row went first.
+//
+// That residue is the same in-flight window MarkSentByToken already documents for
+// double-publish, and closing it would need the claim to be visible to the probe — which is
+// its own change. An older HELD or PARKED row is likewise invisible here, but it was equally
+// invisible to the sweep (sweepableStatusStrings is QUEUED alone), so that is pre-existing
+// rather than widened.
+//
+// 🔑 THE SOLE-COMMAND TEST IS THE WORKER'S OWN READ, NOT SOMETHING THE ENQUEUE DECIDED. A
+// count taken inside CreateCommand would be stale by the time a worker acted on it, and
+// stale in the dangerous direction: a second command enqueued in between would be invisible
+// to a decision already made. Reading here means the answer describes the instant the
+// dispatch happens.
+//
+// 🔴 IT APPLIES THE SAME GATES THE SWEEP DOES, BY CALLING THE SAME FUNCTIONS. groupByTenant
+// carries the tenant lifecycle refusal — publishing is a physical actuation, so a command
+// queued before an operator deleted the tenant must not fire a relay on an offboarded
+// customer's hardware — and deliverTenantBatch carries the presence gate. Reimplementing
+// either here would mean a gate that holds on one dispatch path and not the other, which is
+// the same as not having it.
+func (cproc *CommandDeliveryProcessor) DrainDevice(ctx context.Context, tenant, deviceToken string) {
+	tenantCtx := core.WithTenant(ctx, tenant)
+	queued, err := cproc.Api.QueuedCommandsForDevice(tenantCtx, deviceToken, model.NudgeProbeLimit)
+	if err != nil {
+		// Fails closed: no read, no dispatch. The sweep covers it, and a retry loop here
+		// would hold a worker against an outage while the queue behind it filled.
+		incrLabel(cproc.NudgeMetrics.Declined, declineReadFailed)
+		log.Debug().Err(err).Str("tenant", tenant).Str("device", deviceToken).
+			Msg("Could not read a device's queued commands for a dispatch nudge; the delivery sweep will.")
+		return
+	}
+	if len(queued) == 0 {
+		incrLabel(cproc.NudgeMetrics.Declined, declineNothingQueued)
+		return
+	}
+	if len(queued) > 1 {
+		incrLabel(cproc.NudgeMetrics.Declined, declineNotSole)
+		return
+	}
+	// The tenant comes from the ROW, via groupByTenant, not from the request — the same
+	// source the sweep gates on, so one lifecycle check answers for both paths.
+	batches := groupByTenant(queued, cproc.tenantDeleted)
+	if len(batches) == 0 {
+		incrLabel(cproc.NudgeMetrics.Declined, declineTenantDeleted)
+		return
+	}
+	for _, batch := range batches {
+		cproc.deliverTenantBatch(ctx, batch, pathNudge)
+	}
+	incr(cproc.NudgeMetrics.Applied, 1)
+}
+
+// sweepInterval is the configured cadence, falling back to the platform default.
+func (cproc *CommandDeliveryProcessor) sweepInterval() time.Duration {
+	if cproc.SweepInterval > 0 {
+		return cproc.SweepInterval
+	}
+	return config.DefaultSweepIntervalSeconds * time.Second
+}
+
+// holdReconcileInterval is the hold-reconcile cadence, falling back to the platform
+// default. See the field for why it is settable at all.
+func (cproc *CommandDeliveryProcessor) holdReconcileInterval() time.Duration {
+	if cproc.holdInterval > 0 {
+		return cproc.holdInterval
+	}
+	return config.HoldReconcileInterval * time.Second
+}
+
+// strandedReconcileInterval is the stranded-SENT cadence, same shape.
+func (cproc *CommandDeliveryProcessor) strandedReconcileInterval() time.Duration {
+	if cproc.strandedInterval > 0 {
+		return cproc.strandedInterval
+	}
+	return config.StrandedReconcileInterval * time.Second
+}
+
+// dispatchPath names which of the two dispatch paths a delivery attempt came down.
+//
+// 🔴 IT IS AN EXPLICIT ARGUMENT AND NOT A CONTEXT VALUE OR A FIELD ON THE PROCESSOR. Both
+// paths run concurrently in one process against one processor, so a field would be a data
+// race that happened to read correctly most of the time, and a context value would make
+// the label invisible at the call site — which is where a reader has to be able to see
+// which path a publish belongs to. These are Prometheus label values, so the set is closed.
+type dispatchPath string
+
+const (
+	// pathSweep is the periodic expiry + redelivery pass, holder of the sweep lock.
+	pathSweep dispatchPath = "sweep"
+	// pathNudge is the dispatch issued when a command is enqueued (see DrainDevice).
+	pathNudge dispatchPath = "nudge"
+)
 
 // tenantBatch is one tenant's slice of a sweep tick.
 type tenantBatch struct {
@@ -329,7 +596,8 @@ func groupByTenant(pending []*model.Command, deleted func(string) bool) []tenant
 
 // deliverTenantBatch reads presence once for the tenant, then applies the gate's verdict
 // to each of its commands.
-func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, batch tenantBatch) {
+func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, batch tenantBatch,
+	path dispatchPath) {
 	tenantCtx := core.WithTenant(ctx, batch.tenant)
 	states := cproc.presenceStates(tenantCtx, distinctDevices(batch.commands))
 	for _, cmd := range batch.commands {
@@ -343,7 +611,7 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 		case presence.Undeliverable:
 			cproc.failUndeliverable(tenantCtx, cmd)
 		default:
-			if err := cproc.deliverCommand(ctx, cmd); err != nil {
+			if err := cproc.deliverCommand(ctx, cmd, path); err != nil {
 				log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 					Msg("unable to deliver command")
 			}
@@ -473,7 +741,7 @@ func incrLabel(c *prometheus.CounterVec, label string) {
 // 🔴 The cost of the fixture skipping the constructor is real and was paid: with the
 // plumbing untested, deleting `TenantDeleted: tenantDeleted` from the constructor
 // disabled the gate in every shipped binary and left the whole suite green.
-// TestConstructorWiresTheLifecycleGate is what closes that, and it is the reason this
+// TestConstructorWiresBothDeliveryGates is what closes that, and it is the reason this
 // accessor is not a licence to keep testing around the constructor.
 func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 	return cproc.TenantDeleted != nil && cproc.TenantDeleted(tenant)
@@ -490,7 +758,8 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // Claiming first inverts the risk: the failure mode becomes a row claimed but not
 // published, which ReleaseClaim returns to QUEUED for the next tick. A command delivered
 // late is recoverable; a command delivered twice is not.
-func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command) error {
+func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
+	path dispatchPath) error {
 	// Publish to the command's tenant subject and mark it SENT under the same
 	// tenant context.
 	tenantCtx := core.WithTenant(ctx, cmd.TenantId)
@@ -509,7 +778,7 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		return err
 	}
 	if !claimed {
-		incr(cproc.ClaimsLost, 1)
+		incrLabel(cproc.ClaimsLost, string(path))
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 			Msg("Another dispatcher claimed this command first; not publishing it again.")
 		return nil
@@ -640,13 +909,57 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 			done(core.ResultInvalid)
 			return false
 		}
+		// The device owns the command, but the command is not in a state its answer can
+		// settle — the platform holds it QUEUED or HELD. TERMINAL, and RECORDED rather than
+		// dropped: this is a real answer from the right device, and the reason there is no
+		// live row to put it against is usually that a publish reported an error and the
+		// command was returned to the queue, which means it is also about to go out again.
+		//
+		// 🔴 IT IS DEAD-LETTERED WHERE THE REFUSED-RESPONSE PATH ABOVE IS NOT, and the
+		// difference is ownership. That path declines a claim from a device the command does
+		// not belong to, and filing it under the command's tenant would record one device's
+		// message as another's answer. Here the responder IS the command's device, so the
+		// letter says exactly what happened.
+		//
+		// 🔑 NOT RETRIED, AND THE REASON IS NOT ONLY COST. See ErrCommandNotAnswerable: a
+		// redelivery usually meets the same refusal, and when it does not it is because the
+		// row has been re-dispatched meanwhile — so it would settle the new dispatch with the
+		// old dispatch's answer.
+		//
+		// ⚠️ "NOT RETRIED" IS A DECISION THIS CODE MAKES, NOT AN INVARIANT IT ENFORCES, and
+		// the distinction is worth writing down rather than leaving to be assumed. Nothing
+		// here can prevent a redelivery: the ack below can fail, and JetStream will then
+		// deliver the message again whatever this branch decided. That redelivery meets
+		// whatever state the row is in by then — including a re-dispatched SENT row, which
+		// it would settle with this answer. What bounds it is that the window is small and
+		// the outcome is the one already described above, not a guard. The same is true of
+		// every `_ = msg.Ack()` in this file; it is called out here because the sentence
+		// above would otherwise read as a promise.
+		if errors.Is(err, model.ErrCommandNotAnswerable) {
+			incr(cproc.ResponsesNotAnswerable, 1)
+			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
+				Str("correlation", msg.CorrelationID()).
+				Msg("A device answered a command the platform is not holding for it; recording the " +
+					"answer as a dead letter rather than discarding it.")
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonUnprocessable,
+				"a device answered a command the platform was not holding for it — the command had "+
+					"been returned to the queue or withheld — so the answer could not be recorded "+
+					"against it and the command may be dispatched again")
+			_ = msg.Ack()
+			done(core.ResultFailed)
+			return false
+		}
 		// Treat a failed persist as transient. Leave it unacked to retry until
 		// the redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
 				Msg("dead-lettering command response after maximum delivery attempts")
-			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err)
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonExhausted,
+				"a device answered a command and the answer could not be recorded against "+
+					"it after every attempt, so the command still looks unanswered")
 			_ = msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -730,6 +1043,89 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 	}
 }
 
+// runSweepTicker drives the expiry + delivery sweep on the configured cadence until the
+// processor is asked to stop.
+//
+// Extracted from ExecuteStart so the cadence is OBSERVABLE. Inline, the only thing a test
+// could reach was sweepInterval() itself — and an accessor returning the configured value
+// while the ticker was built from the package default would have scored exactly the same,
+// which is the shape where a helper is certified and its one caller is not.
+func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.sweepInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.sweepLocked(ctx)
+		}
+	}
+}
+
+// runHoldReconcileTicker drives the hold-reconcile net on its own slower cadence. It is
+// deliberately NOT folded into the sweep: the sweep's cadence is chosen for delivery
+// latency, and a walk of the accumulated withheld set has no business running at that
+// rate. Its own ticker also means a slow reconcile pass cannot delay a delivery pass.
+func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.holdReconcileInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.reconcileHolds(ctx)
+		}
+	}
+}
+
+// runStrandedReconcileTicker drives the stranded-SENT net, on its own slower cadence
+// again. Same reasoning as the hold reconciler's separate ticker, plus one of its own: a
+// row is not eligible here until it has been abandoned for StrandedSentGrace, so this
+// pass has nothing to gain from running at either of the other two cadences.
+func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.strandedReconcileInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.reconcileStranded(ctx)
+		}
+	}
+}
+
+// startPeriodic launches one background pass under the WaitGroup ExecuteStop joins.
+//
+// 🔴 THE Add MUST HAPPEN BEFORE THE `go`, AND THIS IS THE INVARIANT, NOT A STYLE NOTE.
+// sync.WaitGroup requires that an Add raising the counter from zero happen-before the Wait
+// it is meant to hold; an Add moved INSIDE the goroutine can be scheduled after Wait has
+// already seen a zero counter and returned, which is the very "ExecuteStop reports a clean
+// stop over work still running" this whole mechanism exists to prevent. Nothing enforces it
+// but this function, which is why every pass goes through it and none starts its own
+// goroutine. It is also not currently reachable from ExecuteStart — that runs
+// synchronously, so every Add completes before Start returns and long before any Stop —
+// so the guarantee rests on the ordering here rather than on the caller.
+//
+// The matching Done is deferred INSIDE the goroutine, and the pass function is a closure
+// rather than the loop method itself, so a loop stays callable directly (several tests
+// drive `go proc.runSweepTicker(ctx)`) without owning a counter it did not raise.
+func (cproc *CommandDeliveryProcessor) startPeriodic(pass func()) {
+	cproc.periodic.Add(1)
+	go func() {
+		defer cproc.periodic.Done()
+		pass()
+	}()
+}
+
 // Initialize the component.
 func (cproc *CommandDeliveryProcessor) Initialize(ctx context.Context) error {
 	return cproc.lifecycle.Initialize(ctx)
@@ -753,65 +1149,41 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// (deliver-on-reconnect semantics). Locked like the ticker's sweep: a rolling
 	// restart starts several pods at once, which is precisely when an unguarded
 	// startup pass would publish every queued command once per new pod.
-	go cproc.sweepLocked(ctx)
+	cproc.startPeriodic(func() { cproc.sweepLocked(ctx) })
 
-	// Processing loop for inbound device responses.
-	go func() {
+	// Processing loop for inbound device responses, joined like every other
+	// background goroutine here.
+	//
+	// 🔑 THE JOIN IS BOUNDED BY THE SAME ROOT CANCELLATION, plus one Fetch.
+	// messaging's reader returns io.EOF the moment its context is cancelled, so this
+	// loop unwinds on the cancel that precedes Stop rather than on anything ExecuteStop
+	// does. The one place inside ReadMessage that does not watch the context is the
+	// pull-consumer Fetch, which is capped at its own MaxWait — currently a second — so
+	// that is the worst this adds to a shutdown, and only when the cancel lands mid-fetch.
+	cproc.startPeriodic(func() {
 		for {
 			eof := cproc.ProcessMessage(ctx)
 			if eof {
 				break
 			}
 		}
-	}()
+	})
 
-	// Background expiry + redelivery ticker.
-	go func() {
-		ticker := time.NewTicker(config.RedeliveryInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.sweepLocked(ctx)
-			}
-		}
-	}()
+	// Background expiry + delivery ticker.
+	cproc.startPeriodic(func() { cproc.runSweepTicker(ctx) })
 
-	// The hold-reconcile net, on its own slower ticker. It is deliberately NOT folded
-	// into the sweep above: the sweep's cadence is chosen for delivery latency, and a
-	// walk of the accumulated withheld set has no business running at that rate. Its own
-	// ticker also means a slow reconcile pass cannot delay a delivery pass.
-	go func() {
-		ticker := time.NewTicker(config.HoldReconcileInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.reconcileHolds(ctx)
-			}
-		}
-	}()
+	// The dispatch nudge's workers. Started here rather than in the constructor so a
+	// processor that is built and never started leaks none of them, and stopped in
+	// ExecuteStop. Nudges enqueued before this point are already in the buffer and are
+	// picked up now; nudges enqueued after ExecuteStop are dropped, which costs a sweep
+	// tick of latency and nothing else.
+	cproc.nudger.Start()
 
-	// The stranded-SENT net, on its own slower ticker again. Same reasoning as the hold
-	// reconciler's separate ticker, plus one of its own: a row is not eligible here until
-	// it has been abandoned for StrandedSentGrace, so this pass has nothing to gain from
-	// running at either of the other two cadences.
-	go func() {
-		ticker := time.NewTicker(config.StrandedReconcileInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.reconcileStranded(ctx)
-			}
-		}
-	}()
+	// The two reconcile nets, each on its own slower ticker. Extracted from here for the
+	// same reason the sweep ticker was: inline, neither the cadence nor the shutdown
+	// behaviour was reachable by anything but the ticker's real interval.
+	cproc.startPeriodic(func() { cproc.runHoldReconcileTicker(ctx) })
+	cproc.startPeriodic(func() { cproc.runStrandedReconcileTicker(ctx) })
 	return nil
 }
 
@@ -821,8 +1193,37 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 }
 
 // ExecuteStop runs shutdown logic.
+//
+// The nudge queue is stopped BEFORE quit is closed, and the ordering is the same one the
+// ticker goroutines rely on in reverse: Stop waits for the workers, and a worker mid-drain
+// is holding a claim it must finish releasing or publishing. Closing quit first would not
+// interrupt it — nothing in the drain reads quit — it would merely make the wait happen
+// with less of the processor still standing.
+//
+// 🔴 IT WAITS FOR THE BACKGROUND PASSES, AND SIGNALLING THEM IS NOT THE SAME THING.
+// Closing quit stops the next pass from starting; it says nothing about the one already
+// running. The caller is beforeMicroserviceStopped, which goes on to stop the broker and
+// then the RdbManager — and the pool is closed in RdbManager.ExecuteTerminate. Without the
+// join, a pass that was mid-flight when quit closed is still issuing queries when its pool
+// closes, from a service that has already reported a clean stop. For the delivery sweep
+// that pass PUBLISHES PHYSICAL ACTUATIONS and holds Api.TrySweepLock, so the lock would be
+// held by a goroutine the lifecycle no longer tracks.
+//
+// 🔑 THE PERIODIC WAIT IS BOUNDED BY THE ROOT CANCELLATION THAT ALREADY HAPPENED, not
+// by a timeout here. Microservice shutdown cancels the root context BEFORE calling Stop,
+// and that root context is the one ExecuteStart handed to every loop, so a pass in flight
+// is already unwinding against a cancelled context by the time this wait begins. That is
+// also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
+// so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
+//
+// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
+// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
+// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
+// only one of them is answerable to the root context.
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
+	cproc.nudger.Stop()
 	close(cproc.quit)
+	cproc.periodic.Wait()
 	return nil
 }
 
@@ -839,17 +1240,25 @@ func (cproc *CommandDeliveryProcessor) ExecuteTerminate(context.Context) error {
 // deadLetterResponse records a device's answer that could not be written against its
 // command.
 //
-// 🔴 IT RUNS ONLY AT THE REDELIVERY CAP, so no redelivery follows whatever this consumer
-// does; leaving the message unacked would strand it rather than buy another attempt. The
-// write gets bounded in-process retries (core/deadletter), and one that still fails is
-// counted as a LOSS.
+// 🔴 NEITHER CALLER IS FOLLOWED BY A REDELIVERY, so leaving the message unacked would
+// strand it rather than buy another attempt — both ack. One runs at the redelivery cap;
+// the other on an outcome that will not change if it is tried again. The write gets
+// bounded in-process retries (core/deadletter), and one that still fails is counted as a
+// LOSS.
 //
-// 🔑 THE REFUSED-RESPONSE PATH ABOVE IS NOT DEAD-LETTERED, and the distinction is the
-// point of having two. A response from a device that does not own the command is not work
+// 🔑 THE REASON AND SUMMARY ARE THE CALLER'S BECAUSE THE TWO CAUSES ARE NOT THE SAME
+// EVENT, and a shared "exhausted" would tell a reader of the letter the opposite of what
+// happened in one of them. ReasonExhausted means the platform tried and could not finish;
+// ReasonUnprocessable means it looked at the work and found something it can never
+// complete. A device answering a command that has been returned to the queue is the second:
+// no number of attempts would have recorded it.
+//
+// 🔑 THE REFUSED-RESPONSE PATH IS NOT DEAD-LETTERED AT ALL, and the distinction is the
+// point of having it. A response from a device that does not own the command is not work
 // the platform accepted and failed to finish — it is a claim it declined, and recording it
 // under the command's tenant would file another device's message as that command's answer.
 func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, msg messaging.Message,
-	command string, cause error) {
+	command string, cause error, reason deadletter.Reason, summary string) {
 	if cproc.dead == nil {
 		return
 	}
@@ -858,11 +1267,10 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		detail = cause.Error()
 	}
 	err := cproc.dead.Write(ctx, deadletter.Envelope{
-		Kind:   deadletter.KindCommandResponse,
-		Reason: deadletter.ReasonExhausted,
-		Source: cproc.area,
-		Summary: "a device answered a command and the answer could not be recorded against " +
-			"it after every attempt, so the command still looks unanswered",
+		Kind:        deadletter.KindCommandResponse,
+		Reason:      reason,
+		Source:      cproc.area,
+		Summary:     summary,
 		Detail:      detail,
 		Attempts:    msg.NumDelivered,
 		Subject:     msg.Subject,

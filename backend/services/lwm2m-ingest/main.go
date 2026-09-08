@@ -35,14 +35,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
@@ -136,7 +134,7 @@ var (
 	leaderGauge     prometheus.Gauge
 
 	Lease      *messaging.DistributedLease
-	httpServer *http.Server
+	httpServer *core.HttpServer
 
 	// leadershipCancel stops the leadership loop on shutdown; leadershipDone closes when it has
 	// fully unwound (this term's Server stopped, registry timers stopped, lease released).
@@ -266,16 +264,29 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Msg("Built an inert (no-credential) LwM2M CoAP/DTLS transport; it serves the health probe only and takes no leadership lease.")
 	}
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if Microservice.Readiness.Ready() && !Microservice.Readiness.Draining() {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-	})
+	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
+	// registerHttpRoutes for why it is here and not where the server starts.
+	registerHttpRoutes()
 	return nil
+}
+
+// registerHttpRoutes mounts this service's HTTP surface — /healthz, /readyz and
+// /metrics — on the microservice's OWN mux rather than on http.DefaultServeMux.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS.
+// RegisterProbes goes through ServeMux.Handle, which panics on a duplicate pattern,
+// and LifecycleComponent's contract says ExecuteStart "may happen on startup or after
+// stop" — so registering from the start path turns a lifecycle restart into a crash.
+// Initialize runs once, which is what makes this the safe half.
+//
+// 🔴 It is also a named function rather than a line inside the initializer so a test
+// can drive the REGISTRATION ITSELF. A test that called RegisterProbes on its own
+// would be asserting against its own copy of the wiring: it would keep passing if this
+// went back to http.Handle on the default mux, which is the exact regression the
+// switchover has to prevent. The uncovered remainder is one line — that the initializer
+// calls this — because the initializer needs config, credentials and a broker.
+func registerHttpRoutes() {
+	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
 // buildMetrics creates every Prometheus instrument exactly once. All are shared across
@@ -838,13 +849,30 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// from a service that simply lost its validator — the gate refuses a bare nil.
 	Microservice.MarkReadyWithoutAuthSurface()
 
-	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
-	go func() {
-		log.Info().Int("port", httpPort).Msg("Starting LwM2M ingest HTTP server.")
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("LwM2M ingest HTTP server exited with error.")
-		}
-	}()
+	return startHttpServer(httpPort)
+}
+
+// startHttpServer builds this service's HTTP server over the microservice's own mux
+// and starts it, returning any bind failure.
+//
+// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
+// pull in opposite directions:
+//
+//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
+//     this runs again after a stop. The routes are registered once, in the initialize
+//     phase.
+//   - It builds a new server because an http.Server cannot be restarted: Shutdown
+//     latches its shuttingDown flag permanently, so reusing one would bind and then
+//     serve nothing.
+//
+// The port is a parameter so a test can ask for an ephemeral one rather than racing
+// whatever holds 8080.
+func startHttpServer(port int32) error {
+	httpServer = Microservice.NewHttpServer(port)
+	if err := httpServer.Start(); err != nil {
+		return err
+	}
+	log.Info().Str("addr", httpServer.Addr()).Msg("Started LwM2M ingest HTTP server.")
 	return nil
 }
 
@@ -893,8 +921,9 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	// term build: buildTerm's epoch floor read can take up to reconcileQueryTimeout per bound tenant
 	// against a slow device-state — exactly the correlated state during a failover — and renewal
 	// must not wait that out or the first renew lands past the TTL and the pod churns evict/rebuild.
-	// keepaliveDone closes when the renewer has stopped, so the release below does not race an
-	// in-flight Renew (a lost CAS there would strand the lease for a TTL on an otherwise clean exit).
+	// keepaliveDone closes when the renewer has stopped. The release below does not depend on that
+	// to order its revision CAS — Lease.Release serializes against an in-flight Renew itself — but
+	// evict still joins on it so the renewer, which is term-scoped, does not outlive the term.
 	keepaliveDone := make(chan struct{})
 	go func() {
 		defer close(keepaliveDone)
@@ -1085,7 +1114,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // beforeMicroserviceStopped drains readiness, unwinds leadership (self-evict: stop the transport
-// and registry timers, release the lease) or the inert transport, and shuts the HTTP server down.
+// and registry timers, release the lease) or the inert transport, stops the NATS manager, and
+// shuts the HTTP server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
 	// When leadership is running, cancelling it makes the loop self-evict (stop the transport +
@@ -1096,6 +1126,22 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		<-leadershipDone
 	} else if inertStop != nil {
 		inertStop()
+	}
+	// Stop the NATS manager here, not just Terminate it after: Terminate is only legal
+	// from Stopped (core/core/lifecycle.go), so skipping this step makes the terminate
+	// below a refusal — the metrics sampler keeps running, the connection is never
+	// drained, and, because shuttingDown is only set inside ExecuteStop/ExecuteTerminate,
+	// the ClosedHandler reports an orderly stop as a permanent unasked-for close.
+	//
+	// 🔴 AFTER the unwind above, never before it. The unwind ends in evict(), which
+	// releases the lease with a KV write over this same connection; Stop drains that
+	// connection, so hoisting this block makes the release fail and leaves a standby
+	// waiting out a full lease TTL to take over. Both halves are pinned by
+	// nats_shutdown_test.go — the second test fails on exactly that hoist.
+	if NatsManager != nil {
+		if err := NatsManager.Stop(ctx); err != nil {
+			log.Error().Err(err).Msg("Error stopping the NATS manager.")
+		}
 	}
 	if httpServer == nil {
 		return nil

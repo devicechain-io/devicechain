@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -51,6 +52,45 @@ type Microservice struct {
 
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
 	Readiness *ReadinessGate
+
+	// metricsReg is the registry every metric this microservice constructs is
+	// registered in, and it is a registry this microservice OWNS rather than the
+	// process-global default one.
+	//
+	// The registration key those constructors compose is
+	// devicechain_<MetricsSubsystem()>_<name>, and MetricsSubsystem() derives from an
+	// environment variable — so on a shared registry the key is ambient environment
+	// plus a caller-supplied string, and a duplicate is a MustRegister panic. That
+	// made "one Microservice per process, forever" an unstated invariant of a
+	// constructor whose name says otherwise, and it had already escaped the library:
+	// three places outside core had independently written a unique-area workaround to
+	// get around it.
+	//
+	// nil for a Microservice built as a struct literal instead of by NewMicroservice.
+	// See MetricsRegisterer for what that means and why it is the safe direction.
+	metricsReg *prometheus.Registry
+
+	// metricsHandedOut records that something has asked where to register, i.e. that a
+	// collector may already be sitting on whatever metricsReg was at the time. It is
+	// what lets UseMetricsRegistry REFUSE a late call instead of merely documenting
+	// that it must not happen.
+	//
+	// A late call is not a no-op, it is a SPLIT: a collector is registered where it was
+	// built and cannot be moved, so the metrics built before the swap stay on the old
+	// registry while the gatherer reads the new one. Called after NewMicroservice that
+	// strands the three readiness collectors — /metrics answers 200 with a missing
+	// `ready` gauge, which is the exact failure this registry ownership exists to close.
+	//
+	// Atomic because MetricsRegisterer is reachable from any goroutine that builds a
+	// metric, and an unsynchronized bool written from two of them is a data race.
+	metricsHandedOut atomic.Bool
+
+	// mux is the HTTP multiplexer this microservice owns, created on first use by
+	// Mux(). Lazily rather than in NewMicroservice so a Microservice built as a struct
+	// literal has one too — unlike the metrics registry above, a private mux carries no
+	// collision hazard, since each Microservice gets its own.
+	muxOnce sync.Once
+	mux     *http.ServeMux
 
 	// Observability metrics (E17). nil when the microservice was built without
 	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
@@ -155,6 +195,11 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 
 	// Create common tooling.
 	ms.Readiness = NewReadinessGate()
+
+	// This microservice's own metrics registry. It is created BEFORE the metrics
+	// below, because a metric constructed while this is nil is not registered
+	// anywhere and would be missing from /metrics with nothing to say so.
+	ms.metricsReg = prometheus.NewRegistry()
 
 	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
 	// plane is ready and counters for the background auth-gate attempts/failures,
@@ -519,7 +564,7 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 
 // Create a new counter with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewCounter(name string, help string, labels []string) prometheus.Counter {
-	return promauto.NewCounter(prometheus.CounterOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewCounter(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -529,7 +574,7 @@ func (ms *Microservice) NewCounter(name string, help string, labels []string) pr
 
 // Create a new counter vector with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewCounterVec(name string, help string, labels []string) *prometheus.CounterVec {
-	return promauto.NewCounterVec(prometheus.CounterOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewCounterVec(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -539,7 +584,7 @@ func (ms *Microservice) NewCounterVec(name string, help string, labels []string)
 
 // Create a new gauge with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewGauge(name string, help string, labels []string) prometheus.Gauge {
-	return promauto.NewGauge(prometheus.GaugeOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewGauge(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,
@@ -549,7 +594,7 @@ func (ms *Microservice) NewGauge(name string, help string, labels []string) prom
 
 // Create a new gauge vector with the namespace and subsystem auto-filled based on microservice
 func (ms *Microservice) NewGaugeVec(name string, help string, labels []string) *prometheus.GaugeVec {
-	return promauto.NewGaugeVec(prometheus.GaugeOpts{
+	return promauto.With(ms.MetricsRegisterer()).NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
 		Subsystem: ms.MetricsSubsystem(),
 		Name:      name,

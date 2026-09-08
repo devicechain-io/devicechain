@@ -11,7 +11,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
 	graphql "github.com/graph-gophers/graphql-go"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 )
 
@@ -106,7 +105,7 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	}
 
 	// Add handler for metrics
-	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/metrics", gql.metricsHandler())
 
 	// Kubernetes probes (ADR-022 decision 3): liveness is always healthy while
 	// the process runs, but readiness reports 503 until the auth gate opens, so a
@@ -135,6 +134,23 @@ func (gql *GraphQLManager) ExecuteStart(context.Context) error {
 	}()
 
 	return nil
+}
+
+// metricsHandler is what this server registers on /metrics.
+//
+// 🔴 It is the microservice's OWN handler, not promhttp.Handler(). promhttp.Handler()
+// gathers from prometheus.DefaultGatherer and from nothing else, so it can only expose
+// what happens to sit on the process-global default registry — and every metric a
+// Microservice constructs now lives on a registry that Microservice owns. Pointing this
+// route back at promhttp.Handler() would not fail, log, or 500. It would answer 200 with
+// a well-formed exposition body that omits every metric this service exports, and the
+// only symptom would be a dashboard that went blank.
+//
+// Microservice.MetricsHandler says what it gathers and what instrumentation it keeps;
+// this exists so the route is served by a named handler the tests can drive, since
+// ExecuteStart itself registers onto http.DefaultServeMux and cannot be called twice.
+func (gql *GraphQLManager) metricsHandler() http.Handler {
+	return gql.Microservice.MetricsHandler()
 }
 
 // Stop component.

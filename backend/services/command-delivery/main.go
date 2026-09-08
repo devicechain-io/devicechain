@@ -112,6 +112,33 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
 		presenceReader(infra), deadWriter)
+	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
+	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
+	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
+	// the manager itself is not created until LATER in that same function, so the package
+	// variable is still nil while those assignments run. It compiles, it reads as
+	// consistent with its neighbours, and it dies on startup.
+	//
+	// Floored positive by ApplyDefaults, so what lands here is always usable and never the
+	// "unset" zero the field treats as "use the platform default".
+	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
+
+	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
+	// queue, whose workers dispatch that device's backlog through the same gates the sweep
+	// applies. Without it nothing dispatches until the next tick, so QUEUED -> SENT is
+	// uniform on [0, sweepInterval] — a command an operator issues from the console sits
+	// for half the interval on average, with the platform idle the whole time.
+	//
+	// 🔴 SET HERE FOR THE REASON THE LINE ABOVE IS, AND THE OTHER HALF OF THE SAME TRAP.
+	// The processor does not exist until this callback runs, so binding the nudger beside
+	// the Api.* assignments in afterMicroserviceInitialized — where it belongs by
+	// appearance — would bind a nil. Api is created there and is live by the time this
+	// runs, so this is the one window where both ends exist.
+	//
+	// A nil nudger would be safe (the nudge is simply off and every command waits for the
+	// sweep), which is exactly why the wiring is worth stating: nothing else would fail.
+	Api.Nudger = CommandDeliveryProcessor.Nudger()
+
 	err = CommandDeliveryProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

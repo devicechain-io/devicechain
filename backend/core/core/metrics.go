@@ -4,11 +4,13 @@
 package core
 
 import (
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ProcessorMetrics is the shared RED-style instrumentation for a message-
@@ -37,23 +39,120 @@ func (ms *Microservice) MetricsSubsystem() string {
 	return strings.ReplaceAll(ms.FunctionalArea, "-", "")
 }
 
+// MetricsRegisterer is where every metric this microservice constructs is registered.
+//
+// It returns a prometheus.Registerer interface built from a concrete *prometheus.Registry
+// field, and the nil branch is not defensive noise. promauto.With reads a nil Registerer
+// as "construct the collector but register it nowhere", and an interface value holding a
+// typed nil pointer is NOT nil — so returning ms.metricsReg unconditionally would hand
+// promauto a non-nil interface wrapping a nil registry, and the first metric built would
+// panic on the nil dereference rather than quietly going unregistered.
+//
+// A Microservice built by NewMicroservice always has a registry. One built as a struct
+// literal — which is how tests build them — has none, and its metrics are constructed
+// unregistered rather than landing on the process-global default registry. That is the
+// safe direction: an unregistered counter still counts, so the code under test behaves
+// identically, while two literals sharing a functional area no longer collide.
+//
+// Calling it records that a collector may now exist on whatever registry is attached,
+// which is the fact UseMetricsRegistry refuses a late call on.
+func (ms *Microservice) MetricsRegisterer() prometheus.Registerer {
+	ms.metricsHandedOut.Store(true)
+	if ms.metricsReg == nil {
+		return nil
+	}
+	return ms.metricsReg
+}
+
+// metricsGatherer is what MetricsHandler serves: this microservice's own registry
+// unioned with the process default registry.
+//
+// Both halves are load-bearing, and the failure mode of dropping either is the same
+// silent one — a clean 200 whose body is simply missing metrics, with no error and no
+// log line. Without the first half, everything the constructors above build disappears.
+// Without the second, so does everything still registered globally: the Go runtime and
+// process collectors client_golang installs on the default registry in its own init, and
+// the package-level promauto vars declared in core and in the services.
+func (ms *Microservice) metricsGatherer() prometheus.Gatherer {
+	if ms.metricsReg == nil {
+		return prometheus.DefaultGatherer
+	}
+	return prometheus.Gatherers{ms.metricsReg, prometheus.DefaultGatherer}
+}
+
+// UseMetricsRegistry points this microservice's metric constructors at reg. It is for
+// callers that build a Microservice without NewMicroservice — tests — and need the
+// metrics they then construct to be gatherable.
+//
+// 🔴 IT MUST BE CALLED BEFORE ANY METRIC IS CONSTRUCTED, AND IT ENFORCES THAT RATHER
+// THAN ASKING FOR IT. A collector is registered where it was built and cannot be moved
+// afterwards, so a late call does not redirect anything — it SPLITS: whatever was built
+// first stays on the old registry while the gatherer reads the new one. Called after
+// NewMicroservice, that strands the three readiness collectors and /metrics answers 200
+// with no `ready` gauge, which is the same silent subtraction this ownership exists to
+// end. A comment saying "call this first" would have been the assertion of an invariant
+// with nothing enforcing it.
+//
+// It panics rather than returning an error because there is no runtime condition here
+// to handle: the only way to reach it is a call in the wrong order, which is a
+// programming mistake in the caller and is fixed by moving one line.
+func (ms *Microservice) UseMetricsRegistry(reg *prometheus.Registry) {
+	if ms.metricsHandedOut.Load() {
+		panic("core: UseMetricsRegistry called after a metric was already constructed on this " +
+			"Microservice; collectors cannot be moved between registries, so the earlier ones " +
+			"would be stranded off the gatherer. Attach the registry before building any metric.")
+	}
+	ms.metricsReg = reg
+}
+
+// MetricsHandler is the http.Handler a service serves its Prometheus exposition from.
+//
+// It is built here, once, rather than spelled out at each endpoint that registers a
+// /metrics route, because two details of it are wrong by default and neither failure
+// reports itself — both answer 200 with a well-formed body that is simply missing
+// things:
+//
+//   - It gathers metricsGatherer, NOT prometheus.DefaultGatherer. promhttp.Handler()
+//     gathers the default one and nothing else, so it cannot see a single metric this
+//     microservice constructs.
+//   - It keeps promhttp's own scrape instrumentation. That is not part of HandlerFor:
+//     promhttp.Handler() wraps its handler in InstrumentMetricHandler, which is where
+//     promhttp_metric_handler_requests_total and promhttp_metric_handler_requests_in_flight
+//     come from. Swapping in a bare HandlerFor drops both.
+//
+// The scrape instrumentation registers on THIS microservice's registry, which also ends
+// the process-global collision it used to carry: two promhttp.Handler() calls in one
+// process registered the same two collectors on the default registry.
+func (ms *Microservice) MetricsHandler() http.Handler {
+	h := promhttp.HandlerFor(ms.metricsGatherer(), promhttp.HandlerOpts{})
+	reg := ms.MetricsRegisterer()
+	if reg == nil {
+		// InstrumentMetricHandler registers unconditionally and would dereference a nil
+		// Registerer, so a Microservice with no registry — a struct literal — gets the
+		// uninstrumented handler rather than a panic.
+		return h
+	}
+	return promhttp.InstrumentMetricHandler(reg, h)
+}
+
 // NewProcessorMetrics builds the instrumentation for a named processing loop
 // (e.g. "resolve", "persist", "state"). The metric names are prefixed with name
 // and namespaced/subsystemed by the service, so two services' loops do not
 // collide.
 func (ms *Microservice) NewProcessorMetrics(name string) *ProcessorMetrics {
 	sub := ms.MetricsSubsystem()
+	auto := promauto.With(ms.MetricsRegisterer())
 	return &ProcessorMetrics{
-		processed: promauto.NewCounterVec(prometheus.CounterOpts{
+		processed: auto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_messages_total", Help: "Messages handled by the " + name + " loop, by result.",
 		}, []string{"result"}),
-		duration: promauto.NewHistogram(prometheus.HistogramOpts{
+		duration: auto.NewHistogram(prometheus.HistogramOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_duration_seconds", Help: "Per-message handling duration for the " + name + " loop.",
 			Buckets: prometheus.DefBuckets,
 		}),
-		inflight: promauto.NewGauge(prometheus.GaugeOpts{
+		inflight: auto.NewGauge(prometheus.GaugeOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_inflight", Help: "Messages currently being handled by the " + name + " loop.",
 		}),

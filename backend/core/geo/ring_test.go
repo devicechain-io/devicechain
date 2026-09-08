@@ -99,7 +99,7 @@ func TestSomeDegenerateRingsAreCaughtOnlyByLoopValidation(t *testing.T) {
 		{"a duplicate corner leaving three loop vertices", [][]float64{{0, 0}, {1, 0}, {1, 0}, {0, 0}}},
 		{"only two distinct vertices", [][]float64{{0, 0}, {1, 1}, {0, 0}, {0, 0}}},
 	} {
-		if _, _, ok := RingSelfIntersects(tc.ring); ok {
+		if _, _, ok := LoopSelfIntersects(loopOrFatal(t, tc.ring)); ok {
 			t.Errorf("%s: the crossing check saw it, so it no longer demonstrates the gap "+
 				"— find another ring or drop the case", tc.name)
 		}
@@ -160,6 +160,12 @@ func TestStructurallyImpossibleRingsAreRefused(t *testing.T) {
 		ring [][]float64
 	}{
 		{"too few positions", [][]float64{{0, 0}, {1, 0}, {0, 0}}},
+		// Two positions cannot describe edges at all. It is here because the
+		// crossing check has nothing to compare in such a ring, so a predicate
+		// that answered a VERDICT for it would have to answer "does not cross" —
+		// which on this question reads as "the ring is fine". Only an error can
+		// say "there was nothing to ask".
+		{"only two positions", [][]float64{{0, 0}, {1, 0}}},
 		{"empty", [][]float64{}},
 		{"a position with one element", [][]float64{{0, 0}, {1}, {0.5, 1}, {0, 0}}},
 		// 🔴 Not closed. Found by the cross-service parity test, not by reading:
@@ -176,16 +182,63 @@ func TestStructurallyImpossibleRingsAreRefused(t *testing.T) {
 	}
 }
 
-// The narrow entry point must stay silent about rings it cannot build from,
-// rather than reporting a crossing it never looked for.
-func TestRingSelfIntersectsIsSilentOnUnbuildableRings(t *testing.T) {
-	if _, _, ok := RingSelfIntersects([][]float64{{0, 0}, {1, 0}}); ok {
-		t.Error("claimed a crossing in a ring too short to have edges")
+// 🔴 Out-of-range degrees are REFUSED, not wrapped, and the assertion names the
+// ordinate rather than settling for non-nil.
+//
+// The conversion to the sphere does not reject them: latitude 91 with longitude 1
+// comes back as lat 89 lon -179 — measured — so the ring below, which is otherwise
+// a perfectly simple quadrilateral, used to validate clean while bounding a shape
+// whose third corner had moved 180° around the planet. That is the same failure
+// shape as the bow-tie this package exists for: nothing about the accepted answer
+// looks wrong.
+func TestOutOfRangeDegreesAreRefusedRatherThanWrapped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ring [][]float64
+		want string
+	}{
+		{"latitude above 90", [][]float64{{0, 0}, {1, 0}, {1, 91}, {0, 1}, {0, 0}},
+			"position 2 latitude 91 is outside [-90, 90]"},
+		{"latitude below -90", [][]float64{{0, 0}, {1, 0}, {1, -90.5}, {0, 1}, {0, 0}},
+			"position 2 latitude -90.5 is outside [-90, 90]"},
+		{"longitude above 180", [][]float64{{0, 0}, {1, 0}, {181, 1}, {0, 1}, {0, 0}},
+			"position 2 longitude 181 is outside [-180, 180]"},
+		{"longitude below -180", [][]float64{{0, 0}, {1, 0}, {-180.5, 1}, {0, 1}, {0, 0}},
+			"position 2 longitude -180.5 is outside [-180, 180]"},
+	} {
+		err := ValidateClosedRing(tc.ring)
+		if err == nil {
+			t.Errorf("%s: accepted", tc.name)
+			continue
+		}
+		if err.Error() != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, err.Error(), tc.want)
+		}
 	}
-	// ...but it must still SEE one in a ring it can build, or the check above
-	// would pass against a function that always returns false.
-	if _, _, ok := RingSelfIntersects(bowtie); !ok {
-		t.Error("missed the crossing in a bow-tie")
+}
+
+// 🔴 The counterweight, and the bound polarity is the whole point of it. ±180
+// longitude and ±90 latitude are LEGAL coordinates — the antimeridian and the poles
+// are places — so the comparisons have to be strict. Written `<=` / `>=` instead,
+// every assertion in the test above still passes while real fences at the edge of
+// the coordinate system become unauthorable.
+//
+// Each shape below carries a boundary value on a ring the EXPORTED gate accepts,
+// which is what makes this a claim about the contract rather than about the private
+// loop builder: measured, ValidateClosedRing returns nil for all four.
+func TestRangeBoundariesAreAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ring [][]float64
+	}{
+		{"a quad against the eastern antimeridian", [][]float64{{180, 0}, {179, 0}, {179, 1}, {180, 1}, {180, 0}}},
+		{"a quad against the western antimeridian", [][]float64{{-180, 0}, {-179, 0}, {-179, -1}, {-180, -1}, {-180, 0}}},
+		{"a triangle with its apex on the north pole", [][]float64{{0, 89}, {1, 89}, {0.5, 90}, {0, 89}}},
+		{"a triangle with its apex on the south pole", [][]float64{{0, -89}, {1, -89}, {0.5, -90}, {0, -89}}},
+	} {
+		if err := ValidateClosedRing(tc.ring); err != nil {
+			t.Errorf("%s: a boundary coordinate was refused: %v", tc.name, err)
+		}
 	}
 }
 
@@ -204,9 +257,21 @@ func TestAdjacentEdgesWrapsAround(t *testing.T) {
 	}
 	// A triangle is all-adjacent — every pair of its 3 edges shares a vertex — so
 	// a correct scan can never report a crossing in one.
-	if _, _, ok := RingSelfIntersects(triangle); ok {
+	if _, _, ok := LoopSelfIntersects(loopOrFatal(t, triangle)); ok {
 		t.Error("reported a crossing between adjacent edges of a triangle")
 	}
+}
+
+// loopOrFatal builds the loop a crossing-check assertion needs, and fails the test
+// rather than returning nil if it cannot — a nil loop would make every crossing
+// assertion below it pass for the wrong reason.
+func loopOrFatal(t *testing.T, ring [][]float64) *s2.Loop {
+	t.Helper()
+	loop, err := loopFromClosedRing(ring)
+	if err != nil {
+		t.Fatalf("could not build a loop from %v: %v", ring, err)
+	}
+	return loop
 }
 
 func TestPointFromDegreesIsLatitudeFirst(t *testing.T) {

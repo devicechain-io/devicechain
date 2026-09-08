@@ -465,6 +465,38 @@ var entities = []entity{
 		// microseconds, so comparing it reports a healthy instance as MISMATCH.
 		// newCredentialToken IS selected — it is a server-minted uuid, but it is STORED,
 		// so it is precisely the kind of value this drill exists to watch.
+		//
+		// 🔴 device{token} is NOT selected, and its reason is a THIRD kind — worth
+		// reading, because it is the only one of the three that is about the drill's
+		// own shape rather than about a field.
+		//
+		// It was selected, and it reported a difference that was REAL: the mutation
+		// answered "" where the query answered the token, because replaceDevice built
+		// its response record without the association the query Preloads, and the
+		// non-null SDL field made the resolver substitute a zero-valued Device rather
+		// than say so. That is fixed in device-management, where it belongs, and
+		// TestReplaceDeviceAndDeviceReplacementsAgreeOnTheDevice pins the two doors
+		// together at the only level that can compare them in one process.
+		//
+		// The field still cannot stay here, and NOT because the defect was hidden.
+		// This drill writes its receipt from the BASELINE RELEASE's mutation response
+		// and reads it back from the UPGRADED build's query. So any field whose
+		// response representation is CORRECTED between those two releases reads as
+		// CHANGED for exactly one cycle — the drill reporting a fix as data loss. That
+		// is a property of comparing two doors across a release boundary, and it
+		// applies to whatever gets corrected next, not just to this field.
+		//
+		// What makes dropping it cost nothing HERE is separate and specific: ReadVars
+		// pins the read to device "apiprobe-device", and DeviceReplacements filters on
+		// device_id via that token, so any row this query can return already has the
+		// right device. Reading the token back could only ever echo the criterion. A
+		// re-pointed device_id does not slip through — it returns NO row, which verify
+		// reports as missing.
+		//
+		// 🔴 THAT ARGUMENT DOES NOT GENERALIZE, and device-credential immediately below
+		// is the counter-example: it is read by the CREDENTIAL's own token, nothing in
+		// its criteria mentions a device, and device{token} is the only thing there
+		// proving the credential still hangs off the right one. It stays selected.
 		Name:     "device-replacement",
 		Area:     "device-management",
 		Mutation: "replaceDevice",
@@ -481,7 +513,7 @@ var entities = []entity{
 			"pageNumber": 1, "pageSize": 10, "device": "apiprobe-device",
 		},
 		Fields: "actor reason unitIdentifier retiredCredentialTokens " +
-			"newCredentialToken newCredentialType device{token}",
+			"newCredentialToken newCredentialType",
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				"deviceToken": s.tokens["device"],
