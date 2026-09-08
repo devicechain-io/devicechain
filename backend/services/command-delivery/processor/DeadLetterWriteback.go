@@ -282,28 +282,29 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 		return
 	}
 	// 🔴 THE REASON DECIDES WHETHER THERE IS ANYTHING TO SETTLE, AND KIND ALONE CANNOT.
-	// Kind says what the work WAS; Reason says what the producer DID about it, and only one
-	// reason means "the answer is lost". ReasonExhausted does: the write was attempted to
-	// the redelivery cap and never landed, so the command is genuinely unanswerable and
-	// must stop reading as in flight. Every other reason describes a write that was never
-	// attempted — the producer looked at the command and declined — so the answer is not
-	// lost in the way MarkResponseLost's FAILED and its error text assert.
+	// Kind says what the work WAS; Reason says what the producer DID about it, and only a
+	// reason meaning "we attempted this and lost it" leaves a command genuinely unanswerable
+	// and in need of being stopped from reading as in flight. Every other reason describes a
+	// write that was never attempted — the producer looked at the command and declined — so
+	// the answer is not lost in the way MarkResponseLost's FAILED and its error text assert.
 	//
-	// 🔴 SETTLING ONE OF THOSE STAMPS FAILED ON A LIVE COMMAND. A response to a command
-	// that had been returned to the queue is recorded here as ReasonUnprocessable; by the
-	// time this consumer reads it the sweep may have re-dispatched that command, so the row
-	// is SENT again and DOES match MarkResponseLost's predicate. The write lands, the
-	// command reads FAILED, and the device's real answer to the new dispatch then arrives
-	// on a terminal row and is dropped as late. Recording that the platform declined to
-	// write must not become the platform writing.
+	// 🔑 THAT AXIS IS THE VOCABULARY'S, NOT THIS CONSUMER'S, so it is asked of the
+	// vocabulary. Reason.WorkWasAttempted is a positive list — an explicit case per reason
+	// that settles state, and a default of false — which is what keeps a reason nobody has
+	// classified from settling commands by default. Re-deriving the rule here would leave
+	// the next consumer to re-derive it too, or not to.
 	//
-	// 🔑 A POSITIVE LIST, NOT A SKIP OF THE ONE REASON THAT EXISTS TODAY, AND THE DIRECTION
-	// IS THE WHOLE POINT. A new reason means a new way of giving up, and the question
-	// "should this settle a command?" has to be answered deliberately for each one. Written
-	// as a skip, a reason nobody thought about here would settle commands by default —
-	// which is exactly how this defect arrived. Written this way it is a counted no-op
-	// until someone decides otherwise, which is the recoverable direction to be wrong in.
-	if e.Reason != deadletter.ReasonExhausted {
+	// 🔴 SETTLING A DECLINED LETTER STAMPS FAILED ON A LIVE COMMAND. A response to a command
+	// that had been returned to the queue is recorded as ReasonUnprocessable; by the time
+	// this consumer reads it the sweep may have re-dispatched that command, so the row is
+	// SENT again and DOES match MarkResponseLost's predicate. The write lands, the command
+	// reads FAILED, and the device's real answer to the new dispatch then arrives on a
+	// terminal row and is dropped as late. Recording that the platform declined to write
+	// must not become the platform writing.
+	//
+	// A letter outside the list is acked, left alone and counted, so an unexpected reason is
+	// a visible no-op rather than a quiet one — the recoverable direction to be wrong in.
+	if !e.Reason.WorkWasAttempted() {
 		log.Info().Str("tenant", tenant).Str("command", e.Reference).Str("reason", string(e.Reason)).
 			Msg("Leaving a command alone: its dead letter records a response the platform " +
 				"declined to write, not one it failed to write.")
