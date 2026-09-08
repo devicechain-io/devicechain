@@ -67,6 +67,13 @@ jobs:
       - name: release-highlights guard self-test
         run: hack/check-release-highlights.sh --self-test
 
+      # Same reasoning as the guard above, and the same blast radius: this builds the
+      # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
+      # the `cli` job after every image has already been pushed. The self-test is the
+      # part that runs on every PR.
+      - name: release-notes header self-test
+        run: hack/build-release-notes-header.sh --self-test
+
       # The govulncheck wrapper decides which findings are allowed to pass. Its
       # allowlist is the one place in CI where a known vulnerability is waved
       # through on purpose, so proving the checker can still fail — on an

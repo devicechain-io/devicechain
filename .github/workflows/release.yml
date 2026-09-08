@@ -816,11 +816,27 @@ jobs:
           fi
           echo "OK: ${REGISTRY}/device-management:${tag} resolves."
 
+      # THE RELEASE BODY IS THIS HEADER PLUS GORELEASER'S CHANGELOG. goreleaser
+      # generates the changelog from commit subjects, which answers "what changed"
+      # and is no use at all for "should I upgrade" -- a reader gets
+      # `fix(events): give payload rows and anchors identities of their own` and has
+      # to reverse-engineer the release from it. The header carries the part a
+      # machine cannot derive: the hand-written highlights, from the SAME file the
+      # website manifest reads, so the two cannot drift.
+      #
+      # --release-header, NOT --release-notes: the latter REPLACES the body and would
+      # silently drop the changelog. Both flags exist and one of them is wrong.
+      - name: Build the release-notes header from the highlights
+        run: |
+          hack/build-release-notes-header.sh "${GITHUB_REF_NAME}" \
+            > "${GITHUB_WORKSPACE}/release-header.md"
+          cat "${GITHUB_WORKSPACE}/release-header.md"
+
       - name: goreleaser release
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-header=${{ github.workspace }}/release-header.md
           # The dcctl module is the goreleaser project root; its config and
           # main.go live under backend/cli.
           workdir: backend/cli
