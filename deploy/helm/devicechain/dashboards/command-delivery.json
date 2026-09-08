@@ -56,7 +56,8 @@
         "sort": 1,
         "includeAll": false,
         "multi": false,
-        "regex": ""
+        "regex": "",
+        "description": "Instance picker. Driven off command_delivery_claims_lost_total, which is a LABEL VECTOR (path=sweep|nudge) and would therefore export nothing until the first lost claim -- so the processor pre-initialises both paths at zero at registration, which is what keeps this picker able to name an instance on a healthy install. Do not repoint it at a counter that is not pre-initialised: the batch counters are the example, empty until the first fleet write."
       }
     ]
   },
@@ -66,9 +67,9 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "DeviceChain — Command Delivery",
+  "title": "DeviceChain \u2014 Command Delivery",
   "uid": "dc-command-delivery-ops",
-  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the dispatch sweep's claim outcomes, and the presence gate's holds. The instance picker is driven by claims_lost rather than by a batch counter, because the batch counters are label vectors that export nothing until the first fleet write — picking one of those would leave the dashboard unable to name an instance that has only ever sent single commands. Note the two naming eras: the six original counters carry a historical command_delivery_ stutter in their metric names and the batch counters do not.",
+  "description": "Operations board for command delivery: fleet writes (batch enqueues, device dispositions, refusal codes and whether the delivery-machinery reserve caused them, cancels), the claim outcomes of both dispatch paths (the periodic sweep and the enqueue-time nudge), and the presence gate's holds. The instance picker is driven by claims_lost rather than by a batch counter, because the batch counters are label vectors that export nothing until the first fleet write \u2014 picking one of those would leave the dashboard unable to name an instance that has only ever sent single commands. claims_lost is a label vector too, since the sweep and the nudge are counted apart, so the processor PRE-INITIALISES both paths at zero at registration; that is what keeps it usable here, and it is why repointing this at any counter without the same treatment would reintroduce the empty-picker problem. Note the two naming eras: the six original counters carry a historical command_delivery_ stutter in their metric names and the batch counters do not.",
   "version": 1,
   "weekStart": "",
   "panels": [
@@ -88,7 +89,7 @@
       "id": 2,
       "type": "stat",
       "title": "Batches created /s",
-      "description": "Fleet writes admitted and persisted — a new batch, not an idempotent replay.",
+      "description": "Fleet writes admitted and persisted \u2014 a new batch, not an idempotent replay.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -204,7 +205,7 @@
       "id": 4,
       "type": "stat",
       "title": "Batches refused /s",
-      "description": "Fleet writes decided against — nothing was enqueued. Break the reason down in the refusal panels below.",
+      "description": "Fleet writes decided against \u2014 nothing was enqueued. Break the reason down in the refusal panels below.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -266,7 +267,7 @@
       "id": 5,
       "type": "stat",
       "title": "Devices accepted /s",
-      "description": "Per-device commands enqueued by fleet writes. This is the unit that matters for load — one batch can be one device or ten thousand.",
+      "description": "Per-device commands enqueued by fleet writes. This is the unit that matters for load \u2014 one batch can be one device or ten thousand.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -386,7 +387,7 @@
       "id": 7,
       "type": "stat",
       "title": "Reserve-bound refusals /s",
-      "description": "Refusals that WOULD NOT have happened without the delivery-machinery reserve: the write fitted against the tenant's raw ceiling and was refused only by the headroom the reserve holds back. The reserve doing its job — but a standing rate means the ceiling or the reserve wants tuning. Alerted as CommandBatchReserveRefusals (warning).",
+      "description": "Refusals that WOULD NOT have happened without the delivery-machinery reserve: the write fitted against the tenant's raw ceiling and was refused only by the headroom the reserve holds back. The reserve doing its job \u2014 but a standing rate means the ceiling or the reserve wants tuning. Alerted as CommandBatchReserveRefusals (warning).",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -448,7 +449,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Batch enqueues by target and outcome",
-      "description": "Every fleet write, split by what it targeted (an explicit device list or a group) and how it ended. target_kind=unknown is a refusal decided before a target was established — the request named both a list and a group, or neither.",
+      "description": "Every fleet write, split by what it targeted (an explicit device list or a group) and how it ended. target_kind=unknown is a refusal decided before a target was established \u2014 the request named both a list and a group, or neither.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -564,7 +565,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Refusals by code",
-      "description": "Why devices were refused. The code label is CLOSED by folding: a code this build does not know — including one returned by another service's fleet gate — is recorded as \"other\", so the label cannot grow without bound. A rising \"other\" means a peer is refusing for a reason this build has no name for.",
+      "description": "Why devices were refused. The code label is CLOSED by folding: a code this build does not know \u2014 including one returned by another service's fleet gate \u2014 is recorded as \"other\", so the label cannot grow without bound. A rising \"other\" means a peer is refusing for a reason this build has no name for.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -621,8 +622,8 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Refusals by bound — ceiling vs reserve",
-      "description": "Which limit actually decided the refusal. bound=ceiling: the tenant's own undelivered-command ceiling would have refused this anyway. bound=reserve: it fitted against the raw ceiling and was refused ONLY by the delivery-machinery reserve — that is the counterfactual, not merely \"a reserve was in force\", so this series names refusals the reserve genuinely caused. bound=none: a refusal that was never about a limit. Tune the ceiling or the reserve when the reserve line is standing rather than spiking.",
+      "title": "Refusals by bound \u2014 ceiling vs reserve",
+      "description": "Which limit actually decided the refusal. bound=ceiling: the tenant's own undelivered-command ceiling would have refused this anyway. bound=reserve: it fitted against the raw ceiling and was refused ONLY by the delivery-machinery reserve \u2014 that is the counterfactual, not merely \"a reserve was in force\", so this series names refusals the reserve genuinely caused. bound=none: a refusal that was never about a limit. Tune the ceiling or the reserve when the reserve line is standing rather than spiking.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -680,7 +681,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "Batch cancels by disposition",
-      "description": "What pulling the brake on a fleet write actually caught, per command. cancelled: stopped before the device saw it. already_sent: physically actuated — cancelling would stop nothing and would only discard the device's real answer. already_finished: terminal before the cancel arrived. A cancel with almost everything in already_sent means the brake is being pulled too late to be a brake.",
+      "description": "What pulling the brake on a fleet write actually caught, per command. cancelled: stopped before the device saw it. already_sent: physically actuated \u2014 cancelling would stop nothing and would only discard the device's real answer. already_finished: terminal before the cancel arrived. A cancel with almost everything in already_sent means the brake is being pulled too late to be a brake.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -749,8 +750,8 @@
     {
       "id": 14,
       "type": "stat",
-      "title": "Claims STRANDED /s — commands that will lie",
-      "description": "🔴 THE ONE TO LOOK AT FIRST. A stranded claim is a command left reading SENT whose publish failed AND whose release failed too. It was never sent, nothing will retry it, and it will expire as TIMEOUT — blaming a device that did nothing wrong. Every other counter on this page describes something that reported itself; this one describes the platform telling an operator something false. Any non-zero value deserves investigation. Alerted as CommandClaimsStranded (critical).",
+      "title": "Claims STRANDED /s \u2014 commands that will lie",
+      "description": "\ud83d\udd34 THE ONE TO LOOK AT FIRST. A stranded claim is a command left reading SENT whose publish failed AND whose release failed too. It was never sent, nothing will retry it, and it will expire as TIMEOUT \u2014 blaming a device that did nothing wrong. Every other counter on this page describes something that reported itself; this one describes the platform telling an operator something false. Any non-zero value deserves investigation. Alerted as CommandClaimsStranded (critical).",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -812,7 +813,7 @@
       "id": 15,
       "type": "stat",
       "title": "Claims lost /s",
-      "description": "Dispatches abandoned because another dispatcher claimed the command first. Expected and harmless during a rolling update — the claim is what stops two pods physically actuating the same device twice. Sustained on a steady-state instance, it means two sweeps are running concurrently.",
+      "description": "Dispatches abandoned because another dispatcher claimed the command first, across both dispatch paths. Expected and harmless \u2014 the claim is a compare-and-set, and it is what stops two dispatchers physically actuating the same device twice. A standing rate is NORMAL here now that the enqueue-time nudge dispatches alongside the sweep: the two racing for one row is the design, not a fault. Read the by-path breakdown below rather than this total, and treat losses on one path with no matching traffic on the other as the shape worth investigating.",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -991,7 +992,7 @@
       "id": 18,
       "type": "timeseries",
       "title": "Claim contention and undeliverable commands",
-      "description": "Lost claims (another dispatcher got there first) alongside commands the transport cannot carry. Lost claims should track rollouts; undeliverable should track profile changes.",
+      "description": "Lost claims BY DISPATCH PATH (another dispatcher got there first) alongside commands the transport cannot carry. The sweep is the periodic pass; the nudge is the dispatch issued when a command is enqueued. Both series moving together is the two paths racing for the same rows, which is expected and safe. One path losing claims while the other is silent is not: that is a dispatcher racing something other than its counterpart. Undeliverable should track profile changes.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1009,8 +1010,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_claims_lost_total{namespace=\"$namespace\"}[5m]))",
-          "legendFormat": "claims lost /s"
+          "expr": "sum(rate(devicechain_commanddelivery_command_delivery_claims_lost_total{namespace=\"$namespace\"}[5m])) by (path)",
+          "legendFormat": "claims lost /s ({{path}})"
         },
         {
           "refId": "B",
@@ -1067,7 +1068,7 @@
       "id": 20,
       "type": "stat",
       "title": "Holds placed /s",
-      "description": "Commands withheld from dispatch because the device is authoritatively absent. Withheld, not failed — they go out when the device comes back.",
+      "description": "Commands withheld from dispatch because the device is authoritatively absent. Withheld, not failed \u2014 they go out when the device comes back.",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -1182,7 +1183,7 @@
     {
       "id": 22,
       "type": "stat",
-      "title": "Presence read errors /s — the gate is failing OPEN",
+      "title": "Presence read errors /s \u2014 the gate is failing OPEN",
       "description": "Sweep passes that could not read the presence projection. The gate FAILS OPEN by design, so this is not a stall: it is commands being dispatched UNGATED, to devices nobody checked were there. A standing rate means every hold this instance should be placing is not being placed. Alerted as CommandPresenceReadErrors (warning).",
       "gridPos": {
         "h": 4,
@@ -1245,7 +1246,7 @@
       "id": 23,
       "type": "timeseries",
       "title": "Holds placed vs released",
-      "description": "The two sides of the presence gate. They need not balance instant by instant — a device that stays away holds its commands until it returns or they expire — but a sustained gap with no returning devices is held work piling up against the tenant's undelivered ceiling, which is the same ceiling fleet writes are admitted against.",
+      "description": "The two sides of the presence gate. They need not balance instant by instant \u2014 a device that stays away holds its commands until it returns or they expire \u2014 but a sustained gap with no returning devices is held work piling up against the tenant's undelivered ceiling, which is the same ceiling fleet writes are admitted against.",
       "gridPos": {
         "h": 8,
         "w": 12,

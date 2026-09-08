@@ -179,8 +179,9 @@ ninguna salida que no exija uno — salvo el TTL, que registra `TIMEOUT`.
 Esa es la misma etiqueta errónea que `PARKED` existe para eliminar, llegando por otro camino,
 así que la plataforma la cierra de la misma manera. Un proceso en segundo plano busca comandos
 que lleven en `SENT` sin desenlace más tiempo del que la plataforma podría haber seguido
-trabajando en ellos — derivado del propio presupuesto de reintentos de la capa de mensajería,
-unos cinco minutos y medio hoy, no una cifra elegida a mano. Los que puede rearmar con
+trabajando en ellos — derivado del propio presupuesto de reintentos de la capa de mensajería
+y del barrido de entrega más lento que un operador puede configurar, unos diez minutos hoy,
+no una cifra elegida a mano. Los que puede rearmar con
 seguridad pasan a `PARKED`, y se entregan en el próximo despertar del dispositivo como
 cualquier otro comando aparcado.
 

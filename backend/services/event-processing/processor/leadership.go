@@ -487,11 +487,14 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	rp.pcancel()
 	rp.readerWG.Wait()
 	if handle.keepAliveDone != nil {
-		// 2. Join the renewer BEFORE releasing. Renew runs its KV Update outside the
-		//    lease mutex, so a Release racing one deletes with the pre-renew revision,
-		//    fails the CAS, and leaves a freshly renewed entry to age out on its own —
-		//    the next pod then waits a full TTL for a lease nobody holds. At a 1s renew
-		//    interval this race is not theoretical.
+		// 2. Join the renewer BEFORE releasing. The revision CAS is NOT what this
+		//    buys any more: Lease.Release serializes itself against an in-flight
+		//    Renew, so the ordering holds whether or not a caller joins first. What
+		//    the join buys is that no goroutine from this term outlives the term. The
+		//    renewer is term-scoped, step 1 has already cancelled its context, and
+		//    joining it here means nothing from this term is still running — or still
+		//    logging a renewal failure against a partition someone else now owns —
+		//    once the entry is released.
 		<-handle.keepAliveDone
 	}
 	// 3. Withdraw the readers' reply-inbox interest. This is what stops a pull

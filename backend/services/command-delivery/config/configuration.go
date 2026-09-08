@@ -11,9 +11,52 @@ import (
 )
 
 const (
-	// RedeliveryInterval is the cadence (in seconds) of the expiry + redelivery
-	// sweep that times out stale commands and re-publishes still-queued ones.
-	RedeliveryInterval = 30
+	// DefaultSweepIntervalSeconds is the cadence of the expiry + redelivery sweep that
+	// times out stale commands and dispatches still-queued ones.
+	//
+	// 🔑 IT IS THE ONE INTERVAL HERE WITH NO ARGUMENT BEHIND ITS VALUE. The two below
+	// each defend theirs at length; this one arrived as a bare constant and stayed. It
+	// is now a default rather than a law, because it is also the interval that decides
+	// user-visible latency: nothing dispatches on enqueue, so QUEUED -> SENT is uniform
+	// on [0, interval] and an operator watching a command sit for half a minute is
+	// watching this number.
+	//
+	// 🔴 LOWERING IT IS NOT FREE, AND THE HALF THAT COSTS IS NOT THE HALF YOU WOULD
+	// EXPECT. The DELIVERY read is cheap and stays cheap: it selects QUEUED alone against
+	// a partial index keyed (status, id), so it is a direct seek into the QUEUED partition
+	// with no sort and no HELD rows touched, and an idle fleet of any size reads nothing.
+	//
+	// But a TICK is not only that read. sweepLocked runs ExpireStale FIRST, and that query
+	// is `status NOT IN (terminal) AND <expiry predicate> AND id > cursor` -- and NO INDEX
+	// IN THIS TABLE CONTAINS expires_at, so it walks the whole non-terminal set, HELD rows
+	// included. That is precisely the set an offline fleet's backlog accumulates in. So the
+	// per-tick cost scales with the BACKLOG, and halving the interval doubles that walk.
+	//
+	// What that means for an operator: on an instance with a small backlog, turning this
+	// down is close to free and buys latency directly. On one with a large withheld
+	// backlog it is not, and the honest fix for latency there is a dispatch on enqueue
+	// rather than a faster poll.
+	DefaultSweepIntervalSeconds = 30
+
+	// MinSweepIntervalSeconds floors the sweep cadence.
+	//
+	// 🔑 IT IS A GUARD AGAINST A PATHOLOGICAL VALUE, NOT A RECOMMENDATION. Two costs
+	// compound below it: every tick is a TrySweepLock round trip per replica, and every
+	// tick is the unindexed expiry walk described above. Five seconds bounds that
+	// amplification to six times the default's while still allowing most of the latency
+	// win an operator would come here for.
+	//
+	// It is deliberately ABOVE 1. A floor of 1 would be unreachable code: ApplyDefaults
+	// maps every non-positive value onto the default, so Validate's lower bound can only
+	// ever fire for a value between 1 and the floor, and a floor of 1 leaves that range
+	// empty -- a check that cannot fail, guarding nothing.
+	MinSweepIntervalSeconds = 5
+
+	// MaxSweepIntervalSeconds ceilings it. An over-long interval is refused rather than
+	// accepted because this sweep is not only a delivery path: it is also what expires
+	// stale commands, so stretching it delays every command's terminal state and not
+	// just its dispatch.
+	MaxSweepIntervalSeconds = 300
 
 	// HoldReconcileInterval is the cadence (in seconds) of the pass that releases
 	// WITHHELD commands whose devices have come back.
@@ -34,10 +77,17 @@ const (
 	// commands abandoned in SENT.
 	//
 	// 🔑 SLOWER THAN THE HOLD RECONCILER, BECAUSE WHAT IT WAITS FOR IS SLOWER. A row is
-	// not even eligible until it has been in SENT for StrandedSentGrace (330s today), so
-	// ticking faster than that would mostly re-ask a question whose answer cannot have
-	// changed. This is a floor under a failure that is already minutes to hours from its
-	// visible consequence; there is no latency to win.
+	// not eligible until it has been in SENT for StrandedSentGrace (600s today). This is a
+	// floor under a failure that is already minutes to hours from its visible consequence;
+	// there is no latency to win by ticking faster.
+	//
+	// ⚠️ An earlier version of this note argued that ticking faster than the grace "would
+	// mostly re-ask a question whose answer cannot have changed". That was never quite
+	// right and is now plainly wrong: eligibility is per-row against each row's own
+	// sent_time, so rows cross the horizon continuously and no pass re-asks the same
+	// question. What this cadence actually bounds is how long a newly-eligible row waits
+	// (at most one tick) and how fast the cursored 500-row walk drains a backlog. A
+	// cadence shorter than the grace is therefore sensible, not redundant.
 	//
 	// ⚠️ It is deliberately NOT derived from StrandedSentGrace even though it is close to
 	// it. They are independent: the grace period is a correctness bound (act no sooner
@@ -120,6 +170,12 @@ type CommandDeliveryConfiguration struct {
 	// platform default in ApplyDefaults, so the field can never mean "unlimited".
 	HeldCommandCeiling int
 
+	// SweepIntervalSeconds is the cadence of the expiry + delivery sweep. Fail-safe in
+	// the same direction as the fields below: absent, zero or negative lands on the
+	// platform default in ApplyDefaults, never on "never sweep" -- a sweep that does not
+	// run stops expiring commands as well as dispatching them.
+	SweepIntervalSeconds int
+
 	// DeliveryMachineryReserve is the fraction of the ceiling in force that only the
 	// platform's own service-token callers may draw on. It is OPERATOR-SIDE ONLY — there
 	// is deliberately no per-tenant override and no tier key, because a tenant able to
@@ -160,6 +216,11 @@ func (c *CommandDeliveryConfiguration) ApplyDefaults() {
 	if !(c.DeliveryMachineryReserve > 0) {
 		c.DeliveryMachineryReserve = DefaultDeliveryMachineryReserve
 	}
+	// Same direction again for the sweep cadence: the harmless-looking value lands on the
+	// default, never on the pathological reading. Zero seconds is not "as fast as possible".
+	if c.SweepIntervalSeconds <= 0 {
+		c.SweepIntervalSeconds = DefaultSweepIntervalSeconds
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects a
@@ -178,6 +239,26 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	if c.HeldCommandCeiling < MinHeldCommandCeiling {
 		return fmt.Errorf("heldCommandCeiling must be at least %d (got %d)",
 			MinHeldCommandCeiling, c.HeldCommandCeiling)
+	}
+	// The sweep cadence is bounded at BOTH ends, and the two ends refuse different
+	// mistakes. Below the floor the pass stops being a sweep and becomes a spin against
+	// the advisory lock; above the ceiling it delays expiry, not just dispatch, so a
+	// command's terminal state drifts with it.
+	//
+	// 🔴 THE CEILING IS ALSO A CORRECTNESS BOUND, NOT ONLY AN ERGONOMIC ONE, THOUGH NOT
+	// IN THE DIRECTION IT FIRST APPEARS. processor.StrandedSentGrace is a const EXPRESSION
+	// over MaxSweepIntervalSeconds, so raising this ceiling raises that horizon WITH it,
+	// automatically -- which is the whole point of deriving rather than writing a number.
+	// Raising it therefore cannot make the stranded pass park commands too early; what it
+	// does is lengthen stranded DETECTION, since a row waits the longer horizon before it
+	// is eligible at all.
+	//
+	// The thing that would leave the horizon short is REPLACING that term -- deriving the
+	// grace from the default, say -- and TestStrandedGraceCoversTheSlowestPermittedSweep
+	// is what catches that.
+	if c.SweepIntervalSeconds < MinSweepIntervalSeconds || c.SweepIntervalSeconds > MaxSweepIntervalSeconds {
+		return fmt.Errorf("sweepIntervalSeconds must be between %d and %d (got %d)",
+			MinSweepIntervalSeconds, MaxSweepIntervalSeconds, c.SweepIntervalSeconds)
 	}
 	// An over-large reserve is refused rather than clamped. Unlike an absent value —
 	// which has an obviously right answer — a reserve of 0.8 or 3 is an operator saying
