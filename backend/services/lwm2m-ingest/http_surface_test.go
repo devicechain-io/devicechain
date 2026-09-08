@@ -106,9 +106,18 @@ func TestHttpServerRestartDoesNotPanic(t *testing.T) {
 // error and no log line. A route left behind by the move would therefore look exactly
 // like a route that was never written.
 //
-// So a route IS left behind here, deliberately, and it must 404. If this service's
-// server ever goes back to the default mux — by omitting Handler, or by anyone
-// "fixing" a route with http.Handle — that route starts answering 200 and this fails.
+// 🔴 READ WHICH ASSERTION CATCHES WHAT, because the two here fail for different
+// regressions and only one of them is about this service:
+//
+//   - The 404 below fires only if the SERVER stops serving the owned mux — if
+//     NewHttpServer stopped setting Handler, say. A route this service leaves behind
+//     keeps 404ing either way, because it was never on the owned mux to begin with.
+//   - The counterweight assertions below it — the probe routes answering 200 — are what
+//     catch a registration left on the default mux: those routes stop being served and
+//     turn 404. That is the assertion that fires for the switchover regression.
+//
+// Both are worth having; conflating them would leave the reader expecting the wrong one
+// to go red.
 func TestServerDoesNotServeTheDefaultMux(t *testing.T) {
 	newTestMicroservice(t)
 	// The SERVICE's registration, not a copy of it: a test that called RegisterProbes
