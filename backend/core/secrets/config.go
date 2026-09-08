@@ -69,8 +69,8 @@ func (c Config) withDefaults() Config {
 // unsupported selection is rejected at startup rather than silently defaulting to
 // something the operator did not intend. It validates the selection is a known
 // identifier; whether the selected backend/provider is actually built in this
-// binary is enforced at wiring time (a declared-but-unimplemented option fails
-// closed there), keeping this pure validation dependency-free.
+// binary is enforced by New, the single wiring point (a declared-but-unimplemented
+// option fails closed there), keeping this pure validation dependency-free.
 func (c Config) Validate() error {
 	c = c.withDefaults()
 	switch c.Backend {

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -73,38 +72,20 @@ func parseConfiguration() error {
 }
 
 // buildSecretStore constructs the envelope-encrypted secret store (ADR-059) from the
-// instance secrets configuration. It fails closed on an unknown or not-yet-implemented
-// backend/KEK provider and on a missing/malformed instance root key, so a service that
-// cannot form its KEK does not start (encryption-at-rest is not optional once wired).
+// instance secrets configuration. secrets.New is the single wiring point: it fails
+// closed on an unknown or declared-but-unbuilt backend/KEK provider and on a missing or
+// malformed instance root key, so a service that cannot form its KEK does not start
+// (encryption-at-rest is not optional once wired).
 func buildSecretStore() (secrets.SecretStore, error) {
 	cfg := Microservice.InstanceConfiguration.Infrastructure.Secrets
-	backend := cfg.Backend
-	if backend == "" {
-		backend = secrets.BackendPostgres
-	}
-	kekProvider := cfg.KEKProvider
-	if kekProvider == "" {
-		kekProvider = secrets.InstanceKEKProvider
-	}
-	// Reject an unknown identifier up front (fail-closed), then reject a known-but-
-	// unbuilt option: only the default postgres backend + instance KEK provider ship
-	// today; the external secret-manager backends and cloud-KMS providers are additive.
-	if err := (secrets.Config{Backend: backend, KEKProvider: kekProvider}).Validate(); err != nil {
-		return nil, err
-	}
-	if backend != secrets.BackendPostgres || kekProvider != secrets.InstanceKEKProvider {
-		return nil, fmt.Errorf("secrets: only backend %q with KEK provider %q is implemented (got backend=%q kekProvider=%q)",
-			secrets.BackendPostgres, secrets.InstanceKEKProvider, backend, kekProvider)
-	}
-	rootKey, err := cfg.DecodedRootKey()
-	if err != nil {
-		return nil, err
-	}
-	kek, err := secrets.NewInstanceKeyProvider(rootKey)
-	if err != nil {
-		return nil, err
-	}
-	return secrets.NewStore(RdbManager.Database, kek), nil
+	// DecodedRootKey is passed as a source rather than called here so New keeps this
+	// wiring's original check order: an external backend that owns its own keys is
+	// refused for not being built, not for lacking an instance root key.
+	return secrets.New(
+		secrets.Config{Backend: cfg.Backend, KEKProvider: cfg.KEKProvider},
+		RdbManager.Database,
+		cfg.DecodedRootKey,
+	)
 }
 
 // createNatsComponents creates the messaging components used by this microservice:
