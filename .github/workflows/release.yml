@@ -826,17 +826,34 @@ jobs:
       #
       # --release-header, NOT --release-notes: the latter REPLACES the body and would
       # silently drop the changelog. Both flags exist and one of them is wrong.
+      # 🔴 WRITE THIS OUTSIDE THE WORKSPACE. $GITHUB_WORKSPACE *is* the checkout, so a
+      # file written there is an untracked file in the repo -- and goreleaser's `validate`
+      # refuses to release from a dirty tree ("git is in a dirty state"). That is not a
+      # nuisance check to work around: releasing from a tree that does not match the tag
+      # is exactly what it exists to prevent. $RUNNER_TEMP is outside the checkout.
+      #
+      # This shipped broken in v0.15.0-rc.1 and the rc is what caught it -- after every
+      # image had been pushed, which is the cost of learning it there. It got past local
+      # testing because the dry run passed `--skip=publish,validate`, so the one check
+      # that would have failed was the one that was skipped.
       - name: Build the release-notes header from the highlights
         run: |
           hack/build-release-notes-header.sh "${GITHUB_REF_NAME}" \
-            > "${GITHUB_WORKSPACE}/release-header.md"
-          cat "${GITHUB_WORKSPACE}/release-header.md"
+            > "${RUNNER_TEMP}/release-header.md"
+          cat "${RUNNER_TEMP}/release-header.md"
+          # The tree must be clean here, or goreleaser will refuse below. Fail with a
+          # sentence that names the cause rather than letting it surface as "dirty state".
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The checkout is dirty before goreleaser runs; it will refuse to release. Something in this job wrote into the workspace:"
+            git status --porcelain
+            exit 1
+          fi
 
       - name: goreleaser release
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
           version: "~> v2"
-          args: release --clean --release-header=${{ github.workspace }}/release-header.md
+          args: release --clean --release-header=${{ runner.temp }}/release-header.md
           # The dcctl module is the goreleaser project root; its config and
           # main.go live under backend/cli.
           workdir: backend/cli
