@@ -377,6 +377,12 @@ func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
 	}()
 
 	// Background inactivity monitor, tracked so ExecuteStop can join it.
+	//
+	// 🔴 THE Add IS OUTSIDE THE `go` ON PURPOSE, as it is for readerWG and workerWG
+	// above. sync.WaitGroup requires that an Add raising the counter from zero
+	// happen-before the Wait meant to hold for it; an Add moved inside the goroutine can be
+	// scheduled after Wait has already seen a zero counter and returned, which is the
+	// "clean stop reported over work still running" this join exists to prevent.
 	sp.monitorWG.Add(1)
 	go func() {
 		defer sp.monitorWG.Done()

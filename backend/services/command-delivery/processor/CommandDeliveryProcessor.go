@@ -1034,10 +1034,19 @@ func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Co
 
 // startPeriodic launches one background pass under the WaitGroup ExecuteStop joins.
 //
-// 🔑 EVERY BACKGROUND PASS GOES THROUGH HERE, and the Add is at the CALL SITE rather than
-// inside the loop bodies because the loops are also driven directly by tests. A loop that
-// called Done() on its own would make a `go proc.runSweepTicker(ctx)` in a test panic on a
-// negative WaitGroup counter, which is the sort of coupling that gets the join deleted.
+// 🔴 THE Add MUST HAPPEN BEFORE THE `go`, AND THIS IS THE INVARIANT, NOT A STYLE NOTE.
+// sync.WaitGroup requires that an Add raising the counter from zero happen-before the Wait
+// it is meant to hold; an Add moved INSIDE the goroutine can be scheduled after Wait has
+// already seen a zero counter and returned, which is the very "ExecuteStop reports a clean
+// stop over work still running" this whole mechanism exists to prevent. Nothing enforces it
+// but this function, which is why every pass goes through it and none starts its own
+// goroutine. It is also not currently reachable from ExecuteStart — that runs
+// synchronously, so every Add completes before Start returns and long before any Stop —
+// so the guarantee rests on the ordering here rather than on the caller.
+//
+// The matching Done is deferred INSIDE the goroutine, and the pass function is a closure
+// rather than the loop method itself, so a loop stays callable directly (several tests
+// drive `go proc.runSweepTicker(ctx)`) without owning a counter it did not raise.
 func (cproc *CommandDeliveryProcessor) startPeriodic(pass func()) {
 	cproc.periodic.Add(1)
 	go func() {
@@ -1071,15 +1080,23 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// startup pass would publish every queued command once per new pod.
 	cproc.startPeriodic(func() { cproc.sweepLocked(ctx) })
 
-	// Processing loop for inbound device responses.
-	go func() {
+	// Processing loop for inbound device responses, joined like every other
+	// background goroutine here.
+	//
+	// 🔑 THE JOIN IS BOUNDED BY THE SAME ROOT CANCELLATION, plus one Fetch.
+	// messaging's reader returns io.EOF the moment its context is cancelled, so this
+	// loop unwinds on the cancel that precedes Stop rather than on anything ExecuteStop
+	// does. The one place inside ReadMessage that does not watch the context is the
+	// pull-consumer Fetch, which is capped at its own MaxWait — currently a second — so
+	// that is the worst this adds to a shutdown, and only when the cancel lands mid-fetch.
+	cproc.startPeriodic(func() {
 		for {
 			eof := cproc.ProcessMessage(ctx)
 			if eof {
 				break
 			}
 		}
-	}()
+	})
 
 	// Background expiry + delivery ticker.
 	cproc.startPeriodic(func() { cproc.runSweepTicker(ctx) })
@@ -1121,12 +1138,17 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 // that pass PUBLISHES PHYSICAL ACTUATIONS and holds Api.TrySweepLock, so the lock would be
 // held by a goroutine the lifecycle no longer tracks.
 //
-// 🔑 THE WAIT IS BOUNDED BY THE ROOT CANCELLATION THAT ALREADY HAPPENED, not by a
-// timeout here. Microservice shutdown cancels the root context BEFORE calling Stop, and
-// that root context is the one ExecuteStart handed to every loop, so a pass in flight is
-// already unwinding against a cancelled context by the time this wait begins. That is also
-// why no deadline is taken from ExecuteStop's own context: it is context.Background(), so a
-// bounded wait on it could never fire — a guard that cannot fire is worse than none.
+// 🔑 THE PERIODIC WAIT IS BOUNDED BY THE ROOT CANCELLATION THAT ALREADY HAPPENED, not
+// by a timeout here. Microservice shutdown cancels the root context BEFORE calling Stop,
+// and that root context is the one ExecuteStart handed to every loop, so a pass in flight
+// is already unwinding against a cancelled context by the time this wait begins. That is
+// also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
+// so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
+//
+// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
+// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
+// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
+// only one of them is answerable to the root context.
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
 	cproc.nudger.Stop()
 	close(cproc.quit)

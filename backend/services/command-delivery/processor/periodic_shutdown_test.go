@@ -5,11 +5,13 @@ package processor
 
 import (
 	"context"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // 🔴 WHAT THESE TESTS ARE FOR. ExecuteStop used to end at `close(cproc.quit)`. Closing
@@ -28,8 +30,8 @@ import (
 // join that never completes would be a hung shutdown, not a fixed one.
 //
 // 🔑 THERE IS ONE TEST PER PASS, NOT ONE FOR THE PROCESSOR, AND EACH PASS HAS ITS OWN
-// GATE. The WaitGroup is registered at four separate call sites, and a test that blocked
-// on whichever pass happened to arrive first would stay green with three of those four
+// GATE. The WaitGroup is registered at five separate call sites, and a test that blocked
+// on whichever pass happened to arrive first would stay green with four of those five
 // deleted — any one surviving registration is enough to hold ExecuteStop. That is not a
 // hypothetical: the first version of this file shared one counter across the three lock
 // methods, and the two reconciler tests were in fact parking the STARTUP DELIVERY pass,
@@ -45,6 +47,11 @@ type passGate struct {
 	calls  int
 	parkOn int
 
+	// parked is true while a call is held, and duringPark counts the calls that arrive
+	// from OTHER goroutines while it is. See callsDuringPark.
+	parked     bool
+	duringPark int
+
 	entered chan struct{}
 	release chan struct{}
 }
@@ -59,13 +66,31 @@ func (g *passGate) take() (bool, error) {
 	g.mu.Lock()
 	g.calls++
 	park := g.parkOn > 0 && g.calls == g.parkOn
+	if park {
+		g.parked = true
+	} else if g.parked {
+		g.duringPark++
+	}
 	g.mu.Unlock()
 	if !park {
 		return false, nil
 	}
 	g.entered <- struct{}{}
 	<-g.release
+	g.mu.Lock()
+	g.parked = false
+	g.mu.Unlock()
 	return false, nil
+}
+
+// callsDuringPark is how many calls reached this gate from some other goroutine while one
+// was parked. It is what lets a test PROVE which goroutine it parked — see
+// TestStopWaitsForTheDeliverySweepTicker, whose whole difficulty is that the startup pass
+// and the sweep ticker call the same method.
+func (g *passGate) callsDuringPark() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.duringPark
 }
 
 // blockingLockApi is a CommandDeliveryApi with an independent gate per pass. The embedded
@@ -99,6 +124,24 @@ func (a *blockingLockApi) TryStrandedLock(context.Context, func() error) (bool, 
 	return a.stranded.take()
 }
 
+// parkingReader holds the response-consumer loop inside ReadMessage, then ends it. EOF on
+// release is what the real reader does on a cancelled context, so the loop unwinds the way
+// it does in production rather than by some route invented here.
+type parkingReader struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *parkingReader) ReadMessage(context.Context) (messaging.Message, error) {
+	r.once.Do(func() {
+		r.entered <- struct{}{}
+		<-r.release
+	})
+	return messaging.Message{}, io.EOF
+}
+func (r *parkingReader) HandleResponse(error) {}
+
 // startedProc builds a literal processor with an EOF response reader and runs the real
 // Initialize/Start callbacks, so what the test drives is the lifecycle's own wiring
 // rather than a reconstruction of it.
@@ -118,15 +161,27 @@ func startedProc(t *testing.T, api model.CommandDeliveryApi, tune func(*CommandD
 	return proc
 }
 
-// assertStopWaits is the assertion all four cases share: with one pass parked at its own
+// assertStopWaits is the assertion every case shares: with one pass parked at its own
 // gate, ExecuteStop must not return; released, it must.
-func assertStopWaits(t *testing.T, proc *CommandDeliveryProcessor, gate *passGate, pass string) {
+//
+// beforeStop, when given, runs after the pass is parked and BEFORE ExecuteStop is called.
+// That ordering is not incidental: ExecuteStop closes quit before it waits, which stops
+// every ticker, so a check placed inside the wait window would observe a system in which
+// nothing can tick and would answer "quiet" no matter what it was asked. The first version
+// of the attribution check below was written there and could not fail — its negative
+// control passed, which is how it was caught.
+func assertStopWaits(t *testing.T, proc *CommandDeliveryProcessor, entered <-chan struct{},
+	release chan struct{}, pass string, beforeStop func()) {
 	t.Helper()
 
 	select {
-	case <-gate.entered:
+	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("the %s pass never started; this test cannot measure a join it never set up", pass)
+	}
+
+	if beforeStop != nil {
+		beforeStop()
 	}
 
 	stopped := make(chan error, 1)
@@ -142,7 +197,7 @@ func assertStopWaits(t *testing.T, proc *CommandDeliveryProcessor, gate *passGat
 	case <-time.After(250 * time.Millisecond):
 	}
 
-	close(gate.release)
+	close(release)
 
 	select {
 	case err := <-stopped:
@@ -162,18 +217,47 @@ func assertStopWaits(t *testing.T, proc *CommandDeliveryProcessor, gate *passGat
 func TestStopWaitsForTheStartupDeliveryPass(t *testing.T) {
 	api := newBlockingLockApi(1, 0, 0)
 	proc := startedProc(t, api, nil)
-	assertStopWaits(t, proc, api.sweep, "startup delivery")
+	assertStopWaits(t, proc, api.sweep.entered, api.sweep.release, "startup delivery", nil)
 }
 
-// The sweep ticker. Its gate parks the SECOND sweep-lock call, because the startup pass
-// takes the first and is waved straight through — that is what separates this test from
-// the one above.
+// The sweep ticker.
+//
+// 🔴 THIS IS THE ONE TEST WHOSE PASS IS NOT IDENTIFIED BY WHICH METHOD IT CALLS. The
+// startup pass and the ticker both go through TrySweepLock, so parking "the second call"
+// only reaches the ticker if the startup goroutine is scheduled within the tick interval.
+// That assumption fails in the WORSE direction — under CI load the ticker takes call one,
+// the startup pass parks at call two, and the test silently measures the startup
+// registration instead, leaving "the sweep ticker is never registered" alive with a green
+// suite.
+//
+// 🔑 SO THE ATTRIBUTION IS ASSERTED RATHER THAN ASSUMED, and callsDuringPark is what
+// asserts it. With a call parked and the processor otherwise still running, one of two
+// things is true: the parked goroutine is the TICKER, in which case the ticker cannot tick
+// and — the startup pass having already been one of the two earlier calls — nothing else
+// reaches this gate; or the parked goroutine is the STARTUP pass, in which case the ticker
+// is free and lands a call every 5ms. Requiring zero over a window many ticks long
+// therefore passes only when the parked pass really is the ticker, and the mis-scheduled
+// case becomes a loud red instead of a vacuous green.
+//
+// 🔴 THE CHECK RUNS BEFORE ExecuteStop, AND IT IS WORTHLESS ANYWHERE ELSE. ExecuteStop
+// closes quit before it waits, which stops the ticker — so the same check made while
+// ExecuteStop was blocked would observe a system that cannot tick and would answer "zero"
+// however wrong the attribution was. It was written there first, and its negative control
+// (park call one, which is the startup pass) passed. This is the version that fails it.
 func TestStopWaitsForTheDeliverySweepTicker(t *testing.T) {
-	api := newBlockingLockApi(2, 0, 0)
+	api := newBlockingLockApi(3, 0, 0)
 	proc := startedProc(t, api, func(p *CommandDeliveryProcessor) {
 		p.SweepInterval = 5 * time.Millisecond
 	})
-	assertStopWaits(t, proc, api.sweep, "delivery sweep")
+	assertStopWaits(t, proc, api.sweep.entered, api.sweep.release, "delivery sweep", func() {
+		// Long enough for ~10 ticks, so a free ticker cannot go unnoticed.
+		time.Sleep(50 * time.Millisecond)
+		if n := api.sweep.callsDuringPark(); n != 0 {
+			t.Fatalf("%d further sweep-lock calls arrived while the pass was parked, so the "+
+				"parked pass was NOT the ticker (a ticking ticker is exactly what produces "+
+				"them) and this test is measuring some other goroutine's registration", n)
+		}
+	})
 }
 
 // The hold reconciler, parked at its own lock. The sweep gate parks nothing, so the
@@ -184,7 +268,7 @@ func TestStopWaitsForTheHoldReconcilePass(t *testing.T) {
 	proc := startedProc(t, api, func(p *CommandDeliveryProcessor) {
 		p.holdInterval = 5 * time.Millisecond
 	})
-	assertStopWaits(t, proc, api.hold, "hold reconcile")
+	assertStopWaits(t, proc, api.hold.entered, api.hold.release, "hold reconcile", nil)
 }
 
 // The stranded-SENT reconciler, same shape again.
@@ -193,10 +277,23 @@ func TestStopWaitsForTheStrandedReconcilePass(t *testing.T) {
 	proc := startedProc(t, api, func(p *CommandDeliveryProcessor) {
 		p.strandedInterval = 5 * time.Millisecond
 	})
-	assertStopWaits(t, proc, api.stranded, "stranded reconcile")
+	assertStopWaits(t, proc, api.stranded.entered, api.stranded.release, "stranded reconcile", nil)
 }
 
-// 🔑 THE COUNTERWEIGHT TO ALL FOUR. Waiting is only correct while a shutdown with nothing
+// The inbound response-consumer loop. It is not a ticker and not a database pass, but it
+// is a background goroutine ExecuteStart launches and it does write through the same pool,
+// so leaving it untracked is the same shape as the four above. Its gate is the reader
+// rather than the API, which is also what makes it unambiguous: no other goroutine reads
+// messages.
+func TestStopWaitsForTheResponseConsumer(t *testing.T) {
+	reader := &parkingReader{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	proc := startedProc(t, &fakeApi{}, func(p *CommandDeliveryProcessor) {
+		p.CommandResponsesReader = reader
+	})
+	assertStopWaits(t, proc, reader.entered, reader.release, "response consumer", nil)
+}
+
+// 🔑 THE COUNTERWEIGHT TO ALL FIVE. Waiting is only correct while a shutdown with nothing
 // in flight is still prompt: a join placed where a loop can never reach its Done would
 // satisfy every test above by hanging, and this is what tells the two apart.
 func TestStopIsPromptWhenNoPassIsRunning(t *testing.T) {
