@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-ai-inference/config"
@@ -233,7 +232,7 @@ func registerAdminHandler(providers map[gqlcore.ContextKey]interface{}, metrics 
 		Inference: InferenceResolver,
 		Metrics:   metrics,
 	})
-	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, providers, Microservice.Readiness))
+	Microservice.Mux().Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, providers, Microservice.Readiness))
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.

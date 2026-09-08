@@ -192,9 +192,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Serve the OAuth 2.1 Authorization-Server Metadata (RFC 8414) when an issuer
 	// URL is configured (ADR-047). Absent an issuer the OAuth surface stays off,
 	// fail-closed — mirroring the service-token secret gate above.
-	if Configuration.OAuthEnabled() {
-		registerOAuthHandlers()
-	}
+	registerOAuthHandlersIfEnabled()
 
 	// The instance-scoped settings Service (ADR-042 P2). Shared between the
 	// data-plane resolver (which reads the branding.default setting as the cascade's
@@ -244,7 +242,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Tenant branding-logo object-store endpoints (ADR-058): an authorizing read
 	// proxy + a branding:write upload, on the shared http server. Data-plane tier
 	// (tenant access tokens), self-scoped to the caller's tenant.
-	graphql.RegisterBrandingLogoHandler(http.DefaultServeMux, BlobStore, IdentityManager, IdentityManager.Validator())
+	graphql.RegisterBrandingLogoHandler(Microservice.Mux(), BlobStore, IdentityManager, IdentityManager.Validator())
 
 	// The ADR-077 purge coordinator. Deleting a tenant marks its row `purging` and cuts
 	// access; this is what then erases its data across every store and removes the row,
@@ -343,7 +341,7 @@ func registerAdminHandler() {
 		graphql.ContextAdminKey: adminSvc,
 	}
 	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
-	http.Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
+	Microservice.Mux().Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
 }
 
 // registerSettingsHandler parses the settings schema and registers its
@@ -354,7 +352,7 @@ func registerSettingsHandler() {
 		graphql.ContextSettingsKey: SettingsService,
 	}
 	settingsSchema := gqlcore.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
-	http.Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
+	Microservice.Mux().Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
 }
 
 // registerKeyHandlers serves the instance signing keys on the shared http server
@@ -362,7 +360,7 @@ func registerSettingsHandler() {
 // of every retained public key — consumers select the right key by the token's
 // kid, which lets a signing-key rotation propagate without restarts.
 func registerKeyHandlers() {
-	http.HandleFunc("/auth/jwks", func(w http.ResponseWriter, r *http.Request) {
+	Microservice.Mux().HandleFunc("/auth/jwks", func(w http.ResponseWriter, r *http.Request) {
 		jwks, err := IdentityManager.JWKS()
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
@@ -397,14 +395,28 @@ func registerKeyHandlers() {
 // The insertion is computed from the configured issuer rather than hardcoded, so an
 // operator who sets a path-less issuer (a dedicated AS host) gets one registration
 // and no duplicate.
+// registerOAuthHandlersIfEnabled is the gate itself, as a named function.
+//
+// 🔴 IT IS SEPARATE FROM registerOAuthHandlers SO A TEST CAN DRIVE THE GATE RATHER THAN
+// RESTATE IT. Spelled inline in the initializer, the only way to test "OAuth off
+// registers nothing" was for the test to skip the call itself — which asserts against
+// the test's own copy of the condition and stays green even if this became
+// unconditional. The absence has to be produced by production's own decision.
+func registerOAuthHandlersIfEnabled() {
+	if !Configuration.OAuthEnabled() {
+		return
+	}
+	registerOAuthHandlers()
+}
+
 func registerOAuthHandlers() {
-	identity.RegisterMetadataHandlers(http.DefaultServeMux, Configuration.Auth.IssuerUrl)
+	identity.RegisterMetadataHandlers(Microservice.Mux(), Configuration.Auth.IssuerUrl)
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
 	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and
 	// confidential clients (client_secret_basic/post) both flow through it. The
 	// authorize endpoint that issues codes lands in slice C.
-	http.Handle(identity.TokenPath, identity.TokenHandler(
+	Microservice.Mux().Handle(identity.TokenPath, identity.TokenHandler(
 		IdentityManager.AuthenticateClient,
 		IdentityManager.RedeemAuthorizationCode,
 		IdentityManager.RefreshOAuth,
@@ -413,19 +425,19 @@ func registerOAuthHandlers() {
 	// The authorization endpoint (ADR-047 slice C): the server-rendered
 	// login → tenant-select → consent flow that issues the codes the token endpoint
 	// redeems.
-	http.Handle(identity.AuthorizePath, identity.AuthorizeHandler(IdentityManager))
+	Microservice.Mux().Handle(identity.AuthorizePath, identity.AuthorizeHandler(IdentityManager))
 
 	// The userinfo endpoint (ADR-047 SSO): a login client (Grafana) that treats the
 	// access token as opaque calls it with the token as a Bearer credential to read
 	// the subject's identity + the operator-tier `sudo` claim. Validation goes
 	// through the access-token validator (signature + type + tenant).
-	http.Handle(identity.UserinfoPath, identity.UserinfoHandler(func(t string) (*auth.Claims, error) {
+	Microservice.Mux().Handle(identity.UserinfoPath, identity.UserinfoHandler(func(t string) (*auth.Claims, error) {
 		return IdentityManager.Validator().Validate(t)
 	}))
 
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.
-	http.HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {
+	Microservice.Mux().HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -449,7 +461,7 @@ func registerOAuthHandlers() {
 // an empty configured secret fails closed (minting disabled). The handler body
 // lives in identity so its branches are unit-tested.
 func registerServiceTokenHandler() {
-	http.Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
+	Microservice.Mux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
 		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
 		IdentityManager.IssueServiceToken,
 	))
