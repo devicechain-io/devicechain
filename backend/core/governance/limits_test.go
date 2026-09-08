@@ -5,7 +5,9 @@ package governance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -181,6 +183,50 @@ func TestDimension_PerSecond(t *testing.T) {
 
 	// A zero-value Dimension meters at the declared number rather than at nothing.
 	assert.Equal(t, 42.0, Dimension{Name: "unscaled"}.PerSecond(42))
+}
+
+// A non-positive platform default is floored to defaultLimits rather than served. A
+// config key left unset arrives here as a zero value, and a zero ceiling is NOT
+// "unlimited" — it is a bucket that admits nothing, i.e. a total outage for every
+// tenant with no override and for every tenant during the cold-cache window.
+func TestNewTenantLimitResolver_FloorsNonPositiveDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		def  Limits
+		want Limits
+	}{
+		{"both unset", Limits{}, defaultLimits},
+		{"rate unset", Limits{Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
+		{"burst unset", Limits{MessagesPerSecond: 1000}, Limits{MessagesPerSecond: 1000, Burst: defaultLimits.Burst}},
+		{"negative", Limits{MessagesPerSecond: -1, Burst: -1}, defaultLimits},
+		{"NaN rate", Limits{MessagesPerSecond: math.NaN(), Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
+		{"infinite rate", Limits{MessagesPerSecond: math.Inf(1), Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
+		{"usable default is untouched", platformDefault, platformDefault},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A fetcher that never answers, so what is asserted is the value served
+			// for an unresolved tenant — the cold-cache and fail-open reading.
+			f := &blockingFetcher{gate: make(chan struct{})}
+			r := NewTenantLimitResolver(f, tc.def, "test")
+			rps, burst := r.Resolve("acme")
+			assert.Equal(t, tc.want.MessagesPerSecond, rps)
+			assert.Equal(t, tc.want.Burst, burst)
+			assert.Positive(t, rps, "a served ceiling must admit something")
+			assert.Positive(t, burst, "a served ceiling must admit something")
+		})
+	}
+}
+
+// The fetcher folds overrides onto the same floored default, so the value served on a
+// cold miss and the value a null override resolves to cannot disagree.
+func TestNewServiceFetcher_FloorsNonPositiveDefault(t *testing.T) {
+	f := NewServiceFetcher(nil, "", Limits{}, Ingest).(*serviceFetcher)
+	assert.Equal(t, defaultLimits, f.def)
+
+	limits, floored := resolveLimits(map[string]json.RawMessage{}, f.def, Ingest)
+	assert.Empty(t, floored)
+	assert.Equal(t, defaultLimits, limits, "a tenant with no override inherits the floored default")
 }
 
 func tenantName(i int) string {
