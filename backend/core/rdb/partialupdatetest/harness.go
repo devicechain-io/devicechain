@@ -5,9 +5,14 @@ package partialupdatetest
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // THE PARTIAL-UPDATE HARNESS.
@@ -558,15 +563,22 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 
 // 🔴 THE FIXTURE MUST BE NO MORE PERMISSIVE THAN PRODUCTION, and this is what says so.
 //
-// NewSQLiteDB registers the token-grammar callback because production does. It used not
-// to, and that is not a tidiness point: a harness weaker than the world it certifies
-// passes things the real system refuses, so a defect can be green here and broken live.
-// It let a whitespace-only profile token through.
+// NewSQLiteDB registers the four global callbacks because production registers four. Two
+// of them used not to be there — while the fixture's own doc claimed parity — and that is
+// not a tidiness point: a harness weaker than the world it certifies passes things the
+// real system refuses, so a defect can be green here and broken live. The missing token
+// grammar let a whitespace-only profile token through.
 //
-// Without this the registration is UNOBSERVED — a mutant deleting the call survived an
-// entire service's suite, because every fixture token in it is already grammar-conforming
-// and nothing ever asked the callback to do anything. Asking it directly is the only way
-// the fixture's strictness is pinned rather than assumed.
+// Without this the registrations are UNOBSERVED. A mutant deleting the token-grammar call
+// survived an entire service's suite, because every fixture token in it is already
+// grammar-conforming and nothing ever asked the callback to do anything. The audit journal
+// and the erasure fence are unobserved for the same reason and more completely: no
+// property below ever fences a tenant or reads the journal, and every one of them asserts
+// on `fam.Update(...) == nil`, so a mutant deleting either registration changes nothing
+// any of them can see. (Tenant scoping is the exception — the properties all run under a
+// tenant, and it fails closed without one.) Asking each one directly is the only way the
+// fixture's strictness is pinned rather than assumed, and each subtest below names the
+// callback it would lose.
 func fixtureIsAsStrictAsProduction[A any](t *testing.T, s Suite[A]) {
 	for _, bad := range []string{"not a token", "-leading-hyphen", "trailing space "} {
 		t.Run(bad, func(t *testing.T) {
@@ -587,6 +599,143 @@ func fixtureIsAsStrictAsProduction[A any](t *testing.T, s Suite[A]) {
 			t.Fatalf("the fixture refused the grammar-conforming token %q: %v", s.ValidToken, err)
 		}
 	})
+
+	t.Run("and refuses a write for a fenced tenant", func(t *testing.T) {
+		fixtureFencesAPurgedTenant(t, s.Context())
+	})
+	t.Run("and journals the mutation it accepts", func(t *testing.T) {
+		fixtureJournalsAMutation(t, s.Context())
+	})
+	t.Run("and fails a mutation whose journal write fails", func(t *testing.T) {
+		fixtureFailsClosedOnAnUnwritableJournal(t, s.Context())
+	})
+}
+
+// fenceProbe is the harness's OWN tenant-scoped row, and it exists because the last two
+// callbacks cannot be driven through Suite.CreateWithToken.
+//
+// 🔴 A SERVICE'S STRICTNESS ENTITY IS NOT NECESSARILY FENCEABLE. ai-inference's is
+// AIProvider, which is INSTANCE-scoped — no tenant column, written in the system context —
+// so a fence planted for the suite's tenant would not apply to it and "the fixture refuses
+// a fenced write" would pass there by being asked nothing. That is the vacuity this whole
+// property exists to prevent, so the fence and journal subtests drive a row whose shape is
+// known: TenantScoped, so the fence has a tenant to match and the scope callback has a
+// column to stamp, and NO Token field, so the token grammar contributes nothing and a
+// refusal here can only have come from the callback under test.
+type fenceProbe struct {
+	ID uint `gorm:"primaryKey"`
+	rdb.TenantScoped
+	Note string
+}
+
+// suiteTenant is the tenant the probe rows are written under: the suite's own, so the
+// fence is planted for the tenant the rest of the harness runs as.
+func suiteTenant(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		t.Fatal("Suite.Context carries no tenant, so nothing here can be fenced — see " +
+			"TenantContext")
+	}
+	return tenant
+}
+
+// THE ERASURE FENCE IS REGISTERED. A write for a tenant this area has reclaimed is
+// refused, in the fixture, exactly as production refuses it (ADR-077).
+//
+// The unfenced write comes first and is asserted to SUCCEED, for the same reason the valid
+// token is asserted above: a fence that refused everything would satisfy the second half
+// on its own, and the fixture fails closed on an unreadable purged_tenants — so "refused"
+// and "the table was never created" are the same observation without this line.
+func fixtureFencesAPurgedTenant(t *testing.T, ctx context.Context) {
+	tenant := suiteTenant(t, ctx)
+	db := NewSQLiteDB(t, &fenceProbe{})
+
+	if err := db.WithContext(ctx).Create(&fenceProbe{Note: "before the fence"}).Error; err != nil {
+		t.Fatalf("the fixture refused an UNFENCED write: %v — the fence subtest below would "+
+			"then pass without the fence doing anything", err)
+	}
+
+	now := time.Now().UTC()
+	if err := db.WithContext(ctx).Create(&rdb.PurgedTenant{
+		Token: tenant, Epoch: now, PlantedAt: now,
+	}).Error; err != nil {
+		t.Fatalf("plant the fence for %q: %v", tenant, err)
+	}
+
+	err := db.WithContext(ctx).Create(&fenceProbe{Note: "after the fence"}).Error
+	if !errors.Is(err, rdb.ErrTenantPurged) {
+		t.Fatalf("a write for the fenced tenant %q returned %v, want %v — the fixture is not "+
+			"running the erasure fence production runs, so every property here is asserted "+
+			"against a chain that cannot refuse a resurrection", tenant, err, rdb.ErrTenantPurged)
+	}
+}
+
+// THE AUDIT JOURNAL IS REGISTERED. Every mutation the fixture accepts is recorded, by
+// construction, the way production records it (ADR-019).
+func fixtureJournalsAMutation(t *testing.T, ctx context.Context) {
+	db := NewSQLiteDB(t, &fenceProbe{})
+	if err := db.WithContext(ctx).Create(&fenceProbe{Note: "journalled"}).Error; err != nil {
+		t.Fatalf("create the probe row: %v", err)
+	}
+
+	var events []rdb.AuditEvent
+	if err := db.WithContext(ctx).Find(&events).Error; err != nil {
+		t.Fatalf("read the audit journal: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("one create wrote %d audit rows, want 1 — the fixture is not running the "+
+			"audit journal production runs", len(events))
+	}
+	if events[0].Operation != "create" || events[0].TenantId != suiteTenant(t, ctx) {
+		t.Fatalf("the audit row reads (%s, tenant %q), want (create, tenant %q)",
+			events[0].Operation, events[0].TenantId, suiteTenant(t, ctx))
+	}
+}
+
+// 🔴 THE CLASS THE TEN PROPERTIES ABOVE STRUCTURALLY CANNOT SEE, PINNED HERE INSTEAD.
+//
+// The journal's hook is After("gorm:create"/"update"/"delete"), which gorm sorts past the
+// commit callback, and it fails closed with db.AddError. So a mutation whose journal write
+// fails reports FAILURE for a row that has already CHANGED. Every property above asserts
+// on `fam.Update(...) == nil` and reads the row only when that returned nil, so none of
+// them can observe an error over a completed write — registering the callback would
+// otherwise be strictness the harness owns but never exercises.
+//
+// This drives it: take the journal's table away, then update. The error is required AND so
+// is the changed value, because an assertion on the error alone would also pass if the
+// mutation had been refused, which is the opposite behaviour.
+func fixtureFailsClosedOnAnUnwritableJournal(t *testing.T, ctx context.Context) {
+	db := NewSQLiteDB(t, &fenceProbe{})
+	row := &fenceProbe{Note: "seeded"}
+	if err := db.WithContext(ctx).Create(row).Error; err != nil {
+		t.Fatalf("create the probe row: %v", err)
+	}
+	if err := db.Migrator().DropTable(&rdb.AuditEvent{}); err != nil {
+		t.Fatalf("drop the audit journal's table: %v", err)
+	}
+
+	err := db.WithContext(ctx).Model(&fenceProbe{}).
+		Where("id = ?", row.ID).Update("note", "moved").Error
+	if err == nil {
+		t.Fatal("an update whose journal write could not land reported success — production " +
+			"fails closed here, so the fixture is certifying a mutation production would " +
+			"have reported as failed")
+	}
+
+	var reloaded []fenceProbe
+	if err := db.WithContext(ctx).Where("id = ?", row.ID).Find(&reloaded).Error; err != nil {
+		t.Fatalf("reload the probe row: %v", err)
+	}
+	if len(reloaded) != 1 {
+		t.Fatalf("reloaded %d probe rows, want 1", len(reloaded))
+	}
+	if reloaded[0].Note != "moved" {
+		t.Fatalf("the probe row reads %q, want %q — the failure this reports is supposed to be "+
+			"one over a mutation that ALREADY HAPPENED; a refused write is a different "+
+			"behaviour and this subtest is no longer pinning the one it names",
+			reloaded[0].Note, "moved")
+	}
 }
 
 // ─── shared helpers ────────────────────────────────────────────────────────
