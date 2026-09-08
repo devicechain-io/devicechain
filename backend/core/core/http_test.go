@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -293,6 +294,67 @@ func TestHttpServerShutdownBeforeStartLeavesItStartable(t *testing.T) {
 	}
 	if err := srv.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		t.Errorf("second Shutdown = %v, want nil or ErrServerClosed", err)
+	}
+}
+
+// Start after Shutdown must refuse, and must say WHY it refuses.
+//
+// Both refusals are correct — http.Server cannot be restarted once shut down — but they
+// send a reader to different places. "already started" describes a second Start racing a
+// first and invites a hunt for that second caller; a service that stopped and wants to
+// serve again needs to hear that this server is spent and it should build another.
+func TestHttpServerStartAfterShutdownSaysItCannotBeRestarted(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "restart-refusal"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+
+	srv := ms.NewHttpServer(0)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	err := srv.Start()
+	if err == nil {
+		t.Fatal("Start after Shutdown returned nil; http.Server latches shuttingDown, so it " +
+			"would bind and then serve nothing")
+	}
+	if !strings.Contains(err.Error(), "cannot be restarted") {
+		t.Errorf("restart refusal = %q, want it to say the server cannot be restarted rather "+
+			"than that it is already started", err)
+	}
+}
+
+// Addr must be safe to call from another goroutine while Start runs.
+//
+// The lifecycle callers are sequential, so nothing in a service races these today — but
+// Addr is how anything else discovers the bound port, and an unsynchronised read of a
+// field Start writes is a data race whether or not the values ever disagree. Under
+// -race this fails without the mutex; without -race it proves only that nothing
+// deadlocks, which is why the guard is stated here rather than left to the reader.
+func TestHttpServerAddrIsSafeConcurrentlyWithStart(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "addr-race"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+
+	srv := ms.NewHttpServer(0)
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = srv.Addr()
+		}()
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	wg.Wait()
+
+	if srv.Addr() == "" {
+		t.Error("Addr() is empty after Start")
 	}
 }
 

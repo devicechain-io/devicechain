@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -99,7 +100,14 @@ func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
 // Shutdown are plain methods and the calling service decides when they run.
 type HttpServer struct {
 	server *http.Server
-	ln     net.Listener
+
+	// mu guards ln and stopped. The lifecycle callers are sequential, so it is not
+	// there to order Start against Shutdown — it is there because Addr is the natural
+	// way for anything else to discover the bound port, and reading a field another
+	// goroutine writes is a data race whether or not the values ever disagree.
+	mu      sync.Mutex
+	ln      net.Listener
+	stopped bool
 }
 
 // NewHttpServer builds an HTTP server for this microservice's mux on the given port.
@@ -131,6 +139,20 @@ func (ms *Microservice) NewHttpServer(port int32) *HttpServer {
 // matters: a Serve error after a successful bind is either the ErrServerClosed of a
 // clean Shutdown or a genuinely exotic condition on an already-bound socket.
 func (s *HttpServer) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 🔴 A SHUT-DOWN SERVER IS FINISHED, NOT MERELY IDLE, AND THE TWO REFUSALS SAY SO
+	// DIFFERENTLY. http.Server latches its shuttingDown flag on the first Shutdown and
+	// never clears it, so a later Serve returns ErrServerClosed immediately — inside
+	// the goroutine below, where it is indistinguishable from a clean stop and is
+	// swallowed. Restarting one therefore SUCCEEDS and serves nothing. Refusing here is
+	// what turns that into an error the caller can act on, and a message that said
+	// "already started" would send them looking for a second Start that does not exist.
+	// A service that needs to serve again builds a new HttpServer.
+	if s.stopped {
+		return fmt.Errorf("http server on %s was shut down and cannot be restarted", s.server.Addr)
+	}
 	if s.ln != nil {
 		return fmt.Errorf("http server is already started on %s", s.ln.Addr())
 	}
@@ -150,8 +172,10 @@ func (s *HttpServer) Start() error {
 }
 
 // Addr is the address actually bound, which is not the configured one when the port
-// was 0. It returns "" before Start.
+// was 0. It returns "" before Start, and is safe to call from any goroutine.
 func (s *HttpServer) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.ln == nil {
 		return ""
 	}
@@ -162,9 +186,34 @@ func (s *HttpServer) Addr() string {
 //
 // It is safe on a server that was never started, because a service's teardown path
 // runs after a startup that may have refused partway through — and a teardown that
-// panics on the way out of a failed startup replaces the real error with its own.
+// panics on the way out of a failed startup replaces the real error with its own. That
+// case is a genuine no-op: forwarding it to http.Server.Shutdown would latch the
+// shuttingDown flag and leave a server that binds but never serves.
+//
+// 🔴 WHAT net/http'S Shutdown DOES NOT COVER, since this wrapper looks like it might:
+// it closes idle connections and waits for active ones, but HIJACKED connections it
+// neither closes nor waits for. A caller that takes over a connection owns its
+// teardown, and net/http stops accounting for it entirely.
+//
+// That is not hypothetical here. The GraphQL subscription endpoint upgrades through
+// gorilla/websocket, whose Upgrader hijacks — so every live subscription is a
+// connection this Shutdown will neither wait for nor close, and the server can report a
+// clean stop with subscription goroutines still running on sockets it no longer knows
+// about. Closing those is the subscription layer's job, not this one's (#949).
+//
+// MCP's event streams are the contrasting case and are NOT affected: they are ordinary
+// active responses, which Shutdown does wait on.
 func (s *HttpServer) Shutdown(ctx context.Context) error {
-	if s.ln == nil {
+	s.mu.Lock()
+	started := s.ln != nil
+	if started {
+		s.stopped = true
+	}
+	s.mu.Unlock()
+
+	// Deliberately outside the lock: Shutdown blocks until the active requests drain,
+	// and holding mu across it would make every concurrent Addr wait out the drain.
+	if !started {
 		return nil
 	}
 	return s.server.Shutdown(ctx)
