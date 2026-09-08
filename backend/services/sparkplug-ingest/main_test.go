@@ -4,7 +4,10 @@
 package main
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -174,4 +177,105 @@ func TestResolveSourcesBuildsOnePerSource(t *testing.T) {
 	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Empty(t, empty)
+}
+
+// leaseTermRecorder is a fake leaseTerm that makes a leadership term's teardown ORDER
+// observable. Its KeepAlive parks once the term context is cancelled — standing in for
+// a Renew whose KV Update is still in flight, widened from the microseconds it really
+// occupies to a window only the test can close — and Release records whether the
+// renewer had stopped by the time it ran.
+type leaseTermRecorder struct {
+	keepAliveStarted chan struct{}
+	letRenewerFinish chan struct{}
+	releaseCalled    chan struct{}
+
+	renewerStopped           atomic.Bool
+	releasedWhileRenewerLive atomic.Bool
+}
+
+func newLeaseTermRecorder() *leaseTermRecorder {
+	return &leaseTermRecorder{
+		keepAliveStarted: make(chan struct{}),
+		letRenewerFinish: make(chan struct{}),
+		releaseCalled:    make(chan struct{}),
+	}
+}
+
+func (l *leaseTermRecorder) Epoch() uint64 { return 7 }
+
+func (l *leaseTermRecorder) KeepAlive(ctx context.Context, _ time.Duration) error {
+	close(l.keepAliveStarted)
+	<-ctx.Done()
+	<-l.letRenewerFinish
+	l.renewerStopped.Store(true)
+	return nil
+}
+
+func (l *leaseTermRecorder) Release() error {
+	l.releasedWhileRenewerLive.Store(!l.renewerStopped.Load())
+	close(l.releaseCalled)
+	return nil
+}
+
+// TestServeAsLeaderJoinsTheRenewerBeforeReleasing pins the teardown ordering that keeps
+// a handover fast. Renew runs its KV Update OUTSIDE the lease mutex, so a Release racing
+// one deletes with the pre-renew revision, loses the CAS, and leaves a freshly renewed
+// entry behind — the partition then stays unacquirable for a full lease TTL on what was
+// an orderly exit. The guarantee is structural, not statistical: the renewer must have
+// RETURNED before Release is called.
+//
+// The assertion is an ordering one, not a timing one. The fake's KeepAlive parks
+// indefinitely after the term ends, so a teardown that joins the renewer provably cannot
+// reach Release until the test lets it; one that does not reaches Release at once and is
+// caught by both the early-release check and the flag Release records.
+func TestServeAsLeaderJoinsTheRenewerBeforeReleasing(t *testing.T) {
+	prevManager := Manager
+	Manager = host.NewManager(nil) // no sources: Start/Stop are no-ops
+	t.Cleanup(func() { Manager = prevManager })
+
+	rec := newLeaseTermRecorder()
+	t.Cleanup(func() {
+		// Never leave the renewer parked, whichever way this test ends.
+		select {
+		case <-rec.letRenewerFinish:
+		default:
+			close(rec.letRenewerFinish)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		serveAsLeader(ctx, rec)
+	}()
+
+	<-rec.keepAliveStarted
+	cancel() // end the term, exactly as a shutdown or a definitively lost lease does
+
+	// The renewer is parked, so a correct teardown cannot have released yet.
+	select {
+	case <-rec.releaseCalled:
+		t.Fatal("serveAsLeader released the lease while its renewer was still running; " +
+			"a release racing an in-flight renewal loses its revision check and leaves the " +
+			"entry to age out, delaying the handover by a full lease TTL")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	close(rec.letRenewerFinish) // the in-flight renewal completes; the renewer returns
+
+	select {
+	case <-served:
+	case <-time.After(10 * time.Second):
+		t.Fatal("serveAsLeader did not return after its renewer stopped")
+	}
+
+	select {
+	case <-rec.releaseCalled:
+	default:
+		t.Fatal("serveAsLeader returned without releasing the lease")
+	}
+	assert.True(t, rec.renewerStopped.Load(), "the renewer should have stopped before the term ended")
+	assert.False(t, rec.releasedWhileRenewerLive.Load(),
+		"Release ran while the renewer was still live; join the renewer before releasing")
 }

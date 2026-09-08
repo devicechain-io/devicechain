@@ -412,18 +412,33 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 	}
 }
 
+// leaseTerm is the narrow slice of *messaging.Lease that a leadership term drives.
+// It exists so the term's teardown ORDERING — join the renewer, THEN release — can
+// be exercised deterministically by a unit test with a fake lease, the way
+// lwm2m-ingest's serveServer lets its serve supervision be tested with a fake
+// transport. *messaging.Lease satisfies it.
+type leaseTerm interface {
+	Epoch() uint64
+	KeepAlive(ctx context.Context, interval time.Duration) error
+	Release() error
+}
+
 // serveAsLeader connects every source and holds them until the lease is definitively
 // lost (KeepAlive returns ErrNotHolder) or the service is shutting down (ctx). On
-// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills) and
-// release the lease so a standby can take over. KeepAlive runs on its OWN goroutine so
-// no processing stall can starve renewal (ADR-070 M4).
-func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
+// either it self-evicts: stop the sources (announcing OFFLINE, firing the wills),
+// join the renewer, and release the lease so a standby can take over. KeepAlive runs
+// on its OWN goroutine so no processing stall can starve renewal (ADR-070 M4).
+func serveAsLeader(ctx context.Context, lease leaseTerm) {
 	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired Sparkplug leadership; connecting sources.")
 	setLeader(true)
 
 	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// keepAliveDone closes when the renewer has stopped, so the release below cannot
+	// run while a Renew is still in flight. See the join in the teardown.
+	keepAliveDone := make(chan struct{})
 	go func() {
+		defer close(keepAliveDone)
 		if errors.Is(lease.KeepAlive(leaderCtx, leaseRenewInterval), messaging.ErrNotHolder) {
 			log.Error().Msg("Lost the Sparkplug leadership lease; self-evicting.")
 			cancel()
@@ -433,8 +448,19 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	Manager.Start()
 	<-leaderCtx.Done()
 
+	// The teardown order is the whole of it, and it matches DETECT's endTerm.
+	// 1. Stop everything that reads or writes: the sources announce OFFLINE and
+	//    disconnect, so past this point nothing is still ingesting for this term.
 	setLeader(false)
 	Manager.Stop()
+	// 2. Join the renewer BEFORE releasing. Renew runs its KV Update outside the lease
+	//    mutex, so a Release racing one deletes with the pre-renew revision, fails the
+	//    CAS, and leaves a freshly renewed entry to age out on its own — the next
+	//    leader then waits a full TTL for a lease nobody holds, which is precisely the
+	//    handover gap the lease exists to close. leaderCtx is already cancelled here,
+	//    so this waits only for an in-flight renewal to finish.
+	<-keepAliveDone
+	// 3. Release last, once nothing can still be writing to the entry.
 	if err := lease.Release(); err != nil {
 		log.Warn().Err(err).Msg("Error releasing the Sparkplug lease (it will age out via its TTL).")
 	}
