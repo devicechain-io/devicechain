@@ -1085,7 +1085,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // beforeMicroserviceStopped drains readiness, unwinds leadership (self-evict: stop the transport
-// and registry timers, release the lease) or the inert transport, and shuts the HTTP server down.
+// and registry timers, release the lease) or the inert transport, stops the NATS manager, and
+// shuts the HTTP server down.
 func beforeMicroserviceStopped(ctx context.Context) error {
 	Microservice.Readiness.BeginDrain()
 	// When leadership is running, cancelling it makes the loop self-evict (stop the transport +
@@ -1096,6 +1097,22 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		<-leadershipDone
 	} else if inertStop != nil {
 		inertStop()
+	}
+	// Stop the NATS manager here, not just Terminate it after: Terminate is only legal
+	// from Stopped (core/core/lifecycle.go), so skipping this step makes the terminate
+	// below a refusal — the metrics sampler keeps running, the connection is never
+	// drained, and, because shuttingDown is only set inside ExecuteStop/ExecuteTerminate,
+	// the ClosedHandler reports an orderly stop as a permanent unasked-for close.
+	//
+	// 🔴 AFTER the unwind above, never before it. The unwind ends in evict(), which
+	// releases the lease with a KV write over this same connection; Stop drains that
+	// connection, so hoisting this block makes the release fail and leaves a standby
+	// waiting out a full lease TTL to take over. Both halves are pinned by
+	// nats_shutdown_test.go — the second test fails on exactly that hoist.
+	if NatsManager != nil {
+		if err := NatsManager.Stop(ctx); err != nil {
+			log.Error().Err(err).Msg("Error stopping the NATS manager.")
+		}
 	}
 	if httpServer == nil {
 		return nil
