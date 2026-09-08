@@ -18,11 +18,11 @@
 // evaluation refuses — the same rings, for the same reasons, with the same answer.
 //
 // These predicates re-check the structure they depend on (length, closure, finite
-// coordinates) rather than trusting a caller to have done it. Both callers DO
-// check first, and both produce better messages, so in practice this package's
-// structural errors are unreachable from either — but a precondition enforced only
-// by a comment is not enforced, and the parity test caught exactly that: an
-// unclosed ring was silently reinterpreted as a different, closed shape.
+// and in-range coordinates) rather than trusting a caller to have done it. Both
+// callers DO check first, and both produce better messages, so in practice this
+// package's structural errors are unreachable from either — but a precondition
+// enforced only by a comment is not enforced, and the parity test caught exactly
+// that: an unclosed ring was silently reinterpreted as a different, closed shape.
 package geo
 
 import (
@@ -112,6 +112,20 @@ func loopFromClosedRing(ring [][]float64) (*s2.Loop, error) {
 		if math.IsNaN(lon) || math.IsInf(lon, 0) || math.IsNaN(lat) || math.IsInf(lat, 0) {
 			return nil, fmt.Errorf("position %d is not a finite coordinate", i)
 		}
+		// 🔴 Range is checked here for the same reason closure is, and it has to run
+		// BEFORE the conversion below rather than being left to the caller. Degrees
+		// outside their range are not rejected by the spherical conversion, they are
+		// WRAPPED: latitude 91 becomes lat 89 lon -179 — measured — so a ring with a
+		// corner 180° around the planet from where it was drawn validates clean and
+		// bounds a completely different area. Nothing about that answer looks wrong.
+		// The one caller does check first, and reports it better, which is exactly
+		// what was true of closure before an unclosed ring got through here.
+		if lon < -180 || lon > 180 {
+			return nil, fmt.Errorf("position %d longitude %v is outside [-180, 180]", i, lon)
+		}
+		if lat < -90 || lat > 90 {
+			return nil, fmt.Errorf("position %d latitude %v is outside [-90, 90]", i, lat)
+		}
 		pts = append(pts, PointFromDegrees(lat, lon))
 	}
 	loop := s2.LoopFromPoints(pts)
@@ -119,19 +133,15 @@ func loopFromClosedRing(ring [][]float64) (*s2.Loop, error) {
 	return loop, nil
 }
 
-// RingSelfIntersects reports the first pair of non-adjacent edges of a closed ring
-// that cross, if any. It is the narrow entry point for callers that only want the
-// crossing question; ValidateClosedRing is the one authoring should use.
-//
-// A ring this cannot build a loop from reports false rather than guessing — the
-// caller owns those cases and diagnoses them better.
-func RingSelfIntersects(ring [][]float64) (int, int, bool) {
-	loop, err := loopFromClosedRing(ring)
-	if err != nil {
-		return 0, 0, false
-	}
-	return LoopSelfIntersects(loop)
-}
+// 🔴 There is deliberately NO exported ring-taking wrapper around the crossing
+// check, and re-adding one is the thing this paragraph exists to prevent. The
+// wrapper that used to sit here answered `false` — "this ring does not cross
+// itself" — for every ring it could not build a loop from: unclosed, too short, a
+// NaN coordinate. That is fail-OPEN on a predicate named exactly like the one an
+// authoring gate reaches for, in a package where every other exit is fail-closed.
+// ValidateClosedRing is the entry point: it returns an ERROR for the cases a
+// verdict cannot describe, so a caller cannot mistake "could not ask" for "asked
+// and the answer was fine".
 
 // LoopSelfIntersects reports the first pair of NON-ADJACENT edges of the loop that
 // cross, if any. Adjacent edges are skipped because they legitimately share a
