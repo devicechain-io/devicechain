@@ -712,10 +712,13 @@ func (g *leaseDeleteGateKV) letDeleteReturn() {
 // are the pair that ENFORCES the "mu is the read lock" claim, rather than leaving it
 // asserted in a comment. Holder.Held() is evaluated for every term-gated message and
 // is documented never to block, so no KV round trip may run under mu. A Lease makes
-// exactly two of them — Renew's revision-checked Update and Release's
-// revision-checked Delete — and there is one test per round trip: park it, then
-// require Held() to answer while it is outstanding. A third round trip added to the
-// type needs a third case here, or it ships covered by review only.
+// exactly two KV WRITES — Renew's revision-checked Update and Release's
+// revision-checked Delete — and there is one test per write: park it, then require
+// Held() to answer while it is outstanding. A third write added to the type needs a
+// third case here, or it ships covered by review only.
+//
+// Writes is the count to check, not round trips: WatchHolder and the rebind in
+// Holder.run also make one (kv.Watch creates a consumer), and neither takes mu.
 //
 // This one covers Renew, and it is the case the ordering gates cannot reach:
 // TestReleaseWaitsForAnInFlightRenew also parks an Update, but the thing it watches

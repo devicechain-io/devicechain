@@ -49,12 +49,11 @@ var (
 	// error is why it is a sentinel.
 	ErrLeaseHeld = errors.New("messaging: partition lease already held by another owner")
 	// ErrNotHolder is returned once this lease is DEFINITIVELY no longer ours — its
-	// validity window (last successful renewal + TTL) has elapsed, or it was
-	// released. The caller must stop consuming
-	// and tear down its keyed state (ADR-070 M3 self-eviction), then RELEASE this
-	// lease and Acquire a fresh one to recover (Release clears our own now-stale
-	// entry so the re-Acquire is not blocked by it). A single failed Renew is NOT
-	// this: see Renew.
+	// validity window (last successful renewal + TTL) has elapsed, or it was released.
+	// The caller must stop consuming and tear down its keyed state (ADR-070 M3
+	// self-eviction), then RELEASE this lease and Acquire a fresh one to recover
+	// (Release clears our own now-stale entry so the re-Acquire is not blocked by it).
+	// A single failed Renew is NOT this: see Renew.
 	ErrNotHolder = errors.New("messaging: lease is no longer held by this owner")
 	// ErrStaleEpoch is returned by Fence.RejectIfStale for a downstream write whose
 	// epoch predates the newest owner seen for the partition (ADR-070 decision 4b).
@@ -166,9 +165,16 @@ func (l *DistributedLease) PriorOwnerReleasedCleanly(partition string) bool {
 }
 
 // Lease is one acquired ownership of a partition. It is safe for concurrent use by
-// a single KeepAlive renewer goroutine alongside a processing loop gating on
-// WatchHolder's Holder — do NOT call Renew from more than one goroutine (KeepAlive
-// is that goroutine).
+// a KeepAlive renewer goroutine alongside a processing loop gating on WatchHolder's
+// Holder.
+//
+// ONE renewer is the intended shape (KeepAlive is that goroutine), but since renewMu
+// began serializing the whole read-rev/write/store-rev sequence, that is DESIGN
+// INTENT rather than a correctness constraint: a second concurrent Renew now waits
+// and then reads the revision the first stored, so its CAS lands rather than losing
+// to a revision it never saw. This comment used to say "do NOT call Renew from more
+// than one goroutine" and meant it — before renewMu, two renewers could read the same
+// rev and one would take a CAS failure indistinguishable from a takeover.
 //
 // Holder.Held() is the ONLY supported way to ask "do I still own this?" on a
 // processing loop, and the reason is a performance one that a second, more obvious
@@ -217,11 +223,16 @@ type Lease struct {
 	//
 	// The claim is now unqualified — NO Lease method holds mu across a round trip —
 	// and what enforces it is a pair of tests rather than this comment. A Lease makes
-	// exactly two KV round trips, Renew's Update and Release's Delete;
+	// exactly two KV WRITES, the two named above, and there is one test per write:
 	// TestHeldDoesNotBlockOnARenewRoundTrip and TestHeldDoesNotBlockOnAReleaseRoundTrip
 	// park one each and assert Holder.Held() still answers while it is outstanding.
-	// Both fail if the round trip moves under mu. A third round trip added to this type
-	// needs its own park-and-answer case, or it is covered by review only.
+	// Both fail if that write moves under mu. A third write added to this type needs
+	// its own park-and-answer case, or it is covered by review only.
+	//
+	// Writes, not round trips, is the right count to check against: WatchHolder and the
+	// rebind in Holder.run also make one (kv.Watch creates a consumer). Neither takes
+	// mu, so the claim above holds for them too — but a reader auditing "two" against
+	// the source should be counting the CAS writers, or the number will not add up.
 	//
 	// LOCK ORDER IS renewMu THEN mu, NEVER THE REVERSE. Only Renew and Release take
 	// renewMu, and each takes it first and releases it by defer; every other path
