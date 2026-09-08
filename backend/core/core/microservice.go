@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -83,6 +84,13 @@ type Microservice struct {
 	// Atomic because MetricsRegisterer is reachable from any goroutine that builds a
 	// metric, and an unsynchronized bool written from two of them is a data race.
 	metricsHandedOut atomic.Bool
+
+	// mux is the HTTP multiplexer this microservice owns, created on first use by
+	// Mux(). Lazily rather than in NewMicroservice so a Microservice built as a struct
+	// literal has one too — unlike the metrics registry above, a private mux carries no
+	// collision hazard, since each Microservice gets its own.
+	muxOnce sync.Once
+	mux     *http.ServeMux
 
 	// Observability metrics (E17). nil when the microservice was built without
 	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
