@@ -42,6 +42,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -274,6 +276,91 @@ func validateSegment(field, seg string) error {
 		default:
 			return fmt.Errorf("blob: %s segment %q contains an invalid character", field, seg)
 		}
+	}
+	return nil
+}
+
+// defaultContentType is reported for an object whose key extension maps to no known
+// MIME type. A generic asset served with this type downloads rather than executes.
+const defaultContentType = "application/octet-stream"
+
+// assetContentTypes is the ONLY extension→Content-Type mapping this package uses:
+// the asset types the branding read proxy relies on. Every other extension infers
+// nothing.
+//
+// It is deliberately CLOSED rather than a call to mime.TypeByExtension, because
+// that function is not a pure function of its argument. Go's mime package seeds
+// itself from the host's system MIME database on top of its own builtin table: it
+// takes the first of /usr/local/share/mime/globs2 and /usr/share/mime/globs2 that
+// it can open — an EMPTY one still counts, and suppresses the rest — and only if
+// neither opens does it fall back to /etc/mime.types and the apache/httpd
+// mime.types files. Every one of those is supplied by the base image. The base
+// image we publish (cgr.dev/chainguard/static, see .ko.yaml) ships none of them; a
+// Debian dev or CI host ships them.
+//
+// Since checkContentTypeMatchesExt gates the write path, the consequence is not a
+// cosmetic header difference: the SAME Put is accepted on one base image and
+// rejected on another. A Debian host infers "application/x-raw-disk-image" for
+// ".img", "application/x-tar" for ".tar" and "application/x-cd-image" for ".iso",
+// where the published image infers nothing for any of them.
+//
+// A closed table makes the inference a property of this source file, so the same
+// input gets the same answer in a test, in dev, and in production.
+var assetContentTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".svg":  "image/svg+xml",
+}
+
+// inferContentType maps a key/id extension to a Content-Type using the closed table
+// above, returning "" for anything it does not name. The extension is matched
+// case-insensitively so "LOGO.PNG" and "logo.png" agree.
+func inferContentType(ext string) string {
+	return assetContentTypes[strings.ToLower(ext)]
+}
+
+// checkContentTypeMatchesExt fails closed when a declared Content-Type contradicts
+// the type the id's extension infers, so the filesystem backend (which serves the
+// inferred type) and a cloud backend (which serves the declared type) cannot end up
+// serving the same object as two different types. It compares base media types only
+// (ignoring parameters like charset). An empty declared type, or an extension that
+// infers nothing, is not a contradiction and is allowed.
+//
+// Both backends call it, and this is the single statement of why. The claim is
+// about an object MOVING between them — the Ref format treats backend migration as
+// a considered scenario — and an invariant enforced on one side only would not
+// survive a migration in the direction that skips the check. S3 persisting the
+// declared type makes S3 internally consistent, not consistent with what the
+// filesystem backend would serve for the same key.
+//
+// 🔴 Know the limit of what it buys: because inferContentType names only the five
+// asset extensions, the two-backends-agree invariant HOLDS ONLY INSIDE THAT TABLE.
+// It refuses nothing outside the table, and correspondingly guarantees nothing
+// about those objects: a ".tar" Put declaring "application/x-tar" is accepted by
+// both backends and then served as "application/x-tar" by S3 and as
+// defaultContentType by the filesystem backend. The same divergence is reachable
+// the other way, for an object Put with NO declared type at all — there is then
+// nothing to compare, so nothing is refused. Both are pre-existing and deliberate:
+// closing either would mean re-deriving a full MIME table, which is the
+// host-dependence the closed table above exists to remove. The invariant is
+// load-bearing for the branding assets, and those are what the table names.
+func checkContentTypeMatchesExt(id, declared string) error {
+	if declared == "" {
+		return nil
+	}
+	inferred := inferContentType(filepath.Ext(id))
+	if inferred == "" {
+		return nil
+	}
+	declaredBase, _, derr := mime.ParseMediaType(declared)
+	inferredBase, _, ierr := mime.ParseMediaType(inferred)
+	if derr != nil || ierr != nil {
+		return nil // a malformed declared type is not treated as a contradiction here
+	}
+	if !strings.EqualFold(declaredBase, inferredBase) {
+		return fmt.Errorf("blob: content type %q contradicts the %q extension type %q", declared, filepath.Ext(id), inferredBase)
 	}
 	return nil
 }
