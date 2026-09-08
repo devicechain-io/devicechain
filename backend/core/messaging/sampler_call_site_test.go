@@ -27,8 +27,10 @@ import (
 func TestSamplerReportsConfiguredNotClampedReplicas(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
-	// A unique area: newStreamMetrics registers into the default registerer, so two
-	// managers sharing a FunctionalArea would collide on duplicate registration.
+	// A distinct area so this test's gauges are its own. It is no longer a collision
+	// hazard — a Microservice registers into a registry it owns, and this one is a
+	// struct literal with no registry, so newStreamMetrics registers nothing anywhere
+	// and the values below are read straight off the GaugeVec handles.
 	nmgr.Microservice.FunctionalArea = "samplercallsite"
 	nmgr.metrics = newStreamMetrics(nmgr.Microservice)
 
