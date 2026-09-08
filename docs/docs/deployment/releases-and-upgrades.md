@@ -816,6 +816,118 @@ Instances created before this release have no such record and list as `no record
 guess the cluster`. Destroy still works on them, falling back to the old derivation, so the
 caveat above continues to apply to them and only to them.
 
+### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
+
+`v0.15.0` is a plain `helm upgrade` from `v0.14.x`. Six new migrations run themselves as the
+services start, there is nothing to recreate, and no data needs moving by hand.
+
+The breaking changes are in the **API** and in **outbound network access**, not in the upgrade
+itself. If you run the platform and drive it through the console, there is nothing here for you
+to do. The three sections below are for people who call the API directly, who send notifications
+through something inside their own network, or who run the MCP server.
+
+#### Update operations no longer replace the whole record
+
+This is the change that affects the most people, and it is the reason this release is marked
+breaking.
+
+Before, an update replaced the record: **any field you left out was erased.** Now a field you do
+not mention is left exactly as it was, and clearing a value takes an explicit `null`.
+
+The request itself is a new shape that no longer carries the record's own name — updating and
+renaming are separate operations, and there are now dedicated `rename…` mutations for the four
+types that need one. So an application calling the API directly must **drop the name from its
+update requests and regenerate its client code.**
+
+**A request in the old shape is refused outright** with an error naming the field it no longer
+accepts. It is not half-applied, and it does not fail quietly — which means you find out at the
+first call rather than from a record that has lost half its contents.
+
+:::caution The one case that changes quietly
+An application that cleared a value by **leaving the field out** now keeps the old value instead.
+Nothing errors; the update simply does less than it used to. If your code relies on omission to
+clear a field, send an explicit `null` instead.
+
+Note that not every field accepts `null` — some are required and refuse it with a named error.
+Those are fields that could never legitimately be cleared.
+:::
+
+:::danger One sharp edge worth knowing about
+If you build an update request by binding a **separate variable per field**, a variable you do
+not supply arrives as an **explicit null** rather than as an absent field — and explicit null
+means *clear this*. On a notification policy's `rules` that empties the entire rule set and
+returns success. Bind the whole request object as one variable, or only include the fields you
+actually intend to change.
+:::
+
+#### The id on a stored event has changed
+
+An event's `id` is now the event's own identifier, rather than a value assembled from the device
+token, the event type and the timestamp. **Any id you saved from an earlier release will no
+longer match anything.**
+
+The previous form was also not unique: a device reporting two measurements at the same instant
+produced the **same id for both**, so any client keeping a normalized cache keyed on it was
+silently merging those readings into one. If you stored ids, re-read them; if you keyed on them,
+this is a correctness fix as much as a break.
+
+#### Outbound connections to private addresses are now refused
+
+Notification webhooks, **SMTP relays** and connector HTTP calls can no longer reach loopback,
+private, carrier-grade NAT, link-local or cloud metadata addresses. The check happens at connect
+time, and a refusal is **final — it is not retried.**
+
+This is on by default and there is no switch to turn it off.
+
+:::caution If your mail relay lives inside the cluster, alarm mail will stop
+This is the failure most likely to catch you, because nothing about it looks like a network
+policy change: notifications simply stop arriving, and the failure is recorded as permanent
+rather than pending. Allow the specific addresses you use:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      egress:
+        allowedDestinations:
+          - 10.96.0.25/32      # the in-cluster SMTP relay
+```
+
+List each destination as its own `/32`. Destinations on the public internet are unaffected and
+need no entry.
+:::
+
+#### If you run the MCP server
+
+Two changes need action, and one of them stops the service from starting:
+
+- **A resource URL with a trailing slash is now refused at startup.** An identifier is compared
+  exactly, so a trailing slash meant tokens were bound to an address that never quite matched.
+  It used to be accepted and then quietly fail to line up; now it fails loudly at boot. Remove
+  the slash.
+- **The protected-resource metadata has moved** to the location the specification defines, with
+  the well-known segment between the host and the path. The chart routes it for you. **If you
+  terminate ingress yourself, add a route** for the `/.well-known/` prefix that does not rewrite
+  the path.
+
+#### One configuration key was removed
+
+A `debug` key inside an `eventSources` entry is no longer accepted. Configuration is validated
+strictly, so leaving it in place **stops the service from starting** with an error naming the
+field. Remove it. This is the only key removed in this release.
+
+#### Also in this release
+
+Commands are now dispatched the moment they are enqueued rather than waiting for the next sweep,
+and the sweep interval is configurable if you want to change how often the safety net runs. Dead
+letters can be read and queried instead of only counted. There is a reporting view you can point
+a BI tool at. Assets gained parent/child hierarchy and a documented property contract, devices
+gained a replacement operation, alarms gained bulk acknowledgement, and a tenant can choose the
+language its console opens in.
+
+The published npm packages and the .NET/Unity SDK carry no source changes in this release. If
+your own code sends update mutations through them, though, that code is yours to regenerate.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

@@ -14,20 +14,31 @@
     "notes; repeating `fix(events): give payload rows and anchors identities of their own` here",
     "adds nothing. Say what changed for the person running the platform.",
     "",
-    "Keep it to a handful of lines. This renders in a download menu and a docs banner, not in",
-    "a document — a fifteen-item list is a changelog wearing a different hat.",
+    "Keep it to a handful of lines. This renders in the website's download menu, not in a",
+    "document — a fifteen-item list is a changelog wearing a different hat.",
     "",
-    "`breaking` drives an automatic warning on the website and in the docs. Set it true when an",
-    "upgrade is not a plain `helm upgrade`, and say so in the first highlight."
+    "`breaking` MEANS 'THIS RELEASE HAS BREAKING CHANGES'. It does NOT mean 'you must recreate",
+    "your instance', and this comment used to say it did — it told you to set the flag when an",
+    "upgrade is not a plain `helm upgrade`. The website has never read it that way since the",
+    "copy was repaired: `true` renders exactly one sentence, 'This release has breaking changes",
+    "— read the release notes before upgrading', and `false` renders nothing at all. So set it",
+    "true whenever something breaks for SOMEBODY — an API caller, an operator, a package",
+    "consumer — and use the first highlight to say who, and whether the upgrade itself is",
+    "ordinary. If a release ever genuinely requires recreating an instance, give that its OWN",
+    "manifest field rather than overloading this one a second time.",
+    "",
+    "The other correction: there is no docs banner. Nothing under docs/ fetches releases.json.",
+    "The website download menu is this file's only consumer."
   ],
-  "version": "v0.14.0",
-  "breaking": false,
+  "version": "v0.15.0",
+  "breaking": true,
   "highlights": [
-    "A plain helm upgrade from v0.13.x. There is no migration, and no API, topic, permission or configuration key changes — the platform you are running is the same one. This release is about what sits around it: the packages you build against, and the CLI you run it with.",
-    "The web runtime is on npm. @devicechain/client, @devicechain/dashboards, @devicechain/widgets and @devicechain/brand are published, so embedding a dashboard or a widget in your own application no longer means building against our source tree. All four move together and are pinned to each other, so one install resolves one version of the set.",
-    "Map widgets now expect the host application to provide MapLibre. It is a peer dependency: your app supplies the library, its worker URL and its stylesheet, which is what lets your bundler settle those rather than ours. A map widget with no host configuration above it now renders an explicit notice instead of a blank canvas. This affects you only if you were building our widgets from the source tree; there is nothing to change on the server.",
-    "The .NET and Unity client SDK is on nuget.org as DeviceChain.Sdk, built to stay usable under AOT and IL2CPP.",
-    "dcctl can now tell you what it has bootstrapped and shut all of it down: `dcctl instances list` shows every instance, the cluster it lives in and whether that cluster is still there, and `dcctl destroy --all` tears down the lot. This closes a real defect — an instance bootstrapped with --kube-context had its cluster guessed from its name at both ends, so destroying it deleted nothing, removed the local state, and reported success while the cluster kept running. Destroy now uses the cluster recorded at bootstrap, and refuses out loud when it cannot.",
-    "Dependency and base-image updates across the Go modules and the web console."
+    "A plain helm upgrade from v0.14.x — nothing to recreate, no data to migrate by hand, and the six new migrations run themselves as the services start. The breaking changes in this release are in the API and in outbound network access, not in the upgrade: if you run the platform and call it only through the console, there is nothing you need to do.",
+    "Update operations no longer replace the whole record. Previously a field you left out of an update was erased; now a field you do not mention is left exactly as it was, and clearing a value takes an explicit null. The request is a new shape that no longer carries the record's own name, so applications calling the API directly must drop that name and regenerate their client code — a request in the old shape is refused outright rather than half-applied. The one case that changes quietly is an application that cleared a value by leaving the field out: it will now keep the old value instead.",
+    "Outbound connections to private addresses are now refused, and this one can surprise you. Notification webhooks, SMTP relays and connector HTTP calls are blocked from reaching loopback, private, carrier-NAT, link-local and cloud metadata addresses, and a blocked destination is treated as final rather than retried. If your alarm mail goes through a relay inside the cluster, it will stop being delivered until you list that address under the new egress allow-list. Destinations on the public internet are unaffected.",
+    "The id on a stored event is now the event's own identifier rather than a value assembled from the device, type and timestamp, so ids saved from an earlier release no longer match anything. The previous form was not unique — two readings taken at the same instant produced the same id — so a client that treated it as a key was silently merging rows.",
+    "If you run the MCP server, two things need your attention: a resource URL with a trailing slash is now refused at startup rather than quietly mismatching, and the protected-resource metadata has moved to the location the specification actually defines. If you terminate ingress yourself, that path needs a route. Separately, a `debug` key inside an `eventSources` entry is no longer accepted and must be removed before the service will start.",
+    "Commands now go out the moment they are enqueued instead of waiting for the next sweep, and how often that sweep runs is yours to set. Also new: dead letters you can actually read and query, a reporting view for pointing a BI tool at your telemetry, parent/child hierarchy for assets and a way to replace a device, bulk alarm acknowledgement, and a per-tenant console language.",
+    "The published packages are unchanged. @devicechain/client, @devicechain/dashboards, @devicechain/widgets, @devicechain/brand and the DeviceChain.Sdk package for .NET and Unity carry no source changes in this release — but if your own code sends update mutations through them, that is your code to regenerate."
   ]
 }

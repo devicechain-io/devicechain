@@ -871,6 +871,124 @@ Las instancias creadas antes de esta versión no tienen ese registro y aparecen 
 destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas recurriendo a la
 derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
 
+### v0.15.0 — las actualizaciones dejan de borrar lo que no envió {#v0150-upgrade}
+
+`v0.15.0` es una actualización `helm upgrade` normal desde `v0.14.x`. Seis migraciones nuevas se
+ejecutan solas al arrancar los servicios, no hay nada que recrear y ningún dato debe moverse a
+mano.
+
+Los cambios incompatibles están en la **API** y en el **acceso de red saliente**, no en la
+actualización en sí. Si administra la plataforma y la maneja desde la consola, aquí no hay nada
+que deba hacer. Las secciones siguientes son para quienes llaman a la API directamente, quienes
+envían notificaciones a través de algo dentro de su propia red, o quienes ejecutan el servidor
+MCP.
+
+#### Las actualizaciones ya no reemplazan el registro completo
+
+Este es el cambio que afecta a más gente, y es la razón por la que esta versión está marcada como
+incompatible.
+
+Antes, una actualización reemplazaba el registro: **cualquier campo que omitiera se borraba.**
+Ahora un campo que no menciona se deja exactamente como estaba, y borrar un valor requiere un
+`null` explícito.
+
+La petición en sí tiene una forma nueva que ya no lleva el nombre del propio registro —
+actualizar y renombrar son operaciones distintas, y ahora existen mutaciones `rename…` dedicadas
+para los cuatro tipos que lo necesitan. Por tanto, una aplicación que llame a la API directamente
+debe **quitar el nombre de sus peticiones de actualización y regenerar su código cliente.**
+
+**Una petición con la forma antigua se rechaza por completo**, con un error que nombra el campo
+que ya no se acepta. No se aplica a medias y no falla en silencio: se entera en la primera
+llamada, y no a partir de un registro que ha perdido la mitad de su contenido.
+
+:::caution El único caso que cambia en silencio
+Una aplicación que borraba un valor **omitiendo el campo** ahora conserva el valor anterior. Nada
+da error; la actualización simplemente hace menos de lo que hacía. Si su código se apoya en la
+omisión para borrar un campo, envíe un `null` explícito en su lugar.
+
+Tenga en cuenta que no todos los campos aceptan `null`: algunos son obligatorios y lo rechazan con
+un error específico. Son campos que nunca podrían borrarse legítimamente.
+:::
+
+:::danger Un detalle afilado que conviene conocer
+Si construye una petición de actualización enlazando una **variable distinta por campo**, una
+variable que no suministre llega como **null explícito** en lugar de como campo ausente — y null
+explícito significa *borra esto*. En el campo `rules` de una política de notificación eso vacía
+todo el conjunto de reglas y devuelve éxito. Enlace el objeto de petición completo como una sola
+variable, o incluya únicamente los campos que realmente quiere cambiar.
+:::
+
+#### El id de un evento almacenado ha cambiado
+
+El `id` de un evento es ahora el identificador propio del evento, en lugar de un valor compuesto a
+partir del token del dispositivo, el tipo de evento y la marca de tiempo. **Cualquier id que haya
+guardado de una versión anterior ya no coincidirá con nada.**
+
+La forma anterior tampoco era única: un dispositivo que reportaba dos medidas en el mismo instante
+producía **el mismo id para ambas**, de modo que cualquier cliente con una caché normalizada
+basada en él estaba fusionando esas lecturas en una sola sin avisar. Si guardó ids, vuelva a
+leerlos; si los usaba como clave, esto es tanto una corrección como una ruptura.
+
+#### Las conexiones salientes a direcciones privadas ahora se rechazan
+
+Los webhooks de notificación, los **relés SMTP** y las llamadas HTTP de los conectores ya no
+pueden alcanzar direcciones de loopback, privadas, de NAT de operador, de enlace local ni de
+metadatos de nube. La comprobación ocurre en el momento de conectar, y un rechazo es **definitivo:
+no se reintenta.**
+
+Esto está activo por omisión y no hay ningún interruptor para desactivarlo.
+
+:::caution Si su relé de correo vive dentro del clúster, el correo de alarmas dejará de salir
+Este es el fallo con más probabilidad de sorprenderle, porque nada en él se parece a un cambio de
+política de red: las notificaciones simplemente dejan de llegar, y el fallo queda registrado como
+permanente en lugar de pendiente. Autorice las direcciones concretas que utiliza:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      egress:
+        allowedDestinations:
+          - 10.96.0.25/32      # el relé SMTP dentro del clúster
+```
+
+Indique cada destino como su propio `/32`. Los destinos en la internet pública no se ven afectados
+y no necesitan entrada.
+:::
+
+#### Si ejecuta el servidor MCP
+
+Dos cambios requieren acción, y uno de ellos impide que el servicio arranque:
+
+- **Una URL de recurso con una barra final ahora se rechaza al arrancar.** Un identificador se
+  compara de forma exacta, así que una barra final significaba que los tokens quedaban ligados a
+  una dirección que nunca terminaba de coincidir. Antes se aceptaba y luego fallaba de forma
+  silenciosa; ahora falla de forma visible al arrancar. Quite la barra.
+- **Los metadatos de recurso protegido han cambiado de ubicación**, a la que define la
+  especificación, con el segmento well-known entre el host y la ruta. El chart la enruta por
+  usted. **Si usted mismo termina el ingress, añada una ruta** para el prefijo `/.well-known/` que
+  no reescriba la ruta.
+
+#### Se ha eliminado una clave de configuración
+
+La clave `debug` dentro de una entrada de `eventSources` ya no se acepta. La configuración se
+valida de forma estricta, así que dejarla **impide que el servicio arranque**, con un error que
+nombra el campo. Elimínela. Es la única clave eliminada en esta versión.
+
+#### También en esta versión
+
+Los comandos se despachan ahora en el momento en que se encolan, en lugar de esperar al siguiente
+barrido, y el intervalo de ese barrido es configurable si quiere cambiar cada cuánto se ejecuta la
+red de seguridad. Las cartas muertas se pueden leer y consultar, no solo contar. Hay una vista de
+informes a la que puede apuntar una herramienta de BI. Los activos incorporan jerarquía
+padre/hijo y un contrato de propiedades documentado, los dispositivos incorporan una operación de
+sustitución, las alarmas incorporan confirmación masiva, y un inquilino puede elegir el idioma con
+el que abre su consola.
+
+Los paquetes npm publicados y el SDK para .NET/Unity no llevan cambios de código en esta versión.
+Ahora bien, si su propio código envía mutaciones de actualización a través de ellos, ese código sí
+es suyo para regenerar.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

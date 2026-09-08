@@ -210,14 +210,87 @@ for series in sorted(seen):
             % (series, where, metric, areas[subsystem])
         )
 
+# --- gap 3: an alert's comparison must bind to the WHOLE expression ----------
+#
+# 🔴 THIS CLASS SHIPPED, PAST REVIEW, AND WOULD HAVE PAGED EVERY OPERATOR.
+# `sum(rate(x)) or vector(0) > 0` reads as "the rate, defaulting to zero, above
+# zero". It is not. `>` binds TIGHTER than `or`, so it parses as
+# `sum(rate(x)) or (vector(0) > 0)`: the right side filters the sample 0 by
+# `> 0` and is EMPTY, leaving a bare `sum(rate(x))` with no comparison at all.
+# An alert fires on ANY sample its expression returns, whatever the value, and a
+# plain Counter is exported at 0 from construction -- so the series always
+# exists, rate() always returns a sample, and the alert fires forever.
+#
+# promtool cannot help: the expression is valid PromQL and means exactly what it
+# says. Neither can gap 2 -- every series in it is spelled correctly. The defect
+# is entirely in the precedence, which is why it needs its own check.
+#
+# Two shapes are caught, and the second is the general case of the first:
+#   1. `or vector(N)` immediately followed by a comparison -- the comparison has
+#      bound to the vector() instead of to the expression.
+#   2. an alert whose expr contains no comparison operator at all.
+alert_re = re.compile(r"-\s*alert:\s*(\S+)(.*?)(?=\n\s*-\s*alert:|\Z)", re.S)
+expr_re = re.compile(r"\n\s*expr:\s*\|?(.*?)(?=\n\s*(?:for|labels|annotations|record):)", re.S)
+# `or vector(0) > 0` -- a comparison that binds to the vector() rather than to
+# the whole expression. `(... or vector(0)) > 0` does not match: the next
+# non-space character there is the closing paren.
+unbound_re = re.compile(r"\bor\s+vector\([^)]*\)\s*(?:<|>|==|!=)")
+comparison_re = re.compile(r"<=|>=|<|>|==|!=")
+# SOME PromQL CONSTRUCTS ARE THEMSELVES THE PREDICATE, and an alert built on one
+# is correct with no comparison anywhere. Demanding a comparison would push an
+# author into bolting a meaningless `> 0` onto a rule that is already right.
+#   absent() / absent_over_time()  -- a sample only when the series is MISSING
+#   X unless Y                     -- a sample only for an X with no matching Y
+# Both were found by this check's first draft flagging real, correct rules
+# (CNPGClusterStateUnobserved and PostgresWALArchivingNotConfigured). The list is
+# an allowlist of predicates rather than a loosening: anything NOT on it still
+# has to say what it is comparing against.
+absence_re = re.compile(r"\babsent(?:_over_time)?\s*\(|\bunless\b")
+alerts_checked = 0
+for path in rule_files:
+    with open(path, "rb") as fh:
+        text = fh.read().decode("utf-8", "replace")
+    rel = os.path.relpath(path, root)
+    for name, body in alert_re.findall(text):
+        match = expr_re.search(body)
+        if not match:
+            continue
+        alerts_checked += 1
+        # Strip comment lines: they quote the broken form on purpose.
+        expr = "\n".join(
+            line for line in match.group(1).splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        if unbound_re.search(expr):
+            problems.append(
+                "%s (in %s) writes `or vector(...)` immediately before its comparison.\n"
+                "    `>` binds tighter than `or`, so the comparison applies to the vector()\n"
+                "    and not to the expression -- what is left is an alert with NO comparison,\n"
+                "    which fires permanently. Parenthesise it: `(... or vector(0)) > 0`."
+                % (name, rel)
+            )
+        elif not comparison_re.search(expr) and not absence_re.search(expr):
+            problems.append(
+                "%s (in %s) has an expr with no comparison and no absence/unless\n"
+                "    predicate, so every sample it returns is an alert. If it is meant to fire on\n"
+                "    any sample at all, say so explicitly rather than by omission."
+                % (name, rel)
+            )
+if not alerts_checked:
+    sys.exit(
+        "no alert expressions were found in %d rule template(s) -- gap 3 would be inert"
+        % len(rule_files)
+    )
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
         print("  - %s" % p, file=sys.stderr)
     sys.exit(1)
 
-print("    %d dashboard(s) parse; %d devicechain_* series all resolve to a Go registration"
-      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES])))
+print("    %d dashboard(s) parse; %d devicechain_* series all resolve to a Go registration;\n"
+      "    %d alert expression(s) compare against something"
+      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), alerts_checked))
 PY
 }
 
@@ -468,7 +541,60 @@ EOF
   rm -f "$chart/dashboards/scratch-board.json"
   echo "  ok: an unpinned new dashboard is caught"
 
-  echo "self-test passed: 7 defects, each planted alone, each caught; a clean tree passes"
+  # Case 8 — THE PRECEDENCE DEFECT, alone. This is the real one: it shipped past
+  # review into a release window. Every series in it is spelled correctly, so
+  # gap 2 passes it, and it is valid PromQL, so promtool passes it. The mutation
+  # is the exact text that was written -- `or vector(0) > 0` with no parentheses
+  # binding the comparison to the whole expression.
+  sed -i 's/\[5m\])) > 0/[5m])) or vector(0) > 0/' "$tmpl/prometheusrule-probe.yaml"
+  grep -q 'or vector(0) > 0' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the precedence mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag an alert whose comparison binds to vector() instead of the expression"
+  fi
+  restore
+  echo "  ok: an alert comparing against vector() instead of its expression is caught"
+
+  # Case 9 — THE GENERAL CASE, alone: an expr with no comparison at all, which
+  # is what the defect in case 8 DEGRADES INTO once PromQL has parsed it. Worth
+  # planting separately, because a checker could catch the literal text of case
+  # 8 by pattern and still miss an alert that simply forgot its threshold.
+  sed -i 's/\[5m\])) > 0/[5m]))/' "$tmpl/prometheusrule-probe.yaml"
+  grep -q '5m\]))$' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the missing-comparison mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag an alert expression with no comparison operator"
+  fi
+  restore
+  echo "  ok: an alert with no comparison at all is caught"
+
+  # Case 10 — THE COUNTERWEIGHT FOR GAP 3, and it matters as much as case 0.
+  # The CORRECT parenthesisation must still pass, or the check would be pushing
+  # authors away from the very idiom the sibling alert needs: without
+  # `or vector(0)`, an alert summing several services goes ABSENT rather than
+  # false the moment one of them stops being scraped.
+  sed -i 's/\[5m\])) > 0/[5m])) or vector(0)) > 0/; s/expr: sum(/expr: (sum(/' "$tmpl/prometheusrule-probe.yaml"
+  grep -q 'or vector(0)) > 0' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the correct-parenthesisation mutation did not apply"
+  check_content "$work" >/dev/null ||
+    fail "flagged a CORRECTLY parenthesised `or vector(0)` -- the check rejects the right idiom"
+  restore
+  echo "  ok: a correctly parenthesised or-vector(0) still passes"
+
+  # Case 11 — THE SECOND COUNTERWEIGHT FOR GAP 3. An `absent()` alert is correct
+  # with no comparison: absent() returns a sample only when the series is
+  # MISSING, so it already is the test. The first draft of this check flagged a
+  # real one (CNPGClusterStateUnobserved), which is exactly how a well-meant gate
+  # teaches an author to bolt a meaningless `> 0` onto a correct rule.
+  sed -i 's|expr: sum(rate(devicechain_selftestarea_other_probe_total{namespace="dc"}\[5m\])) > 0|expr: absent(devicechain_selftestarea_other_probe_total{namespace="dc"})|' "$tmpl/prometheusrule-probe.yaml"
+  grep -q 'expr: absent(' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the absent() mutation did not apply"
+  check_content "$work" >/dev/null ||
+    fail "flagged an absent() alert, which is correct with no comparison"
+  restore
+  echo "  ok: an absent() alert with no comparison still passes"
+
+  echo "self-test passed: 9 defects, each planted alone, each caught; three clean trees pass"
   exit 0
 fi
 

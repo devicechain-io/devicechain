@@ -952,7 +952,9 @@ jobs:
           jq . releases.json
 
       # 🔴 NOT run for a prerelease. devicechain.io/releases.json is what the site's download
-      # menu and the docs banner read, so publishing an rc there would advertise a release
+      # menu reads — the only consumer; nothing under docs/ fetches it, though this comment
+      # and the highlights file both used to claim a docs banner did. Publishing an rc there
+      # would advertise a release
       # candidate as the current version — and an rc exists precisely to be discarded. The
       # step below this one already said a prerelease "is deliberately not what
       # devicechain.io should advertise"; only the VERIFICATION was skipped, while the push

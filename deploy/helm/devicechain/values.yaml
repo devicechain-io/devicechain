@@ -1112,6 +1112,17 @@ functionalAreas:
     # <origin>/.well-known/oauth-authorization-server/api/user-management. The chart
     # routes it — but only once auth.issuerUrl is set on user-management (see below),
     # because until then there is no authorization server to route to.
+    #
+    # 🔴 replicas IS PINNED HERE FOR THE SAME REASON sparkplug-ingest AND lwm2m-ingest
+    # PIN THEIRS: mcp can only run one serving pod, the template fails the render
+    # otherwise, and an area that cannot scale must not be left inheriting the GLOBAL
+    # replicas. It was, and the cost was not theoretical — `--set replicas=2` is the
+    # zero-downtime recipe this chart's own README and the published upgrade guide both
+    # give, and with mcp enabled (profile `full`) it aborted the render for the whole
+    # release rather than for the one area that cannot take it. Pinning it here means the
+    # global setting means what it says everywhere it can; the area guard in
+    # deployment.yaml stays as the backstop for anyone who sets THIS value above 1.
+    replicas: 1
     config: {}
       # resourceUrl: https://<host>/api/mcp
       # issuerUrl: https://<host>/api/user-management
