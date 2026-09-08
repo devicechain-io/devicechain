@@ -125,9 +125,9 @@ func TestLeaseBucketRejectsDivergentTTL(t *testing.T) {
 
 // TestLeaseHolderFailsAfterTakeover is the self-eviction guard (M3). We simulate an
 // expiry-plus-takeover deterministically by deleting the entry out from under the
-// owner (what the TTL does on a crash) and letting a standby Acquire. A LIVE
-// AmITheHolder read then shows the owner it no longer holds it, its Renew CAS
-// fails, and the standby genuinely owns the higher epoch.
+// owner (what the TTL does on a crash) and letting a standby Acquire. The displaced
+// owner's Renew CAS then fails — which is what KeepAlive converts into ErrNotHolder
+// — and the standby genuinely owns the higher epoch and can renew.
 func TestLeaseHolderFailsAfterTakeover(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
@@ -140,8 +140,8 @@ func TestLeaseHolderFailsAfterTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	if held, err := owner.AmITheHolder(); err != nil || !held {
-		t.Fatalf("AmITheHolder while held = (%v, %v), want (true, nil)", held, err)
+	if err := owner.Renew(); err != nil {
+		t.Fatalf("Renew while held: %v", err)
 	}
 
 	// Simulate the TTL expiring the owner's entry, then a standby taking over.
@@ -156,30 +156,43 @@ func TestLeaseHolderFailsAfterTakeover(t *testing.T) {
 		t.Fatalf("standby epoch %d must exceed the prior owner's %d (monotonic fence)", standby.Epoch(), owner.Epoch())
 	}
 
-	// A live read shows the displaced owner it is out (definitive, not the transient
-	// ride-out): the entry now carries a different holder uuid.
-	if held, err := owner.AmITheHolder(); err != nil || held {
-		t.Fatalf("displaced owner AmITheHolder = (%v, %v), want (false, nil)", held, err)
-	}
-	// And its CAS renewal can no longer land.
+	// The entry now carries a different holder uuid, so the displaced owner's CAS
+	// renewal can no longer land — the failure KeepAlive turns into ErrNotHolder once
+	// the validity window has elapsed.
 	if err := owner.Renew(); err == nil {
 		t.Fatal("displaced owner Renew succeeded, want a CAS failure")
 	}
-	// The standby genuinely holds it.
-	if held, err := standby.AmITheHolder(); err != nil || !held {
-		t.Fatalf("standby AmITheHolder = (%v, %v), want (true, nil)", held, err)
+	// The standby genuinely holds it: the entry is its uuid, and its own CAS renewal
+	// still lands (which the displaced owner's failure alone would not prove — a
+	// broken KV would fail both).
+	entry, err := dl.kv.Get(kvKey("detect:tenant-1"))
+	if err != nil {
+		t.Fatalf("read the lease entry after takeover: %v", err)
+	}
+	if string(entry.Value()) != standby.holder {
+		t.Fatalf("lease entry holder = %q, want the standby's %q", entry.Value(), standby.holder)
+	}
+	if err := standby.Renew(); err != nil {
+		t.Fatalf("standby Renew after takeover: %v", err)
 	}
 }
 
-// TestAmITheHolderRidesOutTransientErrorWithinWindow is the finding-3 fix: a NATS
-// blip must NOT be read as lost ownership while we are still inside the validity
-// window (no standby can Acquire until the server-side entry TTL-expires). Only
-// past the window is a transient failure definitive. Without this, a shared broker
-// hiccup evicts every owner at once.
-func TestAmITheHolderRidesOutTransientErrorWithinWindow(t *testing.T) {
+// TestKeepAliveRidesOutTransientFailureWithinWindow pins the ride-out half of the
+// validity window, which TestKeepAliveReturnsOnLoss does not reach: it only shows
+// that KeepAlive DOES report loss, never that it withholds that report while the
+// window is still open.
+//
+// A NATS blip must not be read as lost ownership inside the window, because no
+// standby can Acquire the partition until the server-side entry TTL-expires — so
+// self-evicting on the first failed renewal would take a fleet of owners down on a
+// shared broker hiccup while their partitions were still theirs. Only past the
+// window is a transient failure definitive.
+func TestKeepAliveRidesOutTransientFailureWithinWindow(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 
-	dl, err := nmgr.NewDistributedLease(1 * time.Second)
+	// A long TTL keeps the ride-out assertion structural rather than raced: a correct
+	// KeepAlive cannot return anywhere inside a 30s window, however slow the box.
+	dl, err := nmgr.NewDistributedLease(30 * time.Second)
 	if err != nil {
 		cleanup()
 		t.Fatalf("NewDistributedLease: %v", err)
@@ -190,19 +203,37 @@ func TestAmITheHolderRidesOutTransientErrorWithinWindow(t *testing.T) {
 		t.Fatalf("Acquire: %v", err)
 	}
 
-	// Total NATS outage: every KV op now errors (a transient failure, not a takeover).
+	// Total NATS outage: every KV op now errors (a transient failure, not a takeover),
+	// so every renewal from here on fails.
 	cleanup()
 
-	// Within the validity window (just acquired), we still hold the lease.
-	if held, err := lease.AmITheHolder(); err != nil || !held {
-		t.Fatalf("AmITheHolder during a blip within the window = (%v, %v), want (true, nil)", held, err)
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { done <- lease.KeepAlive(ctx, 20*time.Millisecond) }()
+
+	// Renewals are failing and we are inside the window: ownership is not yet lost.
+	select {
+	case kerr := <-done:
+		t.Fatalf("KeepAlive returned %v while renewals were failing INSIDE the validity window: a "+
+			"transient failure is not loss until the window elapses, and self-evicting here would "+
+			"drop a partition no standby could have taken", kerr)
+	case <-time.After(500 * time.Millisecond):
 	}
-	// Force the window to have elapsed; now a transient failure IS definitive loss.
+
+	// Force the window to have elapsed. Now the same failing renewals ARE definitive.
 	lease.mu.Lock()
-	lease.lastRenew = time.Now().Add(-2 * time.Second)
+	lease.lastRenew = time.Now().Add(-31 * time.Second)
 	lease.mu.Unlock()
-	if held, err := lease.AmITheHolder(); held || err == nil {
-		t.Fatalf("AmITheHolder past the window during a blip = (%v, %v), want (false, non-nil)", held, err)
+
+	select {
+	case kerr := <-done:
+		if !errors.Is(kerr, ErrNotHolder) {
+			t.Fatalf("KeepAlive returned %v once the window had elapsed with no successful renewal, "+
+				"want ErrNotHolder", kerr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("KeepAlive did not report loss after the validity window elapsed with every renewal failing")
 	}
 }
 
@@ -231,9 +262,14 @@ func TestLeaseReleaseIsRevisionChecked(t *testing.T) {
 
 	// The displaced owner releasing must NOT remove the standby's entry.
 	_ = owner.Release() // a benign error here is fine; the invariant is the standby survives
-	if held, err := standby.AmITheHolder(); err != nil || !held {
-		t.Fatalf("standby AmITheHolder after displaced owner's Release = (%v, %v), want (true, nil): "+
-			"a revision-unchecked release would have dropped the new owner's hold", held, err)
+	entry, err := dl.kv.Get(kvKey("sparkplug"))
+	if err != nil {
+		t.Fatalf("read the lease entry after the displaced owner's Release = %v, want the standby's "+
+			"entry intact: a revision-unchecked release would have dropped the new owner's hold", err)
+	}
+	if string(entry.Value()) != standby.holder {
+		t.Fatalf("lease entry holder after the displaced owner's Release = %q, want the standby's %q",
+			entry.Value(), standby.holder)
 	}
 }
 
@@ -261,8 +297,9 @@ func TestLeaseReleaseIsIdempotent(t *testing.T) {
 	if err := lease.Renew(); !errors.Is(err, ErrNotHolder) {
 		t.Fatalf("Renew after Release = %v, want ErrNotHolder", err)
 	}
-	if held, err := lease.AmITheHolder(); err != nil || held {
-		t.Fatalf("AmITheHolder after Release = (%v, %v), want (false, nil)", held, err)
+	if lease.stillValid() {
+		t.Fatal("stillValid after Release = true, want false: a released lease is out of its window " +
+			"immediately, so Holder.Held() reports not-held without waiting out the TTL")
 	}
 	// The partition is free again.
 	if _, err := dl.Acquire("detect:tenant-1"); err != nil {
@@ -406,9 +443,10 @@ func TestKeepAliveReturnsOnLoss(t *testing.T) {
 }
 
 // TestLeaseConcurrentAccessIsRaceFree exercises the documented concurrency posture
-// — one KeepAlive renewer alongside a loop calling AmITheHolder and Epoch, plus a
-// Release — so `go test -race` can prove the mutex actually covers the shared
-// fields (the "safe for concurrent use" claim is otherwise pinned only by reading).
+// — one KeepAlive renewer alongside a term-gate loop calling Holder.Held() and
+// Epoch, plus a Release — so `go test -race` can prove the mutexes actually cover
+// the shared fields (the "safe for concurrent use" claim is otherwise pinned only
+// by reading).
 func TestLeaseConcurrentAccessIsRaceFree(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
@@ -423,6 +461,12 @@ func TestLeaseConcurrentAccessIsRaceFree(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	holder, err := lease.WatchHolder(ctx)
+	if err != nil {
+		cancel()
+		t.Fatalf("WatchHolder: %v", err)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); _ = lease.KeepAlive(ctx, 20*time.Millisecond) }()
@@ -433,7 +477,7 @@ func TestLeaseConcurrentAccessIsRaceFree(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				_, _ = lease.AmITheHolder()
+				_ = holder.Held()
 				_ = lease.Epoch()
 			}
 		}
@@ -664,11 +708,81 @@ func (g *leaseDeleteGateKV) letDeleteReturn() {
 	g.proceedOnce.Do(func() { close(g.proceed) })
 }
 
-// TestHeldDoesNotBlockOnAReleaseRoundTrip pins the second half of the "mu is the
-// read lock" claim. Holder.Held() is evaluated for every term-gated message and is
-// documented never to block, so no KV round trip may run under mu — and Release's
-// revision-checked delete is a round trip. Holding mu across it would stall every
-// gated read for as long as that request takes, up to the client's request timeout.
+// TestHeldDoesNotBlockOnARenewRoundTrip and TestHeldDoesNotBlockOnAReleaseRoundTrip
+// are the pair that ENFORCES the "mu is the read lock" claim, rather than leaving it
+// asserted in a comment. Holder.Held() is evaluated for every term-gated message and
+// is documented never to block, so no KV round trip may run under mu. A Lease makes
+// exactly two of them — Renew's revision-checked Update and Release's
+// revision-checked Delete — and there is one test per round trip: park it, then
+// require Held() to answer while it is outstanding. A third round trip added to the
+// type needs a third case here, or it ships covered by review only.
+//
+// This one covers Renew, and it is the case the ordering gates cannot reach:
+// TestReleaseWaitsForAnInFlightRenew also parks an Update, but the thing it watches
+// (Release) is REQUIRED to block there on renewMu, so an Update that had moved under
+// mu would still pass it. Held() takes mu and never renewMu, which is what makes it
+// the probe that can tell the two apart.
+//
+// The lease TTL is deliberately long here: the point is that Held() answers while
+// the renewal is outstanding, not what it answers.
+func TestHeldDoesNotBlockOnARenewRoundTrip(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	dl, err := nmgr.NewDistributedLease(30 * time.Second)
+	if err != nil {
+		t.Fatalf("NewDistributedLease: %v", err)
+	}
+	lease, err := dl.Acquire("detect:tenant-4")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	holder, err := lease.WatchHolder(ctx)
+	if err != nil {
+		t.Fatalf("WatchHolder: %v", err)
+	}
+
+	gate := &leaseRenewGateKV{
+		KeyValue: lease.kv,
+		landed:   make(chan struct{}),
+		proceed:  make(chan struct{}),
+	}
+	lease.kv = gate
+	defer gate.letUpdateReturn()
+
+	renewDone := make(chan error, 1)
+	go func() { renewDone <- lease.Renew() }()
+
+	select {
+	case <-gate.landed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the renew Update never reached the store")
+	}
+
+	// The renewal is in flight. The gate predicate must still answer.
+	held := make(chan bool, 1)
+	go func() { held <- holder.Held() }()
+	select {
+	case <-held:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Holder.Held() blocked while a Renew was inside its KV Update: the term gate is " +
+			"evaluated per message and must never wait on a round trip, so mu must not be held " +
+			"across one — and a renewal happens on every KeepAlive tick, so this would stall reads " +
+			"repeatedly for the life of the term")
+	}
+
+	gate.letUpdateReturn()
+	if rerr := <-renewDone; rerr != nil {
+		t.Fatalf("Renew: %v", rerr)
+	}
+}
+
+// TestHeldDoesNotBlockOnAReleaseRoundTrip is the Release half of that pair (see
+// above). Holding mu across the revision-checked delete would stall every gated read
+// for as long as that request takes, up to the client's request timeout.
 //
 // The lease TTL is deliberately long here: the point is that Held() answers while
 // the delete is outstanding, not what it answers.
