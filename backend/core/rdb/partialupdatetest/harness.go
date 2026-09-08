@@ -647,6 +647,13 @@ func suiteTenant(t *testing.T, ctx context.Context) string {
 // token is asserted above: a fence that refused everything would satisfy the second half
 // on its own, and the fixture fails closed on an unreadable purged_tenants — so "refused"
 // and "the table was never created" are the same observation without this line.
+//
+// 🔴 AND THE ROW COUNT IS ASSERTED, NOT ONLY THE ERROR — the same both-halves bar the
+// journal subtest below applies in the opposite direction. An error says the write was
+// REPORTED as refused; it does not say the row was WITHHELD. Registered as an After hook
+// the fence would report ErrTenantPurged over a resurrection that had already landed,
+// which is the exact failure it exists to prevent, and an error-only assertion passes on
+// it. The fence's value is that nothing was written, so that is what is measured.
 func fixtureFencesAPurgedTenant(t *testing.T, ctx context.Context) {
 	tenant := suiteTenant(t, ctx)
 	db := NewSQLiteDB(t, &fenceProbe{})
@@ -669,6 +676,28 @@ func fixtureFencesAPurgedTenant(t *testing.T, ctx context.Context) {
 			"running the erasure fence production runs, so every property here is asserted "+
 			"against a chain that cannot refuse a resurrection", tenant, err, rdb.ErrTenantPurged)
 	}
+
+	// The half an error cannot report: the refused row is NOT THERE. Only the one written
+	// before the fence was planted survives.
+	var rows []fenceProbe
+	if err := db.WithContext(ctx).Find(&rows).Error; err != nil {
+		t.Fatalf("reload the probe rows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Note != "before the fence" {
+		t.Fatalf("the fenced tenant's table holds %d rows (%s), want the 1 written before the "+
+			"fence — the refusal was REPORTED but the row LANDED, which is a resurrection the "+
+			"error message denies", len(rows), notesOf(rows))
+	}
+}
+
+// notesOf renders the probe rows for the failure above, so it names what actually got
+// through rather than only how many did.
+func notesOf(rows []fenceProbe) string {
+	notes := make([]string, len(rows))
+	for i, r := range rows {
+		notes[i] = r.Note
+	}
+	return strings.Join(notes, ", ")
 }
 
 // THE AUDIT JOURNAL IS REGISTERED. Every mutation the fixture accepts is recorded, by
