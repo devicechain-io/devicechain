@@ -114,22 +114,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Metrics are shared across every source. They are intentionally NOT labeled by
-	// tenant: a per-tenant label on a counter driven by broker traffic is a
-	// cardinality risk (the governance lesson) and the aggregate is enough here —
-	// per-source attribution lives in the (cardinality-safe) logs.
-	metrics := host.Metrics{
-		Messages: Microservice.NewCounterVec("messages_total",
-			"Sparkplug messages received, by message type.", []string{"type"}),
-		DecodeErrors: Microservice.NewCounter("decode_errors_total",
-			"Sparkplug messages that failed topic parse or payload decode.", nil),
-		RebirthRequests: Microservice.NewCounter("rebirth_requests_total",
-			"Sparkplug node rebirth commands emitted by the session machine.", nil),
-		ConnectFailures: Microservice.NewCounter("connect_failures_total",
-			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces).", nil),
-		IngestFailures: Microservice.NewCounter("ingest_failures_total",
-			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable).", nil),
-	}
+	// Every Prometheus instrument this service keeps for its whole life, built in the
+	// INITIALIZE phase. See buildMetrics for why the phase matters.
+	metrics := buildMetrics()
 
 	// Bring up the durable emit path. The writer is created SYNCHRONOUSLY here, right
 	// after Initialize sets the JetStream context — NOT in the NatsManager's oncreate
@@ -193,6 +180,46 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // calls this — because the initializer needs config, credentials and a broker.
 func registerHttpRoutes() {
 	Microservice.RegisterProbes(Microservice.Readiness)
+}
+
+// buildMetrics creates every Prometheus instrument exactly once and returns the ones
+// the sources share. They are intentionally NOT labeled by tenant: a per-tenant label
+// on a counter driven by broker traffic is a cardinality risk (the governance lesson)
+// and the aggregate is enough here — per-source attribution lives in the
+// (cardinality-safe) logs.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE LEADERSHIP STARTS, for the
+// same reason registerHttpRoutes is called from there. Microservice.NewGauge goes
+// through promauto, which panics on a duplicate registration, and LifecycleComponent's
+// contract says ExecuteStart "may happen on startup or after stop" — so building an
+// instrument on the start path turns a lifecycle restart into a crash. Initialize runs
+// once, which is what makes this the safe half. lwm2m-ingest's buildMetrics says the
+// same thing for the same reason.
+//
+// 🔴 It is also a named function rather than a block inside the initializer so a test
+// can drive the CONSTRUCTION ITSELF. A test that built its own gauge would be asserting
+// against its own copy of the wiring and would keep passing if this moved back onto the
+// start path, which is the exact regression it has to prevent.
+//
+// leaderGauge is built here unconditionally, including for a source-less deployment
+// that takes no lease and connects nothing: it then reads 0 for the life of the pod,
+// which is what it claims — this replica is not connecting sources.
+func buildMetrics() host.Metrics {
+	leaderGauge = Microservice.NewGauge("is_leader",
+		"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).", nil)
+
+	return host.Metrics{
+		Messages: Microservice.NewCounterVec("messages_total",
+			"Sparkplug messages received, by message type.", []string{"type"}),
+		DecodeErrors: Microservice.NewCounter("decode_errors_total",
+			"Sparkplug messages that failed topic parse or payload decode.", nil),
+		RebirthRequests: Microservice.NewCounter("rebirth_requests_total",
+			"Sparkplug node rebirth commands emitted by the session machine.", nil),
+		ConnectFailures: Microservice.NewCounter("connect_failures_total",
+			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces).", nil),
+		IngestFailures: Microservice.NewCounter("ingest_failures_total",
+			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable).", nil),
+	}
 }
 
 // resolveSources turns each configured source into a resolved Host Application
@@ -364,20 +391,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// opened regardless: a standby is "ready" to take over (its /readyz must pass so it
 	// is not killed while waiting). With no sources there is nothing to lead.
 	if len(Configuration.Sources) > 0 {
-		leaderGauge = Microservice.NewGauge("is_leader",
-			"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).", nil)
-		lease, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
-		if err != nil {
+		if err := startLeadership(); err != nil {
 			return err
 		}
-		Lease = lease
-		lctx, cancel := context.WithCancel(context.Background())
-		leadershipCancel = cancel
-		leadershipDone = make(chan struct{})
-		go func() {
-			defer close(leadershipDone)
-			runLeadership(lctx, lease)
-		}()
 	} else {
 		Manager.Start()
 	}
@@ -388,6 +404,33 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	Microservice.MarkReadyWithoutAuthSurface()
 
 	return startHttpServer(httpPort)
+}
+
+// startLeadership acquires the single-owner lease and launches the leadership loop that
+// owns the Manager for as long as this replica holds it.
+//
+// 🔴 IT BUILDS NOTHING THAT CANNOT BE BUILT TWICE, which is the same constraint
+// startHttpServer carries. It runs from the start phase, and ExecuteStart "may happen
+// on startup or after stop" — so a Prometheus instrument constructed here would panic
+// on the duplicate registration the second time round. The instruments are built once,
+// in the initialize phase, by buildMetrics.
+//
+// It is a named function rather than a block inside afterMicroserviceStarted so a test
+// can call the start path twice; the uncovered remainder is the one line that calls it.
+func startLeadership() error {
+	lease, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
+	if err != nil {
+		return err
+	}
+	Lease = lease
+	lctx, cancel := context.WithCancel(context.Background())
+	leadershipCancel = cancel
+	leadershipDone = make(chan struct{})
+	go func() {
+		defer close(leadershipDone)
+		runLeadership(lctx, lease)
+	}()
+	return nil
 }
 
 // startHttpServer builds this service's HTTP server over the microservice's own mux
