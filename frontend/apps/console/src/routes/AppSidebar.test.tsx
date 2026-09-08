@@ -61,12 +61,13 @@ function renderWith(auths: string[], at = '/') {
 const entry = (label: string) => screen.queryByText(label, { exact: true });
 
 describe('the Settings group', () => {
-  it('shows both children to someone holding both authorities', () => {
-    renderWith(['branding:write', 'basemap:write'], '/branding');
+  it('shows every child to someone holding all three authorities', () => {
+    renderWith(['branding:write', 'basemap:write', 'locale:write'], '/branding');
 
     expect(entry('Settings')).toBeTruthy();
     expect(entry('Branding')).toBeTruthy();
     expect(entry('Map')).toBeTruthy();
+    expect(entry('Language')).toBeTruthy();
   });
 
   it('shows only Branding to a holder of branding:write', () => {
@@ -75,9 +76,10 @@ describe('the Settings group', () => {
     expect(entry('Settings')).toBeTruthy();
     expect(entry('Branding')).toBeTruthy();
     expect(entry('Map')).toBeNull();
+    expect(entry('Language')).toBeNull();
   });
 
-  // 🔴 The one that matters most, and the one the two grants exist to keep apart:
+  // 🔴 The one that matters most, and the one the grants exist to keep apart:
   // holding the map key must not advertise the ability to restyle the console.
   it('shows only Map to a holder of basemap:write', () => {
     renderWith(['basemap:write'], '/basemap');
@@ -85,22 +87,42 @@ describe('the Settings group', () => {
     expect(entry('Settings')).toBeTruthy();
     expect(entry('Map')).toBeTruthy();
     expect(entry('Branding')).toBeNull();
+    expect(entry('Language')).toBeNull();
+  });
+
+  // The same argument for the third grant: setting the tenant's language must not
+  // come with the brand or the map key attached.
+  it('shows only Language to a holder of locale:write', () => {
+    renderWith(['locale:write'], '/locale');
+
+    expect(entry('Settings')).toBeTruthy();
+    expect(entry('Language')).toBeTruthy();
+    expect(entry('Branding')).toBeNull();
+    expect(entry('Map')).toBeNull();
   });
 
   // 🔴 The empty-group case. A group whose children are all filtered away must
   // disappear rather than sit there opening onto nothing — this is the failure a tab
   // strip would have had to re-derive, and it is why the group shape was chosen.
-  it('disappears entirely for someone holding neither', () => {
+  it('disappears entirely for someone holding none of them', () => {
     renderWith(['device:read']);
 
     expect(entry('Settings')).toBeNull();
     expect(entry('Branding')).toBeNull();
     expect(entry('Map')).toBeNull();
+    expect(entry('Language')).toBeNull();
   });
 
   it('is not labelled Basemap any more, at any authority', () => {
     renderWith(['branding:write', 'basemap:write'], '/basemap');
     expect(entry('Basemap')).toBeNull();
+  });
+
+  // The nav label is wayfinding; the identifier is not. "Language" is what the group
+  // shows, while the authority, the GraphQL field and the route all stay "locale".
+  it('labels the locale child Language rather than Locale', () => {
+    renderWith(['locale:write'], '/locale');
+    expect(entry('Locale')).toBeNull();
   });
 });
 
@@ -119,7 +141,7 @@ describe('the record-management nav is untouched by the grouping', () => {
   });
 
   it('hides the CRUD groups from someone with only config authorities', () => {
-    renderWith(['branding:write', 'basemap:write'], '/basemap');
+    renderWith(['branding:write', 'basemap:write', 'locale:write'], '/basemap');
 
     expect(entry('Devices')).toBeNull();
     expect(entry('Areas')).toBeNull();

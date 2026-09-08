@@ -224,6 +224,15 @@ func TestReadSweepReachesTheDerivedDoors(t *testing.T) {
 		"device-management.entityGroupVersions",
 		"dashboard-management.dashboardVersions",
 		"outbound-connectors.connectorVersions",
+		// The asset hierarchy and the device-replacement journal. Same class, same
+		// argument: each reads a row DERIVED from a write — a containment edge, an
+		// append-only replacement record — rather than the entity the probe seeded, so
+		// a read-back of the probe's own writes goes nowhere near them. Named here so a
+		// future exemption cannot drop them without saying so out loud.
+		"device-management.assetParent",
+		"device-management.assetAncestors",
+		"device-management.assetChildren",
+		"device-management.deviceReplacements",
 	} {
 		call, ok := planned[want]
 		if !ok {

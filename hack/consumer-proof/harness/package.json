@@ -1,0 +1,9 @@
+{
+  "name": "dc-consumer-proof-harness",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "puppeteer-core": "^24.30.0"
+  }
+}

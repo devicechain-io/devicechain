@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"gorm.io/datatypes"
 )
 
@@ -94,8 +95,7 @@ func TestAnEditChangingOnlyNameAndMetadataMintsNothing(t *testing.T) {
 
 	name := "North Yard"
 	metadata := `{"owner":"logistics"}`
-	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: geometry, Name: &name, Metadata: &metadata}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceUpdateRequest{Geometry: dcgraphql.OptionalStringOf(geometry), Name: dcgraphql.OptionalStringOf(name), Metadata: dcgraphql.OptionalStringOf(metadata)}); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 
@@ -114,8 +114,7 @@ func TestAnEditChangingOnlyNameAndMetadataMintsNothing(t *testing.T) {
 	}
 
 	// The control. A real geometry change still does all three.
-	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: boxGeometry(10, 10, 11, 11)}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", geoFenceEdit(boxGeometry(10, 10, 11, 11))); err != nil {
 		t.Fatalf("control update: %v", err)
 	}
 	controlVersion, controlFacts, controlEvictions := h.observe(t)
@@ -140,8 +139,7 @@ func TestResubmittingIdenticalGeometryMintsNothing(t *testing.T) {
 	before, factsBefore, evictionsBefore := h.observe(t)
 
 	for i := 0; i < 3; i++ {
-		if _, err := h.api.UpdateGeoFence(h.ctx, "dock", &GeoFenceCreateRequest{
-			Token: "dock", Geometry: geometry}); err != nil {
+		if _, err := h.api.UpdateGeoFence(h.ctx, "dock", geoFenceEdit(geometry)); err != nil {
 			t.Fatalf("resubmit %d: %v", i, err)
 		}
 	}
@@ -155,8 +153,7 @@ func TestResubmittingIdenticalGeometryMintsNothing(t *testing.T) {
 	// 🔴 THE ENGINE RETAINS FOUR VERSIONS PER TENANT. Three no-op saves used to mint three
 	// versions, which is enough on its own to evict a fence set still being used by an event
 	// in flight. The control confirms the path is alive.
-	if _, err := h.api.UpdateGeoFence(h.ctx, "dock", &GeoFenceCreateRequest{
-		Token: "dock", Geometry: boxGeometry(4, 4, 5, 5)}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "dock", geoFenceEdit(boxGeometry(4, 4, 5, 5))); err != nil {
 		t.Fatalf("control update: %v", err)
 	}
 	// All three, not just the version: a mint path that still wrote rows but had stopped
@@ -193,8 +190,7 @@ func TestSkippedMintsLeaveNoHolesInTheVersionSequence(t *testing.T) {
 	}
 	want := int32(1)
 	for i, step := range steps {
-		if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceCreateRequest{
-			Token: "yard", Geometry: step.geometry, Name: step.name}); err != nil {
+		if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceUpdateRequest{Geometry: dcgraphql.OptionalStringOf(step.geometry), Name: optionalStr(step.name)}); err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}
 		if step.mints {
@@ -242,8 +238,7 @@ func TestAnUndecodableCurrentSnapshotMintsRatherThanRefusing(t *testing.T) {
 	// The same rename that would be skipped against a readable snapshot must now succeed
 	// AND mint, because an undecodable snapshot cannot be shown equal to anything.
 	name := "North Yard"
-	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: geometry, Name: &name}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "yard", &GeoFenceUpdateRequest{Geometry: dcgraphql.OptionalStringOf(geometry), Name: dcgraphql.OptionalStringOf(name)}); err != nil {
 		t.Fatalf("a corrupt current snapshot must not block authoring: %v", err)
 	}
 	v, facts, evictions := h.observe(t)
@@ -298,12 +293,10 @@ func TestTheComparisonIsOverThePairingNotTheSetOfShapes(t *testing.T) {
 	version, facts, evictions := h.observe(t)
 
 	// Step 1 — swap. Same hashes, different owners.
-	if _, err := h.api.UpdateGeoFence(h.ctx, "north", &GeoFenceCreateRequest{
-		Token: "north", Geometry: south}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "north", geoFenceEdit(south)); err != nil {
 		t.Fatalf("swap north: %v", err)
 	}
-	if _, err := h.api.UpdateGeoFence(h.ctx, "south", &GeoFenceCreateRequest{
-		Token: "south", Geometry: north}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "south", geoFenceEdit(north)); err != nil {
 		t.Fatalf("swap south: %v", err)
 	}
 	afterSwap, factsAfterSwap, evictionsAfterSwap := h.observe(t)
@@ -319,8 +312,7 @@ func TestTheComparisonIsOverThePairingNotTheSetOfShapes(t *testing.T) {
 
 	// Step 2 — give north the shape south already holds. Every hash in the resulting set was
 	// already in the previous one; only north's ref changed.
-	if _, err := h.api.UpdateGeoFence(h.ctx, "north", &GeoFenceCreateRequest{
-		Token: "north", Geometry: north}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "north", geoFenceEdit(north)); err != nil {
 		t.Fatalf("converge north: %v", err)
 	}
 	afterConverge, _, _ := h.observe(t)
@@ -332,8 +324,7 @@ func TestTheComparisonIsOverThePairingNotTheSetOfShapes(t *testing.T) {
 
 	// Step 3 — the skip still holds with two fences in the list.
 	name := "North Yard"
-	if _, err := h.api.UpdateGeoFence(h.ctx, "north", &GeoFenceCreateRequest{
-		Token: "north", Geometry: north, Name: &name}); err != nil {
+	if _, err := h.api.UpdateGeoFence(h.ctx, "north", &GeoFenceUpdateRequest{Geometry: dcgraphql.OptionalStringOf(north), Name: dcgraphql.OptionalStringOf(name)}); err != nil {
 		t.Fatalf("rename north: %v", err)
 	}
 	if v, _, _ := h.observe(t); v != afterConverge {

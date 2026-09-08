@@ -3,6 +3,13 @@
 .claude/commands/
 .claude/agents/
 .claude/skills/
+# Agent worktrees are created INSIDE the repo, so without this they show up as
+# untracked and are one `git add -A` away from being committed -- which has
+# happened here before, at 428 files. They also make the working tree
+# permanently dirty, which matters more than tidiness now that the release job
+# refuses to run goreleaser from a dirty checkout.
+.claude/worktrees/
+.claude/settings.json
 
 # Legacy individual repos (reference only, not part of monorepo)
 _legacy/

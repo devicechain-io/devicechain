@@ -1,0 +1,17 @@
+{
+  "activeBadge": "activa",
+  "activeLabel": "Versión activa:",
+  "colBy": "Por",
+  "colPublished": "Publicada",
+  "colVersion": "Versión",
+  "descHint": "Notas opcionales sobre esta versión.",
+  "empty": "Aún no hay versiones publicadas.",
+  "labelFieldLabel": "Etiqueta",
+  "labelHint": "Opcional, p. ej. un nombre de versión.",
+  "labelPlaceholder": "v1.0",
+  "loading": "Cargando versiones…",
+  "publishButton": "Publicar",
+  "publishedToast": "Versión {{version}} publicada",
+  "rollbackButton": "Revertir",
+  "rolledBackToast": "Revertido a la versión {{version}}"
+}

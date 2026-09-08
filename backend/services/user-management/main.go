@@ -15,8 +15,10 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/config"
+	"github.com/devicechain-io/dc-user-management/deadletters"
 	"github.com/devicechain-io/dc-user-management/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
@@ -42,6 +44,12 @@ var (
 	// PurgeCoordinator reclaims a deleted tenant's data and then releases its token
 	// (ADR-077). nil when disabled by a negative interval.
 	PurgeCoordinator *purge.Coordinator
+
+	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
+	// with the consumer that fills it and the sweep that bounds it.
+	DeadLetterStore    *deadletters.Store
+	DeadLetterConsumer *deadletters.Consumer
+	DeadLetterSweeper  *deadletters.Sweeper
 
 	// TsdbGuest is the purge's connection to the telemetry cluster, which
 	// event-management owns and this service only visits. Built alongside the
@@ -99,9 +107,31 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize nats manager (used for the refresh-token KV store).
+	// The ADR-024 store. It is built HERE, before the admin handler is registered below,
+	// because that handler captures it — an earlier arrangement created it afterwards and
+	// handed the admin service a nil, which its own tolerate-nil path then rendered as
+	// "nothing has failed" on every query while the table filled.
+	DeadLetterStore = deadletters.NewStore(RdbManager)
+
+	// Create and initialize nats manager (the refresh-token KV store, and the ADR-024
+	// dead-letter consumer).
+	//
+	// 🔴 THE CONSUMER IS BUILT INSIDE THE CALLBACK, NOT MERELY ITS READER, and the
+	// distinction is a service-killer. This callback runs in NatsManager's ExecuteSTART,
+	// not Initialize — so anything constructed out here during afterMicroserviceInitialized
+	// captures a nil reader by value and panics on its first read, taking the identity
+	// service down. notification-management builds its processor inside the callback for
+	// exactly this reason; this now does the same.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		func(*messaging.NatsManager) error { return nil })
+		func(nmgr *messaging.NatsManager) error {
+			reader, err := nmgr.NewReader(streams.DeadLetters)
+			if err != nil {
+				return err
+			}
+			DeadLetterConsumer = deadletters.NewConsumer(Microservice, reader, DeadLetterStore,
+				core.NewNoOpLifecycleCallbacks())
+			return DeadLetterConsumer.Initialize(context.Background())
+		})
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
@@ -245,6 +275,21 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		log.Info().Msg("Tenant purge coordinator disabled by configuration; deleted tenants stay purging")
 	}
 
+	// The retention sweep. It needs only the store, so unlike the consumer it can be built
+	// here. The store itself lives in one of the four services' streams rather than in
+	// them, because the read surface is the operator plane: a per-entry failure reason at
+	// full fidelity on a tenant-readable surface would hand back the status-class oracle
+	// the egress boundary closed.
+	if sweep := Configuration.DeadLetterSweepInterval(); sweep > 0 {
+		DeadLetterSweeper = deadletters.NewSweeper(Microservice, DeadLetterStore,
+			Configuration.DeadLetterRetention(), sweep, core.NewNoOpLifecycleCallbacks())
+		if err := DeadLetterSweeper.Initialize(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Info().Msg("Dead-letter retention sweep disabled by configuration; the store grows unbounded")
+	}
+
 	return nil
 }
 
@@ -293,7 +338,7 @@ func buildBlobStore(ctx context.Context) (blob.Store, error) {
 // RdbManager via its own iam store wrapper.
 func registerAdminHandler() {
 	adminSvc := admin.NewService(iam.NewStore(RdbManager),
-		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold())
+		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	adminProviders := map[gqlcore.ContextKey]interface{}{
 		graphql.ContextAdminKey: adminSvc,
 	}
@@ -334,19 +379,26 @@ func registerKeyHandlers() {
 // 8414 metadata + a public JWKS mirror); the /oauth/authorize and /oauth/token
 // endpoints it advertises land in the following slices.
 //
-// Deployment companion (tracked for the slice that enables OAuth in a cluster):
-// external discovery needs two ingress adjustments this in-code slice does not
-// make. (1) The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught
-// by the ingress rule that 404s external /api/<area>/auth/* — no ingress change
-// needed for it. (2) A strict RFC 8414 client of an issuer WITH a path
-// (https://host/api/user-management) fetches the metadata at the path-INSERTED
-// location (https://host/.well-known/oauth-authorization-server/api/user-management),
-// which the current /api/<area> ingress rule does not route; the widely-used
-// path-APPENDED form (<issuer>/.well-known/...) does route through it. Supporting
-// strict clients needs an added ingress rule (or a dedicated path-less issuer
-// host). Inert until an operator sets IssuerUrl.
+// The advertised jwks_uri is /oauth/jwks precisely so it is NOT caught by the
+// ingress rule that 404s external /api/<area>/auth/* — no ingress change is needed
+// for it.
+//
+// 🔴 THE METADATA DOCUMENT IS SERVED AT TWO PATHS, AND THE SECOND IS THE ONE CLIENTS
+// USE. A note here used to describe the path-INSERTED location as an unsupported
+// nicety for "strict" clients and closed with "inert until an operator sets
+// IssuerUrl". Both halves were wrong by the time they were read. It is not strictness:
+// RFC 8414 §3.1 specifies insertion, the MCP specification requires clients to try it
+// FIRST for a path-carrying issuer, and the reference client aborts the whole walk on
+// the first error rather than falling through to the appended form — so the appended
+// form routing was no consolation, because nothing reached it. And it was not inert:
+// the Helm chart derives mcp's issuerUrl from the ingress automatically, so every
+// ingress install that enables mcp is pointed at a path-carrying issuer here.
+//
+// The insertion is computed from the configured issuer rather than hardcoded, so an
+// operator who sets a path-less issuer (a dedicated AS host) gets one registration
+// and no duplicate.
 func registerOAuthHandlers() {
-	http.Handle(identity.MetadataPath, identity.AuthorizationServerMetadataHandler(Configuration.Auth.IssuerUrl))
+	identity.RegisterMetadataHandlers(http.DefaultServeMux, Configuration.Auth.IssuerUrl)
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
 	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and
@@ -416,6 +468,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Start(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return GraphQLManager.Start(ctx)
 }
 
@@ -428,6 +490,18 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// order: its pass holds an advisory lock on a pooled connection.
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	// Before the broker it reads from and the database it writes to, in the reverse of
+	// the start order.
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -444,6 +518,16 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterSweeper != nil {
+		if err := DeadLetterSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if DeadLetterConsumer != nil {
+		if err := DeadLetterConsumer.Terminate(ctx); err != nil {
 			return err
 		}
 	}

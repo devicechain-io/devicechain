@@ -36,8 +36,10 @@ import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
+import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
+import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
 
 export default function DeviceDetailPage() {
@@ -120,11 +122,22 @@ export default function DeviceDetailPage() {
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
           <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>
+          {/* The device's share of the facet-value authoring surface the other three
+              member families get through the registry kit's detailTabs. */}
+          <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
           {canManageCredentials && (
             <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
+          )}
+          {/* Replacement rides the same gate as credentials, and for the same
+              reason rather than by association: the mutation returns the credential
+              minted for the incoming unit, whose id is the bearer for an
+              ACCESS_TOKEN. Showing the tab to a viewer would present a form whose
+              every submission 403s. */}
+          {canManageCredentials && (
+            <TabsTrigger value="replacement">{t('tabReplacement')}</TabsTrigger>
           )}
         </TabsList>
         <TabsContent value="basic">
@@ -141,6 +154,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="assignment">
           <SectionPanel>
             <DeviceAssignmentPanel deviceToken={device.token} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="facets">
+          <SectionPanel>
+            <EntityAttributesPanel entityType="device" entityToken={device.token} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="connectivity">
@@ -173,6 +191,13 @@ export default function DeviceDetailPage() {
           <TabsContent value="credentials">
             <SectionPanel>
               <DeviceCredentialsPanel deviceToken={device.token} />
+            </SectionPanel>
+          </TabsContent>
+        )}
+        {canManageCredentials && (
+          <TabsContent value="replacement">
+            <SectionPanel>
+              <DeviceReplacementPanel deviceToken={device.token} />
             </SectionPanel>
           </TabsContent>
         )}

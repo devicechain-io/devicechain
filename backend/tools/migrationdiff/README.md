@@ -65,7 +65,19 @@ go run . -mode verify -container dc-mdiff -host localhost -port 55432 \
   -user postgres -password postgres -db dcmigrationdiff -golden-dir golden
 ```
 
-Flags: `-mode snapshot|verify`, `-only area1,area2` (subset), `-golden-dir`.
+Flags: `-mode snapshot|verify|coverage|replay`, `-only area1,area2` (subset), `-golden-dir`.
+
+The four modes answer four different questions about one migration chain:
+
+| mode | question |
+| --- | --- |
+| `snapshot` | capture what the chains build now, as the oracle everything else compares to |
+| `verify` | do the chains still build it? (also runs `coverage` and `replay`) |
+| `coverage` | can the tenant purge account for every table the chains created? |
+| `replay` | can each migration survive being run a second time, as it is after a partial failure? |
+
+`coverage` and `replay` refuse `-only`: a run that skipped areas reports them clean, which
+reads exactly like a run that checked them.
 
 ## The squash workflow
 

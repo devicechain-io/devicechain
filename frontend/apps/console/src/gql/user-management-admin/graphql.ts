@@ -33,7 +33,7 @@ export type AdminRoleCreateRequest = {
 };
 
 export type AdminRoleUpdateRequest = {
-  authorities: Array<string>;
+  authorities?: Array<string> | null | undefined;
   description?: string | null | undefined;
   name?: string | null | undefined;
 };
@@ -87,7 +87,7 @@ export type AdminTenantUpdateRequest = {
   outboundBurst?: number | null | undefined;
   outboundMessagesPerSecond?: number | null | undefined;
   shedPriority?: number | null | undefined;
-  tierToken: string;
+  tierToken?: string | null | undefined;
 };
 
 export type DeletionWait =

@@ -21,10 +21,15 @@ func containsPattern(s string) string {
 	return "%" + likeEscaper.Replace(s) + "%"
 }
 
-// AuditEventSearchCriteria selects rows from the append-only audit journal
-// (ADR-019). The journal is tenant-scoped by construction, so a read is
-// automatically restricted to the caller's tenant; these filters narrow within
-// it. Every filter is optional except pagination — a bounded time range is
+// AuditEventSearchCriteria selects rows from the audit journal (ADR-019). The
+// journal is tenant-scoped by construction, so a read is automatically restricted
+// to the caller's tenant; these filters narrow within it.
+//
+// Rows are only ever appended by the platform and never edited through any API,
+// with one deliberate exception worth knowing about when reading results: the
+// ADR-077 tenant purge empties `actor` and `entity_label` for a deleted tenant, so
+// a row from before an erasure reads back with both fields blank. That is the
+// retention working, not data missing. Every filter is optional except pagination — a bounded time range is
 // recommended for a busy tenant.
 type AuditEventSearchCriteria struct {
 	Pagination

@@ -205,8 +205,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	RaiseAlarmReader = rareader
+	// The ADR-024 arm for the hop AFTER REACT. REACT dead-letters a detection whose
+	// actions it could not dispatch; an edge it dispatched successfully could still die
+	// here, with the same consequence — a raise that does not re-emit until the condition
+	// re-breaches, a resolve that strands its alarm.
+	raDead, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi)
+		core.NewNoOpLifecycleCallbacks(), CachedApi, raDead)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -331,7 +339,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
 	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
 		&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
-		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}))
+		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{}))
 
 	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 	// its draft rules against event-processing and fails closed on an uncompilable one.

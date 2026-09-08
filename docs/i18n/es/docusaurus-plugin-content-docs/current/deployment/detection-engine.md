@@ -6,18 +6,18 @@ title: Cómo operar el motor de detección
 # Cómo operar el motor de detección
 
 Las [reglas de detección](../concepts/event-processing.md) las evalúa un servicio que se comporta de
-forma distinta al resto de la plataforma: mantiene estado vivo en memoria, se ejecuta como una
-**única instancia** y evalúa sobre el **tiempo del evento** en lugar de sobre el reloj. Esta página
-es el contrato del operador: qué se gana con eso, qué cuesta y cómo distinguir un motor sano de uno
-atascado.
+forma distinta al resto de la plataforma: mantiene estado vivo en memoria, detecta desde
+una **única instancia activa** y evalúa sobre el **tiempo del evento** en lugar de sobre el reloj.
+Esta página es el contrato del operador: qué se gana con eso, qué cuesta y cómo distinguir un
+motor sano de uno atascado.
 
 Si lo que busca es qué puede expresar una regla o cómo autorarla, empiece por
 [Procesamiento de eventos y alarmas](../concepts/event-processing.md).
 
-## Una sola instancia, a propósito
+## Un solo motor activo, a propósito
 
-El motor de detección se ejecuta como **exactamente una réplica**, y el chart lo distribuye así, con
-una estrategia de despliegue de tipo *recreate*.
+Exactamente un motor detecta a la vez. El chart distribuye una sola réplica con una estrategia de
+despliegue de tipo *recreate*, que es la forma más simple de conseguirlo.
 
 Esto no es una limitación de escalado a la espera de que alguien la levante a la ligera. El motor
 mantiene en memoria cada ventana abierta, cada temporizador en marcha y cada enclavamiento de flanco
@@ -29,24 +29,47 @@ Tres cosas protegen ese invariante, y conviene saber que no son igual de fuertes
 
 1. **La estrategia de despliegue** impide que un despliegue solape la instancia antigua con la
    nueva. Solo cubre los despliegues.
-2. **El chart se niega a renderizar** una configuración que pida más de una réplica junto a esa
-   estrategia.
+2. **Un arrendamiento (lease) de partición** decide qué réplica puede actuar. Una réplica lee,
+   confirma mensajes, escribe puntos de control y publica únicamente mientras mantiene el
+   arrendamiento, y se detiene en el momento en que deja de tenerlo.
 3. **El propio motor se niega a confirmar** un punto de control que quede por detrás de uno ya
    almacenado. Si dos motores llegan a ejecutarse brevemente —una expulsión, el drenaje de un nodo o
    un pod eliminado a mano programan un reemplazo de inmediato—, el que se quedó atrás se detiene en
    lugar de sobrescribir.
 
-:::warning Un drenaje puede ejecutar dos motores durante unos segundos
-Solo la vía del despliegue está cubierta por completo. En una expulsión o un drenaje de nodo, el
-reemplazo se programa antes de que el original se haya detenido, así que durante unos segundos dos
-motores pueden consumir el mismo flujo. La valla del punto de control lo contiene —el que pierde se
-detiene—, pero es la razón para preferir un despliegue deliberado a drenar el nodo en el que
-casualmente está el motor.
+:::warning Un drenaje puede ejecutar dos pods durante unos segundos
+Solo la vía del despliegue está cubierta por completo por la estrategia. En una expulsión o un
+drenaje de nodo, el reemplazo se programa antes de que el original se haya detenido. El
+arrendamiento y la valla del punto de control lo contienen —el pod que no tiene el arrendamiento
+deja de consumir, y un punto de control atrasado se rechaza—, pero es la razón para preferir un
+despliegue deliberado a drenar el nodo en el que casualmente está el motor.
 :::
 
-Como hay una sola réplica, no hay presupuesto de interrupción de pods. Drenar su nodo detiene la
-detección hasta
-que el pod se reprograma.
+### Ejecutar un standby en caliente
+
+Puede ejecutar más de una réplica, y las réplicas adicionales son **standbys, no escritores**.
+Establezca ambos valores:
+
+```yaml
+functionalAreas:
+  event-processing:
+    replicas: 2
+    strategy: RollingUpdate
+```
+
+Subir `replicas` sin abandonar además la estrategia *recreate* hace fallar el renderizado, porque
+esa estrategia detiene todos los pods antes de arrancar ninguno: el standby estaría caído justo
+cuando hace falta.
+
+Un standby está listo y sirve la API, pero no tiene el arrendamiento: no consume nada, no confirma
+nada y toma la partición cuando el líder la libera o su arrendamiento expira. Lo que ahorra es el
+arranque del pod y, en una expulsión, la espera a que se programe un reemplazo. Lo que **no** evita
+es el coste de reinicio descrito en la siguiente sección: un standby no mantiene estado del motor
+precargado, porque cargarlo significaría leer un punto de control que el líder todavía está
+escribiendo.
+
+Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su nodo detiene la
+detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
 ## Qué cuesta un reinicio
 
@@ -91,19 +114,39 @@ reintenta con un temporizador, en lugar de martillear el destino. Tras cinco int
 repartidos en unos cuatro minutos en total:
 
 - la solicitud de un **conector de salida** se envía a la **cola de mensajes no entregados**, de
-  modo que se puede inspeccionar o reprocesar;
-- una **detección** **se descarta con un error ruidoso**: en esa vía no hay cola de mensajes no
-  entregados. Un *levantamiento* descartado no volverá a aparecer hasta que la condición se despeje
-  y se vuelva a incumplir; una *resolución* descartada deja activa una alarma que debería haberse
-  limpiado.
+  modo que se puede inspeccionar;
+- una **detección** cuyas acciones no se pudieron despachar **también se envía a esa cola**, con un
+  error ruidoso.
+
+:::caution Enviado a la cola es quedar registrado, no reintentado
+Nada vuelve a ejecutar un mensaje de esa cola. El registro existe para que un fallo sea visible y
+diagnosticable en lugar de silencioso; las consecuencias del propio fallo se mantienen igualmente.
+Un *levantamiento* que no se despachó no volverá a aparecer hasta que la condición se despeje y se
+vuelva a incumplir, y una *resolución* que no se despachó deja activa una alarma que debería
+haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no como algo que se
+vaciará por sí solo.
+:::
+
+Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
+
+```bash
+dcctl dead-letters list --server <host> --email <usted> --password <secreto> \
+  --tenant acme --since 2026-09-04T00:00:00Z
+```
+
+También están en el endpoint GraphQL de administración de la instancia como `deadLetters`,
+protegido por la misma autoridad que el diario de auditoría. Los registros se conservan 30 días
+de forma predeterminada —más que el flujo de mensajes subyacente, que es la razón de
+almacenarlos— y la retención es configurable por despliegue.
 
 La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse como urgente.
 
 :::caution Una acción que falla se lleva por delante a las que van después
 Las acciones de una regla se ejecutan en el orden en que están listadas, y una acción que falla
 detiene al resto. En cada reintento, las acciones *anteriores* a ella se vuelven a ejecutar, y las
-*posteriores* siguen sin haberse ejecutado nunca; así que, si el evento acaba descartándose, esas
-acciones posteriores se pierden sin haber llegado a intentarse ni una sola vez.
+*posteriores* siguen sin haberse ejecutado nunca; así que, si el evento acaba abandonándose, esas
+acciones posteriores no llegaron a ocurrir en absoluto. El mensaje de la cola registra que la
+detección se disparó y que sus acciones no; no las lleva a cabo.
 
 **Ordene las acciones de una regla de modo que la importante vaya primero.** Si una regla levanta
 una alarma y además llama a un webhook, poner la alarma primero significa que un endpoint inestable
@@ -375,7 +418,9 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
-| `ReactPoisonDropping` | Se están descartando acciones tras agotar sus reintentos: se están perdiendo alarmas o comandos. Trátelo como urgente. |
+| `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker. |
+| `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 

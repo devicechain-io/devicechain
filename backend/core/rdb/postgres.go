@@ -248,14 +248,43 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
-	// Register the audit-journal callbacks and ensure the journal table exists, so
-	// every entity mutation in this service is recorded by construction (ADR-019).
-	// The table is core-owned and auto-migrated here rather than via each service's
-	// migration list, so no per-service wiring is required.
-	if err := rdb.Database.AutoMigrate(&AuditEvent{}); err != nil {
+	// Register the audit-journal callbacks so every entity mutation in this service
+	// is recorded by construction (ADR-019).
+	//
+	// Registering the writer before its table exists is deliberate and safe, but the
+	// reason is not "nothing writes a row until a seed does" — every chain writes one
+	// even with no seeds, because gormigrate records each applied migration with an
+	// ordinary gorm Create, which fires these callbacks and INSERTs into the journal.
+	// The invariant that actually holds is narrower and stronger: no gorm
+	// Create/Update/Delete runs between this line and the AutoMigrate in
+	// ExecuteInitialize. What is in that gap is applyPoolSizing, gormigrate.New, and a
+	// raw pg_advisory_lock — no row operations at all.
+	//
+	// The table is created there rather than here because it is DDL, and every DDL
+	// statement this service issues must be serialized behind the migration advisory
+	// lock — see ExecuteInitialize.
+	if err := RegisterAuditJournal(rdb.Database); err != nil {
 		return err
 	}
-	if err := RegisterAuditJournal(rdb.Database); err != nil {
+
+	// Register the erasure fence (ADR-077) so a write for a tenant this area has
+	// already reclaimed is refused inside the writing transaction.
+	//
+	// It goes here, beside the other three, for the same reason they are here: the
+	// six areas that write tenant rows without any lifecycle gate — device-state,
+	// event-processing, event-management, dashboard-management, ai-inference and
+	// user-management — do not gain one by being remembered, they gain one by there
+	// being nowhere to put a write that does not pass through this callback chain.
+	// Two of those six are the consumer paths carrying the create-on-miss and
+	// ON CONFLICT upserts that ADR-077 verified as resurrection vectors, and neither
+	// has a call site anyone could have wired a gate onto.
+	//
+	// Same table-before-writer note as the journal above: purged_tenants is created by
+	// the AutoMigrate in ExecuteInitialize, behind the migration advisory lock, and no
+	// gorm row operation runs in the gap. The fence FAILS CLOSED on an unreadable
+	// table, so getting that order wrong would wedge startup loudly rather than
+	// silently disarming the fence — which is the direction this check should fail in.
+	if err := RegisterTenantFence(rdb.Database); err != nil {
 		return err
 	}
 

@@ -57,7 +57,17 @@ type UpgradeOptions struct {
 // already emits it as one document — and it means the CRD path is never the thing
 // nobody remembered.
 func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error {
-	kubeContext := instanceContext(opts.Options)
+	// 🔴 THE SAME BINDING DESTROY USES, AND ANNOUNCED THE SAME WAY. `upgrade` carried the
+	// identical defect: it derived kind-<instance> and so pointed at a cluster that does
+	// not exist for any instance bootstrapped with --kube-context. Reading the record
+	// fixes where it points; announcing the SOURCE is what stops a guess being presented
+	// as knowledge, which is the half a silent fix would have left behind.
+	binding, source := ResolveBinding(opts.Options)
+	if err := refuseUnreadable(source, opts.Instance); err != nil {
+		return err
+	}
+	announceBinding(binding, source, opts.Instance)
+	kubeContext := binding.KubeContext
 
 	registry, version, err := resolveOperatorImageSource(opts.Options)
 	if err != nil {

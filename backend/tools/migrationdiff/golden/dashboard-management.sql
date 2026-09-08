@@ -12,6 +12,8 @@ ALTER TABLE ONLY "dashboard-management".dashboard_versions ALTER COLUMN id SET D
 ALTER TABLE ONLY "dashboard-management".dashboards
  ADD CONSTRAINT dashboards_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "dashboard-management".dashboards ALTER COLUMN id SET DEFAULT nextval('"dashboard-management".dashboards_id_seq'::regclass);
+ALTER TABLE ONLY "dashboard-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_dashboard-management_dashboard_versions_deleted_at" ON "dashboard-management".dashboard_versions USING btree (deleted_at);
 CREATE INDEX "idx_dashboard-management_dashboard_versions_tenant_id" ON "dashboard-management".dashboard_versions USING btree (tenant_id);
 CREATE INDEX "idx_dashboard-management_dashboards_deleted_at" ON "dashboard-management".dashboards USING btree (deleted_at);
@@ -75,6 +77,12 @@ CREATE TABLE "dashboard-management".dashboards (
  name character varying(128),
  description character varying(1024),
  definition jsonb NOT NULL
+);
+CREATE TABLE "dashboard-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
 );
 CREATE UNIQUE INDEX uix_dashboard_versions_dashboard_version ON "dashboard-management".dashboard_versions USING btree (dashboard_id, version);
 CREATE UNIQUE INDEX uix_dashboards_tenant_token ON "dashboard-management".dashboards USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

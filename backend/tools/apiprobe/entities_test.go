@@ -227,12 +227,22 @@ func TestEveryEntityIsComplete(t *testing.T) {
 		if (e.ReadInput == "") != (e.ReadVars == nil) {
 			t.Errorf("entity %q sets one of ReadInput/ReadVars without the other", e.Name)
 		}
-		// A result envelope is only unwrappable if the refusal beside it is
-		// asked for too — otherwise a declined create reports as an absent
-		// object with no code and no reason.
-		if e.Wrap != "" && e.Reject == "" {
-			t.Errorf("entity %q unwraps %q but selects no rejection; a refusal would arrive bare", e.Name, e.Wrap)
-		}
+		// 🔴 THE "AN ENVELOPE MUST CARRY A REJECTION" HALF OF THIS CHECK MOVED, AND THE
+		// REASON IS THAT IT WAS ASSERTING SOMETHING THE SCHEMA DECIDES. It read: a
+		// result envelope is only unwrappable if the refusal beside it is asked for
+		// too. That is true of {command, rejection} — a STRUCTURED refusal, which
+		// arrives as a null object with a reason next to it — and false of an envelope
+		// with no rejection field at all, where a refused create is a GraphQL error and
+		// there is nothing beside it to select. Requiring Reject there demands a
+		// selection the schema cannot serve.
+		//
+		// It now lives in documents_test.go as TestAnEnvelopeWithARejectionSelectsIt,
+		// which asks the SERVED SCHEMA whether the mutation's return type declares a
+		// `rejection` field rather than assuming every envelope does. Derived from the
+		// type, not from a rule about envelopes in general.
+		//
+		// The other direction needs no schema and stays here: selecting a rejection
+		// with no envelope to unwrap is incoherent whatever the schema says.
 		if e.Wrap == "" && e.Reject != "" {
 			t.Errorf("entity %q selects a rejection but has no envelope to unwrap", e.Name)
 		}

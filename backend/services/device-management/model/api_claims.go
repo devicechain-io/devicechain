@@ -192,6 +192,17 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		if res.RowsAffected == 0 {
 			return ErrClaimNotOpen
 		}
+		// This is the THIRD writer of relationship edges, and it takes a
+		// CALLER-CHOSEN relationship type — so redeeming a claim with
+		// relationshipType "contains" would create a containment edge that never met
+		// the asset hierarchy's structural contract (ADR-072). It is refused here for
+		// the same reason CreateEntityRelationship refuses it: a gate with a third
+		// door around it is not a gate. A no-op for every other type, which is every
+		// type a claim is legitimately redeemed with.
+		if err := api.admitContainmentEdge(tx, request.RelationshipType,
+			rel.SourceType, rel.SourceId, rel.TargetType, rel.TargetId); err != nil {
+			return err
+		}
 		return tx.Create(rel).Error
 	})
 	if err != nil {

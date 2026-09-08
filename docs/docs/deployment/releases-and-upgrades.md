@@ -95,20 +95,33 @@ Because the registry is public, no credentials are required to pull released ima
 
 Pin the image tag to the release you want:
 
+`DC_ROOT_KEY` below is the instance's secret-store root key — required by the `default`
+profile, generated once with `openssl rand -base64 32`, and passed unchanged on every
+install and upgrade. See
+[Deploying with Helm](./kubernetes-operator.md#deploying-with-helm) for why.
+
+Substitute a real released tag for `<version>` — the
+[releases page](https://github.com/devicechain-io/devicechain/releases) lists them, and an
+unreleased value fails at the pull rather than at install time.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 The Helm chart itself is also published as an OCI artifact, so you can install it without a
-checkout of the repository:
+checkout of the repository. The chart is versioned separately from the images and carries no
+leading `v`; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the
+latest, and `--version` refuses anything that was never published:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 \
+  --version <chart-version> \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 The chart is also listed on
@@ -131,12 +144,12 @@ helm get values dc -n default -o yaml > dc-values.yaml
 helm upgrade dc deploy/helm/devicechain \
   -n default \
   -f dc-values.yaml \
-  --set image.tag=v1.3.0
+  --set image.tag=<new-version>
 
 rm dc-values.yaml
 
 # 2. The operator. Not part of the chart, so `helm upgrade` cannot move it.
-dcctl upgrade local devicechain --version v1.3.0
+dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::warning Both steps, every time — the second one is not optional
@@ -445,6 +458,15 @@ reason — renaming it, editing its description — silently un-declares positio
 device on it. The only symptom is that map surfaces go quiet. Send the field, or set the
 declaration again after any update from an older client.
 
+:::note[This no longer applies]
+`updateDeviceProfile` has since become a [partial
+update](../reference/graphql-api.md#which-mutations-are-partial-updates): a request that says
+nothing about the declaration now leaves it alone, and clearing one takes an explicit `null`.
+The advice above is what to do on a `v0.12.x` or `v0.13.x` instance; on a current one there is
+nothing to carry forward. Renaming a profile is a [mutation of its
+own](../reference/graphql-api.md#renaming-a-record).
+:::
+
 **Windowed detection rules no longer count buffered readings from outside their window.**
 Repeating, sliding-aggregate and correlation rules used to fold in a reading from any point
 in the past, which let a rule reading "three readings within ten seconds" fire on readings an
@@ -738,6 +760,180 @@ instance draws from, and the fence count bounds an announcement that has to fit 
 message. The refusals name both the number and
 the setting to raise, and a `geofence_cap_refusals_total` metric counts them by which limit
 refused.
+
+### v0.14.0 — the packages you build against {#v0140-upgrade}
+
+`v0.14.0` is a plain `helm upgrade` from `v0.13.x`. It adds no migration, so the database is
+untouched, and it changes no API, topic, permission or configuration key. **If you only run the
+platform, there is nothing to do.**
+
+What changed is around it — the artifacts you build against, and the CLI you run it with.
+
+**The web runtime is published.** `@devicechain/client`, `@devicechain/dashboards`,
+`@devicechain/widgets` and `@devicechain/brand` are on npm, so embedding a dashboard or a widget
+in your own application is an install rather than a build against our source tree. The four are
+released together at one version and pinned to each other. See
+[npm Packages](../reference/npm-packages.md) for the install line and the dist-tag policy.
+
+**If you were building our widgets from the source tree, one change is yours to make.**
+`maplibre-gl` is now a peer dependency of `@devicechain/widgets`: your application supplies the
+library, its worker URL and its stylesheet, instead of the widget package deciding those for
+you. That is what makes the package work under a bundler we do not control — but it means a map
+widget with no host wiring above it now renders an explicit notice rather than a blank canvas,
+which is the symptom to expect if you upgrade without doing it. The wiring is short and is
+written out at [Rendering a map](../reference/npm-packages.md#map-host-wiring). Nothing changes
+on the server.
+
+**The .NET and Unity client SDK is published** to nuget.org as `DeviceChain.Sdk`.
+
+**`dcctl` can tell you what it has bootstrapped, and shut all of it down.**
+
+```bash
+# every instance, the cluster it lives in, and whether that cluster is still there
+dcctl instances list
+
+# tear down all of them
+dcctl destroy --all
+```
+
+🔴 **This closes a defect worth acting on, not just knowing about.** Until now nothing recorded
+which cluster an instance had been bootstrapped into — it was derived from the instance name at
+create time and derived again at destroy time. That derivation is wrong for any instance
+bootstrapped with `--kube-context`, and the failure was silent in the worst direction: `dcctl
+destroy` asked the provider to delete a cluster that did not exist, which succeeds quietly,
+removed the local state, and reported the instance destroyed while its actual cluster kept
+running. **If you have ever bootstrapped with `--kube-context` and destroyed that instance
+afterwards, its cluster is probably still up.** `dcctl instances list` cannot show you these —
+the destroy removed the local record, which is precisely the problem — so ask the provider
+directly (for the local provider, `kind get clusters`) and delete what you recognise.
+
+From this release the cluster is written down at bootstrap and read back at destroy, and the
+closing line says which of three things happened: the recorded cluster was deleted, the cluster
+was already gone and only local state was cleared, or the record could not be trusted and
+nothing was touched. None of them is the old sentence printed over a cluster still running.
+
+Instances created before this release have no such record and list as `no record — destroy will
+guess the cluster`. Destroy still works on them, falling back to the old derivation, so the
+caveat above continues to apply to them and only to them.
+
+### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
+
+`v0.15.0` is a plain `helm upgrade` from `v0.14.x`. The new migrations run themselves as the
+services start, there is nothing to recreate, and no data needs moving by hand.
+
+The breaking changes are in the **API** and in **outbound network access**, not in the upgrade
+itself. If you run the platform and drive it through the console, there is nothing here for you
+to do. The sections below are for people who call the API directly, who send notifications
+through something inside their own network, who run the MCP server, or who have customised
+`event-sources` configuration.
+
+#### Update operations no longer replace the whole record
+
+This is the change that affects the most people, and it is the reason this release is marked
+breaking.
+
+Before, an update replaced the record: **any field you left out was erased.** Now a field you do
+not mention is left exactly as it was, and clearing a value takes an explicit `null`.
+
+The request itself is a new shape that no longer carries the record's own name — updating and
+renaming are separate operations, and there are now dedicated `rename…` mutations for the four
+types that need one. So an application calling the API directly must **drop the name from its
+update requests and regenerate its client code.**
+
+**A request in the old shape is refused outright** with an error naming the field it no longer
+accepts. It is not half-applied, and it does not fail quietly — which means you find out at the
+first call rather than from a record that has lost half its contents.
+
+:::caution The one case that changes quietly
+An application that cleared a value by **leaving the field out** now keeps the old value instead.
+Nothing errors; the update simply does less than it used to. If your code relies on omission to
+clear a field, send an explicit `null` instead.
+
+Note that not every field accepts `null` — some are required and refuse it with a named error.
+Those are fields that could never legitimately be cleared.
+:::
+
+:::danger One sharp edge worth knowing about
+If you build an update request by binding a **separate variable per field**, a variable you do
+not supply arrives as an **explicit null** rather than as an absent field — and explicit null
+means *clear this*. On a notification policy's `rules` that empties the entire rule set and
+returns success. Bind the whole request object as one variable, or only include the fields you
+actually intend to change.
+:::
+
+#### The id on a stored event has changed
+
+An event's `id` is now the event's own identifier, rather than a value assembled from the device
+token, the event type and the timestamp. **Any id you saved from an earlier release will no
+longer match anything.**
+
+The previous form was also not unique: a device reporting two measurements at the same instant
+produced the **same id for both**, so any client keeping a normalized cache keyed on it was
+silently merging those readings into one. If you stored ids, re-read them; if you keyed on them,
+this is a correctness fix as much as a break.
+
+#### Outbound connections to private addresses are now refused
+
+Notification webhooks, **SMTP relays** and connector HTTP calls can no longer reach loopback,
+private, carrier-grade NAT, link-local or cloud metadata addresses. The check happens at connect
+time, and a refusal is **final — it is not retried.**
+
+This is on by default and there is no switch to turn it off.
+
+:::caution If your mail relay lives inside the cluster, alarm mail will stop
+This is the failure most likely to catch you, because nothing about it looks like a network
+policy change: notifications simply stop arriving, and the failure is recorded as permanent
+rather than pending. Allow the specific addresses you use:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      egress:
+        allowedDestinations:
+          - 10.96.0.25/32      # the in-cluster SMTP relay
+```
+
+List each destination as its own `/32`. Destinations on the public internet are unaffected and
+need no entry.
+:::
+
+#### If you run the MCP server
+
+Two changes need action, and one of them stops the service from starting:
+
+- **A resource URL with a trailing slash is now refused at startup.** An identifier is compared
+  exactly, so a trailing slash meant tokens were bound to an address that never quite matched.
+  It used to be accepted and then quietly fail to line up; now it fails loudly at boot. Remove
+  the slash.
+- **The protected-resource metadata has moved** to the location the specification defines, with
+  the well-known segment between the host and the path. The chart routes it for you. **If you
+  terminate ingress yourself, add a route** for the `/.well-known/` prefix that does not rewrite
+  the path.
+
+#### Two configuration keys were removed, and they behave differently
+
+- **`debug`, inside an `eventSources` entry.** Configuration is validated strictly, so leaving
+  this in place **stops `event-sources` from starting**, with an error naming the field. Remove it.
+- **`inboundEventBatching` and its `maxBatchSize` / `batchTimeoutMs`.** This one is retired rather
+  than rejected: it is stripped at load with a warning, so the service starts normally. Remove it
+  at your convenience.
+
+The difference is not arbitrary — a key that is retired is one we can still recognise by name, so
+it can be dropped for you. A key nested inside a list entry cannot be, which is why the first one
+has to stop the service instead.
+
+#### Also in this release
+
+Commands are now dispatched the moment they are enqueued rather than waiting for the next sweep,
+and the sweep interval is configurable if you want to change how often the safety net runs. Dead
+letters can be read and queried instead of only counted. There is a reporting view you can point
+a BI tool at. Assets gained parent/child hierarchy and a documented property contract, devices
+gained a replacement operation, alarms gained bulk acknowledgement, and a tenant can choose the
+language its console opens in.
+
+The published npm packages and the .NET/Unity SDK carry no source changes in this release. If
+your own code sends update mutations through them, though, that code is yours to regenerate.
 
 ### The one-time durable-ingest cutover
 

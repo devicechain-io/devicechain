@@ -113,6 +113,16 @@ type Metrics struct {
 	SamplesTruncated        prometheus.Counter // samples dropped from a single Notify past decode.MaxSamplesPerNotify
 	IngestDropped           prometheus.Counter // a Notify dropped on a retryable ingest error (no retry in the callback)
 	ActiveObservations      prometheus.Gauge   // live observations currently held across all sessions
+
+	// The decode's own skip accounting (decode.Skips). Without these a Notify that
+	// decodes to nothing is indistinguishable from one that was never sent: the payload
+	// is well-formed, the decode returns no error, and the zero-sample early return below
+	// counts nothing. They are separate counters rather than one because they mean
+	// opposite things to an operator — the first is a fleet whose objects are not
+	// measurements, and the other two are firmware faults.
+	RecordsNonNumeric prometheus.Counter // records with no numeric value (vb/vs/vd, or sum-only)
+	RecordsNonFinite  prometheus.Counter // records whose value resolved to NaN or ±Inf
+	RecordsUnnamed    prometheus.Counter // records whose resolved SenML name normalised to empty
 }
 
 // slot is one identity's observation state. It is mutated only under Manager.mu. A PARKED
@@ -374,7 +384,7 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 		incr(m.metrics.DecodeFailures, 1)
 		return
 	}
-	samples, truncated, err := decode.Samples(cf, body, m.now)
+	samples, skips, err := decode.Samples(cf, body, m.now)
 	if err != nil {
 		if errors.Is(err, decode.ErrUnsupportedContentFormat) {
 			incr(m.metrics.UnknownContentFormat, 1)
@@ -383,7 +393,12 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 		}
 		return
 	}
-	incr(m.metrics.SamplesTruncated, truncated) // a single Notify's samples past decode.MaxSamplesPerNotify
+	// Counted BEFORE the zero-sample return, which is the whole point: that return is
+	// exactly the case where nothing else says anything happened.
+	incr(m.metrics.SamplesTruncated, skips.Truncated) // a single Notify's samples past decode.MaxSamplesPerNotify
+	incr(m.metrics.RecordsNonNumeric, skips.NonNumeric)
+	incr(m.metrics.RecordsNonFinite, skips.NonFinite)
+	incr(m.metrics.RecordsUnnamed, skips.Unnamed)
 	if len(samples) == 0 {
 		return // a well-formed but non-numeric batch (e.g. a boolean IPSO object) — nothing to measure
 	}

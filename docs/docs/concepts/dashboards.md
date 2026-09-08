@@ -4,10 +4,10 @@ title: Dashboards
 
 # Dashboards
 
-DeviceChain includes an embeddable, version-controlled dashboard system for visualizing live device data. A dashboard is a **tenant-scoped resource** authored in the console and rendered from a portable JSON definition — the same definition renders in the console, in the standalone reference viewer, or in a React application built against this repository's frontend workspace.
+DeviceChain includes an embeddable, version-controlled dashboard system for visualizing live device data. A dashboard is a **tenant-scoped resource** authored in the console and rendered from a portable JSON definition — the same definition renders in the console, in the standalone reference viewer, or in any React application that installs the runtime packages from npm.
 
 :::note Status
-Available: the canvas editor, the built-in widget set (telemetry, alarm, and command/control widgets), live subscriptions, **widget actions** (alarm ack/clear, send command — server-authorized), versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer. Planned: publishing the runtime packages to the public npm registry (today they are unpublished workspace source with no build step of their own — each application's bundler compiles them from TypeScript), richer datasource selectors (relationship-graph traversal, drill-down), per-breakpoint layout editing, and additional widgets.
+Available: the canvas editor, the built-in widget set (telemetry, alarm, and command/control widgets), live subscriptions, **widget actions** (alarm ack/clear, send command — server-authorized), versioning (publish / rollback), synthetic preview, named slots + binding manifests, and export — plus the standalone `/dash` reference viewer and the runtime packages published on npm. Planned: richer datasource selectors (relationship-graph traversal, drill-down), per-breakpoint layout editing, and additional widgets.
 :::
 
 ## The canvas
@@ -46,7 +46,7 @@ Widgets are themed with CSS custom properties, so an embedding application contr
 
 Widgets can also carry **actions** — acknowledge or clear an alarm, or send a command — which the server authorizes against the caller's own tenant-scoped rights (for example, an action requiring `alarm:write` is inert for a read-only viewer).
 
-Opening a dashboard at all requires **`dashboard:read`**, which is *not* part of the read-only baseline every enabled tenant member receives — so a member with no assigned role can view devices, events, state, commands, and alarms, but cannot list or open a dashboard until a role grants it. `dashboard:write` gates create, update, publish, rollback, and delete.
+Opening a dashboard requires **`dashboard:read`**, which every enabled tenant member holds: it is part of the read-only baseline, alongside reading devices, events, state, commands, and alarms. A dashboard is a saved arrangement of data those authorities already reach, so a member who can read the data can open the view of it. `dashboard:write` gates create, update, publish, rollback, and delete, and stays role-granted.
 
 ## Datasources
 
@@ -81,6 +81,6 @@ The runtime is structured as layered packages:
 | `@devicechain/widgets` | the React widget components (datasource in, pixels out) and the renderer that lays them out |
 | `@devicechain/dashboards` | the `DashboardHub` (owns the connection, resolves selectors, multiplexes telemetry subscriptions) and the definition, selector, slot, and binding-manifest types |
 
-A React application embeds a live dashboard by constructing a hub with a resolver and a binding manifest and rendering the definition. That path is worked end to end inside this repository — the console and the standalone `/dash` application both take it — but the runtime packages are not published, so embedding today means building against the frontend workspace rather than installing from a registry. The standalone **`/dash`** application is the reference external embedder: it has its own login, accepts an exported definition plus a binding manifest, and renders it. It is view-only as to **authoring** — there is no editor, no save, and it never fetches a dashboard from the service — but widget actions stay available: a viewer holding `alarm:write` or `command:write` can acknowledge and clear alarms and dispatch commands to real devices from the dashboard it renders, and the server enforces those rights either way.
+A React application embeds a live dashboard by constructing a hub with a resolver and a binding manifest and rendering the definition. That path is worked end to end inside this repository — the console and the standalone `/dash` application both take it, building against the very artifacts an outside consumer downloads — and the packages are published to npm, so an external application installs them the same way. See [npm Packages](../reference/npm-packages.md) for the install line, the version and dist-tag policy, and the one piece of host wiring the map widget needs. The standalone **`/dash`** application is the reference external embedder: it has its own login, accepts an exported definition plus a binding manifest, and renders it. It is view-only as to **authoring** — there is no editor, no save, and it never fetches a dashboard from the service — but widget actions stay available: a viewer holding `alarm:write` or `command:write` can acknowledge and clear alarms and dispatch commands to real devices from the dashboard it renders, and the server enforces those rights either way.
 
 See also the [Architecture](./architecture.md) overview and the [GraphQL API reference](../reference/graphql-api.md).

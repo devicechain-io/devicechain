@@ -69,7 +69,7 @@ func requireFenceAuthoring(ctx context.Context) error {
 // gating creation alone would leave the inversion open to anyone who could edit one fence.
 func (r *SchemaResolver) UpdateGeoFence(ctx context.Context, args struct {
 	Token   string
-	Request model.GeoFenceCreateRequest
+	Request model.GeoFenceUpdateRequest
 }) (*GeoFenceResolver, error) {
 	if err := requireFenceAuthoring(ctx); err != nil {
 		return nil, err

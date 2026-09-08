@@ -418,8 +418,7 @@ func TestUpdateStoresTheCanonicalGeometry(t *testing.T) {
 		t.Fatalf("fixture does not validate: %v", err)
 	}
 
-	updated, err := api.UpdateGeoFence(ctx, "yard", &GeoFenceCreateRequest{
-		Token: "yard", Geometry: nonCanonicalRequest})
+	updated, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(nonCanonicalRequest))
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}

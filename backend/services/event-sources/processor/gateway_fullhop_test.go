@@ -73,8 +73,9 @@ func captureReader(t *testing.T, nc *nats.Conn, area string) messaging.MessageRe
 	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
 	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
 	// Reads gate on auth being live; nothing here exercises auth, so open the gate
-	// rather than block every fetch on a validator this test never installs.
-	ms.Readiness.MarkReady(nil)
+	// rather than block every fetch on a validator this test never installs. The gate
+	// REFUSES a bare nil validator, so this states the intent instead of passing one.
+	ms.Readiness.MarkReadyWithoutAuthSurface()
 
 	nmgr := &messaging.NatsManager{Microservice: ms}
 	require.NoError(t, nmgr.ExecuteInitialize(context.Background()),

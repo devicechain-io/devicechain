@@ -343,6 +343,12 @@ En una nueva ejecución también reconcilia el depósito:
 artefacto de depósito, que vive fuera de ese directorio por diseño y que destroy
 nombra al terminar.
 
+Hay un caso en el que elimina menos: una instancia arrancada dentro de un clúster que
+creaste tú mismo (con `--kube-context`) deja ese clúster **en marcha**. La instancia se
+desinstala de él y su estado local —incluidos los vecinos del depósito— se limpia, pero
+el clúster no es de dcctl para borrarlo. Lo dice, y nombra el clúster, al terminar.
+`dcctl instances list` muestra qué instancias están en ese estado.
+
 Consérvelo mientras conserve cualquier copia de seguridad de las bases de datos de esa
 instancia. Es lo único que todavía puede leerlas. Elimínelo cuando esas copias hayan
 desaparecido, y no antes.

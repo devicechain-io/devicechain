@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"golang.org/x/crypto/bcrypt"
@@ -40,13 +41,36 @@ type OAuthClientInput struct {
 	Confidential bool
 }
 
-// OAuthClientMutableInput is the data to update a client: its client_id identity
-// is fixed; only the name/description, redirect URIs, and scopes change.
-type OAuthClientMutableInput struct {
-	Name         string
-	Description  string
-	RedirectURIs []string
-	Scopes       []string
+// OAuthClientUpdateRequest is the data to update a client: its client_id identity is
+// fixed and carried by the mutation's own argument.
+//
+// Every field carries the platform's three update states — absent leaves the stored
+// value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 THE TWO ALLOWLISTS CANNOT BE EMPTIED, AND THE REFUSAL IS BY NAME.
+//
+// RedirectUris and Scopes are `[String!]`, so the fold ALLOWS an explicit null or an
+// empty list — for a list those are one request spelled two ways and both mean "empty".
+// This mutation refuses the result anyway, through the same validateRedirectURIs /
+// validateClientScopes the create path uses, because for an OAuth client each list
+// emptied is a security control removed:
+//
+//   - no redirect URI means the exact-match allowlist matches nothing, so the client can
+//     never complete an authorization. It is not a powerless client, it is a broken one.
+//   - no scope means every token minted for it would carry an empty scope. The AS is
+//     fail-closed, so today that grants nothing — but it makes the registration a claim
+//     nobody can read, and the create path has never allowed it.
+//
+// Contrast RoleUpdateRequest.Authorities, which the create path DOES allow to be empty
+// and which is therefore clearable here: the rule is that update and create agree about
+// what a legal record is, not that lists are special.
+type OAuthClientUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// RedirectUris is spelled with the schema's casing rather than the model's
+	// RedirectURIs: it is packed straight off the wire by field name.
+	RedirectUris dcgraphql.OptionalStringList
+	Scopes       dcgraphql.OptionalStringList
 }
 
 // ListOAuthClients returns the client registry (ADR-047).
@@ -124,23 +148,31 @@ func generateClientSecret() (secret, hash string, err error) {
 	return secret, string(h), nil
 }
 
-// UpdateOAuthClient replaces a client's mutable fields (name/description, redirect
-// URIs, scopes). Its client_id is fixed.
-func (s *Service) UpdateOAuthClient(ctx context.Context, clientId string, in OAuthClientMutableInput) (*iam.OAuthClient, error) {
-	if err := validateRedirectURIs(in.RedirectURIs); err != nil {
-		return nil, err
-	}
-	if err := validateClientScopes(in.Scopes); err != nil {
-		return nil, err
-	}
+// UpdateOAuthClient applies a partial update to a client: an omitted field leaves the
+// stored value alone, an explicit null clears it, a value sets it. Its client_id is
+// fixed and named by the mutation's own argument.
+//
+// Both allowlists are validated as the RESULTING list rather than as what the caller
+// sent — under a partial update those differ, and it is the resulting registration that
+// has to be usable. Everything is decided before the first assignment, so a rejected
+// list refuses the whole update rather than renaming the client and then failing.
+func (s *Service) UpdateOAuthClient(ctx context.Context, clientId string, request *OAuthClientUpdateRequest) (*iam.OAuthClient, error) {
 	c, err := s.loadOAuthClient(ctx, clientId)
 	if err != nil {
 		return nil, err
 	}
-	c.Name = rdb.NullStrOf(&in.Name)
-	c.Description = rdb.NullStrOf(&in.Description)
-	c.RedirectURIs = in.RedirectURIs
-	c.Scopes = in.Scopes
+	uris := request.RedirectUris.ApplyTo(c.RedirectURIs)
+	if err := validateRedirectURIs(uris); err != nil {
+		return nil, err
+	}
+	scopes := request.Scopes.ApplyTo(c.Scopes)
+	if err := validateClientScopes(scopes); err != nil {
+		return nil, err
+	}
+	c.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(c.Name)))
+	c.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(c.Description)))
+	c.RedirectURIs = uris
+	c.Scopes = scopes
 	if err := s.iam.UpdateOAuthClient(ctx, c); err != nil {
 		return nil, err
 	}
@@ -209,9 +241,19 @@ func validateClientId(id string) error {
 
 // validateRedirectURIs requires at least one redirect URI and validates each
 // against the OAuth 2.1 rules (https, or http for loopback; no fragment).
+//
+// The emptiness refusal serves the update path as well as the create one: `redirectUris:
+// null` and `redirectUris: []` are one request spelled two ways, and both would leave an
+// exact-match allowlist that matches nothing.
 func validateRedirectURIs(uris []string) error {
 	if len(uris) == 0 {
-		return fmt.Errorf("at least one redirectUri is required")
+		// The field is named as the SCHEMA spells it — redirectUris, plural — so the
+		// refusal points at something the caller actually sent. It read "redirectUri"
+		// while the input field has always been `redirectUris`, which is a small thing
+		// until a client greps the error for the field to highlight.
+		return fmt.Errorf("at least one entry in redirectUris is required: an empty allowlist " +
+			"matches nothing, so the client could never complete an authorization — send the " +
+			"URIs it should have, or omit the field to leave them alone")
 	}
 	for _, u := range uris {
 		if err := auth.ValidateRedirectURI(u); err != nil {
@@ -226,7 +268,9 @@ func validateRedirectURIs(uris []string) error {
 // exist.
 func validateClientScopes(scopes []string) error {
 	if len(scopes) == 0 {
-		return fmt.Errorf("at least one scope is required")
+		return fmt.Errorf("at least one entry in scopes is required: a client registered for " +
+			"none describes a permission set nobody can read — send the scopes it should " +
+			"have, or omit the field to leave them alone")
 	}
 	for _, sc := range scopes {
 		if !auth.IsSupportedScope(sc) {

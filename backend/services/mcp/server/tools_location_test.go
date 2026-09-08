@@ -183,34 +183,14 @@ func TestQueryLocations_AuthorityRefusalSurfaces(t *testing.T) {
 }
 
 // The tool is REGISTERED and reachable over a real MCP session: a client connected to
-// the server built by registerTools finds query_locations in tools/list, with the
-// input schema that lets an agent call it. Constructing Tools directly (as every test
-// above does) proves nothing about whether the catalog exposes it.
+// the handler New serves finds query_locations in tools/list, with the input schema that
+// lets an agent call it. Constructing Tools directly (as every test above does) proves
+// nothing about whether the catalog exposes it.
 func TestQueryLocationsToolIsRegistered(t *testing.T) {
-	ctx := context.Background()
-	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	registerTools(s, NewTools(NewGraphQLClient()))
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	if _, err := s.Connect(ctx, serverTransport, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).
-		Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	defer cs.Close()
-
-	res, err := cs.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
+	names, tools := listServedTools(t)
 
 	var found *mcp.Tool
-	names := make([]string, 0, len(res.Tools))
-	for _, tool := range res.Tools {
-		names = append(names, tool.Name)
+	for _, tool := range tools {
 		if tool.Name == "query_locations" {
 			found = tool
 		}

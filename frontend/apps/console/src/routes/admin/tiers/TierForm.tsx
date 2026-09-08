@@ -37,10 +37,18 @@ import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tier
 // LAYOUT. Create is a single flat form. Edit is TABBED: Basic (identity + color) and
 // Settings (ceilings), plus an AI-models tab whose content the caller passes in
 // (aiModelsPanel) since it lives on a different admin plane. Basic and Settings are two
-// VIEWS OF ONE SAVE, not two independent forms: name/description/color are a full replace
-// at the API (a settings-only PATCH that omitted them would clear them), so both tabs
-// share this component's state and its single `submit`, and each renders the same Save
-// button. The AI tab saves itself, per grant, and carries no such button.
+// VIEWS OF ONE SAVE, not two independent forms: both tabs share this component's state
+// and its single `submit`, and each renders the same Save button. The AI tab saves
+// itself, per grant, and carries no such button.
+//
+// 🔴 THE REASON FOR THE SHARED SUBMIT HAS CHANGED AND THE STRUCTURE HAS NOT BEEN
+// REVISITED. It was a correctness requirement: name/description/color were a full replace
+// at the API, so a settings-only save that omitted them CLEARED them. Under the partial
+// update an omitted field is left alone, so a per-tab submit would be safe PROVIDED each
+// tab omitted the keys it does not own — which is not the idiom below, where a blank name
+// is spelled as an explicit `null` and would still clear. Splitting the tabs is a
+// deliberate piece of work rather than a consequence of the conversion, and it is not
+// done here.
 export function TierForm({
   tier,
   onDone,
@@ -90,15 +98,19 @@ export function TierForm({
       const config = buildTierConfigPatch(dimensions, settings, tier?.config);
       if (editing) {
         await updateTenantTier(tier.token, {
-          // Explicit nulls — see the note above createTenant in lib/api/admin.
+          // Explicit nulls: this form renders name and description and seeds them from
+          // the loaded tier, so a cleared box means a cleared field.
           name: name.trim() || null,
           description: description.trim() || null,
-          // 🔴 `config ?? null` preserves buildTierConfigPatch's meaning exactly, it does
-          // not weaken it. The server leaves the tier's settings alone when config is a
-          // nil pointer (`if in.Config != nil` in UpdateTenantTier), and an explicit
-          // GraphQL null decodes to that same nil pointer as an omitted key. Only "{}"
-          // clears — which is what would re-price every tenant at this tier.
-          config: config ?? null,
+          // 🔴 CONFIG IS THE ONE FIELD HERE THAT MUST BE OMITTED RATHER THAN NULLED, AND
+          // THE REASON INVERTED WITH THE CONVERSION. `null` used to decode to the same
+          // nil pointer an omitted key did, so `config ?? null` preserved
+          // buildTierConfigPatch's "leave the settings alone" exactly. Under the
+          // three-state semantic a null CLEARS — which is precisely the silent re-pricing
+          // of every tenant at this tier that buildTierConfigPatch exists to prevent — so
+          // `undefined` is now the only spelling of "leave it alone", and the key has to
+          // be dropped rather than nulled.
+          config,
           // Color is a full replace, like name: "" is a real value meaning "no pill".
           color,
         });

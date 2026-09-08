@@ -61,23 +61,54 @@ const absoluteTimeThreshold = 1 << 28
 // A resolved time at or above it is treated as a broken clock and stamped as receipt time.
 const maxAbsoluteTimeSeconds = 1 << 40
 
+// Skips accounts for every record a decode read and did not turn into a sample. It exists
+// because the alternative is a counter that only ever reports the total.
+//
+// 🔴 THREE VERY DIFFERENT DEVICE FAULTS PRODUCED THE SAME OBSERVATION: an empty sample
+// slice and no error. "This device reports only booleans", "this device's firmware is
+// sending garbage" and "this device is sending nothing at all" were indistinguishable from
+// the metrics — the decode incremented nothing on any of the skip paths, and the caller's
+// zero-sample early return counted nothing either. A record that is dropped silently is a
+// record nobody can be told about.
+//
+// The counts are per RECORD, not per sample: one record yields at most one sample, so they
+// are the same unit as the samples that did survive.
+type Skips struct {
+	// Truncated is records dropped by MaxSamplesPerNotify. It is an UPPER BOUND — the tail
+	// past the cap is not examined, so it may include records that would themselves have
+	// been skipped — and exists to make truncation visible, never to reconstruct the data.
+	Truncated int
+	// NonNumeric is records carrying no numeric value: a boolean/string/opaque reading
+	// (vb/vs/vd) or a sum-only record. The expected steady state for a fleet whose IPSO
+	// objects are not measurements, and the reason an empty result is not an error.
+	NonNumeric int
+	// NonFinite is records whose v+bv resolved to NaN or ±Inf. Always a fault: a
+	// non-finite value serializes to text the resolver's ParseFloat ACCEPTS, so these
+	// would otherwise land in the time-series store.
+	NonFinite int
+	// Unnamed is records whose resolved name (bn+n) normalised to empty. Always a fault:
+	// a sample with no resource path has no series to belong to.
+	Unnamed int
+}
+
+// Total is every record the decode dropped, for a caller that wants one number.
+func (s Skips) Total() int { return s.Truncated + s.NonNumeric + s.NonFinite + s.Unnamed }
+
 // Samples decodes one payload of the given CoAP content format into measurement samples,
 // stamping the receipt clock (now) wherever the payload carries no absolute time. It returns
 // ErrUnsupportedContentFormat for a format this slice does not handle. A successful decode of
 // a well-formed pack that happens to contain only non-numeric records returns an empty slice
-// and no error (nothing to measure is not an error).
+// and no error (nothing to measure is not an error) — with the skip accounted in Skips, which
+// is what tells that case apart from a device that sent nothing.
 //
-// The sample slice is capped at MaxSamplesPerNotify; the second return value is the number of
-// records dropped by that cap (0 in the overwhelming common case). It is an UPPER BOUND on the
-// numeric samples dropped — the tail past the cap is not examined, so it may include records
-// that would themselves have been skipped as non-numeric — and exists only to make truncation
-// visible (a counter), never to reconstruct the dropped data.
-func Samples(cf message.MediaType, payload []byte, now func() time.Time) ([]adapter.Sample, int, error) {
+// The sample slice is capped at MaxSamplesPerNotify; see Skips for what the second return
+// value accounts for.
+func Samples(cf message.MediaType, payload []byte, now func() time.Time) ([]adapter.Sample, Skips, error) {
 	switch cf {
 	case message.AppSenmlJSON:
 		return decodeSenmlJSON(payload, now)
 	default:
-		return nil, 0, ErrUnsupportedContentFormat
+		return nil, Skips{}, ErrUnsupportedContentFormat
 	}
 }
 
@@ -107,10 +138,10 @@ type senmlRecord struct {
 // still self-consistently the decoded version; a pathological unsupported bver hidden past the
 // cap is simply not reached). Non-numeric records (vb/vs/vd), sum-only records (s with no v),
 // and records resolving to a non-finite value or an empty name are skipped, never emitted.
-func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, int, error) {
+func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Skips, error) {
 	var records []senmlRecord
 	if err := json.Unmarshal(payload, &records); err != nil {
-		return nil, 0, err
+		return nil, Skips{}, err
 	}
 
 	var (
@@ -118,6 +149,7 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, in
 		baseTime    float64
 		baseValue   float64
 		baseVersion = senmlVersion
+		skips       Skips
 	)
 	out := make([]adapter.Sample, 0, min(len(records), MaxSamplesPerNotify))
 	for i := range records {
@@ -136,23 +168,30 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, in
 			baseVersion = *r.BaseVersion
 		}
 		if baseVersion != senmlVersion {
-			return nil, 0, ErrUnsupportedSenmlVersion
+			return nil, Skips{}, ErrUnsupportedSenmlVersion
 		}
 
 		// Numeric value only (ADR-016). A record with no v — a boolean/string/data reading
 		// or a sum-only record — is not a measurement.
+		//
+		// Every skip below is COUNTED. Dropping is right in all three cases; doing it
+		// silently is what made "only booleans", "garbage" and "nothing at all" read
+		// identically from outside.
 		if r.Value == nil {
+			skips.NonNumeric++
 			continue
 		}
 		value := *r.Value + baseValue
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			// A v+bv overflow renders "+Inf", which the resolver's ParseFloat ACCEPTS —
 			// so a non-finite value would land in the TSDB. Drop it at the source.
+			skips.NonFinite++
 			continue
 		}
 
 		name, ok := normalizeName(baseName + r.Name)
 		if !ok {
+			skips.Unnamed++
 			continue
 		}
 
@@ -161,7 +200,8 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, in
 			// and every remaining record, counting them as an upper bound on samples dropped
 			// (the tail is not scanned, so some may have been non-numeric). This bounds one
 			// message's contribution to the downstream store and the sample-limiter charge.
-			return out, len(records) - i, nil
+			skips.Truncated = len(records) - i
+			return out, skips, nil
 		}
 
 		out = append(out, adapter.Sample{
@@ -170,7 +210,7 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, in
 			Time:  resolveTimeMs(baseTime, r.Time, now),
 		})
 	}
-	return out, 0, nil
+	return out, skips, nil
 }
 
 // normalizeName canonicalises a resolved SenML name (baseName+name) into a stable LwM2M

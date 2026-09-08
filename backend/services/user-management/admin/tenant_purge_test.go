@@ -39,7 +39,7 @@ func newPurgeTestService(t *testing.T) *Service {
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{},
 		&iam.TenantPurge{}, &iam.TenantPurgeStore{}))
-	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold)
+	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold, nil)
 	seedTiers(t, s)
 	return s
 }

@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -23,10 +24,39 @@ type DeviceProfileCreateRequest struct {
 	Category *string
 	Metadata *string
 	// Location is the profile's position declaration (ADR-078), or nil for "these
-	// devices do not report their own position". Replace semantics on update, exactly
-	// like every other field here: passing nil CLEARS an existing declaration, which
-	// is how the API expresses "this kind of device stopped reporting position".
+	// devices do not report their own position".
 	Location *LocationDeclaration
+}
+
+// DeviceProfileUpdateRequest is the three-state partial update of a device profile:
+// an omitted field leaves the stored value alone, an explicit null clears it, and a
+// value sets it.
+//
+// 🔴 IT CARRIES NO TOKEN, AND THE RENAME IT USED TO CARRY DID NOT EVAPORATE. A
+// profile rename is a real capability — allowed while the profile is unused, refused
+// once it is published or adopted — and it now has a mutation of its own
+// (renameDeviceProfile / Api.RenameDeviceProfile) where `newToken` can mean only one
+// thing. What is gone is the payload token that had to be RECONCILED against the
+// argument, which is a disagreement this type cannot express rather than one it
+// refuses.
+type DeviceProfileUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Category is the functional device-class facet (ADR-045 decision 8). Nullable,
+	// so an explicit null withdraws the classification.
+	Category dcgraphql.OptionalString
+	// Metadata is an opaque JSON string in the schema, not a map, so it replaces
+	// wholesale when sent and clears on null. There is no per-key merge to choose
+	// between: the API has never been able to address an individual key.
+	Metadata dcgraphql.OptionalString
+	// Location is the position declaration (ADR-078).
+	//
+	// 🔴 ITS ABSENT READING CHANGED WITH THIS CONVERSION, DELIBERATELY. Under the
+	// full-replace input, a request carrying no declaration CLEARED one that was
+	// there — omission was the clear operation, so restating a profile without
+	// carrying the declaration forward silently un-declared position for every device
+	// built on it. Omitting it now PRESERVES it, and clearing is an explicit null.
+	Location OptionalLocationDeclaration
 }
 
 // Represents a device profile (ADR-045): the reusable, tenant-scoped capability

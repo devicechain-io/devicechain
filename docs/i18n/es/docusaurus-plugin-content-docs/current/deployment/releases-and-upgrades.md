@@ -98,20 +98,33 @@ Debido a que el registro es público, no se requieren credenciales para descarga
 
 Fije la etiqueta de imagen a la versión que desea:
 
+`DC_ROOT_KEY`, más abajo, es la clave raíz del almacén de secretos de la instancia:
+la requiere el perfil `default`, se genera una sola vez con `openssl rand -base64 32` y se
+pasa sin cambios en cada instalación y actualización. Consulte
+[Desplegando con Helm](./kubernetes-operator.md#desplegando-con-helm) para saber por qué.
+
+Sustituya `<version>` por una etiqueta realmente publicada —la
+[página de versiones](https://github.com/devicechain-io/devicechain/releases) las lista, y un
+valor no publicado falla al descargar la imagen, no en el momento de la instalación—.
+
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 El chart de Helm en sí también se publica como un artefacto OCI, por lo que puede instalarlo sin una
-copia local del repositorio:
+copia local del repositorio. El chart se versiona por separado de las imágenes y no lleva la
+`v` inicial; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la
+última, y `--version` rechaza cualquier valor que nunca se haya publicado:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 \
+  --version <chart-version> \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 El chart también está publicado en
@@ -135,12 +148,12 @@ helm get values dc -n default -o yaml > dc-values.yaml
 helm upgrade dc deploy/helm/devicechain \
   -n default \
   -f dc-values.yaml \
-  --set image.tag=v1.3.0
+  --set image.tag=<new-version>
 
 rm dc-values.yaml
 
 # 2. El operador. No forma parte del chart, así que `helm upgrade` no puede moverlo.
-dcctl upgrade local devicechain --version v1.3.0
+dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::warning Ambos pasos, siempre: el segundo no es opcional
@@ -464,6 +477,15 @@ descripción — deja de declarar la posición para todos los dispositivos que l
 silencio. El único síntoma es que las superficies de mapa se quedan vacías. Envíe el campo,
 o vuelva a establecer la declaración después de cualquier actualización hecha desde un
 cliente antiguo.
+
+:::note[Esto ya no aplica]
+`updateDeviceProfile` ha pasado desde entonces a ser una [actualización
+parcial](../reference/graphql-api.md#which-mutations-are-partial-updates): una petición que no
+dice nada sobre la declaración ahora la deja como está, y limpiarla requiere un `null` explícito.
+El consejo de arriba es lo que hay que hacer en una instancia `v0.12.x` o `v0.13.x`; en una actual
+no hay nada que arrastrar. Renombrar un perfil es una [mutación
+propia](../reference/graphql-api.md#renaming-a-record).
+:::
 
 **Las reglas de detección con ventana ya no cuentan lecturas acumuladas de fuera de su
 ventana.** Las reglas de repetición, de agregado deslizante y de correlación incorporaban una
@@ -790,6 +812,189 @@ que tiran todos los inquilinos de la instancia, y el número de geocercas acota 
 que caber en un solo mensaje del broker. Los rechazos
 nombran tanto el número como el ajuste que hay que subir, y una métrica
 `geofence_cap_refusals_total` los cuenta según qué límite rechazó.
+
+### v0.14.0 — los paquetes contra los que compila {#v0140-upgrade}
+
+`v0.14.0` es un `helm upgrade` normal desde `v0.13.x`. No añade ninguna migración, así que la base
+de datos queda intacta, y no cambia ninguna API, tema, permiso ni clave de configuración. **Si
+solo ejecuta la plataforma, no hay nada que hacer.**
+
+Lo que cambió está a su alrededor: los artefactos contra los que compila y la CLI con la que la
+ejecuta.
+
+**El runtime web está publicado.** `@devicechain/client`, `@devicechain/dashboards`,
+`@devicechain/widgets` y `@devicechain/brand` están en npm, así que embeber un panel o un widget en
+su propia aplicación es una instalación y ya no una compilación contra nuestro árbol de fuentes.
+Los cuatro se publican juntos en una misma versión y están fijados entre sí. Ver
+[Paquetes de npm](../reference/npm-packages.md) para la línea de instalación y la política de
+dist-tags.
+
+**Si estaba compilando nuestros widgets desde el árbol de fuentes, hay un cambio que le
+corresponde hacer.** `maplibre-gl` ahora es una dependencia peer de `@devicechain/widgets`: su
+aplicación proporciona la biblioteca, la URL de su worker y su hoja de estilos, en lugar de que el
+paquete de widgets las decida por usted. Eso es lo que hace que el paquete funcione bajo un
+empaquetador que no controlamos — pero significa que un widget de mapa sin cableado del anfitrión
+por encima ahora muestra un aviso explícito en lugar de un lienzo en blanco, que es el síntoma que
+debe esperar si actualiza sin hacerlo. El cableado es corto y está descrito en
+[Renderizar un mapa](../reference/npm-packages.md#map-host-wiring). En el servidor no cambia nada.
+
+**El SDK cliente para .NET y Unity está publicado** en nuget.org como `DeviceChain.Sdk`.
+
+**`dcctl` ya puede decirle qué ha arrancado, y apagarlo todo.**
+
+```bash
+# cada instancia, el clúster en el que vive y si ese clúster sigue existiendo
+dcctl instances list
+
+# destruirlas todas
+dcctl destroy --all
+```
+
+🔴 **Esto cierra un defecto sobre el que conviene actuar, no solo conocerlo.** Hasta ahora nada
+registraba en qué clúster se había arrancado una instancia: se derivaba del nombre de la instancia
+al crearla y se volvía a derivar al destruirla. Esa derivación es incorrecta para cualquier
+instancia arrancada con `--kube-context`, y el fallo era silencioso en la peor dirección: `dcctl
+destroy` pedía al proveedor que borrara un clúster que no existía, lo cual tiene éxito sin decir
+nada, eliminaba el estado local e informaba de que la instancia había sido destruida mientras su
+clúster real seguía funcionando. **Si alguna vez arrancó con `--kube-context` y después destruyó
+esa instancia, es probable que su clúster siga en pie.** `dcctl instances list` no puede
+mostrárselas — la destrucción eliminó el registro local, que es justamente el problema — así que
+pregunte directamente al proveedor (para el proveedor local, `kind get clusters`) y borre lo que
+reconozca.
+
+A partir de esta versión el clúster se anota al arrancar y se relee al destruir, y la línea final
+dice cuál de tres cosas ocurrió: se borró el clúster registrado, el clúster ya no estaba y solo se
+limpió el estado local, o el registro no era fiable y no se tocó nada. Ninguna de ellas es la
+frase antigua impresa sobre un clúster que sigue funcionando.
+
+Las instancias creadas antes de esta versión no tienen ese registro y aparecen como `no record —
+destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas recurriendo a la
+derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
+
+### v0.15.0 — las actualizaciones dejan de borrar lo que no envió {#v0150-upgrade}
+
+`v0.15.0` es una actualización `helm upgrade` normal desde `v0.14.x`. Las migraciones nuevas se
+ejecutan solas al arrancar los servicios, no hay nada que recrear y ningún dato debe moverse a
+mano.
+
+Los cambios incompatibles están en la **API** y en el **acceso de red saliente**, no en la
+actualización en sí. Si administra la plataforma y la maneja desde la consola, aquí no hay nada
+que deba hacer. Las secciones siguientes son para quienes llaman a la API directamente, quienes
+envían notificaciones a través de algo dentro de su propia red, quienes ejecutan el servidor MCP,
+o quienes han personalizado la configuración de `event-sources`.
+
+#### Las actualizaciones ya no reemplazan el registro completo
+
+Este es el cambio que afecta a más gente, y es la razón por la que esta versión está marcada como
+incompatible.
+
+Antes, una actualización reemplazaba el registro: **cualquier campo que omitiera se borraba.**
+Ahora un campo que no menciona se deja exactamente como estaba, y borrar un valor requiere un
+`null` explícito.
+
+La petición en sí tiene una forma nueva que ya no lleva el nombre del propio registro —
+actualizar y renombrar son operaciones distintas, y ahora existen mutaciones `rename…` dedicadas
+para los cuatro tipos que lo necesitan. Por tanto, una aplicación que llame a la API directamente
+debe **quitar el nombre de sus peticiones de actualización y regenerar su código cliente.**
+
+**Una petición con la forma antigua se rechaza de plano**, con un error que nombra el campo
+que ya no se acepta. No se aplica a medias y no falla en silencio: se entera en la primera
+llamada, y no a partir de un registro que ha perdido la mitad de su contenido.
+
+:::caution El único caso que cambia en silencio
+Una aplicación que borraba un valor **omitiendo el campo** ahora conserva el valor anterior. Nada
+da error; la actualización simplemente hace menos de lo que hacía. Si su código se apoya en la
+omisión para borrar un campo, envíe un `null` explícito en su lugar.
+
+Tenga en cuenta que no todos los campos aceptan `null`: algunos son obligatorios y lo rechazan con
+un error específico. Son campos que nunca podrían borrarse legítimamente.
+:::
+
+:::danger Un caso delicado que conviene conocer
+Si construye una petición de actualización enlazando una **variable distinta por campo**, una
+variable que no suministre llega como **null explícito** en lugar de como campo ausente — y null
+explícito significa *borra esto*. En el campo `rules` de una política de notificación eso vacía
+todo el conjunto de reglas y devuelve éxito. Enlace el objeto de petición completo como una sola
+variable, o incluya únicamente los campos que realmente quiere cambiar.
+:::
+
+#### El id de un evento almacenado ha cambiado
+
+El `id` de un evento es ahora el identificador propio del evento, en lugar de un valor compuesto a
+partir del token del dispositivo, el tipo de evento y la marca de tiempo. **Cualquier id que haya
+guardado de una versión anterior ya no coincidirá con nada.**
+
+La forma anterior tampoco era única: un dispositivo que reportaba dos medidas en el mismo instante
+producía **el mismo id para ambas**, de modo que cualquier cliente con una caché normalizada
+basada en él estaba fusionando esas lecturas en una sola sin avisar. Si guardó ids, vuelva a
+leerlos; si los usaba como clave, esto es tanto una corrección como una ruptura.
+
+#### Las conexiones salientes a direcciones privadas ahora se rechazan
+
+Los webhooks de notificación, los **relés SMTP** y las llamadas HTTP de los conectores ya no
+pueden alcanzar direcciones de loopback, privadas, de NAT de operador, de enlace local ni de
+metadatos de nube. La comprobación ocurre en el momento de conectar, y un rechazo es **definitivo:
+no se reintenta.**
+
+Esto está activo por omisión y no hay ningún interruptor para desactivarlo.
+
+:::caution Si su relé de correo vive dentro del clúster, el correo de alarmas dejará de salir
+Este es el fallo con más probabilidad de sorprenderle, porque nada en él se parece a un cambio de
+política de red: las notificaciones simplemente dejan de llegar, y el fallo queda registrado como
+permanente en lugar de pendiente. Autorice las direcciones concretas que utiliza:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      egress:
+        allowedDestinations:
+          - 10.96.0.25/32      # el relé SMTP dentro del clúster
+```
+
+Indique cada destino como su propio `/32`. Los destinos en la internet pública no se ven afectados
+y no necesitan entrada.
+:::
+
+#### Si ejecuta el servidor MCP
+
+Dos cambios requieren acción, y uno de ellos impide que el servicio arranque:
+
+- **Una URL de recurso con una barra final ahora se rechaza al arrancar.** Un identificador se
+  compara de forma exacta, así que una barra final significaba que los tokens quedaban ligados a
+  una dirección que nunca terminaba de coincidir. Antes se aceptaba y luego fallaba de forma
+  silenciosa; ahora falla de forma visible al arrancar. Quite la barra.
+- **Los metadatos de recurso protegido han cambiado de ubicación**, a la que define la
+  especificación, con el segmento well-known entre el host y la ruta. El chart los enruta por
+  usted. **Si usted mismo termina el ingress, añada una ruta** para el prefijo `/.well-known/` que
+  no reescriba la ruta.
+
+#### Se han eliminado dos claves de configuración, y se comportan de forma distinta
+
+- **`debug`, dentro de una entrada de `eventSources`.** La configuración se valida de forma
+  estricta, así que dejarla **impide que `event-sources` arranque**, con un error que nombra el
+  campo. Elimínela.
+- **`inboundEventBatching` y sus `maxBatchSize` / `batchTimeoutMs`.** Esta queda retirada, no
+  rechazada: se descarta al cargar la configuración con una advertencia, así que el servicio
+  arranca con normalidad. Elimínela cuando le venga bien.
+
+La diferencia no es arbitraria: una clave retirada es una que todavía podemos reconocer por su
+nombre, de modo que podemos descartarla por usted. Una clave anidada dentro de una entrada de una
+lista no lo es, y por eso la primera tiene que detener el servicio.
+
+#### También en esta versión
+
+Los comandos se despachan ahora en el momento en que se encolan, en lugar de esperar al siguiente
+barrido, y el intervalo de ese barrido es configurable si quiere cambiar cada cuánto se ejecuta la
+red de seguridad. Los mensajes no entregados (dead letters) se pueden leer y consultar, no solo contar. Hay una vista de
+informes a la que puede apuntar una herramienta de BI. Los activos incorporan jerarquía
+padre/hijo y un contrato de propiedades documentado, los dispositivos incorporan una operación de
+sustitución, las alarmas incorporan reconocimiento masivo, y un inquilino puede elegir el idioma con
+el que abre su consola.
+
+Los paquetes npm publicados y el SDK para .NET/Unity no llevan cambios de código en esta versión.
+Ahora bien, si su propio código envía mutaciones de actualización a través de ellos, ese código sí
+tendrá que regenerarlo usted.
 
 ### La transición única a la ingesta duradera
 

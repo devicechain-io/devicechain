@@ -45,6 +45,16 @@ package streams
 // Tier is a stream's disk-budget class. The two tiers exist because the streams
 // divide cleanly by what drives their volume, and sizing them alike wastes most
 // of the platform's disk floor on streams that will never fill.
+//
+// 🔴 IT IS A DISK-BUDGET CLASS AND NOTHING ELSE. It is the obvious hook for per-tier
+// CONSUMER tuning — different retry budgets or ack windows for hot and cold streams —
+// and that was considered and declined. Two reasons, both in the MaxDeliver comment in
+// core/messaging/nats.go: the server freezes a durable's config, so varying a field by
+// tier crash-loops any cluster that is not brand new; and the dead-letter arms spread
+// across the service estate compare Message.NumDelivered against the package-level
+// messaging.MaxDeliver, so a per-tier limit would make them write their dead letter at
+// the wrong attempt, or never, with nothing in the test estate able to see it. Read
+// that comment before giving this type a second job.
 type Tier int
 
 const (
@@ -215,7 +225,41 @@ const (
 	AlarmEvents         = "alarm-events"
 	RaiseAlarm          = "raise-alarm"
 	FailedDecode        = "failed-decode"
-	FailedEvents        = "failed-events"
+
+	// FailedEvents carries an event the resolve/persist pipeline could not process:
+	// device-management publishes one when resolution fails, event-management when
+	// the message will not unmarshal or the row will not insert.
+	//
+	// 🔴 IT IS WRITE-ONLY TODAY, AND SAYING SO HERE IS THE POINT OF THIS COMMENT.
+	// Grep the backend for this constant and every hit is NewWriter — two of them.
+	// Nothing subscribes, nothing stores it, no console surface reads it, and there
+	// is no reconciler that works it off. A record published here is retained for the
+	// cold tier's window and then expires unread.
+	//
+	// So it is a REPORT, not a queue, and it must not be described as a dead-letter
+	// queue in comments or in prose. The platform does have one of those —
+	// DeadLetters below, whose letters user-management stores and command-delivery
+	// reads back — and the distinction is exactly the one an operator needs: work in
+	// DeadLetters can be recovered, and an event reported here cannot. The
+	// operator-visible signal for a persistence failure is the producing service's
+	// log line and its RED metrics counter.
+	//
+	// Giving it a consumer is open work, not something this comment forecloses; what
+	// it forecloses is a reader inferring one from the vocabulary.
+	FailedEvents = "failed-events"
+
+	// DeadLetters is the platform's one sink for work a consumer accepted and then gave
+	// up on (ADR-024) — a detection's actions that could not be dispatched, an alarm
+	// that could not be delivered to anyone, a command response that could not be
+	// recorded.
+	//
+	// 🔑 ONE STREAM, NOT A `.dead` TWIN PER SOURCE, and the reason is this budget. The
+	// convention above is `<base>.dead`, and following it for the three consumers that
+	// lacked an arm would have cost three more cold streams — three more MaxBytes
+	// RESERVED UP FRONT on every deployment's JetStream volume, forever, to hold
+	// something that is empty in steady state. What that gives up is telling producers
+	// apart by subject, which the envelope carries anyway (core/deadletter).
+	DeadLetters = "dead-letters"
 )
 
 // ConnectorDispatchDead is the terminal dead-letter sink for connector dispatch
@@ -252,10 +296,12 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8448 MiB
-// (7 Hot x 1 GiB + 8 Cold x 128 MiB + this capped capture stream), the MQTT
-// gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache x 64)
-// — 9.5 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields. Every
+// The arithmetic, at the shipped defaults: the declared streams reserve 8704 MiB
+// (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB), the
+// MQTT gateway stores 384 MiB and the KV buckets 896 MiB (4 State x 128 + 6 Cache
+// x 64) — 9.75 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields.
+// (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
+// tree held nine, and it is the sentence anyone weighing a new stream reads.) Every
 // ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
 // overcommit, it crashloops every stream-creating service at upgrade with
 // "insufficient storage resources available".
@@ -455,6 +501,15 @@ var All = []Stream{
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
+	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. Areas is
+	// the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
+	// NewWriter does — so a profile running the store but none of the four producers would
+	// otherwise have a stream the replication check believes should not be there.
+	{Suffix: DeadLetters,
+		Areas: []string{"event-processing", "notification-management", "command-delivery",
+			"device-management", "user-management", "outbound-connectors"},
+		Tier: Cold, Why: "ADR-024 dead-letter sink: five areas write it, user-management stores it, " +
+			"command-delivery reads it back to settle the commands its letters are about"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

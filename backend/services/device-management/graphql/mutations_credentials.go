@@ -35,14 +35,14 @@ func (r *SchemaResolver) CreateDeviceCredential(ctx context.Context, args struct
 // Update an existing device credential.
 func (r *SchemaResolver) UpdateDeviceCredential(ctx context.Context, args struct {
 	Token   string
-	Request *model.DeviceCredentialCreateRequest
+	Request model.DeviceCredentialUpdateRequest
 }) (*DeviceCredentialResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateDeviceCredential(ctx, args.Token, args.Request)
+	updated, err := api.UpdateDeviceCredential(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -59,16 +59,23 @@ func normalizedRuleScope(token *string, version *int32) (*string, *int32) {
 // a PUBLISHED DYNAMIC entity-group version — loadGroupVersionForScoping rejects a static group,
 // a missing group, or a missing version (and re-compiles the frozen selector, so a scope
 // pinning an un-lowerable version is rejected too). An unscoped rule (both absent) is valid.
-func (api *Api) validateDetectionRuleScope(ctx context.Context, request *DetectionRuleCreateRequest) error {
-	hasToken := request.EntityGroupToken != nil && *request.EntityGroupToken != ""
-	hasVersion := request.EntityGroupVersion != nil
+//
+// 🔴 IT TAKES THE PAIR, NOT THE REQUEST, and that is what makes it usable from the partial
+// update. Under three-state semantics either half may be ABSENT from a request while the
+// other is present, so the pairing rule is a claim about the values the rule will END UP
+// WITH — an update naming only a version on an unscoped rule is a half-set scope even though
+// the request looks fine on its own. A request-shaped check could not see that, and would
+// have let normalizedRuleScope silently discard the version instead.
+func (api *Api) validateDetectionRuleScope(ctx context.Context, groupToken *string, groupVersion *int32) error {
+	hasToken := groupToken != nil && *groupToken != ""
+	hasVersion := groupVersion != nil
 	if !hasToken && !hasVersion {
 		return nil
 	}
 	if hasToken != hasVersion {
 		return fmt.Errorf("a detection rule scope requires both an entity group token and a version")
 	}
-	if _, _, _, err := api.loadGroupVersionForScoping(ctx, api.RDB.DB(ctx), *request.EntityGroupToken, *request.EntityGroupVersion); err != nil {
+	if _, _, _, err := api.loadGroupVersionForScoping(ctx, api.RDB.DB(ctx), *groupToken, *groupVersion); err != nil {
 		return fmt.Errorf("invalid detection rule scope: %w", err)
 	}
 	return nil

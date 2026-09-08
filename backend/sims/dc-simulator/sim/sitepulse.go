@@ -185,7 +185,7 @@ func buildSitepulseGotoParameterSchema() string {
 	for i, z := range zones {
 		tokens[i] = z.Token
 	}
-	// The keys and the SCALAR/STRING vocabulary are device-management's CommandParameter
+	// The keys and the SCALAR/STRING vocabulary are device-management's ParameterSpec
 	// json tags and its ADR-016 MetricDataType, mirrored by hand for the reason
 	// everything in this module mirrors wire vocabulary: dc-simulator is deliberately an
 	// untrusted external client and cannot import the owning type. Unlike a rule

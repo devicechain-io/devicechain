@@ -116,17 +116,27 @@ export async function createConnector(opts: {
   return data.createConnector;
 }
 
-// updateConnector is a full replacement of the draft's {type, config, name,
-// description}. `secret` follows the store's write-only contract: omit (null) to
-// PRESERVE the stored credential, send a non-empty string to REPLACE it, or send
-// an empty string to CLEAR it — so a caller who isn't touching the credential must
-// pass null, never "". expectedUpdatedAt is the optimistic-concurrency precondition
-// (ADR-039): pass the updatedAt the editor loaded so a save fails (CONFLICT) if
-// another writer changed the connector since.
+// updateConnector is a PARTIAL update of the draft. Every field is three-state: leave
+// it `undefined` to say nothing about it (the stored value is kept), pass `null` to
+// clear it, or pass a value to set it.
+//
+// 🔴 `undefined` AND `null` ARE NOW DIFFERENT REQUESTS, which is the whole point of the
+// conversion and the one thing to get right at a call site. Under the previous
+// full-replace shape every field was written unconditionally, so `?? null` was the
+// idiom everywhere and a field the caller had nothing to say about was cleared. Do NOT
+// reintroduce `?? null` here: it turns "unchanged" into "clear this".
+//
+// `type` and `config` sit on NOT NULL columns and REFUSE a null. Changing `type` alone
+// re-validates the STORED config against the new kind, so a re-point that leaves the
+// config unusable is refused at the write rather than at send time. `secret` follows
+// the store's write-only contract: omit it to PRESERVE the stored credential, send a
+// value to ROTATE it, or send null (or "") to DELETE it. expectedUpdatedAt is the
+// optimistic-concurrency precondition: pass the updatedAt the editor loaded so a save
+// fails (CONFLICT) if another writer changed the connector since.
 const UPDATE_CONNECTOR = graphql(`
   mutation UpdateConnector(
     $token: String!
-    $request: ConnectorCreateRequest!
+    $request: ConnectorUpdateRequest!
     $expectedUpdatedAt: String
   ) {
     updateConnector(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
@@ -139,28 +149,49 @@ const UPDATE_CONNECTOR = graphql(`
 export async function updateConnector(
   token: string,
   input: {
+    // undefined ⇒ leave alone, null ⇒ clear, value ⇒ set.
     name?: string | null;
     description?: string | null;
-    type: string;
-    config: string;
-    // null ⇒ preserve, "" ⇒ clear, value ⇒ replace.
+    // Required columns: undefined ⇒ leave alone, value ⇒ set. A null is refused.
+    type?: string;
+    config?: string;
+    // undefined ⇒ preserve, null ⇒ delete, value ⇒ rotate.
     secret?: string | null;
     expectedUpdatedAt?: string | null;
   },
 ): Promise<{ token: string; updatedAt: string | null }> {
+  const { expectedUpdatedAt, ...request } = input;
   const data = await gql('outbound-connectors', UPDATE_CONNECTOR, {
     token,
-    request: {
-      token,
-      name: input.name ?? null,
-      description: input.description ?? null,
-      type: input.type,
-      config: input.config,
-      secret: input.secret ?? null,
-    },
-    expectedUpdatedAt: input.expectedUpdatedAt ?? null,
+    // The rest object is forwarded as-is so a key the caller never set stays ABSENT on
+    // the wire. Rebuilding it field by field is what would reintroduce `?? null`.
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
   });
   return data.updateConnector;
+}
+
+// renameConnector changes a connector's token and nothing else. It is the capability
+// updateConnector's payload token used to carry: a blank newToken is refused, renaming
+// to the current token is an idempotent success, and a token another connector holds is
+// refused by name. The credential is keyed by the connector's immutable id and stays
+// bound — but a rule's connector reference names the TOKEN, so rules pointing at a
+// renamed connector must be re-pointed too.
+const RENAME_CONNECTOR = graphql(`
+  mutation RenameConnector($token: String!, $newToken: String!) {
+    renameConnector(token: $token, newToken: $newToken) {
+      token
+      updatedAt
+    }
+  }
+`);
+
+export async function renameConnector(
+  token: string,
+  newToken: string,
+): Promise<{ token: string; updatedAt: string | null }> {
+  const data = await gql('outbound-connectors', RENAME_CONNECTOR, { token, newToken });
+  return data.renameConnector;
 }
 
 // CONFLICT_MARKER matches the backend's optimistic-concurrency error text (the

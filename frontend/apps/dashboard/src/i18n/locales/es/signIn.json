@@ -1,0 +1,12 @@
+{
+  "chooseTenant": "Elige un inquilino",
+  "emailLabel": "Correo electrónico",
+  "enterTenantFailed": "No se pudo acceder a ese inquilino.",
+  "invalidCredentials": "Correo electrónico o contraseña no válidos.",
+  "noTenants": "Esta cuenta no tiene inquilinos.",
+  "passwordLabel": "Contraseña",
+  "serverUnreachable": "No se pudo conectar con el servidor. Comprueba que la API esté en ejecución.",
+  "submit": "Iniciar sesión",
+  "submitting": "Iniciando sesión…",
+  "title": "Iniciar sesión"
+}

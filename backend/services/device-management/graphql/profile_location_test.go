@@ -66,7 +66,7 @@ mutation ($request: DeviceProfileCreateRequest) {
 }`
 
 const updateProfileMutation = `
-mutation ($token: String!, $request: DeviceProfileCreateRequest) {
+mutation ($token: String!, $request: DeviceProfileUpdateRequest!) {
   updateDeviceProfile(token: $token, request: $request) {
     token
     location { expectedAccuracyMeters expectedUpdateIntervalSeconds }
@@ -165,31 +165,105 @@ func TestGraphQLNullLocationIsDistinctFromDeclaredEmpty(t *testing.T) {
 	}
 }
 
-// Clearing over GraphQL: an update that carries no location removes the declaration,
-// the same replace semantics name/category/metadata already have on this request.
-func TestGraphQLClearsLocationDeclaration(t *testing.T) {
-	ctx := profileLocationCtx(t)
-
-	execProfileGql(t, ctx, createProfileMutation, map[string]any{
-		"request": map[string]any{
-			"token":    "tracker",
-			"location": map[string]any{"expectedAccuracyMeters": 3.75},
-		},
-	})
-	if present, _, _ := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
-		map[string]any{"tokens": []any{"tracker"}})); !present {
-		t.Fatal("precondition failed: the declaration was never stored, so clearing it proves nothing")
+// 🔴 THE THREE STATES OF `location`, DRIVEN OVER THE WIRE, AND THE ONE THAT CHANGED.
+//
+// A nested input object is the only place on the platform where the three states go
+// through a hand-written unmarshaler rather than one of core's Optional* scalars, so
+// this is where "absent" and "explicit null" are shown to arrive distinguishably — the
+// model harness sends Go values and cannot see the packer at all.
+//
+// The absent case is the behaviour change. It used to CLEAR: a request carrying no
+// location removed the declaration, which meant editing a profile's name silently
+// un-declared position for every device built on it. It now preserves, and the clear
+// has to be asked for.
+func TestGraphQLLocationDeclarationThreeStates(t *testing.T) {
+	seed := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx := profileLocationCtx(t)
+		execProfileGql(t, ctx, createProfileMutation, map[string]any{
+			"request": map[string]any{
+				"token":    "tracker",
+				"location": map[string]any{"expectedAccuracyMeters": 3.75},
+			},
+		})
+		if present, _, _ := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
+			map[string]any{"tokens": []any{"tracker"}})); !present {
+			t.Fatal("precondition failed: the declaration was never stored, so nothing below proves anything")
+		}
+		return ctx
 	}
 
-	execProfileGql(t, ctx, updateProfileMutation, map[string]any{
-		"token":   "tracker",
-		"request": map[string]any{"token": "tracker"},
+	t.Run("omitted preserves", func(t *testing.T) {
+		ctx := seed(t)
+		// A well-formed update that says nothing about location, which is exactly the
+		// request the old defect arrived in.
+		execProfileGql(t, ctx, updateProfileMutation, map[string]any{
+			"token":   "tracker",
+			"request": map[string]any{"name": "Renamed display only"},
+		})
+		present, accuracy, _ := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
+			map[string]any{"tokens": []any{"tracker"}}))
+		if !present {
+			t.Fatal("an update that never mentioned location erased the declaration")
+		}
+		if accuracy == nil || *accuracy != 3.75 {
+			t.Errorf("expectedAccuracyMeters = %v, want the untouched 3.75", accuracy)
+		}
 	})
 
-	if present, _, _ := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
-		map[string]any{"tokens": []any{"tracker"}})); present {
-		t.Error("the declaration survived a clearing update")
-	}
+	t.Run("explicit null clears", func(t *testing.T) {
+		ctx := seed(t)
+		execProfileGql(t, ctx, updateProfileMutation, map[string]any{
+			"token":   "tracker",
+			"request": map[string]any{"location": nil},
+		})
+		if present, _, _ := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
+			map[string]any{"tokens": []any{"tracker"}})); present {
+			t.Error("the declaration survived an explicit null")
+		}
+	})
+
+	t.Run("an object replaces", func(t *testing.T) {
+		ctx := seed(t)
+		execProfileGql(t, ctx, updateProfileMutation, map[string]any{
+			"token": "tracker",
+			"request": map[string]any{
+				"location": map[string]any{"expectedUpdateIntervalSeconds": 45},
+			},
+		})
+		present, accuracy, interval := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
+			map[string]any{"tokens": []any{"tracker"}}))
+		if !present {
+			t.Fatal("a declaration sent as a value did not arrive")
+		}
+		if accuracy != nil {
+			t.Errorf("expectedAccuracyMeters = %v, want it replaced away — the declaration is one "+
+				"document, not a per-key merge", accuracy)
+		}
+		if interval == nil || *interval != 45 {
+			t.Errorf("expectedUpdateIntervalSeconds = %v, want 45", interval)
+		}
+	})
+
+	// The empty object is a fourth wire spelling and is NOT the null: it is the
+	// "reports position, no expectations stated" claim, which must stay distinct all
+	// the way to the client.
+	t.Run("an empty object is not a clear", func(t *testing.T) {
+		ctx := seed(t)
+		execProfileGql(t, ctx, updateProfileMutation, map[string]any{
+			"token":   "tracker",
+			"request": map[string]any{"location": map[string]any{}},
+		})
+		present, accuracy, interval := locationFromProfiles(t, execProfileGql(t, ctx, readProfileQuery,
+			map[string]any{"tokens": []any{"tracker"}}))
+		if !present {
+			t.Fatal("`{}` was stored as NULL, which says 'does not report position' — a different claim")
+		}
+		if accuracy != nil || interval != nil {
+			t.Errorf("declared-empty kept values from the previous declaration: accuracy=%v interval=%v",
+				accuracy, interval)
+		}
+	})
 }
 
 // Editing the declaration is a profile edit, so it is gated on device:write like every

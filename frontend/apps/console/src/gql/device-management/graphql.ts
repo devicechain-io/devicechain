@@ -46,11 +46,30 @@ export type AreaTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type AreaTypeUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
+export type AreaUpdateRequest = {
+  areaTypeToken?: string | null | undefined;
+  description?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type AssetCreateRequest = {
   assetTypeToken: string;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  properties?: string | null | undefined;
   token: string;
 };
 
@@ -69,12 +88,33 @@ export type AssetTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  propertySchema?: string | null | undefined;
   token: string;
 };
 
 export type AssetTypeSearchCriteria = {
   pageNumber: number;
   pageSize: number;
+};
+
+export type AssetTypeUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  propertySchema?: string | null | undefined;
+};
+
+export type AssetUpdateRequest = {
+  assetTypeToken?: string | null | undefined;
+  description?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  properties?: string | null | undefined;
 };
 
 export type AuditEventSearchCriteria = {
@@ -104,6 +144,15 @@ export type CommandDefinitionSearchCriteria = {
   deviceProfile?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type CommandDefinitionUpdateRequest = {
+  commandKey?: string | null | undefined;
+  description?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  parameterSchema?: string | null | undefined;
 };
 
 export type CustomerCreateRequest = {
@@ -137,6 +186,24 @@ export type CustomerTypeSearchCriteria = {
   pageSize: number;
 };
 
+export type CustomerTypeUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
+export type CustomerUpdateRequest = {
+  customerTypeToken?: string | null | undefined;
+  description?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type DetectionRuleCreateRequest = {
   authoringGraph?: string | null | undefined;
   definition: string;
@@ -154,6 +221,18 @@ export type DetectionRuleSearchCriteria = {
   deviceProfile?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type DetectionRuleUpdateRequest = {
+  authoringGraph?: string | null | undefined;
+  definition?: string | null | undefined;
+  description?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  entityGroupToken?: string | null | undefined;
+  entityGroupVersion?: number | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
 };
 
 export type DeviceBulkCreateRequest = {
@@ -219,6 +298,31 @@ export type DeviceProfileSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceProfileUpdateRequest = {
+  category?: string | null | undefined;
+  description?: string | null | undefined;
+  location?: DeviceLocationDeclarationInput | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
+export type DeviceReplaceRequest = {
+  credentialId?: string | null | undefined;
+  credentialToken?: string | null | undefined;
+  credentialType?: string | null | undefined;
+  credentialValue?: string | null | undefined;
+  deviceToken: string;
+  expiresAt?: string | null | undefined;
+  reason?: string | null | undefined;
+  unitIdentifier?: string | null | undefined;
+};
+
+export type DeviceReplacementSearchCriteria = {
+  device?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type DeviceSearchCriteria = {
   deviceType?: string | null | undefined;
   pageNumber: number;
@@ -259,6 +363,32 @@ export type DeviceTypeUpdateRequest = {
   profileToken?: string | null | undefined;
 };
 
+export type DeviceUpdateRequest = {
+  description?: string | null | undefined;
+  deviceTypeToken?: string | null | undefined;
+  externalId?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
+export type EntityAttributeSearchCriteria = {
+  attrKeys?: Array<string> | null | undefined;
+  entity?: string | null | undefined;
+  entityType?: string | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+  scope?: string | null | undefined;
+};
+
+export type EntityAttributeSetRequest = {
+  attrKey: string;
+  entity: string;
+  entityType: string;
+  scope: string;
+  value?: string | null | undefined;
+  valueType: string;
+};
+
 export type EntityGroupCreateRequest = {
   backgroundColor?: string | null | undefined;
   borderColor?: string | null | undefined;
@@ -279,6 +409,18 @@ export type EntityGroupSearchCriteria = {
   membershipMode?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type EntityGroupUpdateRequest = {
+  backgroundColor?: string | null | undefined;
+  borderColor?: string | null | undefined;
+  description?: string | null | undefined;
+  foregroundColor?: string | null | undefined;
+  icon?: string | null | undefined;
+  imageUrl?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+  selector?: string | null | undefined;
 };
 
 export type EntityRelationshipCreateRequest = {
@@ -329,6 +471,13 @@ export type GeoFenceSearchCriteria = {
   pageSize: number;
 };
 
+export type GeoFenceUpdateRequest = {
+  description?: string | null | undefined;
+  geometry?: string | null | undefined;
+  metadata?: string | null | undefined;
+  name?: string | null | undefined;
+};
+
 export type MetricDefinitionCreateRequest = {
   dataType: string;
   description?: string | null | undefined;
@@ -349,6 +498,20 @@ export type MetricDefinitionSearchCriteria = {
   metricKey?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
+};
+
+export type MetricDefinitionUpdateRequest = {
+  dataType?: string | null | undefined;
+  description?: string | null | undefined;
+  descriptor?: string | null | undefined;
+  deviceProfileToken?: string | null | undefined;
+  enum?: string | null | undefined;
+  maxValue?: number | null | undefined;
+  metadata?: string | null | undefined;
+  metricKey?: string | null | undefined;
+  minValue?: number | null | undefined;
+  name?: string | null | undefined;
+  unit?: string | null | undefined;
 };
 
 export type PaginationInput = {
@@ -411,7 +574,7 @@ export type CreateAreaMutation = { createArea: { id: string, token: string, name
 
 export type UpdateAreaMutationVariables = Exact<{
   token: string;
-  request?: AreaCreateRequest | null | undefined;
+  request: AreaUpdateRequest;
 }>;
 
 
@@ -447,7 +610,7 @@ export type CreateAreaTypeMutation = { createAreaType: { id: string, token: stri
 
 export type UpdateAreaTypeMutationVariables = Exact<{
   token: string;
-  request?: AreaTypeCreateRequest | null | undefined;
+  request: AreaTypeUpdateRequest;
 }>;
 
 
@@ -465,29 +628,29 @@ export type AssetsQueryVariables = Exact<{
 }>;
 
 
-export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetsQuery = { assets: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type AssetByTokenQuery = { assetsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateAssetMutationVariables = Exact<{
   request?: AssetCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateAssetMutation = { createAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type UpdateAssetMutationVariables = Exact<{
   token: string;
-  request?: AssetCreateRequest | null | undefined;
+  request: AssetUpdateRequest;
 }>;
 
 
-export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateAssetMutation = { updateAsset: { id: string, token: string, name: string | null, description: string | null, metadata: string | null, properties: string | null, createdAt: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteAssetMutationVariables = Exact<{
   token: string;
@@ -501,29 +664,29 @@ export type AssetTypesQueryVariables = Exact<{
 }>;
 
 
-export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AssetTypesQuery = { assetTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AssetTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null }> };
+export type AssetTypeByTokenQuery = { assetTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null }> };
 
 export type CreateAssetTypeMutationVariables = Exact<{
   request?: AssetTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
+export type CreateAssetTypeMutation = { createAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null } };
 
 export type UpdateAssetTypeMutationVariables = Exact<{
   token: string;
-  request?: AssetTypeCreateRequest | null | undefined;
+  request: AssetTypeUpdateRequest;
 }>;
 
 
-export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, createdAt: string | null } };
+export type UpdateAssetTypeMutation = { updateAssetType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, metadata: string | null, propertySchema: string | null, activeVersion: number | null, createdAt: string | null } };
 
 export type DeleteAssetTypeMutationVariables = Exact<{
   token: string;
@@ -531,6 +694,74 @@ export type DeleteAssetTypeMutationVariables = Exact<{
 
 
 export type DeleteAssetTypeMutation = { deleteAssetType: boolean };
+
+export type AssetParentQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetParentQuery = { assetParent: { id: string, token: string, name: string | null } | null };
+
+export type AssetAncestorsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetAncestorsQuery = { assetAncestors: Array<{ id: string, token: string, name: string | null }> };
+
+export type AssetChildrenQueryVariables = Exact<{
+  parentToken?: string | null | undefined;
+  pagination: PaginationInput;
+}>;
+
+
+export type AssetChildrenQuery = { assetChildren: { results: Array<{ id: string, token: string, name: string | null, assetType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type SetAssetParentMutationVariables = Exact<{
+  childToken: string;
+  parentToken: string;
+}>;
+
+
+export type SetAssetParentMutation = { setAssetParent: { id: string, token: string } };
+
+export type ClearAssetParentMutationVariables = Exact<{
+  childToken: string;
+}>;
+
+
+export type ClearAssetParentMutation = { clearAssetParent: boolean };
+
+export type AssetTypeVersionsQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssetTypeVersionsQuery = { assetTypeVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null, propertySchema: string }> };
+
+export type ActiveAssetTypeVersionQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type ActiveAssetTypeVersionQuery = { activeAssetTypeVersion: { version: number, label: string | null, publishedAt: string, propertySchema: string } | null };
+
+export type PublishAssetTypeMutationVariables = Exact<{
+  token: string;
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+}>;
+
+
+export type PublishAssetTypeMutation = { publishAssetType: { version: number } };
+
+export type RollbackAssetTypeMutationVariables = Exact<{
+  token: string;
+  version: number;
+}>;
+
+
+export type RollbackAssetTypeMutation = { rollbackAssetType: { token: string, activeVersion: number | null } };
 
 export type AuditEventsQueryVariables = Exact<{
   criteria: AuditEventSearchCriteria;
@@ -607,7 +838,7 @@ export type CreateCustomerMutation = { createCustomer: { id: string, token: stri
 
 export type UpdateCustomerMutationVariables = Exact<{
   token: string;
-  request?: CustomerCreateRequest | null | undefined;
+  request: CustomerUpdateRequest;
 }>;
 
 
@@ -643,7 +874,7 @@ export type CreateCustomerTypeMutation = { createCustomerType: { id: string, tok
 
 export type UpdateCustomerTypeMutationVariables = Exact<{
   token: string;
-  request?: CustomerTypeCreateRequest | null | undefined;
+  request: CustomerTypeUpdateRequest;
 }>;
 
 
@@ -686,7 +917,7 @@ export type CreateDevicesMutation = { createDevices: Array<{ id: string, token: 
 
 export type UpdateDeviceMutationVariables = Exact<{
   token: string;
-  request?: DeviceCreateRequest | null | undefined;
+  request: DeviceUpdateRequest;
 }>;
 
 
@@ -758,7 +989,7 @@ export type CreateEntityGroupMutation = { createEntityGroup: { id: string, token
 
 export type UpdateEntityGroupMutationVariables = Exact<{
   token: string;
-  request?: EntityGroupCreateRequest | null | undefined;
+  request: EntityGroupUpdateRequest;
 }>;
 
 
@@ -799,11 +1030,19 @@ export type CreateDeviceProfileMutation = { createDeviceProfile: { id: string, t
 
 export type UpdateDeviceProfileMutationVariables = Exact<{
   token: string;
-  request?: DeviceProfileCreateRequest | null | undefined;
+  request: DeviceProfileUpdateRequest;
 }>;
 
 
 export type UpdateDeviceProfileMutation = { updateDeviceProfile: { id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } };
+
+export type RenameDeviceProfileMutationVariables = Exact<{
+  token: string;
+  newToken: string;
+}>;
+
+
+export type RenameDeviceProfileMutation = { renameDeviceProfile: { id: string, token: string } };
 
 export type DeleteDeviceProfileMutationVariables = Exact<{
   token: string;
@@ -859,7 +1098,7 @@ export type CreateMetricDefinitionMutation = { createMetricDefinition: { id: str
 
 export type UpdateMetricDefinitionMutationVariables = Exact<{
   token: string;
-  request?: MetricDefinitionCreateRequest | null | undefined;
+  request: MetricDefinitionUpdateRequest;
 }>;
 
 
@@ -902,7 +1141,7 @@ export type CreateCommandDefinitionMutation = { createCommandDefinition: { id: s
 
 export type UpdateCommandDefinitionMutationVariables = Exact<{
   token: string;
-  request?: CommandDefinitionCreateRequest | null | undefined;
+  request: CommandDefinitionUpdateRequest;
 }>;
 
 
@@ -943,7 +1182,7 @@ export type CreateDetectionRuleMutation = { createDetectionRule: { id: string, t
 
 export type UpdateDetectionRuleMutationVariables = Exact<{
   token: string;
-  request: DetectionRuleCreateRequest;
+  request: DetectionRuleUpdateRequest;
 }>;
 
 
@@ -955,6 +1194,30 @@ export type DeleteDetectionRuleMutationVariables = Exact<{
 
 
 export type DeleteDetectionRuleMutation = { deleteDetectionRule: boolean };
+
+export type EntityAttributesQueryVariables = Exact<{
+  criteria: EntityAttributeSearchCriteria;
+}>;
+
+
+export type EntityAttributesQuery = { entityAttributes: { results: Array<{ id: string, entityType: string, scope: string, attrKey: string, valueType: string, value: string | null, lastUpdated: string | null }>, pagination: { totalRecords: number | null } } };
+
+export type SetEntityAttributeMutationVariables = Exact<{
+  request: EntityAttributeSetRequest;
+}>;
+
+
+export type SetEntityAttributeMutation = { setEntityAttribute: { id: string, scope: string, attrKey: string, valueType: string, value: string | null } };
+
+export type DeleteEntityAttributeMutationVariables = Exact<{
+  entityType: string;
+  entity: string;
+  scope: string;
+  attrKey: string;
+}>;
+
+
+export type DeleteEntityAttributeMutation = { deleteEntityAttribute: boolean };
 
 export type FacetKeysQueryVariables = Exact<{
   criteria: FacetKeySearchCriteria;
@@ -1001,7 +1264,7 @@ export type CreateGeoFenceMutation = { createGeoFence: { id: string, token: stri
 
 export type UpdateGeoFenceMutationVariables = Exact<{
   token: string;
-  request: GeoFenceCreateRequest;
+  request: GeoFenceUpdateRequest;
 }>;
 
 
@@ -1032,7 +1295,13 @@ export type EntityRelationshipsQueryVariables = Exact<{
 }>;
 
 
-export type EntityRelationshipsQuery = { entityRelationships: { results: Array<{ id: string, token: string, targetType: string, target:
+export type EntityRelationshipsQuery = { entityRelationships: { results: Array<{ id: string, token: string, sourceType: string, targetType: string, source:
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+        | { id: string, token: string }
+      , target:
         | { id: string, token: string }
         | { id: string, token: string }
         | { id: string, token: string }
@@ -1053,6 +1322,20 @@ export type RemoveEntityRelationshipsMutationVariables = Exact<{
 
 
 export type RemoveEntityRelationshipsMutation = { removeEntityRelationships: boolean };
+
+export type DeviceReplacementsQueryVariables = Exact<{
+  criteria: DeviceReplacementSearchCriteria;
+}>;
+
+
+export type DeviceReplacementsQuery = { deviceReplacements: { results: Array<{ id: string, occurredTime: string, actor: string, reason: string | null, unitIdentifier: string | null, retiredCredentialTokens: Array<string>, newCredentialToken: string, newCredentialType: string, device: { id: string, token: string } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type ReplaceDeviceMutationVariables = Exact<{
+  request: DeviceReplaceRequest;
+}>;
+
+
+export type ReplaceDeviceMutation = { replaceDevice: { retiredCredentialTokens: Array<string>, device: { id: string, token: string }, replacement: { id: string, occurredTime: string, actor: string, reason: string | null, unitIdentifier: string | null }, newCredential: { id: string, token: string, credentialType: string, credentialId: string } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -1215,7 +1498,7 @@ export const CreateAreaDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAreaMutation, CreateAreaMutationVariables>;
 export const UpdateAreaDocument = new TypedDocumentString(`
-    mutation UpdateArea($token: String!, $request: AreaCreateRequest) {
+    mutation UpdateArea($token: String!, $request: AreaUpdateRequest!) {
   updateArea(token: $token, request: $request) {
     id
     token
@@ -1299,7 +1582,7 @@ export const CreateAreaTypeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAreaTypeMutation, CreateAreaTypeMutationVariables>;
 export const UpdateAreaTypeDocument = new TypedDocumentString(`
-    mutation UpdateAreaType($token: String!, $request: AreaTypeCreateRequest) {
+    mutation UpdateAreaType($token: String!, $request: AreaTypeUpdateRequest!) {
   updateAreaType(token: $token, request: $request) {
     id
     token
@@ -1329,6 +1612,7 @@ export const AssetsDocument = new TypedDocumentString(`
       name
       description
       metadata
+      properties
       createdAt
       assetType {
         id
@@ -1356,6 +1640,7 @@ export const AssetByTokenDocument = new TypedDocumentString(`
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1377,6 +1662,7 @@ export const CreateAssetDocument = new TypedDocumentString(`
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1391,13 +1677,14 @@ export const CreateAssetDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateAssetMutation, CreateAssetMutationVariables>;
 export const UpdateAssetDocument = new TypedDocumentString(`
-    mutation UpdateAsset($token: String!, $request: AssetCreateRequest) {
+    mutation UpdateAsset($token: String!, $request: AssetUpdateRequest!) {
   updateAsset(token: $token, request: $request) {
     id
     token
     name
     description
     metadata
+    properties
     createdAt
     assetType {
       id
@@ -1430,6 +1717,8 @@ export const AssetTypesDocument = new TypedDocumentString(`
       borderColor
       imageUrl
       metadata
+      propertySchema
+      activeVersion
       createdAt
     }
     pagination {
@@ -1453,6 +1742,8 @@ export const AssetTypeByTokenDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
@@ -1470,12 +1761,14 @@ export const CreateAssetTypeDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
     `) as unknown as TypedDocumentString<CreateAssetTypeMutation, CreateAssetTypeMutationVariables>;
 export const UpdateAssetTypeDocument = new TypedDocumentString(`
-    mutation UpdateAssetType($token: String!, $request: AssetTypeCreateRequest) {
+    mutation UpdateAssetType($token: String!, $request: AssetTypeUpdateRequest!) {
   updateAssetType(token: $token, request: $request) {
     id
     token
@@ -1487,6 +1780,8 @@ export const UpdateAssetTypeDocument = new TypedDocumentString(`
     borderColor
     imageUrl
     metadata
+    propertySchema
+    activeVersion
     createdAt
   }
 }
@@ -1496,6 +1791,99 @@ export const DeleteAssetTypeDocument = new TypedDocumentString(`
   deleteAssetType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteAssetTypeMutation, DeleteAssetTypeMutationVariables>;
+export const AssetParentDocument = new TypedDocumentString(`
+    query AssetParent($token: String!) {
+  assetParent(token: $token) {
+    id
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<AssetParentQuery, AssetParentQueryVariables>;
+export const AssetAncestorsDocument = new TypedDocumentString(`
+    query AssetAncestors($token: String!) {
+  assetAncestors(token: $token) {
+    id
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<AssetAncestorsQuery, AssetAncestorsQueryVariables>;
+export const AssetChildrenDocument = new TypedDocumentString(`
+    query AssetChildren($parentToken: String, $pagination: PaginationInput!) {
+  assetChildren(parentToken: $parentToken, pagination: $pagination) {
+    results {
+      id
+      token
+      name
+      assetType {
+        id
+        token
+        name
+        icon
+        backgroundColor
+        foregroundColor
+        borderColor
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AssetChildrenQuery, AssetChildrenQueryVariables>;
+export const SetAssetParentDocument = new TypedDocumentString(`
+    mutation SetAssetParent($childToken: String!, $parentToken: String!) {
+  setAssetParent(childToken: $childToken, parentToken: $parentToken) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetAssetParentMutation, SetAssetParentMutationVariables>;
+export const ClearAssetParentDocument = new TypedDocumentString(`
+    mutation ClearAssetParent($childToken: String!) {
+  clearAssetParent(childToken: $childToken)
+}
+    `) as unknown as TypedDocumentString<ClearAssetParentMutation, ClearAssetParentMutationVariables>;
+export const AssetTypeVersionsDocument = new TypedDocumentString(`
+    query AssetTypeVersions($token: String!) {
+  assetTypeVersions(token: $token) {
+    version
+    label
+    description
+    publishedAt
+    publishedBy
+    propertySchema
+  }
+}
+    `) as unknown as TypedDocumentString<AssetTypeVersionsQuery, AssetTypeVersionsQueryVariables>;
+export const ActiveAssetTypeVersionDocument = new TypedDocumentString(`
+    query ActiveAssetTypeVersion($token: String!) {
+  activeAssetTypeVersion(token: $token) {
+    version
+    label
+    publishedAt
+    propertySchema
+  }
+}
+    `) as unknown as TypedDocumentString<ActiveAssetTypeVersionQuery, ActiveAssetTypeVersionQueryVariables>;
+export const PublishAssetTypeDocument = new TypedDocumentString(`
+    mutation PublishAssetType($token: String!, $label: String, $description: String) {
+  publishAssetType(token: $token, label: $label, description: $description) {
+    version
+  }
+}
+    `) as unknown as TypedDocumentString<PublishAssetTypeMutation, PublishAssetTypeMutationVariables>;
+export const RollbackAssetTypeDocument = new TypedDocumentString(`
+    mutation RollbackAssetType($token: String!, $version: Int!) {
+  rollbackAssetType(token: $token, version: $version) {
+    token
+    activeVersion
+  }
+}
+    `) as unknown as TypedDocumentString<RollbackAssetTypeMutation, RollbackAssetTypeMutationVariables>;
 export const AuditEventsDocument = new TypedDocumentString(`
     query AuditEvents($criteria: AuditEventSearchCriteria!) {
   auditEvents(criteria: $criteria) {
@@ -1683,7 +2071,7 @@ export const CreateCustomerDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCustomerMutation, CreateCustomerMutationVariables>;
 export const UpdateCustomerDocument = new TypedDocumentString(`
-    mutation UpdateCustomer($token: String!, $request: CustomerCreateRequest) {
+    mutation UpdateCustomer($token: String!, $request: CustomerUpdateRequest!) {
   updateCustomer(token: $token, request: $request) {
     id
     token
@@ -1767,7 +2155,7 @@ export const CreateCustomerTypeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCustomerTypeMutation, CreateCustomerTypeMutationVariables>;
 export const UpdateCustomerTypeDocument = new TypedDocumentString(`
-    mutation UpdateCustomerType($token: String!, $request: CustomerTypeCreateRequest) {
+    mutation UpdateCustomerType($token: String!, $request: CustomerTypeUpdateRequest!) {
   updateCustomerType(token: $token, request: $request) {
     id
     token
@@ -1871,7 +2259,7 @@ export const CreateDevicesDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDevicesMutation, CreateDevicesMutationVariables>;
 export const UpdateDeviceDocument = new TypedDocumentString(`
-    mutation UpdateDevice($token: String!, $request: DeviceCreateRequest) {
+    mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
   updateDevice(token: $token, request: $request) {
     id
     token
@@ -2067,7 +2455,7 @@ export const CreateEntityGroupDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateEntityGroupMutation, CreateEntityGroupMutationVariables>;
 export const UpdateEntityGroupDocument = new TypedDocumentString(`
-    mutation UpdateEntityGroup($token: String!, $request: EntityGroupCreateRequest) {
+    mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {
   updateEntityGroup(token: $token, request: $request) {
     id
     token
@@ -2166,7 +2554,7 @@ export const CreateDeviceProfileDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDeviceProfileMutation, CreateDeviceProfileMutationVariables>;
 export const UpdateDeviceProfileDocument = new TypedDocumentString(`
-    mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileCreateRequest) {
+    mutation UpdateDeviceProfile($token: String!, $request: DeviceProfileUpdateRequest!) {
   updateDeviceProfile(token: $token, request: $request) {
     id
     token
@@ -2184,6 +2572,14 @@ export const UpdateDeviceProfileDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateDeviceProfileMutation, UpdateDeviceProfileMutationVariables>;
+export const RenameDeviceProfileDocument = new TypedDocumentString(`
+    mutation RenameDeviceProfile($token: String!, $newToken: String!) {
+  renameDeviceProfile(token: $token, newToken: $newToken) {
+    id
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RenameDeviceProfileMutation, RenameDeviceProfileMutationVariables>;
 export const DeleteDeviceProfileDocument = new TypedDocumentString(`
     mutation DeleteDeviceProfile($token: String!) {
   deleteDeviceProfile(token: $token)
@@ -2254,7 +2650,7 @@ export const CreateMetricDefinitionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateMetricDefinitionMutation, CreateMetricDefinitionMutationVariables>;
 export const UpdateMetricDefinitionDocument = new TypedDocumentString(`
-    mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionCreateRequest) {
+    mutation UpdateMetricDefinition($token: String!, $request: MetricDefinitionUpdateRequest!) {
   updateMetricDefinition(token: $token, request: $request) {
     id
     token
@@ -2319,7 +2715,7 @@ export const CreateCommandDefinitionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateCommandDefinitionMutation, CreateCommandDefinitionMutationVariables>;
 export const UpdateCommandDefinitionDocument = new TypedDocumentString(`
-    mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionCreateRequest) {
+    mutation UpdateCommandDefinition($token: String!, $request: CommandDefinitionUpdateRequest!) {
   updateCommandDefinition(token: $token, request: $request) {
     id
     token
@@ -2387,7 +2783,7 @@ export const CreateDetectionRuleDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateDetectionRuleMutation, CreateDetectionRuleMutationVariables>;
 export const UpdateDetectionRuleDocument = new TypedDocumentString(`
-    mutation UpdateDetectionRule($token: String!, $request: DetectionRuleCreateRequest!) {
+    mutation UpdateDetectionRule($token: String!, $request: DetectionRuleUpdateRequest!) {
   updateDetectionRule(token: $token, request: $request) {
     id
     token
@@ -2399,6 +2795,45 @@ export const DeleteDetectionRuleDocument = new TypedDocumentString(`
   deleteDetectionRule(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDetectionRuleMutation, DeleteDetectionRuleMutationVariables>;
+export const EntityAttributesDocument = new TypedDocumentString(`
+    query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {
+  entityAttributes(criteria: $criteria) {
+    results {
+      id
+      entityType
+      scope
+      attrKey
+      valueType
+      value
+      lastUpdated
+    }
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EntityAttributesQuery, EntityAttributesQueryVariables>;
+export const SetEntityAttributeDocument = new TypedDocumentString(`
+    mutation SetEntityAttribute($request: EntityAttributeSetRequest!) {
+  setEntityAttribute(request: $request) {
+    id
+    scope
+    attrKey
+    valueType
+    value
+  }
+}
+    `) as unknown as TypedDocumentString<SetEntityAttributeMutation, SetEntityAttributeMutationVariables>;
+export const DeleteEntityAttributeDocument = new TypedDocumentString(`
+    mutation DeleteEntityAttribute($entityType: String!, $entity: String!, $scope: String!, $attrKey: String!) {
+  deleteEntityAttribute(
+    entityType: $entityType
+    entity: $entity
+    scope: $scope
+    attrKey: $attrKey
+  )
+}
+    `) as unknown as TypedDocumentString<DeleteEntityAttributeMutation, DeleteEntityAttributeMutationVariables>;
 export const FacetKeysDocument = new TypedDocumentString(`
     query FacetKeys($criteria: FacetKeySearchCriteria!) {
   facetKeys(criteria: $criteria) {
@@ -2482,7 +2917,7 @@ export const CreateGeoFenceDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CreateGeoFenceMutation, CreateGeoFenceMutationVariables>;
 export const UpdateGeoFenceDocument = new TypedDocumentString(`
-    mutation UpdateGeoFence($token: String!, $request: GeoFenceCreateRequest!) {
+    mutation UpdateGeoFence($token: String!, $request: GeoFenceUpdateRequest!) {
   updateGeoFence(token: $token, request: $request) {
     id
     token
@@ -2527,6 +2962,11 @@ export const EntityRelationshipsDocument = new TypedDocumentString(`
     results {
       id
       token
+      sourceType
+      source {
+        id
+        token
+      }
       targetType
       target {
         id
@@ -2554,3 +2994,52 @@ export const RemoveEntityRelationshipsDocument = new TypedDocumentString(`
   removeEntityRelationships(tokens: $tokens)
 }
     `) as unknown as TypedDocumentString<RemoveEntityRelationshipsMutation, RemoveEntityRelationshipsMutationVariables>;
+export const DeviceReplacementsDocument = new TypedDocumentString(`
+    query DeviceReplacements($criteria: DeviceReplacementSearchCriteria!) {
+  deviceReplacements(criteria: $criteria) {
+    results {
+      id
+      occurredTime
+      actor
+      reason
+      unitIdentifier
+      retiredCredentialTokens
+      newCredentialToken
+      newCredentialType
+      device {
+        id
+        token
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceReplacementsQuery, DeviceReplacementsQueryVariables>;
+export const ReplaceDeviceDocument = new TypedDocumentString(`
+    mutation ReplaceDevice($request: DeviceReplaceRequest!) {
+  replaceDevice(request: $request) {
+    device {
+      id
+      token
+    }
+    replacement {
+      id
+      occurredTime
+      actor
+      reason
+      unitIdentifier
+    }
+    newCredential {
+      id
+      token
+      credentialType
+      credentialId
+    }
+    retiredCredentialTokens
+  }
+}
+    `) as unknown as TypedDocumentString<ReplaceDeviceMutation, ReplaceDeviceMutationVariables>;

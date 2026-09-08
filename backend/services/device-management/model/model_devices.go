@@ -162,6 +162,32 @@ type DeviceBulkCreateRequest struct {
 	Metadata           *string
 }
 
+// DeviceUpdateRequest is the PARTIAL-update counterpart of DeviceCreateRequest.
+// Omitted leaves the stored value alone, an explicit null clears it, a value sets it.
+//
+// 🔴 TOKEN IS DELIBERATELY ABSENT, and here that closes a defect with a second
+// symptom. The old path located the row by `request.Token` and ignored the
+// mutation's own `token` argument entirely, so a caller who sent a `token` argument
+// naming one device and a `request.token` naming another silently updated the
+// SECOND and got a 200 for it — the mandatory argument was dead. It also meant a
+// device rename was unreachable through this method, which is why the roster
+// fan-out below could assume a stable device-token key. Both remain true of the new
+// shape, but now by construction: the argument is the only identity channel, and a
+// token move is unrepresentable rather than accidentally unreachable.
+type DeviceUpdateRequest struct {
+	ExternalId  dcgraphql.OptionalString
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// DeviceTypeToken re-types the device. Omitted keeps the current type. An
+	// explicit NULL IS REFUSED — device_type_id is NOT NULL, and a device with no
+	// type resolves no capability at all. An unknown token is refused, totally.
+	//
+	// A re-type may move the device onto a different DeviceProfile, so this is the
+	// field the post-commit roster fan-out watches.
+	DeviceTypeToken dcgraphql.OptionalString
+	Metadata        dcgraphql.OptionalString
+}
+
 // Represents a device.
 type Device struct {
 	gorm.Model
@@ -233,6 +259,37 @@ type DeviceCredentialCreateRequest struct {
 	Enabled         bool
 	ExpiresAt       *string
 	Metadata        *string
+}
+
+// A PARTIAL update to a device credential: omit a field to leave the stored value
+// alone, send null to clear a nullable one, send a value to set it. There is no Token —
+// the credential is identified by the mutation's `token` argument.
+//
+// 🔴 THE THREE STATES MATTER MORE HERE THAN ANYWHERE ELSE IN THIS AREA, because the
+// full-replace shape made every edit a re-authentication event. Renaming nothing but the
+// metadata sent a request with no credentialValue, which BLANKED the secret the device
+// presents at connect time; a request with no expiresAt removed the expiry; a request
+// that failed to restate `enabled: true` disabled the credential. All three returned 200
+// and took the device offline at its next reconnect.
+type DeviceCredentialUpdateRequest struct {
+	// DeviceToken re-points the credential at another device. The FK is NOT NULL, so a
+	// null is refused and an unknown token refuses the whole update.
+	DeviceToken dcgraphql.OptionalString
+	// CredentialType and CredentialId are NOT NULL: a credential with no type has no
+	// vocabulary and one with no id resolves to no device, so both refuse a null.
+	CredentialType dcgraphql.OptionalString
+	CredentialId   dcgraphql.OptionalString
+	// CredentialValue is the secret material and IS nullable — a credential type that
+	// carries no secret is a real state — so an explicit null clears it. Omitting it
+	// leaves the secret in place, which is what makes a metadata edit safe.
+	CredentialValue dcgraphql.OptionalString
+	// Enabled sits on a NOT NULL column; a null is refused rather than folded to false,
+	// which would silently disable the credential.
+	Enabled dcgraphql.OptionalBool
+	// ExpiresAt is an RFC3339 timestamp on a nullable column: null (or an empty string,
+	// which is what a cleared form field sends) means "never expires".
+	ExpiresAt dcgraphql.OptionalString
+	Metadata  dcgraphql.OptionalString
 }
 
 // DeviceCredential holds authentication material for a device (ADR-014).

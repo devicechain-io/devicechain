@@ -88,15 +88,36 @@ trap 'rm -rf "$work"' EXIT
 # 🔴 A HARD FAILURE, never a skip. A check that quietly passes when it could not
 # fetch its schemas is worse than no check: it reports success for every run on a
 # machine with no network, including CI the day a repository URL changes.
-helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true
-helm repo update cnpg >/dev/null 2>&1 ||
-  fail "could not refresh the cloudnative-pg Helm repository; this check cannot run without the CRD schemas and will not pretend otherwise"
+#
+# 🔴 OCI, NOT THE HTTP CHART REPOSITORY, AND THE REASON IS MEASURED. Upstream pointed
+# cloudnative-pg.github.io/charts at a 301 to cloudnative-pg.io/charts, and on
+# 2026-09-02 that domain began answering SERVFAIL -- a delegation/DNSSEC-shaped
+# failure, resolver-dependent and intermittent: 8.8.8.8 and 1.1.1.1 both SERVFAILed,
+# and one of them had served the records correctly minutes earlier. That took BOTH
+# http forms down at once, the github.io one because helm follows the redirect into
+# the hole, while cloudnative-pg.github.io itself kept resolving fine.
+#
+# 🔑 It read as a flake for three CI runs because a developer machine had a cached
+# answer and passed happily -- and because `dig +short` prints NOTHING for SERVFAIL,
+# which is easy to read as "the domain has no records" when it actually means "the
+# question could not be answered". Ask for the status line, not the short form.
+#
+# The same charts are published as OCI artifacts on ghcr.io -- the registry this
+# project already depends on for its own images -- addressed by digest and needing no
+# index.yaml and no chart-repo host. That removes a whole class of outage rather than
+# moving to a different host that can have the same one. (Addressed by version TAG,
+# not by digest -- helm resolves `--version 0.29.0` to a tag, which is re-pushable.)
+CNPG_CHART_REGISTRY="${CNPG_CHART_REGISTRY:-oci://ghcr.io/cloudnative-pg/charts}"
 
 for spec in "cloudnative-pg:$operator_version" "plugin-barman-cloud:$plugin_version"; do
   name="${spec%%:*}"
   version="${spec##*:}"
-  helm pull "cnpg/$name" --version "$version" --untar --untardir "$work" >/dev/null 2>&1 ||
-    fail "could not pull cnpg/$name $version"
+  # 🔴 KEEP HELM'S OWN ERROR. This used to be `>/dev/null 2>&1`, and the generic
+  # message that replaced it cost three CI runs to diagnose: every distinct failure
+  # -- a moved URL, a dead domain, a missing version -- printed the same sentence.
+  # The run that first carried helm's stderr named the true cause in one line.
+  pull_err="$(helm pull "$CNPG_CHART_REGISTRY/$name" --version "$version" --untar --untardir "$work" 2>&1)" ||
+    fail "could not pull $name $version from $CNPG_CHART_REGISTRY; this check cannot run without the CRD schemas and will not pretend otherwise. helm said: $pull_err"
 done
 
 # Both charts render their CRDs as templates gated on `crds.create`, so the raw
@@ -209,6 +230,24 @@ rendered+=("$(render_case restore-pitr "${base[@]}" --set instances=3 --set sync
   --set restore.recoveryTarget.targetTLI=latest \
   --set restore.recoveryTargetImmediate=true)")
 
+# The read-only SQL/BI roles (the event store's shape). Its own case because
+# `spec.managed.roles` grows entries no other render produces — connectionLimit,
+# passwordSecret, inRoles, disablePassword — and each of those is a field name this
+# chart types by hand. Misspell one and helm renders it happily, the API server
+# drops it, and the role arrives with no connection cap or, worse, with a password
+# nobody set. Both cases: a group role with no login, and a login role with a
+# password Secret; and a third with none, so the disablePassword branch renders too.
+rendered+=("$(render_case analytics-roles "${base[@]}" --set instances=1 \
+  --set reservedApplicationConnections=40 \
+  --set 'extraRoles[0].name=analytics_reader' --set 'extraRoles[0].login=false' \
+  --set 'extraRoles[1].name=analytics_acme' --set 'extraRoles[1].login=true' \
+  --set 'extraRoles[1].connectionLimit=5' \
+  --set 'extraRoles[1].passwordSecretName=analytics-acme-credentials' \
+  --set 'extraRoles[1].inRoles[0]=analytics_reader' \
+  --set 'extraRoles[2].name=analytics_bravo' --set 'extraRoles[2].login=true' \
+  --set 'extraRoles[2].connectionLimit=5' \
+  --set 'extraRoles[2].inRoles[0]=analytics_reader')")
+
 # --- the configurations the chart must REFUSE ---------------------------------
 say "checking the render-time guards"
 
@@ -256,6 +295,24 @@ refuses backup-without-destination "fails every archive attempt" \
 refuses five-field-schedule "CloudNativePG schedules take SIX" \
   "${base[@]}" --set instances=1 "${backup[@]}" --set backup.schedule='0 3 * * *'
 
+# The connection budget for the read-only SQL/BI roles. Both halves are refusals of
+# a configuration that applies cleanly and starves the platform at runtime, and the
+# starvation is silent: pools open lazily, so the Cluster keeps reporting Ready
+# while the application stops being able to reach it.
+refuses analytics-role-without-a-limit "declares no connection limit" \
+  "${base[@]}" --set instances=1 \
+  --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true'
+
+refuses analytics-role-name-too-long "PostgreSQL truncates identifiers longer than 63" \
+  "${base[@]}" --set instances=1 \
+  --set 'extraRoles[0].name=analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy' \
+  --set 'extraRoles[0].login=true' --set 'extraRoles[0].connectionLimit=5'
+
+refuses analytics-roles-over-budget "the extra roles ask for" \
+  "${base[@]}" --set instances=1 --set reservedApplicationConnections=40 \
+  --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true' \
+  --set 'extraRoles[0].connectionLimit=60'
+
 # COVERAGE: every `fail` in the templates must have been tripped by a case above.
 # A guard nothing exercises is indistinguishable from one that has stopped firing,
 # and this is the only thing in the repo that renders these templates at all.
@@ -277,6 +334,15 @@ for path in sorted(glob.glob(os.path.join(chart, "templates", "**", "*"), recurs
     # "fix" it by loosening the count, i.e. by removing the control.
     code = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", "", text, flags=re.S)  # Helm comments
     code = "\n".join(ln for ln in code.split("\n") if not ln.lstrip().startswith("#"))
+    # 🔴 And the guards' own MESSAGES, which is not the same exemption as the two
+    # above and was found the hard way. A guard message is prose too, and one of
+    # them explains that the condition it refuses "does not fail loudly" — so the
+    # word inside the string counted as a tenth template action against nine
+    # extracted messages, and this control fired on a chart whose guards were all
+    # present and all covered. Masking string literals is safe in the direction
+    # that matters: in the `fail "literal"` form this control exists to catch, the
+    # token is OUTSIDE the quotes and still counted.
+    code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)
     seen += len(re.findall(r"\bfail\b", code))
     # The message literal, with \" handled: several guards quote a cron example.
     for m in re.finditer(r'fail \(?printf?\s*"((?:[^"\\]|\\.)*)"', text):

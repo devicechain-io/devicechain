@@ -17,7 +17,8 @@
 // broker shutdown emits NO disconnect advisories for the connections it was holding —
 // measured, not assumed — so every rolling broker upgrade leaves every connected
 // device asserted-online with nothing to correct it, and an asserted row is skipped by
-// the inactivity sweep (device-state/model/api.go:425). That is why reconciliation
+// the inactivity sweep (the presence_source predicate in Api.SweepInactive,
+// device-state/model/api.go). That is why reconciliation
 // against the broker's live inventory is part of this package rather than a follow-up:
 // the advisories alone are not a complete account of a device's life.
 package presence

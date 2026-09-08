@@ -36,5 +36,6 @@ var (
 		NewCommandDispatchNonceSchema(),
 		NewDrainableIndexSchema(),
 		NewStrandedSentIndexSchema(),
+		NewQueuedDeviceIndexSchema(),
 	}
 )

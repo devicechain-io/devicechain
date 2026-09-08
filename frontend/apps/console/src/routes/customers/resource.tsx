@@ -3,13 +3,13 @@
 
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
+import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import {
   listCustomers,
   getCustomer,
   deleteCustomer,
   createCustomer,
   updateCustomer,
-  customerPreserved,
   listCustomerTypes,
   type Customer,
 } from '@/lib/api/customers';
@@ -55,11 +55,11 @@ export const customerResource: RegistryResource<Customer> = {
         })
       }
       update={(token, req) =>
-        // RegistryInstanceForm calls update only when editing, so c is set.
-        // Start from everything the customer already is (customerPreserved) — the update is a
-        // full replace, so anything left out is deleted rather than left alone.
+        // A partial update: this form edits the name, the description and the type,
+        // so it sends exactly those. externalId and metadata are untouched because
+        // they are not mentioned — where the full-replace shape needed them re-sent
+        // from a stale snapshot to survive at all.
         updateCustomer(token, {
-          ...customerPreserved(c!),
           name: req.name,
           description: req.description,
           customerTypeToken: req.typeToken,
@@ -68,4 +68,17 @@ export const customerResource: RegistryResource<Customer> = {
       onDone={onDone}
     />
   ),
+  // Facet values live on the entity as EntityAttribute rows, and until this tab
+  // existed nothing we ship could write one — the Browse axis for this family was
+  // declarable and permanently unmatchable. The panel is shared with the other three
+  // member families; only the entity type differs.
+  detailTabs: [
+    {
+      value: 'facets',
+      label: 'facets:panelTab',
+      render: (c) => (
+        <EntityAttributesPanel entityType="customer" entityToken={c.token} />
+      ),
+    },
+  ],
 };

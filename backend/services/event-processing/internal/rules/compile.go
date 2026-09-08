@@ -419,6 +419,14 @@ func validateReact(r Rule, limits Limits) error {
 				return invalid(r.ID, "actions", "action %d payload template: %v", i, err)
 			}
 		}
+		// Cost-gate a raiseAlarm's alarm-key template at the same tenant ceiling, against its own
+		// narrower environment (series only — alarmkey.go). This is where an author who reached for
+		// `value` is told, by the type checker, that the key must be edge-stable.
+		if a.Type == ActionRaiseAlarm && a.RaiseAlarm != nil && a.RaiseAlarm.AlarmKeyTemplate != "" {
+			if _, err := CompileAlarmKeyTemplate(a.RaiseAlarm.AlarmKeyTemplate, limits.PredicateCostCeiling); err != nil {
+				return invalid(r.ID, "actions", "action %d alarmKeyTemplate: %v", i, err)
+			}
+		}
 		// Reject an exact-duplicate action (fail-closed). The dispatcher keys idempotency on the
 		// detection identity PLUS the action's CONTENT (this same key's shape), so two identical
 		// actions collapse to ONE idempotency token and only one would ever dispatch — a silent
@@ -466,7 +474,7 @@ func ActionDedupKey(a Action) string {
 	}
 	switch a.Type {
 	case ActionRaiseAlarm:
-		return "raiseAlarm|" + a.RaiseAlarm.AlarmKey + guardSeg
+		return "raiseAlarm|" + alarmKeyIdentity(a.RaiseAlarm) + guardSeg
 	case ActionSendCommand:
 		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
 	case ActionHTTPCall:
@@ -485,6 +493,28 @@ func ActionDedupKey(a Action) string {
 	default:
 		return string(a.Type)
 	}
+}
+
+// AlarmKeyIdentitySeparator is not a separator so much as a DISCRIMINATOR: it prefixes the
+// alarm-key segment of a raiseAlarm identity when the key is RENDERED rather than literal. The
+// ADR-042 token grammar has no ':', so no literal alarm key can ever produce this prefix — which is
+// what keeps a rendered key and a literal one from colliding in the identity, including the case
+// where the literal key is EMPTY (legal: the dispatcher then defaults it to the rule's stable key).
+const AlarmKeyIdentitySeparator = "tmpl:"
+
+// alarmKeyIdentity renders a raiseAlarm's key contribution to the action identity keys. The two
+// fields are mutually exclusive (validateAction rejects both), so it emits exactly one — and emits
+// the LITERAL case byte-for-byte as it was before alarm-key templates existed, so no already-minted
+// identity moves. Exported through AlarmKeyIdentitySeparator so react.actionContentKey shares this
+// ONE discriminator rather than mirroring a drift-prone copy.
+func alarmKeyIdentity(r *RaiseAlarmAction) string {
+	if r == nil {
+		return ""
+	}
+	if r.AlarmKeyTemplate != "" {
+		return AlarmKeyIdentitySeparator + r.AlarmKeyTemplate
+	}
+	return r.AlarmKey
 }
 
 // HeaderKey renders a header map into a stable, order-independent string for the action identity
@@ -556,6 +586,12 @@ func validateAction(ruleID string, i int, a Action) error {
 	}
 	switch a.Type {
 	case ActionRaiseAlarm:
+		// A literal key and a rendered one are mutually exclusive: with both set there is no rule
+		// for which wins, and either choice silently discards what the author wrote. Rejected here
+		// rather than resolved by precedence, so the ambiguity cannot reach a published rule.
+		if a.RaiseAlarm.AlarmKey != "" && a.RaiseAlarm.AlarmKeyTemplate != "" {
+			return invalid(ruleID, "actions", "action %d declares both alarmKey and alarmKeyTemplate; set exactly one", i)
+		}
 		if a.RaiseAlarm.AlarmKey != "" {
 			if err := validateMetric(a.RaiseAlarm.AlarmKey); err != nil {
 				return invalid(ruleID, "actions", "action %d alarmKey: %v", i, err)

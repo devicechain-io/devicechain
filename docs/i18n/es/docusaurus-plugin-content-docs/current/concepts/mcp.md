@@ -60,20 +60,69 @@ El resultado: conecta un asistente, y podrá *leer dispositivos, estado, medicio
 
 El servidor MCP es un **servidor de recursos OAuth 2.1**, y `user-management` es su **servidor de autorización** — de modo que conectar un cliente es un flujo OAuth estándar, no un intercambio de claves a medida:
 
-1. El cliente descubre los requisitos del servidor a partir de sus metadatos de recurso protegido (RFC 9728) y encuentra el servidor de autorización a partir de sus metadatos (RFC 8414, en `/.well-known/oauth-authorization-server`).
+1. El cliente descubre los requisitos del servidor a partir de sus metadatos de recurso protegido (RFC 9728), y luego encuentra el servidor de autorización a partir de *sus* metadatos (RFC 8414). Ambos documentos viven en una ruta well-known construida insertando el segmento well-known **entre** el host y la ruta del identificador — así que en una instancia en `iot.example.com` son `/.well-known/oauth-protected-resource/api/mcp` y `/.well-known/oauth-authorization-server/api/user-management`.
 2. El usuario pasa por el **flujo de código de autorización con PKCE** (`/oauth/authorize`): inicia sesión, elige el inquilino a conceder, y da su consentimiento — todo renderizado por el servidor, sin secreto compartido.
 3. El cliente intercambia el código por un token de acceso con alcance de inquilino en `/oauth/token`, y lo renueva según sea necesario (los tokens de actualización son de un solo uso y rotan).
 4. El cliente invoca las herramientas MCP con ese token; cada llamada se ejecuta bajo los propios permisos del usuario.
 
 Los clientes son **registrados por un administrador** (a través de la API de administración) en lugar de autorregistrarse, de modo que un operador controla qué aplicaciones pueden solicitar acceso y con qué URIs de redirección.
 
-## Qué no puede hacer (hoy)
+### A dónde apuntar un cliente {#where-to-point-a-client}
+
+Hay una sola URL que configurar, y es el host público de la instancia más `/api/mcp`:
+
+```
+https://<host-de-tu-instancia>/api/mcp
+```
+
+Esa única cadena es tres cosas a la vez, y por eso es la única que necesitas:
+
+- el **endpoint** al que el cliente envía por POST sus peticiones MCP;
+- el **identificador de recurso** que el cliente manda como parámetro `resource` al pedir un token, y con el que el token queda sellado como audiencia;
+- el **punto de partida del descubrimiento** — todo lo demás se deriva de él.
+
+No hay que introducir nada más a mano. Un cliente que recibe el `401` de ese endpoint lee la ubicación de los metadatos en la cabecera `WWW-Authenticate` de la respuesta, la sigue, y a partir de ese documento averigua dónde está el servidor de autorización y le pide *sus* propios metadatos. El descubrimiento son esas tres peticiones, y puedes recorrerlas a mano antes de apuntar ningún cliente:
+
+```bash
+# 1. El endpoint responde 401 y nombra su documento de metadatos.
+curl -i -X POST https://<host-de-tu-instancia>/api/mcp
+
+# 2. Ese documento nombra el servidor de autorización.
+curl https://<host-de-tu-instancia>/.well-known/oauth-protected-resource/api/mcp
+
+# 3. El servidor de autorización describe dónde iniciar sesión y obtener un token.
+curl https://<host-de-tu-instancia>/.well-known/oauth-authorization-server/api/user-management
+```
+
+Las rutas well-known resultan extrañas la primera vez: el segmento well-known va **entre** el host y el resto de la ruta, no después. Esa es la ubicación que los estándares definen para un identificador que lleva una ruta, así que es la que un cliente construye por su cuenta. Para el segundo documento, la forma que parece más intuitiva, `https://<host>/api/mcp/.well-known/oauth-protected-resource`, sirve lo mismo, para los clientes que la construyen así.
+
+Las tres peticiones son sin autenticar — el descubrimiento es público por diseño y no devuelve ningún secreto. La petición 3 solo responde una vez que el servidor de autorización está encendido; abajo se explica [por qué](#limits-and-boundaries) es un paso aparte.
+
+:::caution Ejecuta exactamente una réplica
+El servidor MCP mantiene la sesión de protocolo de cada cliente en memoria, en el pod que la creó. Las sesiones no se comparten entre pods y no hay afinidad de sesión, así que una segunda réplica significa que aproximadamente la mitad de las peticiones de cada cliente llegan a un pod que nunca ha oído hablar de su sesión y son rechazadas. El fallo es intermitente y su mensaje no menciona el escalado, así que se lee como un error del cliente. Instalar esta área con más de una réplica se rechaza de plano en lugar de dejarlo para que se descubra.
+:::
+
+## Límites y fronteras {#limits-and-boundaries}
+
+Algunos de estos puntos son trabajo pendiente y otros son decisiones. Vale la pena distinguirlos, así que cada uno dice cuál es.
+
+**Deliberado, y sin previsión de cambio:**
 
 - **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance elevado *y* una confirmación humana explícita — un asistente nunca accionará un dispositivo en silencio.
-- **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión.
+- **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para cruzar esa frontera.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
+- **Ninguna credencial de servicio está cableada en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: no hay en el servidor MCP ninguna ruta de código que eche mano de una credencial propia, así que no hay nada que un ataque de diputado confundido pueda tomar prestado. Toda lectura hacia abajo sale bajo el token del propio llamante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio — eso es fontanería de despliegue, no algo que el servidor use.)
+- **Los payloads de los comandos no se devuelven.** `list_commands` entrega el nombre, el estado y las marcas de tiempo de un comando; lo que se envió al dispositivo queda fuera del contexto del agente.
 
-También es **opcional (opt-in)** — el servicio `mcp` no forma parte de un despliegue predeterminado y es habilitado explícitamente por un operador.
+**Límites que alcanzarás antes que cualquier otro:**
+
+- Los resultados se paginan de 25 en 25 por defecto y 100 como máximo, y una consulta de varios dispositivos admite como mucho 50 tokens por llamada. Un agente que recorra una flota grande la recorre por páginas.
+- Una respuesta descendente que el servidor vaya a leer está limitada a 8 MiB — es un límite sobre lo que obtiene de las propias APIs de la plataforma, no un límite que anuncie al agente. Una sesión caduca por inactividad a los 30 minutos.
+
+**Habilitar el servicio no basta para poder usarlo.** Hay dos interruptores independientes, y activar solo el primero es la forma habitual de acabar con un servidor que responde y al que no se puede llegar:
+
+1. El área funcional `mcp` no forma parte de un despliegue predeterminado; un operador la habilita explícitamente.
+2. El servidor de autorización en `user-management` está a su vez apagado hasta que se configura una URL de emisor. Hasta entonces, `mcp` arranca y sirve sus metadatos, y **ningún cliente puede obtener un token**. Es un interruptor aparte a propósito: fijar el emisor cambia un claim de **todos** los tokens que emite la instancia, no solo los que usa MCP.
 
 ## Relacionado
 

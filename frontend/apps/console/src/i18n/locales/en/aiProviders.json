@@ -21,7 +21,7 @@
   "dirtyTestWarning": "You have unsaved changes. This tests the last saved configuration — save first to test your edits.",
   "emptyProviders": "No providers yet. Create one, then grant it to a tier to enable NL→rule authoring for those tenants.",
   "enabledHint": "— a disabled provider stays listed but never serves a call.",
-  "endpointDescription": "Override the kind's default base URL (self-hosted / proxied). Blank = the built-in default.",
+  "endpointDescription": "Override the kind's default base URL (self-hosted / proxied). Blank = the built-in default. Required for a kind that has no default, such as openai-compatible.",
   "endpointInvalidError": "Endpoint must be an http(s) URL, or blank for the kind default.",
   "endpointLabel": "Endpoint",
   "endpointPlaceholder": "https://api.anthropic.com",

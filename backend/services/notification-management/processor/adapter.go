@@ -5,7 +5,9 @@ package processor
 
 import (
 	"context"
+	"net/http"
 
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -34,9 +36,27 @@ type ChannelAdapter interface {
 // channel whose type is absent here has no adapter and is skipped with a warning
 // (its capability flag should still read available=false). Keep this in sync with
 // model.SupportedChannelTypes' Available flags.
-func newAdapterRegistry() map[string]ChannelAdapter {
+// guard is the tenant-egress boundary both adapters dial through. It is passed in
+// rather than each adapter building its own, so the operator's allowed-destination
+// configuration reaches BOTH transports or neither — an escape hatch that applied to
+// webhooks and not to SMTP would be worse than none, because it would look like it
+// worked.
+func newAdapterRegistry(guard *egress.Guard) map[string]ChannelAdapter {
 	return map[string]ChannelAdapter{
-		model.ChannelTypeSMTP:    &smtpAdapter{},
-		model.ChannelTypeWebhook: &webhookAdapter{},
+		model.ChannelTypeSMTP:    &smtpAdapter{guard: guard},
+		model.ChannelTypeWebhook: &webhookAdapter{client: egressClient(guard)},
 	}
+}
+
+// egressClient builds the HTTP client the webhook adapter delivers through: httpsink's
+// forced no-redirect policy, over a transport that dials through the guard.
+//
+// A nil guard falls back to httpsink.DefaultClient, whose own guard carries no
+// allowances. That is the fail-closed direction: a wiring mistake here narrows the
+// boundary rather than removing it.
+func egressClient(guard *egress.Guard) *http.Client {
+	if guard == nil {
+		return nil
+	}
+	return &http.Client{Transport: guard.Transport()}
 }

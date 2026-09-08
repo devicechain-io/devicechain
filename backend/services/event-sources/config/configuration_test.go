@@ -34,9 +34,6 @@ func TestLoadDefaultsEventSources(t *testing.T) {
 	assert.Equal(t, "json", httpSrc.Decoder.Type)
 	assert.Equal(t, "8081", httpSrc.Configuration["port"])
 
-	assert.Equal(t, 100, cfg.InboundEventBatching.MaxBatchSize)
-	assert.Equal(t, 100, cfg.InboundEventBatching.BatchTimeoutMs)
-
 	// The per-tenant ingest ceiling defaults to the platform rate, never unlimited.
 	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), cfg.IngestRateLimit.MessagesPerSecond)
 	assert.Equal(t, DefaultIngestBurst, cfg.IngestRateLimit.Burst)

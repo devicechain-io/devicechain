@@ -4,6 +4,7 @@
 package model
 
 import (
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -125,6 +126,36 @@ type DetectionRuleCreateRequest struct {
 	// the pairing and that the group is a published dynamic group with that version.
 	EntityGroupToken   *string
 	EntityGroupVersion *int32
+}
+
+// A PARTIAL update to a detection rule: omit a field to leave the stored value alone,
+// send null to clear a nullable one, send a value to set it. There is no Token — the
+// rule is identified by the mutation's `token` argument.
+type DetectionRuleUpdateRequest struct {
+	// DeviceProfileToken re-parents the rule; the FK is NOT NULL, so a null is refused
+	// and an unknown token refuses the whole update.
+	DeviceProfileToken dcgraphql.OptionalString
+	Name               dcgraphql.OptionalString
+	Description        dcgraphql.OptionalString
+	// Definition is the opaque rules.Rule document and is NOT NULL: a rule with no
+	// definition detects nothing, so a null is refused rather than stored.
+	Definition dcgraphql.OptionalString
+	// Enabled sits on a NOT NULL column. A null is refused rather than folded to
+	// false, which would park a live rule and report success.
+	Enabled  dcgraphql.OptionalBool
+	Metadata dcgraphql.OptionalString
+	// AuthoringGraph is the nullable canvas sidecar. Null DROPS it — what a form edit
+	// of a canvas-authored rule needs, since the graph is then stale. Omitting it now
+	// KEEPS it; the full-replace shape dropped it on every edit that did not restate it,
+	// so editing a rule's name through any client that did not round-trip the canvas
+	// silently un-canvassed the rule.
+	AuthoringGraph dcgraphql.OptionalString
+	// EntityGroupToken / EntityGroupVersion are the optional group scope (ADR-062 S4).
+	// They are folded independently and then validated as a PAIR against what the rule
+	// ends up with, so naming one without the other is refused rather than silently
+	// discarded — see validateDetectionRuleScope.
+	EntityGroupToken   dcgraphql.OptionalString
+	EntityGroupVersion dcgraphql.OptionalInt32
 }
 
 // Search criteria for locating detection rules.

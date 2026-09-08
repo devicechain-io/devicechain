@@ -87,15 +87,20 @@ func (r *SchemaResolver) Refresh(ctx context.Context, args struct {
 // UpdateProfile lets the signed-in user edit their own display name (first/last).
 // Self-scoped: it targets the identity carried in the caller's token, so being
 // authenticated is sufficient; email and credentials are immutable here.
+//
+// It takes a dedicated ProfileUpdateRequest rather than two inline arguments. The
+// arguments were already effectively three-state — a nil pointer left a field alone —
+// but on a hand-rolled mechanism nothing certified and the exhaustiveness guard could
+// not see. See identity.ProfileUpdateRequest for what each state does, including why
+// null and "" agree here.
 func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
-	FirstName *string
-	LastName  *string
+	Request identity.ProfileUpdateRequest
 }) (*CurrentIdentityResolver, error) {
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
 		return nil, auth.ErrUnauthenticated
 	}
-	id, err := r.getIdentityManager(ctx).UpdateProfile(ctx, claims.Username, args.FirstName, args.LastName)
+	id, err := r.getIdentityManager(ctx).UpdateProfile(ctx, claims.Username, &args.Request)
 	if err != nil {
 		return nil, err
 	}

@@ -71,11 +71,14 @@ func (r *AdminResolver) CreateAiProvider(ctx context.Context, args struct {
 	return &AIProviderResolver{M: *created, C: ctx}, nil
 }
 
-// UpdateAiProvider updates the provider with the given (current) token.
-// expectedUpdatedAt, when supplied, is an optimistic-concurrency precondition.
+// UpdateAiProvider partially updates the provider with the given (current) token: an
+// omitted field is left alone, an explicit null clears it. The provider is named by the
+// token ARGUMENT and the request carries none, so this can never retarget a second
+// provider. expectedUpdatedAt, when supplied, is an optimistic-concurrency
+// precondition.
 func (r *AdminResolver) UpdateAiProvider(ctx context.Context, args struct {
 	Token             string
-	Request           model.AIProviderCreateRequest
+	Request           model.AIProviderUpdateRequest
 	ExpectedUpdatedAt *string
 }) (*AIProviderResolver, error) {
 	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
@@ -86,6 +89,24 @@ func (r *AdminResolver) UpdateAiProvider(ctx context.Context, args struct {
 		return nil, err
 	}
 	return &AIProviderResolver{M: *updated, C: ctx}, nil
+}
+
+// RenameAiProvider changes a provider's token and nothing else. It is the capability
+// updateAiProvider's payload token used to carry, given a mutation where the new token
+// can mean only one thing. The authority is updateAiProvider's — a rename is an edit of
+// the provider, not a new kind of act.
+func (r *AdminResolver) RenameAiProvider(ctx context.Context, args struct {
+	Token    string
+	NewToken string
+}) (*AIProviderResolver, error) {
+	if err := auth.Authorize(ctx, auth.AIAdmin); err != nil {
+		return nil, err
+	}
+	renamed, err := apiFrom(ctx).RenameAIProvider(ctx, args.Token, args.NewToken)
+	if err != nil {
+		return nil, err
+	}
+	return &AIProviderResolver{M: *renamed, C: ctx}, nil
 }
 
 // DeleteAiProvider deletes the provider with the given token.

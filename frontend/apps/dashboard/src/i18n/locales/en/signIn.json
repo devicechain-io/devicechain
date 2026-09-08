@@ -1,0 +1,12 @@
+{
+  "chooseTenant": "Choose a tenant",
+  "emailLabel": "Email",
+  "enterTenantFailed": "Could not enter that tenant.",
+  "invalidCredentials": "Invalid email or password.",
+  "noTenants": "This account has no tenants.",
+  "passwordLabel": "Password",
+  "serverUnreachable": "Could not reach the server. Check that the API is running.",
+  "submit": "Sign in",
+  "submitting": "Signing in…",
+  "title": "Sign in"
+}

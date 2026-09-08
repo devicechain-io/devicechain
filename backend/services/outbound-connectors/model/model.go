@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/datatypes"
@@ -82,10 +83,9 @@ type ConnectorVersion struct {
 	PublishedBy string `gorm:"size:256"`
 }
 
-// ConnectorCreateRequest is the data required to create or update a connector. Config
-// is the raw JSON config document (validated by the API layer). Secret is write-only:
-// a nil value preserves the stored secret on update (the caller cannot read it back to
-// resend it); a non-nil value replaces it, and an explicit empty string clears it.
+// ConnectorCreateRequest is the data required to create a connector. Config is the raw
+// JSON config document (validated by the API layer). Secret is write-only: nil or an
+// empty string means no credential.
 type ConnectorCreateRequest struct {
 	Token       string
 	Name        *string
@@ -93,6 +93,41 @@ type ConnectorCreateRequest struct {
 	Type        string
 	Config      string
 	Secret      *string
+}
+
+// ConnectorUpdateRequest is the three-state partial update of a connector's DRAFT: an
+// omitted field leaves the stored value alone, an explicit null clears it, and a value
+// sets it.
+//
+// 🔴 IT CARRIES NO TOKEN, AND THE RENAME IT USED TO CARRY DID NOT EVAPORATE. The
+// payload token on the create input MEANT the connector's new name — the credential is
+// keyed by the connector's immutable id, so a rename keeps it bound — which is why this
+// family could not be converted mechanically. The rename moved to renameConnector,
+// where `newToken` can mean only one thing.
+type ConnectorUpdateRequest struct {
+	Name        dcgraphql.OptionalString
+	Description dcgraphql.OptionalString
+	// Type is the connector kind. Its column is NOT NULL and its zero value is not a
+	// member of the vocabulary, so an explicit null is REFUSED rather than folded to
+	// "" — see ApplyToRequired.
+	Type dcgraphql.OptionalString
+	// Config is the opaque per-type connection document. NOT NULL for the same reason:
+	// there is no reading of "clear this connector's configuration" that leaves a
+	// dispatchable row behind.
+	Config dcgraphql.OptionalString
+	// Secret is the write-only outbound credential (never a column — see
+	// ConnectorSecretRef).
+	//
+	// 🔴 ITS THREE STATES ARE THE POINT OF CONVERTING IT, AND THE NULL IS NEW. The old
+	// shape was a *string meaning preserve-on-nil, replace-on-value, clear-on-EMPTY-
+	// STRING — three states smuggled through a pointer, with the clear spelled as a
+	// value. Under the partial-update semantic the clear is what an explicit null
+	// means everywhere else on the platform, so that is what it means here: omitted
+	// PRESERVES the stored credential (the caller cannot read it back to resend it), a
+	// value ROTATES it, and null DELETES it. An empty string keeps its old meaning and
+	// clears too, because a form's "" and a null are the same intent and refusing one
+	// of them would only surprise a caller.
+	Secret dcgraphql.OptionalString
 }
 
 // ConnectorSearchCriteria is the filter/pagination for a connector search.

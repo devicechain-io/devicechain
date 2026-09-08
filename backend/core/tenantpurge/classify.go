@@ -90,6 +90,29 @@ const (
 	// somewhere else and accounted for there. See ExternalStores, which is what lets the
 	// coordinator's side of the tree assert every named store actually exists.
 	ClassExternal
+
+	// ClassRedacted names a table whose ROWS are kept and whose IDENTIFIERS are
+	// destroyed — the only class in which a purge writes to a table rather than
+	// emptying it.
+	//
+	// It exists for one table today, and for a conflict the other four classes each
+	// resolve by giving up half of it. The audit journal is the evidence that a tenant
+	// was deleted; sweeping it destroys the record of the erasure, and keeping it whole
+	// retains the tenant's people by name past the erasure that record certifies.
+	// ClassDirect takes the first, ClassExempt and ClassExternal both claim a falsehood
+	// (the table holds this tenant's personal data and nothing else erases it), and
+	// ClassDeferred would block every purge on the instance over data that IS being
+	// dealt with.
+	//
+	// 🔴 UNLIKE EVERY OTHER CLASS, THIS ONE IS ASSIGNED BEFORE THE CATALOG SPEAKS, and
+	// that inversion is deliberate rather than convenient. Exemptions are applied last
+	// precisely so a stale entry can never stop a tenant-bearing table being swept —
+	// but audit_events HAS a tenant column, so the catalog would call it direct and an
+	// exemption for it would be inert. A retention decision about a tenant-bearing
+	// table is exactly the case the last-wins rule cannot express, so it is stated in
+	// the one place it can be: ahead of the column check, naming the columns it
+	// destroys.
+	ClassRedacted
 )
 
 func (c Class) String() string {
@@ -104,6 +127,8 @@ func (c Class) String() string {
 		return "deferred"
 	case ClassExternal:
 		return "external"
+	case ClassRedacted:
+		return "redacted"
 	default:
 		return "unclassified"
 	}
@@ -130,7 +155,10 @@ type Entry struct {
 	Table Table
 	Class Class
 
-	// Column is the tenant column, for ClassDirect only.
+	// Column is the tenant column, for ClassDirect and ClassRedacted. Both select
+	// their rows the same way and differ only in what the statement built around the
+	// predicate does with them — which is also why a redacted table without one is
+	// refused at classification rather than at sweep time.
 	Column string
 
 	// Links are the foreign keys through which a ClassTransitive table reaches
@@ -139,8 +167,15 @@ type Entry struct {
 	// of what its other columns point at.
 	Links []Link
 
-	// Reason is why a table is exempt, deferred or external; empty otherwise.
+	// Reason is why a table is exempt, deferred, external or redacted; empty otherwise.
 	Reason string
+
+	// Redact names the columns a ClassRedacted table has emptied for the purged
+	// tenant; empty otherwise. It is carried on the entry rather than looked up again
+	// at sweep time so the plan is a complete description of what the purge will do —
+	// a reader of the coverage report can see WHICH identifiers are destroyed, and a
+	// residual scan can check exactly those columns without a second source of truth.
+	Redact []string
 
 	// Store names the purge store that erases a ClassExternal table; empty otherwise.
 	// It is carried out of the registry so a reader of the plan — the coverage gate's
@@ -491,6 +526,28 @@ func classify(cols []column, fks []constraint, extra admitted) (*Plan, error) {
 	entries := make(map[Table]*Entry, len(tables))
 	for _, t := range order {
 		e := &Entry{Table: t, Origin: extra[t]}
+		// 🔴 A REDACTION IS DECIDED AHEAD OF THE COLUMN CHECK, and it is the only rule
+		// that runs before the catalog. See ClassRedacted for why the last-wins ordering
+		// that governs every exemption cannot express this one.
+		if rule, ok := redactionFor(t); ok {
+			if cols := tables[t]; sweepableKind(kindOf(cols)) {
+				if col, ok := directColumn(cols); ok {
+					e.Class = ClassRedacted
+					e.Reason = rule.Reason
+					e.Redact = rule.Columns
+					e.Column = col
+					entries[t] = e
+					continue
+				}
+			}
+			// 🔴 A REDACTION WITHOUT A TENANT COLUMN FALLS THROUGH TO UNCLASSIFIED, which
+			// fails the purge before a row is touched — and fails it in CI, where the
+			// coverage gate runs, rather than inside the sweep transaction of a real
+			// customer's deletion. This rule runs ahead of the catalog, so without the
+			// fall-through a matview or a foreign table that happened to carry the
+			// registered name would be classified redacted with nothing to select on,
+			// pass every gate, and then error on every pass forever.
+		}
 		// A tenant column only makes a relation direct if a DELETE can act on it.
 		// A matview or foreign table with a tenant column needs an explicit answer,
 		// not a statement that fails or reaches into another system.

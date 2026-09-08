@@ -605,26 +605,35 @@ export function DetectionRuleForm({
       // reverse round-trip). Comparison is logical (parsed, order-independent), because the
       // form re-emits its own key order, not the canvas's canonical bytes. (Fable 9b-1 MED.)
       const keepGraph = editing && entity.authoringGraph != null && sameLogicalRule(definition, entity.definition);
-      const request: Required<DetectionRuleCreateRequest> = {
-        token: editing ? entity.token : token.trim(),
+      const edited = {
         deviceProfileToken: profileToken,
         name: name.trim() || null,
         description: description.trim() || null,
         definition,
+        // 🔴 THE NULLS HERE ARE DELIBERATE CLEARS, NOT OMISSIONS, and under the partial
+        // update that distinction is now expressible instead of accidental. An explicit
+        // null DROPS the stale canvas sidecar and UN-SCOPES the rule, which is exactly
+        // what this form means in both cases; leaving the field out would keep them.
         authoringGraph: keepGraph ? entity!.authoringGraph : null,
         enabled,
-        metadata: entity?.metadata ?? null,
         // ADR-062 S4 group scope — sent together or not at all; cleared when un-scoped.
         entityGroupToken: scoped && scopeGroupToken ? scopeGroupToken : null,
         entityGroupVersion:
           scoped && scopeGroupToken && scopeGroupVersion != null ? scopeGroupVersion : null,
       };
       if (editing) {
-        await updateDetectionRule(entity.token, request);
-        onDone(t('ruleUpdatedToast', { token: request.token }));
+        // metadata is not named: this form does not edit it, and the update leaves what
+        // it does not name alone.
+        await updateDetectionRule(entity.token, edited);
+        onDone(t('ruleUpdatedToast', { token: entity.token }));
       } else {
-        await createDetectionRule(request);
-        onDone(t('ruleCreatedToast', { token: request.token }));
+        const created: Required<DetectionRuleCreateRequest> = {
+          token: token.trim(),
+          ...edited,
+          metadata: null,
+        };
+        await createDetectionRule(created);
+        onDone(t('ruleCreatedToast', { token: created.token }));
       }
     } catch (err) {
       setFormError(errMessage(err));

@@ -16,6 +16,7 @@
 #   Rendered documentation   docs/docs, docs/i18n, docs/blog, docs/src  -> NO ADR refs
 #   Draft feature docs       docs-drafts/**/*.md, body only            -> NO ADR refs
 #   npm registry metadata    frontend/packages/*/package.json          -> NO ADR refs
+#   npm package readme       frontend/packages/*/README.md, scanned whole -> NO ADR refs
 #   Helm listing prose       deploy/helm/*/{Chart.yaml,README.md}      -> NO ADR refs
 #   NuGet registry metadata  sdks/**/*.csproj <Description>/<PackageTags> -> NO ADR refs
 #   NuGet package readme     the file a csproj names as its <PackageReadmeFile>,
@@ -88,17 +89,52 @@ scan_drafts() {
   done < <(find "$base" -type f -name '*.md' -print0)
 }
 
-# The other published surface, and a much easier one to miss: the `description`
-# of an npm package renders on npmjs.com. frontend/packages/* are slated for
-# publication to the public registry, so their descriptions are read by people
-# who have never seen this repository, let alone the private one.
-# Takes the packages root so the self-test can point it somewhere harmless
-# rather than at the real tree.
-scan_package_descriptions() {
+# The other published surface, and a much easier one to miss: an npm package's
+# metadata renders on npmjs.com. frontend/packages/* publish to the public
+# registry, so this is read by people who have never seen this repository, let
+# alone the private one.
+#
+# 🔴 SCANNED WHOLE, and that is a DELIBERATE WIDENING from the earlier rule, which
+# matched `"(description|keywords)".*ADR-` on a single line. That rule had a hole
+# with a shape worth remembering: a `keywords` array written multi-line — which is
+# how npm itself writes one — puts each keyword on its OWN line, with no
+# `"keywords"` token anywhere near it, so every entry was invisible to the check.
+# Patching the pattern to follow an array would only move the boundary again.
+#
+# Scanning the whole file is safe here in a way it is NOT for a csproj, and the
+# difference is the reason the two rules disagree: package.json is strict JSON and
+# has no comment syntax, so there is no maintainer-commentary region to protect.
+# Every string in the file is data, and npmjs.com renders more of it than the two
+# fields the old pattern knew about.
+#
+# Takes the packages root so the self-test can point it somewhere harmless rather
+# than at the real tree.
+scan_npm_packages() {
+  local base="${1:-frontend/packages}" f readme
+  for f in "$base"/*/package.json; do
+    [ -f "$f" ] || continue
+    grep -nE "$PATTERN" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+    # And the readme beside it. npmjs.com renders README.md as the package PAGE
+    # BODY — larger than the description, and the first thing a stranger reads.
+    # Same surface, same rule, same whole-file treatment as a NuGet package readme:
+    # HTML comments included, because "which parts of my readme does the reader
+    # see" is not a question worth being clever about.
+    readme="$(dirname "$f")/README.md"
+    [ -f "$readme" ] || continue   # reported by check_npm_readmes_exist, not here
+    grep -nE "$PATTERN" "$readme" 2>/dev/null | sed "s|^|${readme}:|" || true
+  done
+}
+
+# The counterweight, exactly as for <PackageReadmeFile>: a package with no
+# README.md scans clean, because there is nothing to scan. And nothing else reports
+# it either — `npm pack` on a package whose `files` names a README that is not there
+# simply packs one file fewer and exits 0, with no error and no warning (measured).
+check_npm_readmes_exist() {
   local base="${1:-frontend/packages}" f
   for f in "$base"/*/package.json; do
     [ -f "$f" ] || continue
-    grep -nE "\"(description|keywords)\".*${PATTERN}" "$f" 2>/dev/null | sed "s|^|${f}:|" || true
+    [ -f "$(dirname "$f")/README.md" ] ||
+      echo "${f}: no README.md beside it — npmjs.com would render an empty package page"
   done
 }
 
@@ -212,19 +248,84 @@ if [ "${1:-}" = "--self-test" ]; then
   echo "  ok: clean content produces no match"
 
   mkdir -p "$tmp/packages/example"
+  clean_npm_package() {
+    printf '{ "description": "A thing." }\n' > "$tmp/packages/example/package.json"
+    printf '# example\n\nA thing.\n' > "$tmp/packages/example/README.md"
+  }
+
+  clean_npm_package
+  if [ -n "$(scan_npm_packages "$tmp/packages")" ]; then
+    echo "  FAIL: the guard reports a match in a clean npm package" >&2
+    exit 1
+  fi
+  echo "  ok: a clean npm package produces no match"
+
+  clean_npm_package
   printf '{ "description": "A thing (ADR-039)." }\n' > "$tmp/packages/example/package.json"
-  if [ -z "$(scan_package_descriptions "$tmp/packages")" ]; then
+  if [ -z "$(scan_npm_packages "$tmp/packages")" ]; then
     echo "  FAIL: the guard did not see a planted ADR reference in an npm description" >&2
     exit 1
   fi
   echo "  ok: planted npm description detected"
 
-  printf '{ "description": "A thing." }\n' > "$tmp/packages/example/package.json"
-  if [ -n "$(scan_package_descriptions "$tmp/packages")" ]; then
-    echo "  FAIL: the guard reports a match in a clean npm description" >&2
+  # 🔴 THE REGRESSION CASE. The rule this replaced matched
+  # `"(description|keywords)".*ADR-` on ONE LINE, so a keywords array written the
+  # way npm itself writes one — each entry on its own line, the `"keywords"` token
+  # nowhere near them — was invisible to it. This case is the reason the scan reads
+  # the whole file, and it fails against the old pattern.
+  clean_npm_package
+  printf '{\n  "description": "A thing.",\n  "keywords": [\n    "iot",\n    "ADR-039"\n  ]\n}\n' \
+    > "$tmp/packages/example/package.json"
+  planted="$(scan_npm_packages "$tmp/packages")"
+  if [ -z "$planted" ]; then
+    echo "  FAIL: the guard did not see an ADR reference in a MULTI-LINE keywords array —" >&2
+    echo "        that is npm's own formatting, and it is the hole this scan exists to close" >&2
     exit 1
   fi
-  echo "  ok: clean npm description produces no match"
+  case "$planted" in
+    *:5:*) echo "  ok: planted multi-line keyword detected, at its real line number" ;;
+    *)     echo "  FAIL: multi-line keyword reported at the wrong line: $planted" >&2; exit 1 ;;
+  esac
+
+  # The readme is the package PAGE BODY, so it gets the same two directions plus the
+  # comment case, for the same reason the NuGet one does.
+  clean_npm_package
+  printf '# example\n\nA thing, secured at the broker (ADR-025).\n' > "$tmp/packages/example/README.md"
+  if [ -z "$(scan_npm_packages "$tmp/packages")" ]; then
+    echo "  FAIL: the guard did not scan an npm package README — that file IS the" >&2
+    echo "        package page on npmjs.com" >&2
+    exit 1
+  fi
+  echo "  ok: planted npm README reference detected"
+
+  clean_npm_package
+  printf -- '<!-- Internal note (ADR-025). -->\n\n# example\n' > "$tmp/packages/example/README.md"
+  if [ -z "$(scan_npm_packages "$tmp/packages")" ]; then
+    echo "  FAIL: the guard skipped an HTML comment in an npm README — a readme is" >&2
+    echo "        scanned whole, deliberately" >&2
+    exit 1
+  fi
+  echo "  ok: an npm README is scanned whole, comments included"
+
+  # And the pair that keeps "clean" and "not there" apart, as for <PackageReadmeFile>.
+  clean_npm_package
+  if [ -n "$(check_npm_readmes_exist "$tmp/packages")" ]; then
+    echo "  FAIL: the existence check fired on a README that is present" >&2
+    exit 1
+  fi
+  rm -f "$tmp/packages/example/README.md"
+  if [ -n "$(scan_npm_packages "$tmp/packages")" ]; then
+    echo "  FAIL: the ADR scan reported a hit for a README that does not exist" >&2
+    exit 1
+  fi
+  if [ -z "$(check_npm_readmes_exist "$tmp/packages")" ]; then
+    echo "  FAIL: a package with no README.md was not reported. The ADR scan over it is" >&2
+    echo "        empty, which is indistinguishable from clean — this is the check that" >&2
+    echo "        keeps the two apart" >&2
+    exit 1
+  fi
+  echo "  ok: a package with no README.md is reported"
+  clean_npm_package
 
   # The draft exemption is the one rule here that makes the guard WEAKER, so it
   # gets both controls: the body must still be caught, and the frontmatter must
@@ -411,8 +512,27 @@ EOF
   exit 1
 fi
 
+missing_readme="$(check_npm_readmes_exist)"
+if [ -n "$missing_readme" ]; then
+  cat >&2 <<EOF
+
+==> A published npm package has no README
+
+$missing_readme
+
+npmjs.com renders README.md as the package page. npm does not error on a missing
+one — it publishes happily and shows an empty page — and the ADR sweep over that
+file reads as clean, because there is nothing to read.
+
+Add a README.md beside the package.json, and keep it in the package's \`files\`
+allowlist so it is actually packed.
+
+EOF
+  exit 1
+fi
+
 hits="$(scan "${TARGETS[@]}")"
-for extra in "$(scan_package_descriptions)" "$(scan_drafts)" "$(scan_chart_listing)" "$(scan_nuget_metadata)"; do
+for extra in "$(scan_npm_packages)" "$(scan_drafts)" "$(scan_chart_listing)" "$(scan_nuget_metadata)"; do
   [ -n "$extra" ] || continue
   hits="${hits:+$hits
 }${extra}"
@@ -435,8 +555,9 @@ a public page that explains it:
 
 ADR citations remain correct in source comments and maintainer-facing files.
 This guard covers only the surfaces a stranger is SERVED by another host:
-${TARGETS[*]}, docs-drafts (body), frontend/packages/*/package.json
-(description/keywords), deploy/helm/*/{Chart.yaml,README.md} — the prose
+${TARGETS[*]}, docs-drafts (body), the whole of
+frontend/packages/*/{package.json,README.md} — the metadata and page body
+npmjs.com renders — deploy/helm/*/{Chart.yaml,README.md} — the prose
 Artifact Hub renders as a chart's listing — and sdks/**/*.csproj
 <Description>/<PackageTags> plus the whole of any file a csproj names as its
 <PackageReadmeFile>, all of which nuget.org renders the same way. Chart

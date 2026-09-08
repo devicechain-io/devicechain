@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -30,58 +31,6 @@ func validateGeoFenceToken(token string) error {
 		return fmt.Errorf("invalid geofence token %q: %w", token, err)
 	}
 	return nil
-}
-
-// errGeoFenceTokenImmutable refuses an update that would move a fence to a different
-// token. It is the request-shape half of `updateGeoFence(token:, request:)`, which
-// carries the token twice: once to say which fence, and once inside a request input
-// shared with the create path.
-//
-// 🔴 A RENAME HAS NO SAFE OUTCOME, WHICH IS WHY IT IS REFUSED RATHER THAN CASCADED. A
-// rule names a fence by its token, inside compiled CEL text that this service cannot
-// see and event-processing cannot be asked to rewrite. So a rename leaves every
-// `geo.inFence("old")` naming nothing: containment answers ErrUnknownFence, which the
-// runtime turns into a SKIPPED sample rather than a `false` — deliberately, so the
-// breakage lands on the eval-error counter instead of silently reading as "outside".
-// That is the loudest a downstream service can be about it, and it is still only
-// visible to someone already looking at the counter. The rename itself, meanwhile,
-// succeeds with a 200 and mints a fence-set version that freezes the NEW token into the
-// snapshot, so nothing downstream can even reconstruct what the rules used to name.
-//
-// The other two surfaces already assume immutability — the console renders the token as
-// a disabled input when editing, and the concept docs say the token is fixed once
-// created — so this closes a gap between the API and everything written about it, and
-// matches how UpdateDeviceProfile refuses the same move.
-//
-// 🔴 THE RECIPE IS CREATE-THEN-DELETE, IN THAT ORDER, AND THE ORDER IS NOT STYLE. A caller
-// who genuinely wants a different token creates the second fence FIRST and deletes the old
-// one after, which is also the operation that makes them confront the rules naming the old
-// token. Doing it the other way round is a data-loss trap for exactly the tenants this
-// service grandfathers: the whole-set position budget refuses growth relative to what is
-// STORED, so deleting first lowers the stored sum and the recreate is then refused on its
-// way back up. The fence is gone and cannot be put back. Create-then-delete never crosses
-// that line — the create is the growth, and it is checked while the old fence still exists.
-//
-// It does mean the create-then-delete recipe needs one spare fence slot under the tenant's
-// geoFenceCeiling for the moment both exist. A tenant exactly at its fence ceiling has to
-// have the ceiling raised to rename anything, which is a refusal with a route out rather
-// than an operation that destroys a fence.
-//
-// 🔴 AND THE RECIPE DOES NOT WORK AT ALL FOR A FENCE GRANDFATHERED OVER THE PER-FENCE
-// CEILING, IN EITHER ORDER. A create has no stored baseline to be measured against, so
-// CreateGeoFence checks the incoming count against geoFencePositionCeiling unconditionally —
-// the growth comparison that lets an oversized fence be EDITED has nothing to compare to when
-// the fence is new. So a fence larger than its tenant's current ceiling can be edited and
-// deleted but never re-created under any token. The failure is benign in order (the create
-// refuses before anything is deleted, so nothing is lost), but the recipe above is narrower
-// than it reads: renaming such a fence needs the ceiling raised, not a different order.
-func errGeoFenceTokenImmutable(token string, requested string) error {
-	if requested == token {
-		return nil
-	}
-	return fmt.Errorf("cannot rename geofence %q to %q: a fence's token is immutable, "+
-		"because rules name fences by token and a rename would leave them naming nothing",
-		token, requested)
 }
 
 // geoFenceCapsAttempt is the result of TRYING to resolve the tenant's geofence caps, held
@@ -306,16 +255,18 @@ func (api *Api) CreateGeoFence(ctx context.Context, request *GeoFenceCreateReque
 // per-tenant retention plus a tenant-wide cache eviction, not one row. See
 // mintGeoFenceSetVersion.
 //
-// A fence's TOKEN is immutable, and this is where that is enforced — see
-// errGeoFenceTokenImmutable.
+// A fence's TOKEN is immutable, and under the partial-update input that is enforced by
+// UNREPRESENTABILITY rather than by a guard: GeoFenceUpdateRequest has no token field,
+// so there is no rename for a check to refuse. That is a stronger property than the
+// refusal it replaces, which could only fire once a caller had already written the
+// request.
+//
+// This is a PARTIAL update: a field the caller did not name keeps its stored value, an
+// explicit null clears a nullable one, and `geometry` — a NOT NULL column — refuses a
+// null. Omitting the geometry therefore means "leave the shape alone", which is what
+// makes a rename or a metadata edit provably not growth.
 func (api *Api) UpdateGeoFence(ctx context.Context, token string,
-	request *GeoFenceCreateRequest) (*GeoFence, error) {
-	if err := validateGeoFenceToken(request.Token); err != nil {
-		return nil, err
-	}
-	if err := errGeoFenceTokenImmutable(token, request.Token); err != nil {
-		return nil, err
-	}
+	request *GeoFenceUpdateRequest) (*GeoFence, error) {
 	// 🔴 THE ROW IS LOADED BEFORE THE GEOMETRY IS CHECKED AGAINST THE TENANT'S CEILING,
 	// AND THAT ORDER IS THE WHOLE OF THE GRANDFATHERING RULE. What the ceiling refuses is
 	// GROWTH, not size: a tenant whose tier was lowered — or who is over the default
@@ -332,9 +283,24 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	canonicalGeometry, incoming, err := validateGeoFenceGeometry(request.Geometry)
+	// 🔴 `incoming` IS ONLY MEANINGFUL WHEN THE CALLER REPLACED THE GEOMETRY, and
+	// replaceGeometry is what says so rather than letting 0 stand in for "unchanged". 0
+	// is a real position count for a document this package refuses to write, and the
+	// ceiling check below reads `incoming > stored` — which would compare the right way
+	// for an unreplaced fence only by luck of the polarity, not because it meant
+	// anything.
+	replaceGeometry := request.Geometry.Set
+	geometry, err := request.Geometry.ApplyToRequired("geometry", string(matches[0].Geometry))
 	if err != nil {
 		return nil, err
+	}
+	canonicalGeometry := ""
+	incoming := 0
+	if replaceGeometry {
+		canonicalGeometry, incoming, err = validateGeoFenceGeometry(geometry)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 🔴 AN UPDATE RESOLVES UNCONDITIONALLY, UNLIKE A DELETE, AND THE ASYMMETRY IS REAL
@@ -342,8 +308,17 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	// passes geoFenceCapsNotNeeded() and never touches user-management. An update can: even
 	// one that makes a fence SMALLER can raise the tenant's whole-set total, because that
 	// total is over DISTINCT geometry and editing one of several identically-drawn fences
-	// un-deduplicates it (see the budget check in mintGeoFenceSetVersion). So there is no
-	// test available here that proves this edit needs no cap.
+	// un-deduplicates it (see the budget check in mintGeoFenceSetVersion).
+	//
+	// 🔴 THE PARTIAL UPDATE ADDS A CASE WHERE A TEST *WOULD* BE AVAILABLE, AND IT IS
+	// DELIBERATELY NOT TAKEN. An update that does not name a geometry cannot move the
+	// distinct-geometry set at all, so it provably needs no cap — a name or metadata edit
+	// could skip this resolve entirely and stop paying the outage stall described below.
+	// It is left in because the saving is an optimization and the reasoning that justifies
+	// it is the same reasoning that, done slightly wrong, lets a growth through unmetered.
+	// Resolving is never incorrect, only slower; skipping is correct only while the
+	// argument above holds. Stated rather than done, so the next reader can decide with
+	// the argument in front of them instead of rediscovering it.
 	//
 	// 🔴 WHAT THAT COSTS, STATED — AND IT IS WORSE THAN "THE FIRST ONE STALLS". During a
 	// user-management outage an update blocks for the fetch timeout and then SUCCEEDS if it
@@ -355,14 +330,16 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	// blocking. An operator sizing an outage's blast radius needs the repeating version.
 	capsAttempt := api.geoFenceCaps(ctx)
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name)
-	updated.Description = rdb.NullStrOf(request.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
+	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-	updated.Geometry = datatypes.JSON(canonicalGeometry)
+	if replaceGeometry {
+		updated.Geometry = datatypes.JSON(canonicalGeometry)
+	}
 
 	var minted *GeoFenceSetVersion
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -424,7 +401,7 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 		// increase the count is always allowed, so REPLACING the corrupt document with a
 		// smaller one succeeds. Deleting is a route out too but a worse one to advertise — for
 		// a tenant over its budget, delete-then-recreate forfeits the headroom and the fence
-		// cannot be put back (see errGeoFenceTokenImmutable).
+		// cannot be put back (see GeoFenceUpdateRequest).
 		stored := 0
 		if n, err := geoFencePositionsIn([]byte(locked[0].Geometry)); err == nil {
 			stored = n
@@ -432,7 +409,11 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 			log.Warn().Err(err).Str("token", token).
 				Msg("Unable to count the positions in a stored geofence geometry; metering this edit as if the fence were new. An edit that does not increase the position count is still accepted, so replacing it with a smaller geometry will succeed.")
 		}
-		if incoming > stored {
+		// replaceGeometry is stated rather than left to `incoming > stored`. An update that
+		// did not name a geometry has no incoming count at all, and reading its sentinel 0
+		// as a shrink gives the right answer for the wrong reason — the next edit to this
+		// comparison would silently start metering unchanged fences against the ceiling.
+		if replaceGeometry && incoming > stored {
 			caps, err := capsAttempt.require("this geofence's position count")
 			if err != nil {
 				return err
@@ -1202,7 +1183,7 @@ func (api *Api) mintGeoFenceSetVersion(tx *gorm.DB, now time.Time,
 	// forfeited by deleting, which is what "cannot grow" means when the starting point is
 	// already too high. A high-water mark would remove the ratchet and would never decay,
 	// which is worse. It is why the token-rename recipe is create-then-delete rather than the
-	// reverse; see errGeoFenceTokenImmutable.
+	// reverse; see GeoFenceUpdateRequest.
 	if knowOldSum && knowNewSum && newSum > oldSum {
 		caps, err := capsAttempt.require("the tenant's total geofence position count")
 		if err != nil {

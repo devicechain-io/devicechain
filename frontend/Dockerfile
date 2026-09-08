@@ -46,14 +46,17 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/console/package.json apps/console/
 COPY apps/dashboard/package.json apps/dashboard/
+COPY packages/brand/package.json packages/brand/
 COPY packages/client/package.json packages/client/
 COPY packages/dashboards/package.json packages/dashboards/
 COPY packages/widgets/package.json packages/widgets/
 RUN npm ci
 
 COPY . .
-# Root `build` runs every workspace's build (`tsc --noEmit && vite build`): the
-# console (served at /) and the dashboard app (served at /dash, base '/dash/').
+# Root `build` builds the two apps (`tsc --noEmit && vite build`): the console
+# (served at /) and the dashboard app (served at /dash, base '/dash/'). Each app's
+# `prebuild` compiles the publishable packages first — the apps consume their
+# `dist`, not their sources — so this one command still covers the whole tree.
 # The generated GraphQL client under apps/console/src/gql is committed, so no
 # codegen step is needed here. Output lands at apps/<app>/dist.
 RUN npm run build

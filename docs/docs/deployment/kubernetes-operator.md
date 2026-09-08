@@ -24,19 +24,36 @@ You choose which services to run with **either** a named profile **or** an expli
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
+Any profile that runs an area owning a secret store — which the `default` profile does,
+through `notification-management` — requires the instance's **secret-store root key**, and
+the chart fails the render without it rather than letting the area crash-loop. Generate one
+value (`openssl rand -base64 32`), keep it, and pass the **same** value on every install and
+upgrade: a new key makes secrets already stored under the old one unreadable. `dcctl
+bootstrap` mints and escrows this key for you; supply it yourself only when driving the
+chart directly.
+
 ```bash
-helm install dc deploy/helm/devicechain --set instance.id=devicechain
-# run a smaller set of services:
+DC_ROOT_KEY="$(openssl rand -base64 32)"   # generate ONCE, then keep it
+
+helm install dc deploy/helm/devicechain \
+  --set instance.id=devicechain \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY"
+
+# Run a smaller set of services. `telemetry` runs no area with a secret store,
+# so it needs no root key.
 helm install dc deploy/helm/devicechain --set profile=telemetry
 ```
 
 To install a published release, pin the image tag to a version — released images are public
-on `ghcr.io/devicechain-io`, so nothing has to be built locally:
+on `ghcr.io/devicechain-io`, so nothing has to be built locally. Substitute a real released
+tag for `<version>`; the
+[releases page](https://github.com/devicechain-io/devicechain/releases) lists them.
 
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY" \
+  --set image.tag=<version>
 ```
 
 See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and the

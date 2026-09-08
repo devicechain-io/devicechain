@@ -10,6 +10,7 @@
 #   hack/migration-diff.sh snapshot   # capture golden schemas from the current chains
 #   hack/migration-diff.sh verify     # assert the chains still reproduce the goldens
 #   hack/migration-diff.sh coverage   # assert the tenant purge accounts for every table
+#   hack/migration-diff.sh replay     # assert every migration is individually re-runnable
 #
 # `verify` is the guard: it fails if a migration changes a schema without the golden
 # being refreshed, and — at the GA migration-squash — it proves a single baseline
@@ -34,12 +35,31 @@
 # goldens in a second pass (MDIFF_LAUNCH=operand) — that second pass is what pins the
 # claim that both majors produce identical schema. Override with MDIFF_IMAGE to check
 # another one.
+#
+# 🔴 A GOLDEN AND THE DIFFER THAT CAPTURED IT ARE ONE ARTIFACT. RE-SNAPSHOT AGAINST THE
+# TREE YOU WILL COMMIT, NOT THE ONE YOU STARTED FROM.
+#
+# The pinned image above is only half of what a golden depends on: the other half is
+# backend/tools/migrationdiff itself — its pg_dump flags and its normalizeDump. A
+# sibling PR that changes either produces a differently-shaped dump from the same
+# database, so a golden captured before you rebased onto it can be wrong under the
+# differ that CI will actually run, and the failure arrives as a schema diff that
+# looks like your migration's fault.
+#
+# This is not hypothetical: #893 changed the differ's dump flags and normalization
+# while #894 was re-snapshotting for a new table. The golden had to be captured
+# twice — once, then again after the rebase — and only the second capture was
+# checked by the instrument CI uses.
+#
+# So: rebase FIRST, snapshot SECOND, and if main moves under you again, re-run
+# `verify` before pushing. Verify is cheap and it is the only thing that can tell
+# you the artifact and the instrument still agree.
 set -euo pipefail
 
 MODE="${1:-verify}"
 case "$MODE" in
-  snapshot | verify | coverage) ;;
-  *) echo "usage: $0 <snapshot|verify|coverage>" >&2; exit 2 ;;
+  snapshot | verify | coverage | replay) ;;
+  *) echo "usage: $0 <snapshot|verify|coverage|replay>" >&2; exit 2 ;;
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -151,6 +171,25 @@ if [ "$MODE" = "verify" ]; then
   echo "==> Running migrationdiff (mode=coverage)"
   go run . \
     -mode coverage \
+    -host localhost -port "$HOST_PORT" \
+    -user postgres -password "$PASSWORD" \
+    -db "$DB"
+
+  # The REPLAY gate. `verify` compares pg_dump output, which is blind to this property by
+  # construction: gormigrate skips an ID it has already recorded, so running a chain twice
+  # is a no-op that produces an identical dump. Every migrations.go tells the next
+  # maintainer their migration must be individually re-runnable — this is the first thing
+  # that checks.
+  #
+  # It works in its own database (<db>_replay) because it repeatedly DROPs and rebuilds
+  # schemas, which would destroy the artefact `verify` above just finished asserting
+  # against the goldens. Nothing after this point reads that database today — the drill
+  # builds its own — so the separation is defensive: it is what keeps a check ADDED after
+  # this one from silently running against a rebuilt schema.
+  echo "==> Running migrationdiff (mode=replay)"
+  go run . \
+    -mode replay \
+    -container "$CONTAINER" \
     -host localhost -port "$HOST_PORT" \
     -user postgres -password "$PASSWORD" \
     -db "$DB"

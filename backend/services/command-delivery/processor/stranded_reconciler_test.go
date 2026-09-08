@@ -376,7 +376,7 @@ func TestConstructorWiresTheStrandedPass(t *testing.T) {
 	proc := NewCommandDeliveryProcessor(ms, nil, &recordingWriter{}, core.NewNoOpLifecycleCallbacks(),
 		api, nil, &scriptedReader{states: map[string]presence.State{
 			"dev-1": asserted(false, lwm2mSource),
-		}})
+		}}, nil)
 
 	proc.reconcileStranded(context.Background())
 

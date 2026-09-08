@@ -54,6 +54,7 @@ function setting(key: string, value: string, extra: Partial<Row> = {}): Row {
 const MASKS = 'entity.token_masks';
 const BASEMAP = 'basemap.default';
 const BRANDING = 'branding.default';
+const LOCALE = 'locale.default';
 
 async function renderWith(rows: Row[]) {
   listSettingsMock.mockResolvedValue(rows);
@@ -467,4 +468,116 @@ describe('what is validated is what would be sent', () => {
   //
   // The reachable branding equivalent is a non-hex colour, which is a text input
   // and is covered above.
+});
+
+// 🔴 locale.default is the only setting whose stored value is a BARE JSON STRING
+// rather than an object, so it exercises a codec path none of the other three do:
+// `onlyKnownKeys` never runs, and "is this the shape my editor models?" is a
+// typeof check. Both directions are pinned here — a string loads into the field, a
+// non-string falls back to raw JSON — because the failure mode of getting it wrong
+// is the full-replace field loss the registry exists to prevent.
+describe('locale default editor', () => {
+  const tagField = () => screen.getByLabelText(/language tag/i) as HTMLInputElement;
+
+  it('loads the stored tag into the field', async () => {
+    await renderWith([setting(LOCALE, '"es"')]);
+    expect(tagField().value).toBe('es');
+  });
+
+  it('saves the tag as a bare JSON string, not as an object', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'pt-BR' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledTimes(1));
+    expect(setSettingMock.mock.calls[0]).toEqual([LOCALE, '"pt-BR"']);
+  });
+
+  it('offers the shipped locales as one-click shortcuts', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.click(screen.getByRole('button', { name: /es\s*Español/i }));
+    expect(tagField().value).toBe('es');
+  });
+
+  it('blocks a value that is not a language tag, and says so', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'en_US' } });
+
+    expect(await screen.findByText(/is not a language tag/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+    expect(setSettingMock).not.toHaveBeenCalled();
+  });
+
+  // 🔴 AN EMPTY FIELD IS A CHOICE, NOT AN UNFINISHED FORM — it stores JSON `null`,
+  // meaning "no instance-wide default; each viewer's browser decides". This is the
+  // state the setting SHIPS in, and the first version of this editor could not express
+  // it at all: the field refused to be emptied and the shipped default was a concrete
+  // "en", which every unconfigured instance then applied over every viewer's browser
+  // language. The screen says what the empty state does, so it does not read as a form
+  // waiting to be filled.
+  it('saves an emptied field as null, and says what that means', async () => {
+    await renderWith([setting(LOCALE, '"es"')]);
+    fireEvent.change(tagField(), { target: { value: '' } });
+
+    expect(await screen.findByText(/no instance-wide default/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, 'null'));
+  });
+
+  // The other direction: a stored null loads AS the empty field rather than dropping to
+  // the raw editor, so the operator can see and change the state the setting ships in.
+  it('loads a stored null as the empty field rather than as raw JSON', async () => {
+    await renderWith([setting(LOCALE, 'null')]);
+
+    expect(tagField().value).toBe('');
+    expect(screen.queryByRole('textbox', { name: /raw json/i })).toBeNull();
+  });
+
+  // 🔴 The editor emits the CANONICAL form, because the server refuses anything else —
+  // it holds a validator and no normalizer, so whatever it accepts is stored verbatim,
+  // and a stored "  ES-mx " would make this setting read as dirty on load with Save
+  // enabled before anyone typed.
+  it('sends the canonical form of what was typed', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: '  ES-mx ' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, '"es-MX"'));
+  });
+
+  // 🔴 The counterweight to every block above: a well-formed tag with no catalog in
+  // this build must still SAVE. The server accepts it — the shipped set lives with
+  // the catalogs, not in the backend — so refusing it here would be stricter than
+  // the platform and would leave the operator no way through. It gets a warning, not
+  // an error.
+  it('warns about a tag this build ships no catalog for, but still allows the save', async () => {
+    await renderWith([setting(LOCALE, '"en"')]);
+    fireEvent.change(tagField(), { target: { value: 'fr' } });
+
+    expect(await screen.findByText(/no catalog for/i)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(setSettingMock).toHaveBeenCalledWith(LOCALE, '"fr"'));
+  });
+
+  // A value that is neither a string NOR null cannot be modelled by this editor, so it
+  // must fall back to raw JSON rather than load as blank and then be saved over — the
+  // full-replace field loss the registry exists to prevent. (`null` is excluded from
+  // this rule on purpose: it is a state this editor models, see above.)
+  it('falls back to the raw editor for an object-shaped value', async () => {
+    await renderWith([setting(LOCALE, '{"locale":"es"}')]);
+
+    expect(rawJson().value).toContain('locale');
+    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
+  });
+
+  it('falls back to the raw editor for a number', async () => {
+    await renderWith([setting(LOCALE, '5')]);
+
+    expect(rawJson().value).toContain('5');
+    expect(screen.queryByLabelText(/language tag/i)).toBeNull();
+  });
 });

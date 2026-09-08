@@ -35,14 +35,14 @@ func (r *SchemaResolver) CreateMetricDefinition(ctx context.Context, args struct
 // Update an existing metric definition.
 func (r *SchemaResolver) UpdateMetricDefinition(ctx context.Context, args struct {
 	Token   string
-	Request *model.MetricDefinitionCreateRequest
+	Request model.MetricDefinitionUpdateRequest
 }) (*MetricDefinitionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateMetricDefinition(ctx, args.Token, args.Request)
+	updated, err := api.UpdateMetricDefinition(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

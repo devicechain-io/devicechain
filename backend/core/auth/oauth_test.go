@@ -237,7 +237,7 @@ func TestParseScope(t *testing.T) {
 // showing that scope name still describes what it now grants.
 func TestScopeAllowancesAreExactlyThese(t *testing.T) {
 	want := map[string][]string{
-		"read-only": {"device:read", "event:read", "state:read", "command:read", "alarm:read"},
+		"read-only": {"device:read", "event:read", "state:read", "command:read", "alarm:read", "dashboard:read"},
 		"location":  {"location:read"},
 	}
 

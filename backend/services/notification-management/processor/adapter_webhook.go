@@ -116,5 +116,18 @@ func parseWebhookConfig(channel *model.NotificationChannel) (*webhookConfig, err
 	if cfg.Method != http.MethodPost {
 		return nil, fmt.Errorf("webhook channel %q method %q is not supported (POST only)", channel.Token, cfg.Method)
 	}
+	// authHeader had no validation anywhere until now — not here, not at channel-create.
+	// It is written to the wire AFTER httpsink's reserved-header drop loop, so an X-DC-*
+	// name reached the request having passed through no filter at all.
+	//
+	// 🔴 This is NOT an authoring-time check, and calling it one would be worse than not
+	// having it. parseWebhookConfig runs from Deliver and nowhere else; CreateNotificationChannel
+	// checks only that Config is a JSON object. So a bad authHeader is still accepted at
+	// save time and still surfaces as a delivery failure. What this buys is the failure
+	// arriving with a message that names the field, next to the URL and method checks that
+	// share the same limitation — not an earlier one.
+	if err := (httpsink.Auth{Header: cfg.AuthHeader, Scheme: cfg.AuthScheme}).Validate(); err != nil {
+		return nil, fmt.Errorf("webhook channel %q has an invalid auth header: %w", channel.Token, err)
+	}
 	return cfg, nil
 }

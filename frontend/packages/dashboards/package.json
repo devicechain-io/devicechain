@@ -1,26 +1,56 @@
 {
   "name": "@devicechain/dashboards",
-  "version": "0.0.1",
+  "version": "0.0.0-dev",
   "description": "DeviceChain dashboard runtime — the DashboardHub (telemetry subscription multiplexing over the client wire, plus the alarm, command and location channels) and the dashboard-definition, selector, slot, and binding-manifest types.",
+  "keywords": [
+    "devicechain",
+    "iot",
+    "dashboard",
+    "telemetry",
+    "graphql"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://devicechain.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicechain-io/devicechain.git",
+    "directory": "frontend/packages/dashboards"
+  },
+  "bugs": {
+    "url": "https://github.com/devicechain-io/devicechain/issues"
+  },
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "node ../../scripts/build-package.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@devicechain/client": "*",
     "@graphql-typed-document-node/core": "^3.2.0"
   },
   "peerDependencies": {
+    "@devicechain/client": "0.0.0-dev",
     "graphql": "^16.0.0 || ^17.0.0"
   },
   "devDependencies": {
+    "@devicechain/client": "0.0.0-dev",
     "graphql": "^17.0.2",
     "typescript": "~7.0.2",
     "vitest": "^4.1.11"

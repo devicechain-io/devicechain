@@ -90,8 +90,12 @@ export function MetricDefinitionForm({
     setFormError(null);
     setBusy(true);
     try {
-      const request: Required<MetricDefinitionCreateRequest> = {
-        token: editing ? entity.token : token.trim(),
+      // 🔴 THE EDIT NAMES ONLY THE FIELDS THIS FORM SHOWS. enum, descriptor and
+      // metadata used to be carried forward from the loaded entity because the update
+      // was a full replace and leaving one out deleted it; the update is partial now,
+      // so an unnamed field is left alone and re-sending a stale copy is the only way
+      // left to lose one.
+      const edited = {
         deviceProfileToken: profileToken,
         metricKey: metricKey.trim(),
         name: opt(name),
@@ -100,17 +104,21 @@ export function MetricDefinitionForm({
         unit: opt(unit),
         minValue: optNum(minValue),
         maxValue: optNum(maxValue),
-        // Carry forward fields this form doesn't edit (full-replace update).
-        enum: entity?.enum ?? null,
-        descriptor: entity?.descriptor ?? null,
-        metadata: entity?.metadata ?? null,
       };
       if (editing) {
-        await updateMetricDefinition(entity.token, request);
-        onDone(t('deviceProfiles:defMetricUpdatedToast', { key: request.metricKey }));
+        await updateMetricDefinition(entity.token, edited);
+        onDone(t('deviceProfiles:defMetricUpdatedToast', { key: edited.metricKey }));
       } else {
-        await createMetricDefinition(request);
-        onDone(t('deviceProfiles:defMetricCreatedToast', { key: request.metricKey }));
+        // A create has nothing to leave alone, so it names everything.
+        const created: Required<MetricDefinitionCreateRequest> = {
+          token: token.trim(),
+          ...edited,
+          enum: null,
+          descriptor: null,
+          metadata: null,
+        };
+        await createMetricDefinition(created);
+        onDone(t('deviceProfiles:defMetricCreatedToast', { key: created.metricKey }));
       }
     } catch (err) {
       setFormError(errMessage(err));
@@ -202,21 +210,26 @@ export function CommandDefinitionForm({
     setFormError(null);
     setBusy(true);
     try {
-      const request: Required<CommandDefinitionCreateRequest> = {
-        token: editing ? entity.token : token.trim(),
+      // The edit names only what this form shows; metadata is left alone rather than
+      // carried forward. See the metric form above for why that reversed.
+      const edited = {
         deviceProfileToken: profileToken,
         commandKey: commandKey.trim(),
         name: opt(name),
         description: opt(description),
         parameterSchema: opt(parameterSchema),
-        metadata: entity?.metadata ?? null,
       };
       if (editing) {
-        await updateCommandDefinition(entity.token, request);
-        onDone(t('deviceProfiles:defCommandUpdatedToast', { key: request.commandKey }));
+        await updateCommandDefinition(entity.token, edited);
+        onDone(t('deviceProfiles:defCommandUpdatedToast', { key: edited.commandKey }));
       } else {
-        await createCommandDefinition(request);
-        onDone(t('deviceProfiles:defCommandCreatedToast', { key: request.commandKey }));
+        const created: Required<CommandDefinitionCreateRequest> = {
+          token: token.trim(),
+          ...edited,
+          metadata: null,
+        };
+        await createCommandDefinition(created);
+        onDone(t('deviceProfiles:defCommandCreatedToast', { key: created.commandKey }));
       }
     } catch (err) {
       setFormError(errMessage(err));

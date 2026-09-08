@@ -6,17 +6,18 @@ title: Running the Detection Engine
 # Running the Detection Engine
 
 [Detection rules](../concepts/event-processing.md) are evaluated by a service that behaves
-differently from the rest of the platform: it holds live state in memory, it runs as a **single
-instance**, and it evaluates on **event time** rather than on the clock. This page is the operator's
-contract — what that buys, what it costs, and how to tell a healthy engine from a stuck one.
+differently from the rest of the platform: it holds live state in memory, it detects from a
+**single active instance**, and it evaluates on **event time** rather than on the clock. This page
+is the operator's contract — what that buys, what it costs, and how to tell a healthy engine from
+a stuck one.
 
 If you are looking for what a rule can express or how to author one, start at
 [Event Processing & Alarms](../concepts/event-processing.md) instead.
 
-## One instance, on purpose
+## One active engine, on purpose
 
-The detection engine runs as **exactly one replica**, and the chart ships it that way with a
-recreate-style rollout.
+Exactly one engine detects at a time. The chart ships a single replica with a recreate-style
+rollout, which is the simplest way to arrange that.
 
 This is not a scaling limitation waiting to be lifted casually. The engine holds every open window,
 every running timer and every raised-edge latch in memory, and commits them as a single checkpoint.
@@ -27,21 +28,42 @@ Three things protect that invariant, and it is worth knowing that they are not e
 
 1. **The rollout strategy** stops a deploy from overlapping the old and new instances. It covers
    deploys only.
-2. **The chart refuses to render** a configuration that asks for more than one replica alongside
-   that strategy.
+2. **A partition lease** decides which replica may act. A replica fetches, acknowledges,
+   checkpoints and publishes only while it holds the lease, and stops the moment it does not.
 3. **The engine itself refuses to commit** a checkpoint that is behind one already stored. If two
    engines do briefly run — an eviction, a node drain, or a manually deleted pod all schedule a
    replacement immediately — the one that fell behind stops rather than overwriting.
 
-:::warning A drain can briefly run two engines
-Only the rollout path is fully covered. An eviction or node drain has the replacement scheduled
-before the original has stopped, so for a few seconds two engines can consume the same stream. The
-checkpoint fence contains it — the loser halts — but it is the reason to prefer a deliberate rollout
-over draining the node the engine happens to be on.
+:::warning A drain can briefly run two pods
+Only the rollout path is fully covered by the strategy. An eviction or node drain has the
+replacement scheduled before the original has stopped. The lease and the checkpoint fence contain
+it — the pod that does not hold the lease stops consuming, and a lagging checkpoint is refused —
+but it is the reason to prefer a deliberate rollout over draining the node the engine happens to
+be on.
 :::
 
-Because there is one replica, there is no pod disruption budget. Draining its node stops detection
-until the pod is rescheduled.
+### Running a warm standby
+
+You may run more than one replica, and the extra replicas are **standbys, not writers**. Set both:
+
+```yaml
+functionalAreas:
+  event-processing:
+    replicas: 2
+    strategy: RollingUpdate
+```
+
+Raising `replicas` without also moving off the recreate strategy fails the render, because that
+strategy stops every pod before starting any — the standby would be down exactly when it is needed.
+
+A standby is ready and serves the API, but holds no lease: it consumes nothing, commits nothing, and
+takes the partition when the leader releases it or its lease expires. What that buys is the pod
+start and, on an eviction, the wait for a replacement to be scheduled. What it does **not** skip is
+the restart cost described in the next section — a standby holds no pre-loaded engine state, because
+loading it would mean reading a checkpoint the leader is still writing.
+
+With a single replica there is no pod disruption budget, and draining its node stops detection until
+the pod is rescheduled. A standby is the way to avoid that.
 
 ## What a restart costs
 
@@ -80,17 +102,36 @@ The telemetry path is at-least-once end to end, so plan for a repeat rather than
 When a downstream system is unavailable, the message is left unacknowledged and retried on a timer
 rather than hammered. After five delivery attempts, roughly four minutes apart in total:
 
-- an **outbound connector** request is **dead-lettered**, so it can be inspected or replayed;
-- a **detection** is **dropped with a loud error** — there is no dead-letter queue on that path. A
-  dropped *raise* will not re-appear until the condition clears and breaches again; a dropped
-  *resolve* leaves an alarm active that should have cleared.
+- an **outbound connector** request is **dead-lettered**, so it can be inspected;
+- a **detection** whose actions could not be dispatched is **dead-lettered too**, with a loud error.
+
+:::caution Dead-lettered is recorded, not retried
+Nothing re-runs a dead letter. The record exists so a failure is visible and diagnosable
+rather than silent — the consequences of the failure itself stand either way. A *raise*
+that was not dispatched will not re-appear until the condition clears and breaches again,
+and a *resolve* that was not dispatched leaves an alarm active that should have cleared.
+Treat a dead letter as something to investigate, not something that will drain on its own.
+:::
+
+Read them with `dcctl dead-letters list`, which authenticates as an operator identity:
+
+```bash
+dcctl dead-letters list --server <host> --email <you> --password <secret> \
+  --tenant acme --since 2026-09-04T00:00:00Z
+```
+
+They are also on the instance's admin GraphQL endpoint as `deadLetters`, gated on the same
+authority as the audit journal. Records are kept for 30 days by default — longer than the
+underlying message stream, which is the point of storing them — and the retention is
+configurable per deployment.
 
 The `ReactPoisonDropping` alert exists for exactly that case and should be treated as urgent.
 
 :::caution An action that fails takes its later siblings with it
 A rule's actions run in the order they are listed, and a failing action stops the rest. On each
 retry the actions *before* it run again, and the actions *after* it have still never run — so if the
-event is eventually dropped, those later actions are lost without ever having been attempted.
+event is eventually given up on, those later actions never happened at all. The dead letter records
+that the detection fired and its actions did not; it does not carry them out.
 
 **Order a rule's actions so the important one comes first.** If a rule both raises an alarm and calls
 a webhook, putting the alarm first means a flaky endpoint cannot cost you the alarm.
@@ -339,7 +380,9 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
-| `ReactPoisonDropping` | Actions are being dropped after exhausting their retries — alarms or commands are being lost. Treat as urgent. |
+| `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
+| `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker. |
+| `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
 | `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 

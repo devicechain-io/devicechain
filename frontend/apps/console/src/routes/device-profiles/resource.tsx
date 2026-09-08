@@ -36,7 +36,6 @@ import {
   getDeviceProfile,
   createDeviceProfile,
   updateDeviceProfile,
-  deviceProfilePreserved,
   deleteDeviceProfile,
   listMetricDefinitions,
   deleteMetricDefinition,
@@ -94,31 +93,30 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
     setFormError(null);
     setBusy(true);
     try {
-      // 🔴 `location` is why this starts from deviceProfilePreserved rather than
-      // listing fields. It is the profile's position declaration, no form on this
-      // page edits it, and the schema says in as many words that leaving it out of
-      // an update clears it — so a rename here used to silently un-declare position
-      // for every device built on the profile, and the only symptom would have been
-      // its map surfaces going quiet.
-      const request: Required<DeviceProfileCreateRequest> = editing
-        ? {
-            ...deviceProfilePreserved(entity),
-            name: name.trim() || null,
-            description: description.trim() || null,
-            category: category.trim() || null,
-          }
-        : {
-            token: token.trim(),
-            name: name.trim() || null,
-            description: description.trim() || null,
-            category: category.trim() || null,
-            metadata: null,
-            location: null,
-          };
       if (editing) {
-        await updateDeviceProfile(entity.token, request);
+        // 🔴 THIS NAMES ONLY THE FIELDS THIS FORM OWNS, and it can because the update
+        // is a partial one: an omitted field is left alone. It used to have to rebuild
+        // the WHOLE request from the loaded profile (deviceProfilePreserved), because
+        // omitting a field CLEARED it — and the field that mattered was `location`, the
+        // position declaration no form on this page edits. Editing a profile's name
+        // therefore un-declared position for every device built on it, and the only
+        // symptom was its map surfaces going quiet. `metadata` and `location` are
+        // absent here on purpose; that is now what "leave them alone" is spelled as.
+        await updateDeviceProfile(entity.token, {
+          name: name.trim() || null,
+          description: description.trim() || null,
+          category: category.trim() || null,
+        });
         onDone(t('deviceProfiles:profileUpdatedToast', { token: entity.token }));
       } else {
+        const request: Required<DeviceProfileCreateRequest> = {
+          token: token.trim(),
+          name: name.trim() || null,
+          description: description.trim() || null,
+          category: category.trim() || null,
+          metadata: null,
+          location: null,
+        };
         await createDeviceProfile(request);
         onDone(t('deviceProfiles:profileCreatedToast', { token: request.token }));
       }

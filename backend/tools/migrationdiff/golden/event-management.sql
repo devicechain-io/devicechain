@@ -6,6 +6,17 @@ ALTER TABLE ONLY "event-management".event_management_migrations
  ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, event_id, occurred_time);
+ALTER TABLE ONLY "event-management".purged_tenants
+ ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+CREATE FUNCTION analytics.reader_tenant() RETURNS text
+ LANGUAGE sql STABLE
+ AS $$
+ SELECT CASE
+ WHEN session_user::text NOT IN ('analytics_reader', 'analytics_location_reader')
+ AND session_user::text LIKE 'analytics=_%' ESCAPE '='
+ THEN substring(session_user::text from 11)
+ END
+ $$;
 CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management".alert_events USING btree (tenant_id);
 CREATE INDEX "idx_event-management_event_anchors_tenant_id" ON "event-management".event_anchors USING btree (tenant_id);
 CREATE INDEX "idx_event-management_location_events_tenant_id" ON "event-management".location_events USING btree (tenant_id);
@@ -28,6 +39,7 @@ CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurem
 CREATE INDEX measurement_events_tenant_id_occurred_time_idx ON "event-management".measurement_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX state_change_events_occurred_time_idx ON "event-management".state_change_events USING btree (occurred_time DESC);
 CREATE SCHEMA "event-management";
+CREATE SCHEMA analytics;
 CREATE SEQUENCE "event-management".audit_events_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -107,6 +119,12 @@ CREATE TABLE "event-management".measurement_events (
  unit text,
  data_type character varying(32)
 );
+CREATE TABLE "event-management".purged_tenants (
+ token character varying(128) NOT NULL,
+ epoch timestamp with time zone NOT NULL,
+ planted_at timestamp with time zone NOT NULL,
+ completed_at timestamp with time zone
+);
 CREATE TABLE "event-management".state_change_events (
  tenant_id character varying(128) NOT NULL,
  event_id bytea NOT NULL,
@@ -148,6 +166,92 @@ UNION ALL
  FROM "event-management".measurement_events
  WHERE (measurement_events.occurred_time >= COALESCE(_timescaledb_functions.to_timestamp(_timescaledb_functions.cagg_watermark(N)), '-infinity'::timestamp with time zone))
  GROUP BY measurement_events.tenant_id, measurement_events.device_token, measurement_events.event_type, measurement_events.name, (public.time_bucket('00:01:00'::interval, measurement_events.occurred_time));
+CREATE VIEW analytics.alert_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ type,
+ level,
+ message,
+ source
+ FROM "event-management".alert_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.event_anchors WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ anchor_type,
+ anchor_token
+ FROM "event-management".event_anchors
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ source,
+ alt_id,
+ processed_time
+ FROM "event-management".events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.location_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ latitude,
+ longitude,
+ elevation,
+ accuracy,
+ speed,
+ heading
+ FROM "event-management".location_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.measurement_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ payload_id,
+ device_token,
+ event_type,
+ occurred_time,
+ name,
+ value,
+ classifier,
+ unit,
+ data_type
+ FROM "event-management".measurement_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.measurement_rollups WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ device_token,
+ event_type,
+ name,
+ bucket,
+ sum_value,
+ min_value,
+ max_value,
+ count_value
+ FROM "event-management".measurement_rollups
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
+CREATE VIEW analytics.state_change_events WITH (security_barrier='true') AS
+ SELECT tenant_id,
+ event_id,
+ device_token,
+ event_type,
+ occurred_time,
+ state,
+ reason,
+ session_id
+ FROM "event-management".state_change_events
+ WHERE ((tenant_id)::text = analytics.reader_tenant());
 TIMESCALE CONTINUOUS AGGREGATE measurement_rollups MATERIALIZED_ONLY f MATERIALIZATION _materialized_hypertable_N;
 TIMESCALE HYPERTABLE alert_events DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;
 TIMESCALE HYPERTABLE event_anchors DIMENSION occurred_time INTERVAL 7 days COMPRESSION f;

@@ -76,7 +76,7 @@ func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string)
 	select {
 	case rp.attrUpdates <- attrUpdate{tenant: tenant, deviceToken: deviceToken}:
 		return true
-	case <-rp.procCtx.Done():
+	case <-rp.pctx().Done():
 		return false
 	}
 }
@@ -91,7 +91,7 @@ func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string)
 func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 	defer rp.readerWG.Done()
 	for {
-		msg, err := rp.AttributeReader.ReadMessage(rp.procCtx)
+		msg, err := rp.AttributeReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
 			return
 		}
@@ -99,7 +99,7 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 			rp.AttributeReader.HandleResponse(err)
 			select {
 			case <-time.After(readErrorBackoff):
-			case <-rp.procCtx.Done():
+			case <-rp.pctx().Done():
 				return
 			}
 			continue
@@ -123,7 +123,7 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 			var op func() error
 			if ev.Removed {
 				op = func() error {
-					return rp.AttributeStore.Remove(rp.procCtx, tenant, ev.DeviceToken, ev.Scope, ev.AttrKey, ev.UpdatedAt)
+					return rp.AttributeStore.Remove(rp.pctx(), tenant, ev.DeviceToken, ev.Scope, ev.AttrKey, ev.UpdatedAt)
 				}
 			} else {
 				attr := &model.DeviceAttribute{
@@ -134,7 +134,7 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 					Value:       ev.Value,
 					LastEventAt: ev.UpdatedAt,
 				}
-				op = func() error { return rp.AttributeStore.Upsert(rp.procCtx, attr) }
+				op = func() error { return rp.AttributeStore.Upsert(rp.pctx(), attr) }
 			}
 			if !rp.persistBeforeAck(desc, op) {
 				return // shutdown mid-retry: leave unacked; the fact redelivers next start
@@ -154,7 +154,7 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 // per-tenant subject) and payload, with the same drop-not-fatal contract as decodeRosterFact. The
 // tenant travels on the subject, never the payload.
 func decodeAttributeFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.DeviceAttributeEvent, bool) {
-	_, tenant, ok := messaging.TenantContextFromSubject(rp.procCtx, msg.Subject)
+	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping device-attribute fact with no parseable tenant in subject %q", msg.Subject)

@@ -151,12 +151,20 @@ func publishProfile(t *testing.T, ctx context.Context, profileToken string) {
 	}
 }
 
+// editDraftDeclaration replaces the profile's draft declaration. A nil draft is an
+// EXPLICIT CLEAR rather than an omission: under the three-state update input, omitting
+// the field preserves the stored declaration, so the pointer's nil has to be spelled as
+// the clear it means here.
 func editDraftDeclaration(t *testing.T, ctx context.Context, profileToken string,
 	draft *model.LocationDeclaration) {
 	t.Helper()
 	api := apiOf(ctx)
-	if _, err := api.UpdateDeviceProfile(ctx, profileToken, &model.DeviceProfileCreateRequest{
-		Token: profileToken, Location: draft,
+	location := model.ClearedLocationDeclaration()
+	if draft != nil {
+		location = model.OptionalLocationDeclarationOf(*draft)
+	}
+	if _, err := api.UpdateDeviceProfile(ctx, profileToken, &model.DeviceProfileUpdateRequest{
+		Location: location,
 	}); err != nil {
 		t.Fatalf("update profile %q: %v", profileToken, err)
 	}

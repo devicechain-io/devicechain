@@ -11,6 +11,12 @@
 //
 // Unlike the standalone /dash editor's paste-a-token inputs, the datasource fields
 // here use real entity pickers (EntityPicker) over the console's list queries.
+//
+// The type-specific fields are NOT written out here. They are derived from the widget
+// option schema by widgetOptionFields.tsx (ADR-076 half 1), which is where the reasoning
+// for that lives; what remains in this file is the part that is not a widget option — the
+// datasource selector and the scoped-slot context, both of which are stored outside the
+// options bag and reported through their own callbacks.
 
 import type {
   AnchorSelector,
@@ -27,9 +33,6 @@ import type {
 import {
   WIDGET_BINDS_DATASOURCE,
   WIDGET_CHANNEL,
-  clampNumberOption,
-  enumOptionValues,
-  numberOptionSpec,
   type WidgetChannel,
 } from '@devicechain/widgets';
 import { useEffect, useState } from 'react';
@@ -40,14 +43,12 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
-import { Checkbox } from '@/components/ui/checkbox';
-import { useQuery } from '@/lib/hooks/use-query';
-import {
-  listCommandDefinitionsForDevice,
-  getDeviceCommandVocabulary,
-} from '@/lib/api/device-management';
-import { commandChoices, type PickableCommand } from '@/routes/devices/commandVocabulary';
 import { EntityPicker, type EntityKind } from './EntityPicker';
+import {
+  WidgetOptionFields,
+  WidgetOptionNotices,
+  type OptionFieldContext,
+} from './widgetOptionFields';
 
 // Which widgets carry a datasource, and on which channel — DERIVED from the widget
 // package's own classifiers rather than listed here.
@@ -63,19 +64,6 @@ import { EntityPicker, type EntityKind } from './EntityPicker';
 // tenant-wide); the command-button carries one as its single TARGET device.
 const widgetTypesOn = (channel: WidgetChannel): Set<WidgetType> =>
   new Set((Object.keys(WIDGET_CHANNEL) as WidgetType[]).filter((type) => WIDGET_CHANNEL[type] === channel));
-
-// The widget.options field keys this panel edits. Named at module scope rather than
-// written as bare literals inside the JSX tree: the i18n lint rule walks those (they
-// look like user-facing text and are not), and a single place to spell them means the
-// key passed to NumberInput for its SCHEMA and the key passed to setOption for its
-// VALUE cannot drift apart — which would silently bound one option by another's rules.
-const OPTION_MIN = 'min';
-const OPTION_MAX = 'max';
-const OPTION_PRECISION = 'precision';
-const OPTION_MAX_ROWS = 'maxRows';
-const OPTION_STATE = 'state';
-const OPTION_SEVERITY = 'severity';
-const OPTION_ACKNOWLEDGED = 'acknowledged';
 
 const ALARM_WIDGETS = widgetTypesOn('alarm');
 const CONTROL_WIDGETS = widgetTypesOn('control');
@@ -121,54 +109,6 @@ function kindOptions(t: TFunction): ComboboxOption[] {
     { value: 'device', label: t('common:familyDevice') },
     { value: 'anchor', label: t('widgetKindAnchor') },
   ];
-}
-
-// The VALUES come from the option schema, the labels from the catalogue. A dropdown
-// that offered a value the schema rejects would let the panel author a definition the
-// validator refuses — and these were hand-written copies of lists WIDGET_OPTIONS
-// already declares, one import away from the package that owns them.
-//
-// enumValues throws rather than returning empty on a missing option: an empty
-// dropdown is a working-looking control that can express nothing, and a widget whose
-// filter silently disappeared is exactly the failure this panel edits toward.
-function enumValues(type: WidgetType, key: string): readonly string[] {
-  const values = enumOptionValues(type, key);
-  if (!values) {
-    throw new Error(`${type} declares no enum option ${key}; the dropdown would be empty`);
-  }
-  return values;
-}
-
-// Labels are keyed by value so a schema change surfaces as a missing translation
-// rather than as a silently mislabelled option.
-function labelled(values: readonly string[], label: (value: string) => string): ComboboxOption[] {
-  return values.map((value) => ({ value, label: label(value) }));
-}
-
-function alarmStateOptions(t: TFunction): ComboboxOption[] {
-  return labelled(enumValues('alarm-table', OPTION_STATE), (value) =>
-    value === 'ACTIVE' ? t('widgetAlarmStateActive') : t('widgetAlarmStateCleared'),
-  );
-}
-
-function alarmSeverityOptions(t: TFunction): ComboboxOption[] {
-  const labels: Record<string, string> = {
-    CRITICAL: t('widgetAlarmSeverityCritical'),
-    MAJOR: t('widgetAlarmSeverityMajor'),
-    MINOR: t('widgetAlarmSeverityMinor'),
-    WARNING: t('widgetAlarmSeverityWarning'),
-    INDETERMINATE: t('widgetAlarmSeverityIndeterminate'),
-  };
-  return labelled(enumValues('alarm-table', OPTION_SEVERITY), (value) => labels[value] ?? value);
-}
-
-// Stored as the string 'true'/'false' (absent = any) — the widget maps it back to the
-// boolean acknowledged filter, which is why the schema declares it as an enum of two
-// STRINGS and why a real boolean here would make the filter vanish.
-function alarmAckOptions(t: TFunction): ComboboxOption[] {
-  return labelled(enumValues('alarm-table', OPTION_ACKNOWLEDGED), (value) =>
-    value === 'true' ? t('widgetAlarmAckAcknowledged') : t('widgetAlarmAckUnacknowledged'),
-  );
 }
 
 // eslint-disable-next-line i18next/no-literal-string -- target-type API values.
@@ -258,6 +198,14 @@ export function WidgetConfigPanel({
     onChange({ ...widget, options });
   };
 
+  const fieldContext: OptionFieldContext = {
+    widget,
+    setOption,
+    setOptions,
+    slots,
+    deviceToken: datasource?.kind === 'device' ? datasource.deviceToken : undefined,
+  };
+
   return (
     <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
       <div className="mb-4 flex items-center justify-between">
@@ -268,18 +216,7 @@ export function WidgetConfigPanel({
       </div>
 
       <div className="space-y-4">
-        <TitleFields widget={widget} setOption={setOption} />
-
-        {widget.type === 'entity-selector' && (
-          <EntitySelectorFields
-            slots={slots}
-            // 'selectionTarget' is the widget.options field key, not user text.
-            // eslint-disable-next-line i18next/no-literal-string
-            selectionTarget={optString(widget, 'selectionTarget')}
-            // eslint-disable-next-line i18next/no-literal-string
-            onSelect={(target) => setOption('selectionTarget', target)}
-          />
-        )}
+        <WidgetOptionFields ctx={fieldContext} leading />
 
         {DATA_WIDGETS.has(widget.type) && (
           <>
@@ -365,253 +302,10 @@ export function WidgetConfigPanel({
           </>
         )}
 
-        {widget.type === 'command-button' && (
-          <CommandFields
-            deviceToken={datasource?.kind === 'device' ? datasource.deviceToken : undefined}
-            // 'commandName' is the widget.options field key, not user text.
-            // eslint-disable-next-line i18next/no-literal-string
-            commandName={optString(widget, 'commandName')}
-            onSelect={(def) =>
-              setOptions({
-                commandName: def?.commandKey,
-                commandLabel: def?.name ?? def?.commandKey,
-                parameterSchema: def?.parameterSchema ?? undefined,
-              })
-            }
-          />
-        )}
-
-        <TypeOptions widget={widget} setOption={setOption} />
+        <WidgetOptionFields ctx={fieldContext} leading={false} />
+        <WidgetOptionNotices widget={widget} />
       </div>
     </aside>
-  );
-}
-
-// ---- Title / text -----------------------------------------------------------
-
-function TitleFields({
-  widget,
-  setOption,
-}: {
-  widget: WidgetInstance;
-  setOption: (key: string, value: string | undefined) => void;
-}) {
-  const { t } = useTranslation('dashboards');
-  if (widget.type === 'label') {
-    return (
-      <FormField label={t('widgetLabelText')}>
-        {/* 'text' is the widget.options field key, not user text. */}
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <Input value={optString(widget, 'text')} onChange={(e) => setOption('text', e.target.value)} />
-      </FormField>
-    );
-  }
-  if (widget.type === 'image') {
-    return (
-      <>
-        <FormField label={t('widgetLabelImageUrl')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'url')} onChange={(e) => setOption('url', e.target.value)} />
-        </FormField>
-        <FormField label={t('widgetLabelAltText')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'alt')} onChange={(e) => setOption('alt', e.target.value)} />
-        </FormField>
-      </>
-    );
-  }
-  return (
-    <FormField label={t('widgetLabelTitle')}>
-      {/* eslint-disable-next-line i18next/no-literal-string */}
-      <Input value={optString(widget, 'title')} onChange={(e) => setOption('title', e.target.value)} />
-    </FormField>
-  );
-}
-
-// ---- Type-specific options --------------------------------------------------
-
-function TypeOptions({
-  widget,
-  setOption,
-}: {
-  widget: WidgetInstance;
-  setOption: (key: string, value: string | number | boolean | undefined) => void;
-}) {
-  const { t } = useTranslation('dashboards');
-  if (widget.type === 'gauge') {
-    return (
-      <>
-        <FormField label={t('widgetLabelMin')}>
-          <NumberInput
-            widgetType={widget.type}
-            option={OPTION_MIN}
-            value={optNumber(widget, 'min')}
-            onChange={(v) => setOption(OPTION_MIN, v)}
-          />
-        </FormField>
-        <FormField label={t('widgetLabelMax')}>
-          <NumberInput
-            widgetType={widget.type}
-            option={OPTION_MAX}
-            value={optNumber(widget, 'max')}
-            onChange={(v) => setOption(OPTION_MAX, v)}
-          />
-        </FormField>
-        <FormField label={t('widgetLabelUnit')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
-        </FormField>
-        <FlashToggle widget={widget} setOption={setOption} />
-      </>
-    );
-  }
-  if (widget.type === 'latest-card') {
-    return (
-      <>
-        <FormField label={t('widgetLabelUnit')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'unit')} onChange={(e) => setOption('unit', e.target.value)} />
-        </FormField>
-        <FormField label={t('widgetLabelPrecision')}>
-          <NumberInput
-            widgetType={widget.type}
-            option={OPTION_PRECISION}
-            value={optNumber(widget, 'precision')}
-            onChange={(v) => setOption(OPTION_PRECISION, v)}
-          />
-        </FormField>
-        <FlashToggle widget={widget} setOption={setOption} />
-      </>
-    );
-  }
-  if (widget.type === 'alarm-table' || widget.type === 'alarm-count') {
-    return (
-      <>
-        <FormField label={t('widgetLabelState')} description={t('widgetStateHint')}>
-          <Combobox
-            options={alarmStateOptions(t)}
-            value={optString(widget, 'state')}
-            // eslint-disable-next-line i18next/no-literal-string
-            onChange={(v) => setOption('state', v || undefined)}
-            placeholder={t('widgetPlaceholderAny')}
-          />
-        </FormField>
-        <FormField label={t('widgetLabelSeverity')} description={t('widgetSeverityHint')}>
-          <Combobox
-            options={alarmSeverityOptions(t)}
-            value={optString(widget, 'severity')}
-            // eslint-disable-next-line i18next/no-literal-string
-            onChange={(v) => setOption('severity', v || undefined)}
-            placeholder={t('widgetPlaceholderAny')}
-          />
-        </FormField>
-        <FormField label={t('widgetLabelAcknowledged')} description={t('widgetAcknowledgedHint')}>
-          <Combobox
-            options={alarmAckOptions(t)}
-            value={optString(widget, 'acknowledged')}
-            // eslint-disable-next-line i18next/no-literal-string
-            onChange={(v) => setOption('acknowledged', v || undefined)}
-            placeholder={t('widgetPlaceholderAny')}
-          />
-        </FormField>
-        {widget.type === 'alarm-table' && (
-          <>
-            <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsAlarmHint')}>
-              <NumberInput
-            widgetType={widget.type}
-            option={OPTION_MAX_ROWS}
-            value={optNumber(widget, 'maxRows')}
-            onChange={(v) => setOption(OPTION_MAX_ROWS, v)}
-          />
-            </FormField>
-            <FlashToggle widget={widget} setOption={setOption} />
-          </>
-        )}
-      </>
-    );
-  }
-  if (widget.type === 'command-button') {
-    return (
-      <FormField label={t('widgetLabelMaxRows')} description={t('widgetMaxRowsCommandHint')}>
-        <NumberInput
-            widgetType={widget.type}
-            option={OPTION_MAX_ROWS}
-            value={optNumber(widget, 'maxRows')}
-            onChange={(v) => setOption(OPTION_MAX_ROWS, v)}
-          />
-      </FormField>
-    );
-  }
-  if (widget.type === 'table') {
-    return (
-      <>
-        <FormField label={t('widgetLabelPrecision')} description={t('widgetPrecisionTableHint')}>
-          <NumberInput
-            widgetType={widget.type}
-            option={OPTION_PRECISION}
-            value={optNumber(widget, 'precision')}
-            onChange={(v) => setOption(OPTION_PRECISION, v)}
-          />
-        </FormField>
-        <FlashToggle widget={widget} setOption={setOption} />
-      </>
-    );
-  }
-  if (widget.type === 'map') {
-    return (
-      <>
-        <FormField label={t('widgetLabelTileUrl')} description={t('widgetTileUrlHint')}>
-          {/* 'tileUrl' is the widget.options field key, not user text. */}
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'tileUrl')} onChange={(e) => setOption('tileUrl', e.target.value)} />
-        </FormField>
-        <FormField label={t('widgetLabelAttribution')} description={t('widgetAttributionHint')}>
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <Input value={optString(widget, 'attribution')} onChange={(e) => setOption('attribution', e.target.value)} />
-        </FormField>
-        {/* 🔴 A widget tile source with no credit line is IGNORED at render — the two
-            halves are one value, and this tier never reaches the server's validation,
-            so the renderer discards the pair rather than drawing a provider's tiles
-            uncredited. Saying so is the whole point: without it the option silently
-            does nothing and reads as broken, which is the complaint the basemap work
-            started from. The geofence editor carries the same message. */}
-        {optString(widget, 'tileUrl').trim() !== '' &&
-          optString(widget, 'attribution').trim() === '' && (
-            <p className="text-destructive text-xs" data-testid="widget-tile-uncredited">
-              {t('widgetTileUncredited')}
-            </p>
-          )}
-      </>
-    );
-  }
-  return null; // chart/label/image have no extra options beyond above
-}
-
-// FlashToggle exposes the opt-in directional change-flash (widget option `flashOnChange`,
-// read by the widgets package's optBoolean): a value briefly tints green/red on a
-// rise/fall, then fades. Off by default; the option is dropped when unchecked.
-function FlashToggle({
-  widget,
-  setOption,
-}: {
-  widget: WidgetInstance;
-  setOption: (key: string, value: string | number | boolean | undefined) => void;
-}) {
-  const { t } = useTranslation('dashboards');
-  const checked = widget.options?.flashOnChange === true;
-  return (
-    <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground">
-      <Checkbox
-        className="mt-0.5"
-        checked={checked}
-        // eslint-disable-next-line i18next/no-literal-string
-        onCheckedChange={(c) => setOption('flashOnChange', c === true)}
-      />
-      <span>
-        <span className="font-medium">{t('widgetFlashOnChange')}</span>
-        <span className="mt-0.5 block text-xs text-muted-foreground">{t('widgetFlashOnChangeHint')}</span>
-      </span>
-    </label>
   );
 }
 
@@ -759,111 +453,6 @@ function AnchorFields({
   );
 }
 
-// ---- Command selection (command-button) -------------------------------------
-
-// CommandFields lets the author pick which command the button issues, from the target
-// device's PUBLISHED command vocabulary (ADR-043 decision 3). Picking one bakes its key,
-// label, and parameter schema into the widget's options — so the widget renders its typed
-// form at runtime with no device→profile resolution. Requires a target device to be
-// chosen first (that's where the command list comes from).
-//
-// When the device's profile CONSTRAINS its vocabulary, the picker offers published
-// commands only, because published is what the enqueue gate accepts. Baking a draft there
-// would produce a button that looks correct in the editor, renders correctly on the
-// dashboard, and fails only when an operator presses it. Draft-only commands are still
-// NAMED below the picker rather than omitted: an author who just wrote a command
-// definition and can't find it needs to be told it is unpublished, not left to conclude
-// the editor is broken.
-//
-// When the profile does NOT constrain (no profile, never published, or no definitions —
-// ADR-043 decision 4), the gate accepts any key, so the drafts ARE offerable and are
-// offered. Restricting to published there would leave the whole unconstrained device
-// class — most devices, pre-GA — with an empty picker and no way to author a command
-// button at all, for a button that would have worked.
-function CommandFields({
-  deviceToken,
-  commandName,
-  onSelect,
-}: {
-  deviceToken: string | undefined;
-  commandName: string;
-  onSelect: (def: PickableCommand | undefined) => void;
-}) {
-  const { t } = useTranslation('dashboards');
-  const { data, loading, error } = useQuery(
-    async () => {
-      if (!deviceToken) return commandChoices(null, []);
-      const [vocabulary, drafts] = await Promise.all([
-        getDeviceCommandVocabulary(deviceToken),
-        listCommandDefinitionsForDevice(deviceToken),
-      ]);
-      return commandChoices(vocabulary, drafts);
-    },
-    [deviceToken],
-  );
-  const selectable = data?.selectable ?? [];
-  const draftOnly = data?.draftOnly ?? [];
-  const constrained = data?.constrained ?? false;
-
-  const options: ComboboxOption[] = selectable.map((def) => ({
-    value: def.commandKey,
-    label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
-  }));
-
-  // A command baked from a previous target device may not exist on the current one (the
-  // author repointed the device without re-picking), or may have been unpublished since.
-  // Flag it — non-destructively, since the datasource and options update through separate
-  // handlers — so the author re-picks rather than silently shipping a button that fails.
-  const staleSelection =
-    commandName !== '' && !loading && !error && !selectable.some((d) => d.commandKey === commandName);
-
-  return (
-    <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('widgetCommandHeading')}
-      </div>
-      {!deviceToken ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandSelectDevice')}</p>
-      ) : loading ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandLoading')}</p>
-      ) : error ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandLoadError', { error })}</p>
-      ) : (
-        <>
-          {staleSelection && (
-            <p className="text-xs text-destructive">{t('widgetCommandStale', { commandName })}</p>
-          )}
-          {selectable.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t('widgetCommandNoneDefined')}</p>
-          ) : (
-            <FormField label={t('widgetCommandHeading')} description={t('widgetCommandFieldHint')}>
-              <Combobox
-                options={options}
-                value={commandName}
-                onChange={(key) => onSelect(selectable.find((d) => d.commandKey === key))}
-                placeholder={t('widgetCommandSelectPlaceholder')}
-              />
-            </FormField>
-          )}
-          {!constrained && selectable.length > 0 && (
-            <p className="text-xs text-muted-foreground">{t('widgetCommandUnpublishedHint')}</p>
-          )}
-          {draftOnly.length > 0 && (
-            <div className="space-y-1 rounded-md bg-muted/50 p-2">
-              <p className="text-xs text-muted-foreground">{t('widgetCommandDraftOnlyLabel')}</p>
-              {/* Actual (untranslated) command names — data, not prose. */}
-              <p className="text-xs font-medium text-muted-foreground">{draftOnly.join(', ')}</p>
-              <p className="text-xs text-muted-foreground">
-                {t('widgetCommandDraftOnlyPublishHint', { count: draftOnly.length })}
-              </p>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
 // ---- scoped-slot context authoring (ADR-039) --------------------------------
 
 // SlotScopeFields authors a device slot's CONTEXT: a root context (bound directly / by a
@@ -934,52 +523,6 @@ function SlotScopeFields({
   );
 }
 
-// EntitySelectorFields picks which slot an entity-selector widget re-points. A scoped slot
-// becomes a member picker (which device within the parent context); a root slot a context
-// picker (which building/customer the dashboard shows). The target is stored in the widget's
-// options; the runtime resolves the candidate set from the target slot's scope.
-function EntitySelectorFields({
-  slots,
-  selectionTarget,
-  onSelect,
-}: {
-  slots: Record<string, SlotDefinition> | undefined;
-  selectionTarget: string;
-  onSelect: (target: string | undefined) => void;
-}) {
-  const { t } = useTranslation('dashboards');
-  const names = Object.keys(slots ?? {});
-  const options: ComboboxOption[] = names.map((name) => {
-    const slot = slots![name];
-    const role = slot.scope
-      ? t('widgetRoleMemberOf', { parent: slot.scope.parent })
-      : slot.type === 'anchor'
-        ? t('widgetRoleContext')
-        : t('widgetRoleDevice');
-    return { value: name, label: name, description: role };
-  });
-
-  return (
-    <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('widgetSelectionTargetHeading')}
-      </div>
-      {options.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t('widgetSelectionTargetEmptyHint')}</p>
-      ) : (
-        <FormField label={t('widgetLabelTargetSlot')} description={t('widgetTargetSlotHint')}>
-          <Combobox
-            options={options}
-            value={selectionTarget}
-            onChange={(v) => onSelect(v || undefined)}
-            placeholder={t('widgetPlaceholderSelectSlot')}
-          />
-        </FormField>
-      )}
-    </div>
-  );
-}
-
 // ---- measurement <-> comma-string helpers -----------------------------------
 
 // MeasurementsInput keeps its own text buffer so the controlled join→split→join
@@ -1013,71 +556,4 @@ function splitMeasurements(value: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-}
-
-// ---- options readers (panel-local; strict-typed inputs) ---------------------
-
-function optString(widget: WidgetInstance, key: string): string {
-  const value = widget.options?.[key];
-  return typeof value === 'string' ? value : '';
-}
-
-function optNumber(widget: WidgetInstance, key: string): number | undefined {
-  const value = widget.options?.[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-// A numeric option input, bounded by its own schema.
-//
-// 🔴 IT CLAMPS ON BLUR, NOT PER KEYSTROKE, and the difference is the whole design. An
-// onChange clamp fights the author mid-word: with a minimum of 1, typing "05" to mean
-// 5 rewrites the 0 to a 1 under the cursor and stores 15; on an integer option,
-// typing "1.5" deletes the fraction the instant the 5 lands. A controlled input
-// writes the corrected value straight back into the field, so each of those is
-// visible and unrecoverable without retyping.
-//
-// So the draft is held locally while the field has focus and reconciled when it is
-// not. min/max/step still drive the spinner and the browser's own validity state
-// during typing; the clamp is what stops an out-of-range value being STORED, since
-// typing bypasses the spinner entirely.
-//
-// The bounds come from WIDGET_OPTIONS rather than a second copy of the same numbers
-// here, so the panel and the validator cannot disagree about one option. They can
-// still disagree about a RULE spanning two — a gauge min above its max is authorable
-// here and rejected there — because that is not something a single input can see.
-function NumberInput({
-  widgetType,
-  option,
-  value,
-  onChange,
-}: {
-  widgetType: WidgetType;
-  option: string;
-  value: number | undefined;
-  onChange: (value: number | undefined) => void;
-}) {
-  const spec = numberOptionSpec(widgetType, option);
-  const [draft, setDraft] = useState<string | null>(null);
-
-  const commit = (raw: string) => {
-    setDraft(null);
-    onChange(raw === '' ? undefined : clampNumberOption(spec, Number(raw)));
-  };
-
-  return (
-    <Input
-      type="number"
-      value={draft ?? value ?? ''}
-      min={spec?.min}
-      max={spec?.max}
-      step={spec?.integer ? 1 : undefined}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => commit(e.target.value)}
-      onKeyDown={(e) => {
-        // Enter commits too: an author who types a value and presses Enter expects it
-        // applied, not held as a draft until they click somewhere else.
-        if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
-      }}
-    />
-  );
 }

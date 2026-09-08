@@ -33,8 +33,24 @@ const (
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
 // emitted by construction on every entity mutation, of who changed which entity
 // when. It is metadata-only — the changed column values are deliberately NOT
-// stored, so the journal carries no PII or credential material (a future
-// enhancement could add a redacted value diff).
+// stored, so no credential or payload material reaches it (a future enhancement
+// could add a redacted value diff).
+//
+// 🔴 IT DOES CARRY PERSONAL DATA, AND THIS COMMENT USED TO SAY IT DID NOT. The
+// claim was "no PII or credential material", written eight lines above a field
+// documented as holding "a token, name, or email". Two columns name people:
+// Actor is the acting JWT's username, which for every human token IS the email
+// (core/auth/issuer.go mints username and email from the same value), and
+// EntityLabel is an identity row's email or a customer-chosen token, which is
+// routinely a person's or a company's name. Metadata-only bounds what a mutation
+// can leak INTO the journal; it says nothing about who the journal names.
+//
+// That is what makes the ADR-077 retention a decision rather than a formality.
+// The journal is kept through a tenant purge, because sweeping it destroys the
+// evidence of the erasure it is part of — and both columns above are emptied for
+// the purged tenant, irreversibly, by the redaction registered in
+// core/tenantpurge. Written empty rather than hashed: an email is a low-entropy
+// enumerable space, so a digest of one is reversible by anyone with a user list.
 //
 // It carries a TenantId field (not the TenantScoped embed, but matched the same
 // way by the scoping callbacks), so a read of the journal is tenant-scoped like
@@ -60,12 +76,19 @@ type AuditEvent struct {
 	// single keyed row; empty for a bulk/condition update or delete (RowsAffected
 	// then conveys the scope).
 	EntityPK string
-	// EntityLabel is a human-facing, non-sensitive identifier of the affected row
-	// (e.g. a token, name, or email), recorded when the mutated model implements
-	// AuditLabeler and its label is set. Empty otherwise (a model that opts out, a
-	// bulk statement, or a delete-by-key that carried no populated struct). It is
-	// display sugar over (TableName, EntityPK) — deliberately not a value dump, so
-	// the metadata-only contract of the journal (ADR-019) holds.
+	// EntityLabel is a human-facing identifier of the affected row (e.g. a token,
+	// name, or email), recorded when the mutated model implements AuditLabeler and
+	// its label is set. Empty otherwise (a model that opts out, a bulk statement, or
+	// a delete-by-key that carried no populated struct). It is display sugar over
+	// (TableName, EntityPK) — deliberately not a value dump, so the metadata-only
+	// contract of the journal (ADR-019) holds.
+	//
+	// 🔴 IT IS NOT "NON-SENSITIVE", WHICH IS WHAT THIS USED TO SAY. Not being a
+	// credential and not being personal data are different properties, and the
+	// parenthetical above already admits the second: an identity row's label is its
+	// email, and the customer-chosen tokens promoted from TokenReference across some
+	// two dozen models are routinely people's and companies' names. It is one of the
+	// two columns emptied for a purged tenant — see the type doc.
 	EntityLabel  string
 	RowsAffected int64
 }
@@ -86,12 +109,16 @@ type AuditExempt interface {
 	AuditExempt() bool
 }
 
-// AuditLabeler is implemented by a model to contribute a human-facing,
-// non-sensitive label for the affected row to its audit entry (e.g. a token,
-// name, or email) — turning an opaque "iam_roles #3" into "iam_roles operator"
-// in an audit view. The label must never be a secret or free-form value dump;
-// the journal stays metadata-only by design (ADR-019), and the model chooses
-// exactly which safe identifier to expose. Opting in is optional: a model that
+// AuditLabeler is implemented by a model to contribute a human-facing label for
+// the affected row to its audit entry (e.g. a token, name, or email) — turning an
+// opaque "iam_roles #3" into "iam_roles operator" in an audit view. The label must
+// never be a secret or free-form value dump; the journal stays metadata-only by
+// design (ADR-019), and the model chooses exactly which safe identifier to expose.
+//
+// 🔴 "SAFE" HERE MEANS "NOT A CREDENTIAL", NOT "NOT PERSONAL". A label is expected
+// to identify — that is its whole job — and several of the implementations return an
+// email or a customer-chosen name. What that costs is paid at erasure, not here: the
+// column is emptied for a purged tenant (see AuditEvent). Opting in is optional: a model that
 // does not implement it simply records no label and the reader falls back to the
 // (table, pk) reference.
 type AuditLabeler interface {
@@ -135,10 +162,20 @@ func isAuditExempt(db *gorm.DB) bool {
 
 // RegisterAuditJournal installs global GORM After callbacks that append an
 // AuditEvent for every create/update/delete by construction (ADR-019), alongside
-// the tenant-scope callbacks. The audit row is written inside the mutation's
-// transaction (a fresh session sharing the same connection), so it commits iff
-// the mutation commits; a failure to record the audit row fails the mutation
-// (fail-closed — no unrecorded mutation).
+// the tenant-scope callbacks. A failure to record the audit row is reported as the
+// mutation's error (fail-closed — no silently unrecorded mutation).
+//
+// 🔴 IT DOES NOT COMMIT WITH THE MUTATION, AND THIS COMMENT USED TO SAY IT DID.
+// gorm sorts an After("gorm:create") callback AFTER gorm:commit_or_rollback_transaction,
+// so by the time this one runs the statement's implicit transaction has committed
+// and the fresh session is on the pool rather than in that transaction. The
+// consequence is the one that matters when reading the error: a failed audit write
+// reports failure for a mutation that HAPPENED. It is why the ADR-077 erasure fence
+// excludes the journal — fencing it would have handed the tenant sweeper a refusal
+// for rows it had already deleted (see rdb.RegisterTenantFence).
+//
+// An explicit transaction the caller opened is a different case: there the session
+// shares that transaction and does roll back with it.
 func RegisterAuditJournal(db *gorm.DB) error {
 	for _, register := range []func() error{
 		func() error {

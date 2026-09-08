@@ -65,7 +65,7 @@ func TestDeviceCommandVocabulary(t *testing.T) {
 		api := newEnqueueTestApi(t)
 		seedDeviceWithCommands(t, api, ctx, "dev-strict", []*CommandDefinition{
 			defWithSchema(t, "reboot", nil),
-			defWithSchema(t, "setpoint", []CommandParameter{
+			defWithSchema(t, "setpoint", []ParameterSpec{
 				{Name: "celsius", DataType: MetricDouble, Required: true},
 			}),
 		})
@@ -140,7 +140,7 @@ func TestDeviceCommandVocabulary(t *testing.T) {
 		seedDeviceWithCommands(t, api, ctx, "dev-agree", []*CommandDefinition{
 			defWithSchema(t, "reboot", nil),
 			defWithSchema(t, "identify", nil),
-			defWithSchema(t, "setpoint", []CommandParameter{
+			defWithSchema(t, "setpoint", []ParameterSpec{
 				{Name: "celsius", DataType: MetricDouble, Required: true},
 			}),
 		})

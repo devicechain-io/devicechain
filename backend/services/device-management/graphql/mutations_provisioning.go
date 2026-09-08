@@ -29,14 +29,14 @@ func (r *SchemaResolver) CreateProvisioningProfile(ctx context.Context, args str
 // Update an existing provisioning profile.
 func (r *SchemaResolver) UpdateProvisioningProfile(ctx context.Context, args struct {
 	Token   string
-	Request *model.ProvisioningProfileCreateRequest
+	Request model.ProvisioningProfileUpdateRequest
 }) (*ProvisioningProfileResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateProvisioningProfile(ctx, args.Token, args.Request)
+	updated, err := api.UpdateProvisioningProfile(ctx, args.Token, &args.Request)
 	if err != nil {
 		return nil, err
 	}

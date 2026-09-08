@@ -113,10 +113,13 @@ func (m ReconcileMetrics) repaired(direction string, n int) {
 // shutdown emits NO disconnect advisories for the connections it was holding —
 // measured against nats-server v2.14.4 — so every rolling broker upgrade leaves every
 // connected device asserted-online. Nothing else corrects that: an asserted row is
-// skipped by the inactivity sweep (device-state/model/api.go:425), and data events
-// cannot flip an asserted device's Active (api.go:196). Both existing asserted sources
-// repair their own missed deaths for the same reason (sparkplug host.go:567,
-// lwm2m main.go:566); this one would have been the first that could not.
+// skipped by the inactivity sweep (the presence_source predicate in Api.SweepInactive),
+// and data events cannot flip an asserted device's Active (the freshness branch in
+// Api.MergeDeviceState guards on PresenceSourceAsserted) — both in
+// device-state/model/api.go. Both existing asserted sources repair their own missed
+// deaths for the same reason (sparkplug host.reconcileProbe, lwm2m
+// registry.ReconstructShadow / ReconstructDisconnect); this one would have been the
+// first that could not.
 type Reconciler struct {
 	tap      *Tap
 	requests Requester

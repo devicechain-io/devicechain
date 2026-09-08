@@ -1,31 +1,67 @@
 {
   "name": "@devicechain/widgets",
-  "version": "0.0.1",
+  "version": "0.0.0-dev",
   "description": "DeviceChain presentational dashboard widgets across five channels — telemetry (time-series chart + gauge over Apache ECharts, latest card, table, label, image), alarm (table, count), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) — plus the renderer that lays them out. Themed via CSS custom properties, no Tailwind leakage.",
+  "keywords": [
+    "devicechain",
+    "iot",
+    "dashboard",
+    "widgets",
+    "react",
+    "echarts",
+    "maplibre"
+  ],
   "license": "Apache-2.0",
+  "homepage": "https://devicechain.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicechain-io/devicechain.git",
+    "directory": "frontend/packages/widgets"
+  },
+  "bugs": {
+    "url": "https://github.com/devicechain-io/devicechain/issues"
+  },
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./vite": "./src/vite.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js"
+    },
     "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "node ../../scripts/build-package.mjs",
     "typecheck": "tsc --noEmit",
+    "pretest": "node ../../scripts/build-packages.mjs",
     "test": "vitest run"
   },
   "dependencies": {
-    "@devicechain/client": "*",
-    "@devicechain/dashboards": "*",
     "echarts": "^6.0.0"
   },
   "peerDependencies": {
+    "@devicechain/client": "0.0.0-dev",
+    "@devicechain/dashboards": "0.0.0-dev",
     "maplibre-gl": "^6.6.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@devicechain/client": "0.0.0-dev",
+    "@devicechain/dashboards": "0.0.0-dev",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.4.0",
     "@types/react": "^19.2.18",

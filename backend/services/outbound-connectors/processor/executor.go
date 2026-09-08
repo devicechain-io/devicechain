@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
@@ -59,9 +60,21 @@ type Executor struct {
 }
 
 // NewExecutor builds the executor over a secret resolver, the connector store (for publish
-// resolution), and the fallback send timeout. A nil connectors store disables publish execution.
-func NewExecutor(resolver *SecretResolver, connectors *model.Api, defaultTimeout time.Duration) *Executor {
-	return &Executor{secrets: resolver, connectors: connectors, defaultTimeout: defaultTimeout, send: publish.Send}
+// resolution), the HTTP client tenant deliveries go out on, and the fallback send timeout.
+// A nil connectors store disables publish execution.
+//
+// client carries the tenant-egress boundary: production passes one whose transport dials
+// through the configured egress guard. A nil client falls back to httpsink.DefaultClient,
+// whose own guard carries no allowances — so a missed wiring narrows the boundary rather
+// than removing it.
+func NewExecutor(resolver *SecretResolver, connectors *model.Api, client *http.Client, defaultTimeout time.Duration) *Executor {
+	return &Executor{
+		secrets:        resolver,
+		connectors:     connectors,
+		client:         client,
+		defaultTimeout: defaultTimeout,
+		send:           publish.Send,
+	}
 }
 
 // Execute performs the dispatch and classifies the result. The request has already passed
@@ -135,6 +148,14 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
+		// A destination the egress boundary refused is TERMINAL, and separating it here is the whole
+		// point of the sentinel. Left in the transient branch it would be retried to the redelivery
+		// cap and then dead-lettered as an ordinary failure — five attempts at an address that
+		// cannot become public, and an operator reading "dead" when the truth is "you pointed this
+		// at 169.254.169.254".
+		if errors.Is(err, egress.ErrBlocked) {
+			return execOutcome{outcome: outcomeBlocked, retryable: false, err: err}
+		}
 		// A send error or non-2xx is transient (bounded by the redelivery cap): the endpoint may be
 		// briefly down. httpsink already suppresses the response body when a secret is presented, so
 		// this error text cannot leak the credential.

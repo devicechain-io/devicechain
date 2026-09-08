@@ -149,6 +149,22 @@
         "automountToken": { "type": "boolean" }
       }
     },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "infrastructureNamespaceSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "dnsNamespaceSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
     "podDisruptionBudget": {
       "type": "object",
       "properties": {
@@ -272,7 +288,7 @@
           "strategy": {
             "type": "string",
             "enum": ["RollingUpdate", "Recreate"],
-            "description": "Deployment rollout strategy for this area. Default RollingUpdate. Recreate stops all old pods before starting new ones (no old+new overlap) — required for a single-writer stream processor like event-processing (ADR-051 DETECT), which must also stay at replicas:1."
+            "description": "Deployment rollout strategy for this area. Default RollingUpdate. Recreate stops all old pods before starting new ones (no old+new overlap), which is why it is paired with replicas:1 — the template refuses Recreate above one replica for any area, since every pod would stop before any started. event-processing (ADR-051 DETECT) ships that way, and is the one stateful single-owner area that MAY exceed replicas:1: its extra replicas are warm standbys arbitrated by the ADR-070 partition lease, and running them means setting RollingUpdate as well. sparkplug-ingest, lwm2m-ingest and mcp are pinned at one serving pod by an area-keyed guard, whatever the strategy — the first two because they own a broker Host session and a UDP socket, mcp because it keeps each client's protocol session in memory on the pod that made it."
           },
           "resources": { "type": "object" },
           "goMemLimit": { "type": "string", "description": "GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas)." },

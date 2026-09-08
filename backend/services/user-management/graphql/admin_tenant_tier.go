@@ -83,13 +83,9 @@ type adminTenantTierCreateInput struct {
 	Color       *string
 }
 
-// adminTenantTierUpdateInput mirrors AdminTenantTierUpdateRequest.
-type adminTenantTierUpdateInput struct {
-	Name        *string
-	Description *string
-	Config      *string
-	Color       *string
-}
+// The update input's resolver-local mirror is gone: UpdateTenantTier takes
+// admin.TierUpdateRequest directly, so there is no flattening hop for a state to be
+// lost in. See the note where adminRoleUpdateInput used to be.
 
 // CreateTenantTier registers a tier (requires tenant:write).
 func (r *AdminResolver) CreateTenantTier(ctx context.Context, args struct {
@@ -111,40 +107,23 @@ func (r *AdminResolver) CreateTenantTier(ctx context.Context, args struct {
 	}))
 }
 
-// UpdateTenantTier updates a tier by token (requires tenant:write).
+// UpdateTenantTier applies a partial update to a tier by token (requires tenant:write):
+// an omitted field leaves the stored value alone, an explicit null clears it, a value
+// sets it.
 //
-// An OMITTED config leaves the tier's settings untouched; an explicit one replaces
-// them. The distinction is carried all the way down (hence the pointer) rather than
-// collapsed here: a rename that omits config must not clear it, because that would
-// silently drop every tenant at the tier to the platform default.
+// An OMITTED config still leaves the tier's settings untouched — a rename that says
+// nothing about config must not clear it, because that silently drops every tenant at
+// the tier to the platform default. That used to need a bespoke `*map[string]any` and a
+// normalization step here, since config alone had the absent state; every field has it
+// now, so the special case is gone rather than generalized.
 func (r *AdminResolver) UpdateTenantTier(ctx context.Context, args struct {
 	Token   string
-	Request adminTenantTierUpdateInput
+	Request admin.TierUpdateRequest
 }) (*AdminTenantTierResolver, error) {
 	if err := auth.Authorize(ctx, auth.TenantWrite); err != nil {
 		return nil, err
 	}
-	var cfg *map[string]any
-	if args.Request.Config != nil {
-		parsed, err := parseConfig(args.Request.Config)
-		if err != nil {
-			return nil, err
-		}
-		// A supplied-but-empty config ("{}" or "") clears the settings — the
-		// deliberate way to say "this tier declares nothing", which parseConfig
-		// renders as a nil map. Normalize it to a non-nil empty map so the service
-		// still sees "supplied".
-		if parsed == nil {
-			parsed = map[string]any{}
-		}
-		cfg = &parsed
-	}
-	return wrapTier(r.getAdminService(ctx).UpdateTenantTier(ctx, args.Token, admin.TierMutableInput{
-		Name:        strOrEmpty(args.Request.Name),
-		Description: strOrEmpty(args.Request.Description),
-		Config:      cfg,
-		Color:       strOrEmpty(args.Request.Color),
-	}))
+	return wrapTier(r.getAdminService(ctx).UpdateTenantTier(ctx, args.Token, &args.Request))
 }
 
 // ReorderTenantTiers sets the operator's listing order for the whole catalog (requires
