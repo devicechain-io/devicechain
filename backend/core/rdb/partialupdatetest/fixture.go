@@ -33,11 +33,33 @@ import (
 // that. The Cleanup below is what makes the fixture's isolation a property of the fixture
 // rather than of how it happens to be invoked.
 //
-// 🔴 THE TOKEN GRAMMAR IS REGISTERED BECAUSE PRODUCTION REGISTERS IT. It used not to be,
-// and that is not a tidiness point: a harness weaker than the world it certifies passes
-// things the real system refuses, so a defect can be green here and broken live. It let a
-// whitespace-only profile token through. Suite.CreateWithToken is what pins the
-// registration rather than assuming it — see the FixtureIsAsStrictAsProduction property.
+// 🔴 ALL FOUR CALLBACKS ARE REGISTERED BECAUSE PRODUCTION REGISTERS ALL FOUR, and that
+// is not a tidiness point: a harness weaker than the world it certifies passes things the
+// real system refuses, so a defect can be green here and broken live. The token grammar
+// used not to be here and it let a whitespace-only profile token through; the audit
+// journal and the erasure fence used not to be here either, while this comment claimed
+// parity with production, so every property below was being asserted against a callback
+// chain two hooks shorter than the shipped one.
+//
+// The list is rdb.ConnectPostgres's, in its order, and the four are:
+//
+//   - tenant scoping — the row-level isolation predicate, fail-closed on no tenant;
+//   - the token grammar — fail-closed token validation on create and update;
+//   - the audit journal — an After hook that appends an AuditEvent for every mutation and
+//     reports a failure to record one as the MUTATION's error;
+//   - the erasure fence — a Before hook that refuses a create or update for a tenant this
+//     area has reclaimed.
+//
+// FixtureIsAsStrictAsProduction is what pins all of it rather than assuming it.
+//
+// 🔴 THE LAST TWO NEED TABLES, WHICH IS WHY THE MIGRATE LIST IS PREPENDED TO RATHER THAN
+// PASSED THROUGH. The fence FAILS CLOSED on an unreadable purged_tenants — an
+// unanswerable fence is not an absent one — so registering it without creating that table
+// refuses every write in the fixture, and the journal's insert would fail the same way
+// against a missing audit_events. Production creates both in ExecuteInitialize's
+// AutoMigrate for exactly this reason; the fixture does it here. The caller's slice is
+// never appended to in place: the tables come back on a fresh backing array so a family's
+// Migrate list cannot be grown by having been passed here.
 func NewSQLiteDB(t *testing.T, tables ...any) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+DSNName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -51,7 +73,14 @@ func NewSQLiteDB(t *testing.T, tables ...any) *gorm.DB {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(tables...); err != nil {
+	if err := rdb.RegisterAuditJournal(db); err != nil {
+		t.Fatalf("register audit journal: %v", err)
+	}
+	if err := rdb.RegisterTenantFence(db); err != nil {
+		t.Fatalf("register tenant fence: %v", err)
+	}
+	migrate := append([]any{&rdb.AuditEvent{}, &rdb.PurgedTenant{}}, tables...)
+	if err := db.AutoMigrate(migrate...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db

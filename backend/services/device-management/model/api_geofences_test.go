@@ -629,6 +629,39 @@ func TestValidateGeoFenceGeometry(t *testing.T) {
 	}
 }
 
+// 🔴 An out-of-range coordinate is reported HERE, naming the ring and the position
+// within it, and that wording is what an author reads.
+//
+// core/geo range-checks too — a precondition enforced only by a comment is not
+// enforced, and its checks are what keep out-of-range degrees away from the
+// spherical conversion for any future caller. But its message can only say
+// "position N": it is handed one ring and does not know which of a polygon's rings
+// it is. This validator runs first and says which. Asserting only that the document
+// is refused would let the better message be lost silently the day the order of
+// these two checks changes, which is exactly the kind of regression nothing else
+// here would see.
+func TestOutOfRangeGeometryCoordinatesNameTheirRingAndPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{"longitude", polygonGeometry(-181, 33, -84.1, 33.1, -84.2, 33.0, -181, 33),
+			"polygon ring 0 position 0 longitude -181 is outside [-180, 180]"},
+		{"latitude", polygonGeometry(-84.0, 91, -84.1, 33.1, -84.2, 33.0, -84.0, 91),
+			"polygon ring 0 position 0 latitude 91 is outside [-90, 90]"},
+	} {
+		_, _, err := validateGeoFenceGeometry(tc.doc)
+		if err == nil {
+			t.Errorf("%s: accepted an out-of-range coordinate", tc.name)
+			continue
+		}
+		if err.Error() != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, err.Error(), tc.want)
+		}
+	}
+}
+
 // A RESERVED kind is refused as reserved, not as unknown — and the difference is in the
 // message an author reads. "reserved but not yet supported" says the name is right and
 // the engine is not ready; "unsupported" says the name is wrong. Telling an author to fix

@@ -620,6 +620,20 @@ func lockTenantForBatch(ctx context.Context, tx *gorm.DB) error {
 
 // insertBatchCommands writes one QUEUED command per admitted device, in chunks.
 //
+// 🔴 THIS PATH ISSUES NO DISPATCH NUDGE, AND THAT IS A PROPERTY OF THE CODE RATHER THAN A
+// FLAG SOMEBODY SET. The nudge hangs off CreateCommand (Api.nudgeDispatch); a batch never
+// calls CreateCommand — it comes down CreateCommandBatch to the CreateInBatches below — so
+// a batch cannot reach the nudge even if it wanted to. Verified by grep at the time of
+// writing: CreateCommand has exactly ONE caller in this service, the createCommand GraphQL
+// mutation.
+//
+// 🔴 SAY IT HERE BECAUSE IT IS THE PROPERTY THAT COULD SILENTLY CHANGE. A fleet write to
+// 50,000 devices routed through CreateCommand "for consistency" would emit 50,000 nudges,
+// each a per-device read, from one API call — and every one of them would then stand down
+// or dispatch a command the sweep was about to dispatch anyway. The batch has no latency
+// problem the nudge solves: its commands go out on the sweep, which is the same tick they
+// would have shared regardless. TestABatchCreateIssuesNoNudges is the standing guard.
+//
 // Every row carries the batch's id AND its token: the id links them for counting and
 // cancelling, the token lets the single-table command search filter by batch without a
 // join. The command token is platform-generated rather than derived from the batch and
