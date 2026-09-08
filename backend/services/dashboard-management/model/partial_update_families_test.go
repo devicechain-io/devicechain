@@ -30,7 +30,7 @@ import (
 // per field is the shape the harness exists to replace.
 
 // newPartialUpdateApi builds a SQLite-backed Api migrated for one family. The database
-// half — the named shared-cache DSN, the pool close, the token-grammar registration, and
+// half — the named shared-cache DSN, the pool close, the four callback registrations, and
 // the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	t.Helper()
