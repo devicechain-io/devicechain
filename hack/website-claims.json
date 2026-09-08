@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "MECHANICALLY CHECKABLE CLAIMS THE PUBLIC WEBSITE MAKES.",
+    "",
+    "devicechain.io lives in a separate repository, and its prose is hand-written. Nothing",
+    "in the release pipeline reads it -- a release pushes releases.json and nothing else --",
+    "so for three releases the site drifted from the platform unnoticed. An audit against",
+    "the tree then found 15 wrong claims, of which only TWO had drifted; THIRTEEN were wrong",
+    "when they were written.",
+    "",
+    "That split is why this file exists and why it looks the way it does. A periodic re-read",
+    "would have caught the two and none of the thirteen, and would have been skipped by the",
+    "second release anyway. What is recorded here instead is every claim the site makes that",
+    "a machine can settle against this repository -- so writing a wrong one fails CI on the",
+    "PR that changes the underlying fact.",
+    "",
+    "🔴 WHAT THIS FILE CANNOT DO, stated plainly so nobody trusts it further than it goes.",
+    "It records what the site is BELIEVED to claim. Nothing here verifies that the site",
+    "actually says it -- the HTML is not in this repository and is deliberately not fetched",
+    "(a gate that needs the network is a gate that goes red on someone else's bad afternoon,",
+    "and one that skips on fetch failure is worse than none). Keeping this file faithful to",
+    "the page is a human step, and it is one line on the release-prep checklist.",
+    "",
+    "ADDING A CLAIM. Only add one a machine can settle from this repository. 'The platform",
+    "is fast' is not checkable; 'the site names these four connector types' is. If a claim",
+    "cannot be expressed as a check below, it belongs in the release-prep read-through",
+    "instead, not here as a comment nobody executes."
+  ],
+
+  "npm_packages": {
+    "_why": "The site names these as installable. If one is renamed or unpublished, an install line on the page stops working.",
+    "site_says": ["@devicechain/client", "@devicechain/dashboards", "@devicechain/widgets", "@devicechain/brand"]
+  },
+
+  "nuget_package": {
+    "_why": "Named on the page as the .NET/Unity SDK.",
+    "site_says": "DeviceChain.Sdk"
+  },
+
+  "connector_types": {
+    "_why": "The site says outbound connectors publish to MQTT, Kafka, SNS and SQS. A type that is removed, renamed, or newly added makes that sentence wrong in one direction or the other -- note gcp_pubsub is deliberately NOT shipped, and the site must not claim it.",
+    "site_says": ["mqtt", "kafka", "aws_sns", "aws_sqs"]
+  },
+
+  "rule_type_count": {
+    "_why": "The site says 'Eight kinds of rule' and names them. A count in prose is the most rot-prone thing on the page and the easiest to check, so it is checked rather than dropped. This claim shipped WRONG as 'nine' -- the four WindowMode values are modes for the aggregate type, not types of their own, and counting one produced the ninth.",
+    "site_says": 8
+  },
+
+  "doc_links": {
+    "_why": "Pages the site links by path. A docs page that is renamed or deleted turns a link on the homepage into a 404, and nothing else would notice.",
+    "site_says": [
+      "getting-help.md",
+      "reference/transport-matrix.md",
+      "deployment/releases-and-upgrades.md"
+    ]
+  }
+}
