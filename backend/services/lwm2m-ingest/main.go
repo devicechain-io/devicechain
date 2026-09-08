@@ -35,7 +35,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -135,7 +134,7 @@ var (
 	leaderGauge     prometheus.Gauge
 
 	Lease      *messaging.DistributedLease
-	httpServer *http.Server
+	httpServer *core.HttpServer
 
 	// leadershipCancel stops the leadership loop on shutdown; leadershipDone closes when it has
 	// fully unwound (this term's Server stopped, registry timers stopped, lease released).
@@ -265,20 +264,29 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Msg("Built an inert (no-credential) LwM2M CoAP/DTLS transport; it serves the health probe only and takes no leadership lease.")
 	}
 
-	// The microservice's own handler, not promhttp.Handler(): every metric this
-	// service constructs is registered on a registry the Microservice owns, and
-	// promhttp.Handler() gathers prometheus.DefaultGatherer and nothing else, so it
-	// would answer 200 with all of them missing. MetricsHandler gathers both.
-	http.Handle("/metrics", Microservice.MetricsHandler())
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if Microservice.Readiness.Ready() && !Microservice.Readiness.Draining() {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-	})
+	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
+	// registerHttpRoutes for why it is here and not where the server starts.
+	registerHttpRoutes()
 	return nil
+}
+
+// registerHttpRoutes mounts this service's HTTP surface — /healthz, /readyz and
+// /metrics — on the microservice's OWN mux rather than on http.DefaultServeMux.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS.
+// RegisterProbes goes through ServeMux.Handle, which panics on a duplicate pattern,
+// and LifecycleComponent's contract says ExecuteStart "may happen on startup or after
+// stop" — so registering from the start path turns a lifecycle restart into a crash.
+// Initialize runs once, which is what makes this the safe half.
+//
+// 🔴 It is also a named function rather than a line inside the initializer so a test
+// can drive the REGISTRATION ITSELF. A test that called RegisterProbes on its own
+// would be asserting against its own copy of the wiring: it would keep passing if this
+// went back to http.Handle on the default mux, which is the exact regression the
+// switchover has to prevent. The uncovered remainder is one line — that the initializer
+// calls this — because the initializer needs config, credentials and a broker.
+func registerHttpRoutes() {
+	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
 // buildMetrics creates every Prometheus instrument exactly once. All are shared across
@@ -841,13 +849,30 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// from a service that simply lost its validator — the gate refuses a bare nil.
 	Microservice.MarkReadyWithoutAuthSurface()
 
-	httpServer = &http.Server{Addr: fmt.Sprintf(":%d", httpPort)}
-	go func() {
-		log.Info().Int("port", httpPort).Msg("Starting LwM2M ingest HTTP server.")
-		if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("LwM2M ingest HTTP server exited with error.")
-		}
-	}()
+	return startHttpServer(httpPort)
+}
+
+// startHttpServer builds this service's HTTP server over the microservice's own mux
+// and starts it, returning any bind failure.
+//
+// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
+// pull in opposite directions:
+//
+//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
+//     this runs again after a stop. The routes are registered once, in the initialize
+//     phase.
+//   - It builds a new server because an http.Server cannot be restarted: Shutdown
+//     latches its shuttingDown flag permanently, so reusing one would bind and then
+//     serve nothing.
+//
+// The port is a parameter so a test can ask for an ephemeral one rather than racing
+// whatever holds 8080.
+func startHttpServer(port int32) error {
+	httpServer = Microservice.NewHttpServer(port)
+	if err := httpServer.Start(); err != nil {
+		return err
+	}
+	log.Info().Str("addr", httpServer.Addr()).Msg("Started LwM2M ingest HTTP server.")
 	return nil
 }
 
