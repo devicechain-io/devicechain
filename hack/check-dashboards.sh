@@ -577,7 +577,7 @@ EOF
   grep -q 'or vector(0)) > 0' "$tmpl/prometheusrule-probe.yaml" ||
     fail "the correct-parenthesisation mutation did not apply"
   check_content "$work" >/dev/null ||
-    fail "flagged a CORRECTLY parenthesised `or vector(0)` -- the check rejects the right idiom"
+    fail "flagged a CORRECTLY parenthesised or-vector(0) -- the check rejects the right idiom"
   restore
   echo "  ok: a correctly parenthesised or-vector(0) still passes"
 
