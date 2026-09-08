@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -95,6 +96,20 @@ type CommandDeliveryProcessor struct {
 	// assembled by literal in places the constructor never runs, so a zero here is an
 	// unset field and not an operator asking for a zero-second tick.
 	SweepInterval time.Duration
+
+	// holdInterval and strandedInterval are the cadences of the two reconcile passes,
+	// and ZERO MEANS "use the platform default" exactly as SweepInterval's zero does.
+	// Unlike SweepInterval there is no operator knob behind either — the constants in
+	// config are the only production values — so both are unexported, and the only thing
+	// that sets them is a test.
+	//
+	// 🔑 THEY EXIST FOR THE REASON runSweepTicker WAS EXTRACTED FROM ExecuteStart: a loop
+	// whose cadence nothing can reach is a loop whose SHUTDOWN nothing can drive. What has
+	// to hold at shutdown is that ExecuteStop does not return while one of these passes is
+	// still running, and a test cannot put a pass in flight at all if it must first wait
+	// out a two-minute tick.
+	holdInterval     time.Duration
+	strandedInterval time.Duration
 
 	// Presence answers, for a batch of one tenant's devices, whether dispatching to
 	// each is worth doing right now. MAY BE NIL — read it through presenceStates, never
@@ -238,6 +253,13 @@ type CommandDeliveryProcessor struct {
 
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
+
+	// periodic tracks the background passes ExecuteStart launches, so ExecuteStop can
+	// WAIT for them rather than merely signalling them. Closing quit only asks a loop to
+	// stop; without the join, ExecuteStop returns while a pass is still mid-flight, and
+	// the caller (beforeMicroserviceStopped) goes straight on to close the database pool
+	// underneath it. See ExecuteStop.
+	periodic sync.WaitGroup
 }
 
 // NewCommandDeliveryProcessor creates a new command delivery processor.
@@ -485,6 +507,23 @@ func (cproc *CommandDeliveryProcessor) sweepInterval() time.Duration {
 		return cproc.SweepInterval
 	}
 	return config.DefaultSweepIntervalSeconds * time.Second
+}
+
+// holdReconcileInterval is the hold-reconcile cadence, falling back to the platform
+// default. See the field for why it is settable at all.
+func (cproc *CommandDeliveryProcessor) holdReconcileInterval() time.Duration {
+	if cproc.holdInterval > 0 {
+		return cproc.holdInterval
+	}
+	return config.HoldReconcileInterval * time.Second
+}
+
+// strandedReconcileInterval is the stranded-SENT cadence, same shape.
+func (cproc *CommandDeliveryProcessor) strandedReconcileInterval() time.Duration {
+	if cproc.strandedInterval > 0 {
+		return cproc.strandedInterval
+	}
+	return config.StrandedReconcileInterval * time.Second
 }
 
 // dispatchPath names which of the two dispatch paths a delivery attempt came down.
@@ -1026,6 +1065,67 @@ func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
 	}
 }
 
+// runHoldReconcileTicker drives the hold-reconcile net on its own slower cadence. It is
+// deliberately NOT folded into the sweep: the sweep's cadence is chosen for delivery
+// latency, and a walk of the accumulated withheld set has no business running at that
+// rate. Its own ticker also means a slow reconcile pass cannot delay a delivery pass.
+func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.holdReconcileInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.reconcileHolds(ctx)
+		}
+	}
+}
+
+// runStrandedReconcileTicker drives the stranded-SENT net, on its own slower cadence
+// again. Same reasoning as the hold reconciler's separate ticker, plus one of its own: a
+// row is not eligible here until it has been abandoned for StrandedSentGrace, so this
+// pass has nothing to gain from running at either of the other two cadences.
+func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Context) {
+	ticker := time.NewTicker(cproc.strandedReconcileInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cproc.quit:
+			return
+		case <-ticker.C:
+			cproc.reconcileStranded(ctx)
+		}
+	}
+}
+
+// startPeriodic launches one background pass under the WaitGroup ExecuteStop joins.
+//
+// 🔴 THE Add MUST HAPPEN BEFORE THE `go`, AND THIS IS THE INVARIANT, NOT A STYLE NOTE.
+// sync.WaitGroup requires that an Add raising the counter from zero happen-before the Wait
+// it is meant to hold; an Add moved INSIDE the goroutine can be scheduled after Wait has
+// already seen a zero counter and returned, which is the very "ExecuteStop reports a clean
+// stop over work still running" this whole mechanism exists to prevent. Nothing enforces it
+// but this function, which is why every pass goes through it and none starts its own
+// goroutine. It is also not currently reachable from ExecuteStart — that runs
+// synchronously, so every Add completes before Start returns and long before any Stop —
+// so the guarantee rests on the ordering here rather than on the caller.
+//
+// The matching Done is deferred INSIDE the goroutine, and the pass function is a closure
+// rather than the loop method itself, so a loop stays callable directly (several tests
+// drive `go proc.runSweepTicker(ctx)`) without owning a counter it did not raise.
+func (cproc *CommandDeliveryProcessor) startPeriodic(pass func()) {
+	cproc.periodic.Add(1)
+	go func() {
+		defer cproc.periodic.Done()
+		pass()
+	}()
+}
+
 // Initialize the component.
 func (cproc *CommandDeliveryProcessor) Initialize(ctx context.Context) error {
 	return cproc.lifecycle.Initialize(ctx)
@@ -1049,20 +1149,28 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// (deliver-on-reconnect semantics). Locked like the ticker's sweep: a rolling
 	// restart starts several pods at once, which is precisely when an unguarded
 	// startup pass would publish every queued command once per new pod.
-	go cproc.sweepLocked(ctx)
+	cproc.startPeriodic(func() { cproc.sweepLocked(ctx) })
 
-	// Processing loop for inbound device responses.
-	go func() {
+	// Processing loop for inbound device responses, joined like every other
+	// background goroutine here.
+	//
+	// 🔑 THE JOIN IS BOUNDED BY THE SAME ROOT CANCELLATION, plus one Fetch.
+	// messaging's reader returns io.EOF the moment its context is cancelled, so this
+	// loop unwinds on the cancel that precedes Stop rather than on anything ExecuteStop
+	// does. The one place inside ReadMessage that does not watch the context is the
+	// pull-consumer Fetch, which is capped at its own MaxWait — currently a second — so
+	// that is the worst this adds to a shutdown, and only when the cancel lands mid-fetch.
+	cproc.startPeriodic(func() {
 		for {
 			eof := cproc.ProcessMessage(ctx)
 			if eof {
 				break
 			}
 		}
-	}()
+	})
 
 	// Background expiry + delivery ticker.
-	go cproc.runSweepTicker(ctx)
+	cproc.startPeriodic(func() { cproc.runSweepTicker(ctx) })
 
 	// The dispatch nudge's workers. Started here rather than in the constructor so a
 	// processor that is built and never started leaks none of them, and stopped in
@@ -1071,39 +1179,11 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// tick of latency and nothing else.
 	cproc.nudger.Start()
 
-	// The hold-reconcile net, on its own slower ticker. It is deliberately NOT folded
-	// into the sweep above: the sweep's cadence is chosen for delivery latency, and a
-	// walk of the accumulated withheld set has no business running at that rate. Its own
-	// ticker also means a slow reconcile pass cannot delay a delivery pass.
-	go func() {
-		ticker := time.NewTicker(config.HoldReconcileInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.reconcileHolds(ctx)
-			}
-		}
-	}()
-
-	// The stranded-SENT net, on its own slower ticker again. Same reasoning as the hold
-	// reconciler's separate ticker, plus one of its own: a row is not eligible here until
-	// it has been abandoned for StrandedSentGrace, so this pass has nothing to gain from
-	// running at either of the other two cadences.
-	go func() {
-		ticker := time.NewTicker(config.StrandedReconcileInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cproc.quit:
-				return
-			case <-ticker.C:
-				cproc.reconcileStranded(ctx)
-			}
-		}
-	}()
+	// The two reconcile nets, each on its own slower ticker. Extracted from here for the
+	// same reason the sweep ticker was: inline, neither the cadence nor the shutdown
+	// behaviour was reachable by anything but the ticker's real interval.
+	cproc.startPeriodic(func() { cproc.runHoldReconcileTicker(ctx) })
+	cproc.startPeriodic(func() { cproc.runStrandedReconcileTicker(ctx) })
 	return nil
 }
 
@@ -1119,9 +1199,31 @@ func (cproc *CommandDeliveryProcessor) Stop(ctx context.Context) error {
 // is holding a claim it must finish releasing or publishing. Closing quit first would not
 // interrupt it — nothing in the drain reads quit — it would merely make the wait happen
 // with less of the processor still standing.
+//
+// 🔴 IT WAITS FOR THE BACKGROUND PASSES, AND SIGNALLING THEM IS NOT THE SAME THING.
+// Closing quit stops the next pass from starting; it says nothing about the one already
+// running. The caller is beforeMicroserviceStopped, which goes on to stop the broker and
+// then the RdbManager — and the pool is closed in RdbManager.ExecuteTerminate. Without the
+// join, a pass that was mid-flight when quit closed is still issuing queries when its pool
+// closes, from a service that has already reported a clean stop. For the delivery sweep
+// that pass PUBLISHES PHYSICAL ACTUATIONS and holds Api.TrySweepLock, so the lock would be
+// held by a goroutine the lifecycle no longer tracks.
+//
+// 🔑 THE PERIODIC WAIT IS BOUNDED BY THE ROOT CANCELLATION THAT ALREADY HAPPENED, not
+// by a timeout here. Microservice shutdown cancels the root context BEFORE calling Stop,
+// and that root context is the one ExecuteStart handed to every loop, so a pass in flight
+// is already unwinding against a cancelled context by the time this wait begins. That is
+// also why no deadline is taken from ExecuteStop's own context: it is context.Background(),
+// so a bounded wait on it could never fire — a guard that cannot fire is worse than none.
+//
+// ⚠️ THAT BOUND COVERS cproc.periodic AND NOT nudger.Stop(). A nudge worker drains under
+// context.Background() by deliberate choice — see dispatchNudger.run — so its wait is
+// bounded by the work itself finishing, not by any cancellation. Both waits are here, and
+// only one of them is answerable to the root context.
 func (cproc *CommandDeliveryProcessor) ExecuteStop(context.Context) error {
 	cproc.nudger.Stop()
 	close(cproc.quit)
+	cproc.periodic.Wait()
 	return nil
 }
 
