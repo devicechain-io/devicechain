@@ -911,6 +911,37 @@ type natsReader struct {
 	// held, when set, is the leadership-term predicate this reader is gated on: no
 	// message is handed out unless it reports true. See ReaderWithTermGate.
 	held func() bool
+	// reading enforces MessageReader's one-goroutine-at-a-time contract. pending and
+	// consecutiveTimeouts above are plain fields on purpose — a durable pull consumer
+	// is drained by ONE loop — and this is what makes that a CHECKED precondition
+	// rather than a comment on an unexported field no caller can see.
+	//
+	// It is a busy flag, not a lock: an overlapping second call is REFUSED with
+	// ErrConcurrentRead rather than serialized. Serializing would remove the data race
+	// while leaving the defect the race is a symptom of — two goroutines splitting one
+	// durable's deliveries between them, each acking messages the other never saw —
+	// intact and, worse, invisible.
+	//
+	// It is cleared on every return, so SEQUENTIAL use from different goroutines stays
+	// legal, which matters: event-processing drains these readers to head on its
+	// startup goroutine and then hands the same readers to consumer goroutines it
+	// launches afterwards. Only genuine overlap is refused.
+	reading atomic.Bool
+	// bindMu makes the multi-step (re)bind sequence atomic against itself and against
+	// UnbindTerm. sub is an atomic pointer, so each individual write is already safe;
+	// the SEQUENCE (Unsubscribe, AddConsumer, reconcileFilterSubject, PullSubscribe,
+	// Store) is what needs the exclusion, because bind is reachable from the read loop
+	// (rebindWithBackoff) while BindTerm/UnbindTerm run on the term-build goroutine.
+	// It is not on the per-message path, so it costs nothing.
+	bindMu sync.Mutex
+	// unbound records that a term has ended, and is what stops a re-bind already in
+	// flight from restoring the reply-inbox interest AFTER UnbindTerm removed it — the
+	// exact state UnbindTerm's doc says it exists to prevent, which the mutex alone
+	// does not prevent because it orders the two operations without ordering the term.
+	// Guarded by bindMu so the check and the subscription Store are one step. Only
+	// BindTerm clears it, so a process-scoped reader (one that never unbinds) is
+	// unaffected.
+	unbound bool
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -973,7 +1004,14 @@ func ReaderWithTermGate(held func() bool) ReaderOption {
 //
 // Doing the bind at term START instead puts that failure inside the term build,
 // where it is a term-build failure the caller's retry fuse already covers.
-func (r *natsReader) BindTerm() error { return r.bind() }
+func (r *natsReader) BindTerm() error {
+	r.bindMu.Lock()
+	defer r.bindMu.Unlock()
+	// A new term re-opens the reader the last UnbindTerm closed. This is the ONLY
+	// thing that clears the flag, so nothing between the two terms can re-attach.
+	r.unbound = false
+	return r.bindLocked()
+}
 
 // UnbindTerm drops the pull subscription at the end of a leadership term.
 //
@@ -987,6 +1025,13 @@ func (r *natsReader) BindTerm() error { return r.bind() }
 // Unlike BindTerm this is purely local and succeeds while disconnected, which is
 // why it is safe on the loss path.
 func (r *natsReader) UnbindTerm() error {
+	r.bindMu.Lock()
+	defer r.bindMu.Unlock()
+	// Set BEFORE the swap and under the same lock a bind takes, so a re-bind is either
+	// wholly before this — and its subscription is then the one swapped out here — or
+	// refused. Without it the read loop's self-heal can re-attach a moment later and
+	// hand the old term's pull requests a live reply inbox again.
+	r.unbound = true
 	if old := r.sub.Swap(nil); old != nil {
 		return old.Unsubscribe()
 	}
@@ -1051,6 +1096,21 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 // so the durable survives every pod's shutdown. bind is also the self-heal path:
 // ReadMessage calls it to re-attach if the consumer ever does go away.
 func (r *natsReader) bind() error {
+	r.bindMu.Lock()
+	defer r.bindMu.Unlock()
+	return r.bindLocked()
+}
+
+// errReaderUnbound is what a bind reports when the reader's leadership term has
+// already ended. It is terminal for the self-heal (see rebindWithBackoff): there is
+// nothing to heal back to until a successor term calls BindTerm.
+var errReaderUnbound = errors.New("messaging: reader is unbound; its leadership term has ended")
+
+// bindLocked is bind's body, with bindMu already held.
+func (r *natsReader) bindLocked() error {
+	if r.unbound {
+		return errReaderUnbound
+	}
 	// Release any stale subscription first. With a bound sub this does not delete the
 	// durable; it just releases the old (dead) subscription on a re-bind. The old
 	// pointer stays published until the new one is ready, so a concurrent
@@ -1354,6 +1414,12 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 			if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
 				return err
 			}
+			// The term ended underneath us. Re-attaching now is the thing UnbindTerm
+			// exists to prevent, so stop and let the caller unwind as EOF — which is
+			// what a term teardown wants its read loops to do anyway.
+			if errors.Is(err, errReaderUnbound) {
+				return err
+			}
 			log.Error().Err(err).Str("durable", r.durable).Msg("Re-bind of durable consumer failed; will retry")
 			if backoff *= 2; backoff > rebindBackoffMax {
 				backoff = rebindBackoffMax
@@ -1375,6 +1441,14 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 // subscription/connection closed) it returns io.EOF so the existing processor EOF
 // handling applies.
 func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
+	// Enforce the one-goroutine contract stated on MessageReader.ReadMessage: refuse
+	// an overlapping call rather than racing pending and consecutiveTimeouts, which
+	// can hand the same message out twice or drop a whole fetched batch. See the
+	// reading field for why this refuses instead of serializing.
+	if !r.reading.CompareAndSwap(false, true) {
+		return Message{}, fmt.Errorf("%w: durable %q", ErrConcurrentRead, r.durable)
+	}
+	defer r.reading.Store(false)
 	for {
 		if err := ctx.Err(); err != nil {
 			return Message{}, io.EOF

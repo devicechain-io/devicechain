@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -245,8 +246,30 @@ func (m Message) Ack() error {
 	return m.ack.Ack()
 }
 
+// ErrConcurrentRead is returned by ReadMessage when a second goroutine calls it
+// while a first call is still in flight on the same reader. It is a programming
+// error, not a transport condition: a caller cannot retry its way out of it, and it
+// is deliberately NOT io.EOF, so a read loop that hits it backs off and logs rather
+// than silently shutting itself down.
+var ErrConcurrentRead = errors.New("messaging: ReadMessage is not safe for concurrent use; one goroutine per reader")
+
 // MessageReader is the consumer-side abstraction (kept small for unit testing).
 type MessageReader interface {
+	// ReadMessage returns the next message, blocking until one is available, the
+	// context is cancelled, or the stream ends (io.EOF).
+	//
+	// 🔴 ONE GOROUTINE PER READER. A reader buffers a fetched batch and hands it out
+	// one message at a time, so two concurrent calls would race that buffer and can
+	// deliver the same message twice or drop a batch. The NATS implementation REFUSES
+	// the second caller with ErrConcurrentRead rather than serializing it, because
+	// serializing removes the race but not the defect: two goroutines sharing one
+	// durable would still split its deliveries between them, each acking messages the
+	// other never saw. Fan out AFTER the read (hand the Message to a worker pool, as
+	// notification-management does), not by sharing the reader.
+	//
+	// SEQUENTIAL use from different goroutines is fine and is done in the tree: a
+	// startup goroutine may drain a reader to head and then hand it to the consumer
+	// goroutine that reads it from then on. Only overlapping calls are refused.
 	ReadMessage(ctx context.Context) (Message, error)
 	HandleResponse(err error)
 }
@@ -260,6 +283,13 @@ type MessageReader interface {
 //
 // The two halves are deliberately asymmetric — see BindTerm and UnbindTerm on the
 // NATS implementation for why the bind belongs at term START and never at term end.
+//
+// Unlike ReadMessage these two ARE safe to call from a goroutine other than the one
+// reading the reader — which is the only way they can be used, since the term build
+// and teardown do not run on the read loop. The implementation serializes them
+// against each other and against the read loop's own self-heal re-bind, and a bind
+// that loses that race to an UnbindTerm is refused rather than being allowed to
+// restore the interest the unbind just withdrew.
 type TermBoundReader interface {
 	BindTerm() error
 	UnbindTerm() error
