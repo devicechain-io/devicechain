@@ -295,3 +295,81 @@ func TestDeviceReplacementsReadableAtDeviceRead(t *testing.T) {
 		t.Errorf("deviceReplacements answered an anonymous caller with %v, want ErrUnauthenticated", err)
 	}
 }
+
+// The mutation's response and the query must describe the SAME journal row. They
+// reach it by different routes — the mutation returns the record it just built in
+// memory, the query re-reads it and Preloads the association — and only the second
+// one used to carry the device. The SDL declares `device: Device!`, so the gap did
+// not surface as null or as an error: the resolver substituted a zero-valued Device
+// and the field answered with an empty token, which reads at a call site exactly
+// like a device whose token happens to be blank.
+//
+// Both selections are executed over the real schema rather than compared at the
+// resolver, because the substitution happens IN the resolver and a check that called
+// it directly would be asking the thing under test whether it is right.
+func TestReplaceDeviceAndDeviceReplacementsAgreeOnTheDevice(t *testing.T) {
+	ctx := newReplacementWireCtx(t, auth.DeviceRead, auth.DeviceWrite)
+	seedReplacementWireDevice(t, ctx)
+
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(ctx, `mutation($request: DeviceReplaceRequest!) {
+  replaceDevice(request: $request) {
+    replacement { device { token } }
+  }
+}`, "", map[string]any{
+		"request": map[string]any{"deviceToken": "dozer-01"},
+	})
+	if len(res.Errors) != 0 {
+		t.Fatalf("replaceDevice failed: %v", res.Errors)
+	}
+	var mutated struct {
+		ReplaceDevice struct {
+			Replacement struct {
+				Device struct{ Token string }
+			}
+		}
+	}
+	if err := json.Unmarshal(res.Data, &mutated); err != nil {
+		t.Fatalf("decode mutation result: %v", err)
+	}
+
+	res = schema.Exec(ctx, `query($criteria: DeviceReplacementSearchCriteria!) {
+  deviceReplacements(criteria: $criteria) {
+    results { device { token } }
+  }
+}`, "", map[string]any{
+		"criteria": map[string]any{"pageNumber": 1, "pageSize": 10, "device": "dozer-01"},
+	})
+	if len(res.Errors) != 0 {
+		t.Fatalf("deviceReplacements failed: %v", res.Errors)
+	}
+	var read struct {
+		DeviceReplacements struct {
+			Results []struct {
+				Device struct{ Token string }
+			}
+		}
+	}
+	if err := json.Unmarshal(res.Data, &read); err != nil {
+		t.Fatalf("decode query result: %v", err)
+	}
+	if len(read.DeviceReplacements.Results) != 1 {
+		t.Fatalf("expected 1 replacement, got %d", len(read.DeviceReplacements.Results))
+	}
+
+	// Each side is asserted against the SEEDED LITERAL before they are compared to
+	// each other. A test that only compared the two responses would pass if both
+	// went empty, which is the failure this exists to catch.
+	if got := mutated.ReplaceDevice.Replacement.Device.Token; got != "dozer-01" {
+		t.Errorf("replaceDevice's replacement.device.token = %q, want dozer-01", got)
+	}
+	if got := read.DeviceReplacements.Results[0].Device.Token; got != "dozer-01" {
+		t.Errorf("deviceReplacements' device.token = %q, want dozer-01", got)
+	}
+	if mutated.ReplaceDevice.Replacement.Device.Token !=
+		read.DeviceReplacements.Results[0].Device.Token {
+		t.Errorf("the mutation and the query disagree about the same row: %q vs %q",
+			mutated.ReplaceDevice.Replacement.Device.Token,
+			read.DeviceReplacements.Results[0].Device.Token)
+	}
+}

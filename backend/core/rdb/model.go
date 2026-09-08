@@ -22,10 +22,17 @@ type TenantScoped struct {
 }
 
 // Entity that is referenced by a token which may change over time. Uniqueness is
-// NOT declared here: a per-tenant partial unique index (ADR-042 P1) is created by
-// each service's migration via rdb.CreateTenantTokenIndex — token is unique within
-// a tenant among live (non-soft-deleted) rows, so tenants never collide and a
-// deleted token frees for reuse. A bare global UNIQUE(token) would do neither.
+// NOT declared here: a per-tenant partial unique index (ADR-042 P1) named
+// uix_<table>_tenant_token makes the token unique within a tenant among live
+// (non-soft-deleted) rows, so tenants never collide and a deleted token frees for
+// reuse. A bare global UNIQUE(token) would do neither.
+//
+// Each service's migration declares that index itself, against its own snapshot
+// struct — an index name and a WHERE predicate are schema, and a migration that
+// sourced them from core would start building something different on fresh installs
+// the day core changed. rdb.CreateTenantTokenIndex is the TEST fixture of the same
+// shape, for service unit tests that run on SQLite with no migration chain; it is
+// not the migration path.
 type TokenReference struct {
 	Token string `gorm:"index;not null;size:128"`
 }
@@ -48,8 +55,10 @@ func (t TokenReference) AuditLabel() string { return t.Token }
 // (ADR-049) — a VIN, serial, GS1 code, asset tag — distinct from the token. Unlike
 // the token it is opaque (no NATS/MQTT addressing grammar), not a credential, and
 // nullable; it exists only to be looked up by. Per-tenant uniqueness among live
-// rows WITH an id present is a partial unique index created by each service's
-// migration via rdb.CreateTenantExternalIdIndex (the token analog, ADR-042 P1).
+// rows WITH an id present is a partial unique index each service's migration
+// declares for itself (the token analog, ADR-042 P1);
+// rdb.CreateTenantExternalIdIndex is the test fixture of that shape, on the same
+// terms as rdb.CreateTenantTokenIndex above.
 type ExternalReference struct {
 	ExternalId sql.NullString `gorm:"index;size:256"`
 }

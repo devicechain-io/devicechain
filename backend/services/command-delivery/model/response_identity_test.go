@@ -6,9 +6,11 @@ package model
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"gorm.io/gorm"
 )
 
 // TestMarkResponseRefusesADeviceAnsweringForAnother is the defect, written as a test.
@@ -108,6 +110,13 @@ func TestMarkResponseRefusesADeviceAnsweringForAnotherOnATerminalCommand(t *test
 // This is not the forgery case — the device owns the command. It is the pre-emptive one:
 // reporting success for an actuation still sitting in the queue closes the command out,
 // so the platform stops trying to deliver it and the record says it ran.
+//
+// 🔴 IT USED TO ASSERT A NIL ERROR HERE, WHICH IS THE HALF OF THE GUARD THAT WAS MISSING.
+// Leaving the row alone is necessary and was never in doubt; what the caller also needs is
+// to be TOLD, because a nil error is what it acks on. Asserting only the status made this
+// test pass against a function that refused the write and reported success, which is how a
+// device's answer could be discarded with nothing recording it. The sentinel is asserted
+// too, so a return to the silent shape fails here rather than in production.
 func TestMarkResponseRefusesStatesNoDispatcherHeld(t *testing.T) {
 	for _, status := range []CommandStatus{CommandQueued, CommandHeld} {
 		t.Run(status.String(), func(t *testing.T) {
@@ -126,8 +135,16 @@ func TestMarkResponseRefusesStatesNoDispatcherHeld(t *testing.T) {
 				}
 			}
 
-			if _, err := api.MarkResponse(ctx, "early", "pump-1", true, nil, nil); err != nil {
-				t.Fatalf("MarkResponse: %v", err)
+			_, err = api.MarkResponse(ctx, "early", "pump-1", true, nil, nil)
+			if !errors.Is(err, ErrCommandNotAnswerable) {
+				t.Fatalf("MarkResponse err = %v, want ErrCommandNotAnswerable; a caller told "+
+					"nothing acks the message and the device's answer is gone", err)
+			}
+			// The status is named in the error because it is the only thing that separates a
+			// released dispatch (QUEUED) from a presence hold (HELD), and by the time anyone
+			// reads the dead letter the row has moved.
+			if !strings.Contains(err.Error(), status.String()) {
+				t.Fatalf("MarkResponse err = %q, want it to name the status %s", err, status)
 			}
 			got := loadOrFail(t, api, ctx, created.ID)
 			if got.Status != status.String() {
@@ -160,5 +177,127 @@ func TestAnswerableStatusesAreDispatcherHeld(t *testing.T) {
 		if s == CommandQueued.String() || s == CommandHeld.String() {
 			t.Fatalf("answerable includes %q, which no dispatcher has ever handed to a device", s)
 		}
+	}
+}
+
+// TestMarkResponseAcceptsARaceToTerminal is the counterweight to the test above, and it
+// is the reason the non-match is CLASSIFIED rather than simply turned into an error.
+//
+// 🔴 RowsAffected==0 HAS TWO CAUSES AND ONLY ONE OF THEM IS A PROBLEM. The row can have
+// moved FORWARD to a terminal state between MarkResponse's read and its write — a
+// duplicate answer, an expiry, a cancel — which is an ordinary race the caller must go on
+// treating as settled. Refusing that one would turn every such race into a dead letter and
+// a warning, on a command that is already finished.
+//
+// It is not reachable through the public API alone: both statements live inside the one
+// call, so the row has to be moved UNDER the read. The callback below does exactly that,
+// once, which is why it is registered rather than the status being forced up front — a row
+// forced terminal beforehand takes the fast path and never reaches the branch under test.
+func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	id := seedWithStatus(t, api, ctx, "raced-terminal", CommandQueued)
+	if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
+		t.Fatalf("staging the claim failed: claimed=%v err=%v", claimed, err)
+	}
+
+	// A plain flag rather than a sync.Once: gorm runs its callbacks on the calling
+	// goroutine, and the test needs to READ afterwards whether the hook ever fired — a
+	// once that silently never ran would leave this measuring the fast path instead.
+	raced := false
+	const hook = "test:settle_under_the_read"
+	db := api.RDB.Database
+	if err := db.Callback().Query().After("gorm:query").Register(hook, func(*gorm.DB) {
+		if raced {
+			return
+		}
+		raced = true
+		if err := forceStatus(api, ctx, id, CommandCancelled); err != nil {
+			t.Errorf("settling the row under the read: %v", err)
+		}
+	}); err != nil {
+		t.Fatalf("registering the race hook: %v", err)
+	}
+	defer func() {
+		if err := db.Callback().Query().Remove(hook); err != nil {
+			t.Errorf("removing the race hook: %v", err)
+		}
+	}()
+
+	got, err := api.MarkResponse(ctx, "raced-terminal", "d", true, nil, nil)
+	if err != nil {
+		t.Fatalf("a response that lost a race to a terminal state must settle quietly, got %v", err)
+	}
+	if got.Status != CommandCancelled.String() {
+		t.Fatalf("status = %s, want CANCELLED — the caller is handed the row as it now is", got.Status)
+	}
+	// The premise: the snapshot MarkResponse read really was answerable, so this exercised
+	// the zero-match branch rather than the terminal fast path above it.
+	if !raced {
+		t.Fatal("premise lost: the hook never fired, so nothing raced the write")
+	}
+}
+
+// TestMarkResponseRefusesARowReclaimedUnderTheReRead covers the interleaving where the
+// re-read finds an ANSWERABLE status, which is the one case where the refusal has to
+// explain itself carefully.
+//
+// The row is QUEUED when the write runs, so the write matches nothing. Before the re-read,
+// a dispatcher claims it — the sweep re-dispatching a command that a failed publish
+// returned to the queue. `current` therefore reads SENT.
+//
+// 🔑 IT IS STILL REFUSED, AND THAT IS THE DELIBERATE CALL. The SENT the re-read sees is a
+// NEW dispatch under a new nonce; this answer belongs to the one that was released.
+// Accepting it because the row is answerable again would settle the second dispatch with
+// the first dispatch's answer — the same mis-filing that makes retrying this message wrong.
+//
+// 🔴 AND THE MESSAGE MUST NOT CONTRADICT ITSELF. Reporting only the status NOW would read
+// "not in a state a response can settle ... which is SENT" to whoever opens the dead letter.
+func TestMarkResponseRefusesARowReclaimedUnderTheReRead(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	id := seedWithStatus(t, api, ctx, "reclaimed", CommandQueued)
+
+	// Fire once AFTER the failed UPDATE, which is the only window that produces this
+	// state: a query hook would fire around the reads instead, on either side of it.
+	reclaimed := false
+	const hook = "test:reclaim_after_the_write"
+	db := api.RDB.Database
+	if err := db.Callback().Update().After("gorm:update").Register(hook, func(*gorm.DB) {
+		if reclaimed {
+			return
+		}
+		reclaimed = true
+		if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
+			t.Errorf("re-claiming under the re-read: claimed=%v err=%v", claimed, err)
+		}
+	}); err != nil {
+		t.Fatalf("registering the re-claim hook: %v", err)
+	}
+	defer func() {
+		if err := db.Callback().Update().Remove(hook); err != nil {
+			t.Errorf("removing the re-claim hook: %v", err)
+		}
+	}()
+
+	_, err := api.MarkResponse(ctx, "reclaimed", "d", true, nil, nil)
+	if !errors.Is(err, ErrCommandNotAnswerable) {
+		t.Fatalf("MarkResponse err = %v, want ErrCommandNotAnswerable; this answer belongs to "+
+			"the dispatch that was released, not to the one now in flight", err)
+	}
+	if !reclaimed {
+		t.Fatal("premise lost: the hook never fired, so nothing re-claimed the row")
+	}
+	// Both statuses, or the sentence argues against itself.
+	if !strings.Contains(err.Error(), CommandQueued.String()) ||
+		!strings.Contains(err.Error(), CommandSent.String()) {
+		t.Fatalf("MarkResponse err = %q; it must name the status at the write (QUEUED) as well "+
+			"as the one now (SENT), or it reads as refusing an answerable command", err)
+	}
+	// The re-claim stands: nothing about the refusal may disturb the dispatch in flight.
+	if got := loadOrFail(t, api, ctx, id); got.Status != CommandSent.String() {
+		t.Fatalf("status = %s, want SENT; the refusal must not touch the new dispatch", got.Status)
 	}
 }

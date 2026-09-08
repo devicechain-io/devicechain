@@ -125,7 +125,17 @@ spec:
             summary: "REACT is giving up on un-dispatchable derived events"
             description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
         - alert: DeadLetterStoreLosing
-          expr: sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) or vector(0) > 0
+          # 🔴 THE PARENTHESES AROUND `or vector(0)` ARE LOAD-BEARING, and this rule shipped
+          # without them. `>` binds TIGHTER than `or`, so `sum(rate(x)) or vector(0) > 0`
+          # parses as `sum(rate(x)) or (vector(0) > 0)`: the right side filters the sample 0
+          # by `> 0` and is empty, which leaves a bare `sum(rate(x))` with NO COMPARISON AT
+          # ALL. An alert fires on any sample its expression returns, whatever the value —
+          # and because this metric is a plain Counter (not a CounterVec) it is registered at
+          # construction and exported at 0, so the series always exists and rate() always
+          # returns a sample. The result was a `severity: critical` alert firing permanently
+          # on every instance about five minutes after rollout. Bind the comparison to the
+          # whole expression, the way DeadLetterWriteLost below already does.
+          expr: (sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) or vector(0)) > 0
           for: 5m
           labels:
             severity: critical

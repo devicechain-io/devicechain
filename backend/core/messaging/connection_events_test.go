@@ -4,21 +4,18 @@
 package messaging
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // A broker outage must reach the logs.
@@ -131,7 +128,7 @@ func TestReconnectIsLogged(t *testing.T) {
 // findLog returns the first captured zerolog record whose message contains want,
 // decoded, or nil. Decoding rather than substring-matching is what lets an
 // assertion name the FIELD it depends on.
-func findLog(logs *syncBuffer, want string) map[string]any {
+func findLog(logs *dctest.LogSink, want string) map[string]any {
 	for _, line := range strings.Split(logs.String(), "\n") {
 		if line == "" {
 			continue
@@ -221,34 +218,15 @@ func TestShutdownCloseIsNotLoggedAtError(t *testing.T) {
 	}
 }
 
-// captureLogs redirects the global zerolog logger into a buffer for the duration
-// of the test and restores it afterwards.
-func captureLogs(t *testing.T) *syncBuffer {
+// captureLogs collects the global logger's output for the duration of the test.
+//
+// It switches collection on against the package-wide sink installed by TestMain
+// rather than installing a logger of its own, which is what an earlier version did:
+// it assigned to log.Logger here and restored it in t.Cleanup, underneath the NATS
+// client's callback goroutine still reading it. The reasoning is on dctest.LogSink.
+func captureLogs(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	buf := &syncBuffer{}
-	prev := log.Logger
-	log.Logger = zerolog.New(buf)
-	t.Cleanup(func() { log.Logger = prev })
-	return buf
-}
-
-// syncBuffer is a bytes.Buffer safe for the NATS client's callback goroutines to
-// write while the test goroutine reads.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
+	return logSink.Capture(t)
 }
 
 func startBroker(t *testing.T) *natsserver.Server { return startBrokerOnPort(t, -1) }

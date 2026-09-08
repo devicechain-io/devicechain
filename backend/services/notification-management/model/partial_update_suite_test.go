@@ -31,7 +31,7 @@ import (
 var partialUpdateRootKey = []byte("0123456789abcdef0123456789abcdef")
 
 // newPartialUpdateApi builds a SQLite-backed Api migrated for one family. The database
-// half — the named shared-cache DSN, the pool close, the token-grammar registration, and
+// half — the named shared-cache DSN, the pool close, the four callback registrations, and
 // the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 //
 // 🔴 THE SECRET STORE IS MIGRATED UNCONDITIONALLY, EVEN FOR THE POLICY FAMILY, and that

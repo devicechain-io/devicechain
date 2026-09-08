@@ -115,15 +115,50 @@ func TestIndexReasonDistinguishesAShedFromAFailure(t *testing.T) {
 		outcomeRateLimited: deadletter.ReasonShed,
 		outcomeUnsupported: deadletter.ReasonUnprocessable,
 		outcomeInvalid:     deadletter.ReasonUnprocessable,
+		outcomeBlocked:     deadletter.ReasonUnprocessable,
 	} {
 		if got := indexReasonFor(outcome); got != want {
 			t.Errorf("indexReasonFor(%q) = %q, want %q", outcome, got, want)
 		}
 	}
-	// An outcome nobody has classified reads as the vocabulary's own "says nothing about the cause"
-	// value rather than as a claim.
-	if got := indexReasonFor("something-added-later"); got != deadletter.ReasonExhausted {
-		t.Errorf("an unclassified outcome mapped to %q, want %q", got, deadletter.ReasonExhausted)
+}
+
+// 🔴 ReasonExhausted IS NOT A NEUTRAL VALUE. It is the one reason for which
+// deadletter.Reason.WorkWasAttempted answers true, which is what tells a consumer of the platform
+// dead-letter list that it may SETTLE state on the letter. So mapping an outcome onto it is a claim
+// that this service attempted the send and lost it, and every outcome here has to earn that claim.
+//
+// outcomeBlocked is the case that makes the difference concrete: the egress boundary refused the
+// destination before a byte was written, so nothing was attempted — it is well-formed work aimed
+// somewhere it must not go, not work that failed.
+func TestOnlyAnExhaustedSendClaimsTheWorkWasAttempted(t *testing.T) {
+	// Every terminal outcome that reaches index(): the rate shed and the redelivery-cap case from
+	// Handle, plus the executor's terminal verdicts.
+	for outcome, attempted := range map[string]bool{
+		outcomeDead:        true,
+		outcomeRateLimited: false,
+		outcomeUnsupported: false,
+		outcomeInvalid:     false,
+		outcomeBlocked:     false,
+	} {
+		if got := indexReasonFor(outcome).WorkWasAttempted(); got != attempted {
+			t.Errorf("outcome %q indexes as %q, whose WorkWasAttempted() is %v, want %v — a "+
+				"consumer settles state on exactly this answer", outcome,
+				indexReasonFor(outcome), got, attempted)
+		}
+	}
+
+	// 🔴 AND THE DEFAULT CLAIMS NOTHING. An outcome added later without revisiting the mapping must
+	// not assert an attempt on the strength of nobody having thought about it; that is the skip-list
+	// shape WorkWasAttempted's own contract forbids.
+	later := indexReasonFor("something-added-later")
+	if later.WorkWasAttempted() {
+		t.Errorf("an unclassified outcome indexes as %q, which claims the send was attempted and "+
+			"lost; an outcome nobody has classified must be inert", later)
+	}
+	if !later.Valid() {
+		t.Errorf("an unclassified outcome indexes as %q, which is not in the declared reason "+
+			"vocabulary, so the envelope would be refused on the write path", later)
 	}
 }
 

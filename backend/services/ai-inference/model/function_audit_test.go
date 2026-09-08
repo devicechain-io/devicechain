@@ -29,7 +29,6 @@ func auditedTestApi(t *testing.T) (*Api, *gorm.DB) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&rdb.AuditEvent{}))
 	require.NoError(t, rdb.RegisterAuditJournal(db))
-	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	require.NoError(t, schemaMigrateAll(t, db))
 	kek, err := secrets.NewInstanceKeyProvider(testRootKey)
 	require.NoError(t, err)

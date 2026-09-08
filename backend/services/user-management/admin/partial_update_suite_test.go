@@ -36,8 +36,8 @@ import (
 // surfaces unenumerated.
 
 // newPartialUpdateService builds a SQLite-backed admin Service migrated for one family.
-// The database half — the named shared-cache DSN, the pool close, the token-grammar
-// registration, and the reasons all three are load-bearing — is putest.NewSQLiteDB's.
+// The database half — the named shared-cache DSN, the pool close, the four callback
+// registrations, and the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 //
 // The two purge windows are the same throwaway values the rest of this package's tests
 // use: nothing in the update paths reads them, and passing zero would make a future
