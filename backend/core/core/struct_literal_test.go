@@ -26,6 +26,24 @@ import (
 // goroutine dump naming neither the method nor the expectation it broke.
 const structLiteralBudget = 5 * time.Second
 
+const (
+	// microserviceMethods is how many methods are declared on *Microservice. Check it
+	// with, and update it from, the sum of:
+	//
+	//	grep -c '^func (ms \*Microservice)' core/*.go
+	microserviceMethods = 40
+
+	// helpersDrivenThroughCallers are the internal ones the table does not call directly
+	// because every one of them is on a path a row above already drives: outcomeCh,
+	// cancelRoot, readinessGate, exportReady, shutDown, waitForShutdown, reportOutcome
+	// and metricsGatherer. Calling them directly would test them in isolation from the
+	// wiring, which is where two of this change's three defects actually lived.
+	helpersDrivenThroughCallers = 8
+
+	// structLiteralMethodCount is therefore how many rows the table must carry.
+	structLiteralMethodCount = microserviceMethods - helpersDrivenThroughCallers
+)
+
 // structLiteralCase is one method exercised on &Microservice{}.
 type structLiteralCase struct {
 	// name is the method as a reader of the Microservice doc comment would look it up.
@@ -148,8 +166,32 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 			panics: true, wantPanic: "no ReadinessGate"},
 	}
 
+	// 🔴 A TABLE TEST IS THE SHAPE THAT PASSES BY DOING NOTHING, and this one is more
+	// exposed to that than most: a table over methods reports the same clean PASS whether
+	// it drove thirty-two of them or none. An empty slice, a filter that matches nothing,
+	// a loop over the wrong variable — each of those is a green run asserting that a type
+	// nobody exercised behaves correctly.
+	//
+	// So two things are counted rather than assumed. The first is the table's SIZE against
+	// the number of methods declared on *Microservice, which is what makes a method added
+	// to the type and not to this table a failing test rather than a silent gap:
+	//
+	//	grep -c '^func (ms \*Microservice)' core/*.go
+	//
+	// It is a hand-maintained number and that is deliberate — moving it is the step that
+	// makes someone decide what the new method does on a struct literal and write it into
+	// the doc comment. Nothing can derive it, since the doc comment is prose.
+	require.Len(t, cases, structLiteralMethodCount,
+		"every method on *Microservice needs a row here and a line in the Microservice doc "+
+			"comment; count them with: grep -c '^func (ms \\*Microservice)' core/*.go")
+
+	// The second is that the body actually ran for each row. len(cases) alone does not say
+	// the loop executed — it says the slice was built.
+	ran := 0
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			ran++
 			// Run's failure path calls exitProcess, which is os.Exit in a binary. Stub it
 			// for every case, not just Run's, so a regression that reaches it fails here
 			// instead of ending the test binary.
@@ -182,6 +224,8 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 			}
 		})
 	}
+
+	assert.Equal(t, len(cases), ran, "the table was built but the loop did not drive every row")
 }
 
 // TestOutcomeChannelIsCreatedOnceAndShared is the counterweight to the lazy creation
