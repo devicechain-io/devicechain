@@ -160,6 +160,12 @@ func TestStructurallyImpossibleRingsAreRefused(t *testing.T) {
 		ring [][]float64
 	}{
 		{"too few positions", [][]float64{{0, 0}, {1, 0}, {0, 0}}},
+		// Two positions cannot describe edges at all. It is here because the
+		// crossing check has nothing to compare in such a ring, so a predicate
+		// that answered a VERDICT for it would have to answer "does not cross" —
+		// which on this question reads as "the ring is fine". Only an error can
+		// say "there was nothing to ask".
+		{"only two positions", [][]float64{{0, 0}, {1, 0}}},
 		{"empty", [][]float64{}},
 		{"a position with one element", [][]float64{{0, 0}, {1}, {0.5, 1}, {0, 0}}},
 		// 🔴 Not closed. Found by the cross-service parity test, not by reading:
@@ -211,46 +217,27 @@ func TestOutOfRangeDegreesAreRefusedRatherThanWrapped(t *testing.T) {
 	}
 }
 
-// The counterweight: the range checks must not refuse the boundary values, which
-// are legal coordinates. A gate that rejected ±180 longitude or ±90 latitude would
-// pass every assertion above and still be wrong.
+// 🔴 The counterweight, and the bound polarity is the whole point of it. ±180
+// longitude and ±90 latitude are LEGAL coordinates — the antimeridian and the poles
+// are places — so the comparisons have to be strict. Written `<=` / `>=` instead,
+// every assertion in the test above still passes while real fences at the edge of
+// the coordinate system become unauthorable.
 //
-// It asks loopFromClosedRing rather than ValidateClosedRing on purpose. Only the
-// range check is under test here, and a ring pinned to a pole is a shape the
-// geometric checks may well refuse for reasons that have nothing to do with range.
+// Each shape below carries a boundary value on a ring the EXPORTED gate accepts,
+// which is what makes this a claim about the contract rather than about the private
+// loop builder: measured, ValidateClosedRing returns nil for all four.
 func TestRangeBoundariesAreAccepted(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ring [][]float64
 	}{
-		{"the eastern antimeridian at the north pole", [][]float64{{180, 90}, {179, 89}, {178, 90}, {180, 90}}},
-		{"the western antimeridian at the south pole", [][]float64{{-180, -90}, {-179, -89}, {-178, -90}, {-180, -90}}},
+		{"a quad against the eastern antimeridian", [][]float64{{180, 0}, {179, 0}, {179, 1}, {180, 1}, {180, 0}}},
+		{"a quad against the western antimeridian", [][]float64{{-180, 0}, {-179, 0}, {-179, -1}, {-180, -1}, {-180, 0}}},
+		{"a triangle with its apex on the north pole", [][]float64{{0, 89}, {1, 89}, {0.5, 90}, {0, 89}}},
+		{"a triangle with its apex on the south pole", [][]float64{{0, -89}, {1, -89}, {0.5, -90}, {0, -89}}},
 	} {
-		if _, err := loopFromClosedRing(tc.ring); err != nil {
+		if err := ValidateClosedRing(tc.ring); err != nil {
 			t.Errorf("%s: a boundary coordinate was refused: %v", tc.name, err)
-		}
-	}
-}
-
-// 🔴 A ring the loop builder cannot build from must produce an ERROR, never a
-// crossing VERDICT. There used to be an exported ring-taking wrapper that answered
-// "no crossing" for exactly these rings, which on this predicate reads as "the ring
-// is fine". This is the test that notices if one is reintroduced: the only exported
-// way to ask about a ring is ValidateClosedRing, and it refuses.
-func TestUnbuildableRingsProduceAnErrorNotAVerdict(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ring [][]float64
-	}{
-		{"too short to have edges", [][]float64{{0, 0}, {1, 0}}},
-		{"not closed", [][]float64{{0, 0}, {1, 0}, {0.5, 1}, {0.4, 0.9}}},
-		{"a NaN coordinate", [][]float64{{0, 0}, {nan(), 0}, {0.5, 1}, {0, 0}}},
-	} {
-		if _, err := loopFromClosedRing(tc.ring); err == nil {
-			t.Errorf("%s: built a loop, so it no longer exercises the unbuildable path", tc.name)
-		}
-		if err := ValidateClosedRing(tc.ring); err == nil {
-			t.Errorf("%s: accepted", tc.name)
 		}
 	}
 }

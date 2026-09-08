@@ -134,14 +134,19 @@ func loopFromClosedRing(ring [][]float64) (*s2.Loop, error) {
 }
 
 // 🔴 There is deliberately NO exported ring-taking wrapper around the crossing
-// check, and re-adding one is the thing this paragraph exists to prevent. The
-// wrapper that used to sit here answered `false` — "this ring does not cross
+// check. The one that used to sit here answered `false` — "this ring does not cross
 // itself" — for every ring it could not build a loop from: unclosed, too short, a
 // NaN coordinate. That is fail-OPEN on a predicate named exactly like the one an
 // authoring gate reaches for, in a package where every other exit is fail-closed.
-// ValidateClosedRing is the entry point: it returns an ERROR for the cases a
-// verdict cannot describe, so a caller cannot mistake "could not ask" for "asked
-// and the answer was fine".
+// ValidateClosedRing is the entry point precisely because it returns an ERROR for
+// the cases a verdict cannot describe, so a caller cannot mistake "could not ask"
+// for "asked, and the answer was fine".
+//
+// Nothing MECHANICAL stops that wrapper coming back — no test can fail because a new
+// exported symbol appeared — so this note and review are the whole of the guard. Say
+// so plainly rather than leaving a reader to assume a gate exists. What the tests do
+// hold is the contract underneath it: every ring the deleted wrapper stayed silent
+// about is refused, with an error, by the exported gate.
 
 // LoopSelfIntersects reports the first pair of NON-ADJACENT edges of the loop that
 // cross, if any. Adjacent edges are skipped because they legitimately share a
