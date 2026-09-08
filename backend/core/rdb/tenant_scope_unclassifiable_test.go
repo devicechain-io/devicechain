@@ -110,6 +110,36 @@ func TestUnclassifiableDeleteIsRefused(t *testing.T) {
 	}
 }
 
+// The Create direction, and it is pinned SEPARATELY because a bare-table create is
+// already rejected today by something else entirely — the NOT NULL on tenant_id. That is
+// a storage constraint, not this callback, and mistaking it for coverage is exactly how
+// the Update and Delete directions above went unguarded for so long.
+//
+// 🔑 THE MAP SUPPLIES tenant_id ON PURPOSE, which is what makes this test mean anything.
+// With the column populated the NOT NULL is satisfied and cannot refuse the write, so the
+// callback is the only mechanism left that can — and the value supplied is another
+// tenant's, so a statement that got through would be writing across the boundary.
+func TestUnclassifiableCreateIsRefusedByTheCallbackNotAColumn(t *testing.T) {
+	db := newTestDB(t)
+	seedTwoTenants(t, db)
+
+	ctx := core.WithTenant(context.Background(), "A")
+	err := db.WithContext(ctx).Table("widgets").
+		Create(map[string]interface{}{"name": "smuggled", "tenant_id": "B"}).Error
+	if !errors.Is(err, ErrUnscopedStatement) {
+		t.Fatalf("an unclassifiable create was not refused by the callback: %v", err)
+	}
+
+	var count int64
+	if err := db.WithContext(core.WithSystemContext(context.Background())).
+		Model(&widget{}).Count(&count).Error; err != nil {
+		t.Fatalf("counting rows back: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("the refused create still wrote a row: %d rows, want the seeded 2", count)
+	}
+}
+
 // The counterweight, and the reason the refusal is safe to ship: a system context still
 // lets the same statement through. Instance-scoped work — bootstrap, migration, the
 // erasure sweep — is not a tenant's work, and this is where it says so.
@@ -130,6 +160,18 @@ func TestSystemContextStillRunsAnUnclassifiableStatement(t *testing.T) {
 		Where("name = ?", "a1").
 		Updates(map[string]interface{}{"name": "renamed"}).Error; err != nil {
 		t.Fatalf("a system context was refused an unclassifiable update: %v", err)
+	}
+
+	// Read it back rather than trusting err == nil. A statement can be refused after its
+	// error is cleared, or accepted and then build to nothing; only the row says which
+	// happened, and this write is the one thing in the test that changes state.
+	var renamed int64
+	if err := db.WithContext(sys).Model(&widget{}).
+		Where("name = ?", "renamed").Count(&renamed).Error; err != nil {
+		t.Fatalf("counting the renamed row: %v", err)
+	}
+	if renamed != 1 {
+		t.Fatalf("the system-context update reported success but changed %d rows, want 1", renamed)
 	}
 }
 

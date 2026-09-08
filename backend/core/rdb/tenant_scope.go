@@ -41,26 +41,32 @@ var ErrUnscopedStatement = errors.New("tenant isolation could not be applied: go
 // Models without a TenantId field (e.g. migration bookkeeping tables) pass
 // through untouched.
 //
-// 🔴 WHAT IT DOES NOT COVER, said here rather than left to be discovered — the same
-// sentence tenant_fence.go writes about the erasure fence, because it is the same gap.
-// APPLICABILITY IS A PROPERTY OF THE DESTINATION TYPE, NOT OF THE CALL. gorm decides
-// what a statement is by parsing Statement.Model or Statement.Dest into a schema, and
-// these callbacks can only ask a schema whether it carries TenantId. Two shapes never
-// build one:
+// 🔴 WHAT IT DOES AND DOES NOT COVER, said here rather than left to be discovered — the
+// same sentence tenant_fence.go writes about the erasure fence, because it is the same
+// gap. APPLICABILITY IS A PROPERTY OF THE DESTINATION TYPE, NOT OF THE CALL, and the
+// invariant is a biconditional, not a promise: THE PREDICATE IS APPLIED IF AND ONLY IF
+// THE DESTINATION'S SCHEMA CARRIES TenantId. gorm decides what a statement is by parsing
+// Statement.Model or Statement.Dest, and these callbacks can only ask the resulting
+// schema for that one field. Three ways a statement over a tenant-scoped table lands
+// outside it, and only the second is refused:
 //
 //   - Raw SQL (Exec, and Raw with the SQL already written). Exec runs on gorm's Raw
 //     processor, which has no callbacks registered on it at all, and a statement whose
 //     SQL is already built has no clause list left to inject a predicate into. Isolation
 //     is therefore a property of the ORM path, not of the database. tenantpurge's sweep
-//     is raw Exec, which is why it still works.
-//   - A destination gorm cannot parse — the classic being a bare Table(...) with a map,
-//     which is the natural way to spell a bulk update. This one used to proceed with no
-//     predicate and no error, which is the failure mode this doc previously denied.
-//
-// The second shape is now REFUSED rather than run: a statement that names a table but
-// carries no schema records ErrUnscopedStatement (see scopedTenant). The first is not,
-// and cannot usefully be — a raw statement is out of reach of the clause builder, so
-// refusing it here would only move the same blind spot to a different error message.
+//     is raw Exec, which is why it still works. NOT refused, and cannot usefully be:
+//     refusing here would move the same limit to a different error message while
+//     breaking every legitimate raw read.
+//   - A destination gorm cannot parse at all — the classic being a bare Table(...) with
+//     a map, which is the natural way to spell a bulk update. This used to proceed with
+//     no predicate and no error, which is the failure mode this doc once denied. It is
+//     now REFUSED with ErrUnscopedStatement (see scopedTenant).
+//   - A destination that DOES parse but whose schema is not the table's: a projection
+//     struct (Table("widgets").Find(&[]struct{ Name string }{})) or a model that does not
+//     match the table it is pointed at. NOT refused, and deliberately so — the schema is
+//     well-formed and carries no TenantId, which is indistinguishable from an honest read
+//     of a genuinely unscoped table. Nothing here can tell the two apart, so the predicate
+//     is simply not owed. Naming the entity type in the destination is what earns it.
 //
 // Timing note (GORM v1.31.x): for the *Before* hooks the statement schema is
 // already parsed by the time our callback runs, because processor.Execute()
@@ -144,6 +150,20 @@ func namesATableWithoutASchema(db *gorm.DB) bool {
 	return stmt.Table != "" || stmt.TableExpr != nil
 }
 
+// statementTable renders what the refused statement named, for the error message. It
+// falls back to the table EXPRESSION because Table is empty for a statement that only
+// set one — reporting `table ""` there would name nothing in the very message whose job
+// is to say which statement was refused.
+func statementTable(stmt *gorm.Statement) string {
+	if stmt.Table != "" {
+		return stmt.Table
+	}
+	if stmt.TableExpr != nil {
+		return stmt.TableExpr.SQL
+	}
+	return ""
+}
+
 // scopedTenant returns the context tenant when db is a live, tenant-scoped
 // statement. ok=false means the callback should return without acting; any
 // fail-closed error (no tenant in context for a tenant-scoped model, or a statement
@@ -173,7 +193,7 @@ func scopedTenant(db *gorm.DB) (string, bool) {
 		// Not tenant-scoped, or not classifiable. Only the second is a problem, and
 		// only when a table is named — see namesATableWithoutASchema.
 		if namesATableWithoutASchema(db) {
-			_ = db.AddError(fmt.Errorf("%w (table %q)", ErrUnscopedStatement, db.Statement.Table))
+			_ = db.AddError(fmt.Errorf("%w (table %q)", ErrUnscopedStatement, statementTable(db.Statement)))
 		}
 		return "", false
 	}
