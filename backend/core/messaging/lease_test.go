@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	nats "github.com/nats-io/nats.go"
 )
 
 // TestLeaseAcquireIsMutuallyExclusive pins the core single-owner guarantee: the
@@ -441,4 +443,117 @@ func TestLeaseConcurrentAccessIsRaceFree(t *testing.T) {
 	_ = lease.Release()
 	cancel()
 	wg.Wait()
+}
+
+// leaseRenewGateKV wraps a real KV store so a test can park an in-flight Renew at
+// exactly the instant the renew/release ordering matters: the revision-checked
+// Update has ALREADY been applied by the server (the entry is at a new revision)
+// but Renew has not yet returned, so the Lease still holds the superseded
+// revision. Every method other than Update is the real store's.
+type leaseRenewGateKV struct {
+	nats.KeyValue
+	landed      chan struct{} // closed once the real Update has been applied
+	landedOnce  sync.Once
+	proceed     chan struct{} // closed by the test to let the parked Update return
+	proceedOnce sync.Once
+}
+
+func (g *leaseRenewGateKV) Update(key string, value []byte, last uint64) (uint64, error) {
+	rev, err := g.KeyValue.Update(key, value, last)
+	g.landedOnce.Do(func() { close(g.landed) })
+	<-g.proceed
+	return rev, err
+}
+
+// letUpdateReturn unparks the Update. It is idempotent so a failing test can defer
+// it without racing the success path's own call.
+func (g *leaseRenewGateKV) letUpdateReturn() {
+	g.proceedOnce.Do(func() { close(g.proceed) })
+}
+
+// TestReleaseWaitsForAnInFlightRenew is the ordering gate. Renew and Release both
+// write under a CAS on the lease's own revision, and Renew necessarily performs its
+// KV round trip with the revision it read BEFORE the write landed. So a Release
+// that runs between the Update landing server-side and the new revision being
+// stored would delete against a revision the server has already superseded: the CAS
+// fails, the just-renewed entry survives, and the partition stays claimed by nobody
+// for a full lease TTL before a standby can take it.
+//
+// Serializing that is the LEASE's job, not the caller's, and this pins it two ways:
+//
+//   - STRUCTURALLY — with an Update parked mid-flight, Release must not complete at
+//     all. This is a widened window, not a raced one: the correct implementation can
+//     never finish while the Update is parked, so the wait cannot flake; the
+//     unserialized one finishes in microseconds.
+//   - BY OUTCOME — once the renew completes, Release must actually REMOVE the entry,
+//     so a successor acquires immediately instead of waiting out the TTL.
+func TestReleaseWaitsForAnInFlightRenew(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	dl, err := nmgr.NewDistributedLease(30 * time.Second)
+	if err != nil {
+		t.Fatalf("NewDistributedLease: %v", err)
+	}
+	const partition = "detect:tenant-1"
+	lease, err := dl.Acquire(partition)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	gate := &leaseRenewGateKV{
+		KeyValue: lease.kv,
+		landed:   make(chan struct{}),
+		proceed:  make(chan struct{}),
+	}
+	lease.kv = gate
+	defer gate.letUpdateReturn()
+
+	renewDone := make(chan error, 1)
+	go func() { renewDone <- lease.Renew() }()
+
+	select {
+	case <-gate.landed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the renew Update never reached the store")
+	}
+
+	// The entry is now at a revision the Lease has not stored yet — the exact state a
+	// concurrent Release must not be allowed to observe.
+	releaseDone := make(chan error, 1)
+	releaseRunning := make(chan struct{})
+	go func() {
+		close(releaseRunning)
+		releaseDone <- lease.Release()
+	}()
+	<-releaseRunning
+
+	select {
+	case rerr := <-releaseDone:
+		t.Fatalf("Release completed (err=%v) while a renew Update was still in flight: it ran its "+
+			"revision-checked delete against a revision the landed Update had already superseded, "+
+			"which leaves the renewed entry to age out over a full TTL", rerr)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	gate.letUpdateReturn()
+
+	if rerr := <-renewDone; rerr != nil {
+		t.Fatalf("Renew: %v", rerr)
+	}
+	if rerr := <-releaseDone; rerr != nil {
+		t.Fatalf("Release once the renew had completed: %v (it must delete against the revision that "+
+			"renew wrote, not the one it superseded)", rerr)
+	}
+
+	// Read through the REAL store, not the gate, and read the outcome rather than the
+	// mechanism: the entry is gone.
+	if _, gerr := dl.kv.Get(kvKey(partition)); !errors.Is(gerr, nats.ErrKeyNotFound) {
+		t.Fatalf("lease entry after Release = %v, want ErrKeyNotFound: the release did not remove the "+
+			"renewed entry, so the partition stays claimed until the entry expires", gerr)
+	}
+	// And the partition is immediately re-acquirable, which is the whole point.
+	if _, aerr := dl.Acquire(partition); aerr != nil {
+		t.Fatalf("successor Acquire straight after Release: %v", aerr)
+	}
 }

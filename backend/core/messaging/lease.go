@@ -169,6 +169,15 @@ func (l *DistributedLease) PriorOwnerReleasedCleanly(partition string) bool {
 // a single KeepAlive renewer goroutine alongside a processing loop calling
 // AmITheHolder — do NOT call Renew from more than one goroutine (KeepAlive is that
 // goroutine).
+//
+// RELEASE AND RENEW ARE SERIALIZED HERE, NOT BY THE CALLER (renewMu). Both write
+// under a CAS on rev, and Renew necessarily performs its KV round trip holding the
+// revision it read before the write landed, so a Release running in that gap would
+// delete against a revision the server had already superseded — the CAS fails, the
+// just-renewed entry survives, and the partition is claimed by nobody until it
+// expires. Release therefore WAITS for an in-flight renew instead of requiring
+// every call site to stop its renewer first. Pinned by
+// TestReleaseWaitsForAnInFlightRenew.
 type Lease struct {
 	kv     nats.KeyValue
 	key    string
@@ -186,6 +195,23 @@ type Lease struct {
 	// and re-stamp; see ADR-070 decision 4b DR caveat). Written once at
 	// construction, so Epoch() reads it without the mutex.
 	epoch uint64
+
+	// renewMu serializes the two CAS WRITERS of the entry — Renew's Update and
+	// Release's Delete — across their whole read-rev/write/store-rev sequence, so
+	// neither can observe rev mid-flight (see the type comment).
+	//
+	// 🔴 IT IS A SECOND MUTEX ON PURPOSE, AND THE KV ROUND TRIP MUST NOT MOVE UNDER
+	// mu. mu is the READ lock: Holder.Held() takes it through stillValid() on every
+	// term-gated message (the DETECT reader gate, ADR-070), and is documented never
+	// to block or make a round trip. Widening mu to cover an Update would stall every
+	// gated read for as long as that request takes — up to the NATS request timeout
+	// on each renew.
+	//
+	// LOCK ORDER IS renewMu THEN mu, NEVER THE REVERSE. Only Renew and Release take
+	// renewMu, and each takes it first; every other path (AmITheHolder, stillValid,
+	// Holder.Held) takes mu alone and never reaches for renewMu, so the two cannot
+	// cycle.
+	renewMu sync.Mutex
 
 	mu sync.Mutex
 	// rev is the latest KV revision of our entry, used for the CAS on the next
@@ -214,6 +240,13 @@ func (lease *Lease) Epoch() uint64 { return lease.epoch }
 // definitive loss at the window boundary; a caller renewing by hand should do the
 // same rather than self-evict on one failed Renew.
 func (lease *Lease) Renew() error {
+	// renewMu spans reading rev, the write, and storing the new revision, so a
+	// concurrent Release cannot delete against a revision this Update has already
+	// superseded. mu is taken only around the field accesses — never across the round
+	// trip, which would block Holder.Held() (see the Lease type comment).
+	lease.renewMu.Lock()
+	defer lease.renewMu.Unlock()
+
 	lease.mu.Lock()
 	if lease.released {
 		lease.mu.Unlock()
@@ -319,14 +352,30 @@ func (lease *Lease) stillValidLocked() bool {
 // subsequent Acquire is not blocked by it. A returned error is informational —
 // our own hold is relinquished regardless; a transient delete failure leaves the
 // entry to age out via its TTL (the crash-path handover, no corruption).
+//
+// It is safe to call while a renewer is still running: renewMu makes it WAIT for an
+// in-flight Renew rather than deleting against the revision that renew is in the
+// middle of replacing (see the Lease type comment). Callers may still stop their
+// renewer first — and the Class-3 operators do, because stopping the readers and the
+// renewer before releasing is also what keeps a departing leader from overlapping its
+// successor — but correctness here no longer depends on their doing so.
 func (lease *Lease) Release() error {
+	// renewMu covers reading rev AND the delete: taking it only around the delete
+	// would move the race rather than close it, since a rev read outside it can
+	// already be stale by the time the delete runs.
+	lease.renewMu.Lock()
+	defer lease.renewMu.Unlock()
+
 	lease.mu.Lock()
-	defer lease.mu.Unlock()
 	if lease.released {
+		lease.mu.Unlock()
 		return nil
 	}
 	lease.released = true
-	return lease.kv.Delete(lease.key, nats.LastRevision(lease.rev))
+	rev := lease.rev
+	lease.mu.Unlock()
+
+	return lease.kv.Delete(lease.key, nats.LastRevision(rev))
 }
 
 // Fence is the write-side handover-race guard (ADR-070 decision 4b). It lives on a
