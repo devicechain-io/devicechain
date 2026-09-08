@@ -106,6 +106,29 @@ func Kinds() []string {
 	return out
 }
 
+// Valid reports whether k is one of the declared kinds.
+//
+// 🔑 MEMBERSHIP OF allKinds, NOT A THIRD HAND-COPY OF THE SAME FOUR NAMES. It is positive
+// in the sense that matters — an unlisted value is false, never "assumed fine" — while
+// leaving the vocabulary written down once for both the readers that OFFER it and the
+// writers that are checked against it. A switch here would have been a second list to keep
+// in step with the first, and a list-of-a-list is wrong the first time the set grows.
+//
+// Why it is checked at all: Kind is closed because it is a metric label and a query filter,
+// and a value outside it is not a harmless typo. It marshals, it lands in an indexed
+// column, and it is then invisible to every reader that offers the vocabulary — dcctl's
+// `--kind` help among them. A record of a failure that the one surface built to find
+// failures cannot show is worse than no record, because the operator sees a
+// complete-looking list.
+func (k Kind) Valid() bool {
+	for _, declared := range allKinds {
+		if k == declared {
+			return true
+		}
+	}
+	return false
+}
+
 // Reason is why it was given up on, bounded for the same reasons Kind is.
 type Reason string
 
@@ -127,6 +150,64 @@ const (
 	// letter describes work that would succeed if it were sent again.
 	ReasonShed Reason = "shed"
 )
+
+// Valid reports whether r is one of the declared reasons. Bounded for the same reasons
+// Kind.Valid is, and written the same way: a positive switch, so a value nobody declared
+// is refused on the write path rather than becoming an unfilterable row.
+func (r Reason) Valid() bool {
+	switch r {
+	case ReasonExhausted, ReasonUnprocessable, ReasonShed:
+		return true
+	default:
+		return false
+	}
+}
+
+// WorkWasAttempted reports whether the giving-up service actually ATTEMPTED this work and
+// lost it, as opposed to declining it before any attempt.
+//
+// 🔴 IT IS A VETO, NOT A LICENCE, AND THE ASYMMETRY IS DELIBERATE. False means DO NOT SETTLE:
+// the producer declined before attempting, so a consumer that marks work lost on the strength
+// of the letter would be recording a loss that did not happen. True does not mean "settle" —
+// it means the letter is not disqualified on this axis, and the consumer still owns the
+// question of what its own Kind's letters imply.
+//
+// Reading Kind alone is what this exists to stop. Kind says what the work WAS; it does not
+// say whether anything was lost, and treating it as though it did is how a letter recording
+// a DECLINED write becomes the platform performing that write. That happened: a device's
+// answer to a command the platform had returned to the queue was dead-lettered as
+// unprocessable, and a consumer filtering on Kind alone stamped FAILED on a row the sweep had
+// meanwhile re-dispatched — so the device's real answer to the new dispatch arrived on a
+// terminal row and was discarded as late.
+//
+// 🔑 A KIND WHOSE DECLINED LETTERS ARE THEMSELVES GENUINE LOSSES NEEDS ITS OWN ANSWER, NOT A
+// WIDER TRUE HERE. KindNotification is the worked example: an unprocessable notification would
+// mean the alarm reached nobody and never will, which is exactly the letter such a consumer
+// SHOULD act on — and this method would answer false for it, correctly, because the send was
+// never attempted. The two questions are different, and the fix is a Kind-specific rule at that
+// consumer rather than promoting a reason here, which would silently re-arm every other
+// consumer. No producer emits that letter today; the next author should know the shape anyway.
+//
+// 🔑 A POSITIVE LIST: an explicit case per reason that returns true, and a default of
+// false. A new Reason is a new way of giving up, and whether it settles anything has to be
+// answered deliberately for it. Written as a skip — "everything except the ones I know
+// about" — a reason nobody classified here would settle state by default, which is
+// precisely the direction the defect above came from. This way an unclassified reason is
+// an inert no-op at every consumer until someone decides otherwise, which is the
+// recoverable direction to be wrong in.
+func (r Reason) WorkWasAttempted() bool {
+	switch r {
+	case ReasonExhausted:
+		// The work was retried to the redelivery cap and never landed, so what it
+		// describes is genuinely gone and downstream state must stop reading as in flight.
+		return true
+	default:
+		// ReasonUnprocessable and ReasonShed both describe work the producer looked at and
+		// declined — nothing was attempted, so nothing is lost — and so does any reason a
+		// later build adds without revisiting this.
+		return false
+	}
+}
 
 // Envelope is one dead letter. It is JSON rather than protobuf, unlike the failed-event
 // envelope it sits beside, because it is written once by a handful of call sites and
@@ -186,13 +267,28 @@ type Envelope struct {
 // letter is written at the moment something has already gone wrong, by a caller that is
 // about to ack and forget — so a field left empty here is a record nobody can act on,
 // discovered weeks later by the person the record existed for.
+//
+// 🔴 AN OFF-VOCABULARY Kind OR Reason IS REFUSED HERE TOO, NOT ONLY AN EMPTY ONE. Both are
+// documented as closed sets because they are metric labels and query filters, but a
+// non-empty check enforces neither: Kind("conector-dispatch") compiles, validates,
+// marshals onto the stream and lands in an indexed column, and is then invisible to every
+// reader that offers the declared set — dcctl's `--kind` filter among them. That is a
+// worse outcome than refusing the write, because the operator is shown a list that looks
+// complete. A misclassified Reason is worse still: Reason.WorkWasAttempted answers false
+// for anything it does not recognise, so a typo'd reason silently makes a genuine loss
+// non-actionable to every consumer that settles state on one.
 func (e Envelope) Validate() error {
 	missing := []string{}
+	unknown := []string{}
 	if e.Kind == "" {
 		missing = append(missing, "kind")
+	} else if !e.Kind.Valid() {
+		unknown = append(unknown, fmt.Sprintf("kind %q", string(e.Kind)))
 	}
 	if e.Reason == "" {
 		missing = append(missing, "reason")
+	} else if !e.Reason.Valid() {
+		unknown = append(unknown, fmt.Sprintf("reason %q", string(e.Reason)))
 	}
 	if strings.TrimSpace(e.Source) == "" {
 		missing = append(missing, "source")
@@ -206,6 +302,11 @@ func (e Envelope) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("refusing to write a dead letter with no %s: it would be a record of "+
 			"a failure that nobody reading it could act on", strings.Join(missing, ", "))
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("refusing to write a dead letter with an undeclared %s: it would be a "+
+			"record of a failure that no reader filtering on the declared vocabulary could find",
+			strings.Join(unknown, " and "))
 	}
 	return nil
 }
