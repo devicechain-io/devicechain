@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
+	github.com/nats-io/nats-server/v2 v2.14.6
 	github.com/pion/dtls/v3 v3.1.6
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/prometheus/client_golang v1.24.1
@@ -12,10 +13,14 @@ require (
 )
 
 require (
+	github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op // indirect
 	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/minio/highwayhash v1.0.4 // indirect
+	github.com/nats-io/jwt/v2 v2.8.2 // indirect
 	github.com/nats-io/nats.go v1.53.1 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
