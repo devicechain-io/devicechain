@@ -53,15 +53,19 @@ func (ms *Microservice) MetricsSubsystem() string {
 // unregistered rather than landing on the process-global default registry. That is the
 // safe direction: an unregistered counter still counts, so the code under test behaves
 // identically, while two literals sharing a functional area no longer collide.
+//
+// Calling it records that a collector may now exist on whatever registry is attached,
+// which is the fact UseMetricsRegistry refuses a late call on.
 func (ms *Microservice) MetricsRegisterer() prometheus.Registerer {
+	ms.metricsHandedOut.Store(true)
 	if ms.metricsReg == nil {
 		return nil
 	}
 	return ms.metricsReg
 }
 
-// MetricsGatherer is what a /metrics endpoint must be served from: this microservice's
-// own registry unioned with the process default registry.
+// metricsGatherer is what MetricsHandler serves: this microservice's own registry
+// unioned with the process default registry.
 //
 // Both halves are load-bearing, and the failure mode of dropping either is the same
 // silent one — a clean 200 whose body is simply missing metrics, with no error and no
@@ -69,20 +73,35 @@ func (ms *Microservice) MetricsRegisterer() prometheus.Registerer {
 // Without the second, so does everything still registered globally: the Go runtime and
 // process collectors client_golang installs on the default registry in its own init, and
 // the package-level promauto vars declared in core and in the services.
-func (ms *Microservice) MetricsGatherer() prometheus.Gatherer {
+func (ms *Microservice) metricsGatherer() prometheus.Gatherer {
 	if ms.metricsReg == nil {
 		return prometheus.DefaultGatherer
 	}
 	return prometheus.Gatherers{ms.metricsReg, prometheus.DefaultGatherer}
 }
 
-// UseMetricsRegistry points this microservice's metric constructors at reg.
+// UseMetricsRegistry points this microservice's metric constructors at reg. It is for
+// callers that build a Microservice without NewMicroservice — tests — and need the
+// metrics they then construct to be gatherable.
 //
-// It is for callers that build a Microservice without NewMicroservice — tests — and
-// need the metrics they then construct to be gatherable. Call it before constructing
-// any metric: a collector is registered where it was built, so this cannot move one
-// that already exists.
+// 🔴 IT MUST BE CALLED BEFORE ANY METRIC IS CONSTRUCTED, AND IT ENFORCES THAT RATHER
+// THAN ASKING FOR IT. A collector is registered where it was built and cannot be moved
+// afterwards, so a late call does not redirect anything — it SPLITS: whatever was built
+// first stays on the old registry while the gatherer reads the new one. Called after
+// NewMicroservice, that strands the three readiness collectors and /metrics answers 200
+// with no `ready` gauge, which is the same silent subtraction this ownership exists to
+// end. A comment saying "call this first" would have been the assertion of an invariant
+// with nothing enforcing it.
+//
+// It panics rather than returning an error because there is no runtime condition here
+// to handle: the only way to reach it is a call in the wrong order, which is a
+// programming mistake in the caller and is fixed by moving one line.
 func (ms *Microservice) UseMetricsRegistry(reg *prometheus.Registry) {
+	if ms.metricsHandedOut.Load() {
+		panic("core: UseMetricsRegistry called after a metric was already constructed on this " +
+			"Microservice; collectors cannot be moved between registries, so the earlier ones " +
+			"would be stranded off the gatherer. Attach the registry before building any metric.")
+	}
 	ms.metricsReg = reg
 }
 
@@ -93,7 +112,7 @@ func (ms *Microservice) UseMetricsRegistry(reg *prometheus.Registry) {
 // reports itself — both answer 200 with a well-formed body that is simply missing
 // things:
 //
-//   - It gathers MetricsGatherer, NOT prometheus.DefaultGatherer. promhttp.Handler()
+//   - It gathers metricsGatherer, NOT prometheus.DefaultGatherer. promhttp.Handler()
 //     gathers the default one and nothing else, so it cannot see a single metric this
 //     microservice constructs.
 //   - It keeps promhttp's own scrape instrumentation. That is not part of HandlerFor:
@@ -105,7 +124,7 @@ func (ms *Microservice) UseMetricsRegistry(reg *prometheus.Registry) {
 // the process-global collision it used to carry: two promhttp.Handler() calls in one
 // process registered the same two collectors on the default registry.
 func (ms *Microservice) MetricsHandler() http.Handler {
-	h := promhttp.HandlerFor(ms.MetricsGatherer(), promhttp.HandlerOpts{})
+	h := promhttp.HandlerFor(ms.metricsGatherer(), promhttp.HandlerOpts{})
 	reg := ms.MetricsRegisterer()
 	if reg == nil {
 		// InstrumentMetricHandler registers unconditionally and would dereference a nil

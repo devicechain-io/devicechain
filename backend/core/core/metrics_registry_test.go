@@ -60,6 +60,47 @@ func TestEachMicroserviceGetsItsOwnMetricsRegistry(t *testing.T) {
 	}
 }
 
+// UseMetricsRegistry refuses a call made after a metric has already been built.
+//
+// A collector is registered where it was constructed and cannot be moved, so a late
+// call does not redirect anything: it splits. Whatever was built first stays on the old
+// registry while the gatherer reads the new one, and the endpoint answers 200 with those
+// metrics missing — the same silent subtraction the owned registry exists to end. Called
+// on a Microservice from NewMicroservice, the stranded collectors are the three
+// readiness ones, including the `ready` gauge.
+//
+// The precondition was a sentence in a doc comment before this, which is the shape that
+// keeps being wrong here: an invariant asserted by a comment with nothing enforcing it.
+func TestUseMetricsRegistryRefusesALateCall(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "late-swap"}
+	ms.NewCounter("built_first_total", "A metric constructed before the swap.", nil)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("UseMetricsRegistry accepted a call made after a metric was constructed; " +
+				"the earlier collector is stranded off the gatherer and nothing says so")
+		}
+	}()
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+}
+
+// The counterweight: the ordinary order is not merely tolerated but is what every caller
+// does, so the guard must not fire on it. Without this, "refuses a late call" could be
+// satisfied by a method that refuses every call.
+func TestUseMetricsRegistryAcceptsTheOrdinaryOrder(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "early-swap"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	ms.NewCounter("built_after_total", "A metric constructed after the swap.", nil)
+
+	families, err := ms.metricsReg.Gather()
+	if err != nil {
+		t.Fatalf("gathering: %v", err)
+	}
+	if len(families) != 1 || families[0].GetName() != "devicechain_earlyswap_built_after_total" {
+		t.Errorf("the attached registry holds %d families, want just the counter built after the swap", len(families))
+	}
+}
+
 // A Microservice built as a struct literal has no registry, and its metrics are then
 // constructed unregistered rather than falling back to the process default registry.
 //

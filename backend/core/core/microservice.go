@@ -69,6 +69,21 @@ type Microservice struct {
 	// See MetricsRegisterer for what that means and why it is the safe direction.
 	metricsReg *prometheus.Registry
 
+	// metricsHandedOut records that something has asked where to register, i.e. that a
+	// collector may already be sitting on whatever metricsReg was at the time. It is
+	// what lets UseMetricsRegistry REFUSE a late call instead of merely documenting
+	// that it must not happen.
+	//
+	// A late call is not a no-op, it is a SPLIT: a collector is registered where it was
+	// built and cannot be moved, so the metrics built before the swap stay on the old
+	// registry while the gatherer reads the new one. Called after NewMicroservice that
+	// strands the three readiness collectors — /metrics answers 200 with a missing
+	// `ready` gauge, which is the exact failure this registry ownership exists to close.
+	//
+	// Atomic because MetricsRegisterer is reachable from any goroutine that builds a
+	// metric, and an unsynchronized bool written from two of them is a data race.
+	metricsHandedOut atomic.Bool
+
 	// Observability metrics (E17). nil when the microservice was built without
 	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
 	readyGauge   prometheus.Gauge
