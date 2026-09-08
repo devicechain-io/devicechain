@@ -200,18 +200,36 @@ type Lease struct {
 	// Release's Delete — across their whole read-rev/write/store-rev sequence, so
 	// neither can observe rev mid-flight (see the type comment).
 	//
-	// 🔴 IT IS A SECOND MUTEX ON PURPOSE, AND THE KV ROUND TRIP MUST NOT MOVE UNDER
-	// mu. mu is the READ lock: Holder.Held() takes it through stillValid() on every
-	// term-gated message (the DETECT reader gate, ADR-070), and is documented never
-	// to block or make a round trip. Widening mu to cover an Update would stall every
-	// gated read for as long as that request takes — up to the NATS request timeout
-	// on each renew.
+	// 🔴 IT IS A SECOND MUTEX ON PURPOSE, AND THE RENEW ROUND TRIP MUST NOT MOVE UNDER
+	// mu. mu is the READ lock on the term-gate path: Holder.Held() takes it through
+	// stillValid() for every term-gated message (the DETECT reader gate, ADR-070), and
+	// Held() itself never blocks or makes a round trip. Widening mu to cover an Update
+	// would stall every gated read for as long as that request takes — up to the NATS
+	// request timeout — on each renew.
+	//
+	// The claim is about the RENEW/RELEASE paths, not a blanket one about mu:
+	// AmITheHolder does hold mu across a KV Get. It has no production callers today —
+	// the operators gate on Holder.Held(), which is why that path is the one kept
+	// round-trip-free — but if it ever gains one, its Get belongs outside mu for the
+	// same reason the Update does.
 	//
 	// LOCK ORDER IS renewMu THEN mu, NEVER THE REVERSE. Only Renew and Release take
-	// renewMu, and each takes it first; every other path (AmITheHolder, stillValid,
-	// Holder.Held) takes mu alone and never reaches for renewMu, so the two cannot
-	// cycle.
+	// renewMu, and each takes it first and releases it by defer; every other path
+	// (AmITheHolder, stillValid, Holder.Held) takes mu alone and never reaches for
+	// renewMu, so the two cannot cycle. A path holding mu across a round trip can
+	// therefore make a renewMu holder WAIT, but never deadlock it.
 	renewMu sync.Mutex
+
+	// afterUpdate, when non-nil, is called by Renew after the KV Update has RETURNED
+	// and before the mu that stores the new revision is taken. It exists so a test can
+	// park on the one interleaving a KV interposer structurally cannot reach: an
+	// interposer can only park INSIDE the store's call, and by the time this point is
+	// reached the store has already returned. Both halves of the renewMu span need a
+	// park point, or half the invariant is pinned by review only.
+	//
+	// nil in production, and set once before the Lease is shared with any goroutine.
+	// See TestReleaseWaitsForRenewToStoreItsRevision.
+	afterUpdate func()
 
 	mu sync.Mutex
 	// rev is the latest KV revision of our entry, used for the CAS on the next
@@ -258,6 +276,9 @@ func (lease *Lease) Renew() error {
 	newRev, err := lease.kv.Update(lease.key, []byte(lease.holder), rev)
 	if err != nil {
 		return err
+	}
+	if lease.afterUpdate != nil {
+		lease.afterUpdate()
 	}
 
 	lease.mu.Lock()

@@ -893,8 +893,9 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	// term build: buildTerm's epoch floor read can take up to reconcileQueryTimeout per bound tenant
 	// against a slow device-state — exactly the correlated state during a failover — and renewal
 	// must not wait that out or the first renew lands past the TTL and the pod churns evict/rebuild.
-	// keepaliveDone closes when the renewer has stopped, so the release below does not race an
-	// in-flight Renew (a lost CAS there would strand the lease for a TTL on an otherwise clean exit).
+	// keepaliveDone closes when the renewer has stopped. The release below does not depend on that
+	// to order its revision CAS — Lease.Release serializes against an in-flight Renew itself — but
+	// evict still joins on it so the renewer, which is term-scoped, does not outlive the term.
 	keepaliveDone := make(chan struct{})
 	go func() {
 		defer close(keepaliveDone)
