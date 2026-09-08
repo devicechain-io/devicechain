@@ -141,7 +141,7 @@ type Microservice struct {
 	//
 	// lifecycle is a VALUE, so a struct literal holds a zero LifecycleManager rather than
 	// a nil one — no Component and no Callbacks, which is what makes Initialize, Start,
-	// Stop and Terminate panic on one. See Microservice above for why they are left to.
+	// Stop and Terminate panic on one. See Microservice above for why they are left that way.
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
 
