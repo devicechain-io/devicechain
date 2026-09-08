@@ -465,6 +465,17 @@ var entities = []entity{
 		// microseconds, so comparing it reports a healthy instance as MISMATCH.
 		// newCredentialToken IS selected — it is a server-minted uuid, but it is STORED,
 		// so it is precisely the kind of value this drill exists to watch.
+		//
+		// device{token} IS selected, and it STAYS selected. It is the one field here
+		// that has already reported a real difference: the mutation answered "" while
+		// the query answered the token, because replaceDevice built its response record
+		// without the association the query Preloads and the non-null SDL field made the
+		// resolver substitute a zero-valued Device rather than say so. That is the
+		// opposite of the occurredTime and credentialValue cases above — not a field
+		// whose two representations are legitimately different, but two doors onto one
+		// row that disagreed. The resolver was fixed (device-management
+		// TestReplaceDeviceAndDeviceReplacementsAgreeOnTheDevice pins it); dropping the
+		// field would have made the drill green by removing the only thing that saw it.
 		Name:     "device-replacement",
 		Area:     "device-management",
 		Mutation: "replaceDevice",
