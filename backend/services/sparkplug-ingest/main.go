@@ -434,8 +434,10 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) {
 
 	leaderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// keepAliveDone closes when the renewer has stopped, so the release below cannot
-	// run while a Renew is still in flight. See the join in the teardown.
+	// keepAliveDone closes when the renewer has stopped. The release below does not
+	// depend on that to order its revision CAS — Lease.Release serializes against an
+	// in-flight Renew itself — but the teardown still joins on it so the term's
+	// goroutines do not outlive the term. See the join in the teardown.
 	keepAliveDone := make(chan struct{})
 	go func() {
 		defer close(keepAliveDone)
@@ -453,12 +455,13 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) {
 	//    disconnect, so past this point nothing is still ingesting for this term.
 	setLeader(false)
 	Manager.Stop()
-	// 2. Join the renewer BEFORE releasing. Renew runs its KV Update outside the lease
-	//    mutex, so a Release racing one deletes with the pre-renew revision, fails the
-	//    CAS, and leaves a freshly renewed entry to age out on its own — the next
-	//    leader then waits a full TTL for a lease nobody holds, which is precisely the
-	//    handover gap the lease exists to close. leaderCtx is already cancelled here,
-	//    so this waits only for an in-flight renewal to finish.
+	// 2. Join the renewer BEFORE releasing. The revision CAS is NOT what this buys any
+	//    more: Lease.Release serializes itself against an in-flight Renew, so the
+	//    ordering holds whether or not a caller joins first. What the join buys is that
+	//    no goroutine from this term outlives the term — leaderCtx is already cancelled
+	//    here, so this waits only for the renewer to observe that and stop, and past
+	//    this point nothing from the term is still running or still logging against a
+	//    partition a successor may already own.
 	<-keepAliveDone
 	// 3. Release last, once nothing can still be writing to the entry.
 	if err := lease.Release(); err != nil {
