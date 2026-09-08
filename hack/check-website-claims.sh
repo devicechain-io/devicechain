@@ -49,8 +49,8 @@ check() {
   # The site names these as installable; the tree is the authority on what exists.
   local want_npm have_npm
   want_npm="$(jq -r '.npm_packages.site_says[]?' "$claims" | sort)"
-  have_npm="$(find "$root/frontend/packages" -maxdepth 2 -name package.json 2>/dev/null \
-              -exec jq -r '.name' {} \; | sort)"
+  have_npm="$(find "$root/frontend/packages" -maxdepth 2 -name package.json \
+              -exec jq -r '.name' {} \; 2>/dev/null | sort)"
   if [ -z "$want_npm" ]; then
     problems+=("npm_packages.site_says is empty -- a claim was deleted rather than checked")
   elif [ -z "$have_npm" ]; then
