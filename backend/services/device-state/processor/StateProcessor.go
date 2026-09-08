@@ -58,6 +58,19 @@ type StateProcessor struct {
 	readerWG   sync.WaitGroup
 	workerWG   sync.WaitGroup
 
+	// monitorWG tracks the inactivity monitor so ExecuteStop can WAIT for it rather than
+	// merely signalling it. Closing quit stops the NEXT sweep from starting; it says
+	// nothing about the one already running. See ExecuteStop.
+	monitorWG sync.WaitGroup
+
+	// inactivityInterval is the monitor's cadence, and ZERO MEANS "use the platform
+	// default". There is no operator knob behind it — the constant in config is the only
+	// production value — so it is unexported and the only thing that sets it is a test:
+	// what has to hold at shutdown is that ExecuteStop does not return while a sweep is
+	// still running, and a test cannot put a sweep in flight if it must first wait out a
+	// one-minute tick.
+	inactivityInterval time.Duration
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
 }
@@ -108,6 +121,15 @@ func (sp *StateProcessor) initializeWorkers() {
 			sp.processMessages(context.Background())
 		}()
 	}
+}
+
+// inactivityRecheckInterval is the monitor's cadence, falling back to the platform
+// default. See the field for why it is settable at all.
+func (sp *StateProcessor) inactivityRecheckInterval() time.Duration {
+	if sp.inactivityInterval > 0 {
+		return sp.inactivityInterval
+	}
+	return config.InactivityRecheckInterval * time.Second
 }
 
 // Start component.
@@ -354,27 +376,39 @@ func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
 		}
 	}()
 
-	// Background inactivity monitor: periodically flip devices that have gone
-	// quiet to inactive. The sweep runs under a system context so it spans all
-	// tenants in a single pass (each row keeps its own tenant_id on save).
+	// Background inactivity monitor, tracked so ExecuteStop can join it.
+	sp.monitorWG.Add(1)
 	go func() {
-		ticker := time.NewTicker(config.InactivityRecheckInterval * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-sp.quit:
-				return
-			case <-ticker.C:
-				count, err := sp.Api.SweepInactive(core.WithSystemContext(ctx), time.Now())
-				if err != nil {
-					log.Error().Err(err).Msg("Inactivity sweep failed")
-				} else if count > 0 {
-					log.Info().Msg(fmt.Sprintf("Inactivity monitor marked %d device(s) inactive", count))
-				}
-			}
-		}
+		defer sp.monitorWG.Done()
+		sp.runInactivityMonitor(ctx)
 	}()
 	return nil
+}
+
+// runInactivityMonitor periodically flips devices that have gone quiet to inactive. The
+// sweep runs under a system context so it spans all tenants in a single pass (each row
+// keeps its own tenant_id on save).
+//
+// Extracted from ExecuteStart so both the cadence and the shutdown behaviour are
+// reachable: inline, the only way to put a sweep in flight was to wait out a real tick.
+func (sp *StateProcessor) runInactivityMonitor(ctx context.Context) {
+	ticker := time.NewTicker(sp.inactivityRecheckInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sp.quit:
+			return
+		case <-ticker.C:
+			count, err := sp.Api.SweepInactive(core.WithSystemContext(ctx), time.Now())
+			if err != nil {
+				log.Error().Err(err).Msg("Inactivity sweep failed")
+			} else if count > 0 {
+				log.Info().Msg(fmt.Sprintf("Inactivity monitor marked %d device(s) inactive", count))
+			}
+		}
+	}
 }
 
 // Stop component.
@@ -386,6 +420,19 @@ func (sp *StateProcessor) Stop(ctx context.Context) error {
 // dependency order so no goroutine ever sends on a closed channel (A5): stop the
 // reader, then close the channel it feeds, then wait for the workers it feeds to
 // drain the backlog and exit. The inactivity monitor is stopped independently.
+//
+// 🔴 IT WAITS FOR THE MONITOR, AND SIGNALLING IT IS NOT THE SAME THING. Closing quit
+// stops the next sweep from starting; it says nothing about the one already running. The
+// caller is beforeMicroserviceStopped, which goes on to stop the RdbManager — and the pool
+// is closed in RdbManager.ExecuteTerminate. Without the join, a sweep that was mid-flight
+// when quit closed is still issuing queries when its pool closes, from a service that has
+// already reported a clean stop.
+//
+// 🔑 THE WAIT IS BOUNDED BY THE ROOT CANCELLATION THAT ALREADY HAPPENED. Microservice
+// shutdown cancels the root context BEFORE calling Stop, and that root context is the one
+// ExecuteStart handed to the monitor, so a sweep in flight is already unwinding against a
+// cancelled context by the time this wait begins. No deadline is taken from ExecuteStop's
+// own context because it is context.Background(): a bounded wait on it could never fire.
 func (sp *StateProcessor) ExecuteStop(context.Context) error {
 	if sp.procCancel != nil {
 		sp.procCancel()
@@ -394,7 +441,8 @@ func (sp *StateProcessor) ExecuteStop(context.Context) error {
 	close(sp.messages) //
 	sp.workerWG.Wait() // workers drained + exited
 
-	close(sp.quit) // stop the inactivity monitor
+	close(sp.quit)      // stop the inactivity monitor
+	sp.monitorWG.Wait() // ...and wait for a sweep it may have been in the middle of
 	return nil
 }
 
