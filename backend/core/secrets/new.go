@@ -98,12 +98,17 @@ func New(ctx context.Context, cfg Config, db *gorm.DB, rootKey RootKeySource) (S
 	if err != nil {
 		return nil, err
 	}
-	// The outcome is logged rather than discarded, because its two non-failing values
-	// mean different things: a store with nothing in it yet has not verified anything,
-	// and a check reported as passed when it examined nothing is the shape this check
-	// exists to remove.
-	log.Info().Str("check", "instance-root-key").Str("result", string(result)).
-		Bool("verified", result.Verified()).
-		Msg("Checked the instance root key against this service's stored secrets.")
+	// The outcome is logged rather than discarded, and the two non-failing outcomes
+	// get DIFFERENT MESSAGES rather than one message plus a field. A store with
+	// nothing in it yet has verified nothing, and a line that reads as a passed check
+	// in that case is the same green-tick-that-checked-nothing this exists to remove —
+	// so the sentence itself has to differ, not just a field an eye can skip.
+	event := log.Info().Str("check", "instance-root-key").
+		Str("result", string(result)).Bool("verified", result.Verified())
+	if result.Verified() {
+		event.Msg("The instance root key opens this service's stored secrets.")
+	} else {
+		event.Msg("The instance root key was NOT checked: this service has no stored secrets yet.")
+	}
 	return NewStore(db, kp), nil
 }
