@@ -25,7 +25,7 @@ func TestNewRejectsDeclaredButUnbuiltBackend(t *testing.T) {
 		if err := (Config{Backend: backend}).Validate(); err != nil {
 			t.Fatalf("premise broken: backend %q must pass Validate: %v", backend, err)
 		}
-		store, err := New(Config{Backend: backend}, db, goodRootKey)
+		store, err := New(t.Context(), Config{Backend: backend}, db, goodRootKey)
 		if err == nil {
 			t.Fatalf("backend %q is declared but not built: New must refuse it, got store %#v", backend, store)
 		}
@@ -56,7 +56,7 @@ func TestNewRejectsDeclaredButUnbuiltKEKProvider(t *testing.T) {
 		if err := (Config{Backend: BackendPostgres, KEKProvider: provider}).Validate(); err != nil {
 			t.Fatalf("premise broken: provider %q must pass Validate: %v", provider, err)
 		}
-		store, err := New(Config{Backend: BackendPostgres, KEKProvider: provider}, db, goodRootKey)
+		store, err := New(t.Context(), Config{Backend: BackendPostgres, KEKProvider: provider}, db, goodRootKey)
 		if err == nil {
 			t.Fatalf("KEK provider %q is declared but not built: New must refuse it, got store %#v", provider, store)
 		}
@@ -85,7 +85,7 @@ func TestNewBuildsTheDefaultSelection(t *testing.T) {
 		"zero":     {},
 		"default":  DefaultConfig(),
 	} {
-		store, err := New(cfg, newStoreDB(t), goodRootKey)
+		store, err := New(t.Context(), cfg, newStoreDB(t), goodRootKey)
 		if err != nil {
 			t.Fatalf("%s: the built selection must construct: %v", name, err)
 		}
@@ -112,10 +112,10 @@ func TestNewBuildsTheDefaultSelection(t *testing.T) {
 // treated as the default.
 func TestNewRejectsUnknownIdentifier(t *testing.T) {
 	db := newStoreDB(t)
-	if _, err := New(Config{Backend: "sqlite"}, db, goodRootKey); err == nil {
+	if _, err := New(t.Context(), Config{Backend: "sqlite"}, db, goodRootKey); err == nil {
 		t.Fatal("unknown backend must be rejected")
 	}
-	if _, err := New(Config{Backend: BackendPostgres, KEKProvider: "rot13"}, db, goodRootKey); err == nil {
+	if _, err := New(t.Context(), Config{Backend: BackendPostgres, KEKProvider: "rot13"}, db, goodRootKey); err == nil {
 		t.Fatal("unknown KEK provider must be rejected")
 	}
 }
@@ -125,16 +125,16 @@ func TestNewRejectsUnknownIdentifier(t *testing.T) {
 func TestNewRejectsUnusableRootKey(t *testing.T) {
 	db := newStoreDB(t)
 	want := errors.New("root key unavailable")
-	if _, err := New(DefaultConfig(), db, func() ([]byte, error) { return nil, want }); !errors.Is(err, want) {
+	if _, err := New(t.Context(), DefaultConfig(), db, func() ([]byte, error) { return nil, want }); !errors.Is(err, want) {
 		t.Fatalf("a root-key source error must propagate, got %v", err)
 	}
-	if _, err := New(DefaultConfig(), db, func() ([]byte, error) { return make([]byte, 8), nil }); err == nil {
+	if _, err := New(t.Context(), DefaultConfig(), db, func() ([]byte, error) { return make([]byte, 8), nil }); err == nil {
 		t.Fatal("a wrong-length root key must be rejected")
 	}
-	if _, err := New(DefaultConfig(), db, nil); err == nil {
+	if _, err := New(t.Context(), DefaultConfig(), db, nil); err == nil {
 		t.Fatal("a nil root key source must be rejected")
 	}
-	if _, err := New(DefaultConfig(), nil, goodRootKey); err == nil {
+	if _, err := New(t.Context(), DefaultConfig(), nil, goodRootKey); err == nil {
 		t.Fatal("a nil database handle must be rejected")
 	}
 }
@@ -149,7 +149,7 @@ func TestNewChecksBackendBeforeAskingForARootKey(t *testing.T) {
 		asked = true
 		return nil, errors.New("no instance root key is configured")
 	}
-	_, err := New(Config{Backend: BackendVault}, newStoreDB(t), source)
+	_, err := New(t.Context(), Config{Backend: BackendVault}, newStoreDB(t), source)
 	if err == nil {
 		t.Fatal("an unbuilt backend must be refused")
 	}

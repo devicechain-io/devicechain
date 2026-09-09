@@ -154,7 +154,7 @@ func TestNewRefusesAWrongButWellFormedRootKey(t *testing.T) {
 	}
 	sealingSource := func() ([]byte, error) { return sealingKey, nil }
 
-	store, err := New(DefaultConfig(), db, sealingSource)
+	store, err := New(t.Context(), DefaultConfig(), db, sealingSource)
 	if err != nil {
 		t.Fatalf("an empty store must construct: %v", err)
 	}
@@ -167,12 +167,12 @@ func TestNewRefusesAWrongButWellFormedRootKey(t *testing.T) {
 	}
 	// The same key still constructs over the now-populated store, so the refusal
 	// below is attributable to the key and not to the store having become non-empty.
-	if _, err := New(DefaultConfig(), db, sealingSource); err != nil {
+	if _, err := New(t.Context(), DefaultConfig(), db, sealingSource); err != nil {
 		t.Fatalf("the sealing key must still construct over its own store: %v", err)
 	}
 
 	// goodRootKey is a different, equally well-formed 32-byte key.
-	wrongStore, err := New(DefaultConfig(), db, goodRootKey)
+	wrongStore, err := New(t.Context(), DefaultConfig(), db, goodRootKey)
 	if err == nil {
 		t.Fatalf("New must refuse a root key that does not open the stored secrets, got %#v", wrongStore)
 	}

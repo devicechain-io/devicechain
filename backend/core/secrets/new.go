@@ -41,7 +41,11 @@ type RootKeySource func() ([]byte, error)
 // write, or at read. A declared-but-unbuilt selection is therefore terminal here,
 // the same shape as blob.New and connectorspec.ErrUnsupportedType — recognized,
 // not executable, never silently substituted.
-func New(cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
+//
+// ctx carries the caller's startup lifecycle into the one database round-trip this
+// makes — the root-key self-test below — so a service asked to shut down while its
+// database is hung is not held open by a check that cannot be cancelled.
+func New(ctx context.Context, cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
 	cfg = cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -90,7 +94,7 @@ func New(cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
 	// uses, and every one of them runs its schema migrations before reaching it, so the
 	// secrets table exists by the time the check reads it — SelfTest refuses loudly if
 	// it does not, rather than reading a missing table as an empty one.
-	result, err := SelfTest(context.Background(), db, kp)
+	result, err := SelfTest(ctx, db, kp)
 	if err != nil {
 		return nil, err
 	}
