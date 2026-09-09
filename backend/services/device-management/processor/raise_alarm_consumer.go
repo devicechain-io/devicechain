@@ -49,11 +49,15 @@ type RaiseAlarmConsumer struct {
 	Reader       messaging.MessageReader
 	Api          model.DeviceManagementApi
 
-	// RaiseAlarmMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
-	// here. The consumer itself is constructed inside the NATS manager's oncreate
-	// callback, which runs on every start; a collector constructed there is registered
-	// again on a start after a stop, and the duplicate registration panics.
-	*RaiseAlarmMetrics
+	// RaiseAlarmMetrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase
+	// rather than here. The consumer itself is constructed inside the NATS manager's
+	// oncreate callback, which runs on every start; a collector constructed there is
+	// registered again on a start after a stop, and the duplicate registration panics.
+	//
+	// By value rather than by pointer because this struct is also assembled by literal in
+	// tests that never run the constructor: a zero value gives them the all-nil
+	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
+	RaiseAlarmMetrics
 
 	// dead records a raise-alarm edge that could not be applied (ADR-024). Nil when no
 	// dead-letter writer is configured, in which case the edge is dropped as before.
@@ -100,8 +104,8 @@ type RaiseAlarmMetrics struct {
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
 // built there is registered a second time when the service restarts in place, and
 // MustRegister panics on the duplicate.
-func NewRaiseAlarmMetrics(ms *core.Microservice) *RaiseAlarmMetrics {
-	return &RaiseAlarmMetrics{
+func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
+	return RaiseAlarmMetrics{
 		metrics: ms.NewProcessorMetrics("raise-alarm"),
 		deadLettered: ms.NewCounter("raise_alarm_dead_lettered_total",
 			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
@@ -120,7 +124,7 @@ func NewRaiseAlarmMetrics(ms *core.Microservice) *RaiseAlarmMetrics {
 // start.
 func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
-	dead deadletter.Writer, metrics *RaiseAlarmMetrics) *RaiseAlarmConsumer {
+	dead deadletter.Writer, metrics RaiseAlarmMetrics) *RaiseAlarmConsumer {
 	rc := &RaiseAlarmConsumer{
 		Microservice:      ms,
 		Reader:            reader,

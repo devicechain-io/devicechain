@@ -62,11 +62,15 @@ type Consumer struct {
 	reader       messaging.MessageReader
 	store        *Store
 
-	// Metrics is EMBEDDED, and built ONCE in the initialize phase rather than here. The
-	// consumer itself is constructed inside the NATS manager's oncreate callback, which
-	// runs on every start; a collector constructed there is registered again on a start
-	// after a stop, and the duplicate registration panics.
-	*Metrics
+	// Metrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase rather than
+	// here. The consumer itself is constructed inside the NATS manager's oncreate
+	// callback, which runs on every start; a collector constructed there is registered
+	// again on a start after a stop, and the duplicate registration panics.
+	//
+	// By value rather than by pointer because this struct is also assembled by literal in
+	// tests that never run the constructor: a zero value gives them the all-nil
+	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
+	Metrics
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -95,8 +99,8 @@ type Metrics struct {
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
 // built there is registered a second time when the service restarts in place, and
 // MustRegister panics on the duplicate.
-func NewMetrics(ms *core.Microservice) *Metrics {
-	return &Metrics{
+func NewMetrics(ms *core.Microservice) Metrics {
+	return Metrics{
 		stored: ms.NewCounter("dead_letters_stored_total",
 			"Dead letters written to the queryable store, so a failure a consumer gave up on "+
 				"outlives the stream's own seven-day window (ADR-024).", nil),
@@ -117,7 +121,7 @@ func NewMetrics(ms *core.Microservice) *Metrics {
 // metrics is built once in the initialize phase (see NewMetrics) and shared by every
 // consumer this service constructs, because this constructor runs again on every start.
 func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *Store,
-	callbacks core.LifecycleCallbacks, metrics *Metrics) *Consumer {
+	callbacks core.LifecycleCallbacks, metrics Metrics) *Consumer {
 	c := &Consumer{
 		Microservice: ms,
 		reader:       reader,

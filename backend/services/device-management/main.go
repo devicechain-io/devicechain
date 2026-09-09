@@ -62,8 +62,8 @@ var (
 	// The Prometheus instruments this service exports. All are built ONCE, in the
 	// initialize phase, and shared by every component the NATS manager's oncreate
 	// callback builds. See buildMetrics.
-	ResolveMetrics       *processor.ResolveMetrics
-	RaiseAlarmMetrics    *processor.RaiseAlarmMetrics
+	ResolveMetrics       processor.ResolveMetrics
+	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
 	GeoFencePublishFails prometheus.Counter
 )
 

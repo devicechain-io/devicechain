@@ -50,7 +50,7 @@ var (
 	DeadLetterStore *deadletters.Store
 	// DeadLetterMetrics is built ONCE, in the initialize phase, and shared by every
 	// consumer the NATS manager's oncreate callback builds.
-	DeadLetterMetrics  *deadletters.Metrics
+	DeadLetterMetrics  deadletters.Metrics
 	DeadLetterConsumer *deadletters.Consumer
 	DeadLetterSweeper  *deadletters.Sweeper
 

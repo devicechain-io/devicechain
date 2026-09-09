@@ -26,7 +26,7 @@ func testConsumer(t *testing.T, s *Store) *Consumer {
 	t.Helper()
 	c := &Consumer{
 		store: s,
-		Metrics: &Metrics{
+		Metrics: Metrics{
 			stored:     prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
 			unstorable: prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
 			unstored:   prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),

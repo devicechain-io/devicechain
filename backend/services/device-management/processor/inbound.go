@@ -85,7 +85,11 @@ type InboundEventsProcessor struct {
 	// itself is constructed inside the NATS manager's oncreate callback, which runs on
 	// every start; a collector constructed there is registered again on a start after a
 	// stop, and the duplicate registration panics.
-	metrics *ResolveMetrics
+	//
+	// A value rather than a pointer because this struct is also assembled by literal in
+	// tests that never run the constructor: a zero value gives them the all-nil
+	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
+	metrics ResolveMetrics
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
@@ -135,8 +139,8 @@ type ResolveMetrics struct {
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
 // built there is registered a second time when the service restarts in place, and
 // MustRegister panics on the duplicate.
-func NewResolveMetrics(ms *core.Microservice) *ResolveMetrics {
-	return &ResolveMetrics{
+func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
+	return ResolveMetrics{
 		red: ms.NewProcessorMetrics("resolve"),
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
@@ -154,7 +158,7 @@ func NewResolveMetrics(ms *core.Microservice) *ResolveMetrics {
 // start.
 func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
 	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
-	maxFutureSkew time.Duration, metrics *ResolveMetrics) *InboundEventsProcessor {
+	maxFutureSkew time.Duration, metrics ResolveMetrics) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,

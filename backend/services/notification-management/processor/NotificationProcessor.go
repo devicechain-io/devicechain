@@ -60,11 +60,15 @@ type NotificationProcessor struct {
 	// Microservice at write time, because a dead letter is written on the failure path —
 	// the one place a nil dereference turns a recoverable failure into a crash.
 	area string
-	// NotifyMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
-	// here. The processor itself is constructed inside the NATS manager's oncreate
+	// NotifyMetrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase rather
+	// than here. The processor itself is constructed inside the NATS manager's oncreate
 	// callback, which runs on every start; a collector constructed there is registered
 	// again on a start after a stop, and the duplicate registration panics.
-	*NotifyMetrics
+	//
+	// By value rather than by pointer because this struct is also assembled by literal in
+	// tests that never run the constructor: a zero value gives them the all-nil
+	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
+	NotifyMetrics
 
 	messages chan messaging.Message
 
@@ -115,8 +119,8 @@ type NotifyMetrics struct {
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
 // built there is registered a second time when the service restarts in place, and
 // MustRegister panics on the duplicate.
-func NewNotifyMetrics(ms *core.Microservice) *NotifyMetrics {
-	return &NotifyMetrics{
+func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
+	return NotifyMetrics{
 		metrics: ms.NewProcessorMetrics("notify"),
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
@@ -135,7 +139,7 @@ func NewNotifyMetrics(ms *core.Microservice) *NotifyMetrics {
 // every start.
 func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, notifier Notifier, dead deadletter.Writer,
-	metrics *NotifyMetrics) *NotificationProcessor {
+	metrics NotifyMetrics) *NotificationProcessor {
 	np := &NotificationProcessor{
 		Microservice:  ms,
 		Reader:        reader,

@@ -56,7 +56,7 @@ func newTestProcessor(n Notifier) *NotificationProcessor {
 	// which is what this helper had before the instruments moved into their own type:
 	// the RED metrics are nil-safe, and the dead-letter counters are set by the tests
 	// that assert on them.
-	return &NotificationProcessor{Notifier: n, NotifyMetrics: &NotifyMetrics{}}
+	return &NotificationProcessor{Notifier: n}
 }
 
 // validEventBytes marshals a representative alarm state-change envelope.

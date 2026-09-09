@@ -39,7 +39,7 @@ var (
 	// NotifyMetrics is built ONCE, in the initialize phase, and shared by every
 	// NotificationProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
-	NotifyMetrics *processor.NotifyMetrics
+	NotifyMetrics processor.NotifyMetrics
 )
 
 func main() {

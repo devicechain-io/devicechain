@@ -70,7 +70,7 @@ func newTestConsumer(api model.DeviceManagementApi) *RaiseAlarmConsumer {
 	// which is what this helper had before the instruments moved into their own type:
 	// the RED metrics are nil-safe, and the dead-letter counters are set by the tests
 	// that assert on them.
-	rc := &RaiseAlarmConsumer{Api: api, RaiseAlarmMetrics: &RaiseAlarmMetrics{}}
+	rc := &RaiseAlarmConsumer{Api: api}
 	rc.procCtx = context.Background()
 	return rc
 }
