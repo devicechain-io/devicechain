@@ -113,12 +113,25 @@ type HttpServer struct {
 // NewHttpServer builds an HTTP server for this microservice's mux on the given port.
 // Nothing is bound and nothing is served until Start.
 //
+// This is the constructor to reach for when the server carries the microservice's own
+// routes — probes, metrics, GraphQL. A listener that deliberately serves something else
+// on its own port (the HTTP event source ingests device telemetry on a port of its own,
+// with its own handler, so a device POST cannot reach the management API) builds its
+// server with NewHttpServerForHandler instead and gets the same bind and restart
+// behaviour.
+func (ms *Microservice) NewHttpServer(port int32) *HttpServer {
+	return NewHttpServerForHandler(port, ms.Mux())
+}
+
+// NewHttpServerForHandler builds an HTTP server for an arbitrary handler on the given
+// port. Nothing is bound and nothing is served until Start.
+//
 // Port 0 asks the operating system for an unused one, which is what makes a test able
 // to drive a real listener; Addr reports what was actually bound.
 //
 // 🔴 DO NOT ADD WriteTimeout OR IdleTimeout HERE. They look like the obvious companions
-// to the ReadHeaderTimeout below, and adding them reads as hardening — but this server
-// carries the GraphQL SUBSCRIPTION endpoint, whose WebSocket connections are long-lived
+// to the ReadHeaderTimeout below, and adding them reads as hardening — but the servers
+// built here carry the GraphQL SUBSCRIPTION endpoint, whose WebSocket connections are long-lived
 // by design and idle by design between events. A WriteTimeout would sever a
 // subscription mid-stream; an IdleTimeout would sever a quiet one. Either would surface
 // as subscriptions that "randomly" drop, a long way from the line that caused it.
@@ -128,11 +141,11 @@ type HttpServer struct {
 // connection is hijacked, after which net/http stops accounting for it at all. Shutdown
 // does not close or wait for hijacked connections either — that gap is #949, and it is
 // the subscription layer's to close, not this constructor's.
-func (ms *Microservice) NewHttpServer(port int32) *HttpServer {
+func NewHttpServerForHandler(port int32, handler http.Handler) *HttpServer {
 	return &HttpServer{
 		server: &http.Server{
 			Addr:              fmt.Sprintf(":%d", port),
-			Handler:           ms.Mux(),
+			Handler:           handler,
 			ReadHeaderTimeout: httpReadHeaderTimeout,
 		},
 	}
