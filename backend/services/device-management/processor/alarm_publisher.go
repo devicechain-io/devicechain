@@ -112,8 +112,11 @@ func (w *AlarmEventWriter) PublishAlarmEvent(ctx context.Context, event *model.A
 		return
 	}
 
-	attempts := 0
-	for attempts < alarmPublishAttempts {
+	// 🔑 attempts IS COUNTED, NOT ASSUMED. It goes onto the letter, where it is the
+	// difference between "the broker refused this three times" and "the caller went away
+	// after the first" — so the loop must not be left early by pinning it to the cap.
+	attempts, giveUp := 0, false
+	for attempts < alarmPublishAttempts && !giveUp {
 		attempts++
 		if err = w.writer.WriteMessages(ctx, messaging.Message{Value: bytes}); err == nil {
 			return
@@ -122,9 +125,10 @@ func (w *AlarmEventWriter) PublishAlarmEvent(ctx context.Context, event *model.A
 			select {
 			case <-time.After(alarmPublishBackoff):
 			case <-ctx.Done():
-				// The caller is gone. Stop attempting the publish under its context —
-				// the dead-letter arm detaches and files the transition anyway.
-				attempts = alarmPublishAttempts
+				// The caller is gone, so further attempts under its context would only
+				// fail on the cancellation rather than on the broker. The dead-letter
+				// arm detaches and files the transition anyway.
+				giveUp = true
 			}
 		}
 	}

@@ -257,6 +257,43 @@ func TestAnAlarmEventThatCanBeNeitherPublishedNorFiledIsCountedAsLost(t *testing
 	}
 }
 
+// 🔴 A CANCELLED CALLER IS NOT A REASON TO STOP RECORDING. The transition committed
+// before the publish was attempted, so an operator whose request was cancelled — or a
+// consumer being shut down mid-rollout — still leaves an alarm that reached nobody. The
+// retry stops (further attempts under a dead context would fail on the cancellation
+// rather than on the broker), the arm files the letter under a detached context, and the
+// attempt count on the letter says how far it actually got rather than the cap.
+func TestACancelledCallerStopsTheRetryButStillFilesTheLetter(t *testing.T) {
+	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
+	dead := &deadRecorder{}
+	w := alarmWriterFor(t, pub, dead)
+	ctx, cancel := context.WithCancel(core.WithTenant(context.Background(), "acme"))
+	cancel()
+
+	w.PublishAlarmEvent(ctx, alarmEvent())
+
+	if pub.calls != 1 {
+		t.Fatalf("the publish was attempted %d times under a cancelled context, want 1", pub.calls)
+	}
+	if len(dead.msgs) != 1 {
+		t.Fatalf("wrote %d dead letters, want 1: the cancellation belongs to the caller, not "+
+			"to the record of an alarm nobody was paged about", len(dead.msgs))
+	}
+	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	if err != nil {
+		t.Fatalf("the written letter does not read back: %v", err)
+	}
+	if e.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1: the letter must say how far the publish actually "+
+			"got, not that it spent the whole retry budget", e.Attempts)
+	}
+	if dead.tenants[0] != "acme" {
+		t.Fatalf("the letter was written under tenant %q; the sink detaches the caller's "+
+			"cancellation but must keep its tenant, which is what scopes the subject",
+			dead.tenants[0])
+	}
+}
+
 // A publisher wired without a dead-letter stream must still publish, and must not panic
 // on the failure path — that is the pre-wiring default, and the nil sink is the thing
 // standing between it and a crash in the one moment the arm exists for.
