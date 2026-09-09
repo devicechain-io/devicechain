@@ -170,7 +170,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Its counters were built once in afterMicroserviceInitialized and are handed in,
 	// because this callback runs on every start and a second registration of the same
 	// collector panics.
-	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, deadIndex, executor,
+	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,
 		DispatchMetrics)

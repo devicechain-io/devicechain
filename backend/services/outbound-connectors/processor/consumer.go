@@ -81,10 +81,14 @@ type DispatchConsumer struct {
 // metrics is built once in the initialize phase (see NewDispatchMetrics) and shared by every
 // consumer this service constructs, because this constructor runs again on every start.
 //
+// 🔴 IT TAKES NO Microservice, DELIBERATELY. It used to, for one purpose: building the
+// counters right here — which is what made a restart panic. Leaving the parameter behind
+// with nothing reading it would leave the hook the defect hung on in place.
+//
 // tenantDeleted is a CONSTRUCTOR ARGUMENT rather than a setter for the same reason the rate limiter
 // is: this is the only consumer in the service, so the property worth buying is that a second one
 // added later cannot be constructed without answering the question.
-func NewDispatchConsumer(ms *core.Microservice, reader messaging.MessageReader, dead messaging.MessageWriter,
+func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageWriter,
 	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
 	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics) *DispatchConsumer {
 	var index *deadletter.Sink

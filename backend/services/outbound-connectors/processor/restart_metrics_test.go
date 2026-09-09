@@ -38,7 +38,7 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
 	for start := 1; start <= 2; start++ {
-		if c := NewDispatchConsumer(ms, &fakeReader{}, nil, nil, nil, nil, 0, nil, 1, 1, metrics); c == nil {
+		if c := NewDispatchConsumer(&fakeReader{}, nil, nil, nil, nil, 0, nil, 1, 1, metrics); c == nil {
 			t.Fatalf("start %d built no consumer", start)
 		}
 	}
