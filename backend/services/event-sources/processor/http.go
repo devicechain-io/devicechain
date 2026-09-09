@@ -234,6 +234,17 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 	return nil
 }
 
+// Addr is the address this source is actually serving on, or "" when it is not started.
+// It is not the configured port when the port was 0, which is the case anything
+// discovering the listener from outside this package has to be able to see.
+func (es *HttpEventSource) Addr() string {
+	server := es.server
+	if server == nil {
+		return ""
+	}
+	return server.Addr()
+}
+
 // Stop event source
 func (es *HttpEventSource) Stop(ctx context.Context) error {
 	return es.lifecycle.Stop(ctx)
