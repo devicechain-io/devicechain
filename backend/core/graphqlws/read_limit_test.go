@@ -48,10 +48,16 @@ func awaitTerminal(t *testing.T, sub *Subscription, why string) int {
 // oversizedServer answers the handshake, then sends `pre` ordinary frames followed by
 // one frame of blobBytes, and holds the socket open afterwards — so a client that
 // ends the subscription can only have decided to.
-func oversizedServer(t *testing.T, pre int, blobBytes int) string {
+//
+// The second return is how the refusal looked FROM THE FAR END: the error that ends
+// this server's own read loop, which is the only place a test can see whether the
+// client said why it was leaving or simply dropped the socket. Buffered, so the
+// script never blocks on a test that does not read it.
+func oversizedServer(t *testing.T, pre int, blobBytes int) (string, <-chan error) {
 	t.Helper()
 	blob := strings.Repeat("A", blobBytes)
-	return rawServer(t, func(conn *websocket.Conn) {
+	peerEnd := make(chan error, 1)
+	url := rawServer(t, func(conn *websocket.Conn) {
 		var m wsMessage
 		_ = conn.ReadJSON(&m)
 		_ = conn.WriteJSON(wsMessage{Type: msgConnectionAck})
@@ -67,10 +73,15 @@ func oversizedServer(t *testing.T, pre int, blobBytes int) string {
 		_ = conn.WriteJSON(wsMessage{ID: sub.ID, Type: msgNext, Payload: big})
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
+				select {
+				case peerEnd <- err:
+				default:
+				}
 				return
 			}
 		}
 	})
+	return url, peerEnd
 }
 
 // A `next` frame past the read limit ends the subscription with a terminal error
@@ -84,7 +95,7 @@ func oversizedServer(t *testing.T, pre int, blobBytes int) string {
 // would read a refusal as a clean completion.
 func TestOversizedFrameTerminatesTheSubscription(t *testing.T) {
 	const limit = 4096
-	url := oversizedServer(t, 1, limit*4)
+	url, peerEnd := oversizedServer(t, 1, limit*4)
 
 	c, err := Dial(dialCtx(t), url, nil, WithReadLimit(limit))
 	require.NoError(t, err)
@@ -95,11 +106,31 @@ func TestOversizedFrameTerminatesTheSubscription(t *testing.T) {
 
 	n := awaitTerminal(t, sub, "the oversized frame was accepted and buffered instead of ending it")
 	assert.Equal(t, 1, n, "the frame under the ceiling is delivered; the one over it is not")
-	require.Error(t, sub.Err(), "the subscription ended without saying why")
-	var closeErr *websocket.CloseError
-	if errors.As(sub.Err(), &closeErr) {
+	// 🔴 ASSERTED, NOT CONDITIONAL. This read the client's terminal error as a
+	// *websocket.CloseError under an `if`, and a gorilla client that refuses a frame
+	// for its SIZE reports its own ErrReadLimit, never a close error — the far end
+	// sent nothing. So the check inside that `if` had never once executed, and a
+	// subscription that ended for any other reason at all would have satisfied it.
+	require.ErrorIs(t, sub.Err(), websocket.ErrReadLimit,
+		"the subscription ended, but not because the frame was over the ceiling")
+
+	// And the far end was TOLD. A client that refuses a frame and simply drops the
+	// socket leaves the server unable to tell a refusal from a crashed consumer, and
+	// this is the only vantage point from which the difference is visible. Bounded,
+	// because the thing being reported is a close frame that never arrives — and an
+	// unbounded receive here would make that outcome a hang rather than a failure.
+	select {
+	case err := <-peerEnd:
+		var closeErr *websocket.CloseError
+		if !errors.As(err, &closeErr) {
+			t.Fatalf("the far end's connection ended with %v, want a close frame — the client refused the "+
+				"frame without telling the peer why", err)
+		}
 		assert.Equal(t, websocket.CloseMessageTooBig, closeErr.Code,
 			"the client answers an oversized frame with 1009 (message too big)")
+	case <-time.After(terminalWait):
+		t.Fatal("the far end never saw the connection end: the client refused the frame and then left the " +
+			"socket open, so the server has no way to know the stream is over")
 	}
 }
 
@@ -154,7 +185,7 @@ func TestAnUnsetOrZeroReadLimitStillStopsAtTheDefault(t *testing.T) {
 		{"an explicit zero, which gorilla would read as unlimited", []Option{WithReadLimit(0)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			url := oversizedServer(t, 0, int(defaultReadLimit)+(1<<10))
+			url, _ := oversizedServer(t, 0, int(defaultReadLimit)+(1<<10))
 
 			c, err := Dial(dialCtx(t), url, nil, tc.opts...)
 			require.NoError(t, err)
@@ -165,7 +196,8 @@ func TestAnUnsetOrZeroReadLimitStillStopsAtTheDefault(t *testing.T) {
 
 			n := awaitTerminal(t, sub, "a frame past the default ceiling was accepted; this connection has no read limit at all")
 			assert.Zero(t, n, "a frame past the default ceiling must not be delivered")
-			require.Error(t, sub.Err(), "the subscription ended without saying why")
+			require.ErrorIs(t, sub.Err(), websocket.ErrReadLimit,
+				"the subscription ended, but not because the frame was over the default ceiling")
 		})
 	}
 }

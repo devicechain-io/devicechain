@@ -288,15 +288,24 @@ func TestOversizedSubscriptionFrameIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if err := conn.WriteJSON(wsMessage{Type: msgConnectionInit, Payload: oversized}); err != nil {
-		t.Fatalf("write oversized frame: %v", err)
-	}
+	// 🔴 THE WRITE'S OUTCOME IS RECORDED, NEVER FATAL, BECAUSE A REFUSAL RESETS IT.
+	// The server stops reading the moment the frame passes the ceiling and closes the
+	// socket, which leaves the rest of this frame unread and makes the kernel answer
+	// the remainder of the write with RST. So `connection reset by peer` here is what
+	// success looks like from the peer's side, not a failure of it — a frame large
+	// enough to matter cannot be refused any other way. Whether it lands or is reset
+	// is a socket-buffer race (measured: ~1% at this size, ~100% at a few MiB), so
+	// treating it as a precondition made the ASSERTION BELOW — the only thing that
+	// proves the refusal carries 1009 rather than an arbitrary disconnect — skippable
+	// by timing. Data already queued for us is still delivered after a reset, so the
+	// close frame arrives either way and every assertion below runs either way.
+	writeErr := conn.WriteJSON(wsMessage{Type: msgConnectionInit, Payload: oversized})
 
 	_, _, err = conn.ReadMessage()
 	var closeErr *websocket.CloseError
 	if !errors.As(err, &closeErr) {
 		t.Fatalf("an oversized frame was answered with %v; want the connection closed — the frame was "+
-			"accepted and materialised on the heap instead", err)
+			"accepted and materialised on the heap instead (writing it returned %v)", err, writeErr)
 	}
 	if closeErr.Code != websocket.CloseMessageTooBig {
 		t.Errorf("an oversized frame closed the connection with code %d, want %d (message too big)",
