@@ -51,6 +51,14 @@ func scanTree(t *testing.T) map[string][]schemaplane.Schema {
 		if _, serr := os.Stat(dir); serr != nil {
 			continue
 		}
+		// 🔴 THE LINT OVER OUR OWN TREE, AND IT IS THE STRICT HALF. Dir reads any
+		// release's spelling because apiprobe points it at older trees; Lint is what
+		// holds THIS repository to .graphql, and it is only correct to call it here,
+		// on directories that are ours to rename.
+		if lerr := schemaplane.Lint(dir); lerr != nil {
+			t.Errorf("%s: %v", dir, lerr)
+			continue
+		}
 		found, cerr := schemaplane.Dir(dir)
 		if cerr != nil {
 			t.Fatalf("classify %s: %v", dir, cerr)
@@ -186,17 +194,62 @@ func TestClassifyRefusesAnUnrecognizedFilename(t *testing.T) {
 	}
 }
 
-func TestDirRefusesARefusedExtension(t *testing.T) {
+func TestLintRefusesAnAlternateExtension(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "schema.graphql"), "type Query { a: String }")
 	write(t, filepath.Join(dir, "settings_schema.gql"), "type Query { b: String }")
 
-	_, err := schemaplane.Dir(dir)
+	err := schemaplane.Lint(dir)
 	if err == nil {
-		t.Fatal("Dir accepted a .gql schema artifact")
+		t.Fatal("Lint accepted a .gql schema artifact")
 	}
 	if !strings.Contains(err.Error(), "settings_schema.gql") {
 		t.Fatalf("the error must name the offending file, got: %v", err)
+	}
+}
+
+// Lint is the whole naming rule, not only the extension: a file no convention names
+// has no mount to be served at, and Lint has to say so rather than leave it to a
+// consumer that will find out later.
+func TestLintRefusesAnUnrecognizedFilename(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "internal_schema.graphql"), "type Query { a: String }")
+
+	if err := schemaplane.Lint(dir); err == nil {
+		t.Fatal("Lint accepted a schema filename no convention names")
+	}
+}
+
+// The counterweight to both refusals: a correctly named directory passes. A lint
+// that refused everything would satisfy the two assertions above.
+func TestLintAcceptsACorrectlyNamedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "schema.graphql"), "type Query { a: String }")
+	write(t, filepath.Join(dir, "admin_schema.graphql"), "type Query { b: String }")
+	write(t, filepath.Join(dir, "resolvers.go"), "package graphql")
+
+	if err := schemaplane.Lint(dir); err != nil {
+		t.Fatalf("Lint refused a directory named exactly as this repository requires: %v", err)
+	}
+}
+
+// 🔴 THE DUPLICATE-MOUNT REFUSAL, WHICH READING THROUGH THE EXTENSION MAKES
+// REACHABLE FROM A DIRECTORY. One convention under two spellings is two files
+// claiming one endpoint, and a tool that took either would serve a different schema
+// depending on which the directory listing handed it first. It is an error, named.
+func TestDirRefusesTwoSpellingsOfOneMount(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "schema.graphql"), "type Query { a: String }")
+	write(t, filepath.Join(dir, "schema.gql"), "type Query { b: String }")
+
+	_, err := schemaplane.Dir(dir)
+	if err == nil {
+		t.Fatal("Dir accepted two files claiming " + schemaplane.MountTenant)
+	}
+	for _, want := range []string{"schema.graphql", "schema.gql", schemaplane.MountTenant} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name %q, got: %v", want, err)
+		}
 	}
 }
 
@@ -241,5 +294,117 @@ func write(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// 🔴 THE REGRESSION THIS SEPARATION EXISTS FOR. Dir is not only a lint over this
+// repository's own tree; it is also the scanner apiprobe points at a CHECKED-OUT
+// RELEASE, and the upgrade drill checks out the previous release to seed the
+// baseline install it then upgrades. In that tree user-management's three schemas
+// are spelled .gql, because the rename is newer than the release. A scanner that
+// refuses the spelling an older tree actually uses cannot read the trees it exists
+// to read: the drill died before it upgraded anything, and reported a seeding
+// failure that said nothing about the release under test.
+func TestDirReadsAReleaseTreeThatSpelledItsSchemasGql(t *testing.T) {
+	dir := t.TempDir()
+	// The three names exactly as the previous release spells them.
+	write(t, filepath.Join(dir, "schema.gql"), "type Query { a: String }")
+	write(t, filepath.Join(dir, "admin_schema.gql"), "type Query { b: String }")
+	write(t, filepath.Join(dir, "settings_schema.gql"), "type Query { c: String }")
+
+	got, err := schemaplane.Dir(dir)
+	if err != nil {
+		t.Fatalf("Dir refused a release tree it has to be able to read: %v", err)
+	}
+	want := map[string]schemaplane.Plane{
+		schemaplane.MountTenant:   schemaplane.PlaneTenant,
+		schemaplane.MountAdmin:    schemaplane.PlaneIdentity,
+		schemaplane.MountSettings: schemaplane.PlaneIdentity,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("classified %d schema(s), want %d: %+v", len(got), len(want), got)
+	}
+	for _, s := range got {
+		plane, known := want[s.Mount]
+		if !known {
+			t.Errorf("%s: unexpected mount %s", s.Path, s.Mount)
+			continue
+		}
+		if s.Plane != plane {
+			t.Errorf("%s: plane %q, want %q", s.Path, s.Plane, plane)
+		}
+		delete(want, s.Mount)
+	}
+	for mount := range want {
+		t.Errorf("no schema classified at mount %s", mount)
+	}
+}
+
+// The reading half of the same story: SDLAt has to hand back an older tree's text,
+// because that text is what apiprobe parses to plan the calls it makes.
+func TestSDLAtReadsAnOlderTreesSpelling(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "schema.gql"), "type Query { a: String }")
+
+	sdl, ok, err := schemaplane.SDLAt(dir, schemaplane.MountTenant)
+	if err != nil {
+		t.Fatalf("SDLAt: %v", err)
+	}
+	if !ok || !strings.Contains(sdl, "type Query") {
+		t.Fatalf("SDLAt(%s) = %q, %v; want the file's text", schemaplane.MountTenant, sdl, ok)
+	}
+}
+
+// 🔴 THE ARM THAT CATCHES A NORMALIZATION THAT MOVES AN ENDPOINT. Every schema
+// artifact in this tree still classifies to the mount and plane it classified to
+// before the scanner learned to read an older release's spelling. The expected
+// answers are written out here as LITERAL strings rather than taken from the
+// package's constants, because a table that sourced its answers from the code under
+// test would follow that code anywhere it went — including onto the wrong plane.
+//
+// It pins filenames, not paths, which is what keeps it from drifting: those three
+// names are the whole convention, and a service that gains a schema has to use one
+// of them. The per-file inventory is reconciled in both directions somewhere else,
+// by docs/scripts/schemas.manifest.mjs.
+func TestEverySchemaInTheTreeKeepsTheMountItHad(t *testing.T) {
+	mountFor := map[string]struct {
+		mount string
+		plane string
+	}{
+		"schema.graphql":          {"/graphql", "tenant"},
+		"admin_schema.graphql":    {"/admin/graphql", "identity"},
+		"settings_schema.graphql": {"/settings/graphql", "identity"},
+	}
+
+	byArea := scanTree(t)
+	if len(byArea) < minAreasWithSchemas {
+		t.Fatalf("classified schemas in %d area(s), expected at least %d; a scan that found "+
+			"almost nothing would satisfy every assertion below", len(byArea), minAreasWithSchemas)
+	}
+
+	checked := 0
+	for area, schemas := range byArea {
+		for _, s := range schemas {
+			want, known := mountFor[filepath.Base(s.Path)]
+			if !known {
+				t.Errorf("%s (%s): no expected mount recorded for this filename; if the "+
+					"convention table gained an entry, record what it must answer here too",
+					s.Path, area)
+				continue
+			}
+			if s.Mount != want.mount {
+				t.Errorf("%s: served at %s, but it was classified to %s before", s.Path, s.Mount, want.mount)
+			}
+			if string(s.Plane) != want.plane {
+				t.Errorf("%s: plane %q, but it carried %q before; a mount that changes the "+
+					"principal that reaches it either exposes an identity surface to a tenant "+
+					"token or hides it from the only token that can authorize it",
+					s.Path, s.Plane, want.plane)
+			}
+			checked++
+		}
+	}
+	if checked < minSchemas {
+		t.Fatalf("checked %d schema artifact(s), expected at least %d", checked, minSchemas)
 	}
 }
