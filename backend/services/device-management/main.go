@@ -117,15 +117,29 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	FailedEventsWriter = fevents
 
+	// The ADR-024 dead-letter writer, built once and shared by every arm in this service.
+	// It is created BEFORE the arms that use it so a deployment that cannot create the
+	// dead-letter stream fails at startup, beside every other stream this service needs,
+	// rather than at the first failure — the one moment an arm has to work.
+	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return err
+	}
+
 	// Add the alarm-events writer and inject a publisher over it into the shared Api
 	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and
 	// the GraphQL operator mutations emit alarm state-change events through it.
+	//
+	// The publisher carries the ADR-024 arm for the LAST hop of the alarm flow: an alarm
+	// whose state-change event never reaches the stream pages nobody, and the subscriber
+	// cannot notice — notification-management's durable only advances over messages that
+	// were published — so a give-up here is dead-lettered and counted rather than logged.
 	aevents, err := nmgr.NewWriter(streams.AlarmEvents)
 	if err != nil {
 		return err
 	}
 	AlarmEventsWriter = aevents
-	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter)
+	Api.AlarmPublisher = processor.NewAlarmEventWriter(Microservice, AlarmEventsWriter, deadWriter)
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
@@ -209,12 +223,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// actions it could not dispatch; an edge it dispatched successfully could still die
 	// here, with the same consequence — a raise that does not re-emit until the condition
 	// re-breaches, a resolve that strands its alarm.
-	raDead, err := nmgr.NewWriter(streams.DeadLetters)
-	if err != nil {
-		return err
-	}
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi, raDead)
+		core.NewNoOpLifecycleCallbacks(), CachedApi, deadWriter)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}

@@ -369,6 +369,33 @@ type InfrastructureConfiguration struct {
 	Secrets          SecretsConfiguration
 	Blob             BlobConfiguration
 	Egress           EgressConfiguration
+	GraphQL          GraphQLConfiguration
+}
+
+// GraphQLConfiguration carries the request-shape ceilings that every service's
+// GraphQL server enforces and that an operator may need to move.
+type GraphQLConfiguration struct {
+	// MaxSubscriptionMessageBytes bounds a single inbound WebSocket message on the
+	// subscription transport, in bytes.
+	//
+	// It is the WebSocket half of a pair whose HTTP half already existed. A POST to
+	// /graphql is capped by the handler's request-body ceiling; a WebSocket upgrade
+	// to that SAME path was capped by nothing, because gorilla's read limit is
+	// unlimited until something sets it. The frame is read, and its payload
+	// materialised on the heap, before the connection's credential has been looked
+	// at — so an unbounded frame is reachable by any peer that can complete the
+	// upgrade. The parsed-document ceilings (query length, selection depth) do not
+	// help: they apply after the frame has already been read.
+	//
+	// The default deliberately equals the HTTP body ceiling, so the same operation
+	// carries the same bound over either transport on the one route. Raise it for a
+	// deployment whose subscribe payloads are genuinely larger.
+	//
+	// Fail-safe like the rest of the platform's ceilings (never-unlimited, ADR-023):
+	// a zero, negative, or absent value is the platform default, not "no limit".
+	// There is deliberately no value that turns the ceiling off — a peer that
+	// exceeds it is closed 1009 rather than served.
+	MaxSubscriptionMessageBytes int64
 }
 
 // EgressConfiguration is the operator's escape hatch for the tenant-egress boundary
@@ -465,6 +492,20 @@ const (
 	// so the working set is bounded by activity rather than by device count.
 	DefaultKvStateMaxBytes int64 = 128 << 20 // 128 MiB per state bucket
 )
+
+// DefaultGraphQLMaxSubscriptionMessageBytes is the platform ceiling on a single
+// inbound WebSocket message on the GraphQL subscription transport.
+//
+// 4 MiB, which is the HTTP request-body ceiling the sibling handler on the SAME
+// /graphql route already applies. Matching it is the whole argument for this
+// number: a subscribe frame carries a GraphQL operation and its variables, which
+// is exactly what a POST body carries, so the two transports should not disagree
+// about how large that is allowed to be. It dwarfs every operation the platform
+// issues — the largest documents in the tree are a few KB — while keeping a single
+// frame from being materialised without bound on a pod's heap.
+//
+// See GraphQLConfiguration.MaxSubscriptionMessageBytes for the fail-safe rules.
+const DefaultGraphQLMaxSubscriptionMessageBytes int64 = 4 << 20
 
 // KvMaxBytesFor is the ceiling for the named KV bucket, keyed on its declared
 // tier (kv.All). An unregistered bucket takes the state ceiling — see kv.TierFor
@@ -604,6 +645,13 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if secrets.KEKProvider == "" {
 		secrets.KEKProvider = DefaultSecretsKEKProvider
+	}
+	// Coerce a non-positive GraphQL subscription frame ceiling to the platform
+	// default. gorilla/websocket reads a non-positive read limit as UNLIMITED, so an
+	// omitted or mistyped key must not reach it — same never-unlimited rule as the
+	// stream bounds above.
+	if c.Infrastructure.GraphQL.MaxSubscriptionMessageBytes <= 0 {
+		c.Infrastructure.GraphQL.MaxSubscriptionMessageBytes = DefaultGraphQLMaxSubscriptionMessageBytes
 	}
 	// Default the object-store backend so an instance document that omits it means
 	// "the zero-cloud default" (filesystem/PVC), not an invalid empty selection. The
@@ -784,6 +832,9 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			Secrets: SecretsConfiguration{
 				Backend:     DefaultSecretsBackend,
 				KEKProvider: DefaultSecretsKEKProvider,
+			},
+			GraphQL: GraphQLConfiguration{
+				MaxSubscriptionMessageBytes: DefaultGraphQLMaxSubscriptionMessageBytes,
 			},
 		},
 		Persistence: PersistenceConfiguration{

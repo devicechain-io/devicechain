@@ -6,7 +6,7 @@ const config: CodegenConfig = {
   ignoreNoDocuments: true,
   generates: {
     './src/gql/user-management/': {
-      schema: '../../../backend/services/user-management/graphql/schema.gql',
+      schema: '../../../backend/services/user-management/graphql/schema.graphql',
       documents: ['src/lib/api/user-management.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
@@ -106,7 +106,7 @@ const config: CodegenConfig = {
     // /admin/graphql. Its own schema + client so the admin console's typed
     // operations never mix with the tenant-scoped user-management ones.
     './src/gql/user-management-admin/': {
-      schema: '../../../backend/services/user-management/graphql/admin_schema.gql',
+      schema: '../../../backend/services/user-management/graphql/admin_schema.graphql',
       documents: ['src/lib/api/admin.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
@@ -116,7 +116,7 @@ const config: CodegenConfig = {
     // /settings/graphql on the same identity-token lane as the admin API. Its own
     // schema + client so its typed operations stay separate.
     './src/gql/user-management-settings/': {
-      schema: '../../../backend/services/user-management/graphql/settings_schema.gql',
+      schema: '../../../backend/services/user-management/graphql/settings_schema.graphql',
       documents: ['src/lib/api/settings.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },

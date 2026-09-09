@@ -229,7 +229,17 @@ backup_env_file="$work/backup.env"
 # The off-cluster object store. A container on the `kind` docker network, so the
 # cluster can reach it by name and it survives `kind delete cluster`.
 minio_container="devicechain-dr-minio"
-minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+# 🔴 PINNED BY DIGEST, tag kept beside it so a reader can see the release. A
+# RELEASE.* tag reads like an immutable version and is not one — it is a name the
+# publisher can repoint, so an unpinned tag is a third-party dependency that can
+# move under a drill with no commit here to show for it. This rig's whole claim is
+# that a secret seeded before a restore still decrypts after one; that claim is
+# only about a known object store if the object store is the same bytes twice.
+#
+# hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
+# from the tag you want (`crane digest quay.io/minio/minio:<release>`) and write
+# both.
+minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
 minio_network="kind"
 bucket_rdb="$instance-rdb"
 bucket_tsdb="$instance-tsdb"
@@ -1367,6 +1377,33 @@ its replacement, from two archives and an escrow artifact alone."
 }
 
 # cmd_control is the check on the check.
+#
+# 🔴 THIS PHASE NEEDS REWORKING, AND THE REASON IS A DELIBERATE CHANGE ELSEWHERE.
+# A service that stores secrets now checks its instance root key against its own
+# stored ciphertext when it builds the secret store, and refuses to start if the
+# key does not open it. So the decoy rebuild below no longer produces a running
+# instance: notification-management refuses to start, `dcctl bootstrap` never sees
+# every area become ready, and this phase dies inside `rebuild` with a readiness
+# timeout — a wrong-reason failure that reads as an environment problem.
+#
+# The control has not weakened; its evidence has moved EARLIER. What used to be
+# "the instance comes up and then cannot decrypt" is now "the instance refuses to
+# come up, naming the key". Reworking the phase means:
+#
+#   - letting the decoy `rebuild` fail without aborting, since a failed bring-up is
+#     now the expected outcome rather than an error;
+#   - asserting the SPECIFIC refusal in notification-management's logs, not merely
+#     that it is down. A pod that is down for any other reason would otherwise make
+#     the control "hold" while testing nothing, which is the exact shape this rig
+#     exists to avoid;
+#   - dropping `wait_for_api notification-management` from this phase only (that
+#     area is deliberately not serving here; user-management stores no secrets and
+#     still comes up); and
+#   - keeping run_verify afterwards. It reads the database through its own
+#     port-forward rather than through the area's API, so it still stands as the
+#     second, independent leg: the ciphertext does not decrypt under this key.
+#
+# Until that is done and RUN, this phase's verdict is not evidence either way.
 #
 # It recovers the SAME instance from the SAME archive under a root key that is not
 # the instance's. Everything else is identical. If the secret still decrypts, then

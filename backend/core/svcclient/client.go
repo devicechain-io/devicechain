@@ -34,6 +34,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/singleflight"
@@ -121,6 +122,20 @@ type Client struct {
 	expiresAt time.Time
 }
 
+// sharedTransport is this package's connection pool, shared by every Client in the
+// process. Leaving http.Client.Transport nil would dial through http.DefaultTransport
+// instead: the environment's proxy settings would apply to the service-token mint and
+// to every bearer-carrying cross-service query, and the pool would be the process-wide
+// one, two idle connections per host, shared with code that has nothing to do with
+// auth. httptransport states both.
+//
+// Shared rather than one per Client on purpose. A service constructs several Clients
+// (different subjects and authorities) that all mint from the SAME user-management
+// endpoint, so one pool is what lets the second Client reuse the first's connection.
+// The isolation that matters is from the rest of the process, and that is what this
+// gets.
+var sharedTransport = httptransport.New()
+
 // New builds a Client that mints tokens carrying subject (the calling service's
 // name, for audit) and authorities (the least-privilege capabilities its calls
 // need). umCfg locates user-management's mint endpoint; secret is the shared
@@ -128,7 +143,7 @@ type Client struct {
 // a Client that fails closed on first use.
 func New(umCfg config.UserManagementConfiguration, secret, subject string, authorities []string) *Client {
 	return &Client{
-		http:        &http.Client{Timeout: requestTimeout},
+		http:        &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
 		mintURL:     fmt.Sprintf("http://%s:%d%s", umCfg.Hostname, umCfg.Port, auth.ServiceTokenPath),
 		secret:      secret,
 		subject:     subject,

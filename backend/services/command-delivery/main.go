@@ -304,6 +304,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Api = model.NewApi(RdbManager)
 	Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
 
+	// How many failed dispatches one command may accumulate before the release path stops
+	// returning it to the queue and records FAILED instead. Floored positive in
+	// ApplyDefaults and bounded at both ends in Validate, so this is always a real bound: a
+	// missing or zero configured value means the platform default and NEVER "retry
+	// forever", which is the behaviour it exists to end.
+	Api.MaxDispatchFailures = Configuration.MaxDispatchFailures
+
 	// Fleet-write counters. This is the only place they are built: they register on the
 	// registry this Microservice owns, and the lifecycle manager guarantees this
 	// initializer runs once. Every test builds its Api by literal, leaves this nil, and

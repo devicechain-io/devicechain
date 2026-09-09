@@ -83,6 +83,17 @@ const (
 	// briefly-busy consumer (a GC pause) absorbs a burst rather than tripping the
 	// fail-closed overflow; a sustained-behind consumer still trips it.
 	defaultBuffer = 1024
+	// defaultReadLimit bounds a single inbound message. gorilla applies no limit of
+	// its own — it gates the check on a positive value and nothing sets one — so
+	// without this a client buffers whatever the far end sends, and the far end is
+	// not necessarily the server this package was written against.
+	//
+	// Generous on purpose, and deliberately larger than the server's inbound ceiling:
+	// this bounds RESPONSES, whose size is a property of the data a subscription
+	// carries rather than of an operation someone typed, and a limit that severs a
+	// legitimate stream is worse here than a large buffer. 16 MiB is four times the
+	// platform's request-side ceiling.
+	defaultReadLimit int64 = 16 << 20
 )
 
 // ErrSlowConsumer terminates a subscription whose channel buffer filled because
@@ -120,6 +131,7 @@ type config struct {
 	ackTimeout       time.Duration
 	readTimeout      time.Duration
 	buffer           int
+	readLimit        int64
 	dialer           *websocket.Dialer
 }
 
@@ -140,6 +152,12 @@ func WithReadTimeout(d time.Duration) Option { return func(c *config) { c.readTi
 
 // WithBuffer sets the per-subscription channel depth (see ErrSlowConsumer).
 func WithBuffer(n int) Option { return func(c *config) { c.buffer = n } }
+
+// WithReadLimit bounds a single inbound message in bytes. A non-positive value is
+// ignored in favour of the default: gorilla reads a non-positive read limit as
+// UNLIMITED, so a caller passing 0 would silently get the unbounded read this option
+// exists to close.
+func WithReadLimit(n int64) Option { return func(c *config) { c.readLimit = n } }
 
 // WithDialer supplies a preconfigured gorilla dialer (TLS config, proxy). Its
 // Subprotocols and HandshakeTimeout are overridden to the protocol's needs.
@@ -174,6 +192,7 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 		ackTimeout:       defaultAckTimeout,
 		readTimeout:      defaultReadTimeout,
 		buffer:           defaultBuffer,
+		readLimit:        defaultReadLimit,
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -184,6 +203,10 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 	// like a platform fault. Clamp a misconfiguration back to the default.
 	if cfg.buffer < 1 {
 		cfg.buffer = defaultBuffer
+	}
+	// Never unlimited: see WithReadLimit.
+	if cfg.readLimit < 1 {
+		cfg.readLimit = defaultReadLimit
 	}
 
 	dialer := cfg.dialer
@@ -206,6 +229,8 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 		_ = conn.Close()
 		return nil, fmt.Errorf("graphqlws: server did not negotiate %q", wsSubprotocol)
 	}
+	// Before the first read, which is the connection_ack below.
+	conn.SetReadLimit(cfg.readLimit)
 
 	c := &Client{
 		conn:        conn,

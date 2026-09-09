@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/admin"
 )
 
-//go:embed admin_schema.gql
+//go:embed admin_schema.graphql
 var AdminSchemaContent string
 
 // ContextAdminKey injects the admin control-plane Service into the admin GraphQL

@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/settings"
 )
 
-//go:embed settings_schema.gql
+//go:embed settings_schema.graphql
 var SettingsSchemaContent string
 
 // ContextSettingsKey injects the settings Service into the settings GraphQL

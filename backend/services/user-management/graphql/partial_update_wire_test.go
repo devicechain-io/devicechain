@@ -38,8 +38,8 @@ import (
 //     proof carries here by construction rather than by repetition.
 //
 // 🔴 TWO SCHEMAS ARE COVERED, AND SPLITTING THEM WOULD BE THE SAME LIST TWICE. The four
-// admin catalogs live on admin_schema.gql behind identity-token authorization; the
-// profile edit lives on the tenant data plane in schema.gql. Both go through the table
+// admin catalogs live on admin_schema.graphql behind identity-token authorization; the
+// profile edit lives on the tenant data plane in schema.graphql. Both go through the table
 // below, with the schema and its resolver root named per row, because the property being
 // asserted is identical and a second copy of these three tests is how the second schema
 // comes to be checked less thoroughly than the first.

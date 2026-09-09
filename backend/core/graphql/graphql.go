@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -67,6 +68,11 @@ type GraphQLManager struct {
 	// mistake produces, so it has to be the safe one.
 	Port int32
 
+	// subscriptions is the WebSocket half of the /graphql route, kept here so
+	// ExecuteStop can close the connections http.Server.Shutdown will not.
+	// ExecuteInitialize builds it; it is nil only before that has run.
+	subscriptions *SubscriptionHandler
+
 	lifecycle core.LifecycleManager
 }
 
@@ -120,9 +126,17 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 	// routed to the graphql-transport-ws subscription handler (ADR-037); a plain
 	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
 	// the ws:// URL from the http:// one, matching GraphQL client conventions.
+	gql.subscriptions = NewSubscriptionHandler(gql.Schema, gql.ContextProviders, gql.Gate)
+	// The operator-tunable inbound-frame ceiling. ApplyDefaults has already floored a
+	// missing or non-positive value to the platform default, and readLimit floors it
+	// again at the point of use — a service whose instance config was never loaded
+	// (every test that builds a Microservice by hand) must not end up unbounded.
+	gql.subscriptions.MaxMessageBytes =
+		gql.Microservice.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes
+
 	mux.Handle("/graphql", graphqlDispatcher(
 		NewHttpHandler(gql.Schema, gql.ContextProviders, gql.Gate),
-		NewSubscriptionHandler(gql.Schema, gql.ContextProviders, gql.Gate),
+		gql.subscriptions,
 	))
 
 	// The /graphiql explorer is developer tooling — register it only when dev tools
@@ -199,7 +213,29 @@ func (gql *GraphQLManager) Stop(ctx context.Context) error {
 }
 
 // Lifecycle callback that runs shutdown logic.
-func (gql *GraphQLManager) ExecuteStop(context.Context) error {
+//
+// 🔴 THE SUBSCRIPTIONS ARE CLOSED FIRST, AND THAT ORDER IS THE WHOLE POINT.
+// http.Server.Shutdown neither closes nor waits for HIJACKED connections, and every
+// WebSocket on /graphql is hijacked — so on its own it returns as soon as the
+// ordinary connections idle, and this function logged a successful stop while N
+// subscriptions were still streaming from a pod that had been declared drained.
+// Closing them afterwards would be no better: Shutdown would already have returned
+// and the caller would already have moved on.
+//
+// ctx is honoured rather than replaced with context.Background(). It is the shutdown
+// context itself, so passing it on is the only way a caller can bound the drain at
+// all; handing Shutdown a Background context asks the stdlib to wait indefinitely.
+// Both halves get the same ctx, so a caller's bound covers the whole teardown.
+func (gql *GraphQLManager) ExecuteStop(ctx context.Context) error {
+	// Both errors are collected rather than the first one returned: an unfinished
+	// subscription drain must not skip the HTTP shutdown, and a stop that reports one
+	// problem while silently declining to do the other half is how a leak like this
+	// stays invisible.
+	var subErr error
+	if gql.subscriptions != nil {
+		subErr = gql.subscriptions.Shutdown(ctx)
+	}
+
 	// Nil until ExecuteStart has run.
 	//
 	// ⚠️ The lifecycle does not reach here in that state today — ShutDownNow refuses a
@@ -208,9 +244,9 @@ func (gql *GraphQLManager) ExecuteStop(context.Context) error {
 	// every service drives Stop by hand; one that stops without having started would
 	// otherwise get a nil dereference where a no-op belongs.
 	if gql.Server == nil {
-		return nil
+		return subErr
 	}
-	if err := gql.Server.Shutdown(context.Background()); err != nil {
+	if err := errors.Join(subErr, gql.Server.Shutdown(ctx)); err != nil {
 		return err
 	}
 	log.Info().Int32("port", GRAPHQL_PORT).Msg("GraphQL server shut down successfully.")

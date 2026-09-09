@@ -4,9 +4,11 @@
 package secrets
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -39,7 +41,11 @@ type RootKeySource func() ([]byte, error)
 // write, or at read. A declared-but-unbuilt selection is therefore terminal here,
 // the same shape as blob.New and connectorspec.ErrUnsupportedType — recognized,
 // not executable, never silently substituted.
-func New(cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
+//
+// ctx carries the caller's startup lifecycle into the one database round-trip this
+// makes — the root-key self-test below — so a service asked to shut down while its
+// database is hung is not held open by a check that cannot be cancelled.
+func New(ctx context.Context, cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
 	cfg = cfg.withDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -81,6 +87,28 @@ func New(cfg Config, db *gorm.DB, rootKey RootKeySource) (SecretStore, error) {
 	kp, err := NewInstanceKeyProvider(raw)
 	if err != nil {
 		return nil, err
+	}
+	// The key is well-formed; check that it is the RIGHT one. NewInstanceKeyProvider
+	// can only see the key's length, so a different well-formed key builds a perfectly
+	// valid provider that opens nothing. This is the single wiring point every service
+	// uses, and every one of them runs its schema migrations before reaching it, so the
+	// secrets table exists by the time the check reads it — SelfTest refuses loudly if
+	// it does not, rather than reading a missing table as an empty one.
+	result, err := SelfTest(ctx, db, kp)
+	if err != nil {
+		return nil, err
+	}
+	// The outcome is logged rather than discarded, and the two non-failing outcomes
+	// get DIFFERENT MESSAGES rather than one message plus a field. A store with
+	// nothing in it yet has verified nothing, and a line that reads as a passed check
+	// in that case is the same green-tick-that-checked-nothing this exists to remove —
+	// so the sentence itself has to differ, not just a field an eye can skip.
+	event := log.Info().Str("check", "instance-root-key").
+		Str("result", string(result)).Bool("verified", result.Verified())
+	if result.Verified() {
+		event.Msg("The instance root key opens this service's stored secrets.")
+	} else {
+		event.Msg("The instance root key was NOT checked: this service has no stored secrets yet.")
 	}
 	return NewStore(db, kp), nil
 }

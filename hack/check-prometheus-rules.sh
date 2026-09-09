@@ -100,7 +100,18 @@ python3 -c 'import yaml' 2>/dev/null || fail "python3 needs PyYAML (pip install 
 
 # promtool, from wherever it is. The container is the fallback rather than the
 # default so a developer with a local Prometheus does not pay for a pull.
-promtool_image="${PROMTOOL_IMAGE:-prom/prometheus:v3.5.0}"
+#
+# 🔴 PINNED BY DIGEST, tag kept beside it so a reader can see the version. A bare
+# `v3.5.0` is still a pointer Docker Hub can repoint, which makes an unpinned tag a
+# third-party dependency that can move under a release with no commit here to show
+# for it — and this gate's verdict is exactly the thing that must not change
+# without one. That is not theoretical for this script: the note below records the
+# day this same pull failed and the failure was reported as promtool rejecting
+# rules it had never seen.
+#
+# hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
+# from the tag you want (`crane digest prom/prometheus:<version>`) and write both.
+promtool_image="${PROMTOOL_IMAGE:-prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996}"
 if command -v promtool >/dev/null 2>&1; then
   run_promtool() { promtool check rules "$@"; }
 else

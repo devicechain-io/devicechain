@@ -6,12 +6,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/ast"
 )
@@ -371,32 +373,19 @@ func isRequired(t ast.Type) bool {
 // is. Folding the planes together would plan calls this session cannot make and report
 // every one of them as a finding.
 func loadServedSchema(dir, area string) (*ast.Schema, error) {
-	var files []string
-	for _, ext := range []string{"*.graphql", "*.gql"} {
-		found, err := filepath.Glob(filepath.Join(dir, area, "graphql", ext))
-		if err != nil {
-			return nil, failWith(exitSetup, "glob %s schemas: %w", area, err)
-		}
-		files = append(files, found...)
-	}
-	sort.Strings(files)
-
-	var sdl strings.Builder
-	for _, f := range files {
-		if strings.Contains(filepath.Base(f), "admin") {
-			continue
-		}
-		body, err := os.ReadFile(f) //nolint:gosec // a path this tool globbed itself
-		if err != nil {
-			return nil, failWith(exitSetup, "read %s: %w", f, err)
-		}
-		sdl.Write(body)
-		sdl.WriteString("\n")
-	}
-	if strings.TrimSpace(sdl.String()) == "" {
+	sdl, served, err := schemaplane.SDLAt(filepath.Join(dir, area, "graphql"), schemaplane.MountTenant)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// An area with no graphql directory in this release's tree. Not every area
+		// serves GraphQL, and a deployed tree the sweep is pointed at is older than
+		// this binary by construction.
+		return nil, nil
+	case err != nil:
+		return nil, failWith(exitSetup, "%s: %w", area, err)
+	case !served:
 		return nil, nil
 	}
-	parsed, err := graphql.ParseSchema(sdl.String(), nil, graphql.UseFieldResolvers())
+	parsed, err := graphql.ParseSchema(sdl, nil, graphql.UseFieldResolvers())
 	if err != nil {
 		return nil, failWith(exitSetup, "parse %s schema: %w", area, err)
 	}

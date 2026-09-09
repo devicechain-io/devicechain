@@ -269,6 +269,21 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
+### Límites de tiempo en una petición
+
+El listener de ingesta limita cuánto puede tardar una petición. Un dispositivo dispone de **5
+segundos** para enviar las cabeceras y de **60 segundos** para enviar la petición completa,
+cabeceras y cuerpo. Ambos son configurables por instancia, en los ajustes `httpIngest` del área
+`event-sources`.
+
+Una petición que supera cualquiera de los dos límites ve su **conexión cerrada** — el servidor la
+cierra antes de que el evento exista, así que no hay respuesta, ni evento, ni nada en el pipeline
+con lo que rastrearla. En un enlace restringido (NB-IoT, 2G, satélite), donde tardar varios segundos
+en completar una petición es lo normal, eleve los límites en lugar de dejar que los dispositivos más
+lentos fallen en silencio; el síntoma parece una inestabilidad intermitente del dispositivo que solo
+afecta a esos. La métrica `total_http_connections_closed_before_request` cuenta las conexiones que
+nunca llegaron a entregar una petición, que es lo que deja tras de sí un dispositivo así.
+
 ## Recepción de comandos
 
 Un dispositivo recibe comandos en **su propio** topic:

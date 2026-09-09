@@ -68,9 +68,12 @@ The consequence is a failure that passes the drill most people actually run:
   permanently unreadable. The new cluster minted a *different* root key, and the old
   one is not derivable from anything you still have.
 
-The failure does not surface at restore time. It surfaces later, as an unexplained
-decryption error, typically long after the backup that could have helped has rotated
-away.
+This used to surface only later, as an unexplained decryption error long after the
+backup that could have helped had rotated away. The services that store secrets now
+check their root key against their own stored rows as they start, so a cluster holding
+the wrong key refuses to start and names the cause. That makes the mistake loud
+and immediate instead of slow and scattered — but it recovers nothing. The key is
+still gone.
 
 :::danger There is no recovery from a lost root key
 The key is 256 bits of randomness and the wrapped data keys are not brute-forceable.
@@ -160,9 +163,8 @@ will be asked for the artifact's passphrase (or supply it with
 Two things this command will not let you do:
 
 - **Recover data without the key.** `--restore-rdb-from` on its own is refused. It
-  would rehydrate every row and mint a *fresh* root key, so the restore would report
-  success and every stored secret would be permanently unreadable — the one failure
-  that is invisible at the moment it happens.
+  would rehydrate every row and mint a *fresh* root key, leaving every stored secret
+  permanently unreadable — a loss no later step can undo.
 - **Recover into a live instance.** The flag only takes effect when the database
   cluster is *created*. Re-running it against an instance that already exists does
   nothing at all, rather than half-working.

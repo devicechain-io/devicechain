@@ -200,6 +200,30 @@ instance:
       metrics:
         enabled: true
         httpPort: 9090
+      graphql:
+        # The largest single inbound WebSocket message the GraphQL subscription
+        # endpoint will read, in bytes.
+        #
+        # It is the WebSocket half of a pair whose HTTP half has always been there. A
+        # POST to /graphql is capped by the handler's request-body ceiling (4 MiB); a
+        # WebSocket upgrade to that SAME path was capped by nothing, because
+        # gorilla/websocket applies no read limit until something sets one. The
+        # credential on a subscription connection arrives IN the first frame, so that
+        # frame is read — and its payload held in the pod's heap — before anything has
+        # authenticated the peer. The parsed-document ceilings (query length,
+        # selection depth) apply only after the frame has already been read, so they
+        # do not cover this.
+        #
+        # The default matches the HTTP body ceiling deliberately: the same operation
+        # should carry the same bound over either transport on the one route. Raise it
+        # only for a deployment whose subscribe payloads are genuinely larger; a peer
+        # that exceeds it is closed with WebSocket code 1009 (message too big) and the
+        # server carries on serving everyone else.
+        #
+        # Omitting the key (or setting 0 or a negative number) means the built-in
+        # default — never unlimited. There is deliberately no value that turns the
+        # ceiling off.
+        maxSubscriptionMessageBytes: 4194304 # 4 MiB, matching the HTTP body ceiling
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its
@@ -922,10 +946,39 @@ functionalAreas:
     #       canarySeconds: 60          # the liveness probe; see canaryDeadlineSeconds
     #       canaryDeadlineSeconds: 15
     #       inventoryGatherSeconds: 5  # how long to collect replies from the cluster
+    # Device-facing HTTP listener bounds. These apply ONLY to the HTTP event sources,
+    # not to the 8080 GraphQL/management server, because the two have different callers:
+    # a console reaches the management API over a datacentre network, while a device may
+    # be on NB-IoT, 2G or satellite, where several seconds to complete a request is
+    # ordinary rather than pathological.
+    #
+    # A request that exceeds a bound has its connection closed by the server before any
+    # handler runs, so it never becomes an event and nothing in the event pipeline can
+    # attribute it. Watch total_http_connections_closed_before_request: it counts
+    # connections that sent bytes and never produced a request — a header-timeout close,
+    # but equally a port scan or a client that hung up — and it is the only external
+    # signal that these bounds are closing connections at all.
+    #
+    # requestTimeoutSeconds bounds the read of the WHOLE request, headers and body. It is
+    # the larger of the two holds: a body is capped at 1 MiB, which caps the bytes and
+    # not the time, so a client dribbling one held a connection indefinitely.
+    #   config:
+    #     httpIngest:
+    #       headerTimeoutSeconds: 5    # wait for the request headers
+    #       requestTimeoutSeconds: 60  # whole request, headers and body
+    #
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
     # port. Exposed as an extra Service/container port so devices can reach it.
     # (The MQTT source dials out to the broker, so it needs no inbound port.)
+    #
+    # 🔴 THE PORT BELOW AND THE SOURCE'S OWN `port` MUST AGREE, and if a source is moved
+    # off 8081 this list moves with it. The service refuses to start when two of its
+    # listeners are configured on one port — the GraphQL/management server and every HTTP
+    # source are all in the one process — and names both of them; an ingest port that no
+    # longer matches this list simply cannot be reached from outside the pod. `port: "0"`
+    # is refused for the same reason: it asks the operating system for any free port, so
+    # the listener would come up healthy on an address no device can be told.
     extraPorts:
       - name: http-ingest
         port: 8081

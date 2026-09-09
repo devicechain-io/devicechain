@@ -34,16 +34,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// No test in this package may write the global logger.
-//
-// The race a swap reintroduces is only visible under `go test -race`, which the
-// required CI gates do not run — so without this check the next swap would be caught
-// by nobody until someone ran the race detector by hand while chasing something else,
-// and its report would name this package rather than whatever they were looking for.
-//
-// It covers assignment by name, a taken address, an in-place mutating method call and
-// a dot-import; what it cannot see is written on AssertNoGlobalLoggerSwap, and the
-// hole that matters most here is a swap performed by a helper in another package.
-func TestNoTestSwapsTheGlobalLogger(t *testing.T) {
-	dctest.AssertNoGlobalLoggerSwap(t, ".")
-}
+// The check that no test in this package writes the global logger is no longer here.
+// It used to be, pointed at this one directory, which is precisely why three other
+// packages went on swapping the logger unnoticed: a guard someone has to point at a
+// package covers the packages someone remembered. It now walks the whole workspace
+// from core/test — TestNoTestInTheRepositorySwapsTheGlobalLogger — so this package is
+// covered by the same run that covers every other, including ones not yet written.

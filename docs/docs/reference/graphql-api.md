@@ -147,8 +147,9 @@ above. This is the reliable route because it needs no running instance and no to
 matters most when you are still evaluating DeviceChain. They are generated from
 `backend/services/<area>/graphql/` on every docs build, so they cannot drift from the schemas
 the services parse. (The committed sources are there too, if you would rather read them in
-place; note the filenames are not uniform — most areas use `schema.graphql`, but
-`user-management` uses `schema.gql`, `admin_schema.gql` and `settings_schema.gql`.)
+place. Every one is a `.graphql` file, named for the endpoint that serves it: `schema.graphql`
+for the tenant API, plus `admin_schema.graphql` and `settings_schema.graphql` in the areas that
+also serve an identity-token API.)
 
 **Introspection on a development instance.** Set `DC_GRAPHQL_DEV_TOOLS=true` on the service to
 enable it. Do this on a dev instance only; it is off by default deliberately. Any value that does

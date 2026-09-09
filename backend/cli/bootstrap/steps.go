@@ -42,6 +42,22 @@ const defaultProfile = "default"
 const (
 	registryContainerName = "kind-registry"
 	kindNetwork           = "kind"
+	// 🔴 PINNED BY DIGEST, with the tag kept beside it so a reader can see the
+	// version. `registry:2` is not a version — it is a name Docker Hub can
+	// repoint, so an unpinned tag is a third-party dependency that moves under a
+	// build with no commit here to show for it, pulled anonymously and therefore
+	// subject to that registry's rate limits and outages.
+	//
+	// This is the SAME container hack/upgrade-rig.sh and deploy/local/up.sh start,
+	// and all three only create it when it is not already running — so whichever
+	// runs first decides what the other two reuse, and a pin only one of them
+	// carries is a pin the other two can defeat. Keep the three in step.
+	//
+	// hack/check-image-pins.sh enforces the shape for the two shell sites; this
+	// one is pinned by TestLocalRegistryImageIsDigestPinned, because teaching a
+	// shell tokenizer to read Go would trade a rule that is right for one that is
+	// nearly right. To move the pin: `crane digest registry:<version>`.
+	localRegistryImage = "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
 	// operatorImageName must match the name the release pipeline publishes the
 	// operator under — ghcr.io/devicechain-io/operator (see .github/workflows/
 	// release.yml, which special-cases backend/k8s to ".../operator"). A
@@ -562,7 +578,7 @@ func stepLocalRegistry(ctx context.Context, st *State) error {
 	return nil
 }
 
-// ensureLocalRegistry starts the registry:2 container (if not running), connects
+// ensureLocalRegistry starts the localRegistryImage container (if not running), connects
 // it to the kind network so cluster nodes can pull by reference, and advertises
 // it to the cluster via the KEP-1755 ConfigMap.
 func ensureLocalRegistry(ctx context.Context, st *State) error {
@@ -571,7 +587,7 @@ func ensureLocalRegistry(ctx context.Context, st *State) error {
 	running, _ := outputOf(ctx, "docker", "inspect", "-f", "{{.State.Running}}", registryContainerName)
 	if strings.TrimSpace(running) != "true" {
 		if err := run(ctx, "docker", "run", "-d", "--restart=always",
-			"-p", fmt.Sprintf("127.0.0.1:%s:5000", port), "--name", registryContainerName, "registry:2"); err != nil {
+			"-p", fmt.Sprintf("127.0.0.1:%s:5000", port), "--name", registryContainerName, localRegistryImage); err != nil {
 			return err
 		}
 	}

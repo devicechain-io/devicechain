@@ -74,6 +74,15 @@ func (h *hostRecorder) authFor(path string) string {
 // returns a client from HTTPClient pinned to pinnedHost.
 func pinnedFixture(t *testing.T, pinnedH, otherH http.HandlerFunc) *http.Client {
 	t.Helper()
+	return pinnedFixtureWithTimeout(t, 10*time.Second, pinnedH, otherH)
+}
+
+// pinnedFixtureWithTimeout is pinnedFixture with the caller-supplied client's Timeout
+// under the test's control. A zero timeout is not a variation for its own sake: it is
+// the one input that makes defaultHTTP hand the session a COPY of the caller's client
+// rather than the client itself, so it is what exercises the pin over that copy.
+func pinnedFixtureWithTimeout(t *testing.T, timeout time.Duration, pinnedH, otherH http.HandlerFunc) *http.Client {
+	t.Helper()
 	stub := &authStub{selectExp: farFuture()}
 	auth := httptest.NewServer(http.HandlerFunc(stub.handler))
 	t.Cleanup(auth.Close)
@@ -88,7 +97,7 @@ func pinnedFixture(t *testing.T, pinnedH, otherH http.HandlerFunc) *http.Client 
 	}
 	httpc := &http.Client{
 		Transport: &http.Transport{DialContext: router.dial},
-		Timeout:   10 * time.Second,
+		Timeout:   timeout,
 	}
 	s := NewTenantSession(httpc, auth.URL, "u@x", "pw", "acme")
 	return s.HTTPClient(pinnedHost)

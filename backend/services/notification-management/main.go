@@ -76,12 +76,13 @@ func parseConfiguration() error {
 // closed on an unknown or declared-but-unbuilt backend/KEK provider and on a missing or
 // malformed instance root key, so a service that cannot form its KEK does not start
 // (encryption-at-rest is not optional once wired).
-func buildSecretStore() (secrets.SecretStore, error) {
+func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 	cfg := Microservice.InstanceConfiguration.Infrastructure.Secrets
 	// DecodedRootKey is passed as a source rather than called here so New keeps this
 	// wiring's original check order: an external backend that owns its own keys is
 	// refused for not being built, not for lacking an instance root key.
 	return secrets.New(
+		ctx,
 		secrets.Config{Backend: cfg.Backend, KEKProvider: cfg.KEKProvider},
 		RdbManager.Database,
 		cfg.DecodedRootKey,
@@ -147,7 +148,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// instance KEK provider are implemented; a declared-but-unbuilt backend/provider,
 	// or a missing/short instance root key, fails startup closed so the service can
 	// never silently run without encryption-at-rest.
-	secretStore, err := buildSecretStore()
+	secretStore, err := buildSecretStore(ctx)
 	if err != nil {
 		return err
 	}

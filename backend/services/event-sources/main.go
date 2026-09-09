@@ -122,6 +122,13 @@ var (
 	// lowering, which is a configuration conversation, not a bug report. It is the
 	// only signal that a device is losing nothing but delivering nothing either.
 	TooManyReadingsCounter *prometheus.CounterVec
+	// EarlyCloseCounter counts connections to an HTTP ingest listener that closed
+	// before delivering a request. It is the only external signal that the listener's
+	// header bound is closing connections at all: net/http closes them itself, before
+	// any handler runs, so there is no event, no error and nothing in the pipeline to
+	// attribute a cut-off device to. Labelled by SOURCE only — a connection that never
+	// sent a request named no tenant.
+	EarlyCloseCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -190,6 +197,11 @@ func initializeMetrics() {
 		"Count of inbound messages refused for carrying more readings than the per-message ceiling admits",
 		// SOURCE only, never tenant (ADR-023 G.3) — the tenant on an undecodable
 		// message is an unverified string off the wire.
+		[]string{"source"})
+	EarlyCloseCounter = Microservice.NewCounterVec(
+		"total_http_connections_closed_before_request",
+		"Count of connections to an HTTP ingest listener that closed before delivering a request — "+
+			"a header-timeout close, but equally a port scan, a TCP health check or a client that hung up",
 		[]string{"source"})
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
@@ -394,8 +406,9 @@ func buildEventSources() error {
 			created = append(created, mqtt)
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
+				Configuration.HttpIngest,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate)
+				ingestGate, onConnectionClosedBeforeRequest)
 			if err != nil {
 				return err
 			}
@@ -431,6 +444,14 @@ func onTenantGone(source string, tenant string) {
 		log.Debug().Str("source", source).Str("tenant", tenant).
 			Msg("Refused inbound event for a tenant that has been deleted")
 	}
+}
+
+// onConnectionClosedBeforeRequest accounts for one connection to an HTTP ingest listener
+// that closed without ever delivering a request. Same source-only labelling as the
+// counters above, for a sharper reason here: a connection that sent no request named no
+// tenant at all.
+func onConnectionClosedBeforeRequest(source string) {
+	EarlyCloseCounter.WithLabelValues(source).Inc()
 }
 
 func onRateShed(source string, tenant string) {

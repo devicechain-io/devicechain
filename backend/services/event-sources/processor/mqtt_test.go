@@ -4,15 +4,14 @@
 package processor
 
 import (
-	"bytes"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -151,26 +150,29 @@ func TestMqttOnMessage_CommandPlaneMatchIsExact(t *testing.T) {
 
 var _ mqtt.Message = (*fakeMqttMessage)(nil)
 
-// captureDebugLog redirects the global logger into a buffer at debug level for the
-// duration of a test, and restores both when it ends.
+// captureDebugLog collects log output at debug level for the duration of a test.
+//
+// 🔴 It switches collection on against a sink installed once by TestMain rather than
+// assigning a logger of its own to zerolog's global. That global has no
+// synchronization, and an MQTT source's receive path runs on the paho client's own
+// callback goroutine, which the test does not own and does not wait for — so a
+// swap-and-restore would be writing it while that goroutine reads it. What is toggled
+// instead is the sink's mutex-guarded capture flag.
 //
 // Forcing the LEVEL is load-bearing, not belt-and-braces. The assertion below is of
 // the form "this string must not appear in the log", and a muted logger satisfies it
 // perfectly — so without an explicit level this test would report a pass whenever
 // some earlier test in the package left the global level raised, which is the one
 // failure mode a redaction check must not have. The positive assertions that follow
-// are the other half of the same guard: they fail if nothing was logged at all.
-func captureDebugLog(t *testing.T) *bytes.Buffer {
+// are the other half of the same guard: they fail if nothing was logged at all. The
+// level is a separate, atomically loaded int32 rather than the logger value, so
+// writing it is not the race above.
+func captureDebugLog(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	buf := &bytes.Buffer{}
-	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
-	log.Logger = zerolog.New(buf)
+	prevLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	t.Cleanup(func() {
-		log.Logger = prevLogger
-		zerolog.SetGlobalLevel(prevLevel)
-	})
-	return buf
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+	return logSink.Capture(t)
 }
 
 // With debug logging on, an arriving message is recorded by topic and size and the
