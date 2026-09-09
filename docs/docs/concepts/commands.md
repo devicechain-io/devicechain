@@ -74,8 +74,9 @@ These are terminal, and nothing moves out of a terminal state:
 
 - **`SUCCESSFUL`** / **`FAILED`** — the device reported the outcome. `FAILED` is also
   what the platform records when it cannot complete a command itself: when the device's
-  transport cannot carry commands at all, and when a device did answer but the platform
-  could not record the answer after every attempt. In both of those the `error` field on
+  transport cannot carry commands at all, when a device did answer but the platform could
+  not record the answer after every attempt, and when the platform could not publish the
+  command to its device and stopped retrying. In all of those the `error` field on
   the command says which, so a platform-side `FAILED` is never mistaken for the device
   reporting a fault.
 - **`TIMEOUT`** — it was dispatched and the device never answered.
@@ -244,11 +245,15 @@ from a cancel, so they cannot be told apart after the fact.
 **Only the device can report success.** `SUCCESSFUL` and a device-reported `FAILED` are the
 two outcomes it alone can produce; every other terminal is one the platform writes on its
 own — `TIMEOUT`, `EXPIRED`, `CANCELLED`, or a `FAILED` recorded because the transport
-cannot carry the command at all, or because a device's answer arrived and could not be
-recorded against the command. That last one is deliberately not `TIMEOUT`: the device did
-answer, so blaming it would send you to inspect working hardware. The command's `error`
-field says the answer was lost, and the outcome the device reported is not recoverable —
-if it matters, ask the device again. Reporting the result
+cannot carry the command at all, because a device's answer arrived and could not be
+recorded against the command, or because the platform could not publish the command and
+stopped retrying. Neither of the last two is `TIMEOUT`, and for the same reason in
+opposite directions: one device did answer, and the other was never sent anything, so
+`TIMEOUT` would send you to inspect working hardware in both cases. Where the answer was
+lost, the command's `error` field says so and the outcome the device reported is not
+recoverable — if it matters, ask the device again. Where the command could not be
+published, nothing reached the device at all and the command can simply be issued again
+once the cause is fixed. Reporting the result
 is the device's half of the contract — see
 [Responding to a command](../guides/connecting-a-device.md#responding-to-a-command). A
 device that never responds leaves its commands in `SENT` until their TTL turns them into

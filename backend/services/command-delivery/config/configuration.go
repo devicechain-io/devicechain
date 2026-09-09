@@ -113,6 +113,47 @@ const (
 	// cannot expire commands out from under a device before it can answer.
 	MinCommandTTLSeconds = 60
 
+	// DefaultMaxDispatchFailures is how many times dispatching one command may FAIL
+	// before the platform stops trying and drives the row to FAILED.
+	//
+	// 🔴 IT IS A COUNT, BUT THE VALUE IS CHOSEN AS A DURATION, AND ANYONE CHANGING IT MUST
+	// DO THE SAME ARITHMETIC. A failed publish returns the row to QUEUED, so the next
+	// attempt comes on the next sweep tick: the wall-clock window this bound buys is
+	// roughly maxDispatchFailures × sweepIntervalSeconds. Twenty at the default cadence is
+	// ten minutes — long enough to ride out a broker restart or a rolling upgrade of the
+	// messaging layer, and short enough that a command that can never be published stops
+	// at minutes instead of retrying for the whole 7-day TTL. An operator who shortens the
+	// sweep shortens this window with it.
+	//
+	// 🔴 WHAT THIS TRADES, STATED PLAINLY: a messaging outage longer than that window fails
+	// the queued commands rather than waiting it out. That is the direction to be wrong in.
+	// A command that reaches FAILED says so, names the platform as the cause in its error,
+	// and can be re-issued; the behaviour it replaces spun for seven days and then recorded
+	// TIMEOUT, which asserts the device was sent the command and did not answer — a claim
+	// about hardware that never received anything, and one no operator could tell apart
+	// from a genuine unanswered command.
+	DefaultMaxDispatchFailures = 20
+
+	// MinMaxDispatchFailures floors the bound.
+	//
+	// 🔑 A BOUND THIS SMALL CANNOT MAKE THE JUDGEMENT IT EXISTS TO MAKE. The point of
+	// counting failures is to separate a transient publish error from a command that can
+	// never go out; at 1 the first blip is terminal and no separation happens at all, and
+	// at 2 the verdict rests on a single retry, which across a broker restart is a coin
+	// toss. Three is the smallest bound whose answer rests on more than one retry.
+	//
+	// Like MinSweepIntervalSeconds it is deliberately above 1, so that Validate's lower
+	// bound has a reachable range: ApplyDefaults maps every non-positive value onto the
+	// default, so a floor of 1 would leave the check guarding nothing.
+	MinMaxDispatchFailures = 3
+
+	// MaxMaxDispatchFailures ceilings the bound. Past this it is a bound in name only:
+	// at the default cadence a thousand failures is most of a day, and the wedge this
+	// whole mechanism exists to end simply comes back with a longer fuse. An operator who
+	// wants a command to keep trying for days already has that knob — it is the command
+	// TTL — and it is the one that ends in EXPIRED rather than in a lie about the device.
+	MaxMaxDispatchFailures = 1000
+
 	// DefaultHeldCommandCeiling is the platform default bound on how many WITHHELD
 	// (HELD) commands one tenant may accumulate. HELD is where an offline fleet's
 	// backlog collects and it can sit for days, so it is the one lifecycle state that
@@ -176,6 +217,13 @@ type CommandDeliveryConfiguration struct {
 	// run stops expiring commands as well as dispatching them.
 	SweepIntervalSeconds int
 
+	// MaxDispatchFailures is how many failed dispatch attempts one command may accumulate
+	// before it is driven to FAILED instead of being returned to the queue. Fail-safe in
+	// the same direction as the fields around it: absent, zero or negative lands on the
+	// platform default in ApplyDefaults, never on "retry forever" — an unbounded retry is
+	// the behaviour this bound exists to end.
+	MaxDispatchFailures int
+
 	// DeliveryMachineryReserve is the fraction of the ceiling in force that only the
 	// platform's own service-token callers may draw on. It is OPERATOR-SIDE ONLY — there
 	// is deliberately no per-tenant override and no tier key, because a tenant able to
@@ -221,6 +269,13 @@ func (c *CommandDeliveryConfiguration) ApplyDefaults() {
 	if c.SweepIntervalSeconds <= 0 {
 		c.SweepIntervalSeconds = DefaultSweepIntervalSeconds
 	}
+	// Same direction once more for the dispatch bound. Zero here is an unset field, and
+	// the reading that must never be reachable is "no bound": a command whose publish can
+	// never succeed would then cycle QUEUED -> SENT -> QUEUED on every tick until its TTL
+	// dragged it to TIMEOUT, which is the defect the bound was added for.
+	if c.MaxDispatchFailures <= 0 {
+		c.MaxDispatchFailures = DefaultMaxDispatchFailures
+	}
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects a
@@ -259,6 +314,15 @@ func (c *CommandDeliveryConfiguration) Validate() error {
 	if c.SweepIntervalSeconds < MinSweepIntervalSeconds || c.SweepIntervalSeconds > MaxSweepIntervalSeconds {
 		return fmt.Errorf("sweepIntervalSeconds must be between %d and %d (got %d)",
 			MinSweepIntervalSeconds, MaxSweepIntervalSeconds, c.SweepIntervalSeconds)
+	}
+	// The dispatch bound is refused at both ends, and the two ends refuse different
+	// mistakes. Below the floor the bound cannot tell a transient publish failure from a
+	// command that can never go out, so it converts a broker blip into a terminal state;
+	// above the ceiling it is not a bound at all and the week-long retry it replaced comes
+	// back with a longer fuse.
+	if c.MaxDispatchFailures < MinMaxDispatchFailures || c.MaxDispatchFailures > MaxMaxDispatchFailures {
+		return fmt.Errorf("maxDispatchFailures must be between %d and %d (got %d)",
+			MinMaxDispatchFailures, MaxMaxDispatchFailures, c.MaxDispatchFailures)
 	}
 	// An over-large reserve is refused rather than clamped. Unlike an absent value —
 	// which has an obviously right answer — a reserve of 0.8 or 3 is an operator saying

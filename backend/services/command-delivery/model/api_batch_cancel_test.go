@@ -225,9 +225,13 @@ func TestReleaseClaimRetiresACancelledBatchsCommand(t *testing.T) {
 	if err := api.RDB.DB(ctx).Where("token = ?", "cmd-sent-1").First(claimed).Error; err != nil {
 		t.Fatalf("read command: %v", err)
 	}
-	released, err := api.ReleaseClaim(ctx, claimed.ID)
+	landed, released, err := api.ReleaseClaim(ctx, claimed.ID)
 	if err != nil {
 		t.Fatalf("release: %v", err)
+	}
+	if landed != CommandCancelled {
+		t.Errorf("release reported the row landed on %q; a command whose batch was called off "+
+			"must be reported as CANCELLED, since the caller meters the landings apart", landed)
 	}
 	if !released {
 		t.Fatal("the release did not land; a claimed row must always be releasable")
@@ -252,7 +256,7 @@ func TestReleaseClaimStillQueuesWhenTheBatchIsLive(t *testing.T) {
 	if err := api.RDB.DB(ctx).Where("token = ?", "cmd-sent-1").First(claimed).Error; err != nil {
 		t.Fatalf("read command: %v", err)
 	}
-	if _, err := api.ReleaseClaim(ctx, claimed.ID); err != nil {
+	if _, _, err := api.ReleaseClaim(ctx, claimed.ID); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if got := statusByToken(t, api, ctx, "cmd-sent-1"); got != CommandQueued.String() {

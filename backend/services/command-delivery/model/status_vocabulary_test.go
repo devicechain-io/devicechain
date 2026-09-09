@@ -240,9 +240,12 @@ func TestMarkSentReleasesAHeldCommand(t *testing.T) {
 
 	// 🔑 And the release must be undoable, or a failed publish strands the row: SENT with
 	// a sent_time, claimable by nobody, dying TIMEOUT for a command never delivered.
-	released, err := api.ReleaseClaim(ctx, id)
+	landed, released, err := api.ReleaseClaim(ctx, id)
 	if err != nil {
 		t.Fatalf("ReleaseClaim failed: %v", err)
+	}
+	if landed != CommandQueued {
+		t.Fatalf("ReleaseClaim reported the row landed on %q, not QUEUED", landed)
 	}
 	if !released {
 		t.Fatal("ReleaseClaim did not release a row it had just claimed")
@@ -276,7 +279,7 @@ func TestReleaseClaimCannotResurrectAnAnsweredCommand(t *testing.T) {
 			ctx := core.WithTenant(context.Background(), "A")
 			id := seedWithStatus(t, api, ctx, "answered-"+string(terminal), terminal)
 
-			released, err := api.ReleaseClaim(ctx, id)
+			_, released, err := api.ReleaseClaim(ctx, id)
 			if err != nil {
 				t.Fatalf("ReleaseClaim errored on a terminal command: %v", err)
 			}
@@ -294,7 +297,7 @@ func TestReleaseClaimCannotResurrectAnAnsweredCommand(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 	id := seedWithStatus(t, api, ctx, "genuinely-claimed", CommandSent)
-	if released, err := api.ReleaseClaim(ctx, id); err != nil || !released {
+	if _, released, err := api.ReleaseClaim(ctx, id); err != nil || !released {
 		t.Fatalf("a genuinely claimed SENT row must be releasable (released=%v err=%v)", released, err)
 	}
 }
