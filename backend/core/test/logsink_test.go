@@ -238,6 +238,114 @@ func scanFixture(t *testing.T, source string) []loggerWrite {
 	return found
 }
 
+// The tree walk must find a swap nested any distance below the root, must refuse to
+// descend into the directories the go tool itself does not treat as packages, and must
+// report where it actually got to.
+//
+// The nesting case is the one that matters. The scan this replaced took a single
+// directory, which is why three packages went on swapping the logger unnoticed — nothing
+// pointed it at them — so a version that walked only the top level would reproduce the
+// same blindness while looking like a fix.
+//
+// The skip case is not tidiness either. This repository carries an archived pre-migration
+// tree under _legacy that is deliberately not maintained, and a maintainer's git
+// worktrees live under a dot-directory — those hold a DIFFERENT commit of this
+// repository, so scanning them would report another branch's code as a finding against
+// this one.
+func TestTreeScanWalksNestedPackagesAndSkipsNonPackageDirectories(t *testing.T) {
+	root := t.TempDir()
+	const swap = `package fixture
+
+import (
+	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+)
+
+func TestSwap(t *testing.T) {
+	log.Logger = zerolog.New(nil)
+}
+`
+	nested := filepath.Join(root, "a", "b", "c")
+	for _, dir := range []string{nested, filepath.Join(root, "_legacy"), filepath.Join(root, ".worktree"), filepath.Join(root, "testdata")} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("building the fixture tree: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "fixture_test.go"), []byte(swap), 0o600); err != nil {
+			t.Fatalf("writing the fixture: %v", err)
+		}
+	}
+
+	found, visited, err := globalLoggerSwapsUnder(root)
+	if err != nil {
+		t.Fatalf("scanning the fixture tree: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("got %d findings, want exactly 1 — the nested swap and nothing from the "+
+			"skipped directories: %v", len(found), found)
+	}
+	if !strings.Contains(found[0].pos, filepath.Join("a", "b", "c")) {
+		t.Errorf("the one finding is %s, want the nested one; a walk that reports only the "+
+			"top level is the blindness this replaced", found[0].pos)
+	}
+	if !visited[nested] {
+		t.Errorf("the walk did not record reaching %s, so the caller's cross-check on where "+
+			"it got to would be satisfied by a walk that went nowhere", nested)
+	}
+	for _, skipped := range []string{"_legacy", ".worktree", "testdata"} {
+		if visited[filepath.Join(root, skipped)] {
+			t.Errorf("the walk descended into %s, which is not a package directory", skipped)
+		}
+	}
+}
+
+// A tree with no tests under it at all must be an error, not a clean scan — the same
+// rule as the single-directory form, and for the same reason: a walk that reached
+// nothing otherwise reports exactly what a walk that found nothing wrong reports.
+func TestTreeScanRefusesATreeWithNoTests(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "empty"), 0o750); err != nil {
+		t.Fatalf("building the fixture tree: %v", err)
+	}
+	if _, _, err := globalLoggerSwapsUnder(root); err == nil {
+		t.Error("scanning a tree with no _test.go files returned no error, so a workspace " +
+			"the guard never examined would report clean")
+	}
+}
+
+// Installing the sink a second time must be refused.
+//
+// 🔑 THIS IS THE HALF OF THE CONTRACT THE SOURCE SCAN CANNOT ENFORCE. That scan reads
+// _test.go files, so a swap performed on a test's behalf by a helper in some other
+// package is invisible to it — and this function IS such a helper. Left unguarded it
+// would be the obvious route back to the pattern it replaced: a captureLogs that called
+// InstallLogSink per test would write the global logger once per test, pass every
+// source check, and race exactly as the swap-and-restore it replaced did. Refusing the
+// second install closes that from the other side, so the helper cannot be turned into
+// the standard way of reaching the global logger.
+//
+// The first call may or may not panic depending on whether this package has already
+// installed one; only what happens AFTER an install is the contract, so the first call
+// is made tolerantly and the assertion is on the one after it.
+func TestInstallLogSinkRefusesASecondInstall(t *testing.T) {
+	recoverInstall()
+	if r := recoverInstall(); r == nil {
+		t.Fatal("InstallLogSink returned a second sink instead of panicking. Every call " +
+			"assigns zerolog's global logger, which is safe only before any test has " +
+			"started, so a second one is the per-test swap this package exists to remove")
+	} else if msg := fmt.Sprint(r); !strings.Contains(msg, "already installed") {
+		t.Errorf("the refusal panicked with %q, which does not say what went wrong", msg)
+	}
+}
+
+// recoverInstall calls InstallLogSink and returns whatever it panicked with, or nil.
+func recoverInstall() (recovered any) {
+	defer func() { recovered = recover() }()
+	InstallLogSink()
+	return nil
+}
+
 // Pointing the guard at a directory with no tests must be an error, not a pass.
 // Otherwise a package that renamed or moved its test files would report clean.
 func TestScannerRefusesADirectoryWithNoTests(t *testing.T) {

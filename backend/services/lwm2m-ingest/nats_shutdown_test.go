@@ -10,76 +10,43 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/rs/zerolog"
-	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
-// logSink is the process-wide destination for the global zerolog logger, installed
-// once by TestMain.
+// sink is the process-wide destination for the global zerolog logger, installed once
+// by TestMain.
 //
 // 🔴 It is a sink with a switch rather than a logger a test swaps in and out, and
-// that is the whole point. zlog.Logger is a plain global with no synchronization,
-// while core/messaging's connection handlers log from the NATS client's own async
-// callback goroutine — so assigning to it while a connection is live is a genuine
-// data race, which -race reports against zerolog's own read. Installing the sink
-// before any connection exists and never reassigning removes the race entirely;
-// what a test toggles instead is this mutex-guarded capture flag.
+// that is the whole point. zerolog's global logger is a plain variable with no
+// synchronization, while core/messaging's connection handlers log from the NATS
+// client's own async callback goroutine — so assigning to it while a connection is
+// live is a genuine data race, which -race reports against zerolog's own read.
+// Installing the sink before any connection exists and never reassigning removes the
+// race entirely; what a test toggles instead is a mutex-guarded capture flag.
 //
-// It passes everything through to stderr regardless, so capturing does not swallow
-// the logs of any other test in the package.
-type logSink struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	capturing bool
-}
-
-func (s *logSink) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	if s.capturing {
-		s.buf.Write(p)
-	}
-	s.mu.Unlock()
-	return os.Stderr.Write(p)
-}
-
-func (s *logSink) start() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.buf.Reset()
-	s.capturing = true
-}
-
-func (s *logSink) stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.capturing = false
-	s.buf.Reset()
-}
-
-func (s *logSink) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
-}
-
-var sink = &logSink{}
+// This package used to carry its own copy of that type. The shared one in core/test
+// supersedes it, and not only to avoid a duplicate: the local copy passed each line
+// through to stderr AFTER releasing the lock, which is safe only in front of an
+// os.File, whose Write is a single syscall. The shared sink writes through under the
+// same lock, so it is safe in front of any writer — including the next caller who
+// hands it a buffer.
+var sink *dctest.LogSink
 
 // TestMain installs the sink before any test runs, which is the only moment at which
-// writing zlog.Logger is safe. It is never restored: nothing after m.Run needs the
-// original, and reassigning there would race the same callback goroutines.
+// writing zerolog's global logger is safe. It is never restored: nothing after m.Run
+// needs the original, and reassigning there would race the same callback goroutines.
 func TestMain(m *testing.M) {
-	zlog.Logger = zerolog.New(sink)
+	sink = dctest.InstallLogSink()
 	os.Exit(m.Run())
 }
 
@@ -174,12 +141,10 @@ func startRunningManager(t *testing.T) {
 
 // captureLogs starts recording into the process-wide sink for the life of the test.
 // Package tests run sequentially (nothing here calls t.Parallel), so one capture is
-// live at a time.
-func captureLogs(t *testing.T) *logSink {
+// live at a time — which the sink itself now checks rather than leaving to convention.
+func captureLogs(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	sink.start()
-	t.Cleanup(sink.stop)
-	return sink
+	return sink.Capture(t)
 }
 
 // An orderly shutdown must STOP the NATS manager, not merely terminate it.

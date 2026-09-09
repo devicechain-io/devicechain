@@ -4,7 +4,6 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -14,10 +13,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-notification-management/config"
 	"github.com/devicechain-io/dc-notification-management/model"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // tenantScoped is a live tenant's context, as both entry points build before calling in.
@@ -522,16 +520,19 @@ func TestTheConstructorSetsTheBudgetFromTheConstant(t *testing.T) {
 	}
 }
 
-// captureLogs redirects the package-level zerolog writer for the duration of one test and
-// returns a reader for what was written. The log line is the ONLY runtime signal a
-// budget-cut channel produces, so it is the thing under test here, not a side effect of it.
-func captureLogs(t *testing.T) *bytes.Buffer {
+// captureLogs collects log output for the duration of one test and returns a reader for
+// what was written. The log line is the ONLY runtime signal a budget-cut channel
+// produces, so it is the thing under test here, not a side effect of it.
+//
+// 🔴 It switches collection on against a sink installed once by TestMain rather than
+// assigning a logger of its own to zerolog's global. That global has no synchronization,
+// and a dispatch under test hands its channels to per-channel goroutines that a cut
+// budget deliberately abandons rather than waits for — so a swap-and-restore in
+// t.Cleanup writes it while an abandoned goroutine is still reading it. What is toggled
+// instead is the sink's mutex-guarded capture flag, which every writer contends on.
+func captureLogs(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
-	return &buf
+	return logSink.Capture(t)
 }
 
 // lineContaining returns the single captured log line whose message contains want, failing
@@ -542,7 +543,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // `"attempt":1` across the buffer passed whether or not the budget line carried the field
 // at all — a mutation dropping it from the budget line survived. Fields belong to a LINE,
 // so the line has to be selected before its fields are read.
-func lineContaining(t *testing.T, buf *bytes.Buffer, want string) string {
+func lineContaining(t *testing.T, buf *dctest.LogSink, want string) string {
 	t.Helper()
 	var found []string
 	for _, ln := range strings.Split(buf.String(), "\n") {
