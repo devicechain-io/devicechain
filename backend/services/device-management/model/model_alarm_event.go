@@ -97,10 +97,17 @@ type AlarmStateChangeEvent struct {
 }
 
 // AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is
-// best-effort and side-band to the alarm write: the alarm row is the source of truth
-// and a subscriber can always re-query, so a failed publish is logged by the
-// implementation, never surfaced to the caller (a NATS hiccup must not fail or retry
-// the DB transition). Implementations must be safe for concurrent use.
+// side-band to the alarm write and returns nothing: a broker fault must not fail or
+// retry the DB transition that produced it.
+//
+// 🔴 THAT IS NOT THE SAME AS BEST-EFFORT, AND THE IMPLEMENTATION MUST NOT TREAT IT AS
+// SUCH. The transition is already committed, so an event that never reaches the stream
+// is an alarm nobody is paged about; the subscriber that matters reads a durable whose
+// cursor only advances over messages that were actually published, and no reconciler
+// walks alarm rows for transitions the stream never carried. Swallowing a failure here
+// therefore loses the page silently. An implementation owes the caller no error, but it
+// owes an operator a RECORD — see processor.AlarmEventWriter, which retries and then
+// dead-letters with a counter. Implementations must be safe for concurrent use.
 type AlarmEventPublisher interface {
 	PublishAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent)
 }

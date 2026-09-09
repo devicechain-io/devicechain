@@ -186,8 +186,9 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 }
 
 // emitAlarmEvent publishes an alarm state-change event when a publisher is wired,
-// and is a no-op otherwise. Emission is best-effort (the publisher logs its own
-// failures) so a transition never depends on the event reaching the stream.
+// and is a no-op otherwise. A transition never depends on the event reaching the
+// stream — the publisher returns nothing and handles its own failures, retrying and
+// then dead-lettering so a page that was never sent is recorded rather than lost.
 //
 // It assumes the caller has already committed the transition: the alarm write paths
 // run on the autocommit connection (rdb.DB(ctx) carries no transaction), so the emit
