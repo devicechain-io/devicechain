@@ -30,15 +30,50 @@ func (r *DeviceReplacementResolver) CreatedAt() *string {
 	return util.FormatTime(r.M.CreatedAt)
 }
 
-// Device is the identity that survived the swap. It is loaded by the query's
-// Preload; a replacement row cannot exist without one, so a nil here would be a
-// broken read rather than an absent relationship — the empty resolver keeps the
-// non-null SDL field honest instead of panicking a whole page of history.
+// Device is the identity that survived the swap. Both current readers supply it —
+// the query Preloads it and the mutation attaches it after commit — so the nil case
+// is a record that arrived by some other route; it lazy-loads by DeviceId the way
+// DeviceResolver.DeviceType does, under the SAME context this resolver was built
+// with, which is what carries the tenant and the caller's authorities into the read.
+//
+// One consequence to know before adding a caller: DevicesById requires device:read,
+// and authority matching is exact, so device:write does NOT imply it. A resolver
+// built on the replaceDevice path — gated on device:write — that reached this load
+// would fail for a write-only caller. That is narrower than the caller's authority
+// rather than wider, so it is a trap rather than a hole, but it is the reason
+// ReplaceDevice attaches the device instead of leaving it to be loaded here.
+//
+// 🔴 WHEN THE LOAD FINDS NOTHING IT RETURNS nil, AND THAT IS THE POINT. The
+// alternative — a zero-valued Device — makes `device { token }` come back as `""`,
+// which at a call site is indistinguishable from a device whose token happens to be
+// blank: neither an error nor a null, just a plausible wrong answer.
+//
+// Be clear about what the nil costs, because it is not one field. `device: Device!`
+// sits inside `results: [DeviceReplacement!]!` inside `DeviceReplacementSearchResults!`
+// — non-null the whole way up — so the error propagates through every ancestor and
+// nulls the entire response. ONE unresolvable row fails the WHOLE PAGE of history.
+//
+// That is the right trade here, and the reason is what makes it different from
+// RetiredCredentialTokenList, which argues the opposite a few files away
+// (api_device_replacement.go) and returns an empty slice rather than failing a page.
+// The distinction is who enforces the invariant. A malformed token annotation is
+// unreadable DATA in a column nothing constrains, so one bad row says nothing about
+// the rest and must not take them down. A missing device is a broken RELATIONSHIP
+// that the database itself forbids: device_id is NOT NULL under the foreign key
+// fk_device-management_device_replacements_device, and DeleteDevice hard-deletes a
+// device's replacement rows with it (api_delete.go), so no legitimate row can outlive
+// its device. Reaching this nil means an invariant the storage layer enforces has
+// been violated, and a page that answers confidently over that is worse than no page.
 func (r *DeviceReplacementResolver) Device() *DeviceResolver {
-	if r.M.Device == nil {
-		return &DeviceResolver{M: model.Device{}, S: r.S, C: r.C}
+	if r.M.Device != nil {
+		return &DeviceResolver{M: *r.M.Device, S: r.S, C: r.C}
 	}
-	return &DeviceResolver{M: *r.M.Device, S: r.S, C: r.C}
+	ids := []string{fmt.Sprintf("%d", r.M.DeviceId)}
+	rez, err := r.S.DevicesById(r.C, struct{ Ids []string }{Ids: ids})
+	if err != nil || len(rez) == 0 {
+		return nil
+	}
+	return rez[0]
 }
 
 // OccurredTime is always present — it is stamped by ReplaceDevice, never parsed
@@ -107,16 +142,33 @@ type DeviceReplaceResultResolver struct {
 	C context.Context
 }
 
+// 🔴 THE THREE FIELDS BELOW ANSWER nil ON A NIL COMPONENT RATHER THAN A ZERO VALUE,
+// for the same reason DeviceReplacementResolver.Device does — but they cannot lazy-load
+// their way out of it, and that difference is the whole design of this type.
+//
+// DeviceReplaceResult is not a row. It is the value ReplaceDevice assembles in memory
+// from a single transaction, and it carries no id for any of its three components —
+// there is nothing to load BY. So the only two answers available are the component
+// itself and nil, and every SDL field here is non-null (`device: Device!`,
+// `replacement: DeviceReplacement!`, `newCredential: DeviceCredential!`).
+//
+// api.ReplaceDevice sets all three or returns an error, so none of these branches has
+// a caller today. They are written this way because a second construction path is
+// exactly what recreated the empty-token answer once already: a zero value renders as
+// a successful response full of blanks — an empty device token, a replacement with no
+// actor and no occurred time, a credential with an empty token — which reads as a swap
+// that happened and did nothing. A mutation that half-succeeded must fail loudly, and
+// nil is what makes the non-null field say so.
 func (r *DeviceReplaceResultResolver) Device() *DeviceResolver {
 	if r.M.Device == nil {
-		return &DeviceResolver{M: model.Device{}, S: r.S, C: r.C}
+		return nil
 	}
 	return &DeviceResolver{M: *r.M.Device, S: r.S, C: r.C}
 }
 
 func (r *DeviceReplaceResultResolver) Replacement() *DeviceReplacementResolver {
 	if r.M.Replacement == nil {
-		return &DeviceReplacementResolver{M: model.DeviceReplacement{}, S: r.S, C: r.C}
+		return nil
 	}
 	return &DeviceReplacementResolver{M: *r.M.Replacement, S: r.S, C: r.C}
 }
@@ -133,7 +185,7 @@ func (r *DeviceReplaceResultResolver) Replacement() *DeviceReplacementResolver {
 // exists to catch.
 func (r *DeviceReplaceResultResolver) NewCredential() *DeviceCredentialResolver {
 	if r.M.NewCredential == nil {
-		return &DeviceCredentialResolver{M: model.DeviceCredential{}, S: r.S, C: r.C}
+		return nil
 	}
 	return &DeviceCredentialResolver{M: *r.M.NewCredential, S: r.S, C: r.C}
 }
