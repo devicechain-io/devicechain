@@ -4,7 +4,10 @@
 package core
 
 import (
+	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,12 +138,80 @@ func (ms *Microservice) MetricsHandler() http.Handler {
 	return promhttp.InstrumentMetricHandler(reg, h)
 }
 
+// metricNamePart is the grammar a metric name must satisfy. It is the Prometheus
+// metric-name grammar minus the colon, which is reserved for recording rules and
+// must not appear in a name a service exports directly.
+var metricNamePart = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// requireMetricNamePart refuses a name fragment that cannot appear in a Prometheus
+// metric name, naming the caller and the offending argument.
+//
+// 🔴 IT PANICS, AND IT DOES NOT SANITIZE. Both halves are deliberate.
+//
+// Not sanitizing, because substituting a corrected name for the one the caller asked
+// for exports a series under an identifier nobody wrote down and nobody can grep for —
+// a plausible value returned in place of a refusal.
+//
+// Panicking rather than returning an error, because there is no runtime condition here
+// to handle. Every argument that reaches this is a compile-time string constant chosen
+// by the author of a processing loop, so an illegal one is a programming mistake fixed
+// by editing one line — the same reasoning UseMetricsRegistry panics on, and the same
+// shape as promauto's own MustRegister, which these constructors already sit on top of.
+// An error return would have to be plumbed out of all five metric constructors and
+// through their callers, which build a processor and could do nothing with it but panic
+// themselves.
+//
+// The failure it prevents is quiet rather than loud, which is why it is worth a guard:
+// client_golang accepts an illegal name, and what a scrape then exports depends on the
+// SCRAPER. A collector registered as `..._raise-alarm_inflight` is exported under the
+// escaped name `..._raise_alarm_inflight` to a scraper taking the default escaping, and
+// under the quoted, hyphenated name to one that negotiates escaping=allow-utf-8 — so
+// the same series arrives under two different names and PromQL can only select the
+// second through {__name__="..."}. Nothing anywhere reports an error.
+func requireMetricNamePart(caller string, argument string, value string) string {
+	if !metricNamePart.MatchString(value) {
+		panic(fmt.Sprintf("core: %s was given %s=%q, which cannot appear in a Prometheus "+
+			"metric name (it must match %s). Fix the name at the call site: it is not "+
+			"corrected here, because a silently substituted name exports a series under an "+
+			"identifier the caller never wrote.", caller, argument, value, metricNamePart))
+	}
+	return value
+}
+
+// requireMetricName refuses a metric this microservice could not legally export, and
+// returns the subsystem and name to build it from so a caller uses the values that were
+// checked. Both halves of the exported name are checked:
+//
+//   - the caller-supplied fragment, and
+//   - the whole name it composes to, which is where an illegal FUNCTIONAL AREA shows up.
+//     MetricsSubsystem only removes hyphens, so anything else illegal in the area — a
+//     space, a dot, a leading digit — reaches the exported name intact.
+//
+// The composed name is what is checked rather than the subsystem on its own, because an
+// EMPTY subsystem is legal: a Microservice built as a struct literal has no functional
+// area, BuildFQName then drops the empty component, and the ~30 fixtures that build one
+// go on constructing metrics exactly as the type documents.
+func (ms *Microservice) requireMetricName(caller string, name string) (string, string) {
+	name = requireMetricNamePart(caller, "name", name)
+	sub := ms.MetricsSubsystem()
+	if fq := prometheus.BuildFQName(METRICS_NAMESPACE, sub, name); !metricNamePart.MatchString(fq) {
+		panic(fmt.Sprintf("core: %s cannot export a legal metric for the functional area %s: it "+
+			"reduces to the subsystem %s, composing the name %s, which cannot appear in a "+
+			"Prometheus metric name (it must match %s).",
+			caller, strconv.Quote(ms.FunctionalArea), strconv.Quote(sub), strconv.Quote(fq), metricNamePart))
+	}
+	return sub, name
+}
+
 // NewProcessorMetrics builds the instrumentation for a named processing loop
 // (e.g. "resolve", "persist", "state"). The metric names are prefixed with name
 // and namespaced/subsystemed by the service, so two services' loops do not
 // collide.
+//
+// It panics if name cannot appear in a Prometheus metric name; see
+// requireMetricNamePart for why that is a refusal rather than a correction.
 func (ms *Microservice) NewProcessorMetrics(name string) *ProcessorMetrics {
-	sub := ms.MetricsSubsystem()
+	sub, name := ms.requireMetricName("NewProcessorMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
 	return &ProcessorMetrics{
 		processed: auto.NewCounterVec(prometheus.CounterOpts{

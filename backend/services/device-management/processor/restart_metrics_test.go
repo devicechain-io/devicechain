@@ -60,7 +60,11 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	want := []string{
 		"devicechain_devicemanagement_resolve_inflight",
 		"devicechain_devicemanagement_resolve_event_time_bounded_total",
-		"devicechain_devicemanagement_raise-alarm_inflight",
+		// Underscore, not hyphen. This line read `raise-alarm_inflight` for as long as
+		// the consumer passed that loop name, which is how an illegal metric name
+		// stayed pinned by a passing test: the registry holds whatever name it is
+		// given, and only the exposition — or now the constructor — objects.
+		"devicechain_devicemanagement_raise_alarm_inflight",
 		"devicechain_devicemanagement_raise_alarm_dead_lettered_total",
 	}
 	families, err := reg.Gather()

@@ -178,12 +178,35 @@ if not literals:
     )
 
 series_re = re.compile(r"devicechain_[a-z0-9_]+")
+
+# 🔴 THE RESOLVER TRUNCATES, SO IT HAS TO CHECK WHAT IT TRUNCATED. series_re stops at
+# the first character a metric name cannot contain, which means a series written with a
+# hyphen is not reported as unknown — it is silently shortened to its legal prefix and
+# that prefix is then resolved. `devicechain_devicemanagement_resolve-loop_inflight`
+# becomes `devicechain_devicemanagement_resolve`, whose metric part `resolve` IS a
+# registered Go literal (every processing loop passes its name as one), so the check
+# goes green over an alert naming a series that does not exist.
+#
+# A hyphen is not legal in a Prometheus metric name at all, so any such token is a
+# defect wherever it appears — reported here rather than resolved.
+ILLEGAL_IN_NAME = "-."
+TOKEN_TAIL = re.compile(r"[A-Za-z0-9_.:-]*")
+
 seen = {}
 for path in dashboards + rule_files:
     with open(path, "rb") as fh:
         text = fh.read().decode("utf-8", "replace")
-    for match in series_re.findall(text):
-        seen.setdefault(match, set()).add(os.path.relpath(path, root))
+    for match in series_re.finditer(text):
+        if text[match.end():match.end() + 1] in ILLEGAL_IN_NAME:
+            token = match.group(0) + TOKEN_TAIL.match(text, match.end()).group(0)
+            problems.append(
+                "%s (in %s) contains a character that cannot appear in a Prometheus metric\n"
+                "    name, which must match [a-zA-Z_:][a-zA-Z0-9_:]*. No series is exported under\n"
+                "    that name, and the surrounding selector cannot reference it by identifier."
+                % (token, os.path.relpath(path, root))
+            )
+            continue
+        seen.setdefault(match.group(0), set()).add(os.path.relpath(path, root))
 
 for series in sorted(seen):
     if series in ALLOWED_NON_SERIES:
@@ -434,6 +457,22 @@ EOF
   restore
   echo "  ok: an empty dashboard directory is refused"
 
+  # Case 6 — A SERIES CARRYING A CHARACTER A METRIC NAME CANNOT CONTAIN, alone.
+  # 🔴 THIS ONE PASSED THE RESOLVER BEFORE IT WAS TAUGHT TO LOOK. The series
+  # pattern stops at the hyphen, so the name is not reported as unknown — it is
+  # shortened to `devicechain_selftestarea_probe_total`, which resolves
+  # perfectly, and the rule naming a series that is not exported reads green.
+  # The mutation is on the ALERT half deliberately: an alert over a series that
+  # does not exist evaluates an empty vector, which never fires.
+  sed -i 's/other_probe_total/probe_total-seconds/' "$tmpl/prometheusrule-probe.yaml"
+  grep -q 'probe_total-seconds' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the illegal-character mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag a series containing a character illegal in a metric name"
+  fi
+  restore
+  echo "  ok: a series carrying a character illegal in a metric name is caught"
+
   # -------------------------------------------------------------------------
   # The ConfigMap-name cases DO run against a copy of the real chart, and can:
   # they depend on the chart alone, not on the Go tree, so their clean baseline
@@ -442,7 +481,7 @@ EOF
   chart="$tmp/chart"
   cp -r "$ROOT/deploy/helm/devicechain" "$chart"
 
-  # Case 6 — A RENAMED CONFIGMAP, alone. The exact regression the glob rewrite
+  # Case 7 — A RENAMED CONFIGMAP, alone. The exact regression the glob rewrite
   # could have introduced: everything renders, everything parses, every series
   # is real, and an existing install's dashboard is orphaned with nothing to say
   # so.
@@ -458,7 +497,7 @@ EOF
   cp "$tmp/keep-tmpl.yaml" "$chart/templates/grafana-dashboard.yaml"
   echo "  ok: a renamed dashboard ConfigMap is caught"
 
-  # Case 7 — AN UNPINNED NEW DASHBOARD, alone. The set is asserted both ways, so
+  # Case 8 — AN UNPINNED NEW DASHBOARD, alone. The set is asserted both ways, so
   # adding a dashboard without recording its ConfigMap name here fails too —
   # which is what makes the pinned list a decision rather than a formality.
   printf '{"title": "scratch", "uid": "scratch", "panels": []}\n' >"$chart/dashboards/scratch-board.json"
@@ -468,7 +507,7 @@ EOF
   rm -f "$chart/dashboards/scratch-board.json"
   echo "  ok: an unpinned new dashboard is caught"
 
-  echo "self-test passed: 7 defects, each planted alone, each caught; a clean tree passes"
+  echo "self-test passed: 8 defects, each planted alone, each caught; a clean tree passes"
   exit 0
 fi
 
