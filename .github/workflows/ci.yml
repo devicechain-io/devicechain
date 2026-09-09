@@ -166,6 +166,25 @@ jobs:
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
           echo "Modules ($got): $modules"
 
+      # The race detector exits 0 when it finds nothing, which makes "no data
+      # races" and "never instrumented" the same result. Dropping -race from the
+      # command, a toolchain built without cgo or a missing C compiler each turn
+      # the race step into a second, slower copy of `go test` that reports
+      # success forever. This builds a program with a known race, runs it through
+      # this runner's toolchain and requires a DATA RACE report — plus a
+      # race-free control, since a checker that fails on everything proves
+      # nothing either. It runs here, before the matrix fans out.
+      - name: race detector self-test
+        run: hack/go-race.sh --self-test
+
+      # Which modules the detector covers, said once, as a table. The race step
+      # rides the whole per-module `go` matrix and runs on four of them, and a step
+      # that decides not to run renders as the same green tick as one that ran —
+      # so a reader cannot recover the covered set from the matrix. This is where
+      # that set is legible.
+      - name: race detector coverage
+        run: hack/go-race.sh --list
+
       - name: Build image-smoke module list
         id: smoke
         run: |
@@ -418,6 +437,43 @@ jobs:
             go test -count=1 "${pkgs[@]}"
           else
             go test -count=1 ./...
+          fi
+
+      # Data-race detection, on the modules where concurrent code actually runs.
+      #
+      # 🔴 THE STEP IS UNCONDITIONAL AND THE VERDICT IS A LINE IN THE LOG. An
+      # `if:` here would skip on most of the matrix, and a skipped step and a
+      # passing step render as the same green tick — so "this module was race
+      # checked" and "this module was never race checked" would be
+      # indistinguishable from the outside. Instead every entry runs the script
+      # and every entry prints one of:
+      #
+      #   race: COVERED backend/core -- go test -race -count=1 ./...
+      #   race: NOT COVERED backend/services/mcp -- not in the race set
+      #
+      # and the step then requires that line to be present. A future edit that
+      # leaves this returning 0 without deciding anything fails here rather than
+      # passing quietly. The authoritative covered set is printed as a table by
+      # `hack/go-race.sh --list` in `discover`; the set itself, and the reasoning
+      # for its membership, live in hack/go-race.sh.
+      #
+      # The detector's own liveness is established in `discover` by
+      # `hack/go-race.sh --self-test`, which requires a DATA RACE report from a
+      # program with a known race. Without that, a green step here would be
+      # equally consistent with the instrumentation being off.
+      - name: race detector (covered modules only)
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          hack/go-race.sh "$MODULE" 2>&1 | tee /tmp/go-race.log
+          # Fixed strings, not a pattern: the module path is data, and a regex
+          # here would only be one metacharacter away from matching the wrong
+          # module or nothing at all.
+          if ! grep -qF "race: COVERED $MODULE " /tmp/go-race.log \
+             && ! grep -qF "race: NOT COVERED $MODULE " /tmp/go-race.log; then
+            echo "::error::the race step reached the end without recording a verdict for $MODULE. Its green tick would mean nothing, so it fails instead."
+            exit 1
           fi
 
   # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
