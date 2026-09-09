@@ -65,25 +65,30 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # workspace to instrument because of its Bento dependency tree.
 #
 #   module                    go(prod)  go(test)  sync   `go` job: base -> race
-#   backend/core                    18        66    53      147s ->  271s
-#   .../event-sources                9        13    19       71s ->  161s
-#   .../command-delivery             3        10    17       34s ->  127s
-#   .../lwm2m-ingest                12        15    39       31s ->   96s
+#   backend/core                    18        66    53      179s ->  315s
+#   .../command-delivery             3        10    17       65s ->  178s
+#   .../event-sources                9        13    19       72s ->  166s
+#   .../lwm2m-ingest                12        15    39       44s ->  112s
 #   ---- in the set above; below, measured and not taken ---------------
 #   .../event-processing            14        21    22      101s ->  647s
-#   .../device-management            7         3    11       54s
-#   sims/dc-simulator               15         2    33       33s
-#   .../sparkplug-ingest             6         2    11       24s
-#   edge/dc-edge-agent               4         2     6       56s
-#   .../device-state                 3         3     4       37s
+#   .../device-management            7         3    11       82s
+#   sims/dc-simulator               15         2    33       40s
+#   .../sparkplug-ingest             6         2    11       34s
+#   edge/dc-edge-agent               4         2     6       58s
+#   .../device-state                 3         3     4      100s
 #
-# (Whole-job durations on ubuntu-latest, both columns from real runs of this
-# workflow. Re-measure the surface with:
+# (Whole-job durations on ubuntu-latest, every figure from a real run of this
+# workflow, each set against its own merge base — the runners are noisy enough
+# that a baseline from a different hour is not comparable. Re-measure the
+# surface with:
 #   grep -rhE '^[[:space:]]*go (func|[a-zA-Z_])' <module> --include='*.go' )
 #
-# The four in the set cost +372s of runner time between them and, because they
-# run as separate matrix entries, nothing on the critical path: the longest of
-# them lands at 271s against a `ci` run whose slowest job is already 333s.
+# The four in the set cost +411s of runner time between them, and roughly none
+# of it on the critical path: they are separate matrix entries, and the whole
+# workflow's slowest job is `subscriptions` at ~323s, which the longest of these
+# (core, at 315s) still sits under. Measured end to end, the `ci` run went from
+# 6m08s to 7m15s. 🔑 That margin is now thin, so the next module added here is
+# likely to start extending the run rather than hiding behind `subscriptions`.
 #
 # 🔴 EVENT-PROCESSING IS THE ONE THIS COULD NOT AFFORD, AND IT IS NOT BECAUSE
 # THE MODULE IS WRONG — it has the most concurrency of any service here, and it
