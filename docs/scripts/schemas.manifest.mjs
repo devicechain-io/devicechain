@@ -49,15 +49,32 @@ export const PLANES = {
 };
 
 /**
+ * The one extension a GraphQL schema artifact may carry, and the schema-shaped
+ * extensions that are refused rather than ignored.
+ *
+ * 🔴 REFUSED, NOT IGNORED, and the difference is the whole reason this is written
+ * down. Three of these schemas were spelled .gql for a long time. Two consumers
+ * dropped them in silence for it: a *.graphql glob (the first inventory of this tree
+ * reported 11 files and looked complete, missing login) and addlicense, the SPDX
+ * header gate in CI, which has no handler for the extension and skips such a file
+ * without reporting it. Both failures look exactly like a clean run.
+ *
+ * Mirrored in backend/core/graphql/schemaplane, which is the same rule for the Go
+ * tools that read a services tree.
+ */
+export const SCHEMA_EXTENSION = '.graphql';
+export const REFUSED_SCHEMA_EXTENSIONS = ['.gql', '.graphqls', '.gqls', '.sdl'];
+
+/**
  * The mount each filename convention maps to, verified against the servers that
  * register them: /graphql in the shared core, /admin/graphql and /settings/graphql
  * in user-management and ai-inference. Deriving the plane from the filename is
  * what keeps the hand-written exception list below down to three entries.
  */
 export const FILENAME_CONVENTIONS = [
-  { match: /^admin_schema\.(graphql|gql)$/, mount: '/admin/graphql', suffix: '-admin', plane: 'identity' },
-  { match: /^settings_schema\.(graphql|gql)$/, mount: '/settings/graphql', suffix: '-settings', plane: 'identity' },
-  { match: /^schema\.(graphql|gql)$/, mount: '/graphql', suffix: '', plane: 'tenant' },
+  { match: /^admin_schema\.graphql$/, mount: '/admin/graphql', suffix: '-admin', plane: 'identity' },
+  { match: /^settings_schema\.graphql$/, mount: '/settings/graphql', suffix: '-settings', plane: 'identity' },
+  { match: /^schema\.graphql$/, mount: '/graphql', suffix: '', plane: 'tenant' },
 ];
 
 /**
@@ -89,28 +106,31 @@ export const SCHEMAS = [
   },
   { source: 'backend/services/notification-management/graphql/schema.graphql', area: 'notification-management' },
   { source: 'backend/services/outbound-connectors/graphql/schema.graphql', area: 'outbound-connectors' },
-  { source: 'backend/services/user-management/graphql/admin_schema.gql', area: 'user-management' },
+  { source: 'backend/services/user-management/graphql/admin_schema.graphql', area: 'user-management' },
   {
-    source: 'backend/services/user-management/graphql/schema.gql',
+    source: 'backend/services/user-management/graphql/schema.graphql',
     area: 'user-management',
     note: 'login and refresh take no token — this is where a tenant access token comes '
       + 'from. Every other field on this schema requires one.',
   },
-  { source: 'backend/services/user-management/graphql/settings_schema.gql', area: 'user-management' },
+  { source: 'backend/services/user-management/graphql/settings_schema.graphql', area: 'user-management' },
 ];
 
 /**
  * Published filenames that must exist after every run.
  *
- * These three are the .gql-suffixed schemas — the set a *.graphql glob drops
- * silently, and the reason the first inventory of this tree reported 11 files and
- * looked complete. The missing set contained login, the call every other call
- * depends on.
+ * These three are user-management's, and they are named here because they were once
+ * the set an inventory of this tree silently dropped: they carried a different file
+ * extension from every other schema, a *.graphql glob missed all three, and 11 files
+ * looked exactly as complete as 14 does. The missing set contained login, the call
+ * every other call depends on. The extensions match now — that is what the
+ * discovery refusal in generate-schema.mjs keeps true — and these stay asserted BY
+ * NAME because a count would look just as complete either way.
  *
  * 🔴 Note carefully what this does and does not cover, because the obvious reading
- * is wrong. It does NOT catch a .gql file being renamed or deleted: the manifest
- * floor above fires on that first, in both directions. What it catches is a change
- * to the NAMING SCHEME — an edited suffix in FILENAME_CONVENTIONS, or an area
+ * is wrong. It does NOT catch one of these files being renamed or deleted: the
+ * manifest floor above fires on that first, in both directions. What it catches is a
+ * change to the NAMING SCHEME — an edited suffix in FILENAME_CONVENTIONS, or an area
  * relabelled here — which the floor cannot see at all, because the sources still
  * reconcile perfectly while the published URLs move out from under every link and
  * every agent that cached them.

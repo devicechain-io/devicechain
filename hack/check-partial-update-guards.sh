@@ -202,7 +202,12 @@ check_tree() {
   local base="$1" found=0 failed=0
   local schema svcdir dir svc var
 
-  for schema in "$base"/services/*/graphql/*.gql "$base"/services/*/graphql/*.graphql; do
+  # One extension, because there is one. Every schema artifact in the tree is
+  # .graphql — which is also the only extension addlicense has a handler for, so a
+  # schema under any other one silently loses its SPDX header check as well as this
+  # guard. EXPECTED_UPDATE_SCHEMAS above is what keeps this glob from quietly
+  # matching nothing.
+  for schema in "$base"/services/*/graphql/*.graphql; do
     [ -e "$schema" ] || continue
     [ -n "$(update_fields "$schema")" ] || continue
     found=$((found + 1))

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 )
 
 // createMutation matches a create* field on a schema's Mutation type. The served
@@ -17,34 +19,47 @@ import (
 // types and comments that also mention the word.
 var createMutation = regexp.MustCompile(`(?m)^[\t ]+create[A-Z]\w*\s*\(`)
 
-// servedSchemas returns every tenant-plane schema file. Admin schemas are
-// excluded deliberately: they are a separate identity-token surface with their
-// own principal, and folding them into one number would make the coverage claim
-// mean two different things at once.
+// servedSchemas returns every tenant-plane schema file in the tree. The
+// identity-token schemas — the admin API and the settings API — are excluded
+// deliberately: they are a separate surface with their own principal, and folding
+// them into one number would make the coverage claim mean two different things at
+// once.
+//
+// The plane comes from schemaplane rather than from a substring of the filename.
+// "settings_schema" contains no "admin" and is nonetheless an identity-token
+// surface, so the substring test put it on the wrong side of exactly this
+// distinction.
 func servedSchemas(t *testing.T) []string {
 	t.Helper()
 	root := filepath.Join("..", "..", "services")
-	var out []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.Contains(path, string(os.PathSeparator)+"graphql"+string(os.PathSeparator)) {
-			return nil
-		}
-		ext := filepath.Ext(path)
-		if ext != ".graphql" && ext != ".gql" {
-			return nil
-		}
-		if strings.Contains(filepath.Base(path), "admin") {
-			return nil
-		}
-		out = append(out, path)
-		return nil
-	})
+	areas, err := os.ReadDir(root)
 	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
+		t.Fatalf("read %s: %v", root, err)
 	}
+	var out []string
+	for _, a := range areas {
+		if !a.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, a.Name(), "graphql")
+		if _, serr := os.Stat(dir); serr != nil {
+			continue
+		}
+		found, cerr := schemaplane.Dir(dir)
+		if cerr != nil {
+			t.Fatalf("classify %s: %v", dir, cerr)
+		}
+		for _, s := range found {
+			if s.Mount == schemaplane.MountTenant {
+				out = append(out, s.Path)
+			}
+		}
+	}
+	// A walk that found nothing would make every coverage assertion below vacuous.
+	if len(out) == 0 {
+		t.Fatalf("no tenant-plane schema found under %s", root)
+	}
+	sort.Strings(out)
 	return out
 }
 

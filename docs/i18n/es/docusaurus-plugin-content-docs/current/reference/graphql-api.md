@@ -151,9 +151,10 @@ esquemas](#descargar-los-esquemas) más arriba. Esta es la vía confiable porque
 instancia en ejecución ni un token — lo que más importa cuando todavía estás evaluando
 DeviceChain. Se generan desde `backend/services/<area>/graphql/` en cada build de la
 documentación, así que no pueden divergir de los esquemas que los servicios analizan. (Las
-fuentes versionadas también están ahí, si prefieres leerlas en su sitio; ten en cuenta que los
-nombres de archivo no son uniformes: la mayoría de las áreas usan `schema.graphql`, pero
-`user-management` usa `schema.gql`, `admin_schema.gql` y `settings_schema.gql`.)
+fuentes versionadas también están ahí, si prefieres leerlas en su sitio. Todas son archivos
+`.graphql`, nombrados según el endpoint que las sirve: `schema.graphql` para la API de inquilino,
+más `admin_schema.graphql` y `settings_schema.graphql` en las áreas que además sirven una API con
+token de identidad.)
 
 **Introspección en una instancia de desarrollo.** Configura `DC_GRAPHQL_DEV_TOOLS=true` en el
 servicio para habilitarla. Hazlo solo en una instancia de desarrollo; está deshabilitada por

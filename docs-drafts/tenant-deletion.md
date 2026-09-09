@@ -44,7 +44,7 @@ window has also elapsed. Both are argued below.
 ## 1. The entry point
 
 There is exactly one: the `deleteTenant(token: String!): Boolean!` mutation on the admin plane
-(`backend/services/user-management/graphql/admin_schema.gql`), resolved through
+(`backend/services/user-management/graphql/admin_schema.graphql`), resolved through
 `backend/services/user-management/graphql/admin_catalog.go` into
 `backend/services/user-management/admin/catalog.go`.
 

@@ -4,10 +4,14 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 )
 
 // 🔴 THE COUNTERWEIGHT, and the only test here that can tell a working filter
@@ -325,8 +329,11 @@ func TestABulkInputResolvesToItsBareTypeName(t *testing.T) {
 	}
 }
 
-// Admin schemas are excluded, so an entity declared ONLY on an admin surface is
-// not treated as available on the tenant plane the probe writes through.
+// The identity-token schemas are excluded, so an entity declared ONLY on one of
+// them is not treated as available on the tenant plane the probe writes through.
+// The fixture uses the real filename convention: the classifier resolves a mount
+// from the exact name, so `admin.graphql` is not a schema this platform serves and
+// is refused rather than silently read as one.
 func TestAdminSchemasDoNotCount(t *testing.T) {
 	dir := t.TempDir()
 	area := filepath.Join(dir, "device-management", "graphql")
@@ -344,7 +351,7 @@ input AssetCreateRequest {
     token: String!
 }
 `
-	if err := os.WriteFile(filepath.Join(area, "admin.graphql"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(area, "admin_schema.graphql"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(area, "schema.graphql"), []byte("type Query { placeholder: String }\n"), 0o644); err != nil {
@@ -510,16 +517,19 @@ func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T
 		if !a.IsDir() || a.Name() == "device-management" {
 			continue
 		}
-		for _, ext := range []string{"*.graphql", "*.gql"} {
-			found, _ := filepath.Glob(filepath.Join("..", "..", "services", a.Name(), "graphql", ext))
-			for _, f := range found {
-				body, err := os.ReadFile(f)
-				if err != nil {
-					t.Fatalf("read %s: %v", f, err)
-				}
-				schemas[a.Name()] += string(body) + "\n"
-			}
+		// The TENANT plane only, matching what loadBaseline reads from a real tree.
+		// Copying an area's identity-token schemas in as well would make the
+		// stand-in more permissive than the thing it stands in for.
+		sdl, served, err := schemaplane.SDLAt(filepath.Join("..", "..", "services", a.Name(), "graphql"), schemaplane.MountTenant)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			t.Fatalf("classify %s: %v", a.Name(), err)
+		case !served:
+			continue
 		}
+		schemas[a.Name()] = sdl
 	}
 
 	b, err := loadBaseline(writeBaseline(t, schemas))

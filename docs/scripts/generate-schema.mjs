@@ -20,7 +20,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { sanitizeSdl } from './sanitize.mjs';
 import { scan, formatFindings } from './gate.mjs';
-import { PLANES, FILENAME_CONVENTIONS, SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
+import {
+  PLANES, FILENAME_CONVENTIONS, SCHEMAS, REQUIRED_OUTPUTS, REFUSED_SCHEMA_EXTENSIONS,
+} from './schemas.manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO = join(HERE, '..', '..');
@@ -76,9 +78,25 @@ export function discover(repo = REPO) {
     const dir = join(services, area.name, 'graphql');
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir)) {
-      // Both extensions. user-management uses .gql for all three of its schemas, so
-      // a *.graphql glob drops login/auth, the admin API and settings.
-      if (/\.(graphql|gql)$/.test(f)) found.push(`backend/services/${area.name}/graphql/${f}`);
+      const rel = `backend/services/${area.name}/graphql/${f}`;
+      // 🔴 A SCHEMA UNDER ANY OTHER EXTENSION IS AN ERROR, NOT A FILE TO SKIP, and
+      // that polarity is the whole point. This used to accept .gql as well, which
+      // read as tolerance and was really a split: the three schemas spelled that way
+      // were invisible to a *.graphql glob — the first inventory of this tree
+      // reported 11 files and looked complete, missing login — and invisible to the
+      // SPDX header gate, because addlicense has no handler for the extension and
+      // skips such a file in silence. Refusing here is what keeps the next one from
+      // being discovered the same way.
+      if (REFUSED_SCHEMA_EXTENSIONS.some((ext) => f.toLowerCase().endsWith(ext))) {
+        throw new GenerateError(
+          `${rel} is a GraphQL schema under an unsupported extension`,
+          'Every schema artifact in this repository is .graphql. Rename the file.\n\n'
+          + 'This is not a style rule. addlicense — the SPDX header gate in CI — has no\n'
+          + 'handler for the other extensions, so it stops checking the file without\n'
+          + 'reporting anything, and a *.graphql consumer stops reading it entirely.',
+        );
+      }
+      if (f.endsWith('.graphql')) found.push(rel);
     }
   }
   return found.sort();
@@ -177,8 +195,9 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
 
     // Slot the banner in under the licence header, which stays first. Falls back to
     // the top of the file for a schema that carries no header — which is not
-    // hypothetical: the three .gql files had none, because addlicense has no handler
-    // for that extension and skipped them in silence for as long as they existed.
+    // hypothetical: user-management's three schemas had none for as long as they
+    // carried an extension addlicense has no handler for, because it skipped them in
+    // silence rather than reporting them.
     //
     // The offset matters: `touched` holds the line numbers the gate uses to scope
     // its checks, and inserting above them without shifting it aims every one at the
@@ -228,15 +247,15 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
   };
   artifacts.push({ name: 'index.json', text: `${JSON.stringify(index, null, 2)}\n` });
 
-  // Assert the .gql-sourced schemas by name. A count would look just as complete.
+  // Assert the required outputs by name. A count would look just as complete.
   const names = new Set(artifacts.map((a) => a.name));
   const absent = REQUIRED_OUTPUTS.filter((n) => !names.has(n));
   if (absent.length) {
     throw new GenerateError(
       `${absent.length} required output(s) missing`,
       `${absent.map((n) => `  ${n}`).join('\n')}\n\n`
-      + 'These are the three .gql-suffixed schemas. Their absence is exactly what a\n'
-      + '*.graphql glob produces, and it is invisible in a file count.',
+      + 'These are user-management\'s three schemas — once the exact set a *.graphql\n'
+      + 'glob dropped, which is invisible in a file count.',
     );
   }
 
