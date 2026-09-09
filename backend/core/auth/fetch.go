@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/rs/zerolog/log"
 )
 
@@ -31,6 +32,20 @@ const (
 	jwksRefreshInterval = 30 * time.Second
 	jwksRequestTimeout  = 10 * time.Second
 )
+
+// jwksTransport is this package's own connection pool for the JWKS fetch. Leaving
+// http.Client.Transport nil would dial through http.DefaultTransport, which resolves
+// the environment's proxy settings and shares one small pool with everything else in
+// the process; httptransport states both. One transport for the package, because a
+// transport IS the pool.
+var jwksTransport = httptransport.New()
+
+// jwksHTTPClient builds the client every JWKS fetch runs on. It is a function rather
+// than a literal at the call site so a test can assert on the very client the fetch
+// uses.
+func jwksHTTPClient() *http.Client {
+	return &http.Client{Timeout: jwksRequestTimeout, Transport: jwksTransport}
+}
 
 // NewValidatorForInstance builds a Validator from the user-management JWKS
 // endpoint described by the instance configuration. This is the one place the
@@ -64,7 +79,7 @@ func NewValidatorFromJWKSURL(ctx context.Context, url string, attempts int, dela
 	if attempts < 1 {
 		attempts = 1
 	}
-	client := &http.Client{Timeout: jwksRequestTimeout}
+	client := jwksHTTPClient()
 
 	// The lazy-refresh fetch uses a fresh background context: by the time an
 	// unknown kid triggers it, the startup ctx is long done.

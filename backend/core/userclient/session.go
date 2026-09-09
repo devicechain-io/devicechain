@@ -318,7 +318,11 @@ type bearerTransport struct {
 func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.base
 	if base == nil {
-		base = http.DefaultTransport
+		// Unreachable from HTTPClient, whose session client always carries a
+		// transport (defaultHTTP fills one in). The fallback names this package's
+		// transport rather than http.DefaultTransport so a zero-value
+		// bearerTransport cannot quietly reintroduce the process default.
+		base = sharedTransport
 	}
 	if !hostMatches(t.host, req.URL) {
 		// Off the pinned host. A redirected hop arrives here with Authorization

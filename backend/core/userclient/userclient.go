@@ -31,6 +31,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/httptransport"
 )
 
 const (
@@ -203,10 +205,45 @@ func parseExpiry(s string) time.Time {
 	return t
 }
 
-// defaultHTTP returns httpc if non-nil, else a client bounded by requestTimeout.
+// sharedTransport is this package's connection pool, used by every client it builds
+// itself and filled in on a caller-supplied client that has none. Leaving
+// http.Client.Transport nil would dial through http.DefaultTransport, which resolves
+// the environment's proxy settings — for a login exchange carrying a password and for
+// every call carrying the tenant access token — and shares one small pool with the rest
+// of the process. httptransport states both.
+//
+// A caller that must dial through a proxy, or that needs its own TLS or dialer
+// settings, supplies its own *http.Client; that transport is kept as-is.
+var sharedTransport = httptransport.New()
+
+// defaultClient is the client used when a caller supplies none. It is a package
+// singleton rather than a fresh client per call because graphqlPost resolves the client
+// on EVERY request: a new one each time would be a new pool each time, so nothing would
+// ever be reused and every request would open a connection.
+var defaultClient = &http.Client{Timeout: requestTimeout, Transport: sharedTransport}
+
+// defaultHTTP returns the client a call should run on: the package default when httpc
+// is nil, otherwise httpc — with a copy taken to fill in anything it left unstated.
+//
+// Both fill-ins close the same kind of hole, where an unset field does not mean "no
+// policy" but "inherit a policy nobody chose". A nil Transport means
+// http.DefaultTransport, with the process-wide proxy and pool above. A zero Timeout
+// means no deadline at all, which the sessions make worse: they renew tokens on a
+// detached context, so a caller that passes a client with Timeout 0 gets a login with
+// neither a deadline nor a cancellation path. The caller's own client is never mutated.
 func defaultHTTP(httpc *http.Client) *http.Client {
-	if httpc != nil {
+	if httpc == nil {
+		return defaultClient
+	}
+	if httpc.Transport != nil && httpc.Timeout != 0 {
 		return httpc
 	}
-	return &http.Client{Timeout: requestTimeout}
+	c := *httpc
+	if c.Transport == nil {
+		c.Transport = sharedTransport
+	}
+	if c.Timeout == 0 {
+		c.Timeout = requestTimeout
+	}
+	return &c
 }
