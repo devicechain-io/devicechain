@@ -282,8 +282,14 @@ func TestAnUnsetDrainVariableDoesNotBlockStartup(t *testing.T) {
 	require.NoError(t, ms.InitializeAndStart())
 }
 
-// statusOf issues a GET and returns its status code, failing the test rather than
-// returning a plausible zero if the request could not be made at all.
+// statusOf issues a GET and returns its status code, or -1 when the request could
+// not be made at all.
+//
+// -1 rather than 0 on purpose: it is called from inside the drain callback, where a
+// t.Fatal would abort a goroutine the test is not on, and a zero would be
+// indistinguishable from "not measured yet" in the variables the assertions read.
+// -1 is a value no HTTP response can produce, so a closed or unreachable server
+// shows up in the failure message as itself.
 func statusOf(url string) int {
 	resp, err := http.Get(url) //nolint:gosec // a httptest URL built in this test
 	if err != nil {
