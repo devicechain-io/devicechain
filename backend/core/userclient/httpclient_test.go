@@ -5,9 +5,11 @@ package userclient
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -176,8 +178,38 @@ func TestHTTPClientKeepsBearerAcrossSameHostRedirect(t *testing.T) {
 	}
 }
 
+// Supplying CheckRedirect replaces net/http's default, and the default is also what caps
+// a redirect chain — so the cap is now this package's to enforce. Without it a same-host
+// loop is followed until the client's Timeout, and a caller-supplied client with no
+// Timeout would loop forever.
+func TestHTTPClientStopsASameHostRedirectLoop(t *testing.T) {
+	pinned, other := newHostRecorder(), newHostRecorder()
+	client := pinnedFixture(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			pinned.note(r)
+			http.Redirect(w, r, "http://"+pinnedHost+"/loop", http.StatusFound)
+		},
+		func(w http.ResponseWriter, r *http.Request) { other.note(r); writeData(w, `{"ok":true}`) })
+
+	resp, err := client.Get("http://" + pinnedHost + "/loop")
+	if err == nil {
+		resp.Body.Close()
+		t.Fatalf("a same-host redirect loop must be stopped")
+	}
+	want := fmt.Sprintf("stopped after %d redirects", maxRedirects)
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected the loop to be stopped by the redirect cap (%q), got: %v", want, err)
+	}
+	// The cap fires when via already holds maxRedirects requests, so the server sees
+	// exactly that many — the hop that would have been the 11th is never made.
+	if n := pinned.count(); n != maxRedirects {
+		t.Fatalf("expected exactly %d requests before the cap, got %d", maxRedirects, n)
+	}
+}
+
 // The pin accepts the forms a caller has at hand — a bare hostname, a host:port, or the
-// endpoint URL itself — and rejects a host that merely resembles it.
+// endpoint URL itself — and rejects a host that merely resembles it, or a string that
+// names no host at all.
 func TestNormalizeHostAndMatch(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"api.example.com", "api.example.com"},
@@ -188,18 +220,26 @@ func TestNormalizeHostAndMatch(t *testing.T) {
 		{"[::1]:8443", "::1"},
 		{"::1", "::1"},
 		{"", ""},
+		// A URL naming no host must pin nothing. Read as a host:port these would
+		// yield the scheme, "http" — a name a Kubernetes Service can have, so the
+		// client would be pinned to a real and wrong host rather than to nothing.
+		{"http:///graphql", ""},
+		{"http://", ""},
+		// Userinfo is not a host:port. Kept whole, it matches no URL hostname; read
+		// as a host:port it would yield "user".
+		{"user:pw@api.example.com", "user:pw@api.example.com"},
 	} {
 		if got := normalizeHost(tc.in); got != tc.want {
 			t.Errorf("normalizeHost(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 
-	mustParse := func(raw string) *http.Request {
-		req, err := http.NewRequest(http.MethodGet, raw, nil)
+	mustParse := func(raw string) *url.URL {
+		u, err := url.Parse(raw)
 		if err != nil {
-			t.Fatalf("build request %q: %v", raw, err)
+			t.Fatalf("parse %q: %v", raw, err)
 		}
-		return req
+		return u
 	}
 	for _, tc := range []struct {
 		pin, url string
@@ -212,8 +252,12 @@ func TestNormalizeHostAndMatch(t *testing.T) {
 		{"api.example.com", "https://api.example.com.evil.net/graphql", false},
 		{"api.example.com", "https://sub.api.example.com/graphql", false},
 		{"", "https://api.example.com/graphql", false},
+		// The blank-pin guard's own input class: a URL that also names no host.
+		// Without the guard both sides are "" and the pin would match — the row
+		// above cannot show that, since a non-empty hostname never equals "".
+		{"", "http:///graphql", false},
 	} {
-		if got := hostMatches(tc.pin, mustParse(tc.url).URL); got != tc.want {
+		if got := hostMatches(tc.pin, mustParse(tc.url)); got != tc.want {
 			t.Errorf("hostMatches(%q, %q) = %v, want %v", tc.pin, tc.url, got, tc.want)
 		}
 	}

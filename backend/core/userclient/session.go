@@ -87,7 +87,13 @@ func (s *TenantSession) Query(ctx context.Context, baseURL, query string, variab
 // hostname is compared, case-insensitively. A redirect that changes only the port
 // therefore keeps the bearer, which is also net/http's own rule — it compares hostnames
 // and ignores the port. A request for any other host is sent without the token, so an
-// empty allowedHost yields a client that authenticates nothing.
+// allowedHost that names no host yields a client that authenticates nothing.
+//
+// Because the comparison is host-only, a same-host redirect that downgrades the scheme —
+// https://api.example.com to http://api.example.com — stays on the pinned host and keeps
+// the bearer. That is again net/http's own rule, but it means pinning a public TLS
+// endpoint accepts a hop to plaintext on that host: pass a base transport that refuses
+// plaintext if that matters to the caller.
 func (s *TenantSession) HTTPClient(allowedHost string) *http.Client {
 	host := normalizeHost(allowedHost)
 	return &http.Client{
@@ -108,21 +114,44 @@ func (s *TenantSession) HTTPClient(allowedHost string) *http.Client {
 // normalizeHost reduces a hostname, a host:port or a full URL to the lowercase hostname
 // to compare against. An IPv6 literal loses its brackets, which is the form url.Hostname
 // reports.
+//
+// Anything that names no host yields "", which pins nothing. That matters because the
+// readings below are otherwise happy to return a fragment: "http:///graphql" would be
+// read as the host "http", a name a Kubernetes Service can genuinely have. Likewise the
+// host:port reading only applies when the port is numeric, so a string carrying userinfo
+// ("user:pw@api.example.com") is not read as the host "user" — it is kept whole, and a
+// whole string with an "@" in it matches no URL hostname.
 func normalizeHost(h string) string {
 	h = strings.TrimSpace(h)
 	if h == "" {
 		return ""
 	}
 	if strings.Contains(h, "://") {
-		if u, err := url.Parse(h); err == nil && u.Host != "" {
-			return strings.ToLower(u.Hostname())
+		u, err := url.Parse(h)
+		if err != nil || u.Host == "" {
+			return ""
 		}
+		return strings.ToLower(u.Hostname())
 	}
-	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
+	if hostOnly, port, err := net.SplitHostPort(h); err == nil && isNumeric(port) {
 		h = hostOnly
 	}
 	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
 	return strings.ToLower(h)
+}
+
+// isNumeric reports whether s is a non-empty run of ASCII digits — a port, as opposed to
+// whatever else happened to follow a colon.
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // hostMatches reports whether u names the pinned host. A blank pin matches nothing.
