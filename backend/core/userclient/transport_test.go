@@ -5,6 +5,7 @@ package userclient
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,4 +124,78 @@ func TestSessionHTTPClientWrapsANonDefaultBaseTransport(t *testing.T) {
 	if c.Timeout == 0 {
 		t.Fatal("the session client has no timeout")
 	}
+}
+
+// The host pin still holds over the client this change hands the session.
+//
+// The pin's own arms (httpclient_test.go) drive a caller-supplied client that states
+// both a transport and a timeout, which defaultHTTP passes through untouched — so they
+// exercise the path that existed before this change and would not notice it either way.
+// These arms use a caller client with Timeout 0, which is what makes defaultHTTP hand
+// the session a COPY, and so exercise the pin over the client this change constructs.
+//
+// What these arms do NOT cover, stated because it is easy to assume otherwise: the
+// caller here supplies a transport (the fixture's routing dialer), so the Transport
+// fill-in never runs and deleting it leaves these arms green. That branch is covered by
+// TestDefaultHTTPFillsInWhatACallerLeftUnstated instead, which is what fails when it
+// goes. Removing either half of the pin, or the timeout fill-in, does fail here.
+func TestHostPinHoldsOverTheClientDefaultHTTPBuilds(t *testing.T) {
+	t.Run("the bearer reaches the pinned host and no other", func(t *testing.T) {
+		pinned, other := newHostRecorder(), newHostRecorder()
+		client := pinnedFixtureWithTimeout(t, 0,
+			func(w http.ResponseWriter, r *http.Request) { pinned.note(r); writeData(w, `{"ok":true}`) },
+			func(w http.ResponseWriter, r *http.Request) { other.note(r); writeData(w, `{"ok":true}`) })
+
+		resp, err := client.Get("http://" + pinnedHost + "/graphql")
+		if err != nil {
+			t.Fatalf("pinned host: %v", err)
+		}
+		resp.Body.Close()
+		if got := pinned.authFor("/graphql"); !strings.HasPrefix(got, "Bearer access-") {
+			t.Fatalf("pinned host must receive the tenant bearer, got %q", got)
+		}
+
+		resp, err = client.Get("http://" + otherHost + "/graphql")
+		if err != nil {
+			t.Fatalf("other host: %v", err)
+		}
+		resp.Body.Close()
+		if got := other.authFor("/graphql"); got != "" {
+			t.Fatalf("a host other than the pinned one must receive no Authorization header, got %q", got)
+		}
+	})
+
+	t.Run("a redirect off the pinned host is refused", func(t *testing.T) {
+		pinned, other := newHostRecorder(), newHostRecorder()
+		client := pinnedFixtureWithTimeout(t, 0,
+			func(w http.ResponseWriter, r *http.Request) {
+				pinned.note(r)
+				http.Redirect(w, r, "http://"+otherHost+"/graphql", http.StatusFound)
+			},
+			func(w http.ResponseWriter, r *http.Request) { other.note(r); writeData(w, `{"ok":true}`) })
+
+		resp, err := client.Get("http://" + pinnedHost + "/graphql")
+		if err == nil {
+			resp.Body.Close()
+			t.Fatal("a redirect off the pinned host must be refused")
+		}
+		if !strings.Contains(err.Error(), "refusing to follow a redirect") {
+			t.Fatalf("the error must name the redirect refusal, got %v", err)
+		}
+		if got := other.count(); got != 0 {
+			t.Fatalf("the unpinned host was contacted %d times; it must never be reached", got)
+		}
+	})
+
+	// The client is also bounded even though the caller stated no timeout, which is what
+	// the redirect-chain cap is enforced against: supplying CheckRedirect replaces
+	// net/http's default, and that default is also what caps a chain at ten hops.
+	t.Run("the client is bounded even though the caller stated no timeout", func(t *testing.T) {
+		client := pinnedFixtureWithTimeout(t, 0,
+			func(w http.ResponseWriter, r *http.Request) { writeData(w, `{"ok":true}`) },
+			func(w http.ResponseWriter, r *http.Request) { writeData(w, `{"ok":true}`) })
+		if client.Timeout != requestTimeout {
+			t.Fatalf("client timeout = %v, want %v", client.Timeout, requestTimeout)
+		}
+	})
 }
