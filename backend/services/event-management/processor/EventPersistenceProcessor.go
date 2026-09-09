@@ -59,7 +59,21 @@ type EventPersistenceProcessor struct {
 	workerWG   sync.WaitGroup
 	outboundWG sync.WaitGroup
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (eproc *EventPersistenceProcessor) pacer() *core.ReadPacer {
+	if eproc.readPacer == nil {
+		eproc.readPacer = core.NewReadPacer(eproc.Microservice, "resolved events")
+	}
+	return eproc.readPacer
 }
 
 // Create a new inbound events processor.
@@ -205,24 +219,29 @@ func (eproc *EventPersistenceProcessor) Start(ctx context.Context) error {
 }
 
 // Execute primary processing loop. This is done in a goroutine since it runs indefinitely.
+//
+// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
+// read errors has outlasted the pacer's budget — in which case the pacer has already ended
+// the process, because a persistence loop that cannot read is silently losing the tail of
+// every tenant's history, and a restart is the remedy for most of what causes it.
 func (eproc *EventPersistenceProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := eproc.ResolvedEventsReader.ReadMessage(ctx)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			log.Info().Msg("Detected EOF on resolved events stream")
 			return true
-		} else {
-			eproc.ResolvedEventsReader.HandleResponse(err)
 		}
-	} else {
-		// Hand off to the workers, but abandon the handoff on shutdown so the
-		// loop can exit instead of blocking on a full channel (A5). The message
-		// is unacked, so it is redelivered after restart.
-		select {
-		case eproc.messages <- msg:
-		case <-ctx.Done():
-			return true
-		}
+		eproc.ResolvedEventsReader.HandleResponse(err)
+		return eproc.pacer().PauseAfterError(ctx, err)
+	}
+	eproc.pacer().Succeeded()
+	// Hand off to the workers, but abandon the handoff on shutdown so the
+	// loop can exit instead of blocking on a full channel (A5). The message
+	// is unacked, so it is redelivered after restart.
+	select {
+	case eproc.messages <- msg:
+	case <-ctx.Done():
+		return true
 	}
 	return false
 }

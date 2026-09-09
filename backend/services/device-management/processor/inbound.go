@@ -92,7 +92,21 @@ type InboundEventsProcessor struct {
 	workerWG   sync.WaitGroup
 	outboundWG sync.WaitGroup
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (iproc *InboundEventsProcessor) pacer() *core.ReadPacer {
+	if iproc.readPacer == nil {
+		iproc.readPacer = core.NewReadPacer(iproc.Microservice, "inbound events")
+	}
+	return iproc.readPacer
 }
 
 // Create a new inbound events processor. authMode is the device authentication
@@ -334,24 +348,29 @@ func (iproc *InboundEventsProcessor) Start(ctx context.Context) error {
 }
 
 // Execute primary processing loop. This is done in a goroutine since it runs indefinitely.
+//
+// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
+// read errors has outlasted the pacer's budget — in which case the pacer has already ended
+// the process, because a service that cannot read its own inbound stream is doing nothing
+// while reporting healthy, and a restart is the remedy for most of what causes it.
 func (iproc *InboundEventsProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := iproc.InboundEventsReader.ReadMessage(ctx)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			log.Info().Msg("Detected EOF on inbound events stream")
 			return true
-		} else {
-			iproc.InboundEventsReader.HandleResponse(err)
 		}
-	} else {
-		// Hand off to the resolvers, but abandon the handoff on shutdown so the
-		// loop can exit instead of blocking on a full channel (A5). The message
-		// is unacked, so it is redelivered after restart.
-		select {
-		case iproc.messages <- msg:
-		case <-ctx.Done():
-			return true
-		}
+		iproc.InboundEventsReader.HandleResponse(err)
+		return iproc.pacer().PauseAfterError(ctx, err)
+	}
+	iproc.pacer().Succeeded()
+	// Hand off to the resolvers, but abandon the handoff on shutdown so the
+	// loop can exit instead of blocking on a full channel (A5). The message
+	// is unacked, so it is redelivered after restart.
+	select {
+	case iproc.messages <- msg:
+	case <-ctx.Done():
+		return true
 	}
 	return false
 }

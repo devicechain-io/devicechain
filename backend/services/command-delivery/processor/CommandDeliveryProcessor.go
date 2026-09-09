@@ -260,6 +260,21 @@ type CommandDeliveryProcessor struct {
 	// the caller (beforeMicroserviceStopped) goes straight on to close the database pool
 	// underneath it. See ExecuteStop.
 	periodic sync.WaitGroup
+
+	// readPacer spaces out the retries after a non-EOF read error on the response stream
+	// and ends the loop once the errors stop clearing. Built on first use by pacer(),
+	// because this struct is also assembled by literal in tests that never run the
+	// constructor.
+	readPacer *core.ReadPacer
+}
+
+// pacer returns the response read loop's error pacer, building it on first use. It is
+// touched only by the single read goroutine, which is the pacer's own contract.
+func (cproc *CommandDeliveryProcessor) pacer() *core.ReadPacer {
+	if cproc.readPacer == nil {
+		cproc.readPacer = core.NewReadPacer(cproc.Microservice, "command responses")
+	}
+	return cproc.readPacer
 }
 
 // NewCommandDeliveryProcessor creates a new command delivery processor.
@@ -837,6 +852,16 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 // ProcessMessage reads a single device response and matches it to its command.
 // Undecodable messages (or messages with no parseable tenant) are logged and
 // skipped.
+//
+// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
+// read errors has outlasted the pacer's budget — in which case the pacer has already ended
+// the process.
+//
+// 🔑 THIS LOOP'S SILENT FAILURE PRODUCES WRONG DATA, NOT JUST MISSING DATA, which is why it
+// ends the process rather than retrying forever. Commands go on being dispatched while
+// nothing settles them, so every one of them rides SENT to its TTL and terminalizes as
+// TIMEOUT — which blames the device for a fault on this side of the wire. A restarted pod
+// re-reads the unacked responses; a pod spinning quietly on a read error never does.
 func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := cproc.CommandResponsesReader.ReadMessage(ctx)
 	if err != nil {
@@ -845,8 +870,9 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 			return true
 		}
 		cproc.CommandResponsesReader.HandleResponse(err)
-		return false
+		return cproc.pacer().PauseAfterError(ctx, err)
 	}
+	cproc.pacer().Succeeded()
 
 	// RED metrics for this response (E13): start timing now that we hold a
 	// message, and record its disposition exactly once on whichever return

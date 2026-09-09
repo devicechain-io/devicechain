@@ -71,8 +71,22 @@ type StateProcessor struct {
 	// one-minute tick.
 	inactivityInterval time.Duration
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
 	quit      chan struct{}
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (sp *StateProcessor) pacer() *core.ReadPacer {
+	if sp.readPacer == nil {
+		sp.readPacer = core.NewReadPacer(sp.Microservice, "resolved events")
+	}
+	return sp.readPacer
 }
 
 // Create a new device-state processor.
@@ -139,7 +153,10 @@ func (sp *StateProcessor) Start(ctx context.Context) error {
 
 // Execute the read side of the processing loop. Reads one resolved event from the
 // stream and hands it to the worker pool. Runs in a goroutine since it loops
-// indefinitely. Returns true once the stream EOFs or the loop is being shut down.
+// indefinitely. Returns true once the stream EOFs, the loop is being shut down, or a run of
+// non-EOF read errors has outlasted the pacer's budget — in which case the pacer has already
+// ended the process, because a projection that cannot read its source stream goes stale
+// silently and a restart is the remedy for most of what causes it.
 func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := sp.ResolvedEventsReader.ReadMessage(ctx)
 	if err != nil {
@@ -148,8 +165,9 @@ func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
 			return true
 		}
 		sp.ResolvedEventsReader.HandleResponse(err)
-		return false
+		return sp.pacer().PauseAfterError(ctx, err)
 	}
+	sp.pacer().Succeeded()
 
 	// Hand off to the workers, but abandon the handoff on shutdown so the loop
 	// can exit instead of blocking on a full channel (A5). The message is unacked,

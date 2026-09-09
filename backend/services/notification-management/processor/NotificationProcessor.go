@@ -79,7 +79,21 @@ type NotificationProcessor struct {
 	readerWG   sync.WaitGroup
 	workerWG   sync.WaitGroup
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (np *NotificationProcessor) pacer() *core.ReadPacer {
+	if np.readPacer == nil {
+		np.readPacer = core.NewReadPacer(np.Microservice, "alarm events")
+	}
+	return np.readPacer
 }
 
 // NewNotificationProcessor creates a notification processor over the given reader
@@ -155,7 +169,10 @@ func (np *NotificationProcessor) ExecuteStart(ctx context.Context) error {
 }
 
 // ProcessMessage reads one alarm event and hands it to the worker pool. Returns true
-// once the stream EOFs or the loop is shutting down.
+// once the stream EOFs, the loop is shutting down, or a run of non-EOF read errors has
+// outlasted the pacer's budget — in which case the pacer has already ended the process,
+// because a consumer that cannot read alarms pages nobody while reporting healthy, and a
+// restart is the remedy for most of what causes it.
 func (np *NotificationProcessor) ProcessMessage(ctx context.Context) bool {
 	msg, err := np.Reader.ReadMessage(ctx)
 	if err != nil {
@@ -164,8 +181,9 @@ func (np *NotificationProcessor) ProcessMessage(ctx context.Context) bool {
 			return true
 		}
 		np.Reader.HandleResponse(err)
-		return false
+		return np.pacer().PauseAfterError(ctx, err)
 	}
+	np.pacer().Succeeded()
 
 	// Hand off to the workers, but abandon the handoff on shutdown so the loop can
 	// exit instead of blocking on a full channel (A5). The message is unacked, so it

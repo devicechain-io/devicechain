@@ -371,7 +371,7 @@ func buildEventSources() error {
 				}
 				gatewaySourceBuilt = true
 				GatewaySourceId = source.Id
-				gateway := processor.NewGatewayJetStreamSource(source.Id, decoder,
+				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, onEventDecoded, onEventDecodeFailed,
 					ingestGate)
 				// Held so createNatsComponents can hand it the capture reader once that

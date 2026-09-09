@@ -66,23 +66,31 @@ type GatewayJetStreamSource struct {
 	// allow meters an inbound message against its tenant's ingest ceiling before it
 	// is queued for decode; a false return sheds the message. nil disables metering.
 	allow RateGate
+
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. It carries the microservice a give-up is reported to, so
+	// it is built in the constructor rather than lazily. Nil-safe by construction: a
+	// source built with no microservice (as tests do) still paces, and its give-up stops
+	// the loop and logs instead of ending a process there is none of.
+	readPacer *core.ReadPacer
 }
 
 // NewGatewayJetStreamSource builds the capture-stream source. The reader is
 // supplied separately by SetReader, because at the point sources are built there
 // is no reader to pass — see SetReader.
-func NewGatewayJetStreamSource(id string, decoder Decoder,
+func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
 	allow RateGate) *GatewayJetStreamSource {
 	es := &GatewayJetStreamSource{
-		Id:       id,
-		Decoder:  decoder,
-		received: received,
-		decoded:  decoded,
-		failed:   failed,
-		allow:    allow,
+		Id:        id,
+		Decoder:   decoder,
+		received:  received,
+		decoded:   decoded,
+		failed:    failed,
+		allow:     allow,
+		readPacer: core.NewReadPacer(ms, "gateway capture"),
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es
@@ -181,8 +189,9 @@ func (es *GatewayJetStreamSource) Terminate(ctx context.Context) error {
 
 func (es *GatewayJetStreamSource) ExecuteTerminate(ctx context.Context) error { return nil }
 
-// readLoop pulls from the capture stream until the context is cancelled or the
-// reader reports EOF, then closes drained to release ExecuteStop.
+// readLoop pulls from the capture stream until the context is cancelled, the reader reports
+// EOF, or a run of non-EOF read errors outlasts the pacer's budget, then closes drained to
+// release ExecuteStop.
 func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan struct{}) {
 	defer close(drained)
 	for {
@@ -200,11 +209,27 @@ func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan str
 				return
 			}
 			// A read error is transport-level, not message-level: there is nothing to
-			// ack or drop. The reader retries internally, so this is logged and the
-			// loop continues rather than tearing the source down.
+			// ack or drop, so it is logged and the loop reads again rather than tearing
+			// the source down for one bad fetch.
+			//
+			// 🔴 THE PACER IS WHAT MAKES THAT SAFE, and it is here rather than in the
+			// comment above because the comment above used to be the whole answer. The
+			// reader's own self-heal covers empty fetches and a deleted consumer;
+			// anything else — a broker refusing fetches, a revoked credential, a
+			// subscription it cannot rebuild — arrives here unchanged on every
+			// iteration, and returns instantly while it does. Without the pause that is
+			// the hot spin the EOF branch above already refuses to allow. Past the
+			// pacer's budget the errors are no longer transient in any useful sense, so
+			// it ends the process rather than leaving a source that reports healthy and
+			// ingests nothing.
 			es.reader.HandleResponse(err)
+			if es.readPacer.PauseAfterError(ctx, err) {
+				log.Info().Str("source", es.Id).Msg("Gateway capture read loop stopped.")
+				return
+			}
 			continue
 		}
+		es.readPacer.Succeeded()
 		es.handle(msg)
 	}
 }
