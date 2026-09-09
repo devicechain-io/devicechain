@@ -6,7 +6,6 @@ package geofence
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 
 	"github.com/golang/geo/s1"
 	"github.com/golang/geo/s2"
@@ -112,13 +111,17 @@ type geoJSONGeometry struct {
 
 // compilePolygon2D turns the stored GeoJSON Polygon into loops on the sphere.
 //
-// Ring WINDING is normalized rather than trusted. RFC 7946 asks for a counterclockwise exterior
-// ring, but it is advisory and real producers ignore it; an s2.Loop built from a clockwise ring
-// describes the COMPLEMENT of the intended fence — every point on Earth except the yard. Loop
-// Normalize() re-orients each ring to enclose the SMALLER of the two regions it divides the
-// sphere into, which is the intended one for any fence that is not larger than a hemisphere.
-// (A hemisphere-scale "fence" is not a geofence; it would be inverted, and the authoring vertex
-// bound is not what stops it. Stated rather than defended.)
+// Ring WINDING is normalized rather than trusted, by core/geo's builder. RFC 7946 asks for a
+// counterclockwise exterior ring, but it is advisory and real producers ignore it; an s2.Loop
+// built from a clockwise ring describes the COMPLEMENT of the intended fence — every point on
+// Earth except the yard. Loop Normalize() re-orients each ring to enclose the SMALLER of the two
+// regions it divides the sphere into, which is the intended one for any fence that is not larger
+// than a hemisphere. (A hemisphere-scale "fence" is not a geofence; it would be inverted, and the
+// authoring vertex bound is not what stops it. Stated rather than defended.)
+//
+// Normalizing on the shared side is also what keeps winding out of the authoring/evaluation
+// comparison: both sides ask their questions of the same re-oriented loop, so a ring drawn
+// clockwise and the same ring drawn counter-clockwise cannot get different answers from them.
 func compilePolygon2D(raw json.RawMessage) (geometry, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("missing the GeoJSON geometry object")
@@ -148,64 +151,29 @@ func compilePolygon2D(raw json.RawMessage) (geometry, error) {
 	return p, nil
 }
 
-// loopFromRing builds a normalized, validated s2.Loop from one closed GeoJSON linear ring.
+// loopFromRing compiles one closed GeoJSON linear ring, pairing the loop core/geo builds with
+// the edge index this package needs to answer the boundary question in bounded time.
 //
-// The ring's repeated closing position is DROPPED: GeoJSON closes a ring by repeating its first
-// position, while an s2.Loop is implicitly closed — leaving the duplicate in would make the loop
-// self-degenerate and fail validation.
+// 🔴 IT BUILDS NO LOOP OF ITS OWN, AND THE INDEX IS THE ONLY REASON THIS FUNCTION STILL EXISTS.
+// It used to carry its own copy of the builder — the same length, closure, position-width and
+// finiteness checks, the same LoopFromPoints and Normalize as core/geo. The copies agreed on the
+// day the second was written and stopped agreeing the day a coordinate RANGE check was added to
+// core/geo alone: authoring refused a ring whose corner sat past the pole, this side wrapped it
+// to the far side of the planet, and the resulting fence answered containment confidently about
+// somewhere else. core/geo exists so that authoring and evaluation refuse the same rings for the
+// same reasons; a second copy is how that quietly stops being true.
 //
-// Validation refuses a ring at COMPILE rather than letting it answer, so the fence carries the
-// error and a rule naming it fails loudly. It is in two parts, and the second exists because the
-// first is INCOMPLETE — measured, not assumed:
-//
-//   - s2.Loop.Validate covers non-unit, duplicate and antipodal vertices and the minimum vertex
-//     count. It does NOT cover self-intersection: the Go port's crossing check is commented out
-//     upstream behind a TODO (findAnyCrossing is unimplemented), so a bow-tie ring passes it. It
-//     was written here first, and the test asserting a bow-tie is refused caught that it did not.
-//   - selfIntersects therefore does the crossing check directly. A self-intersecting ring has no
-//     well-defined interior, so without it a bow-tie would answer containment CONFIDENTLY and
-//     arbitrarily — the worst available failure, since nothing about the answer looks wrong.
-//
-// Both are stricter than device-management's authoring validation, which checks GeoJSON structure
-// and coordinate ranges only. Catching it here is second-best (the author learns at detection
-// time, not at draw time) but it is the last place before an answer.
+// What geo.LoopFromClosedRing does, and therefore what this function inherits, is documented
+// with it: structure, finiteness, range, s2's own loop validation, and the crossing scan that
+// s2.Loop.Validate does not do. All of it runs at COMPILE rather than letting a ring answer, so
+// the fence carries the error and a rule naming it fails loudly.
 func loopFromRing(ring [][]float64) (*boundedLoop, error) {
-	if len(ring) < 4 {
-		return nil, fmt.Errorf("a closed ring needs at least 4 positions, got %d", len(ring))
-	}
-	first, last := ring[0], ring[len(ring)-1]
-	if len(first) < 2 || len(last) < 2 {
-		return nil, fmt.Errorf("a position needs at least [longitude, latitude]")
-	}
-	if first[0] != last[0] || first[1] != last[1] {
-		return nil, fmt.Errorf("the ring is not closed")
-	}
-	pts := make([]s2.Point, 0, len(ring)-1)
-	for i, pos := range ring[:len(ring)-1] {
-		if len(pos) < 2 {
-			return nil, fmt.Errorf("position %d needs at least [longitude, latitude]", i)
-		}
-		lon, lat := pos[0], pos[1]
-		if math.IsNaN(lon) || math.IsInf(lon, 0) || math.IsNaN(lat) || math.IsInf(lat, 0) {
-			return nil, fmt.Errorf("position %d is not a finite coordinate", i)
-		}
-		pts = append(pts, pointOf(lat, lon))
-	}
-	loop := s2.LoopFromPoints(pts)
-	loop.Normalize()
-	if err := loop.Validate(); err != nil {
+	loop, err := geo.LoopFromClosedRing(ring)
+	if err != nil {
 		return nil, err
-	}
-	if i, j, ok := geo.LoopSelfIntersects(loop); ok {
-		return nil, fmt.Errorf("the ring is self-intersecting (edges %d and %d cross)", i, j)
 	}
 	return newBoundedLoop(loop), nil
 }
-
-// The crossing scan and its adjacency helper moved to core/geo so the AUTHORING side
-// (device-management) can refuse the same rings this evaluator refuses, instead of
-// accepting a bow-tie that then fails here at compile time. The reasoning, the
-// measurement behind it, and the O(V²) budget live with the code in that package.
 
 // contains answers 2D containment: inside the exterior ring (boundary included) and not strictly
 // inside any hole (a hole's own boundary counts as inside the fence, because it IS part of the
@@ -360,9 +328,16 @@ func scanLoopBoundary(loop *s2.Loop, pt s2.Point) bool {
 	return false
 }
 
-// pointOf converts WGS84 decimal degrees to a point on the unit sphere. Note the argument order
-// flip: GeoJSON positions are [longitude, latitude] while s2.LatLngFromDegrees takes (lat, lng),
-// which is exactly the transposition that produces a fence in the wrong hemisphere.
+// pointOf converts WGS84 decimal degrees to a point on the unit sphere.
+//
+// 🔴 NOTE THE ARGUMENT ORDER: LATITUDE FIRST. GeoJSON positions are [longitude, latitude] and
+// s2.LatLngFromDegrees takes (lat, lng), and that transposition is exactly what produces a fence
+// in the wrong hemisphere — silently, because a transposed fence is a perfectly valid fence.
+//
+// It forwards to core/geo rather than converting here so that this package and the authoring
+// side build the same point from the same degrees. It is kept as a named local function, rather
+// than spelled out at each call site, because that name is where the argument order is stated;
+// the ring builder it used to sit beside has moved to core/geo entirely.
 func pointOf(lat, lon float64) s2.Point {
 	return geo.PointFromDegrees(lat, lon)
 }

@@ -43,7 +43,10 @@ type HttpEventSource struct {
 	InstanceId string
 	Decoder    Decoder
 
-	server    *http.Server
+	// server is built by ExecuteStart and dropped by ExecuteStop, never reused: an
+	// http.Server latches its shutting-down flag permanently, so a restarted one binds
+	// nothing and serves nothing. It is nil before the first start and after every stop.
+	server    *core.HttpServer
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
 	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
@@ -66,6 +69,12 @@ func NewHttpEventSource(id string, config map[string]string, instanceId string, 
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
 			return nil, fmt.Errorf("invalid http event source port %q: %w", raw, err)
+		}
+		// Range-checked here rather than left to the bind: a configured port outside
+		// the TCP range is a configuration error the operator can fix, and saying so at
+		// construction keeps the value that reaches the listener a real port number.
+		if parsed < 0 || parsed > 65535 {
+			return nil, fmt.Errorf("invalid http event source port %q: out of range 0-65535", raw)
 		}
 		port = parsed
 	}
@@ -159,11 +168,11 @@ func (es *HttpEventSource) Initialize(ctx context.Context) error {
 }
 
 // Initialize event source (as called by lifecycle manager)
+//
+// The listening server is deliberately NOT built here. It is built per start, in
+// ExecuteStart, because a start may follow a stop (LifecycleComponent's contract puts
+// Stopped on the permitted set) and net/http's server cannot be started twice.
 func (es *HttpEventSource) ExecuteInitialize(ctx context.Context) error {
-	es.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", es.Port),
-		Handler: es.handler(),
-	}
 	log.Info().Msg("HTTP event source initialized.")
 	return nil
 }
@@ -174,13 +183,19 @@ func (es *HttpEventSource) Start(ctx context.Context) error {
 }
 
 // Start event source (as called by lifecycle manager)
+//
+// A fresh server is built on every start and the bind happens synchronously, so a port
+// already in use or a permission refusal FAILS THE START instead of being logged from a
+// goroutine nobody is listening to. Both of those used to be silent: the source reported
+// a successful start and ingested nothing, and the only symptom was device telemetry
+// over HTTP that stopped arriving.
 func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
-	go func() {
-		log.Info().Int("port", es.Port).Msg("HTTP event source listening.")
-		if err := es.server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("HTTP event source server stopped unexpectedly.")
-		}
-	}()
+	server := core.NewHttpServerForHandler(int32(es.Port), es.handler())
+	if err := server.Start(); err != nil {
+		return fmt.Errorf("unable to start http event source %q: %w", es.Id, err)
+	}
+	es.server = server
+	log.Info().Str("addr", server.Addr()).Msg("HTTP event source listening.")
 	return nil
 }
 
@@ -190,8 +205,18 @@ func (es *HttpEventSource) Stop(ctx context.Context) error {
 }
 
 // Stop event source (as called by lifecycle manager)
+//
+// A stop can arrive on a source that was initialized and never started — Initialized is
+// on the permitted set for stop, so that a component whose start failed halfway is still
+// torn down — which is why the nil server is a no-op rather than a panic. Dropping the
+// reference is what lets the next start bind again.
 func (es *HttpEventSource) ExecuteStop(ctx context.Context) error {
-	return es.server.Shutdown(ctx)
+	server := es.server
+	if server == nil {
+		return nil
+	}
+	es.server = nil
+	return server.Shutdown(ctx)
 }
 
 // Terminate event source

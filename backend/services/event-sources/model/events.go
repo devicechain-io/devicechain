@@ -61,6 +61,34 @@ type UnresolvedEvent struct {
 	AuthenticatedTransport bool
 }
 
+// WithoutPresentedCredential returns a copy of the event with the credential the
+// device presented removed.
+//
+// The credential is live authentication material only until the resolver has
+// authenticated with it. After that it is dead weight the event keeps carrying,
+// and every generic sink that handles an event body — the dead-letter archive, a
+// debug dump of the whole struct — handles the credential with it. Dropping it at
+// the point it stops being needed means those sinks have nothing to hand on,
+// rather than each sink having to remember to strip it.
+//
+// It is a VALUE receiver returning a COPY on purpose. Authentication reads these
+// fields (see the resolver's presentedCredential), so a variant that cleared them
+// in place could disarm the check that is the reason they exist; this one cannot
+// reach the caller's event at all. Callers therefore use the result and leave the
+// original alone.
+//
+// All three fields go, including CredentialType. It is the least sensitive of them,
+// but it arrives on device-controlled input like the other two, so its contents are
+// whatever a producer put there rather than a member of the credential vocabulary.
+// The resolution failure REASON, which is server-derived, is what the dead-letter
+// record and the accompanying log line carry instead.
+func (unrez UnresolvedEvent) WithoutPresentedCredential() UnresolvedEvent {
+	unrez.CredentialType = nil
+	unrez.CredentialId = nil
+	unrez.CredentialSecret = nil
+	return unrez
+}
+
 // Payload for creating a new relationship. The target is a uniform (type, token)
 // reference (ADR-013): TargetType names an entity class and Target is its token.
 type UnresolvedNewRelationshipPayload struct {

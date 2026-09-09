@@ -159,8 +159,22 @@ func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Mes
 // Called when an event can not be resolved. correlation is the inbound message's
 // correlation id, carried onto the outbound failed event for traceability (E15).
 func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error, correlation string) {
+	// Drop the presented credential before the event is archived. The dead-letter
+	// record is durable — it outlives the request by the stream's retention and is
+	// the thing an operator exports when debugging ingest — and by the time
+	// resolution has failed the credential has already served its only purpose, so
+	// the archived record does not need it and must not keep it. The resolution
+	// REASON, which is server-derived, is what identifies an authentication failure
+	// here and in the log line below.
+	//
+	// unrez arrives by value and WithoutPresentedCredential returns a copy, so this
+	// cannot reach the resolver's own event: the authentication decision was already
+	// made, upstream, on the full credential. Nothing here can turn a rejection into
+	// something that reads as a success — the reason and the error travel unchanged.
+	archived := unrez.WithoutPresentedCredential()
+
 	// Marshal event message to protobuf.
-	bytes, err := esproto.MarshalUnresolvedEvent(&unrez)
+	bytes, err := esproto.MarshalUnresolvedEvent(&archived)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal unresolved event to protobuf")
 	} else {

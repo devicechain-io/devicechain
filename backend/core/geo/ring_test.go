@@ -290,3 +290,99 @@ func TestPointFromDegreesIsLatitudeFirst(t *testing.T) {
 
 func nan() float64 { var z float64; return z / z }
 func inf() float64 { var z float64; return 1 / z }
+
+// ringCorpus is the set both exported entry points are asked about below. It mixes
+// shapes that must be accepted with every family of refusal this package has, so
+// an agreement test cannot be satisfied by two functions that both say no.
+func ringCorpus() []struct {
+	name string
+	ring [][]float64
+} {
+	return []struct {
+		name string
+		ring [][]float64
+	}{
+		{"triangle", [][]float64{{0, 0}, {1, 0}, {0.5, 1}, {0, 0}}},
+		{"counter-clockwise box", [][]float64{{-84, 33}, {-83, 33}, {-83, 34}, {-84, 34}, {-84, 33}}},
+		{"clockwise box", [][]float64{{-84, 33}, {-84, 34}, {-83, 34}, {-83, 33}, {-84, 33}}},
+		{"on the antimeridian", [][]float64{{180, 0}, {179, 0}, {179, 1}, {180, 1}, {180, 0}}},
+		{"bow-tie", [][]float64{{0, 0}, {1, 1}, {1, 0}, {0, 1}, {0, 0}}},
+		{"duplicated corner", [][]float64{{0, 0}, {1, 0}, {1, 0}, {0.5, 1}, {0, 0}}},
+		{"too short", [][]float64{{0, 0}, {1, 0}, {0, 0}}},
+		{"not closed", [][]float64{{0, 0}, {1, 0}, {0.5, 1}, {0.4, 0.9}}},
+		{"a NaN coordinate", [][]float64{{0, 0}, {nan(), 0}, {0.5, 1}, {0, 0}}},
+		{"latitude past the pole", [][]float64{{0, 0}, {1, 0}, {1, 91}, {0, 1}, {0, 0}}},
+	}
+}
+
+// 🔴 THE TWO EXPORTED ENTRY POINTS MUST ANSWER IDENTICALLY, BECAUSE THE WHOLE POINT
+// OF THE SECOND ONE IS THAT A CALLER NEEDING THE LOOP DOES NOT WRITE ITS OWN GATE.
+//
+// LoopFromClosedRing exists because the detection engine needs the built loop and
+// ValidateClosedRing would only answer yes-or-no; the engine therefore grew a
+// duplicate builder, which diverged the moment a range check was added to one side.
+// If these two ever answer differently — a check added to one, an error worded
+// differently — a caller reading the accepting one is back to relying on a predicate
+// nobody else enforces. The error TEXT is compared, not merely its nil-ness, because
+// a check added to one and not the other shows up there first.
+func TestTheTwoEntryPointsCannotDisagree(t *testing.T) {
+	accepted := 0
+	for _, tc := range ringCorpus() {
+		validateErr := ValidateClosedRing(tc.ring)
+		loop, loopErr := LoopFromClosedRing(tc.ring)
+
+		switch {
+		case validateErr == nil && loopErr == nil:
+			accepted++
+			if loop == nil {
+				t.Errorf("%s: accepted, but handed back no loop", tc.name)
+			}
+		case validateErr == nil || loopErr == nil:
+			t.Errorf("%s: ValidateClosedRing said %v, LoopFromClosedRing said %v — the two gates "+
+				"are running different checks", tc.name, validateErr, loopErr)
+		default:
+			if validateErr.Error() != loopErr.Error() {
+				t.Errorf("%s: refused for different reasons: %q vs %q", tc.name, validateErr, loopErr)
+			}
+			if loop != nil {
+				t.Errorf("%s: refused, but handed back a loop anyway", tc.name)
+			}
+		}
+	}
+	// Without a floor, two functions that refused the whole corpus would agree
+	// perfectly and this test would be green.
+	if accepted < 4 {
+		t.Errorf("only %d of the corpus was accepted; the agreement above proves nothing "+
+			"if both gates simply refuse everything", accepted)
+	}
+}
+
+// 🔴 THE LOOP HANDED BACK IS NORMALIZED, AND A CALLER MUST NOT HAVE TO KNOW THAT.
+// An s2.Loop built from a clockwise ring describes the COMPLEMENT of the shape that
+// was drawn — every point on Earth except the yard — so a builder that returned the
+// loop un-normalized would hand the evaluator a fence inverted on exactly the rings
+// RFC 7946 calls advisory and real producers get backwards. The inversion is silent:
+// the loop is valid, containment answers confidently, and every answer is wrong.
+func TestTheReturnedLoopIsNormalizedWhicheverWayTheRingWasDrawn(t *testing.T) {
+	counterClockwise := [][]float64{{-84, 33}, {-83, 33}, {-83, 34}, {-84, 34}, {-84, 33}}
+	clockwise := [][]float64{{-84, 33}, {-84, 34}, {-83, 34}, {-83, 33}, {-84, 33}}
+
+	inside := PointFromDegrees(33.5, -83.5)
+	elsewhere := PointFromDegrees(10, 10)
+
+	for _, tc := range []struct {
+		name string
+		ring [][]float64
+	}{{"counter-clockwise", counterClockwise}, {"clockwise", clockwise}} {
+		loop, err := LoopFromClosedRing(tc.ring)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !loop.ContainsPoint(inside) {
+			t.Errorf("%s: a point inside the drawn box reads as outside — the loop is inverted", tc.name)
+		}
+		if loop.ContainsPoint(elsewhere) {
+			t.Errorf("%s: a point on the other side of the world reads as inside — the loop is inverted", tc.name)
+		}
+	}
+}
