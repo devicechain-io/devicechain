@@ -78,8 +78,8 @@ Antes esto solo aparecía después, como un error de descifrado inexplicable muc
 tiempo después de que la copia de seguridad que podría haber ayudado ya hubiera
 rotado. Los servicios que almacenan secretos ahora comprueban su clave raíz contra sus
 propias filas almacenadas al arrancar, así que un clúster con la clave equivocada se
-niega a arrancar y dice cuál es. Eso convierte el error en algo ruidoso e inmediato en
-lugar de lento y disperso, pero no recupera nada. La clave sigue perdida.
+niega a arrancar e indica la causa. Eso convierte el error en algo ruidoso e
+inmediato en lugar de lento y disperso, pero no recupera nada. La clave sigue perdida.
 
 :::danger No hay recuperación posible tras perder la clave raíz
 La clave son 256 bits de aleatoriedad y las claves de datos envueltas no son

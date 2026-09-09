@@ -71,7 +71,7 @@ The consequence is a failure that passes the drill most people actually run:
 This used to surface only later, as an unexplained decryption error long after the
 backup that could have helped had rotated away. The services that store secrets now
 check their root key against their own stored rows as they start, so a cluster holding
-the wrong key refuses to start and says which one it is. That makes the mistake loud
+the wrong key refuses to start and names the cause. That makes the mistake loud
 and immediate instead of slow and scattered — but it recovers nothing. The key is
 still gone.
 
