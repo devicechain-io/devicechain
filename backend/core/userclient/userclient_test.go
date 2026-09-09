@@ -192,7 +192,8 @@ func TestAdminSessionCachesAndReportsSuperuser(t *testing.T) {
 	}
 }
 
-// Query/HTTPClient attach the bearer to the target endpoint.
+// Query attaches the bearer to the target endpoint. HTTPClient's own bearer handling is
+// covered in httpclient_test.go, which needs distinct hostnames to mean anything.
 func TestSessionAttachesBearer(t *testing.T) {
 	stub := &authStub{selectExp: farFuture()}
 	auth := httptest.NewServer(http.HandlerFunc(stub.handler))

@@ -6,12 +6,20 @@ package userclient
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 )
+
+// maxRedirects bounds a redirect chain on a client built by HTTPClient. Supplying a
+// CheckRedirect replaces net/http's default, and the default is also what caps the
+// chain, so the cap has to be carried here too.
+const maxRedirects = 10
 
 // TenantSession authenticates as a user identity into one tenant and keeps a valid
 // tenant access token available for data-plane calls. It is safe for concurrent use.
@@ -65,14 +73,90 @@ func (s *TenantSession) Query(ctx context.Context, baseURL, query string, variab
 	return graphqlPost(ctx, s.httpc, baseURL, map[string]string{"Authorization": "Bearer " + token}, query, variables, out)
 }
 
-// HTTPClient returns an *http.Client that injects the tenant access token as a bearer
-// on every request — for handing to a generated GraphQL client (genqlient) that
-// targets tenant-scoped endpoints.
-func (s *TenantSession) HTTPClient() *http.Client {
+// HTTPClient returns an *http.Client that attaches the tenant access token as a bearer
+// only to requests for allowedHost, and that refuses to follow a redirect off that host
+// — for handing to a generated GraphQL client (genqlient) that targets one
+// tenant-scoped endpoint.
+//
+// The pin is what makes the client safe to hand out. The token is attached by a
+// RoundTripper, and a RoundTripper runs once per hop, after net/http has already decided
+// whether Authorization may be carried across a redirect; without the pin it would put
+// the header back on a hop net/http had deliberately sent bare.
+//
+// allowedHost may be written as a hostname, a host:port or a full endpoint URL: only the
+// hostname is compared, case-insensitively. A redirect that changes only the port
+// therefore keeps the bearer, which is also net/http's own rule — it compares hostnames
+// and ignores the port. A request for any other host is sent without the token, so an
+// allowedHost that names no host yields a client that authenticates nothing.
+//
+// Because the comparison is host-only, a same-host redirect that downgrades the scheme —
+// https://api.example.com to http://api.example.com — stays on the pinned host and keeps
+// the bearer. That is again net/http's own rule, but it means pinning a public TLS
+// endpoint accepts a hop to plaintext on that host: pass a base transport that refuses
+// plaintext if that matters to the caller.
+func (s *TenantSession) HTTPClient(allowedHost string) *http.Client {
+	host := normalizeHost(allowedHost)
 	return &http.Client{
 		Timeout:   s.httpc.Timeout,
-		Transport: &bearerTransport{base: s.httpc.Transport, tok: s.token},
+		Transport: &bearerTransport{base: s.httpc.Transport, tok: s.token, host: host},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !hostMatches(host, req.URL) {
+				return fmt.Errorf("userclient: refusing to follow a redirect to %s: this client is pinned to %s", req.URL.Host, host)
+			}
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("userclient: stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		},
 	}
+}
+
+// normalizeHost reduces a hostname, a host:port or a full URL to the lowercase hostname
+// to compare against. An IPv6 literal loses its brackets, which is the form url.Hostname
+// reports.
+//
+// Anything that names no host yields "", which pins nothing. That matters because the
+// readings below are otherwise happy to return a fragment: "http:///graphql" would be
+// read as the host "http", a name a Kubernetes Service can genuinely have. Likewise the
+// host:port reading only applies when the port is numeric, so a string carrying userinfo
+// ("user:pw@api.example.com") is not read as the host "user" — it is kept whole, and a
+// whole string with an "@" in it matches no URL hostname.
+func normalizeHost(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	if strings.Contains(h, "://") {
+		u, err := url.Parse(h)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		return strings.ToLower(u.Hostname())
+	}
+	if hostOnly, port, err := net.SplitHostPort(h); err == nil && isNumeric(port) {
+		h = hostOnly
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return strings.ToLower(h)
+}
+
+// isNumeric reports whether s is a non-empty run of ASCII digits — a port, as opposed to
+// whatever else happened to follow a colon.
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// hostMatches reports whether u names the pinned host. A blank pin matches nothing.
+func hostMatches(host string, u *url.URL) bool {
+	return host != "" && strings.EqualFold(u.Hostname(), host)
 }
 
 // token serves a still-valid cached access token under a read lock, or single-flights
@@ -223,13 +307,26 @@ func (a *AdminSession) token(ctx context.Context) (string, error) {
 	}
 }
 
-// bearerTransport injects a freshly-resolved bearer token on each outbound request.
+// bearerTransport injects a freshly-resolved bearer token on each outbound request for
+// host, and leaves a request for any other host alone.
 type bearerTransport struct {
 	base http.RoundTripper
 	tok  func(context.Context) (string, error)
+	host string // the one hostname this transport will attach the token to
 }
 
 func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if !hostMatches(t.host, req.URL) {
+		// Off the pinned host. A redirected hop arrives here with Authorization
+		// already dropped by net/http, and setting it again would hand the token to
+		// a host it was never minted for. Send the hop as it stands, and acquire no
+		// token for it.
+		return base.RoundTrip(req)
+	}
 	token, err := t.tok(req.Context())
 	if err != nil {
 		return nil, fmt.Errorf("userclient: acquire token: %w", err)
@@ -237,9 +334,5 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone so we never mutate the caller's request (net/http contract).
 	clone := req.Clone(req.Context())
 	clone.Header.Set("Authorization", "Bearer "+token)
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
 	return base.RoundTrip(clone)
 }
