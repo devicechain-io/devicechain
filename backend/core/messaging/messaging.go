@@ -249,8 +249,10 @@ func (m Message) Ack() error {
 // ErrConcurrentRead is returned by ReadMessage when a second goroutine calls it
 // while a first call is still in flight on the same reader. It is a programming
 // error, not a transport condition: a caller cannot retry its way out of it, and it
-// is deliberately NOT io.EOF, so a read loop that hits it backs off and logs rather
-// than silently shutting itself down.
+// is deliberately NOT io.EOF, so a read loop that hits it logs rather than silently
+// shutting itself down. Note that most read loops in the tree do not pace themselves
+// on a non-EOF error, so a firing is a hot spin emitting one log line per iteration —
+// loud by construction, which is the intent.
 var ErrConcurrentRead = errors.New("messaging: ReadMessage is not safe for concurrent use; one goroutine per reader")
 
 // MessageReader is the consumer-side abstraction (kept small for unit testing).

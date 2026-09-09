@@ -232,3 +232,55 @@ func TestBindTermReopensAReaderTheTermEndClosed(t *testing.T) {
 	require.NoError(t, err, "the re-bound reader must actually consume, not just hold a subscription pointer")
 	require.NoError(t, msg.Ack())
 }
+
+// The unbound flag alone is not enough, and this is what says so.
+//
+// A bind is FIVE steps (unsubscribe, add consumer, reconcile the filter subject,
+// pull-subscribe, store) with three broker round trips between the flag check and the
+// store. Without bindMu holding that span, an UnbindTerm landing inside it sets the
+// flag and swaps out a subscription the in-flight bind has not published yet — and
+// then the bind publishes ITS subscription, after the term ended, which is precisely
+// the live reply inbox UnbindTerm exists to remove. The flag is checked too early to
+// see it; only the lock covers the span.
+//
+// So the invariant asserted here is the end state, not the ordering: once an unbind
+// has happened and every bind has finished, NO subscription may be published. The
+// self-heal is what makes this reachable in production — it re-binds from the read
+// loop while term teardown runs on another goroutine.
+func TestARebindInFlightCannotOutliveTheUnbindThatOverlapsIt(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	mr, err := nmgr.NewReader(streams.InboundEvents)
+	require.NoError(t, err)
+	reader := mr.(*natsReader)
+
+	// Repeat, because the overlap has to be hit rather than arranged: each round
+	// re-opens the reader for a fresh term, hammers bind from one goroutine the way
+	// rebindWithBackoff does, and unbinds underneath it.
+	for round := 0; round < 20; round++ {
+		require.NoError(t, reader.BindTerm(), "round %d could not open a term", round)
+
+		binding := make(chan struct{})
+		go func() {
+			defer close(binding)
+			for {
+				if err := reader.bind(); errors.Is(err, errReaderUnbound) {
+					return // the term ended; this is the self-heal giving up
+				} else if err != nil {
+					return
+				}
+			}
+		}()
+
+		// Land the unbind while a bind is somewhere in its five steps.
+		time.Sleep(time.Duration(round%5) * time.Millisecond)
+		require.NoError(t, reader.UnbindTerm())
+		<-binding
+
+		require.Nil(t, reader.sub.Load(),
+			"round %d: a subscription was published after UnbindTerm returned, so a re-bind that overlapped "+
+				"the term teardown restored the reply-inbox interest the teardown withdrew — the old term's "+
+				"buffered pull requests have somewhere to land again", round)
+	}
+}
