@@ -65,8 +65,8 @@ type CommandDeliveryProcessor struct {
 	// 🔴 IT IS BUILT ONCE, IN THE INITIALIZE PHASE, AND HANDED IN. This processor is
 	// constructed inside the NATS manager's oncreate callback, which runs on EVERY start
 	// — it has to, because the processor holds a reader bound to the connection — so a
-	// collector constructed here would be registered a second time on a start after a
-	// stop, and MustRegister panics on the duplicate.
+	// collector constructed here belongs to the wrong lifetime: it is registered again
+	// whenever that callback is entered again, and MustRegister panics on the duplicate.
 	DeliveryMetrics
 
 	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.

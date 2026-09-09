@@ -187,8 +187,9 @@ type DeliveryMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The processor is built inside
 // the NATS manager's oncreate callback — it has to be, because it holds a reader bound
 // to the connection — and that callback runs on EVERY start. The two dozen collectors
-// below, built there, would be registered a second time when the service restarts in
-// place, and MustRegister panics on the first duplicate.
+// below, built there, would be registered again whenever that callback is entered
+// again — which any start retried after a failed one does — and MustRegister panics on
+// the first duplicate.
 func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 	return DeliveryMetrics{
 		metrics: ms.NewProcessorMetrics("response"),

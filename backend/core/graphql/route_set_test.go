@@ -106,17 +106,21 @@ func TestRouteSetWithDevToolsEnabled(t *testing.T) {
 	}
 }
 
-// A stop-then-start cycle must not panic.
+// A second ExecuteStart must not panic.
 //
 // 🔴 THIS IS THE TRAP THE SWITCHOVER MADE REACHABLE. The routes were registered in
-// ExecuteStart until this change, and LifecycleComponent's own contract says
-// ExecuteStart "may happen on startup or after stop" — so a second start re-ran every
-// registration. ServeMux.Handle panics on a duplicate pattern, and so does
-// http.DefaultServeMux, which is why the hazard is not new: it was simply never
-// reachable, because nothing restarted a GraphQL server in a test.
+// ExecuteStart until this change, so a second entry re-ran every registration.
+// ServeMux.Handle panics on a duplicate pattern, and so does http.DefaultServeMux,
+// which is why the hazard is not new: it was simply never reachable, because nothing
+// drove a GraphQL server's start path twice in a test.
 //
-// Registration now lives in ExecuteInitialize, which runs once. This asserts that
-// ExecuteStart registers nothing by running it twice.
+// 🔴 IT DRIVES THE Execute METHODS RATHER THAN THE MANAGER, and that is what makes it
+// reachable at all: the lifecycle refuses a start from Stopped, so the second entry
+// this pins is the one a RETRIED start produces — a start whose failure restored the
+// component to Initialized, leaving whatever it already registered registered.
+//
+// Registration now lives in ExecuteInitialize. This asserts that ExecuteStart registers
+// nothing by running it twice.
 func TestRestartDoesNotPanic(t *testing.T) {
 	gql, _ := managerOnItsOwnMux(t, "restart-probe")
 

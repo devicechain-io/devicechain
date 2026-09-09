@@ -101,10 +101,11 @@ func (gql *GraphQLManager) Initialize(ctx context.Context) error {
 // route set on the microservice's OWN mux, rather than on http.DefaultServeMux.
 //
 // 🔴 REGISTERED HERE, IN THE INITIALIZE PHASE, AND NOT WHERE THE SERVER STARTS.
-// LifecycleComponent's contract says ExecuteStart "may happen on startup or after
-// stop", and every registration below goes through ServeMux.Handle, which PANICS on a
-// duplicate pattern — so registering from the start path turns a lifecycle restart into
-// a crash. Initialize runs once, which is what makes this the safe half.
+// LifecycleComponent does not promise ExecuteStart runs once — a start that fails
+// restores the component to Initialized, so a retried start enters it again — and every
+// registration below goes through ServeMux.Handle, which PANICS on a duplicate pattern.
+// Registering from the start path turns that retry into a crash. Initialize is where
+// the routes belong, which is what makes this the safe half.
 //
 // It was in ExecuteStart until the mux switchover, and it was survivable there only
 // because http.DefaultServeMux panics identically: the hazard is not new, it was
@@ -168,7 +169,7 @@ func (gql *GraphQLManager) Start(ctx context.Context) error {
 // pull in opposite directions:
 //
 //   - It registers nothing because ServeMux.Handle panics on a duplicate pattern and
-//     this may run again after a stop. The routes belong to ExecuteInitialize.
+//     this may run again on a retried start. The routes belong to ExecuteInitialize.
 //   - It builds a new server because an http.Server cannot be restarted: Shutdown
 //     latches its shuttingDown flag permanently, so reusing one would bind and then
 //     serve nothing.

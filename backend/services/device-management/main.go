@@ -106,9 +106,10 @@ func parseConfiguration() error {
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM createNatsComponents, WHERE THE
 // COMPONENTS THAT READ THEM ARE BUILT. That callback is invoked by the NATS manager on
-// EVERY start — a start after a stop is a supported sequence — and a collector
-// registered twice on this microservice's registry panics. Initialize runs once, which
-// is what makes this the safe half.
+// EVERY start, and a collector belongs to the PROCESS where everything that callback
+// builds belongs to the CONNECTION — registering one twice on this microservice's
+// registry panics. Initialize is where the process's own singletons are made, which is
+// what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
@@ -219,7 +220,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	//
 	// The failure counter is NOT built here: it comes from buildMetrics, which runs in
-	// the initialize phase, because this callback runs again on every start.
+	// the initialize phase, because a counter belongs to the process while everything
+	// this callback builds belongs to the connection.
 	Api.GeoFenceSetPublisher = processor.NewGeoFenceSetWriter(fencepub,
 		Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxMsgSize,
 		GeoFencePublishFails)

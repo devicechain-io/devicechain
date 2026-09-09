@@ -79,10 +79,12 @@ type DispatchConsumer struct {
 // recorder is nil-safe).
 //
 // metrics is built once in the initialize phase (see NewDispatchMetrics) and shared by every
-// consumer this service constructs, because this constructor runs again on every start.
+// consumer this service constructs, because that callback is connection-scoped and the
+// counters are not.
 //
 // 🔴 IT TAKES NO Microservice, DELIBERATELY. It used to, for one purpose: building the
-// counters right here — which is what made a restart panic. Leaving the parameter behind
+// counters right here — which is what made a second entry into that callback panic.
+// Leaving the parameter behind
 // with nothing reading it would leave the hook the defect hung on in place.
 //
 // tenantDeleted is a CONSTRUCTOR ARGUMENT rather than a setter for the same reason the rate limiter

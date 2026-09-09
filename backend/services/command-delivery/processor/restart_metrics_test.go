@@ -10,13 +10,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// A start after a stop must not re-register these components' metrics.
+// A second entry into the start phase must not re-register these components' metrics.
+//
+// 🔴 THE SECOND ENTRY IS A RETRY, NOT A RESTART. The lifecycle refuses a start from
+// Stopped, so what reaches the callback twice is a start retried after a failed one:
+// a failure restores the component to Initialized with whatever the attempt already
+// built still built. Nothing in the tree retries a start today, which is exactly why
+// this is worth a test — the defect it guards is one caller away and invisible.
 //
 // The NATS manager invokes its oncreate callback on EVERY start (see
 // messaging.NewNatsManager), and this service builds both the delivery processor and
 // the dead-letter write-back inside that callback — it has to, because each holds a
 // reader bound to the connection. So a collector constructed by either constructor is
-// constructed a second time when the service is restarted in place, and promauto's
+// constructed a second time whenever that callback is entered again, and promauto's
 // MustRegister panics on the duplicate, taking the process down. Building the
 // instruments in the initialize phase and handing them in is what makes the second
 // construction free.

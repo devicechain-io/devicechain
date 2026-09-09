@@ -227,15 +227,17 @@ func TestClientDisconnectReleasesItsSubscriptions(t *testing.T) {
 	eventuallyLive(t, res, 0, "every client hung up")
 }
 
-// 🔴 A STOP MUST LEAVE THE SERVER STARTABLE. LifecycleComponent's contract says a
-// start "may happen on startup or after stop", and this repository has already been
-// bitten four times by teardown that latched something permanently — http.Server's
-// own shuttingDown flag being the canonical one, which is why ExecuteStart builds a
-// fresh HttpServer each time. SubscriptionHandler is built ONCE, in
-// ExecuteInitialize, and is therefore the same object across a restart: if Shutdown
-// recorded it as closed, subscriptions would come back dead while every probe
-// reported healthy.
-func TestSubscriptionsWorkAgainAfterARestart(t *testing.T) {
+// 🔴 A STOPPED SERVER'S OBJECTS MUST STILL BE USABLE BY A SECOND START PHASE. The
+// lifecycle refuses a start from Stopped, so the second entry this drives is the one a
+// RETRIED start produces — a start whose failure restored the component to Initialized
+// — which is why it calls ExecuteStop/ExecuteStart rather than going through the
+// manager. This repository has already been bitten four times by teardown that latched
+// something permanently — http.Server's own shuttingDown flag being the canonical one,
+// which is why ExecuteStart builds a fresh HttpServer each time. SubscriptionHandler is
+// built ONCE, in ExecuteInitialize, and is therefore the same object across that second
+// entry: if Shutdown recorded it as closed, subscriptions would come back dead while
+// every probe reported healthy.
+func TestSubscriptionsWorkAgainAfterASecondStart(t *testing.T) {
 	gql, res, addr := startDrainServer(t, 0)
 
 	conn := dialSubscribed(t, addr)

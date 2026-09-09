@@ -78,7 +78,7 @@ func newTestMicroservice(t *testing.T) *prometheus.Registry {
 // returns. The consequence for the caller is worth stating plainly: a plain Counter or
 // Gauge moved onto the start path is caught by the set comparison a pass before it
 // would panic, but a childless Vec is invisible here and is caught by the PANIC ARM
-// alone, on the second start. Coverage holds either way; the early, legible failure
+// alone, on the second entry. Coverage holds either way; the early, legible failure
 // does not.
 func registeredMetrics(t *testing.T, registry *prometheus.Registry) []string {
 	t.Helper()
@@ -102,22 +102,22 @@ func get(t *testing.T, path string) int {
 	return resp.StatusCode
 }
 
-// A stop-then-start cycle must not panic, and the start phase must build nothing that
-// can only be built once.
+// A second entry into the start phase must not panic, and that phase must build nothing
+// that can only be built once.
 //
 // 🔴 THIS IS THE TRAP THE START PHASE MAKES EASY TO WALK INTO, and it has TWO doors in
-// this service. LifecycleComponent's own contract says ExecuteStart "may happen on
-// startup or after stop", and both of these panic on a duplicate:
+// this service. LifecycleComponent does not promise ExecuteStart runs once — a start
+// that fails restores the component to Initialized, so a retried start enters it again
+// — and both of these panic on a duplicate:
 //
 //   - the probe routes go through ServeMux.Handle, which panics on a duplicate pattern;
 //   - the leader gauge goes through promauto, which panics on a duplicate registration.
 //
-// Build either from the start path and a lifecycle restart is a crash — not at the next
-// deploy, but for whoever stops and starts a service in place, which is why neither
-// door has ever been walked through in production.
+// Build either from the start path and a retried start is a crash — not at the next
+// deploy, which is why neither door has ever been walked through in production.
 //
-// So the whole restartable start sequence is driven twice here, with the initialize
-// phase run once beforehand, exactly as the lifecycle does it. Both assertions matter
+// So the whole start sequence is driven twice here, with the initialize phase run once
+// beforehand, exactly as a retry after a failed start reaches it. Both assertions matter
 // and they fail differently:
 //
 //   - a construction moved onto the start path PANICS on the second pass, which fails

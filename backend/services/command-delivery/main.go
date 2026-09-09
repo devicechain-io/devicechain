@@ -333,9 +333,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// The delivery processor's and write-back's instruments, built here for the same
 	// reason and NOT where those two components are: they are constructed in
-	// createNatsComponents, which the NATS manager invokes on EVERY start — a start after
-	// a stop is a supported sequence — and a collector registered twice on this
-	// microservice's registry panics. This initializer runs once.
+	// createNatsComponents, which the NATS manager invokes on EVERY start, and a
+	// collector belongs to the PROCESS where everything that callback builds belongs to
+	// the CONNECTION — registering one twice on this microservice's registry panics.
+	// This initializer runs once.
 	buildMetrics()
 
 	// The held-command ceiling this instance falls back to. It is floored positive in

@@ -81,9 +81,10 @@ func (eproc *EventPersistenceProcessor) pacer() *core.ReadPacer {
 // 🔴 IT IS SEPARATE FROM THE CONSTRUCTOR BECAUSE THE TWO RUN IN DIFFERENT PHASES.
 // The processor is built inside the NATS manager's oncreate callback, which runs on
 // EVERY start — it has to, because the processor holds a reader bound to the
-// connection — while a Prometheus collector may be registered only once or the second
-// registration panics. So the caller builds this in the INITIALIZE phase and hands the
-// same instruments to every start's processor.
+// connection — while a Prometheus collector belongs to the PROCESS and may be
+// registered only once, or the second registration panics. So the caller builds this in
+// the INITIALIZE phase and hands the same instruments to every processor that callback
+// builds.
 func NewPersistMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 	return ms.NewProcessorMetrics("persist")
 }
@@ -91,8 +92,8 @@ func NewPersistMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 // Create a new inbound events processor.
 //
 // metrics is built once in the initialize phase (see NewPersistMetrics) and shared by
-// every processor this service constructs, because this constructor runs again on
-// every start.
+// every processor this service constructs, because that callback is connection-scoped
+// and the instruments are not.
 func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader,
 	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi,
 	metrics *core.ProcessorMetrics) *EventPersistenceProcessor {

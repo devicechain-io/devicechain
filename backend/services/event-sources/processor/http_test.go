@@ -282,41 +282,54 @@ func TestHttpEventSource_StartFailsWhenPortIsAlreadyBound(t *testing.T) {
 		"a failed start must not leave the source reading as Started")
 }
 
-// initialize -> start -> stop -> start ends with a source that actually serves.
+// A second entry into the start phase ends with a source that actually serves.
 //
-// A start after a stop is a permitted lifecycle sequence. The server used to be built
-// once, in ExecuteInitialize, and net/http latches its shutting-down flag permanently —
-// so the second Serve returned ErrServerClosed immediately, inside a goroutine that
-// filtered that error out as a clean stop. The restart reported success and served
-// nothing, which is why this test posts a real event rather than inspecting state.
-func TestHttpEventSource_RestartsAndServesAgain(t *testing.T) {
+// The server used to be built once, in ExecuteInitialize, and net/http latches its
+// shutting-down flag permanently — so the second Serve returned ErrServerClosed
+// immediately, inside a goroutine that filtered that error out as a clean stop. The
+// source reported a successful start and served nothing, which is why this test posts a
+// real event rather than inspecting state.
+//
+// 🔴 IT DRIVES ExecuteStart/ExecuteStop, NOT Start/Stop, AND THAT IS THE POINT RATHER
+// THAN A CONVENIENCE. It used to go through the manager, on the premise that a start
+// after a stop was a permitted sequence. It is not one any more — the lifecycle refuses
+// a start from Stopped — but the property this pins did not go with it: ExecuteStart is
+// still entered a second time by a start RETRIED after a failed one, with the previous
+// attempt's latched server still in the field, and that is exactly the condition the
+// silent failure needs. Driving the Execute methods is what that retry looks like from
+// the component's side; its sibling in core/graphql (TestRestartDoesNotPanic) is written
+// the same way for the same reason.
+func TestHttpEventSource_SecondStartRebuildsTheServerAndServes(t *testing.T) {
 	es, dec, _ := newTestHttpSource(t, nil)
 	es.Port = 0 // let the OS choose, so the test needs no fixed port
 
 	ctx := context.Background()
 	require.NoError(t, es.Initialize(ctx))
 
-	require.NoError(t, es.Start(ctx))
+	require.NoError(t, es.ExecuteStart(ctx))
 	require.NotNil(t, es.server)
 	code, err := postCanonicalEvent(es.server.Addr())
 	require.NoError(t, err)
 	require.Equal(t, http.StatusAccepted, code)
 	require.True(t, dec.called)
 
-	require.NoError(t, es.Stop(ctx))
+	first := es.server.Addr()
+	require.NoError(t, es.ExecuteStop(ctx))
 	dec.called = false
 
-	require.NoError(t, es.Start(ctx), "a start after a stop is a supported sequence")
-	require.NotNil(t, es.server, "the restart must build a server")
+	require.NoError(t, es.ExecuteStart(ctx), "a second entry into the start phase must succeed")
+	require.NotNil(t, es.server, "the second entry must build a server")
 	addr := es.server.Addr()
-	assert.NotEmpty(t, addr, "the restarted source must be bound to something")
+	assert.NotEmpty(t, addr, "the rebuilt source must be bound to something")
+	assert.NotEqual(t, first, addr,
+		"the source reports the first server's address; it was reused rather than rebuilt")
 
 	code, err = postCanonicalEvent(addr)
-	assert.NoError(t, err, "the restarted source must answer on the address it reports")
-	assert.Equal(t, http.StatusAccepted, code, "the restarted source must still accept events")
-	assert.True(t, dec.called, "the restarted source must hand the event to the pipeline")
+	assert.NoError(t, err, "the rebuilt source must answer on the address it reports")
+	assert.Equal(t, http.StatusAccepted, code, "the rebuilt source must still accept events")
+	assert.True(t, dec.called, "the rebuilt source must hand the event to the pipeline")
 
-	require.NoError(t, es.Stop(ctx))
+	require.NoError(t, es.ExecuteStop(ctx))
 }
 
 // A stop that arrives on a source which was initialized but never started is a no-op.

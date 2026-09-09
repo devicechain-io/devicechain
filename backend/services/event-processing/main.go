@@ -121,11 +121,12 @@ func parseConfiguration() error {
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM createNatsComponents, WHERE THE
 // COMPONENTS THAT READ THEM ARE BUILT. That callback is invoked by the NATS manager on
-// EVERY start — a start after a stop is a supported sequence — and a collector
-// registered twice on this microservice's registry panics. This service builds the most
-// of any: roughly thirty-five collectors across DETECT and REACT, so the first duplicate
-// takes the process down before the second start has wired anything. Initialize runs
-// once, which is what makes this the safe half.
+// EVERY start, and a collector belongs to the PROCESS where everything that callback
+// builds belongs to the CONNECTION — registering one twice on this microservice's
+// registry panics. This service builds the most of any: roughly thirty-five collectors
+// across DETECT and REACT, so the first duplicate takes the process down before the
+// rest is wired. Initialize is where the process's own singletons are made, which is
+// what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
@@ -239,8 +240,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		MaxRetainedSamplesPerTenant: Configuration.MaxRetainedSamplesPerTenant,
 	}
 	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
-	// because this callback runs on every start and a second registration of the same
-	// collector panics.
+	// because a collector belongs to the process while everything this callback builds
+	// belongs to the connection, and a second registration of the same collector panics.
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
 		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg,
 		core.NewNoOpLifecycleCallbacks(), DetectMetrics)

@@ -76,8 +76,9 @@ type DispatchMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
 // NewDispatchConsumer. The consumer is built inside the NATS manager's oncreate callback
 // — it has to be, because it holds a reader bound to the connection — and that callback
-// runs on EVERY start. A counter built there is registered a second time when the
-// service restarts in place, and MustRegister panics on the duplicate.
+// runs on EVERY start. A counter built there is registered again whenever that
+// callback is entered again — which any start retried after a failed one does — and
+// MustRegister panics on the duplicate.
 func NewDispatchMetrics(ms *core.Microservice) *DispatchMetrics {
 	if ms == nil {
 		return nil

@@ -232,11 +232,11 @@ func TestServerDoesNotServeTheDefaultMux(t *testing.T) {
 		"a route on http.DefaultServeMux is being served; this server is not serving the microservice's own mux")
 }
 
-// A stop-then-start cycle must not panic.
+// A second entry into the start phase must not panic.
 //
 // Both registrars go through ServeMux.Handle, which panics on a duplicate pattern, and
-// ExecuteStart may run after a stop — so this pins that startHttpServer registers
-// nothing. It is not a regression the switchover introduces: http.HandleFunc on the
+// ExecuteStart is entered again by any start retried after a failed one — so this pins
+// that startHttpServer registers nothing. It is not a regression the switchover introduces: http.HandleFunc on the
 // default mux panicked on a duplicate too, which is why the shape carries across
 // unnoticed.
 func TestHttpServerRestartDoesNotPanic(t *testing.T) {

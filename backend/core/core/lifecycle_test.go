@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // recordingComponent is an inert LifecycleComponent that records which hooks ran, can be
@@ -96,20 +97,61 @@ func TestFullLifecycleRunsEveryHookInOrder(t *testing.T) {
 	}
 }
 
-// A start after a stop is a supported sequence, not an accident of the guard being loose.
-// GatewayJetStreamSource builds its channels per-Start and says so in its own comment
-// because of this; narrowing startFrom to Initialized alone would break it silently, since
-// nothing else in the tree exercises the second start.
-func TestStartIsPermittedAfterStop(t *testing.T) {
-	_, mgr := newRecorded()
+// A stop is terminal: a start after one is refused, and the refusal is the whole point
+// of the change rather than a side effect of it.
+//
+// 🔴 THE ELAPSED-TIME ASSERTION IS THE POINT, NOT BELT AND BRACES. What this replaced was
+// not a start that worked; it was a start that was ADMITTED and then failed roughly a
+// minute later on a connection the stop had already drained, blaming the broker. A guard
+// that admitted the call and let some downstream retry budget produce the error would
+// satisfy "it returns an error" while reproducing exactly the behaviour being removed. So
+// the assertion is that nothing ran and no time passed.
+//
+// The message is asserted too, and for the same reason: an error that does not name the
+// state sends the reader to the same wrong place the old one did.
+func TestStartAfterStopIsRefusedImmediately(t *testing.T) {
+	component, mgr := newRecorded()
 	ctx := context.Background()
-	for _, call := range []func(context.Context) error{mgr.Initialize, mgr.Start, mgr.Stop, mgr.Start} {
+	for _, call := range []func(context.Context) error{mgr.Initialize, mgr.Start, mgr.Stop} {
 		if err := call(ctx); err != nil {
 			t.Fatalf("lifecycle step failed: %v", err)
 		}
 	}
-	if mgr.State != Started {
-		t.Errorf("state after restart = %s, want Started", mgr.State)
+	// Without this the test proves nothing about a stopped component: a refusal from
+	// some other state would read identically.
+	if mgr.State != Stopped {
+		t.Fatalf("state before the second start = %s, want Stopped", mgr.State)
+	}
+	before := len(component.calls)
+
+	started := time.Now()
+	err := mgr.Start(ctx)
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("a start after a stop was permitted")
+	}
+	// 100ms is two orders of magnitude below the retry budget the admitted start used to
+	// spend (thirty attempts, roughly a minute) and two orders above what a slices.Contains
+	// and a fmt.Errorf cost on the slowest CI runner. Anything in between means the call
+	// was admitted and something downstream produced the error.
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("the refusal took %s; it must be immediate, not the result of a retry budget", elapsed)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "Stopped") || !strings.Contains(msg, "Initialized") {
+		t.Errorf("refusal %q names neither the state it was in nor the state it may be started from", msg)
+	}
+	if len(component.calls) != before {
+		t.Errorf("a refused start ran %v", component.calls[before:])
+	}
+	if mgr.State != Stopped {
+		t.Errorf("state after the refused start = %s, want Stopped", mgr.State)
+	}
+	// The counterweight to the refusal: a stopped component must still be able to
+	// release its resources. Terminate is what does that, and narrowing startFrom must
+	// not have moved it.
+	if err := mgr.Terminate(ctx); err != nil {
+		t.Fatalf("Terminate after a stop was refused: %v", err)
 	}
 }
 
@@ -275,7 +317,7 @@ func TestEveryStateOutsideTheAllowListIsRefused(t *testing.T) {
 		call      func(*LifecycleManager, context.Context) error
 	}{
 		{"initialize", []LifecycleState{Uninitialized}, (*LifecycleManager).Initialize},
-		{"start", []LifecycleState{Initialized, Stopped}, (*LifecycleManager).Start},
+		{"start", []LifecycleState{Initialized}, (*LifecycleManager).Start},
 		{"stop", []LifecycleState{Initialized, Started}, (*LifecycleManager).Stop},
 		{"terminate", []LifecycleState{Stopped}, (*LifecycleManager).Terminate},
 	}

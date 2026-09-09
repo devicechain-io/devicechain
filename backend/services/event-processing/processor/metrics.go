@@ -106,9 +106,9 @@ type DetectMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
 // NewResolvedEventsProcessor. The processor is built inside the NATS manager's oncreate
 // callback — it has to be, because it holds a reader bound to the connection — and that
-// callback runs on EVERY start. These ~27 collectors built there would be registered a
-// second time when the service restarts in place, and MustRegister panics on the first
-// duplicate.
+// callback runs on EVERY start. These ~27 collectors built there would be registered
+// again whenever that callback is entered again — which any start retried after a
+// failed one does — and MustRegister panics on the first duplicate.
 func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	return &DetectMetrics{
 		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints."),
@@ -212,8 +212,9 @@ type ReactMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
 // NewReactDispatcher. The dispatcher is built inside the NATS manager's oncreate callback
 // — it has to be, because it holds a reader bound to the connection — and that callback
-// runs on EVERY start. A counter built there is registered a second time when the service
-// restarts in place, and MustRegister panics on the duplicate.
+// runs on EVERY start. A counter built there is registered again whenever that callback
+// is entered again — which any start retried after a failed one does — and MustRegister
+// panics on the duplicate.
 func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 	if ms == nil {
 		return nil
