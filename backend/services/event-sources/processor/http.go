@@ -201,9 +201,9 @@ func (es *HttpEventSource) Start(ctx context.Context) error {
 // Start event source (as called by lifecycle manager)
 //
 // A fresh server is built on every entry — see ExecuteInitialize for why it cannot be
-// built once — and the bind happens synchronously, so a port
-// already in use or a permission refusal FAILS THE START instead of being logged from a
-// goroutine nobody is listening to. Both of those used to be silent: the source reported
+// built once — and the bind happens synchronously, so a port already in use or a
+// permission refusal FAILS THE START instead of being logged from a goroutine nobody is
+// listening to. Both of those used to be silent: the source reported
 // a successful start and ingested nothing, and the only symptom was device telemetry
 // over HTTP that stopped arriving.
 func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {

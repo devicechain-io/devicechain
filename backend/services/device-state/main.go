@@ -75,7 +75,7 @@ func parseConfiguration() error {
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE PROCESSOR IS BUILT.
 // The processor is built in createNatsComponents, which the NATS manager invokes on
-// EVERY start, and a collector belongs to the PROCESS where everything that callback
+// EVERY start, and a collector belongs to the PROCESS whereas everything that callback
 // builds belongs to the CONNECTION — registering one twice on this microservice's
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
@@ -110,9 +110,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
 	// Add and initialize device state processor. Its instruments were built once in
-	// afterMicroserviceInitialized and are handed in, because this callback runs on
-	// belongs to the process while everything this callback builds belongs to the
-	// connection, and a second registration of the same collector panics.
+	// afterMicroserviceInitialized and are handed in, because a collector belongs to
+	// the process while everything this callback builds belongs to the connection, and
+	// a second registration of the same collector panics.
 	StateProcessor = processor.NewStateProcessor(Microservice, ResolvedEventsReader,
 		core.NewNoOpLifecycleCallbacks(), Api, StateMetrics)
 	err = StateProcessor.Initialize(context.Background())

@@ -76,7 +76,7 @@ func get(t *testing.T, path string) int {
 //
 // The assertion is that startHttpServer registers NOTHING: it is called twice here,
 // with the routes registered once beforehand as afterMicroserviceInitialized does.
-func TestHttpServerRestartDoesNotPanic(t *testing.T) {
+func TestHttpServerSecondStartDoesNotPanic(t *testing.T) {
 	newTestMicroservice(t)
 	// The SERVICE's registration, not a copy of it: a test that called RegisterProbes
 	// itself would keep passing if this went back to http.Handle on the default mux.

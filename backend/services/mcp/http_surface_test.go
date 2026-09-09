@@ -236,10 +236,10 @@ func TestServerDoesNotServeTheDefaultMux(t *testing.T) {
 //
 // Both registrars go through ServeMux.Handle, which panics on a duplicate pattern, and
 // ExecuteStart is entered again by any start retried after a failed one — so this pins
-// that startHttpServer registers nothing. It is not a regression the switchover introduces: http.HandleFunc on the
-// default mux panicked on a duplicate too, which is why the shape carries across
-// unnoticed.
-func TestHttpServerRestartDoesNotPanic(t *testing.T) {
+// that startHttpServer registers nothing. It is not a regression the switchover
+// introduces: http.HandleFunc on the default mux panicked on a duplicate too, which is
+// why the shape carries across unnoticed.
+func TestHttpServerSecondStartDoesNotPanic(t *testing.T) {
 	base := serveMcp(t)
 	require.Equal(t, http.StatusOK, status(t, http.MethodGet, base+"/healthz"))
 

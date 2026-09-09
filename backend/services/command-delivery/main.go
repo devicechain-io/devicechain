@@ -334,8 +334,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The delivery processor's and write-back's instruments, built here for the same
 	// reason and NOT where those two components are: they are constructed in
 	// createNatsComponents, which the NATS manager invokes on EVERY start, and a
-	// collector belongs to the PROCESS where everything that callback builds belongs to
-	// the CONNECTION — registering one twice on this microservice's registry panics.
+	// collector belongs to the PROCESS whereas everything that callback builds belongs
+	// to the CONNECTION — registering one twice on this microservice's registry panics.
 	// This initializer runs once.
 	buildMetrics()
 

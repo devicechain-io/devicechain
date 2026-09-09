@@ -106,7 +106,7 @@ func parseConfiguration() error {
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM createNatsComponents, WHERE THE
 // COMPONENTS THAT READ THEM ARE BUILT. That callback is invoked by the NATS manager on
-// EVERY start, and a collector belongs to the PROCESS where everything that callback
+// EVERY start, and a collector belongs to the PROCESS whereas everything that callback
 // builds belongs to the CONNECTION — registering one twice on this microservice's
 // registry panics. Initialize is where the process's own singletons are made, which is
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.

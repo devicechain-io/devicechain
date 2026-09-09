@@ -418,7 +418,8 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// workers share the inbound channel, so a per-worker counter would report a
 	// fleet's clock skew as N unrelated series. It comes from the instruments built in
 	// the initialize phase rather than being constructed here, because a counter belongs
-	// to the process while everything this callback builds belongs to the connection.
+	// to the process, while this processor — and so this method — is built anew every
+	// time the connection-scoped oncreate callback runs.
 	eventTime := EventTimePolicy{
 		MaxFutureSkew: iproc.MaxFutureSkew,
 		Bounded:       iproc.metrics.eventTimeBounded,
