@@ -5,6 +5,7 @@ package rdb
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -28,8 +29,11 @@ func newAuditTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&widget{}, &gadget{}, &AuditEvent{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
-	// Register the audit callbacks AFTER migrating so AutoMigrate's own statements
-	// are not audited (it runs before the callbacks exist).
+	// Registering the audit callbacks after migrating is incidental, not a
+	// requirement: this used to claim it kept AutoMigrate's own statements out of
+	// the journal, which cannot happen in either order. The migrator issues DDL
+	// through Exec/Raw, and those never reach the Create/Update/Delete processors
+	// the journal hooks — so there is nothing for it to audit.
 	if err := RegisterAuditJournal(db); err != nil {
 		t.Fatalf("failed to register audit journal: %v", err)
 	}
@@ -217,40 +221,110 @@ func TestAuditJournalTenantScopedRead(t *testing.T) {
 // raised over a completed write, so nothing in this package pinned the reporting
 // half of the contract.
 //
-// This drives it: take the journal's table away, then update. The error is
-// required AND so is the changed value, because an assertion on the error alone
-// would also pass if the mutation had been refused, which is the opposite
-// behaviour — a change that did not happen, reported as failed.
+// This drives it: take the journal's table away, then mutate. The error is
+// required AND so is the state the mutation left behind, because an assertion on
+// the error alone would also pass if the write had been refused or rolled back,
+// which is the opposite behaviour — a change that did not happen, reported as
+// failed.
+//
+// It runs over all three operations because the two halves of the contract fail
+// differently. The three hooks share one closure, so the fail-closed reporting
+// cannot break for one operation alone — but they are three separate
+// registrations, and it is the placement each one is given that puts the journal
+// write past the commit. Delete is the arm downstream reasoning leans on: the
+// erasure fence excludes the journal precisely because the journal runs after the
+// sweeper's delete has committed (see RegisterAuditJournal).
 func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
-	db := newAuditTestDB(t)
-	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+	for _, tc := range []struct {
+		op string
+		// mutate performs, on a database whose journal table has been dropped, the
+		// mutation whose audit row therefore cannot land.
+		mutate func(db *gorm.DB, ctx context.Context, seeded *widget) error
+		// landed asserts the mutation took effect anyway, and says what "took
+		// effect" means for this operation.
+		landed func(t *testing.T, db *gorm.DB, ctx context.Context, seeded *widget)
+	}{
+		{
+			op: "create",
+			mutate: func(db *gorm.DB, ctx context.Context, _ *widget) error {
+				return db.WithContext(ctx).Create(&widget{Name: "created"}).Error
+			},
+			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
+				if n := countWidgets(t, db, ctx, "created"); n != 1 {
+					t.Fatalf("the created widget matched %d rows, want 1 — the failure "+
+						"reported above is supposed to be one raised over an insert that "+
+						"ALREADY COMMITTED; a refused insert is the opposite behaviour", n)
+				}
+			},
+		},
+		{
+			op: "update",
+			mutate: func(db *gorm.DB, ctx context.Context, seeded *widget) error {
+				return db.WithContext(ctx).Model(&widget{}).
+					Where("id = ?", seeded.ID).Update("name", "moved").Error
+			},
+			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
+				if n := countWidgets(t, db, ctx, "moved"); n != 1 {
+					t.Fatalf("the updated widget matched %d rows, want 1 — the failure "+
+						"reported above is supposed to be one raised over an update that "+
+						"ALREADY COMMITTED; a rolled-back update is the opposite behaviour", n)
+				}
+			},
+		},
+		{
+			op: "delete",
+			mutate: func(db *gorm.DB, ctx context.Context, seeded *widget) error {
+				return db.WithContext(ctx).Delete(&widget{}, seeded.ID).Error
+			},
+			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
+				if n := countWidgets(t, db, ctx, "seeded"); n != 0 {
+					t.Fatalf("the deleted widget still matched %d rows, want 0 — the failure "+
+						"reported above is supposed to be one raised over a delete that "+
+						"ALREADY COMMITTED, which is what lets the erasure fence exclude "+
+						"the journal; a rolled-back delete is the opposite behaviour", n)
+				}
+			},
+		},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			db := newAuditTestDB(t)
+			ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"),
+				&auth.Claims{Username: "derek", Tenant: "A"})
 
-	w := &widget{Name: "seeded"}
-	if err := db.WithContext(ctx).Create(w).Error; err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if err := db.Migrator().DropTable(&AuditEvent{}); err != nil {
-		t.Fatalf("drop the audit journal's table: %v", err)
-	}
+			seeded := &widget{Name: "seeded"}
+			if err := db.WithContext(ctx).Create(seeded).Error; err != nil {
+				t.Fatalf("seed a widget: %v", err)
+			}
+			if err := db.Migrator().DropTable(&AuditEvent{}); err != nil {
+				t.Fatalf("drop the audit journal's table: %v", err)
+			}
 
-	err := db.WithContext(ctx).Model(&widget{}).
-		Where("id = ?", w.ID).Update("name", "moved").Error
-	if err == nil {
-		t.Fatal("an update whose journal write could not land reported success — the journal " +
-			"fails closed by design, so a mutation it could not record must never report nil")
-	}
+			err := tc.mutate(db, ctx, seeded)
+			if err == nil {
+				t.Fatalf("the %s reported success even though its journal write could not "+
+					"land — the journal fails closed by design, so a mutation it could "+
+					"not record must never report nil", tc.op)
+			}
+			// The reported error must be the journal's, so this pin cannot be satisfied
+			// by some unrelated failure of the mutation itself.
+			if !strings.Contains(err.Error(), "audit_events") {
+				t.Fatalf("the %s reported %v, which does not name the journal's table — this "+
+					"test only pins the contract while the error it observes is the "+
+					"journal write's", tc.op, err)
+			}
 
-	var reloaded []widget
-	if err := db.WithContext(ctx).Where("id = ?", w.ID).Find(&reloaded).Error; err != nil {
-		t.Fatalf("reload the widget: %v", err)
+			tc.landed(t, db, ctx, seeded)
+		})
 	}
-	if len(reloaded) != 1 {
-		t.Fatalf("reloaded %d widgets, want 1", len(reloaded))
+}
+
+// countWidgets returns how many widgets carry the given name, read under the
+// caller's tenant context like any other tenant-scoped query.
+func countWidgets(t *testing.T, db *gorm.DB, ctx context.Context, name string) int {
+	t.Helper()
+	var rows []widget
+	if err := db.WithContext(ctx).Where("name = ?", name).Find(&rows).Error; err != nil {
+		t.Fatalf("read widgets named %q: %v", name, err)
 	}
-	if reloaded[0].Name != "moved" {
-		t.Fatalf("the widget reads %q, want %q — the error above is supposed to be one raised "+
-			"over a mutation that ALREADY HAPPENED; a refused write is the opposite "+
-			"behaviour, and this test would no longer be pinning the one it names",
-			reloaded[0].Name, "moved")
-	}
+	return len(rows)
 }
