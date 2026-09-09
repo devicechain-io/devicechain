@@ -171,6 +171,73 @@ public class MqttDeviceSessionTests
         Assert.Equal("north", seen.Payload!.Value.GetProperty("station").GetString());
     }
 
+    // ── the dispatch nonce ───────────────────────────────────────────────────
+
+    // 🔴 THE ANSWER MUST NAME THE DISPATCH IT ANSWERS, OR THE PLATFORM REFUSES IT. The command
+    // then sits at SENT until it expires as TIMEOUT — a record blaming the device for a reply it
+    // did send. The value is asserted, not merely its presence: an invented one names a dispatch
+    // nobody is holding and is refused exactly the same way.
+    [Fact]
+    public async Task TheResponseEchoesTheDispatchNonceItWasSent()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await connection.DeliverCommandAsync("cmd-1", "goRefuel", dispatchNonce: "nonce-7");
+
+        Assert.Equal("nonce-7", connection.LastResponse().DispatchNonce);
+    }
+
+    // 🔴🔴 A REDELIVERY UNDER A NEW NONCE IS ANSWERED UNDER THE NEW ONE, AND THIS IS THE CASE
+    // THE WHOLE FIELD EXISTS FOR. A command whose publish reported an error is returned to the
+    // platform's queue and dispatched again under a different nonce — to a device that already
+    // ran it. The handler must NOT run a second time (a machine would move twice), so the
+    // remembered outcome is republished; but it must be republished under the nonce THIS
+    // delivery carried, because the platform has moved off the first one and would refuse an
+    // answer naming it. Caching the response envelope whole is the plausible-looking bug, and it
+    // would leave such a command permanently unsettleable.
+    [Fact]
+    public async Task ARedeliveryUnderANewNonceIsAnsweredUnderThatNonceWithoutRerunningTheHandler()
+    {
+        var connection = new FakeMqttConnection();
+        var invocations = 0;
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            return Task.FromResult(CommandOutcome.Failed("the dozer is stuck"));
+        });
+
+        await connection.DeliverCommandAsync("cmd-1", "goRefuel", dispatchNonce: "nonce-first");
+        await connection.DeliverCommandAsync("cmd-1", "goRefuel", dispatchNonce: "nonce-second");
+
+        Assert.Equal(1, invocations);
+        Assert.Equal(2, connection.Published.Count);
+        var response = connection.LastResponse();
+        Assert.Equal("nonce-second", response.DispatchNonce);
+        // The OUTCOME is still the remembered one: only the dispatch it names is new.
+        Assert.False(response.Success);
+        Assert.Equal("the dozer is stuck", response.Error);
+    }
+
+    // A frame naming no dispatch is answered honestly rather than doctored. The SDK cannot
+    // invent a value the platform would accept, and inventing one would be worse than the
+    // refusal: it would name a dispatch this device may not have received.
+    [Fact]
+    public async Task ACommandNamingNoDispatchIsAnsweredWithNoNonce()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await connection.DeliverRawAsync("inst/acme/device-commands/sensor-001",
+            "{\"token\":\"cmd-1\",\"deviceToken\":\"sensor-001\",\"name\":\"goRefuel\"}");
+
+        Assert.Single(connection.Published);
+        Assert.True(string.IsNullOrEmpty(connection.LastResponse().DispatchNonce));
+    }
+
     // ── at-least-once redelivery ─────────────────────────────────────────────
 
     // 🔑 A REDELIVERY MUST NOT RUN THE HANDLER TWICE — a machine would move twice — BUT MUST
@@ -712,10 +779,16 @@ public class MqttDeviceSessionTests
 
         public ValueTask DisposeAsync() => default;
 
-        public Task DeliverCommandAsync(string token, string name, string? payloadJson = null)
+        // dispatchNonce names the dispatch this delivery is. It defaults to a value rather than
+        // to nothing on purpose: the platform refuses an answer that names no dispatch, so every
+        // test here that is NOT about a missing nonce must deliver one, or it would be asserting
+        // against a round trip the platform would reject.
+        public Task DeliverCommandAsync(string token, string name, string? payloadJson = null,
+            string dispatchNonce = "nonce-1")
         {
             var payload = payloadJson == null ? "null" : payloadJson;
-            var json = $"{{\"token\":\"{token}\",\"deviceToken\":\"sensor-001\",\"name\":\"{name}\",\"payload\":{payload}}}";
+            var json = $"{{\"token\":\"{token}\",\"deviceToken\":\"sensor-001\",\"name\":\"{name}\"," +
+                $"\"payload\":{payload},\"dispatchNonce\":\"{dispatchNonce}\"}}";
             return DeliverRawAsync("inst/acme/device-commands/sensor-001", json);
         }
 

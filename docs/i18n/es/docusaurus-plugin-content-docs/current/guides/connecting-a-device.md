@@ -312,7 +312,8 @@ Cada mensaje es un sobre (envelope) JSON:
   "token": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
   "deviceToken": "sensor-001",
   "name": "reboot",
-  "payload": {"delaySeconds": 5}
+  "payload": {"delaySeconds": 5},
+  "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94"
 }
 ```
 
@@ -322,6 +323,10 @@ Cada mensaje es un sobre (envelope) JSON:
   comandos, este es uno de sus comandos publicados y `payload` ya se ha validado contra
   el esquema de parámetros de ese comando — consulte
   [Comandos y el contrato de capacidades](../concepts/commands.md#commands-and-the-capability-contract).
+- **`dispatchNonce`** nombra **esta entrega** del comando. Es opaco — nada en el dispositivo
+  debería leerlo ni interpretarlo — y debe devolverse en la respuesta. Consérvelo junto al
+  comando hasta responder, y si el mismo comando vuelve a llegar, responda con el nonce de la
+  entrega **más reciente** y no con el que guardó primero.
 
 ## Respuesta a un comando {#responding-to-a-command}
 
@@ -338,12 +343,15 @@ mosquitto_pub \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/command-responses/sensor-001" \
-  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
 
 - **`commandToken` debe ser el `token` del sobre de entrega** — el token del comando,
   no el del dispositivo. Este es el error más común: enviar aquí el token del dispositivo
   no coincide con ningún comando y la respuesta se descarta.
+- **`dispatchNonce` debe ser el `dispatchNonce` del sobre de entrega que está respondiendo.**
+  Es obligatorio: una respuesta que lo omita, o que cite el nonce de una entrega anterior del
+  mismo comando, no cierra el comando. Vea a continuación por qué.
 - **`success`** mueve el comando a `SUCCESSFUL` o `FAILED`.
 - **`payload`** / **`error`** son cadenas opcionales, que se muestran en el historial de
   comandos de la consola y se devuelven a través de la API.
@@ -353,6 +361,26 @@ está autorizado a publicar únicamente en el suyo. Tanto el inquilino como el d
 responde se toman del topic en lugar del cuerpo, de modo que un dispositivo solo puede responder
 por **sus propios** comandos: una respuesta que nombre un comando perteneciente a otro
 dispositivo se rechaza, no se registra.
+
+:::caution Las respuestas deben nombrar la entrega que responden
+Devolver `dispatchNonce` es lo que le indica a la plataforma que su respuesta corresponde a
+**esta** entrega del comando. Importa porque un comando puede publicarse legítimamente más de
+una vez: si una publicación reporta un error, la plataforma no puede distinguir un mensaje que
+se perdió de uno cuyo acuse de recibo se perdió, así que vuelve a encolar el comando para
+enviarlo de nuevo. Sin el nonce, una respuesta a la primera entrega que llegue después de la
+segunda cerraría el comando antes de que el dispositivo hubiera ejecutado esa segunda entrega.
+
+Dos consecuencias para un dispositivo propio:
+
+- Una respuesta **sin** `dispatchNonce` se rechaza. El comando no se cierra, y la respuesta
+  queda registrada en el flujo de mensajes descartados de la plataforma en lugar de perderse,
+  de modo que el rechazo es visible y no silencioso.
+- Una respuesta que cita un `dispatchNonce` del que el comando ya **se ha movido** se rechaza
+  igual. Responda con el nonce de la entrega que realmente está contestando.
+
+Guarde el nonce junto al comando mientras lo ejecuta, y sobrescríbalo si el mismo comando se
+entrega de nuevo antes de que responda.
+:::
 
 :::caution El topic cambió
 Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-responses`, sin

@@ -65,14 +65,14 @@ func TestRecordFrameDedupsByToken(t *testing.T) {
 	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	ds := r.newTestDevice("harness-cmd-probe-001")
 
-	tok, ok := r.recordFrame(ds, frame(t, "cmd-A", "harness-cmd-probe-001", "harness-reset"))
+	tok, _, ok := r.recordFrame(ds, frame(t, "cmd-A", "harness-cmd-probe-001", "harness-reset"))
 	require.True(t, ok)
 	assert.Equal(t, "cmd-A", tok)
 
 	// Redelivery of cmd-A, then a genuinely new command cmd-B.
-	_, ok = r.recordFrame(ds, frame(t, "cmd-A", "harness-cmd-probe-001", "harness-reset"))
+	_, _, ok = r.recordFrame(ds, frame(t, "cmd-A", "harness-cmd-probe-001", "harness-reset"))
 	require.True(t, ok)
-	_, ok = r.recordFrame(ds, frame(t, "cmd-B", "harness-cmd-probe-001", "harness-reset"))
+	_, _, ok = r.recordFrame(ds, frame(t, "cmd-B", "harness-cmd-probe-001", "harness-reset"))
 	require.True(t, ok)
 
 	assert.Equal(t, 2, r.Distinct("harness-cmd-probe-001"), "two DISTINCT command tokens")
@@ -92,7 +92,7 @@ func TestRecordFrameMalformed(t *testing.T) {
 	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	ds := r.newTestDevice("harness-cmd-probe-001")
 
-	tok, ok := r.recordFrame(ds, []byte("{not json"))
+	tok, _, ok := r.recordFrame(ds, []byte("{not json"))
 	assert.False(t, ok)
 	assert.Empty(t, tok)
 
@@ -110,7 +110,7 @@ func TestRecordFrameEmptyTokenIsMalformed(t *testing.T) {
 	r := New("inst-1", "acme", "tcp://x:1883", nil)
 	ds := r.newTestDevice("harness-cmd-probe-001")
 
-	tok, ok := r.recordFrame(ds, frame(t, "", "harness-cmd-probe-001", "harness-reset"))
+	tok, _, ok := r.recordFrame(ds, frame(t, "", "harness-cmd-probe-001", "harness-reset"))
 	assert.False(t, ok)
 	assert.Empty(t, tok)
 	rep := r.Report()
@@ -340,7 +340,7 @@ func TestAFrameAddressedToAnotherDeviceIsNotAnswered(t *testing.T) {
 	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
 
 	payload := []byte(`{"token":"cmd-9","deviceToken":"probe-2","name":"reset"}`)
-	token, ok := r.recordFrame(ds, payload)
+	token, _, ok := r.recordFrame(ds, payload)
 
 	assert.False(t, ok, "a misrouted frame must not be answered")
 	assert.Empty(t, token)
@@ -355,11 +355,47 @@ func TestAFrameAddressedToThisDeviceIsAnswered(t *testing.T) {
 	r := New("i1", "t1", "ssl://broker", nil)
 	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
 
-	token, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","deviceToken":"probe-1","name":"reset"}`))
+	token, _, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","deviceToken":"probe-1","name":"reset"}`))
 	assert.True(t, ok)
 	assert.Equal(t, "cmd-9", token)
 	assert.Equal(t, 1, ds.raw)
 	assert.Equal(t, 0, ds.misrouted)
+}
+
+// TestRecordFrameCarriesTheDispatchNonceToTheAnswer pins the return half of the wire
+// contract: the receiver answers with the nonce the frame carried.
+//
+// 🔴 THE SIM IS A MEASURING INSTRUMENT, AND THIS IS WHAT KEEPS ITS ANSWERS COUNTABLE. The
+// platform refuses a response that names no dispatch, so a receiver that dropped this field
+// would look like a fleet of devices receiving every command and settling none — a failure
+// that reads as a platform fault in every report the sim produces.
+//
+// The absent case is asserted too, and it is deliberately NOT malformed: an empty nonce is a
+// statement about the frame that was published, and this receiver's job is to be an honest
+// witness to it. Answering with the empty value makes the platform's refusal visible; refusing
+// to answer here would hide it as silence instead.
+func TestRecordFrameCarriesTheDispatchNonceToTheAnswer(t *testing.T) {
+	r := New("i1", "t1", "ssl://broker", nil)
+
+	t.Run("echoed when the frame names a dispatch", func(t *testing.T) {
+		ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
+		token, nonce, ok := r.recordFrame(ds,
+			[]byte(`{"token":"cmd-9","deviceToken":"probe-1","name":"reset","dispatchNonce":"nonce-42"}`))
+		assert.True(t, ok)
+		assert.Equal(t, "cmd-9", token)
+		assert.Equal(t, "nonce-42", nonce,
+			"the answer must name the dispatch the frame carried, or the command never settles")
+	})
+
+	t.Run("empty when the frame names none, and still answered", func(t *testing.T) {
+		ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
+		token, nonce, ok := r.recordFrame(ds,
+			[]byte(`{"token":"cmd-9","deviceToken":"probe-1","name":"reset"}`))
+		assert.True(t, ok, "a frame naming no dispatch is not malformed; it is answered honestly")
+		assert.Equal(t, "cmd-9", token)
+		assert.Empty(t, nonce)
+		assert.Equal(t, 0, ds.malformed)
+	})
 }
 
 // An ABSENT addressee is not a WRONG one. The dispatcher always sets deviceToken, but
@@ -369,7 +405,7 @@ func TestAFrameWithNoAddresseeIsStillAnswered(t *testing.T) {
 	r := New("i1", "t1", "ssl://broker", nil)
 	ds := &deviceState{token: "probe-1", distinct: map[string]int{}}
 
-	token, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","name":"reset"}`))
+	token, _, ok := r.recordFrame(ds, []byte(`{"token":"cmd-9","name":"reset"}`))
 	assert.True(t, ok)
 	assert.Equal(t, "cmd-9", token)
 	assert.Equal(t, 0, ds.misrouted)
@@ -380,8 +416,8 @@ func TestMisroutedFramesSurfaceInTheReport(t *testing.T) {
 	ds := &deviceState{token: "probe-1", subscribed: true, distinct: map[string]int{}}
 	require.NoError(t, r.claimDevice("probe-1", ds))
 
-	_, _ = r.recordFrame(ds, []byte(`{"token":"cmd-1","deviceToken":"probe-2"}`))
-	_, _ = r.recordFrame(ds, []byte(`{"token":"cmd-2","deviceToken":"probe-3"}`))
+	_, _, _ = r.recordFrame(ds, []byte(`{"token":"cmd-1","deviceToken":"probe-2"}`))
+	_, _, _ = r.recordFrame(ds, []byte(`{"token":"cmd-2","deviceToken":"probe-3"}`))
 
 	rep := r.Report()
 	assert.Equal(t, 2, rep.TotalMisrouted)

@@ -258,8 +258,15 @@ type CommandDeliveryApi interface {
 	// StrandedSentCommands walks the commands stuck in SENT past the grace horizon.
 	StrandedSentCommands(ctx context.Context, cursor StrandedCursor, olderThan time.Time,
 		limit int) ([]*Command, StrandedCursor, error)
-	MarkSentByToken(ctx context.Context, token string) (bool, error)
-	MarkResponse(ctx context.Context, commandToken, responder string, success bool, payload *string, errMsg *string) (*Command, error)
+	// MarkSentByToken claims a command by token for a dispatcher that delivers it over its
+	// own session, returning the dispatch nonce it stamped so that dispatcher can name the
+	// dispatch when it reports the outcome.
+	MarkSentByToken(ctx context.Context, token string) (string, bool, error)
+	// MarkResponse records a device's answer against the dispatch it names. The nonce is
+	// the device's evidence that it actually received that dispatch; an answer carrying
+	// none is refused.
+	MarkResponse(ctx context.Context, commandToken, responder, dispatchNonce string, success bool,
+		payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
 	ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error)
 
@@ -810,33 +817,91 @@ func claimableStatusStrings() []string {
 // ResponsesRefused counter alongside, so the two stay tellable apart.
 var ErrResponderNotCommandOwner = errors.New("command response came from a device that does not own the command")
 
-// ErrCommandNotAnswerable is returned when a device's OWN answer names a command that is
-// neither terminal nor in a state a response may settle — in practice QUEUED or HELD, the
-// two live states no dispatcher is holding the row in.
+// ErrCommandNotAnswerable is returned when a device's OWN answer names the dispatch the
+// command is still on, and the command is nevertheless in a state that dispatch cannot
+// settle.
 //
-// 🔴 IT EXISTS BECAUSE THE ALTERNATIVE WAS AN ANSWER THAT VANISHED WITH A SUCCESS REPORT.
-// MarkResponse's write is predicated on answerableStatusStrings(), and a non-match used to
-// be indistinguishable from a match: the function reloaded the row and returned it with a
-// nil error, so its consumer acked the message and counted it OK. The device's answer was
-// then gone, with nothing anywhere recording that it had arrived.
+// 🔴 IT IS NOW THE RESIDUAL, AND IT IS UNREACHABLE ON PURPOSE. Its from-set is every
+// non-terminal state and the terminal ones are handled above it, so nothing in today's
+// vocabulary lands here. What it exists for is the state SOMEBODY ADDS LATER without
+// deciding whether a nonce-matched answer may settle it: that state is absent from
+// nonceAnswerableStatusStrings, the write matches nothing, and the answer arrives here
+// loudly instead of being written or silently dropped. A residual that can never fire is
+// the point of it, not a reason to delete it.
 //
-// 🔑 THE REACHABLE SEQUENCE IS AN ORDINARY PUBLISH FAILURE, NOT A PATHOLOGY. A dispatcher
-// claims the row (QUEUED -> SENT) and publishes; the publish reports an error; ReleaseClaim
-// correctly returns the row to QUEUED so it can be tried again. A publish error is not proof
-// nothing was delivered — a lost acknowledgement looks the same from here — so the device may
-// answer moments later, against a row that is now QUEUED.
+// 🔑 IT USED TO NAME THE RELEASED-THEN-ANSWERED CASE, AND THAT CASE HAS MOVED. This
+// sentinel was the refusal a device met when its answer reached a command a publish failure
+// had returned to the queue — the platform could not tell that answer from one to a
+// dispatch it had since issued in its place, so it refused both. The nonce tells them
+// apart: the first now SETTLES the command, and only the second is refused, as
+// ErrResponseNonceMismatch. Both halves of that are why the nonce is on the return path.
 //
-// 🔴 IT IS TERMINAL FOR THE MESSAGE, NOT TRANSIENT, and the reason is worth stating because
-// "retry" is the instinctive reading. A redelivery finds one of two things. Usually the row
-// is still QUEUED and the refusal simply repeats, burning the delivery budget to reach the
-// same place. Worse, the sweep may have re-dispatched it meanwhile — and the row is then
-// SENT, so the redelivered message WOULD be accepted, settling the SECOND dispatch with the
-// FIRST dispatch's answer. Retrying does not recover the answer; it risks mis-filing it.
-//
-// The correct disposition is therefore to record it (a dead letter and a counter) and stop,
-// rather than to drop it or to write it against a command the platform still intends to
-// deliver.
+// 🔴 IT IS TERMINAL FOR THE MESSAGE, NOT TRANSIENT, and that rule outlives the case it was
+// written for. A redelivery meets a row in whatever state has stopped it being settleable,
+// and retrying cannot change that state; what retrying CAN do is reach the row after
+// something else moved it, and write an answer against a situation nobody checked. Record
+// it (a dead letter and a counter) and stop.
 var ErrCommandNotAnswerable = errors.New("command response names a command that is not in a state a response can settle")
+
+// ErrResponseMissingNonce is returned when a device's answer carries no dispatch nonce.
+//
+// 🔴 IT IS A REFUSAL, NOT A DEGRADED ACCEPT, AND THAT IS A DECISION WITH A COST. Accepting
+// such an answer on the status predicate alone — the behaviour every response had before the
+// nonce reached the return path — leaves the platform unable to tell an answer to the
+// dispatch it is holding from an answer to one it released, which is the whole thing the
+// nonce exists to establish. A rule that applied only to the clients that happen to echo it
+// would be no rule: the case it guards against is precisely a client whose answer arrives
+// without the evidence.
+//
+// The consequence is stated rather than discovered: a device that does not echo the nonce
+// cannot settle a command. Every in-tree client echoes it, and command_delivery_responses_
+// without_nonce_total counts the ones that do not, so "is anything out there still answering
+// blind?" has an answer an operator can read.
+//
+// Like ErrCommandNotAnswerable it is TERMINAL for the message. The same client will send the
+// same envelope on every redelivery, so retrying only burns the delivery budget.
+var ErrResponseMissingNonce = errors.New("command response carries no dispatch nonce")
+
+// ErrResponseNonceMismatch is returned when a device's answer names a dispatch the command is
+// no longer on.
+//
+// 🔑 THIS IS THE RELEASED-THEN-ANSWERED CASE SEEN FROM THE OTHER SIDE, and it is the reason
+// the nonce is on the return path at all. A publish reports an error, the claim is released,
+// the sweep dispatches the command again under a NEW nonce — and the device's answer to the
+// FIRST dispatch then arrives. The row is SENT and would satisfy any status predicate, so
+// without the nonce that answer settles the second dispatch: the platform records an
+// actuation the device has not performed yet, and the real answer to it is dropped as late.
+// Naming the dispatch makes the two tellable apart, and this is the refusal.
+//
+// It is also what a stale answer looks like generally — a redelivery of an old response, a
+// device replaying its outbox — and the disposition is the same in every case: record it and
+// stop. Retrying cannot make it match, because the row has moved on by construction.
+var ErrResponseNonceMismatch = errors.New("command response names a dispatch the command is not on")
+
+// nonceAnswerableStatusStrings is the wire form of the states in which a device's answer may
+// settle a command WHEN IT NAMES THE DISPATCH IT IS ANSWERING: every live state.
+//
+// 🔴 IT IS WIDER THAN answerableStatusStrings, AND THE NONCE IS WHAT PAYS FOR THE WIDTH.
+// That set is positive because a status was the only evidence available: a row in QUEUED or
+// HELD is one no dispatcher is holding for the device, so an answer to it could not be
+// distinguished from a device closing out an actuation that never happened. A nonce is
+// evidence of a different kind — it can only have come from an envelope the platform
+// published — so a QUEUED row answered under the nonce it was dispatched with was genuinely
+// received, and settling it is the correct outcome rather than a widened default. That is
+// the case this whole return path exists to close: the command is settled once and not
+// dispatched again.
+//
+// 🔴 IT IS STILL A POSITIVE LIST even though it happens to be every non-terminal state
+// today, for the reason its three siblings are: a state added later must be admitted by
+// someone deciding to admit it. Written as "not terminal" a new state would be answerable by
+// default, which is the exact correction answerableStatusStrings received.
+//
+// The terminal states are absent because a settled command is settled — a late or duplicate
+// answer to one is handled by MarkResponse's fast path, not by a write.
+func nonceAnswerableStatusStrings() []string {
+	return []string{CommandQueued.String(), CommandHeld.String(),
+		CommandSent.String(), CommandParked.String()}
+}
 
 // answerableStatusStrings is the wire form of the states in which a DEVICE RESPONSE may
 // settle a command: the states a dispatcher has held the row in for that device.
@@ -859,6 +924,14 @@ var ErrCommandNotAnswerable = errors.New("command response names a command that 
 // 🔴 DELIBERATELY ITS OWN LIST, like its three siblings above. It happens to be the
 // complement of neither of them, and a shared helper would silently move this set on the
 // day a state is added for one of the other questions.
+//
+// 🔴 MarkResponse NO LONGER USES IT, AND THE REASON IS NOT THAT THE SET WAS WRONG. A device's
+// answer now names the dispatch it received, and that evidence admits the two live states
+// this list excludes (see nonceAnswerableStatusStrings). What is left here is the from-set
+// for the one writer that has NO such evidence: MarkResponseLost, which acts on a dead letter
+// recording that an answer was lost, and a letter carries no nonce. Widening this to match
+// its wider sibling would let a lost answer stamp FAILED on a command the sweep has since
+// re-queued — the case the positive set was introduced to close.
 func answerableStatusStrings() []string {
 	return []string{CommandSent.String(), CommandParked.String()}
 }
@@ -1597,24 +1670,36 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // cancelled — which is a benign race and not an error.
 //
 // 🔴 IT STAMPS A FRESH DISPATCH NONCE, AND THAT IS WHAT INVALIDATES AN IN-FLIGHT PARK.
-// This claim's caller does not publish an envelope — it dispatches over its own live
-// session — so it never reads the value back. The stamp exists for the other direction:
-// a park request still in JetStream redelivery names the PREVIOUS dispatch, and once this
+// A park request still in JetStream redelivery names the PREVIOUS dispatch, and once this
 // write lands that name matches nothing, so the row this caller is about to actuate
 // cannot be dragged back under it. Omitting the stamp here would leave exactly the
 // re-arm window the nonce was introduced to close.
-func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error) {
+//
+// 🔴 IT RETURNS THE NONCE, AND AN EARLIER VERSION DID NOT. This comment used to say the
+// caller "never reads the value back", which stopped being true when a device's answer had
+// to name the dispatch it was answering. This claim's caller does not publish an envelope —
+// it dispatches over its own live session and then publishes the outcome on the device's
+// behalf — but that outcome is a command response like any other, so it has to carry the
+// dispatch nonce, and here is the only place that value exists. A claim that did not hand
+// it back would leave that transport unable to settle anything it delivered.
+func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool, error) {
+	nonce := newDispatchNonce()
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
-			"dispatch_nonce": sql.NullString{String: newDispatchNonce(), Valid: true},
+			"dispatch_nonce": sql.NullString{String: nonce, Valid: true},
 		})
 	if res.Error != nil {
-		return false, res.Error
+		return "", false, res.Error
 	}
-	return res.RowsAffected > 0, nil
+	if res.RowsAffected == 0 {
+		// A lost claim dispatched nothing, so there is no dispatch to name. Handing back
+		// the minted nonce anyway would give the caller a name that matches no row.
+		return "", false, nil
+	}
+	return nonce, true, nil
 }
 
 // MarkResponse records a device response against a command, looked up by its token.
@@ -1625,6 +1710,19 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error)
 // responder is the token of the device that ACTUALLY published the response, taken
 // from the delivered subject rather than the payload, and a response from anyone but
 // the command's own device is refused with ErrResponderNotCommandOwner.
+//
+// dispatchNonce is the value the device echoes from the delivery envelope it received, and
+// it is REQUIRED: an answer that names no dispatch is refused with ErrResponseMissingNonce
+// and one that names a dispatch the command is not on with ErrResponseNonceMismatch.
+//
+// 🔴 THE NONCE, NOT THE STATUS, IS WHAT SAYS THIS ANSWER BELONGS TO THIS DISPATCH. The
+// status only says what the platform believes it did with the row; the nonce is the one
+// thing in the exchange that can only have come from an envelope actually delivered. That
+// difference is what lets a command released back to the queue after a publish reported an
+// error be settled by the device that did receive it — the answer is provably for the
+// dispatch that was released — and, in the same move, what stops the answer to a released
+// dispatch settling the NEW dispatch that replaced it, which a status predicate cannot see
+// at all because both dispatches leave the row reading SENT.
 //
 // 🔴 THAT CHECK IS THE WHOLE POINT OF THE PARAMETER, AND ITS ABSENCE WAS A FORGERY.
 // The device grant used to permit publishing on the TENANT-WIDE response subject while
@@ -1654,11 +1752,17 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (bool, error)
 //   - terminal now -> benign. The command was settled between the read and the write, by a
 //     duplicate response, an expiry or a cancel. Same outcome as the fast path above: the
 //     current row is returned with no error.
-//   - still live -> ErrCommandNotAnswerable. A device answered a command no dispatcher is
-//     holding for it. Nothing is written — see that sentinel for why this is terminal for
-//     the message rather than something to retry.
-func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string, success bool,
-	payload *string, errMsg *string) (*Command, error) {
+//   - live, on a DIFFERENT dispatch -> ErrResponseNonceMismatch. The answer is for a
+//     dispatch this command has moved off, so writing it would settle the current one with
+//     the previous one's outcome.
+//   - live, on THIS dispatch, in a state the set does not admit -> ErrCommandNotAnswerable.
+//     Unreachable while that set is every live state, and kept as the loud residual: a
+//     status added later without being classified fails here instead of falling through.
+//
+// Nothing is written in either refusal — see the sentinels for why each is terminal for the
+// message rather than something to retry.
+func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispatchNonce string,
+	success bool, payload *string, errMsg *string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{commandToken})
 	if err != nil {
 		return nil, err
@@ -1676,6 +1780,17 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 	if found.DeviceToken != responder {
 		return nil, fmt.Errorf("%w: device %q answered for command %q, which belongs to device %q",
 			ErrResponderNotCommandOwner, responder, commandToken, found.DeviceToken)
+	}
+
+	// 🔴 THE NONCE IS CHECKED BEFORE THE TERMINAL FAST PATH, AND THE ORDER IS THE POINT.
+	// An answer that names no dispatch is refused whatever state the row is in, so the
+	// counter behind this sentinel counts EVERY client still answering blind. Checked after
+	// the fast path it would count only the ones that happened to arrive at a live row, and
+	// the one question this refusal has to be able to answer — is anything still sending
+	// these? — would be answered with a number that is quietly short.
+	if dispatchNonce == "" {
+		return nil, fmt.Errorf("%w: device %q answered command %q without naming the dispatch it received",
+			ErrResponseMissingNonce, responder, commandToken)
 	}
 
 	// Fast-path: ignore responses to already-terminal commands (idempotent / late).
@@ -1717,8 +1832,16 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 	// res.RowsAffected, so a predicate that matched nothing returned the reloaded row and a
 	// nil error — success, to every caller. It is the one write in this file that did not
 	// check (its eighteen siblings do), and the block below is what makes the claim true.
+	//
+	// 🔴 dispatch_nonce = ? IS THE AUTHORITATIVE HALF OF THIS PREDICATE, and unlike the
+	// device_token clause beside it, it is not equivalent to anything checked above: the
+	// value is read from the row at the instant of the write, so a dispatcher re-claiming
+	// the command between this read and this write moves it onto a new nonce and the
+	// answer correctly matches nothing. A NULL nonce — a row never dispatched — matches
+	// nothing either, which is SQL's three-valued logic landing on the right side here.
 	res := api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ? AND device_token = ? AND status IN ?", found.ID, responder, answerableStatusStrings()).
+		Where("id = ? AND device_token = ? AND dispatch_nonce = ? AND status IN ?",
+			found.ID, responder, dispatchNonce, nonceAnswerableStatusStrings()).
 		Updates(updates)
 	if res.Error != nil {
 		return nil, res.Error
@@ -1735,22 +1858,25 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder string
 			// duplicate response the fast path above returns, and handled the same way.
 			return current, nil
 		}
-		// 🔑 BOTH STATUSES ARE IN THE MESSAGE, AND ONE OF THEM WOULD CONTRADICT IT. The
-		// status at the write is what separates the causes an operator acts on — QUEUED
-		// says a dispatch was released and this is probably its answer, HELD says the
-		// platform is waiting on presence — and neither can be re-derived later, because by
-		// the time the dead letter is read the row has moved again.
+		// 🔑 THE NONCE IS WHAT SEPARATES THE TWO REMAINING CAUSES, AND THE STATUS CANNOT.
+		// A live row here reads SENT in the ordinary case — the command was re-dispatched
+		// while this answer was in flight — so a message naming only the status would say a
+		// command "could not be settled, and it reads SENT", which contradicts itself for
+		// whoever reads it. What actually happened is that the row is on a DIFFERENT
+		// dispatch, and that is a fact only the nonce carries.
 		//
-		// 🔴 THE STATUS NOW CAN BE AN ANSWERABLE ONE, WHICH IS WHY IT IS NOT REPORTED
-		// ALONE. If a dispatcher re-claims the row between the failed UPDATE and this
-		// re-read, `current` reads SENT — and a message saying a command "is not in a state
-		// a response can settle, which is SENT" contradicts itself for whoever reads it.
-		//
-		// 🔑 REFUSING IS STILL RIGHT IN THAT CASE, AND DELIBERATELY SO. A SENT row here is
-		// a NEW dispatch under a new nonce; this answer belongs to the one that was
-		// released. Accepting it because the row happens to be answerable again would
-		// settle the second dispatch with the first dispatch's answer, which is the precise
-		// mis-filing ErrCommandNotAnswerable's own note gives as the reason not to retry.
+		// Both statuses are still reported: the one at the write separates the causes an
+		// operator acts on, and neither can be re-derived later because by the time the dead
+		// letter is read the row has moved again.
+		if !current.DispatchNonce.Valid || current.DispatchNonce.String != dispatchNonce {
+			return nil, fmt.Errorf("%w: device %q answered command %q naming a dispatch the "+
+				"command has moved off: it read %s when the answer was written and reads %s now",
+				ErrResponseNonceMismatch, responder, commandToken, found.Status, current.Status)
+		}
+		// The answer names the dispatch the row is still on, and the row is live, so only
+		// the status set can have refused it. That is unreachable while the set is every
+		// live state — which is exactly why it is reported loudly rather than folded into
+		// the branch above: a status added later without being classified arrives here.
 		return nil, fmt.Errorf("%w: device %q answered command %q, which the platform was not "+
 			"holding for it: the command read %s when the answer was written and reads %s now",
 			ErrCommandNotAnswerable, responder, commandToken, found.Status, current.Status)

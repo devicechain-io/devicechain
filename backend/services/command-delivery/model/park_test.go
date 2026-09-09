@@ -72,7 +72,7 @@ func TestParkClaimRefusesAStaleNonce(t *testing.T) {
 	if _, _, err := api.ParkClaim(ctx, "re-armed", stale); err != nil {
 		t.Fatalf("park to set up the drain: %v", err)
 	}
-	won, err := api.MarkSentByToken(ctx, "re-armed")
+	_, won, err := api.MarkSentByToken(ctx, "re-armed")
 	if err != nil || !won {
 		t.Fatalf("drain claim: won=%v err=%v", won, err)
 	}
@@ -352,7 +352,7 @@ func TestParkClaimIsANoOpOnACommandThatMovedOn(t *testing.T) {
 	if err != nil || !claimed {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
-	if _, err := api.MarkResponse(ctx, "answered", "d", true, nil, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "answered", "d", nonce, true, nil, nil); err != nil {
 		t.Fatalf("MarkResponse: %v", err)
 	}
 
@@ -380,9 +380,20 @@ func TestMarkResponseAcceptsAParkedCommand(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	seedWithStatus(t, api, ctx, "late-answer", CommandParked)
+	// Staged through the real transitions rather than forced, because the answer has to name
+	// the dispatch the device received: a park RETIRES a claim without erasing which dispatch
+	// it was, and that is what leaves a late answer somewhere to land.
+	id := seedWithStatus(t, api, ctx, "late-answer", CommandQueued)
+	nonce, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("staging the dispatch: claimed=%v err=%v", claimed, err)
+	}
+	if landed, parked, err := api.ParkClaim(ctx, "late-answer", nonce); err != nil || !parked ||
+		landed != CommandParked {
+		t.Fatalf("staging the park: landed=%v parked=%v err=%v", landed, parked, err)
+	}
 
-	got, err := api.MarkResponse(ctx, "late-answer", "d", true, nil, nil)
+	got, err := api.MarkResponse(ctx, "late-answer", "d", nonce, true, nil, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse: %v", err)
 	}

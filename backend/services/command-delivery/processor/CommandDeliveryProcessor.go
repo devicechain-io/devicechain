@@ -46,6 +46,23 @@ type responseEnvelope struct {
 	Success      bool    `json:"success"`
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
+
+	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
+	// and it is REQUIRED: an answer that carries none is refused and dead-lettered.
+	//
+	// 🔴 IT IS THE ONLY THING IN THIS ENVELOPE THAT THE DEVICE COULD NOT HAVE INVENTED, and
+	// that is what it is for. Every other field is a claim; this one can only have come from
+	// an envelope the platform published, so it is evidence that a specific dispatch reached
+	// the device. That evidence is what settles the case this envelope could not previously
+	// express: a publish that reports an error returns the command to the queue, the device
+	// answers anyway because it did receive it, and the platform cannot tell that answer
+	// from one to the dispatch it has since issued in its place — both leave the row reading
+	// SENT. See model.MarkResponse.
+	//
+	// It is NOT `omitempty`, deliberately. A device is expected to send it, so the field
+	// stays on the wire even when a client leaves it empty — which is what an operator sees
+	// when they read a dead letter and ask why the answer was refused.
+	DispatchNonce string `json:"dispatchNonce"`
 }
 
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
@@ -774,7 +791,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
-		response.Success, response.Payload, response.Error); err != nil {
+		response.DispatchNonce, response.Success, response.Payload, response.Error); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
 		// TERMINAL, not transient: the same message would be refused on every redelivery,
 		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and
@@ -816,17 +833,74 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		// the outcome is the one already described above, not a guard. The same is true of
 		// every `_ = msg.Ack()` in this file; it is called out here because the sentence
 		// above would otherwise read as a promise.
+		// The device owns the command and gave a real answer, but the answer does not name
+		// the dispatch it is answering — either it names none at all, or it names one the
+		// command has moved off. Both are TERMINAL for the message and both are RECORDED,
+		// for the same reasons the branch below is: a redelivery meets the same refusal,
+		// and the answer itself is real and worth being able to find.
+		//
+		// 🔴 A LETTER IS WRITTEN HERE WHERE AN EXHAUSTED DISPATCH GETS NONE, AND THE
+		// DIFFERENCE IS WHAT THE ORIGINAL IS. That decision (see DeliveryMetrics.
+		// DispatchesExhausted) turns on the give-up's original being a ROW that survives,
+		// carrying its own terminal status and failure count, already queryable — so a
+		// letter would put a second entry in front of an operator for one event. Here the
+		// original is a MESSAGE. The device's answer exists only on a stream with a seven-day
+		// age limit and a byte ceiling, the command row records nothing about it because the
+		// whole point is that it was not written there, and no reconciler can reconstruct it:
+		// only the device knows what it did. Dropping it would destroy the one copy.
+		//
+		// 🔴 THEY ARE COUNTED APART, AND THE TWO NUMBERS ANSWER DIFFERENT QUESTIONS. A
+		// missing nonce is a CLIENT that has not been updated — the population the refusal
+		// deliberately breaks — so its rate is an operator's evidence that this rule is
+		// safe to have switched on, and it should be zero on an instance whose devices all
+		// speak the current contract. A mismatched nonce is the released-then-answered race
+		// itself: the answer arrived for a dispatch the platform had already replaced, and
+		// a standing rate says commands are being published more than once.
+		if errors.Is(err, model.ErrResponseMissingNonce) {
+			incr(cproc.ResponsesWithoutNonce, 1)
+			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
+				Str("correlation", msg.CorrelationID()).
+				Msg("A device answered a command without naming the dispatch it received; " +
+					"recording the answer as a dead letter rather than settling the command with it.")
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonUnprocessable,
+				"a device answered a command without naming the dispatch it received, so the "+
+					"answer could not be shown to belong to the dispatch the platform is holding "+
+					"and was not recorded against the command")
+			_ = msg.Ack()
+			done(core.ResultFailed)
+			return false
+		}
+		if errors.Is(err, model.ErrResponseNonceMismatch) {
+			incr(cproc.ResponsesStaleNonce, 1)
+			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
+				Str("correlation", msg.CorrelationID()).
+				Msg("A device answered a dispatch the command has moved off; recording the answer " +
+					"as a dead letter rather than settling a later dispatch with it.")
+			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
+				deadletter.ReasonUnprocessable,
+				"a device answered a dispatch its command had already moved off — the command was "+
+					"released and issued again — so recording the answer would have settled the "+
+					"newer dispatch with the older dispatch's outcome")
+			_ = msg.Ack()
+			done(core.ResultFailed)
+			return false
+		}
+		// The residual. The answer names the dispatch the command is still on, and the
+		// command is in a state that dispatch cannot settle — which no state in today's
+		// vocabulary is, so a letter here means a status was added without anyone deciding
+		// whether an answer may settle it. See ErrCommandNotAnswerable.
 		if errors.Is(err, model.ErrCommandNotAnswerable) {
 			incr(cproc.ResponsesNotAnswerable, 1)
 			log.Warn().Err(err).Str("device", responder).Str("command", response.CommandToken).
 				Str("correlation", msg.CorrelationID()).
-				Msg("A device answered a command the platform is not holding for it; recording the " +
-					"answer as a dead letter rather than discarding it.")
+				Msg("A device answered the dispatch its command is on and the command could still " +
+					"not be settled; recording the answer as a dead letter rather than discarding it.")
 			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,
 				deadletter.ReasonUnprocessable,
-				"a device answered a command the platform was not holding for it — the command had "+
-					"been returned to the queue or withheld — so the answer could not be recorded "+
-					"against it and the command may be dispatched again")
+				"a device answered the dispatch its command is still on, and the command was in a "+
+					"state that dispatch could not settle, so the answer could not be recorded "+
+					"against it")
 			_ = msg.Ack()
 			done(core.ResultFailed)
 			return false

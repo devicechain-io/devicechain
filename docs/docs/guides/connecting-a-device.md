@@ -304,7 +304,8 @@ Each message is a JSON envelope:
   "token": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
   "deviceToken": "sensor-001",
   "name": "reboot",
-  "payload": {"delaySeconds": 5}
+  "payload": {"delaySeconds": 5},
+  "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94"
 }
 ```
 
@@ -314,6 +315,10 @@ Each message is a JSON envelope:
   this is one of its published commands and `payload` has already been validated against
   that command's parameter schema — see
   [Commands and the capability contract](../concepts/commands.md#commands-and-the-capability-contract).
+- **`dispatchNonce`** names **this delivery** of the command. It is opaque — nothing on the
+  device should read or interpret it — and it must be echoed in the response. Keep it with
+  the command until you answer, and if the same command arrives again, answer with the nonce
+  from the **latest** delivery rather than the one you first stored.
 
 ## Responding to a command {#responding-to-a-command}
 
@@ -330,12 +335,15 @@ mosquitto_pub \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/command-responses/sensor-001" \
-  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","success":true,"payload":"rebooting in 5s"}'
+  -m '{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":true,"payload":"rebooting in 5s"}'
 ```
 
 - **`commandToken` must be the `token` from the delivery envelope** — the command's token,
   not the device's. This is the single most common mistake: sending the device token here
   matches no command and the response is discarded.
+- **`dispatchNonce` must be the `dispatchNonce` from the delivery envelope you are
+  answering.** It is required: a response that omits it, or that quotes a nonce from an
+  earlier delivery of the same command, does not settle the command. See below for why.
 - **`success`** moves the command to `SUCCESSFUL` or `FAILED`.
 - **`payload`** / **`error`** are optional strings, surfaced in the console's command
   history and returned by the API.
@@ -344,6 +352,26 @@ Like the events and command topics, this one is **per-device**, and a device is 
 to publish only to its own. Both the tenant and the responding device are taken from the
 topic rather than the body, so a device can answer only for **its own** commands: a response
 naming a command that belongs to a different device is rejected, not recorded.
+
+:::caution Answers must name the delivery they answer
+Echoing `dispatchNonce` is what tells the platform your answer belongs to **this** delivery
+of the command. It matters because a command can legitimately be published more than once: if
+a publish reports an error, the platform cannot tell a message that was lost from one whose
+acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an
+answer to the first delivery arriving after the second went out would close the command
+before the device had carried out the second one.
+
+Two consequences for a device you build yourself:
+
+- A response with **no** `dispatchNonce` is refused. The command is not settled, and the
+  answer is recorded on the platform's dead-letter stream rather than dropped, so the
+  refusal is visible rather than silent.
+- A response quoting a `dispatchNonce` the command has **moved off** is refused the same
+  way. Answer with the nonce from the delivery you are actually responding to.
+
+Store the nonce alongside the command while you carry it out, and overwrite it if the same
+command is delivered again before you answer.
+:::
 
 :::caution The topic changed
 This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, with no device

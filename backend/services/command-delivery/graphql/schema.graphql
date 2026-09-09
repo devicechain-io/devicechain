@@ -467,9 +467,15 @@ type Mutation {
     # rather than waiting for the delivery sweep — an LwM2M device draining its held
     # commands over the CoAP session it just opened. Claim BEFORE dispatching: the
     # claim is what stops the sweep from publishing the same command a second time,
-    # and a command is a physical actuation. Returns false if the command was not
-    # claimable (already sent, answered or cancelled), which is a benign race.
-    markCommandSent(token: String!): Boolean!
+    # and a command is a physical actuation.
+    #
+    # Returns the DISPATCH NONCE this claim stamped, which the caller must quote back when
+    # it reports the command's outcome — a response that names no dispatch is refused, and
+    # one that names a superseded dispatch cannot settle the command that replaced it.
+    # Returns null if the command was not claimable (already sent, answered or cancelled),
+    # which is a benign race: there is no dispatch, so there is nothing to name and nothing
+    # to deliver.
+    markCommandSent(token: String!): String
     # Hand back a command whose transport found the device UNREACHABLE, moving it
     # SENT -> PARKED so the record says it went nowhere. The platform decides to publish
     # from presence — is the device registered — but a queue-mode device can be registered

@@ -137,6 +137,7 @@ func (f *fakeApi) HeldCommands(_ context.Context, afterId uint, limit int) ([]*m
 type responseCall struct {
 	commandToken string
 	responder    string
+	nonce        string
 	success      bool
 }
 
@@ -325,11 +326,13 @@ func (f *fakeApi) ExpireStale(context.Context, time.Time) (int64, map[string]int
 	return 0, nil, nil
 }
 
-func (f *fakeApi) MarkSentByToken(_ context.Context, token string) (bool, error) {
+func (f *fakeApi) MarkSentByToken(_ context.Context, token string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markSentByToken = append(f.markSentByToken, token)
-	return true, nil
+	// A nonce that varies per claim, for the reason MarkSent's does: a fixed one would let a
+	// test pass that a real re-claim would break.
+	return fmt.Sprintf("token-nonce-%d", len(f.markSentByToken)), true, nil
 }
 
 // MarkSent returns a nonce that VARIES per claim, rather than a fixed string. The value is
@@ -369,12 +372,17 @@ func (f *fakeApi) CreateCommand(context.Context, *model.CommandCreateRequest) (*
 // broker-verified SUBJECT rather than from anything the sender wrote, and a fake that
 // discarded it would pass identically whether the processor read the subject, read the
 // payload, or passed the empty string.
-func (f *fakeApi) MarkResponse(_ context.Context, commandToken, responder string, success bool,
-	_ *string, _ *string) (*model.Command, error) {
+//
+// 🔑 THE NONCE IS RECORDED FOR THE OPPOSITE REASON: it is the one field on this path that
+// DOES come from the payload, and a fake that dropped it would pass whether the processor
+// forwarded what the device echoed or forwarded nothing at all — which is the difference
+// between a command that settles and one that never does.
+func (f *fakeApi) MarkResponse(_ context.Context, commandToken, responder, nonce string,
+	success bool, _ *string, _ *string) (*model.Command, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responseCalls = append(f.responseCalls, responseCall{
-		commandToken: commandToken, responder: responder, success: success,
+		commandToken: commandToken, responder: responder, nonce: nonce, success: success,
 	})
 	return nil, f.responseErr
 }
