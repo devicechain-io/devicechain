@@ -200,6 +200,30 @@ instance:
       metrics:
         enabled: true
         httpPort: 9090
+      graphql:
+        # The largest single inbound WebSocket message the GraphQL subscription
+        # endpoint will read, in bytes.
+        #
+        # It is the WebSocket half of a pair whose HTTP half has always been there. A
+        # POST to /graphql is capped by the handler's request-body ceiling (4 MiB); a
+        # WebSocket upgrade to that SAME path was capped by nothing, because
+        # gorilla/websocket applies no read limit until something sets one. The
+        # credential on a subscription connection arrives IN the first frame, so that
+        # frame is read — and its payload held in the pod's heap — before anything has
+        # authenticated the peer. The parsed-document ceilings (query length,
+        # selection depth) apply only after the frame has already been read, so they
+        # do not cover this.
+        #
+        # The default matches the HTTP body ceiling deliberately: the same operation
+        # should carry the same bound over either transport on the one route. Raise it
+        # only for a deployment whose subscribe payloads are genuinely larger; a peer
+        # that exceeds it is closed with WebSocket code 1009 (message too big) and the
+        # server carries on serving everyone else.
+        #
+        # Omitting the key (or setting 0 or a negative number) means the built-in
+        # default — never unlimited. There is deliberately no value that turns the
+        # ceiling off.
+        maxSubscriptionMessageBytes: 4194304 # 4 MiB, matching the HTTP body ceiling
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its
