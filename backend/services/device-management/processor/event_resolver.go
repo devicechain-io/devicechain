@@ -995,9 +995,18 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			}
 
 			if log.Debug().Enabled() {
-				jevent, err := json.MarshalIndent(event, "", "  ")
+				// Dump the event WITHOUT the presented credential. This is the whole
+				// unresolved struct rendered as JSON, and a debug line is routinely
+				// shipped off-cluster and retained far longer than the log level was
+				// meant to stay raised. The credential is redacted rather than the dump
+				// dropped because the event is already decoded here, so the fields to
+				// remove are known exactly; every other field is what the dump is for.
+				// The copy is local to this line and resolution below still sees the
+				// full event.
+				redacted := event.WithoutPresentedCredential()
+				jevent, err := json.MarshalIndent(&redacted, "", "  ")
 				if err == nil {
-					log.Debug().Str("correlation", correlation).Msg(fmt.Sprintf("Received %s event:\n%s", event.EventType.String(), jevent))
+					log.Debug().Str("correlation", correlation).Msg(fmt.Sprintf("Received %s event:\n%s", redacted.EventType.String(), jevent))
 				}
 			}
 

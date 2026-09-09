@@ -4,11 +4,15 @@
 package processor
 
 import (
+	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -146,3 +150,50 @@ func TestMqttOnMessage_CommandPlaneMatchIsExact(t *testing.T) {
 }
 
 var _ mqtt.Message = (*fakeMqttMessage)(nil)
+
+// captureDebugLog redirects the global logger into a buffer at debug level for the
+// duration of a test, and restores both when it ends.
+//
+// Forcing the LEVEL is load-bearing, not belt-and-braces. The assertion below is of
+// the form "this string must not appear in the log", and a muted logger satisfies it
+// perfectly — so without an explicit level this test would report a pass whenever
+// some earlier test in the package left the global level raised, which is the one
+// failure mode a redaction check must not have. The positive assertions that follow
+// are the other half of the same guard: they fail if nothing was logged at all.
+func captureDebugLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
+	log.Logger = zerolog.New(buf)
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	t.Cleanup(func() {
+		log.Logger = prevLogger
+		zerolog.SetGlobalLevel(prevLevel)
+	})
+	return buf
+}
+
+// With debug logging on, an arriving message is recorded by topic and size and the
+// message BODY is not written to the log.
+//
+// The body has not been decoded at this point, so this path cannot know what is in
+// it — under the default device authentication mode an inbound event body carries
+// the device's credential — and raising a log level to diagnose ingest is not a
+// decision to copy message bodies into a log pipeline.
+func TestMqttOnMessage_DebugDoesNotLogThePayload(t *testing.T) {
+	logs := captureDebugLog(t)
+	es, _ := newTestMqttSource(t, func(string, string, time.Time, bool) bool { return true })
+	// A body distinguishable from every other field on the line, so a match means
+	// the BODY was logged rather than some substring that happens to coincide.
+	body := []byte(`{"device":"d1","marker":"payload-body-marker"}`)
+
+	es.onMessage(nil, &fakeMqttMessage{topic: "inst-1/acme/events", payload: body})
+
+	got := logs.String()
+	assert.NotContains(t, got, "payload-body-marker", "the message body must not reach the log")
+	// The counterweight: the line must still be there and still be useful, or the
+	// assertion above would also pass with the logging removed entirely.
+	assert.Contains(t, got, "Received MQTT message", "the arrival must still be logged")
+	assert.Contains(t, got, `"topic":"inst-1/acme/events"`, "the topic must still be logged")
+	assert.Contains(t, got, fmt.Sprintf(`"bytes":%d`, len(body)), "the size must still be logged")
+}
