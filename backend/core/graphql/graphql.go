@@ -76,10 +76,6 @@ type GraphQLManager struct {
 	lifecycle core.LifecycleManager
 }
 
-// Subscriptions is the handler serving graphql-transport-ws on /graphql, or nil
-// before ExecuteInitialize has run.
-func (gql *GraphQLManager) Subscriptions() *SubscriptionHandler { return gql.subscriptions }
-
 // Create a new graphql manager.
 func NewGraphQLManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {

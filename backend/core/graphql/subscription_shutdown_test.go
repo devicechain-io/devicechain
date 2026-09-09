@@ -149,8 +149,8 @@ func TestExecuteStopEndsLiveSubscriptions(t *testing.T) {
 	for i := 0; i < n; i++ {
 		conns = append(conns, dialSubscribed(t, addr))
 	}
-	if got := gql.Subscriptions().LiveConnections(); got != n {
-		t.Fatalf("LiveConnections() = %d before the stop, want %d", got, n)
+	if got := gql.subscriptions.liveConnections(); got != n {
+		t.Fatalf("liveConnections() = %d before the stop, want %d", got, n)
 	}
 	if got := res.live.Load(); got != n {
 		t.Fatalf("%d subscription streams are live before the stop, want %d", got, n)
@@ -162,8 +162,8 @@ func TestExecuteStopEndsLiveSubscriptions(t *testing.T) {
 		t.Fatalf("ExecuteStop: %v", err)
 	}
 
-	if got := gql.Subscriptions().LiveConnections(); got != 0 {
-		t.Errorf("LiveConnections() = %d after ExecuteStop returned, want 0 — the server reported an "+
+	if got := gql.subscriptions.liveConnections(); got != 0 {
+		t.Errorf("liveConnections() = %d after ExecuteStop returned, want 0 — the server reported an "+
 			"orderly stop with subscription connections it had walked away from", got)
 	}
 	eventuallyLive(t, res, 0, "ExecuteStop returned, so nothing is left to cancel them")
@@ -209,8 +209,8 @@ func TestClientDisconnectReleasesItsSubscriptions(t *testing.T) {
 	for i := 0; i < n; i++ {
 		conns = append(conns, dialSubscribed(t, addr))
 	}
-	if got := gql.Subscriptions().LiveConnections(); got != n {
-		t.Fatalf("LiveConnections() = %d, want %d", got, n)
+	if got := gql.subscriptions.liveConnections(); got != n {
+		t.Fatalf("liveConnections() = %d, want %d", got, n)
 	}
 
 	for _, conn := range conns {
@@ -218,11 +218,11 @@ func TestClientDisconnectReleasesItsSubscriptions(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && gql.Subscriptions().LiveConnections() > 0 {
+	for time.Now().Before(deadline) && gql.subscriptions.liveConnections() > 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := gql.Subscriptions().LiveConnections(); got != 0 {
-		t.Errorf("LiveConnections() = %d after every client hung up, want 0", got)
+	if got := gql.subscriptions.liveConnections(); got != 0 {
+		t.Errorf("liveConnections() = %d after every client hung up, want 0", got)
 	}
 	eventuallyLive(t, res, 0, "every client hung up")
 }
@@ -255,8 +255,8 @@ func TestSubscriptionsWorkAgainAfterARestart(t *testing.T) {
 
 	// The whole point: a subscription over the restarted server still streams.
 	dialSubscribed(t, restarted)
-	if got := gql.Subscriptions().LiveConnections(); got != 1 {
-		t.Errorf("LiveConnections() = %d after a restart, want 1 — the handler refused to serve again", got)
+	if got := gql.subscriptions.liveConnections(); got != 1 {
+		t.Errorf("liveConnections() = %d after a restart, want 1 — the handler refused to serve again", got)
 	}
 	if got := res.live.Load(); got != 1 {
 		t.Errorf("%d subscription streams are live after a restart, want 1", got)
@@ -373,7 +373,7 @@ func TestExecuteInitializeCarriesTheConfiguredReadLimit(t *testing.T) {
 	if err := gql.ExecuteInitialize(context.Background()); err != nil {
 		t.Fatalf("ExecuteInitialize: %v", err)
 	}
-	if got := gql.Subscriptions().readLimit(); got != configured {
+	if got := gql.subscriptions.readLimit(); got != configured {
 		t.Errorf("the subscription handler's read limit = %d, want the configured %d", got, configured)
 	}
 }

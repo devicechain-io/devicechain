@@ -231,10 +231,12 @@ func (h *SubscriptionHandler) unregister(c *wsConnection) {
 	close(c.done)
 }
 
-// LiveConnections is how many upgraded connections have not yet finished. It exists
-// for tests and for operators reading a drain; nothing in the serving path consults
-// it.
-func (h *SubscriptionHandler) LiveConnections() int {
+// liveConnections is how many upgraded connections have not yet finished.
+//
+// Unexported on purpose: nothing in the serving path consults it, and its only
+// callers are this package's own tests. Exporting it would promise to keep stable a
+// number that exists to be measured, not consumed.
+func (h *SubscriptionHandler) liveConnections() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.conns)
