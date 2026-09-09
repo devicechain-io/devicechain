@@ -63,7 +63,7 @@ func TestRunExitsNonZeroWhenStartupIsRefused(t *testing.T) {
 
 	// An invalid instance id is the earliest fail-closed guard in InitializeAndStart,
 	// so this exercises the real Run path without needing a config volume or a broker.
-	ms := &Microservice{InstanceId: "not a valid token", outcome: make(chan error, 1)}
+	ms := &Microservice{InstanceId: "not a valid token"}
 	err := ms.Run()
 
 	// The exit code is the production-observable assertion. The returned error is only
@@ -75,12 +75,15 @@ func TestRunExitsNonZeroWhenStartupIsRefused(t *testing.T) {
 }
 
 // starting builds a Microservice as it is while still coming up: phase Starting, and a
-// lifecycle in the state where a service spends most of its startup. Both helpers exist
-// so no test hand-rolls the outcome channel — finished() sends on it, and on a
-// zero-value Microservice that is a nil channel, which blocks forever inside the Once.
+// lifecycle in the state where a service spends most of its startup.
+//
+// It no longer hand-rolls the outcome channel, and neither does anything else: outcomeCh
+// creates it on first use, so a struct literal has one. Every fixture here used to carry
+// `outcome: make(chan error, 1)` to keep finished() from parking on a nil channel — a
+// workaround only the tests that already knew about the hazard were applying.
 func starting(t *testing.T, callbacks LifecycleCallbacks) *Microservice {
 	t.Helper()
-	ms := &Microservice{outcome: make(chan error, 1)}
+	ms := &Microservice{}
 	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
 	ms.lifecycle = NewLifecycleManager("test", ms, callbacks)
 	ms.lifecycle.State = Initializing
@@ -246,7 +249,7 @@ func TestAStartedServiceIsTornDownInFull(t *testing.T) {
 	callbacks := NewNoOpLifecycleCallbacks()
 	callbacks.Stopper.Preprocess = func(context.Context) error { close(stopped); return nil }
 
-	ms := &Microservice{InstanceId: "valid-instance", outcome: make(chan error, 1)}
+	ms := &Microservice{InstanceId: "valid-instance"}
 	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
 	ms.lifecycle = NewLifecycleManager("test", inertComponent{}, callbacks)
 

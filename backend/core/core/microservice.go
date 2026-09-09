@@ -34,7 +34,37 @@ const (
 	METRICS_NAMESPACE = "devicechain"
 )
 
-// Primary microservice implementation
+// Microservice is the shared body of a DeviceChain service: its identity, its
+// configuration, its own metrics registry, its own HTTP mux, and its lifecycle.
+//
+// 🔴 A STRUCT LITERAL IS A SUPPORTED WAY TO BUILD ONE, AND WHAT SURVIVES IT IS A
+// PER-METHOD FACT RATHER THAN A PER-FIELD ONE. Around thirty fixtures in this tree write
+// &core.Microservice{…}, two of them exported package-level vars in non-test files, so
+// the mode is real and is staying. The list below is what actually holds, and it is
+// pinned by TestStructLiteralMicroserviceMethods rather than asserted here:
+//
+//	Safe — they behave as they do on a constructed Microservice:
+//	  Banner, Mux, RegisterProbes, NewHttpServer, MetricsSubsystem, MetricsRegisterer,
+//	  MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
+//	  NewGaugeVec, NewProcessorMetrics, LoadInstanceConfiguration,
+//	  LoadMicroserviceConfiguration, ExecuteInitialize, ExecuteStart, ExecuteStop,
+//	  ExecuteTerminate, InitializeAndStart, Run, ShutDownNow, FailNow.
+//
+//	  The metric constructors are the one place where "safe" is not "identical": with no
+//	  registry the collectors are built UNREGISTERED. They still count, so the code under
+//	  test behaves the same; they are simply not gatherable. MetricsRegisterer says why
+//	  that is the safe direction.
+//
+//	Refuse, loudly, because any answer they could invent would be indistinguishable from
+//	a real one:
+//	  Initialize, Start, Stop, Terminate — the zero LifecycleManager has no Component and
+//	  no Callbacks. A manufactured one would return nil, i.e. success, for a service that
+//	  ran no initializer and started nothing.
+//	  MarkReady, MarkReadyWithoutAuthSurface, StartAuthGate, StartInstanceAuthGate — see
+//	  readinessGate for why a gate is not conjured up on demand.
+//
+// A fixture that needs one of those sets the single field it needs, or calls
+// NewMicroservice.
 type Microservice struct {
 	StartTime time.Time
 
@@ -51,6 +81,11 @@ type Microservice struct {
 	MicroserviceConfigurationRaw []byte
 
 	// Readiness gates the data plane on auth being live (ADR-022 decision 3).
+	//
+	// nil on a struct literal, and deliberately NOT created on demand the way mux below
+	// is — the methods that need it refuse instead. readinessGate holds the reason: this
+	// field is read DIRECTLY by the things that serve traffic, so a gate created behind
+	// their backs would not be the one they are consulting.
 	Readiness *ReadinessGate
 
 	// metricsReg is the registry every metric this microservice constructs is
@@ -93,12 +128,20 @@ type Microservice struct {
 	mux     *http.ServeMux
 
 	// Observability metrics (E17). nil when the microservice was built without
-	// NewMicroservice (e.g. in unit tests), so every use is nil-guarded.
+	// NewMicroservice (e.g. in unit tests), so every use of THESE THREE is nil-guarded.
+	//
+	// ⚠️ That is a statement about these three fields and nothing else. Read as a
+	// statement about the type it is false, and it was: four other constructor-only
+	// fields carried no such guarantee. The per-method boundary is on Microservice above.
 	readyGauge   prometheus.Gauge
 	authAttempts prometheus.Counter
 	authFailures prometheus.Counter
 
-	// Internal lifeycle processing
+	// Internal lifeycle processing.
+	//
+	// lifecycle is a VALUE, so a struct literal holds a zero LifecycleManager rather than
+	// a nil one — no Component and no Callbacks, which is what makes Initialize, Start,
+	// Stop and Terminate panic on one. See Microservice above for why they are left that way.
 	lifecycle LifecycleManager
 	shutdown  chan os.Signal
 
@@ -109,7 +152,11 @@ type Microservice struct {
 	// always true, so it recorded that the process had stopped while discarding the only
 	// bit anyone can act on — which is how a service that refused its own configuration
 	// came to exit 0 and report Completed.
-	outcome chan error
+	//
+	// Created by outcomeCh on first use, and by nothing else — see that method for why
+	// building it in NewMicroservice put the defect back through the field that fixes it.
+	outcomeOnce sync.Once
+	outcome     chan error
 
 	// finish makes the FIRST outcome the reported one and every later one a no-op.
 	//
@@ -211,7 +258,6 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
 	ms.rootCtx, ms.cancel = context.WithCancel(context.Background())
-	ms.outcome = make(chan error, 1)
 	ms.shutdown = make(chan os.Signal, 1)
 
 	// Hook interrupt and terminate signals for graceful shutdown
@@ -309,7 +355,37 @@ func (ms *Microservice) Run() error {
 // after an interrupted startup reported success and the real failure was discarded —
 // first-wins was the bug, not the rule. Name the gate before changing either.
 func (ms *Microservice) finished(err error) {
-	ms.finish.Do(func() { ms.outcome <- err })
+	ms.finish.Do(func() { ms.outcomeCh() <- err })
+}
+
+// outcomeCh is the channel finished sends on and waitForShutdown receives from, created
+// on first use so that BOTH ways of building a Microservice have one. It is the only
+// place it is created, for the same reason Mux is the only place the mux is.
+//
+// 🔴 BUILT IN NewMicroservice INSTEAD, IT IS NIL ON A STRUCT LITERAL — AND A NIL CHANNEL
+// DOES NOT FAIL, IT BLOCKS. finished sends inside a sync.Once, so the send parks forever
+// and every later caller then parks on that Once's mutex; waitForShutdown parks on the
+// receive. Run therefore logged its startup error and hung with no further output, which
+// is the exact defect this channel was introduced to fix, reachable through the field
+// that fixes it.
+//
+// A test could work around that by hand-rolling the channel, and several did — a
+// workaround that only the tests which already knew about it were carrying, in a
+// constructor no service calls.
+func (ms *Microservice) outcomeCh() chan error {
+	ms.outcomeOnce.Do(func() { ms.outcome = make(chan error, 1) })
+	return ms.outcome
+}
+
+// cancelRoot cancels the root context if this Microservice has one.
+//
+// A struct literal has none, and it has none because nothing was ever launched on it —
+// so there is nothing to unwind and the guard skips work that does not exist rather than
+// substituting a value for it. Before it, every path into shutDown panicked there.
+func (ms *Microservice) cancelRoot() {
+	if ms.cancel != nil {
+		ms.cancel()
+	}
 }
 
 // reportOutcome logs a failed lifecycle and sets a non-zero exit status for it,
@@ -449,7 +525,7 @@ func (ms *Microservice) shutDown(fatal error) {
 		// became ready was never in a Service's endpoints. There is nothing to drain,
 		// and no reason to sleep the window before exiting.
 		log.Warn().Msg("Asked to shut down before startup completed; nothing to tear down.")
-		ms.cancel()
+		ms.cancelRoot()
 		// nil for a signal-driven stop, which is not this process's verdict on itself;
 		// non-nil when a component called FailNow, which is.
 		ms.finished(fatal)
@@ -478,7 +554,7 @@ func (ms *Microservice) shutDown(fatal error) {
 	// Cancel the root context first so long-running loops (NATS consumers, the
 	// auth gate) observe cancellation and unwind (E10). Stop/Terminate run on
 	// fresh contexts so teardown still completes after the cancellation.
-	ms.cancel()
+	ms.cancelRoot()
 
 	err := ms.Stop(context.Background())
 	if err != nil {
@@ -508,7 +584,7 @@ func (ms *Microservice) shutDown(fatal error) {
 
 // Wait for microservice to shut down, returning how it ended.
 func (ms *Microservice) waitForShutdown() error {
-	return <-ms.outcome
+	return <-ms.outcomeCh()
 }
 
 // LoadInstanceConfiguration reads the instance configuration from the mounted

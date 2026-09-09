@@ -157,6 +157,33 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 	}
 }
 
+// readinessGate is the gate MarkReady, MarkReadyWithoutAuthSurface and StartAuthGate
+// operate on. It REFUSES when there is none rather than creating one, and both halves of
+// that are deliberate.
+//
+// Creating one here on first use — the way Mux does — looks like the obvious fix and is
+// the wrong one, because Readiness is an EXPORTED field that services read directly and
+// hand to the things that actually serve traffic: RegisterProbes, the GraphQL manager,
+// the NATS consumer gate. Those callers captured the nil. A gate created here would not
+// be the one they hold, so this service would record itself ready on a gate nothing
+// consults, /readyz would answer 503 for the life of the process, and nothing anywhere
+// would say why.
+//
+// Answering "not ready" instead is worse still: MarkReadyWithoutAuthSurface returns
+// nothing at all, so a no-op there is indistinguishable at the call site from having
+// opened the gate.
+//
+// So the honest answer is that a Microservice with no gate cannot be marked ready, and
+// asking it to is a construction mistake in the caller — the same kind, and handled the
+// same way, as calling UseMetricsRegistry too late. The message names the two fixes.
+func (ms *Microservice) readinessGate() *ReadinessGate {
+	if ms.Readiness == nil {
+		panic("core: this Microservice has no ReadinessGate, so it cannot be marked ready. " +
+			"Build it with NewMicroservice, or set Readiness = NewReadinessGate() on it before use.")
+	}
+	return ms.Readiness
+}
+
 // MarkReady opens the readiness gate and records the readiness metric (E17).
 // Services call this rather than ms.Readiness.MarkReady directly so the ready
 // signal is exported. It is idempotent (the gate's MarkReady is).
@@ -166,7 +193,7 @@ func (g *ReadinessGate) WaitReady(ctx context.Context) error {
 // for a service the gate had just kept closed — the exported signal disagreeing
 // with the probe that governs traffic.
 func (ms *Microservice) MarkReady(validator *auth.Validator) bool {
-	open := ms.Readiness.MarkReady(validator)
+	open := ms.readinessGate().MarkReady(validator)
 	ms.exportReady()
 	return open
 }
@@ -174,7 +201,7 @@ func (ms *Microservice) MarkReady(validator *auth.Validator) bool {
 // MarkReadyWithoutAuthSurface opens the gate for a service that verifies no tokens
 // and records the readiness metric. See ReadinessGate.MarkReadyWithoutAuthSurface.
 func (ms *Microservice) MarkReadyWithoutAuthSurface() {
-	ms.Readiness.MarkReadyWithoutAuthSurface()
+	ms.readinessGate().MarkReadyWithoutAuthSurface()
 	ms.exportReady()
 }
 
@@ -202,6 +229,16 @@ func (ms *Microservice) exportReady() {
 // property that keeps changing, and a log line that states an invariant nothing
 // enforces is the shape this whole change exists to remove.
 func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Context) (*auth.Validator, error)) {
+	// 🔴 THE GATE IS RESOLVED HERE, SYNCHRONOUSLY, AND NOT INSIDE THE GOROUTINE BELOW. A
+	// missing gate is a construction mistake wherever it is noticed, but WHERE it is
+	// noticed decides what happens to the process. From a spawned goroutine a panic is
+	// unrecoverable: it goes past every defer and every recover on every other stack and
+	// takes the process with it, reported from a stack that does not name the caller. So
+	// this method used to RETURN CLEANLY and then kill the process a moment later, which
+	// is about the least debuggable shape available. On this stack it is an ordinary
+	// panic the caller sees, can recover, and a test can assert.
+	ms.readinessGate()
+
 	go func() {
 		for {
 			if ms.authAttempts != nil {
