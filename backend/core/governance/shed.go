@@ -138,6 +138,18 @@ func (l Limits) Shed(factor float64) Limits {
 	if factor >= 1.0 {
 		return l
 	}
+	// A NaN factor answers false to BOTH of the comparisons around it and would
+	// otherwise reach the scaling below, where math.Round(NaN) is
+	// implementation-defined and the resulting ceiling admits nothing: a total shed
+	// wearing a throttle's clothes. It reads as NO shed rather than as the hard drop,
+	// because the safe reading of a factor nobody chose is "govern this tenant exactly
+	// as if ADR-063 were not shedding", never "discard everything they send". Not
+	// reachable through ShedFactor, whose factors are table constants; guarded here so
+	// that stays a property of this function rather than of its only current caller —
+	// the same guard, for the same reason, as RestrictedCommandLimit's.
+	if math.IsNaN(factor) {
+		return l
+	}
 	if factor <= 0 {
 		return Limits{MessagesPerSecond: 0, Burst: 0}
 	}

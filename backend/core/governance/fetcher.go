@@ -136,8 +136,10 @@ type serviceFetcher struct {
 
 // NewServiceFetcher builds a Fetcher reading dim's overrides from tenantGovernance
 // at umURL (user-management's /graphql endpoint), resolving unset overrides to def.
+// A non-positive rate or burst in def is floored to a real, metered ceiling, the same
+// way NewTenantLimitResolver floors the value it serves on a cold miss.
 func NewServiceFetcher(client *svcclient.Client, umURL string, def Limits, dim Dimension) Fetcher {
-	return &serviceFetcher{client: client, umURL: umURL, def: def, dim: dim}
+	return &serviceFetcher{client: client, umURL: umURL, def: floorLimits(def), dim: dim}
 }
 
 // NewServiceLimitResolver is the one-call wiring every enforcing service wants: a

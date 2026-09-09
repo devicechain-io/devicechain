@@ -3,7 +3,10 @@
 
 package governance
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestShedClassOfBands(t *testing.T) {
 	cases := []struct {
@@ -160,6 +163,18 @@ func TestShedLimitsThrottleFloorsBurst(t *testing.T) {
 	}
 	if got.MessagesPerSecond != 1.0 {
 		t.Errorf("Shed(0.10) rate = %v, want 1.0 (10 * 0.10)", got.MessagesPerSecond)
+	}
+}
+
+// TestShedLimitsRejectsNaN pins that a NaN factor leaves governance alone. NaN answers
+// false to both `>= 1.0` and `<= 0`, so without the guard it reaches the scaling below
+// them, where math.Round(NaN) is implementation-defined and the resulting ceiling
+// admits nothing — a total shed dressed as a throttle.
+func TestShedLimitsRejectsNaN(t *testing.T) {
+	l := Limits{MessagesPerSecond: 1000, Burst: 2000}
+	got := l.Shed(math.NaN())
+	if got.MessagesPerSecond != 1000 || got.Burst != 2000 {
+		t.Errorf("Shed(NaN) = %+v, want the limits unchanged (no shed)", got)
 	}
 }
 
