@@ -922,10 +922,39 @@ functionalAreas:
     #       canarySeconds: 60          # the liveness probe; see canaryDeadlineSeconds
     #       canaryDeadlineSeconds: 15
     #       inventoryGatherSeconds: 5  # how long to collect replies from the cluster
+    # Device-facing HTTP listener bounds. These apply ONLY to the HTTP event sources,
+    # not to the 8080 GraphQL/management server, because the two have different callers:
+    # a console reaches the management API over a datacentre network, while a device may
+    # be on NB-IoT, 2G or satellite, where several seconds to complete a request is
+    # ordinary rather than pathological.
+    #
+    # A request that exceeds a bound has its connection closed by the server before any
+    # handler runs, so it never becomes an event and nothing in the event pipeline can
+    # attribute it. Watch total_http_connections_closed_before_request: it counts
+    # connections that sent bytes and never produced a request — a header-timeout close,
+    # but equally a port scan or a client that hung up — and it is the only external
+    # signal that these bounds are closing connections at all.
+    #
+    # requestTimeoutSeconds bounds the read of the WHOLE request, headers and body. It is
+    # the larger of the two holds: a body is capped at 1 MiB, which caps the bytes and
+    # not the time, so a client dribbling one held a connection indefinitely.
+    #   config:
+    #     httpIngest:
+    #       headerTimeoutSeconds: 5    # wait for the request headers
+    #       requestTimeoutSeconds: 60  # whole request, headers and body
+    #
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management
     # port. Exposed as an extra Service/container port so devices can reach it.
     # (The MQTT source dials out to the broker, so it needs no inbound port.)
+    #
+    # 🔴 THE PORT BELOW AND THE SOURCE'S OWN `port` MUST AGREE, and if a source is moved
+    # off 8081 this list moves with it. The service refuses to start when two of its
+    # listeners are configured on one port — the GraphQL/management server and every HTTP
+    # source are all in the one process — and names both of them; an ingest port that no
+    # longer matches this list simply cannot be reached from outside the pod. `port: "0"`
+    # is refused for the same reason: it asks the operating system for any free port, so
+    # the listener would come up healthy on an address no device can be told.
     extraPorts:
       - name: http-ingest
         port: 8081

@@ -142,13 +142,73 @@ func (ms *Microservice) NewHttpServer(port int32) *HttpServer {
 // does not close or wait for hijacked connections either — that gap is #949, and it is
 // the subscription layer's to close, not this constructor's.
 func NewHttpServerForHandler(port int32, handler http.Handler) *HttpServer {
-	return &HttpServer{
-		server: &http.Server{
-			Addr:              fmt.Sprintf(":%d", port),
-			Handler:           handler,
-			ReadHeaderTimeout: httpReadHeaderTimeout,
-		},
+	return NewHttpServerForHandlerWithOptions(port, handler, HttpServerOptions{})
+}
+
+// HttpServerOptions are the per-listener settings a caller may override. Every zero
+// value keeps the behaviour NewHttpServerForHandler has always had, so a caller that
+// wants none of this passes the zero struct.
+//
+// 🔴 IT EXISTS BECAUSE THE CONSTANTS ABOVE WERE CHOSEN FOR MANAGEMENT SURFACES AND ARE
+// NOW ALSO CARRYING A DEVICE-FACING ONE. event-sources serves device telemetry on a
+// listener of its own, whose callers are constrained radios on NB-IoT, 2G or satellite
+// links rather than a console on a datacentre network. A header budget that is generous
+// for one of those populations is not obviously generous for the other, and a device
+// that exceeds it has its connection closed with nothing in the pipeline to attribute
+// it to — the request never became an event. Two listeners with different callers
+// should not be forced to share a constant.
+type HttpServerOptions struct {
+	// ReadHeaderTimeout overrides the default header budget. Zero keeps the default.
+	// It is never left unset: an unbounded header read is a cheap denial of service.
+	ReadHeaderTimeout time.Duration
+	// ReadTimeout bounds the read of the WHOLE request, headers and body. Zero leaves
+	// it unset, which is net/http's own default and means a slow body is unbounded.
+	//
+	// 🔴 IT IS OPT-IN RATHER THAN DEFAULTED HERE, unlike the header timeout, and for
+	// the reason the doc comment on the constructor gives about WriteTimeout: the
+	// servers built by the plain constructor carry the GraphQL subscription endpoint,
+	// and bounding the whole read of a connection that is about to be hijacked for a
+	// long-lived WebSocket is not a bound this package can choose for them. A listener
+	// that serves ordinary bounded requests — device ingest — sets it.
+	ReadTimeout time.Duration
+	// ConnState, when non-nil, is net/http's per-connection state hook. It runs on the
+	// connection's own goroutine for every transition, so an implementation must be
+	// cheap and must not block.
+	//
+	// 🔴 IT CANNOT TELL YOU WHETHER A REQUEST WAS SERVED, which is the thing a caller
+	// reaches for it wanting to know. StateActive fires as soon as ONE BYTE of a
+	// request has been read and before the request enters a handler, so a connection
+	// cut off part-way through its headers has already been reported active and is
+	// indistinguishable here from one that was served. Correlating a connection with
+	// the requests it produced needs ConnContext below as well.
+	ConnState func(net.Conn, http.ConnState)
+	// ConnContext, when non-nil, is net/http's per-connection context hook: whatever it
+	// returns becomes the base context of every request on that connection, which is
+	// how a handler learns which connection it is answering on. It must return a
+	// non-nil context — net/http panics otherwise.
+	ConnContext func(context.Context, net.Conn) context.Context
+}
+
+// NewHttpServerForHandlerWithOptions builds an HTTP server for an arbitrary handler,
+// overriding the per-listener settings the zero-valued options leave alone. See
+// NewHttpServerForHandler for everything else about the server it returns, including
+// why WriteTimeout and IdleTimeout are not offered here at all.
+func NewHttpServerForHandlerWithOptions(port int32, handler http.Handler, opts HttpServerOptions) *HttpServer {
+	readHeaderTimeout := opts.ReadHeaderTimeout
+	if readHeaderTimeout <= 0 {
+		readHeaderTimeout = httpReadHeaderTimeout
 	}
+	srv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ConnState:         opts.ConnState,
+		ConnContext:       opts.ConnContext,
+	}
+	if opts.ReadTimeout > 0 {
+		srv.ReadTimeout = opts.ReadTimeout
+	}
+	return &HttpServer{server: srv}
 }
 
 // Start binds the listening socket and then serves in the background.
