@@ -229,7 +229,17 @@ backup_env_file="$work/backup.env"
 # The off-cluster object store. A container on the `kind` docker network, so the
 # cluster can reach it by name and it survives `kind delete cluster`.
 minio_container="devicechain-dr-minio"
-minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+# 🔴 PINNED BY DIGEST, tag kept beside it so a reader can see the release. A
+# RELEASE.* tag reads like an immutable version and is not one — it is a name the
+# publisher can repoint, so an unpinned tag is a third-party dependency that can
+# move under a drill with no commit here to show for it. This rig's whole claim is
+# that a secret seeded before a restore still decrypts after one; that claim is
+# only about a known object store if the object store is the same bytes twice.
+#
+# hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
+# from the tag you want (`crane digest quay.io/minio/minio:<release>`) and write
+# both.
+minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
 minio_network="kind"
 bucket_rdb="$instance-rdb"
 bucket_tsdb="$instance-tsdb"

@@ -49,6 +49,14 @@ if [ "$INGRESS_TLS" = "1" ]; then INGRESS_SCHEME=https; else INGRESS_SCHEME=http
 BUILD_IMAGES=${BUILD_IMAGES:-0}
 REGISTRY_NAME=${REGISTRY_NAME:-kind-registry}
 REGISTRY_PORT=${REGISTRY_PORT:-5000}
+# 🔴 PINNED BY DIGEST, tag kept beside it so a reader can see the version. An
+# unpinned `registry:2` is a third-party dependency that Docker Hub can move under
+# us with no commit here to show for it. This is the SAME container hack/upgrade-rig.sh
+# and dcctl start (backend/cli/bootstrap/steps.go); all three only ever create it
+# when it is not already running, so whichever runs first decides what the other
+# two reuse — a pin that only one of them carries is a pin the other two can defeat.
+# hack/check-image-pins.sh enforces the shape.
+REGISTRY_IMAGE=${REGISTRY_IMAGE:-registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373}
 if [ "$BUILD_IMAGES" = "1" ]; then
   REGISTRY=${REGISTRY:-localhost:${REGISTRY_PORT}}
   VERSION=${VERSION:-dev}
@@ -126,7 +134,7 @@ if [ "$BUILD_IMAGES" = "1" ]; then
   log "📦 Local registry ($REGISTRY)"
   if [ "$(docker inspect -f '{{.State.Running}}' "$REGISTRY_NAME" 2>/dev/null || true)" != "true" ]; then
     step "starting registry container"
-    docker run -d --restart=always -p "127.0.0.1:${REGISTRY_PORT}:5000" --name "$REGISTRY_NAME" registry:2 >/dev/null
+    docker run -d --restart=always -p "127.0.0.1:${REGISTRY_PORT}:5000" --name "$REGISTRY_NAME" "$REGISTRY_IMAGE" >/dev/null
   else
     step "registry already running"
   fi
