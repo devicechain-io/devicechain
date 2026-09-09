@@ -727,41 +727,49 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 	return nil
 }
 
-// Create a new counter with the namespace and subsystem auto-filled based on microservice
+// Create a new counter with the namespace and subsystem auto-filled based on microservice.
+// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
 func (ms *Microservice) NewCounter(name string, help string, labels []string) prometheus.Counter {
+	sub, name := ms.requireMetricName("NewCounter", name)
 	return promauto.With(ms.MetricsRegisterer()).NewCounter(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: ms.MetricsSubsystem(),
+		Subsystem: sub,
 		Name:      name,
 		Help:      help,
 	})
 }
 
-// Create a new counter vector with the namespace and subsystem auto-filled based on microservice
+// Create a new counter vector with the namespace and subsystem auto-filled based on microservice.
+// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
 func (ms *Microservice) NewCounterVec(name string, help string, labels []string) *prometheus.CounterVec {
+	sub, name := ms.requireMetricName("NewCounterVec", name)
 	return promauto.With(ms.MetricsRegisterer()).NewCounterVec(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: ms.MetricsSubsystem(),
+		Subsystem: sub,
 		Name:      name,
 		Help:      help,
 	}, labels)
 }
 
-// Create a new gauge with the namespace and subsystem auto-filled based on microservice
+// Create a new gauge with the namespace and subsystem auto-filled based on microservice.
+// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
 func (ms *Microservice) NewGauge(name string, help string, labels []string) prometheus.Gauge {
+	sub, name := ms.requireMetricName("NewGauge", name)
 	return promauto.With(ms.MetricsRegisterer()).NewGauge(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: ms.MetricsSubsystem(),
+		Subsystem: sub,
 		Name:      name,
 		Help:      help,
 	})
 }
 
-// Create a new gauge vector with the namespace and subsystem auto-filled based on microservice
+// Create a new gauge vector with the namespace and subsystem auto-filled based on microservice.
+// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
 func (ms *Microservice) NewGaugeVec(name string, help string, labels []string) *prometheus.GaugeVec {
+	sub, name := ms.requireMetricName("NewGaugeVec", name)
 	return promauto.With(ms.MetricsRegisterer()).NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,
-		Subsystem: ms.MetricsSubsystem(),
+		Subsystem: sub,
 		Name:      name,
 		Help:      help,
 	}, labels)

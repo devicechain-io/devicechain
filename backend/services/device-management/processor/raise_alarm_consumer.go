@@ -106,7 +106,9 @@ type RaiseAlarmMetrics struct {
 // MustRegister panics on the duplicate.
 func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
 	return RaiseAlarmMetrics{
-		metrics: ms.NewProcessorMetrics("raise-alarm"),
+		// "raise_alarm", not "raise-alarm": the loop name becomes part of the exported
+		// metric name, where a hyphen is not legal. NewProcessorMetrics now refuses one.
+		metrics: ms.NewProcessorMetrics("raise_alarm"),
 		deadLettered: ms.NewCounter("raise_alarm_dead_lettered_total",
 			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
 				"them failed, so an alarm that should have been raised or cleared is visible "+
