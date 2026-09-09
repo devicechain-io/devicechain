@@ -471,7 +471,10 @@ jobs:
         run: hack/check-subscribe-confirmed.sh
 
   # ---------------------------------------------------------------------------
-  # HTTP routing: nothing may register on net/http's package-global mux.
+  # HTTP routing and lifecycle phase: two properties of the whole tree that no single
+  # call site shows, both about an HTTP surface that compiles and then is not there.
+  #
+  # Part one: nothing may register on net/http's package-global mux.
   #
   # 🔴 Every HTTP server here serves an EXPLICIT Handler — the mux its Microservice
   # owns — which makes http.DefaultServeMux a mux NOTHING SERVES. A registration on
@@ -484,6 +487,21 @@ jobs:
   # and defeated three ways that all compile — an alias through a variable, a call
   # split across lines, and a helper one directory outside the scanned subtree. What
   # it still cannot see is written in the script.
+  #
+  # Part two: nothing may be constructed in the wrong lifecycle phase.
+  #
+  # 🔴 core.LifecycleManager's state allow lists make ExecuteInitialize run AT MOST
+  # ONCE per component instance and ExecuteStart run again after every stop. So an
+  # http.Server, which cannot be restarted, must be built per start; while a mux
+  # route and a Prometheus collector, which both PANIC on a duplicate, must be built
+  # once. Either in the wrong phase breaks the SECOND start of a service whose first
+  # start looked perfect.
+  #
+  # It follows a type-checked CALL GRAPH from the framework's own entry points rather
+  # than matching names, because the phase a function runs in is a property of its
+  # CALLER: this tree already contains a createNatsComponents that runs on start, an
+  # initializer callback that is an anonymous closure, and a component reached only
+  # through interface dispatch.
   # ---------------------------------------------------------------------------
   http-routing:
     runs-on: ubuntu-latest
@@ -505,6 +523,19 @@ jobs:
 
       - name: nothing registers on http.DefaultServeMux
         run: hack/check-default-servemux.sh
+
+      # Proves this checker can fail too, and does it BEFORE the green run below is
+      # read as evidence. It plants 21 evasion shapes across all three phase rules —
+      # each one a module that really type-checks against a miniature framework of
+      # its own — requires every one to be caught AND named with a file and line,
+      # requires five legitimate arrangements to pass untouched (including the prose
+      # about the watched constructors, which is what defeats a grep), and requires
+      # five instrument failures to exit 2 rather than 0 or 1.
+      - name: lifecycle-phase guard self-test
+        run: hack/check-lifecycle-phase.sh --self-test
+
+      - name: nothing is constructed in the wrong lifecycle phase
+        run: hack/check-lifecycle-phase.sh
 
   # ---------------------------------------------------------------------------
   # Data access: the query shapes that are unsafe in a way no call site shows.
