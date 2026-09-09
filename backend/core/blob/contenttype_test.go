@@ -6,38 +6,91 @@ package blob
 import (
 	"context"
 	"mime"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// systemKnownExtensions are extensions the PROCESS MIME table resolves to a type on
-// at least some hosts, and that this package's closed table deliberately does not
+// The extensions below are ones the PROCESS MIME table resolves to a type on at
+// least some hosts, and that this package's closed table deliberately does not
 // name. They are the input class every other test in this package misses: the rest
 // use one of the five asset extensions or an id with no extension at all, so a
 // regression to mime.TypeByExtension is invisible to them.
 //
-// The two groups differ in WHERE the process table gets its answer, and that
-// difference is the whole point of the closed table:
-//
-//   - ".zip", ".gz" and ".bin" are in Go's own builtin table, so mime.TypeByExtension
-//     answers for them on every host, published image included.
-//   - ".img", ".tar" and ".iso" come only from the host's system MIME database (the
-//     first openable of /usr/local/share/mime/globs2 and /usr/share/mime/globs2,
-//     falling back to /etc/mime.types and the apache/httpd files only if neither
-//     opens). A Debian dev/CI host has one; cgr.dev/chainguard/static, the base image
-//     we publish, does not — so before the closed table these resolved to a type in
-//     dev and to nothing in production.
-//
-// Only the first group can fail on every host. Reverting the closed table is caught
-// by the second group ONLY where a system MIME database exists — which is the
-// property under test, not a shortcoming of the test.
+// They are split by WHERE the process table gets its answer, and that difference is
+// the whole point of the closed table.
+
+// builtinKnownExtensions are in Go's own builtin table (mime/type.go), so
+// mime.TypeByExtension answers for them on every host, the published image
+// included. These rows can fail anywhere, and they run unconditionally.
 //
 // ".bin" is carried for coverage but discriminates nothing on its own: the process
 // table calls it "application/octet-stream", which is both the type these Puts
 // declare and defaultContentType, so it agrees either way.
-var systemKnownExtensions = []string{".zip", ".gz", ".img", ".tar", ".iso", ".bin"}
+var builtinKnownExtensions = []string{".zip", ".gz", ".bin"}
+
+// systemDBKnownExtensions come only from the host's system MIME database. A Debian
+// dev/CI host has one; cgr.dev/chainguard/static, the base image we publish, does
+// not — so before the closed table these resolved to a type in dev and to nothing
+// in production. Reverting the closed table is therefore caught by these rows ONLY
+// where a system MIME database exists, which is the property under test, not a
+// shortcoming of the test. requireSystemMIMEDatabase asserts that precondition out
+// loud rather than letting it lapse into a silent pass.
+var systemDBKnownExtensions = []string{".img", ".tar", ".iso"}
+
+// systemKnownExtensions is both groups, for the row loops that exercise every one.
+var systemKnownExtensions = slices.Concat(builtinKnownExtensions, systemDBKnownExtensions)
+
+// mimeDatabaseFiles are the files Go's unix MIME init consults, in the order it
+// consults them. Only for the failure message — the check itself asks the process
+// table, not the filesystem, because the table is what the code under test reads.
+// Worth knowing when reproducing the absent case: the first globs2 that OPENS wins
+// and ends the search, so an EMPTY globs2 still suppresses the /etc/mime.types
+// fallback, and masking /etc/mime.types alone changes nothing on a host with globs2.
+var mimeDatabaseFiles = []string{
+	"/usr/local/share/mime/globs2", "/usr/share/mime/globs2",
+	"/etc/mime.types", "/etc/apache2/mime.types", "/etc/apache/mime.types",
+	"/etc/httpd/conf/mime.types",
+}
+
+// requireSystemMIMEDatabase fails the calling test when this host's process MIME
+// table cannot answer for the systemDBKnownExtensions rows.
+//
+// Those rows are the half of this gate that can only fail where a system MIME
+// database exists: a revert to mime.TypeByExtension answers "" for them on a host
+// without one, which is what the correct code answers too, so the rows agree with
+// the regression and pass. Without this check that loss is silent — "tested and
+// fine" and "could not test this at all" become the same green.
+//
+// It is deliberately an Errorf and not a t.Skip. A skipped test is a green tick,
+// which is precisely the ambiguity being removed here. The builtinKnownExtensions
+// rows keep their kill on any host, so the calling test carries on after this
+// reports rather than stopping.
+func requireSystemMIMEDatabase(t *testing.T) {
+	t.Helper()
+	var unanswered []string
+	for _, ext := range systemDBKnownExtensions {
+		if mime.TypeByExtension(ext) == "" {
+			unanswered = append(unanswered, ext)
+		}
+	}
+	if len(unanswered) == 0 {
+		return
+	}
+	t.Errorf("mime.TypeByExtension answers nothing for %s, so this host has no system MIME "+
+		"database entry for them (Go consults %s, in that order, and takes the first globs2 "+
+		"that opens). Those rows of this gate can no longer detect a revert to "+
+		"mime.TypeByExtension — they pass whether the closed table is there or not, so a green "+
+		"run would mean \"could not test this\" rather than \"tested and fine\". Either the "+
+		"runner image changed and needs a system MIME database, or these rows need revisiting. "+
+		"Do not silence this with t.Skip: a skip is a green tick, which is the ambiguity this "+
+		"check exists to remove. The %s rows come from Go's builtin table and still hold.",
+		strings.Join(unanswered, ", "), strings.Join(mimeDatabaseFiles, ", "),
+		strings.Join(builtinKnownExtensions, ", "))
+}
 
 func TestInferContentTypeIsClosed(t *testing.T) {
+	requireSystemMIMEDatabase(t)
 	for ext, want := range map[string]string{
 		".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 		".webp": "image/webp", ".svg": "image/svg+xml",
@@ -68,6 +121,7 @@ func TestInferContentTypeIsClosed(t *testing.T) {
 // declared type, on every backend and on every host — the write decision must not
 // depend on what the base image happens to ship in its MIME database.
 func TestPutAcceptsDeclaredTypeForSystemKnownExtension(t *testing.T) {
+	requireSystemMIMEDatabase(t)
 	ctx := context.Background()
 	fs := newFS(t)
 	s3s := newS3(&fakeS3{})
@@ -89,6 +143,7 @@ func TestPutAcceptsDeclaredTypeForSystemKnownExtension(t *testing.T) {
 // outside the closed table is reported as the generic default, not as whatever the
 // host's MIME database calls that extension.
 func TestStatReportsDefaultTypeForSystemKnownExtension(t *testing.T) {
+	requireSystemMIMEDatabase(t)
 	ctx := context.Background()
 	s := newFS(t)
 	for _, ext := range systemKnownExtensions {
