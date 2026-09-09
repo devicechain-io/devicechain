@@ -512,6 +512,17 @@ honest message ("not enabled on this deployment") fires only when the drafter is
 nil, so it could never appear on the profile that needed it. Unsetting the key
 restores that path.
 
+WHY THE SHUTDOWN BUDGET IS INJECTED RATHER THAN WRITTEN. The graceful-shutdown
+window and the pod's grace period are ONE budget checked against itself: a service
+refuses to start if its drain window does not leave room, inside the grace period,
+for the teardown that closes in-flight connections, the broker consumers and the
+database pool. So the two numbers cannot be allowed to come from two places. The
+operator writes shutdownDrainSeconds and terminationGracePeriodSeconds once, at the
+top level; the pod spec reads the second of them and this helper writes both into
+the document the services validate, so the config and the pod are the same budget
+by construction. Setting the block by hand under instance.config is refused rather
+than silently overwritten.
+
 deepCopy keeps .Values untouched, so nothing else that reads instance.config sees
 the filtered document by accident.
 */}}
@@ -522,5 +533,15 @@ the filtered document by accident.
     {{- $_ := unset (index $cfg "infrastructure") "aiInference" -}}
   {{- end -}}
 {{- end -}}
+{{- if not (hasKey $cfg "infrastructure") -}}
+  {{- $_ := set $cfg "infrastructure" dict -}}
+{{- end -}}
+{{- $infra := index $cfg "infrastructure" -}}
+{{- if hasKey $infra "shutdown" -}}
+  {{- fail "instance.config.infrastructure.shutdown is set by the chart, not by hand: it is written from the top-level shutdownDrainSeconds and terminationGracePeriodSeconds values so the drain window and the pod's grace period cannot disagree. Remove the block and set those two values instead." -}}
+{{- end -}}
+{{- $_ := set $infra "shutdown" (dict
+    "drainSeconds" (int .Values.shutdownDrainSeconds)
+    "terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds)) -}}
 {{- $cfg | toJson -}}
 {{- end }}

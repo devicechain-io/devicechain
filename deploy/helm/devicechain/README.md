@@ -187,11 +187,14 @@ exports later) go to a pluggable object store, configured under
 `helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
 `RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
 pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
-503 first, waits `shutdownDrainSeconds` (default 5, under the 30s
-`terminationGracePeriodSeconds`) for endpoint removal to propagate, then drains
-in-flight requests — an app-side drain, since the `FROM scratch` images have no shell
-for a `preStop` hook. Database migrations run under a Postgres advisory lock so
-concurrently-rolling replicas don't race on DDL.
+503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
+propagate, then drains in-flight requests — an app-side drain, since the `FROM
+scratch` images have no shell for a `preStop` hook. That window and
+`terminationGracePeriodSeconds` (default 30) are one budget: both are rendered into
+the instance configuration, and a service refuses to start if the drain would take
+more than half the grace period, since the teardown after the drain is what actually
+finishes in-flight work before the kubelet's SIGKILL. Database migrations run under a
+Postgres advisory lock so concurrently-rolling replicas don't race on DDL.
 
 For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
 `functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area

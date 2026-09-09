@@ -624,10 +624,23 @@ rollingUpdate:
 
 # Graceful shutdown (§10.2). On SIGTERM a service flips readiness to 503, waits
 # shutdownDrainSeconds for the endpoint controllers to pull it from Service
-# endpoints, then drains in-flight requests. The scratch images have no shell, so
-# this drain is app-side (DC_SHUTDOWN_DRAIN_SECONDS), not a preStop hook.
-# terminationGracePeriodSeconds must exceed shutdownDrainSeconds plus in-flight
-# request time, or the kubelet SIGKILLs the pod mid-drain.
+# endpoints, then tears down: it cancels its root context, finishes the requests
+# still in flight, drains its broker consumers and closes its database pool. The
+# scratch images have no shell, so the drain is app-side rather than a preStop hook.
+#
+# These two are ONE budget, and the services check it. Both numbers are written
+# into the instance config (infrastructure.shutdown) by the chart from the values
+# here, so the config a service validates and the grace period its pod is given
+# cannot drift apart. A service REFUSES TO START if the drain takes more than half
+# the grace period, because the drain only WAITS — the teardown after it is what
+# does the work, and the kubelet SIGKILLs the pod when the grace period expires
+# whether or not that has finished. With the defaults below, the largest drain the
+# services will accept is 15.
+#
+# Do not write instance.config.infrastructure.shutdown by hand; the chart refuses
+# to render if you do, because it would be a second source for one budget. Under
+# instance.existingSecret the chart cannot write the block at all, so put it in the
+# Secret yourself, with the same two numbers you set here.
 terminationGracePeriodSeconds: 30
 shutdownDrainSeconds: 5
 

@@ -204,11 +204,14 @@ spec:
               value: {{ $area | quote }}
             - name: DC_MS_FUNCTIONAL_AREA
               value: {{ $area | quote }}
-            {{/* §10.2: app-side drain window (the scratch images have no shell
-            for a preStop hook) — readiness flips to 503 this many seconds before
-            the server stops, so endpoints drain first. */}}
-            - name: DC_SHUTDOWN_DRAIN_SECONDS
-              value: {{ $root.Values.shutdownDrainSeconds | quote }}
+            {{/* §10.2: the app-side drain window (the scratch images have no shell
+            for a preStop hook) is NOT an environment variable. It rides in the
+            instance config, written there by devicechain.instanceConfig from the
+            same shutdownDrainSeconds value, so it is decoded and validated against
+            terminationGracePeriodSeconds at startup rather than read at the moment
+            the process is already shutting down. A pod still carrying
+            DC_SHUTDOWN_DRAIN_SECONDS — through extraEnv, say — refuses to start
+            rather than quietly running on the default. */}}
             {{/* Go does not read the container's memory limit — a Go 1.26 process
             in a 128m container reports no soft limit at all. Setting one is a
             CEILING against an OOMKill during a live-heap spike, not a way to shrink

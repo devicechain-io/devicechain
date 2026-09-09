@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -416,6 +415,19 @@ func (ms *Microservice) InitializeAndStart() error {
 		log.Error().Err(err).Str("instanceId", ms.InstanceId).Msg("Invalid instance id (DC_INSTANCE_ID); refusing to start")
 		return fmt.Errorf("invalid instance id: %w", err)
 	}
+	// A removed environment variable that is still being SET is refused rather than
+	// ignored. Ignoring it is the silent half of the defect this key was moved into
+	// typed config to close: the deployment that wrote a drain window would get the
+	// default instead of the number it asked for, with nothing to say so, and the
+	// symptom would be a shutdown behaving differently from the one configured.
+	if v, ok := os.LookupEnv(ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS); ok {
+		err := fmt.Errorf("%s is set (%q) but is no longer read: the drain window is instance "+
+			"configuration now. Set shutdownDrainSeconds in the chart values — or "+
+			"infrastructure.shutdown.drainSeconds directly, in a hand-written instance document "+
+			"— and remove this variable", ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS, v)
+		log.Error().Err(err).Msg("Refusing to start on configuration that would be ignored")
+		return err
+	}
 	err := ms.Initialize(ms.rootCtx)
 	if err != nil {
 		log.Error().Err(err).Msg("Unable to initialize microservice")
@@ -431,26 +443,14 @@ func (ms *Microservice) InitializeAndStart() error {
 	return nil
 }
 
-// defaultShutdownDrain is the drain window used when DC_SHUTDOWN_DRAIN_SECONDS is
-// unset or invalid. ~5s comfortably covers Service-endpoint removal propagation
-// while staying well under the chart's default terminationGracePeriodSeconds.
-const defaultShutdownDrain = 5 * time.Second
-
-// shutdownDrainDelay resolves the readiness-drain window from the environment,
-// falling back to defaultShutdownDrain. A value of 0 disables the drain (useful
-// for local single-instance runs where there is no Service to drain from).
-func shutdownDrainDelay() time.Duration {
-	v := os.Getenv(ENV_SHUTDOWN_DRAIN_SECONDS)
-	if v == "" {
-		return defaultShutdownDrain
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		log.Warn().Str("value", v).Msgf("Invalid %s; using default drain.", ENV_SHUTDOWN_DRAIN_SECONDS)
-		return defaultShutdownDrain
-	}
-	return time.Duration(n) * time.Second
-}
+// drainSleep is time.Sleep behind a variable, for the same reason exitProcess is
+// os.Exit behind one: a test has to be able to observe the window a shutdown asked
+// for without spending it. Only a test should reassign it, and should restore it.
+//
+// A test that measured the drain by actually sleeping it would be measuring a
+// number it chose to keep small, which is the one number an operator never
+// configures.
+var drainSleep = time.Sleep
 
 // Issue stop and terminate commands to microservice
 //
@@ -545,9 +545,24 @@ func (ms *Microservice) shutDown(fatal error) {
 	// in-flight requests are not severed.
 	if ms.Readiness != nil {
 		ms.Readiness.BeginDrain()
-		if d := shutdownDrainDelay(); d > 0 {
-			log.Info().Dur("drain", d).Msg("Draining: readiness now reports 503; waiting for endpoint removal to propagate.")
-			time.Sleep(d)
+		shutdown := ms.InstanceConfiguration.Infrastructure.Shutdown
+		if d := shutdown.DrainWindow(); d > 0 {
+			log.Info().
+				Dur("drain", d).
+				Int("terminationGracePeriodSeconds", shutdown.TerminationGracePeriodSeconds).
+				Msg("Draining: readiness now reports 503; waiting for endpoint removal to propagate.")
+			startedDraining := time.Now()
+			drainSleep(d)
+			// The window ENDING is logged as well as its beginning, because those are
+			// the two lines whose absence tells an operator what happened. A pod
+			// SIGKILLed mid-drain — the failure the config validation now refuses up
+			// front — prints the first line and never the second, and that is the only
+			// evidence it leaves. Nothing is abandoned at the boundary: the window is a
+			// fixed wait, not a deadline on in-flight work, and the teardown below is
+			// what finishes the requests still running.
+			log.Info().
+				Dur("elapsed", time.Since(startedDraining)).
+				Msg("Drain window elapsed; tearing down. In-flight work is finished by the shutdown that follows, not severed here.")
 		}
 	}
 

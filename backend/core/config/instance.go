@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -370,6 +371,130 @@ type InfrastructureConfiguration struct {
 	Blob             BlobConfiguration
 	Egress           EgressConfiguration
 	GraphQL          GraphQLConfiguration
+	Shutdown         ShutdownConfiguration
+}
+
+// ShutdownConfiguration is the graceful-shutdown budget: how long a terminating
+// pod keeps serving after it reports itself unready, and how long the kubelet
+// will wait before it stops asking.
+//
+// 🔴 IT IS TYPED CONFIG BECAUSE THE ALTERNATIVE FAILS AT THE WORST MOMENT. The
+// drain window used to be read straight from the environment inside the signal
+// handler, so a value that could not be parsed — or one larger than the pod's
+// grace period — was discovered while the process was already trying to shut
+// down, with nobody watching and no way to act on it. Here it is decoded,
+// defaulted and validated at startup, alongside everything else a service
+// refuses to run without.
+type ShutdownConfiguration struct {
+	// DrainSeconds is how long a terminating service keeps serving after it flips
+	// readiness to 503, giving the endpoint controllers time to pull the pod out of
+	// Service endpoints before it stops accepting traffic. kube-proxy is eventually
+	// consistent, so a pod that tore down the moment it was told to would still be
+	// receiving connections it had already stopped answering. The scratch service
+	// images have no shell for a preStop hook, so this drain is app-side.
+	//
+	// It is a POINTER, and that is the one field on this struct where the
+	// distinction earns its keep: 0 is a real, supported value meaning "do not
+	// drain", which a local single-instance run wants because there is no Service
+	// to drain from. A plain int cannot tell that from an absent key, so an
+	// instance document that simply omitted it would silently stop draining — the
+	// severed-request behaviour the window exists to prevent, arrived at by writing
+	// nothing at all. nil means absent and takes the default; 0 means the operator
+	// asked for no drain.
+	//
+	// A negative value is refused rather than coerced. Every other ceiling in this
+	// file coerces, because there the wrong answer is "unlimited" and the safe
+	// direction is obvious; here the wrong answer is a number nobody can act on,
+	// and the operator's intent is unrecoverable.
+	DrainSeconds *int
+	// TerminationGracePeriodSeconds is the pod's own grace period, rendered into
+	// this document by the chart from the same value it writes into the pod spec,
+	// so the two cannot drift. It is here to be VALIDATED AGAINST, not to be
+	// enforced by the process: the kubelet owns the real clock, and a service that
+	// disagrees with it about the budget simply gets SIGKILLed.
+	//
+	// That is what the pairing buys. A drain longer than the grace period is not a
+	// slow shutdown, it is no shutdown: the process sleeps out the window and is
+	// killed inside it, so the context is never cancelled, Stop and Terminate never
+	// run, the broker consumers are not drained and the database pool is not
+	// closed — and the pod dies mid-sleep with nothing in its log to say why.
+	TerminationGracePeriodSeconds int
+}
+
+// DrainWindow is the drain window to actually sleep, defaulted at the point of use
+// as well as in ApplyDefaults.
+//
+// Twice on purpose: a Microservice built as a struct literal never loads an
+// instance document, so this is read from a zero ShutdownConfiguration in a good
+// deal of this tree's test fixtures, and a nil there must not read as "sever every
+// in-flight request".
+func (c ShutdownConfiguration) DrainWindow() time.Duration {
+	if c.DrainSeconds == nil || *c.DrainSeconds < 0 {
+		return DefaultShutdownDrainSeconds * time.Second
+	}
+	return time.Duration(*c.DrainSeconds) * time.Second
+}
+
+// Graceful-shutdown defaults.
+//
+// DefaultShutdownDrainSeconds is sized against what the drain actually waits for,
+// which is endpoint-removal propagation: the endpoints controller observing the
+// pod's readiness change, writing the EndpointSlice, and every node's kube-proxy
+// picking it up. That is a control-plane round trip measured in hundreds of
+// milliseconds to a couple of seconds on a healthy cluster, so 5 leaves several
+// times the headroom without spending a meaningful share of the grace period. It
+// is deliberately NOT a guess at how long in-flight work takes — the phase after
+// the window is what waits for that.
+//
+// DefaultTerminationGracePeriodSeconds is not a number this platform chose. It is
+// Kubernetes' own default for a pod that sets none, so an instance document that
+// omits the key is validated against the grace period its pods will actually get.
+const (
+	DefaultShutdownDrainSeconds          = 5
+	DefaultTerminationGracePeriodSeconds = 30
+)
+
+// validate refuses a drain window that cannot do its job inside the pod's grace
+// period.
+//
+// The rule is that the drain may take at most HALF the grace period, and the half
+// is the argument rather than a round number: the window only WAITS, and the phase
+// after it — cancelling the root context, the graceful HTTP shutdown that finishes
+// in-flight requests, draining the broker consumers, closing the database pool —
+// is the phase that does the work and the phase that cannot be skipped. Giving the
+// waiting half more of the budget than the working half inverts it. A strict
+// "drain < grace" would admit 29 against 30 and call it configured.
+//
+// It refuses rather than clamping, for the reason the rest of this file refuses:
+// an operator who wrote two numbers meant both of them, and which one to correct
+// is theirs to choose. The message names both keys and both remedies, because from
+// inside the process there is no way to tell which of the two was the typo.
+func (c ShutdownConfiguration) validate() error {
+	if c.DrainSeconds == nil {
+		// Absent, and ApplyDefaults has not run yet. Judging it here would report on a
+		// key the operator never wrote.
+		return nil
+	}
+	drain := *c.DrainSeconds
+	if drain < 0 {
+		return fmt.Errorf("infrastructure.shutdown.drainSeconds is %d; a drain window cannot be "+
+			"negative. Use 0 to skip the drain entirely, or a positive number of seconds", drain)
+	}
+	grace := c.TerminationGracePeriodSeconds
+	if grace <= 0 {
+		// Same reasoning as above: not defaulted yet, so there is nothing to compare against.
+		return nil
+	}
+	if drain*2 > grace {
+		return fmt.Errorf("infrastructure.shutdown.drainSeconds is %d, which does not fit inside "+
+			"terminationGracePeriodSeconds (%d). The drain only WAITS for endpoint removal to "+
+			"propagate; closing in-flight connections, the broker consumers and the database pool "+
+			"happens AFTER it, and the kubelet SIGKILLs the pod when the grace period expires "+
+			"whether or not that has finished. Leave the drain at most half the budget: lower "+
+			"drainSeconds to %d or less, or raise terminationGracePeriodSeconds to %d or more",
+			drain, grace, grace/2, drain*2)
+	}
+	return nil
 }
 
 // GraphQLConfiguration carries the request-shape ceilings that every service's
@@ -661,6 +786,19 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Blob.Backend == "" {
 		c.Infrastructure.Blob.Backend = DefaultBlobBackend
 	}
+	// Default the graceful-shutdown budget. Unlike the ceilings above this one does
+	// NOT coerce a value it dislikes: only ABSENCE is defaulted, because 0 is a
+	// supported drain window and a negative one is refused in Validate rather than
+	// quietly rewritten. The grace period is defaulted to Kubernetes' own default,
+	// so an omitted key is judged against the budget the pod will really get.
+	shutdown := &c.Infrastructure.Shutdown
+	if shutdown.DrainSeconds == nil {
+		d := DefaultShutdownDrainSeconds
+		shutdown.DrainSeconds = &d
+	}
+	if shutdown.TerminationGracePeriodSeconds <= 0 {
+		shutdown.TerminationGracePeriodSeconds = DefaultTerminationGracePeriodSeconds
+	}
 }
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -688,6 +826,9 @@ func (c *InstanceConfiguration) Validate() error {
 		return err
 	}
 	if err := c.Infrastructure.Nats.validateStreamReplicas(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.Shutdown.validate(); err != nil {
 		return err
 	}
 	return nil
@@ -799,6 +940,9 @@ func (c *NatsConfiguration) validateTierOrdering() error {
 
 // Creates the default instance configuration
 func NewDefaultInstanceConfiguration() *InstanceConfiguration {
+	// DrainSeconds is a pointer so an absent key is distinguishable from an explicit
+	// zero, which means this default needs somewhere to live.
+	defaultDrain := DefaultShutdownDrainSeconds
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
 			Nats: NatsConfiguration{
@@ -835,6 +979,10 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			},
 			GraphQL: GraphQLConfiguration{
 				MaxSubscriptionMessageBytes: DefaultGraphQLMaxSubscriptionMessageBytes,
+			},
+			Shutdown: ShutdownConfiguration{
+				DrainSeconds:                  &defaultDrain,
+				TerminationGracePeriodSeconds: DefaultTerminationGracePeriodSeconds,
 			},
 		},
 		Persistence: PersistenceConfiguration{
