@@ -5,6 +5,8 @@ package geofence
 
 import (
 	"math"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/geo"
@@ -63,6 +65,22 @@ func TestEveryRingAuthoringAcceptsAlsoCompiles(t *testing.T) {
 		{"two distinct corners", [][]float64{{0, 0}, {1, 1}, {0, 0}, {0, 0}}, false},
 		{"too short", [][]float64{{0, 0}, {1, 0}, {0, 0}}, false},
 		{"not closed", [][]float64{{0, 0}, {1, 0}, {0.5, 1}, {0.4, 0.9}}, false},
+
+		// 🔴 OUT-OF-RANGE DEGREES ARE IN THE CORPUS BECAUSE THE CONVERSION TO THE
+		// SPHERE WRAPS THEM RATHER THAN REFUSING THEM. s2.LatLngFromDegrees turns
+		// latitude 91, longitude 1 into latitude 89, longitude -179 — measured — so a
+		// ring carrying such a corner does not fail to build. It builds a perfectly
+		// valid quadrilateral 180° around the planet from where it was drawn, and
+		// every containment answer it then gives looks entirely reasonable.
+		{"latitude past the north pole", [][]float64{{0, 0}, {1, 0}, {1, 91}, {0, 1}, {0, 0}}, false},
+		{"latitude past the south pole", [][]float64{{0, 0}, {0, -1}, {1, -91}, {1, 0}, {0, 0}}, false},
+		{"longitude past the antimeridian", [][]float64{{0, 0}, {181, 0}, {181, 1}, {0, 1}, {0, 0}}, false},
+		{"longitude past the western antimeridian", [][]float64{{0, 0}, {0, 1}, {-181, 1}, {-181, 0}, {0, 0}}, false},
+
+		// The counterweight to those four: the range BOUNDARY is a real place to draw
+		// a fence, and a builder that refused it would satisfy every refusal above.
+		{"on the antimeridian", [][]float64{{180, 0}, {179, 0}, {179, 1}, {180, 1}, {180, 0}}, true},
+		{"touching the north pole", [][]float64{{0, 89}, {1, 89}, {0.5, 90}, {0, 89}}, true},
 	}
 
 	for _, tc := range corpus {
@@ -73,13 +91,94 @@ func TestEveryRingAuthoringAcceptsAlsoCompiles(t *testing.T) {
 			t.Errorf("%s: authoring accepted=%v, want %v (err: %v)", tc.name, got, tc.wantAccepted, authoringErr)
 		}
 
-		// THE PROPERTY. The converse is deliberately not asserted: the evaluator
-		// may refuse MORE than authoring without stranding anyone, because nothing
-		// gets stored. It is this direction that leaves a dead fence in the
-		// registry — saved, healthy-looking, answering nothing.
+		// THE PROPERTY, now asserted in BOTH directions.
+		//
+		// It used to be one-way, on the reasoning that the evaluator may safely
+		// refuse MORE than authoring because nothing gets stored. That is true of
+		// the consequence, but it left "the engine accepts a ring authoring refuses"
+		// as the one thing this test explicitly did not look at — and that is the
+		// direction a duplicated ring builder drifts in. The evaluator carried its
+		// own copy of the builder; a range check was added to core/geo and not to
+		// the copy; a ring with a corner past the pole was refused at authoring and
+		// silently wrapped by the engine, and nothing here could see it.
+		//
+		// Both sides now call one function, so a disagreement in EITHER direction
+		// means a second implementation has appeared again.
 		if authoringErr == nil && compileErr != nil {
 			t.Errorf("%s: authoring accepted it, the engine refused it (%v) — a fence like this "+
 				"saves clean and then answers nothing", tc.name, compileErr)
 		}
+		if authoringErr != nil && compileErr == nil {
+			t.Errorf("%s: authoring refused it (%v), the engine compiled it anyway — the two sides "+
+				"are running different predicates again", tc.name, authoringErr)
+		}
+	}
+}
+
+// TestOutOfRangeDegreesAreRefusedByTheWholeCompilePath asks the corpus's refusal of the whole
+// document path rather than of a single ring, and names the failure so a break says what broke.
+//
+// The hole case is not decoration. compilePolygon2D walks every ring of the polygon, and a check
+// that ran on the exterior only would leave a fence whose HOLE sits on the far side of the
+// planet — which subtracts nothing where it was drawn, so the fence answers "inside" over ground
+// the author cut out of it.
+func TestOutOfRangeDegreesAreRefusedByTheWholeCompilePath(t *testing.T) {
+	unitSquare := [][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}, {0, 0}}
+	for _, tc := range []struct {
+		name  string
+		rings [][][2]float64
+	}{
+		{"exterior past the pole", [][][2]float64{
+			{{0, 0}, {1, 0}, {1, 91}, {0, 1}, {0, 0}}}},
+		{"exterior past the antimeridian", [][][2]float64{
+			{{0, 0}, {181, 0}, {181, 1}, {0, 1}, {0, 0}}}},
+		{"a hole past the pole", [][][2]float64{
+			unitSquare,
+			{{0.2, 0.2}, {0.8, 0.2}, {0.8, 91}, {0.2, 0.8}, {0.2, 0.2}}}},
+	} {
+		if _, err := CompileGeometry(polygonDocument(tc.rings...)); err == nil {
+			t.Errorf("%s: compiled without error — the corner was wrapped, not refused", tc.name)
+		}
+	}
+}
+
+// TestTheEvaluatorBuildsNoRingLoopOfItsOwn keeps the deleted copy from coming back.
+//
+// The behavioural tests above are the real gate, but they can only catch a second builder that
+// has ALREADY diverged. A fresh copy agrees with core/geo on the day it is written, passes
+// everything here, and then drifts exactly as the last one did — in a commit that touches only
+// one of the two. This one fails on the copy itself, on the day it appears.
+//
+// s2.LoopFromPoints is the whole of the check because it is the whole of the door: it is the
+// only constructor in the library that turns a sequence of positions into a Loop. EmptyLoop,
+// FullLoop, LoopFromCell and RegularLoop build from something that is not a ring, and Loop's
+// fields are unexported so a literal cannot be populated. This is not a ban on s2 in this
+// package — the boundary index, the containment predicate and the distance maths are all s2 and
+// all of them are this package's own work.
+func TestTheEvaluatorBuildsNoRingLoopOfItsOwn(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading the package directory: %v", err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		scanned++
+		if strings.Contains(string(body), "s2.LoopFromPoints") {
+			t.Errorf("%s builds an s2.Loop from positions itself; ring construction belongs to "+
+				"core/geo, so that authoring and evaluation refuse the same rings", name)
+		}
+	}
+	// Without this the test passes by scanning nothing: a renamed suffix, a moved file, or a
+	// directory read that quietly comes back empty would all read as a clean result.
+	if scanned == 0 {
+		t.Fatal("scanned no source files, so the check proved nothing")
 	}
 }

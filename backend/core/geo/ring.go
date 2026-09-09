@@ -69,17 +69,39 @@ func PointFromDegrees(lat, lon float64) s2.Point {
 // The property worth holding, and the one worth testing, is that a ring the
 // authoring gate ACCEPTS always compiles in the engine.
 func ValidateClosedRing(ring [][]float64) error {
+	_, err := LoopFromClosedRing(ring)
+	return err
+}
+
+// LoopFromClosedRing is the same gate as ValidateClosedRing, handing back the loop
+// it built rather than discarding it. A caller that has to EVALUATE the ring —
+// containment, boundary distance — needs the loop, and this is the door that gives
+// it one without building a second one.
+//
+// 🔴 IT IS EXPORTED BECAUSE THE ALTERNATIVE WAS A SECOND IMPLEMENTATION, AND THAT
+// IS NOT HYPOTHETICAL. The detection engine needs the loop and this package would
+// only answer yes-or-no, so the engine grew its own builder: the same length,
+// closure, width and finiteness checks, the same LoopFromPoints and Normalize. The
+// two agreed on the day the copy was written. They stopped agreeing the day the
+// range check below was added to one of them, and what the engine then accepted was
+// a ring silently wrapped to the far side of the planet. A predicate two services
+// must agree on needs ONE implementation, and an implementation only both can reach
+// is one that returns what both of them need.
+//
+// Returning an ERROR rather than a verdict is what keeps it fail-closed — see the
+// note below on the boolean wrapper that used to sit in this package.
+func LoopFromClosedRing(ring [][]float64) (*s2.Loop, error) {
 	loop, err := loopFromClosedRing(ring)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := loop.Validate(); err != nil {
-		return fmt.Errorf("the ring does not bound an area: %w", err)
+		return nil, fmt.Errorf("the ring does not bound an area: %w", err)
 	}
 	if i, j, ok := LoopSelfIntersects(loop); ok {
-		return fmt.Errorf("the ring is self-intersecting (edges %d and %d cross)", i, j)
+		return nil, fmt.Errorf("the ring is self-intersecting (edges %d and %d cross)", i, j)
 	}
-	return nil
+	return loop, nil
 }
 
 // loopFromClosedRing drops the repeated closing position and builds a normalized
@@ -133,14 +155,16 @@ func loopFromClosedRing(ring [][]float64) (*s2.Loop, error) {
 	return loop, nil
 }
 
-// 🔴 There is deliberately NO exported ring-taking wrapper around the crossing
-// check. The one that used to sit here answered `false` — "this ring does not cross
-// itself" — for every ring it could not build a loop from: unclosed, too short, a
-// NaN coordinate. That is fail-OPEN on a predicate named exactly like the one an
-// authoring gate reaches for, in a package where every other exit is fail-closed.
-// ValidateClosedRing is the entry point precisely because it returns an ERROR for
-// the cases a verdict cannot describe, so a caller cannot mistake "could not ask"
-// for "asked, and the answer was fine".
+// 🔴 There is deliberately NO exported ring-taking wrapper that answers the crossing
+// check as a VERDICT. The one that used to sit here answered `false` — "this ring does
+// not cross itself" — for every ring it could not build a loop from: unclosed, too
+// short, a NaN coordinate. That is fail-OPEN on a predicate named exactly like the one
+// an authoring gate reaches for, in a package where every other exit is fail-closed.
+// ValidateClosedRing and LoopFromClosedRing are the entry points precisely because
+// they return an ERROR for the cases a verdict cannot describe, so a caller cannot
+// mistake "could not ask" for "asked, and the answer was fine". The distinction is
+// the RETURN, not the argument: a ring-taking function is fine, a ring-taking bool
+// is not.
 //
 // Nothing MECHANICAL stops that wrapper coming back — no test can fail because a new
 // exported symbol appeared — so this note and review are the whole of the guard. Say
