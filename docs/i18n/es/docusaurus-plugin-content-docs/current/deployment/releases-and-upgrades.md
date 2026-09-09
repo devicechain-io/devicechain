@@ -203,7 +203,14 @@ Lo que hace que el despliegue sea seguro:
   informa "no listo" (de modo que el Service deje de enrutarle nuevas solicitudes), espera una breve
   ventana de drenaje para que ese cambio se propague, y solo entonces termina el trabajo en curso y
   se apaga. Configure la ventana con `shutdownDrainSeconds` (por defecto `5`), mantenida de forma segura
-  por debajo de `terminationGracePeriodSeconds` (por defecto `30`).
+  por debajo de `terminationGracePeriodSeconds` (por defecto `30`). Ambos forman un único presupuesto
+  y los servicios lo verifican: el drenaje puede ocupar como máximo **la mitad** del período de gracia,
+  porque la ventana solo espera — terminar las solicitudes en curso, drenar los consumidores del bróker
+  y cerrar el pool de base de datos ocurren después de ella, y el kubelet envía SIGKILL cuando el
+  período de gracia expira, haya terminado eso o no. Una ventana mayor se rechaza al arrancar el
+  servicio (y en `dcctl bootstrap`, antes de instalar nada), en lugar de descubrirse cuando un pod ya
+  se está apagando. Ponga `shutdownDrainSeconds: 0` para omitir el drenaje por completo, lo que encaja
+  con una ejecución de una sola instancia sin ningún Service del que retirarse.
 - **Migraciones de esquema coordinadas.** Los servicios ejecutan migraciones de base de datos bajo un bloqueo
   a nivel de base de datos, de modo que cuando varias réplicas se inician a la vez, exactamente una aplica las
   migraciones y el resto espera; sin condiciones de carrera, sin DDL duplicado.

@@ -108,7 +108,7 @@
     "terminationGracePeriodSeconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "§10.2: graceful-shutdown window; must exceed shutdownDrainSeconds plus in-flight request time."
+      "description": "§10.2: graceful-shutdown window. Rendered into the pod spec AND into the instance config, where the services validate it against shutdownDrainSeconds and refuse to start if the drain leaves no room for the teardown that follows it."
     },
     "nodeLossTolerationSeconds": {
       "type": ["integer", "null"],
@@ -118,7 +118,7 @@
     "shutdownDrainSeconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "§10.2: app-side readiness-drain window before the server stops (DC_SHUTDOWN_DRAIN_SECONDS)."
+      "description": "§10.2: app-side readiness-drain window before the server tears down, written into the instance config as infrastructure.shutdown.drainSeconds. It may take at most HALF of terminationGracePeriodSeconds — the drain only waits for endpoint removal to propagate, and the teardown after it is what finishes in-flight work — so a larger value is refused at startup, not at shutdown. 0 skips the drain, which suits a single-instance run with no Service to be pulled out of."
     },
     "goMemLimitPercent": {
       "type": "integer",

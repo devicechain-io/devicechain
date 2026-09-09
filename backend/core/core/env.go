@@ -16,13 +16,15 @@ const (
 	// the Helm chart runs) emits structured JSON for log aggregation (E16).
 	ENV_LOG_CONSOLE = "DC_LOG_CONSOLE"
 
-	// ENV_SHUTDOWN_DRAIN_SECONDS is the grace window (in seconds) between flipping
-	// readiness to 503 on SIGTERM and tearing the server down, giving the endpoint
-	// controllers time to pull the pod from Service endpoints before in-flight
-	// traffic stops being accepted (the app-side equivalent of a preStop sleep —
-	// the scratch service images have no shell for a preStop hook). The Helm chart
-	// sets it; it defaults to defaultShutdownDrain when unset or invalid. Must stay
-	// comfortably below terminationGracePeriodSeconds so the graceful HTTP shutdown
-	// still has time after the drain (methodology §10.2).
-	ENV_SHUTDOWN_DRAIN_SECONDS = "DC_SHUTDOWN_DRAIN_SECONDS"
+	// ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS is a variable this process REFUSES TO START
+	// ON, not one it reads. The shutdown drain window is instance configuration —
+	// infrastructure.shutdown.drainSeconds, written by the chart from its
+	// shutdownDrainSeconds value — where it is decoded, defaulted and validated
+	// against the pod's grace period at startup, like every other knob.
+	//
+	// It is named here rather than simply deleted so that a deployment still setting
+	// it is told, at startup, that the value is not being used. Dropping the name
+	// would leave that deployment running on the default with nothing to say its
+	// configuration had stopped taking effect.
+	ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS = "DC_SHUTDOWN_DRAIN_SECONDS"
 )

@@ -29,32 +29,6 @@ func captureExit(t *testing.T) *[]int {
 	return &codes
 }
 
-// shutdownDrainDelay resolves the drain window from the environment, falling back
-// to the default and tolerating invalid input.
-func TestShutdownDrainDelay(t *testing.T) {
-	tests := []struct {
-		name string
-		set  bool
-		val  string
-		want time.Duration
-	}{
-		{"unset uses default", false, "", defaultShutdownDrain},
-		{"explicit seconds", true, "10", 10 * time.Second},
-		{"zero disables drain", true, "0", 0},
-		{"empty uses default", true, "", defaultShutdownDrain},
-		{"invalid uses default", true, "soon", defaultShutdownDrain},
-		{"negative uses default", true, "-3", defaultShutdownDrain},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.set {
-				t.Setenv(ENV_SHUTDOWN_DRAIN_SECONDS, tc.val)
-			}
-			assert.Equal(t, tc.want, shutdownDrainDelay())
-		})
-	}
-}
-
 // A service that refuses to start must say so in its exit status. This is the whole
 // point of the outcome channel: before it, Run returned nil here and the container
 // reported Completed, which is what an orderly shutdown reports.

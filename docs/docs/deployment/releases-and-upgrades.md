@@ -198,7 +198,15 @@ What makes the rollout safe:
   reports "not ready" (so the Service stops routing new requests to it), waits a short
   drain window for that change to propagate, and only then finishes in-flight work and
   shuts down. Configure the window with `shutdownDrainSeconds` (default `5`), kept safely
-  under `terminationGracePeriodSeconds` (default `30`).
+  under `terminationGracePeriodSeconds` (default `30`). The two are one budget and the
+  services check it: the drain may take at most **half** the grace period, because the
+  window only waits — finishing in-flight requests, draining the broker consumers and
+  closing the database pool all happen after it, and the kubelet sends SIGKILL when the
+  grace period expires whether or not that has finished. A larger window is refused when
+  the service starts (and by `dcctl bootstrap` before it installs anything), not
+  discovered when a pod is already shutting down. Set `shutdownDrainSeconds: 0` to skip
+  the drain entirely, which suits a single-instance run with no Service to be pulled out
+  of.
 - **Coordinated schema migrations.** Services run database migrations under a database-level
   lock, so when several replicas start at once exactly one applies migrations and the rest
   wait — no races, no duplicate DDL.
