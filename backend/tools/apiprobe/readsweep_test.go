@@ -6,7 +6,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -14,34 +13,25 @@ import (
 	"github.com/graph-gophers/graphql-go/ast"
 )
 
-// servedSDL concatenates one area's tenant-plane schema text the way loadServedSchema
-// does. It is duplicated rather than shared so a test can parse the SAME text twice —
-// once through the code under test and once through the library directly — without the
-// two readings being the same call.
+// servedSDL reads one area's tenant-plane schema text the way loadServedSchema does.
+//
+// 🔴 IT NAMES THE FILE LITERALLY RATHER THAN ASKING schemaplane, AND THAT IS THE
+// POINT. This exists so a test can read the SAME text twice — once through the code
+// under test and once independently — and a "second" reading routed through the very
+// classifier the first one used is not a second reading at all. Written out here, a
+// change to the convention has to be made in two places that were arrived at
+// separately, which is what makes the comparison mean something.
 func servedSDL(t *testing.T, area string) string {
 	t.Helper()
-	var files []string
-	for _, ext := range []string{"*.graphql", "*.gql"} {
-		found, err := filepath.Glob(filepath.Join("..", "..", "services", area, "graphql", ext))
-		if err != nil {
-			t.Fatalf("glob %s: %v", area, err)
-		}
-		files = append(files, found...)
+	path := filepath.Join("..", "..", "services", area, "graphql", "schema.graphql")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
 	}
-	sort.Strings(files)
-	var sb strings.Builder
-	for _, f := range files {
-		if strings.Contains(filepath.Base(f), "admin") {
-			continue
-		}
-		body, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		sb.Write(body)
-		sb.WriteString("\n")
+	if len(body) == 0 {
+		t.Fatalf("%s is empty; a parser handed nothing validates everything", path)
 	}
-	return sb.String()
+	return string(body)
 }
 
 // probeTokens is a seed's tokens as the sweep receives them: one per entity in the table.

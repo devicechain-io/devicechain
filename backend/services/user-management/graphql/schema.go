@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/identity"
 )
 
-//go:embed schema.gql
+//go:embed schema.graphql
 var SchemaContent string
 
 // ContextIdentityKey injects the identity Manager into the GraphQL request

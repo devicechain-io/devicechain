@@ -5,12 +5,11 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/ast"
 )
@@ -44,56 +43,69 @@ import (
 // 🔴 RUN WITH -count=1 AFTER TOUCHING A SCHEMA: the files live outside this module
 // and Go's test cache does not track them, so an edited schema is served a stale PASS.
 
-// plane names which of an area's two GraphQL surfaces to load. They are separate
-// schemas served at separate paths under separate principals, and folding them
-// together would let a document validate against a type the endpoint it is sent to
-// does not serve.
-type plane bool
-
-const (
-	tenantPlane plane = false
-	adminPlane  plane = true
-)
-
-// servedSchema parses what an area actually serves on one plane, using the same
-// library the services use. Both extensions are read: user-management spells its
-// schemas `.gql` and every other area spells them `.graphql`.
-func servedSchema(t *testing.T, area string, p plane) *graphql.Schema {
+// servedSchema parses what an area actually serves at one MOUNT, using the same
+// library the services use.
+//
+// 🔴 THE MOUNT, NOT A PLANE, AND NOT A FILENAME SUBSTRING. This used to pick files
+// by whether their name contained "admin" and concatenate everything on one side of
+// that test. Two of user-management's three schemas are identity-token surfaces and
+// only one of them says "admin", so the settings schema landed on the tenant side —
+// and since both files declare `type Query` and `type Mutation`, graphql-go kept the
+// last of the duplicate root types silently. The "tenant schema" this function
+// returned for user-management served settings and neither ping, me nor login,
+// while the SDL was non-empty and the floor below stayed quiet. Each mount is one
+// file, parsed alone, exactly as the service parses it.
+func servedSchema(t *testing.T, area, mount string) *graphql.Schema {
 	t.Helper()
 	dir := filepath.Join("..", "..", "services", area, "graphql")
 
-	var files []string
-	for _, ext := range []string{"*.graphql", "*.gql"} {
-		found, err := filepath.Glob(filepath.Join(dir, ext))
-		if err != nil {
-			t.Fatalf("glob %s/%s: %v", dir, ext, err)
-		}
-		files = append(files, found...)
+	sdl, served, err := schemaplane.SDLAt(dir, mount)
+	if err != nil {
+		t.Fatalf("classify %s: %v", dir, err)
 	}
-	sort.Strings(files)
-
-	var sdl strings.Builder
-	for _, f := range files {
-		if strings.Contains(filepath.Base(f), "admin") != bool(p) {
-			continue
-		}
-		body, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		sdl.Write(body)
-		sdl.WriteString("\n")
-	}
-	if sdl.Len() == 0 {
-		t.Fatalf("no schema files for area %q on plane %v; a test that parsed nothing would validate everything", area, p)
+	if !served {
+		t.Fatalf("area %q serves no schema at %s; a test that parsed nothing would validate everything", area, mount)
 	}
 
 	// A nil resolver is enough: validation reads the schema, never a resolver.
-	schema, err := graphql.ParseSchema(sdl.String(), nil, graphql.UseFieldResolvers())
+	schema, err := graphql.ParseSchema(sdl, nil, graphql.UseFieldResolvers())
 	if err != nil {
-		t.Fatalf("parse %s (%v plane): %v", area, p, err)
+		t.Fatalf("parse %s (%s): %v", area, mount, err)
 	}
 	return schema
+}
+
+// 🔴 THE TENANT PLANE OF user-management IS THE ONE THE OLD CLASSIFIER GOT WRONG,
+// and nothing in this file could see it: the coverage table's entities live in five
+// other areas, so servedSchema was never called for user-management on this mount.
+// The defect was therefore latent by coverage luck rather than by construction —
+// which is exactly the state that makes a tidy-up look like a fix.
+//
+// login is the call every other call's token comes from. The settings case is the
+// counterweight: serving those three is only correct while the settings surface,
+// which is served at another path under an identity token, stays off this plane.
+func TestTheUserManagementTenantPlaneServesLoginPingAndMe(t *testing.T) {
+	schema := servedSchema(t, "user-management", schemaplane.MountTenant)
+
+	for _, c := range []struct {
+		name  string
+		doc   string
+		valid bool
+	}{
+		{"ping", `{ ping }`, true},
+		{"me", `{ me { email } }`, true},
+		{"login", `mutation { login(email: "a@b.c", password: "p") { identityToken } }`, true},
+		{"settings", `{ settings { key } }`, false},
+	} {
+		errs := schema.ValidateWithVariables(c.doc, nil)
+		switch {
+		case c.valid && len(errs) > 0:
+			t.Errorf("%s does not resolve on the user-management tenant plane: %v", c.doc, errs)
+		case !c.valid && len(errs) == 0:
+			t.Errorf("%s resolves on the user-management tenant plane, but it is served at %s",
+				c.doc, schemaplane.MountSettings)
+		}
+	}
 }
 
 // The provisioning triple, validated against the admin schema it is sent to.
@@ -101,7 +113,7 @@ func servedSchema(t *testing.T, area string, p plane) *graphql.Schema {
 // document validated with no variables at all reports every one of them as a null
 // that violates its own `String!` — noise that would bury the finding this exists for.
 func TestEveryProvisioningDocumentValidatesAgainstTheAdminSchema(t *testing.T) {
-	schema := servedSchema(t, "user-management", adminPlane)
+	schema := servedSchema(t, "user-management", schemaplane.MountAdmin)
 
 	for _, c := range []struct {
 		name string
@@ -140,7 +152,7 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	for _, e := range allEntities() {
 		schema, ok := byArea[e.Area]
 		if !ok {
-			schema = servedSchema(t, e.Area, tenantPlane)
+			schema = servedSchema(t, e.Area, schemaplane.MountTenant)
 			byArea[e.Area] = schema
 		}
 
@@ -193,7 +205,7 @@ func TestAnEnvelopeWithARejectionSelectsIt(t *testing.T) {
 		}
 		schema, ok := byArea[e.Area]
 		if !ok {
-			schema = servedSchema(t, e.Area, tenantPlane)
+			schema = servedSchema(t, e.Area, schemaplane.MountTenant)
 			byArea[e.Area] = schema
 		}
 		fields, err := mutationReturnFields(schema, e.Mutation)
@@ -276,7 +288,7 @@ func TestEveryTamperDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 			t.Errorf("tamper %q targets %q, which is not in the coverage table", tp.Mode, tp.Entity)
 			continue
 		}
-		schema := servedSchema(t, e.Area, tenantPlane)
+		schema := servedSchema(t, e.Area, schemaplane.MountTenant)
 		if errs := schema.ValidateWithVariables(tp.doc(), tp.vars("apiprobe-"+tp.Entity)); len(errs) > 0 {
 			t.Errorf("tamper %q does not validate against %s: %v\n  document: %s",
 				tp.Mode, e.Area, errs, tp.doc())
@@ -289,8 +301,8 @@ func TestEveryTamperDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 // Each case below is a real defect this file has already caught once, replayed
 // against the same validator to prove the validator is what caught it.
 func TestTheValidatorRejectsTheDefectsItWasBuiltFor(t *testing.T) {
-	admin := servedSchema(t, "user-management", adminPlane)
-	tenant := servedSchema(t, "device-management", tenantPlane)
+	admin := servedSchema(t, "user-management", schemaplane.MountAdmin)
+	tenant := servedSchema(t, "device-management", schemaplane.MountTenant)
 
 	for _, c := range []struct {
 		name   string
@@ -421,7 +433,7 @@ input CommandCreateRequest {
 
 	// And the reverse, against the tree HEAD actually serves: the enveloped
 	// document validates, the bare one does not.
-	head := servedSchema(t, "command-delivery", tenantPlane)
+	head := servedSchema(t, "command-delivery", schemaplane.MountTenant)
 	if errs := head.ValidateWithVariables(command.createDoc(), command.Vars(st)); len(errs) > 0 {
 		t.Errorf("the enveloped create does not validate against the served schema: %v", errs)
 	}

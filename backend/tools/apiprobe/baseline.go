@@ -4,10 +4,14 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 )
 
 // baseline is the schema tree a SEED is measured against, and it exists because
@@ -64,9 +68,9 @@ type baseline struct {
 // loadBaseline reads every tenant-plane schema under dir, which is expected to be
 // a `backend/services` directory from the release being upgraded FROM.
 //
-// Admin schemas are excluded for the same reason the coverage test excludes them:
-// they are a separate identity-token surface, and nothing in the table is served
-// there.
+// The identity-token schemas — the admin API and the settings API — are excluded
+// for the same reason the coverage test excludes them: they are a separate surface
+// under a separate principal, and nothing in the table is served there.
 func loadBaseline(dir string) (*baseline, error) {
 	b := &baseline{dir: dir, raw: map[string]string{}, stripped: map[string]string{}}
 	entries, err := os.ReadDir(dir)
@@ -77,36 +81,26 @@ func loadBaseline(dir string) (*baseline, error) {
 		if !e.IsDir() {
 			continue
 		}
-		// BOTH extensions. user-management spells its schemas `.gql` and every
-		// other area spells them `.graphql`, so globbing one of them makes an
-		// area's schemas invisible — and an invisible area is reported as one the
-		// baseline "serves no schema" for, which skips every entity in it. That is
-		// the fail-open this file's header warns about, arriving through a file
-		// extension rather than through the matching logic.
-		var matches []string
-		for _, ext := range []string{"*.graphql", "*.gql"} {
-			found, err := filepath.Glob(filepath.Join(dir, e.Name(), "graphql", ext))
-			if err != nil {
-				return nil, failWith(exitSetup, "scan %s: %w", e.Name(), err)
-			}
-			matches = append(matches, found...)
+		// 🔴 CLASSIFIED, NOT GUESSED. This used to glob both extensions and drop
+		// anything whose filename contained "admin", which got the plane wrong in
+		// both directions: an area spelling its schemas with an extension the glob
+		// missed became one the baseline "serves no schema" for — skipping every
+		// entity in it — and an identity-token surface whose name says "settings"
+		// rather than "admin" was folded in as though a tenant token reached it.
+		// schemaplane answers by mount instead, and an unrecognised artifact is an
+		// error rather than a file quietly left out.
+		sdl, served, err := schemaplane.SDLAt(filepath.Join(dir, e.Name(), "graphql"), schemaplane.MountTenant)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// An area with no graphql directory in that release's tree.
+			continue
+		case err != nil:
+			return nil, failWith(exitSetup, "scan %s: %w", e.Name(), err)
+		case !served:
+			continue
 		}
-		var body strings.Builder
-		for _, m := range matches {
-			if strings.Contains(filepath.Base(m), "admin") {
-				continue
-			}
-			part, err := os.ReadFile(m)
-			if err != nil {
-				return nil, failWith(exitSetup, "read %s: %w", m, err)
-			}
-			body.Write(part)
-			body.WriteString("\n")
-		}
-		if body.Len() > 0 {
-			b.raw[e.Name()] = body.String()
-			b.stripped[e.Name()] = stripAllSpace(body.String())
-		}
+		b.raw[e.Name()] = sdl
+		b.stripped[e.Name()] = stripAllSpace(sdl)
 	}
 	if len(b.raw) == 0 {
 		// An empty tree would mark every entity unsupported and produce a receipt

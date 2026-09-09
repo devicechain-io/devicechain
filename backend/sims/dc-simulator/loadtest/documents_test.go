@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 )
 
@@ -47,38 +48,26 @@ import (
 
 // servedSchema parses what one functional area serves on its TENANT plane — the only
 // plane this package ever sends to; it holds no admin token and by design never will.
-// Admin SDL files are excluded rather than merged, because folding the two together
-// would let a document validate against a type the endpoint it is sent to does not serve.
+//
+// 🔴 THE MOUNT IS ASKED FOR BY NAME, NOT DERIVED FROM A FILENAME SUBSTRING, and the
+// file is parsed ALONE. Picking files by whether their name contained "admin" and
+// concatenating the rest put user-management's settings schema — an identity-token
+// surface — on the tenant side, and since both it and the tenant schema declare
+// `type Query`, graphql-go kept the last of the duplicate root types with no error.
+// The result was a non-empty SDL serving the wrong file's fields, which the
+// anti-vacuity floor below cannot see, because it is not empty.
 func servedSchema(t *testing.T, area string) *graphql.Schema {
 	t.Helper()
 	dir := filepath.Join("..", "..", "..", "services", area, "graphql")
 
-	var files []string
-	for _, ext := range []string{"*.graphql", "*.gql"} {
-		found, err := filepath.Glob(filepath.Join(dir, ext))
-		if err != nil {
-			t.Fatalf("glob %s/%s: %v", dir, ext, err)
-		}
-		files = append(files, found...)
-	}
-	sort.Strings(files)
-
-	var sdl strings.Builder
-	for _, f := range files {
-		if strings.Contains(filepath.Base(f), "admin") {
-			continue
-		}
-		body, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		sdl.Write(body)
-		sdl.WriteString("\n")
+	sdl, served, err := schemaplane.SDLAt(dir, schemaplane.MountTenant)
+	if err != nil {
+		t.Fatalf("classify %s: %v", dir, err)
 	}
 	// A test that parsed nothing would validate everything, which is the shape of
 	// gate this whole file exists to refuse.
-	if sdl.Len() == 0 {
-		t.Fatalf("no tenant-plane schema files found for area %q under %s", area, dir)
+	if !served {
+		t.Fatalf("no tenant-plane schema found for area %q under %s", area, dir)
 	}
 
 	// A nil resolver is enough: validation reads the schema, never a resolver.
@@ -87,7 +76,7 @@ func servedSchema(t *testing.T, area string) *graphql.Schema {
 	// only at execution, so a validator without it is strictly weaker than the server
 	// it stands in for — and a gate weaker than the thing it models will pass a
 	// document the deployment refuses.
-	schema, err := graphql.ParseSchema(sdl.String(), nil,
+	schema, err := graphql.ParseSchema(sdl, nil,
 		graphql.UseFieldResolvers(), graphql.MaxDepth(15), graphql.MaxQueryLength(100000))
 	if err != nil {
 		t.Fatalf("parse %s: %v", area, err)

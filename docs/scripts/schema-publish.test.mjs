@@ -10,7 +10,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import {
+  readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { sanitizeSdl, sanitizeText, hasCitation } from './sanitize.mjs';
@@ -18,7 +21,9 @@ import { scan } from './gate.mjs';
 import {
   REPO, SITE, CANONICAL, GenerateError, discover, reconcile, resolve, buildArtifacts,
 } from './generate-schema.mjs';
-import { SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
+import {
+  SCHEMAS, REQUIRED_OUTPUTS, SCHEMA_EXTENSION, REFUSED_SCHEMA_EXTENSIONS,
+} from './schemas.manifest.mjs';
 
 const clean = (s) => sanitizeText(s);
 
@@ -267,14 +272,57 @@ test('an unrecognized schema filename fails rather than guessing an auth plane',
   );
 });
 
+// 🔴 THE EXTENSION FLOOR, AND ITS NEGATIVE CONTROL. Discovery is a directory read,
+// and a directory read that quietly skips a file is indistinguishable from a
+// directory that does not contain it. Three schemas lived under a different
+// extension for a long time and were dropped in exactly that silence — by a
+// *.graphql glob here, and by addlicense in the SPDX header job, which has no
+// handler for the extension and reports nothing about a file it cannot parse.
+//
+// The control is the tree itself: discovery over the real repository must find every
+// schema and throw nothing, or the refusal below would be firing on the wrong thing.
+test('discovery refuses a schema artifact under an unsupported extension', () => {
+  const tree = mkdtempSync(join(tmpdir(), 'dc-schema-ext-'));
+  const dir = join(tree, 'backend', 'services', 'device-state', 'graphql');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'schema.graphql'), 'type Query { a: String }\n');
+
+  // Control: the accepted extension alone discovers cleanly.
+  assert.deepEqual(discover(tree), ['backend/services/device-state/graphql/schema.graphql']);
+
+  for (const ext of REFUSED_SCHEMA_EXTENSIONS) {
+    const stray = join(dir, `settings_schema${ext}`);
+    writeFileSync(stray, 'type Query { b: String }\n');
+    assert.throws(
+      () => discover(tree),
+      (e) => e instanceof GenerateError
+        && e.headline.includes(`settings_schema${ext}`)
+        && /unsupported extension/.test(e.headline),
+      `a ${ext} schema was discovered without complaint`,
+    );
+    rmSync(stray);
+  }
+
+  // And back to clean, so the refusal is shown to be about the file rather than
+  // about the fixture having been permanently poisoned.
+  assert.deepEqual(discover(tree), ['backend/services/device-state/graphql/schema.graphql']);
+  rmSync(tree, { recursive: true, force: true });
+});
+
+test('every schema in the real tree carries the one supported extension', () => {
+  const found = discover();
+  assert.ok(found.length >= 14, `discovered only ${found.length} schema(s)`);
+  for (const s of found) assert.ok(s.endsWith(SCHEMA_EXTENSION), s);
+});
+
 // ---------------------------------------------------------------------------
 // The published set.
 // ---------------------------------------------------------------------------
 
-test('all three .gql-sourced schemas are published, asserted by name', () => {
+test('the required outputs are published, asserted by name', () => {
   const names = new Set(buildArtifacts().map((a) => a.name));
-  // Not a count: a *.graphql glob drops all three, and 11 files looks as complete
-  // as 14 does. The one it drops silently is login.
+  // Not a count: these are the three a *.graphql glob once dropped, and 11 files
+  // looks as complete as 14 does. The one it dropped silently was login.
   for (const required of REQUIRED_OUTPUTS) assert.ok(names.has(required), `missing ${required}`);
 });
 
@@ -439,7 +487,7 @@ test('the published SDL still parses as the schema it came from', () => {
   for (const artifact of buildArtifacts()) {
     if (artifact.name === 'index.json') continue;
     const entry = SCHEMAS.find((s) => s.source.endsWith(`/${artifact.name.replace(/\.graphql$/, '')}`)
-      || artifact.name === `${s.area}.graphql` && /\/schema\.(graphql|gql)$/.test(s.source)
+      || artifact.name === `${s.area}.graphql` && /\/schema\.graphql$/.test(s.source)
       || artifact.name === `${s.area}-admin.graphql` && /admin_schema\./.test(s.source)
       || artifact.name === `${s.area}-settings.graphql` && /settings_schema\./.test(s.source));
     assert.ok(entry, `no source for ${artifact.name}`);

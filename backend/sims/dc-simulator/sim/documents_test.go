@@ -4,11 +4,11 @@
 package sim
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 )
 
@@ -39,34 +39,25 @@ import (
 // servedSchema parses what device-management serves on its TENANT plane, with the
 // same options the service parses it with — MaxDepth bites at VALIDATE time, so a
 // validator without it is weaker than the server it stands in for.
+//
+// The mount is named rather than inferred from a filename substring, and the file is
+// parsed alone: concatenating an area's schemas joins two `type Query` declarations,
+// and graphql-go keeps the last of them without reporting an error.
 func servedSchema(t *testing.T, area string) *graphql.Schema {
 	t.Helper()
 	dir := filepath.Join("..", "..", "..", "services", area, "graphql")
-	var sdl strings.Builder
-	for _, ext := range []string{"*.graphql", "*.gql"} {
-		found, err := filepath.Glob(filepath.Join(dir, ext))
-		if err != nil {
-			t.Fatalf("glob %s/%s: %v", dir, ext, err)
-		}
-		for _, f := range found {
-			if strings.Contains(filepath.Base(f), "admin") {
-				continue
-			}
-			b, rerr := os.ReadFile(f)
-			if rerr != nil {
-				t.Fatalf("read %s: %v", f, rerr)
-			}
-			sdl.Write(b)
-			sdl.WriteString("\n")
-		}
+
+	sdl, served, err := schemaplane.SDLAt(dir, schemaplane.MountTenant)
+	if err != nil {
+		t.Fatalf("classify %s: %v", dir, err)
 	}
 	// A test that parsed nothing would validate everything, which is the shape of gate
 	// this file exists to refuse.
-	if sdl.Len() == 0 {
-		t.Fatalf("no tenant-plane schema files found for area %q under %s", area, dir)
+	if !served {
+		t.Fatalf("no tenant-plane schema found for area %q under %s", area, dir)
 	}
 	// A nil resolver is enough: validation reads the schema, never a resolver.
-	schema, err := graphql.ParseSchema(sdl.String(), nil,
+	schema, err := graphql.ParseSchema(sdl, nil,
 		graphql.UseFieldResolvers(), graphql.MaxDepth(15), graphql.MaxQueryLength(100000))
 	if err != nil {
 		t.Fatalf("parse %s: %v", area, err)

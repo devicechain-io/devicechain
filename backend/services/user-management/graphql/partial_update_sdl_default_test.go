@@ -12,7 +12,7 @@ import (
 // 🔴 THE DEFECT NO OTHER TEST IN THIS SERVICE CAN SEE, AND IT WAS DEMONSTRATED RATHER
 // THAN REASONED ABOUT.
 //
-// Adding `ingestBurst: Int = 5` to AdminTenantUpdateRequest in admin_schema.gql left both
+// Adding `ingestBurst: Int = 5` to AdminTenantUpdateRequest in admin_schema.graphql left both
 // ./graphql and ./admin GREEN — and with that one token, every updateTenant that omits
 // ingestBurst reaches the service as Set=true, Value=5, so renaming a tenant writes a
 // burst override of 5 into it.
@@ -51,7 +51,7 @@ func TestNoUpdateInputCarriesAnSDLDefault(t *testing.T) {
 		// is the point of a derived guard: it serves no update* mutation today, so the
 		// floor is 1 and this row would FAIL — which is why it is not here. It is named
 		// instead, so the next person to add an update there finds the reason rather than
-		// an absence: settings_schema.gql's writes are set*/put* single-purpose mutations
+		// an absence: settings_schema.graphql's writes are set*/put* single-purpose mutations
 		// whose whole payload IS the thing they set. Add a row the day that changes.
 	)
 }

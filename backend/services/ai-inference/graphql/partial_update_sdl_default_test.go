@@ -38,7 +38,7 @@ func TestNoUpdateInputCarriesAnSDLDefault(t *testing.T) {
 			MinUpdateMutations: 1,
 		},
 		// 🔴 THE TENANT DATA-PLANE SCHEMA (schema.graphql) IS NAMED RATHER THAN LISTED,
-		// following user-management's settings_schema.gql. It serves ONE mutation,
+		// following user-management's settings_schema.graphql. It serves ONE mutation,
 		// inferRuleCandidate, and no update* at all — so a row for it would fail the
 		// anti-vacuity floor, which must be greater than zero. Its single mutation is a
 		// stateless inference call that persists nothing, so there is no stored value an
