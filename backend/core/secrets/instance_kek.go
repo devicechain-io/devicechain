@@ -31,6 +31,11 @@ type instanceKeyProvider struct {
 // (the instance secretsRootKey, wired from the K8s Secret in a later slice). A
 // key of the wrong length is rejected fail-closed — a service that cannot form
 // its KEK must not start.
+//
+// Length is the ONLY thing it can check: any 32 bytes make a valid AES-256 key, so
+// a different well-formed key builds a perfectly good provider that opens nothing.
+// Whether this is the RIGHT key is a question about the stored ciphertext, and it
+// is answered by SelfTest, which New runs before handing back a store.
 func NewInstanceKeyProvider(rootKey []byte) (KeyProvider, error) {
 	if len(rootKey) != dekSize {
 		return nil, fmt.Errorf("secrets: instance root key is %d bytes, want %d (256-bit)", len(rootKey), dekSize)

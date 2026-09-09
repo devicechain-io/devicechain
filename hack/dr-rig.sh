@@ -1368,6 +1368,33 @@ its replacement, from two archives and an escrow artifact alone."
 
 # cmd_control is the check on the check.
 #
+# 🔴 THIS PHASE NEEDS REWORKING, AND THE REASON IS A DELIBERATE CHANGE ELSEWHERE.
+# A service that stores secrets now checks its instance root key against its own
+# stored ciphertext when it builds the secret store, and refuses to start if the
+# key does not open it. So the decoy rebuild below no longer produces a running
+# instance: notification-management refuses to start, `dcctl bootstrap` never sees
+# every area become ready, and this phase dies inside `rebuild` with a readiness
+# timeout — a wrong-reason failure that reads as an environment problem.
+#
+# The control has not weakened; its evidence has moved EARLIER. What used to be
+# "the instance comes up and then cannot decrypt" is now "the instance refuses to
+# come up, naming the key". Reworking the phase means:
+#
+#   - letting the decoy `rebuild` fail without aborting, since a failed bring-up is
+#     now the expected outcome rather than an error;
+#   - asserting the SPECIFIC refusal in notification-management's logs, not merely
+#     that it is down. A pod that is down for any other reason would otherwise make
+#     the control "hold" while testing nothing, which is the exact shape this rig
+#     exists to avoid;
+#   - dropping `wait_for_api notification-management` from this phase only (that
+#     area is deliberately not serving here; user-management stores no secrets and
+#     still comes up); and
+#   - keeping run_verify afterwards. It reads the database through its own
+#     port-forward rather than through the area's API, so it still stands as the
+#     second, independent leg: the ciphertext does not decrypt under this key.
+#
+# Until that is done and RUN, this phase's verdict is not evidence either way.
+#
 # It recovers the SAME instance from the SAME archive under a root key that is not
 # the instance's. Everything else is identical. If the secret still decrypts, then
 # the drill's pass says nothing — the verifier is not actually testing the key —

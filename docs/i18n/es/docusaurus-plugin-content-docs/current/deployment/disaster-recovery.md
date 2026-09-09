@@ -74,9 +74,12 @@ gente hace:
   quedan ilegibles para siempre. El clúster nuevo acuñó una clave raíz *distinta*, y
   la antigua no se puede derivar de nada de lo que aún conserva.
 
-El fallo no aparece durante la restauración. Aparece después, como un error de
-descifrado inexplicable, normalmente mucho tiempo después de que la copia de seguridad
-que podría haber ayudado ya haya rotado.
+Antes esto solo aparecía después, como un error de descifrado inexplicable mucho
+tiempo después de que la copia de seguridad que podría haber ayudado ya hubiera
+rotado. Los servicios que almacenan secretos ahora comprueban su clave raíz contra sus
+propias filas almacenadas al arrancar, así que un clúster con la clave equivocada se
+niega a arrancar e indica la causa. Eso convierte el error en algo ruidoso e
+inmediato en lugar de lento y disperso, pero no recupera nada. La clave sigue perdida.
 
 :::danger No hay recuperación posible tras perder la clave raíz
 La clave son 256 bits de aleatoriedad y las claves de datos envueltas no son
@@ -167,9 +170,9 @@ proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
 Dos cosas que este comando no le permitirá hacer:
 
 - **Recuperar datos sin la clave.** `--restore-rdb-from` por sí solo se rechaza.
-  Rehidrataría todas las filas y acuñaría una clave raíz *nueva*, de modo que la
-  restauración informaría de éxito y todos los secretos almacenados quedarían
-  ilegibles para siempre: el único fallo que es invisible en el momento en que ocurre.
+  Rehidrataría todas las filas y acuñaría una clave raíz *nueva*, dejando todos los
+  secretos almacenados ilegibles para siempre: una pérdida que ningún paso posterior
+  puede deshacer.
 - **Recuperar sobre una instancia en uso.** La opción solo surte efecto cuando se
   *crea* el clúster de base de datos. Volver a ejecutarla contra una instancia que ya
   existe no hace absolutamente nada, en lugar de funcionar a medias.
