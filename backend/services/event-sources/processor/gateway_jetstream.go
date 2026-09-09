@@ -133,9 +133,13 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 		return fmt.Errorf("event source %q was started without a capture-stream reader: "+
 			"SetReader must be called during NATS component creation, before start", es.Id)
 	}
-	// Per-Start, not per-construction: the lifecycle explicitly permits Start after
-	// Stop, and a channel closed by the previous ExecuteStop would make the next one
-	// return instantly — racing a live read loop into a closed message channel.
+	// Per-Start, not per-construction. These belong to the read loop this start is
+	// about to spawn and to nothing else: ExecuteStop cancels that loop and closes the
+	// message channel, so a set built once at construction would be a set the first
+	// stop destroys. Building them here means a second entry into ExecuteStart — which
+	// a start retried after a failed one produces — gets its own rather than a channel
+	// the previous attempt already closed, which would make the read loop return
+	// instantly and race a live loop into a closed channel.
 	drained := make(chan struct{})
 	es.drained = drained
 	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
@@ -149,7 +153,7 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	loopCtx, cancel := context.WithCancel(context.Background())
 	es.cancel = cancel
 	// The loop is handed its OWN drained channel rather than reading the field, so
-	// a lingering loop from a previous Start cannot close the current one's.
+	// a lingering loop from a previous start attempt cannot close the current one's.
 	go es.readLoop(loopCtx, drained)
 	log.Info().Str("source", es.Id).Msg("Gateway event source consuming the device-events capture stream.")
 	return nil

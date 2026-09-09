@@ -184,8 +184,10 @@ func (es *HttpEventSource) Initialize(ctx context.Context) error {
 // Initialize event source (as called by lifecycle manager)
 //
 // The listening server is deliberately NOT built here. It is built per start, in
-// ExecuteStart, because a start may follow a stop (LifecycleComponent's contract puts
-// Stopped on the permitted set) and net/http's server cannot be started twice.
+// ExecuteStart, because net/http's server cannot be started twice: Shutdown latches
+// its shutting-down flag permanently, so a server built once and reused would bind and
+// then serve nothing. ExecuteStart is entered again by any start retried after a failed
+// one, and each entry has to get its own server for that reason.
 func (es *HttpEventSource) ExecuteInitialize(ctx context.Context) error {
 	log.Info().Msg("HTTP event source initialized.")
 	return nil
@@ -198,9 +200,10 @@ func (es *HttpEventSource) Start(ctx context.Context) error {
 
 // Start event source (as called by lifecycle manager)
 //
-// A fresh server is built on every start and the bind happens synchronously, so a port
-// already in use or a permission refusal FAILS THE START instead of being logged from a
-// goroutine nobody is listening to. Both of those used to be silent: the source reported
+// A fresh server is built on every entry — see ExecuteInitialize for why it cannot be
+// built once — and the bind happens synchronously, so a port already in use or a
+// permission refusal FAILS THE START instead of being logged from a goroutine nobody is
+// listening to. Both of those used to be silent: the source reported
 // a successful start and ingested nothing, and the only symptom was device telemetry
 // over HTTP that stopped arriving.
 func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {

@@ -94,9 +94,10 @@ func (sp *StateProcessor) pacer() *core.ReadPacer {
 // 🔴 IT IS SEPARATE FROM THE CONSTRUCTOR BECAUSE THE TWO RUN IN DIFFERENT PHASES.
 // The processor is built inside the NATS manager's oncreate callback, which runs on
 // EVERY start — it has to, because the processor holds a reader bound to the
-// connection — while a Prometheus collector may be registered only once or the second
-// registration panics. So the caller builds this in the INITIALIZE phase and hands the
-// same instruments to every start's processor.
+// connection — while a Prometheus collector belongs to the PROCESS and may be
+// registered only once, or the second registration panics. So the caller builds this in
+// the INITIALIZE phase and hands the same instruments to every processor that callback
+// builds.
 func NewStateMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 	return ms.NewProcessorMetrics("state")
 }
@@ -104,8 +105,8 @@ func NewStateMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 // Create a new device-state processor.
 //
 // metrics is built once in the initialize phase (see NewStateMetrics) and shared by
-// every processor this service constructs, because this constructor runs again on
-// every start.
+// every processor this service constructs, because that callback is connection-scoped
+// and the instruments are not.
 func NewStateProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceStateApi,
 	metrics *core.ProcessorMetrics) *StateProcessor {

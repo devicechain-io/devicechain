@@ -8,26 +8,32 @@ import (
 	"testing"
 )
 
-// The oncreate callback runs on EVERY start, including a start after a stop.
+// The oncreate callback runs on EVERY ExecuteStart. It is not a once-per-process hook,
+// and nothing here may assume it is.
 //
 // That is the contract NewNatsManager's doc comment states, and it is the reason a
-// service must not construct anything registry-scoped inside its callback: a
-// Prometheus collector built there is built again on the second start, and a
-// duplicate registration panics. Six services did exactly that.
+// service must not construct anything registry-scoped inside its callback: a Prometheus
+// collector built there is built again on a second entry, and a duplicate registration
+// panics. Six services did exactly that.
 //
 // Before this test the contract was a sentence in a doc comment with nothing holding
 // it, which is how it came to be read as "invoked on Start" and not as "invoked again
-// on the NEXT start". A guard added here — suppressing the second call, mirroring the
+// on the NEXT one". A guard added here — suppressing the second call, mirroring the
 // sampler guard immediately below it in ExecuteStart — would look like a tidy fix for
-// the panic and would silently leave the restarted service with readers and writers
-// bound to the connection the stop drained. This test is what refuses that.
+// the panic and would silently leave the service with readers and writers bound to the
+// connection the previous stop drained. This test is what refuses that.
 //
-// 🔴 THE CALLBACK CREATES NOTHING. That is deliberate, and it is a limit on what this
-// test can prove, so it is worth stating rather than leaving to be rediscovered:
-// ExecuteStop drains the connection and a start after it does NOT re-establish one, so
-// a callback that asked for a reader or a writer here would spend the retry budget and
-// fail long before it reached anything worth asserting on. What this pins is the half
-// that runs first on that second start — that the callback is entered at all. That the
+// 🔴 IT DRIVES ExecuteStart/ExecuteStop DIRECTLY, NOT THE MANAGER. That is not a
+// shortcut around the state machine, it is the only way to reach the property: the
+// lifecycle refuses a start from Stopped, so the second entry that matters is the one a
+// RETRIED start produces — a start whose failure restored the component to Initialized.
+// Driving the Execute methods is what that retry looks like from the component's side.
+//
+// 🔴 THE CALLBACK CREATES NOTHING, which is a limit on what this test can prove and is
+// worth stating rather than leaving to be rediscovered: ExecuteStop drains the
+// connection and nothing re-establishes one, so a callback that asked for a reader or a
+// writer here would spend the retry budget and fail long before reaching anything worth
+// asserting on. What this pins is that the callback is entered at all. That the
 // re-entry does not panic on a re-registered collector is pinned per service, beside
 // the constructors that used to do it.
 func TestOncreateRunsOnEveryStart(t *testing.T) {
@@ -55,11 +61,11 @@ func TestOncreateRunsOnEveryStart(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 	if err := nmgr.ExecuteStart(ctx); err != nil {
-		t.Fatalf("start after stop: %v", err)
+		t.Fatalf("second start: %v", err)
 	}
 	if calls != 2 {
-		t.Fatalf("after initialize -> start -> stop -> start oncreate ran %d times, want 2. "+
+		t.Fatalf("after a second ExecuteStart oncreate ran %d times, want 2. "+
 			"A service's callback constructs the objects bound to the connection, so one that "+
-			"runs only on the first start leaves a restarted service wired to nothing", calls)
+			"runs only on the first entry leaves the service wired to nothing", calls)
 	}
 }

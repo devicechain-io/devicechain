@@ -72,8 +72,9 @@ type DeadLetterWriteback struct {
 
 	// WritebackMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
 	// here. The write-back itself is constructed inside the NATS manager's oncreate
-	// callback, which runs on every start; a counter constructed there is registered
-	// again on a start after a stop, and the duplicate registration panics.
+	// callback, which is connection-scoped and is entered again by any start retried
+	// after a failed one; a counter belongs to the PROCESS, and MustRegister panics on
+	// the second registration.
 	*WritebackMetrics
 
 	procCtx    context.Context
@@ -131,8 +132,8 @@ type WritebackMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The write-back is built inside
 // the NATS manager's oncreate callback — it has to be, because it holds a reader bound
 // to the connection — and that callback runs on EVERY start. A counter built there is
-// registered a second time when the service restarts in place, and MustRegister panics
-// on the duplicate.
+// registered again whenever that callback is entered again — which any start retried
+// after a failed one does — and MustRegister panics on the duplicate.
 func NewWritebackMetrics(ms *core.Microservice) *WritebackMetrics {
 	return &WritebackMetrics{
 		settled: ms.NewCounter("command_response_lost_settled_total",

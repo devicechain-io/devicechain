@@ -83,9 +83,10 @@ type InboundEventsProcessor struct {
 
 	// metrics is every Prometheus instrument this processor exports. It is built ONCE,
 	// in the initialize phase, and handed in — NOT built here — because the processor
-	// itself is constructed inside the NATS manager's oncreate callback, which runs on
-	// every start; a collector constructed there is registered again on a start after a
-	// stop, and the duplicate registration panics.
+	// itself is constructed inside the NATS manager's oncreate callback, which is
+	// connection-scoped and is entered again by any start retried after a failed one; a
+	// collector belongs to the PROCESS, and MustRegister panics on the second
+	// registration.
 	//
 	// A value rather than a pointer because this struct is also assembled by literal in
 	// tests that never run the constructor: a zero value gives them the all-nil
@@ -138,7 +139,8 @@ type ResolveMetrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The processor is built inside
 // the NATS manager's oncreate callback — it has to be, because it holds a reader bound
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
-// built there is registered a second time when the service restarts in place, and
+// built there belongs to the wrong lifetime: it is registered again whenever that
+// callback is entered again — which any start retried after a failed one does — and
 // MustRegister panics on the duplicate.
 func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 	return ResolveMetrics{
@@ -415,8 +417,9 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// ONE counter for the whole pool, for the same reason as the memo above: the
 	// workers share the inbound channel, so a per-worker counter would report a
 	// fleet's clock skew as N unrelated series. It comes from the instruments built in
-	// the initialize phase rather than being constructed here, because this runs again
-	// on every start.
+	// the initialize phase rather than being constructed here, because a counter belongs
+	// to the process, while this processor — and so this method — is built anew every
+	// time the connection-scoped oncreate callback runs.
 	eventTime := EventTimePolicy{
 		MaxFutureSkew: iproc.MaxFutureSkew,
 		Bounded:       iproc.metrics.eventTimeBounded,

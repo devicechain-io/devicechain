@@ -58,7 +58,8 @@ type ReactDispatcher struct {
 // the whole REACT wiring lives behind one type.
 //
 // m is built once in the initialize phase (see NewReactMetrics) and shared by every
-// dispatcher this service constructs, because this constructor runs again on every start.
+// dispatcher this service constructs, because that callback is connection-scoped and
+// the counters are not.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
 	connectorRate react.ConnectorRateGate, dead deadletter.Writer, m *ReactMetrics) *ReactDispatcher {

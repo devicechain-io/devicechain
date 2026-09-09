@@ -64,8 +64,9 @@ type Consumer struct {
 
 	// Metrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase rather than
 	// here. The consumer itself is constructed inside the NATS manager's oncreate
-	// callback, which runs on every start; a collector constructed there is registered
-	// again on a start after a stop, and the duplicate registration panics.
+	// callback, which is connection-scoped and is entered again by any start
+	// retried after a failed one; a collector belongs to the PROCESS, and MustRegister
+	// panics on the second registration.
 	//
 	// By value rather than by pointer because this struct is also assembled by literal in
 	// tests that never run the constructor: a zero value gives them the all-nil
@@ -97,7 +98,8 @@ type Metrics struct {
 // 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The consumer is built inside
 // the NATS manager's oncreate callback — it has to be, because it holds a reader bound
 // to the connection — and that callback runs on EVERY start. A Prometheus collector
-// built there is registered a second time when the service restarts in place, and
+// built there belongs to the wrong lifetime: it is registered again whenever that
+// callback is entered again — which any start retried after a failed one does — and
 // MustRegister panics on the duplicate.
 func NewMetrics(ms *core.Microservice) Metrics {
 	return Metrics{
@@ -119,7 +121,8 @@ func NewMetrics(ms *core.Microservice) Metrics {
 // NewConsumer builds the consumer over the dead-letter reader.
 //
 // metrics is built once in the initialize phase (see NewMetrics) and shared by every
-// consumer this service constructs, because this constructor runs again on every start.
+// consumer this service constructs, because that callback is connection-scoped and the
+// instruments are not.
 func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *Store,
 	callbacks core.LifecycleCallbacks, metrics Metrics) *Consumer {
 	c := &Consumer{

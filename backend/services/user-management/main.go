@@ -119,9 +119,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The consumer's Prometheus instruments, built ONCE. 🔴 THEY ARE BUILT HERE AND NOT
 	// IN THE CALLBACK BELOW, and that is the other half of the note on the callback:
 	// what has to go inside it is everything bound to the CONNECTION, and what must stay
-	// out is everything registered with a registry. The callback runs on every start, so
-	// a collector built there is registered a second time on a start after a stop and
-	// MustRegister panics. Initialize runs once.
+	// out is everything registered with a registry — a collector belongs to the PROCESS,
+	// and the callback is entered again by any start retried after a failed one, where
+	// MustRegister panics on the second registration. Initialize runs once.
 	DeadLetterMetrics = deadletters.NewMetrics(Microservice)
 
 	// Create and initialize nats manager (the refresh-token KV store, and the ADR-024

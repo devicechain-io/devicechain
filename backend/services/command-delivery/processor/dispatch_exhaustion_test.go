@@ -301,8 +301,8 @@ func TestAParkedCommandsWakesAreNotCountedAsFailedDispatches(t *testing.T) {
 //
 // The instruments come from NewDeliveryMetrics rather than from the processor's own
 // constructor because that is where they are built: the processor is constructed inside the
-// NATS manager's oncreate callback, which runs on every start, so building a collector there
-// would panic on the second registration when the service restarts in place.
+// NATS manager's oncreate callback, which is connection-scoped, so building a collector there
+// would panic on the second registration the first retried start produced.
 func TestTheConstructorWiresTheExhaustionCounter(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "commanddeliveryexhaustion"}
 	api := &fakeApi{releaseExhausts: true}

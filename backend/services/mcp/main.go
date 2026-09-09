@@ -101,8 +101,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 //
 // 🔴 CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS. Both
 // registrars go through ServeMux.Handle, which panics on a duplicate pattern, and
-// LifecycleComponent's contract says ExecuteStart "may happen on startup or after
-// stop" — so registering from the start path turns a lifecycle restart into a crash.
+// LifecycleComponent does not promise ExecuteStart runs once: a start that fails
+// restores the component to Initialized, so a retried start enters the start path
+// again, and registering from there turns that retry into a crash.
 //
 // 🔴 It is a named function taking its inputs as parameters so a test can drive the
 // REGISTRATION ITSELF. A test that called server.Routes and RegisterProbes on its own
@@ -127,8 +128,8 @@ func afterMicroserviceStarted(_ context.Context) error {
 // pull in opposite directions:
 //
 //   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
-//     this runs again after a stop. The routes are registered once, in the initialize
-//     phase.
+//     this is entered again by any start retried after a failed one. The routes are
+//     registered once, in the initialize phase.
 //   - It builds a new server because an http.Server cannot be restarted: Shutdown
 //     latches its shuttingDown flag permanently, so reusing one would bind and then
 //     serve nothing.

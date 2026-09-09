@@ -40,7 +40,9 @@ type LifecycleComponent interface {
 	// Invokes lifecycle startup.
 	Start(context.Context) error
 
-	// Start component. May happen on startup or after stop.
+	// Start component. Runs once per successful startup: a stop is terminal, so there
+	// is no start after one. A FAILED start is the exception — it restores the
+	// component to Initialized, so a caller that retries re-enters this.
 	ExecuteStart(context.Context) error
 
 	// Invokes lifecycle shutdown.
@@ -135,10 +137,35 @@ func (mgr *LifecycleManager) SetLifecycleState(state LifecycleState) {
 var (
 	initializeFrom = []LifecycleState{Uninitialized}
 
-	// Stopped is on startFrom because a start after a stop is a supported sequence, not
-	// an accident of a loose guard: GatewayJetStreamSource rebuilds its channels per
-	// Start and says so in its own comment for exactly this reason.
-	startFrom = []LifecycleState{Initialized, Stopped}
+	// 🔴 Stopped IS DELIBERATELY ABSENT FROM startFrom. A stop is TERMINAL for a
+	// component: this state machine offers no route back to a started one, and a
+	// start attempted from Stopped is refused at the point it is asked for.
+	//
+	// It used to be permitted, on the grounds that a start after a stop was a
+	// supported sequence. It was not one, and nothing in the tree ever performed it.
+	// Initialize is legal only from Uninitialized, so nothing re-establishes what a
+	// stop tore down — most concretely the broker connection, which
+	// NatsManager.ExecuteStop drains and which no start path re-dials. A second start
+	// therefore entered the component, rebuilt readers against a closed connection,
+	// and failed only after spending a full infrastructure retry budget, reporting
+	// the BROKER as unreachable. That named the wrong thing twice over: the sequence
+	// was impossible at the moment it was requested, not thirty attempts later, and
+	// the fault was in the caller rather than in the infrastructure it accused.
+	//
+	// The remedy for a stopped component is a new process. That is what the
+	// deployment already provides, and what ReadPacer's give-up path already
+	// documents as the remedy for the broker faults it reports: a replacement pod
+	// re-dials, re-creates its durable consumers, and re-reads its mounted
+	// credentials, none of which an in-process second start does.
+	//
+	// ⚠️ THIS DOES NOT MAKE ExecuteStart A ONCE-PER-PROCESS HOOK, and anything that
+	// registers with a process-scoped registry must not assume that it is.
+	// transition restores the previous state when any step fails, so a start that
+	// fails — inside ExecuteStart, or in a Starter callback around it — leaves the
+	// component Initialized and startable again, with whatever the failed attempt
+	// already built still built. NewNatsManager spells out what that costs a callback
+	// that constructs Prometheus collectors.
+	startFrom = []LifecycleState{Initialized}
 
 	// ⚠️ Initialized is on stopFrom DELIBERATELY, and narrowing it to Started alone is a
 	// change that looks like a tightening and is a defect. Two things argue against it,

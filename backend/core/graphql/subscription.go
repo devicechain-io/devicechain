@@ -253,11 +253,11 @@ func (h *SubscriptionHandler) liveConnections() int {
 // been declared drained. They ended at process exit, which reaches the client as a
 // torn TCP connection rather than as a close frame.
 //
-// 🔴 IT DOES NOT LATCH, AND THAT IS DELIBERATE. LifecycleComponent's contract says a
-// start "may happen on startup or after stop", so a handler that recorded itself as
-// closed would leave a restarted server unable to serve subscriptions at all — the
-// exact failure http.Server.Shutdown's permanent shuttingDown flag produces, which is
-// why the manager builds a fresh HttpServer per start. There is nothing to reset
+// 🔴 IT DOES NOT LATCH, AND THAT IS DELIBERATE. ExecuteStart is entered again by any
+// start retried after a failed one, so a handler that recorded itself as closed would
+// leave the retried server unable to serve subscriptions at all — the exact failure
+// http.Server.Shutdown's permanent shuttingDown flag produces, which is why the manager
+// builds a fresh HttpServer per start. There is nothing to reset
 // here: Shutdown acts on the connections that exist when it is called and leaves the
 // handler as it found it. New connections are refused by the listener closing a
 // moment later, and by readiness having reported 503 since the drain began.

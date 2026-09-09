@@ -61,22 +61,22 @@ func get(t *testing.T, path string) int {
 	return resp.StatusCode
 }
 
-// A stop-then-start cycle must not panic.
+// A second entry into the start phase must not panic.
 //
 // 🔴 THIS IS THE TRAP THE SWITCHOVER MAKES EASY TO WALK INTO. The probe routes are
 // registered through ServeMux.Handle, which panics on a duplicate pattern, and
-// LifecycleComponent's own contract says ExecuteStart "may happen on startup or after
-// stop". Register from the start path and a lifecycle restart is a crash — not at the
-// next deploy, but only for whoever stops and starts a service in place.
+// LifecycleComponent does not promise ExecuteStart runs once: a start that fails
+// restores the component to Initialized, so a retried start enters it again. Register
+// from the start path and that retry is a crash.
 //
 // It is not a regression the switchover introduces: http.HandleFunc on
 // http.DefaultServeMux panicked on a duplicate too. That is exactly why it is worth a
 // test — the shape carries across unchanged and nothing complains until the day
-// something restarts.
+// something enters the start path twice.
 //
 // The assertion is that startHttpServer registers NOTHING: it is called twice here,
 // with the routes registered once beforehand as afterMicroserviceInitialized does.
-func TestHttpServerRestartDoesNotPanic(t *testing.T) {
+func TestHttpServerSecondStartDoesNotPanic(t *testing.T) {
 	newTestMicroservice(t)
 	// The SERVICE's registration, not a copy of it: a test that called RegisterProbes
 	// itself would keep passing if this went back to http.Handle on the default mux.

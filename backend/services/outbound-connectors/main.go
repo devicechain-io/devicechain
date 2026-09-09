@@ -100,9 +100,10 @@ func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE CONSUMER IS BUILT.
 // The consumer is built in createNatsComponents, which the NATS manager invokes on
-// EVERY start — a start after a stop is a supported sequence — and a collector
-// registered twice on this microservice's registry panics. Initialize runs once, which
-// is what makes this the safe half.
+// EVERY start, and a collector belongs to the PROCESS whereas everything that callback
+// builds belongs to the CONNECTION — registering one twice on this microservice's
+// registry panics. Initialize is where the process's own singletons are made, which is
+// what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	DispatchMetrics = processor.NewDispatchMetrics(Microservice)
 }
@@ -168,8 +169,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	executor := processor.NewExecutor(resolver, Api, &http.Client{Transport: egressGuard.Transport()},
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	// Its counters were built once in afterMicroserviceInitialized and are handed in,
-	// because this callback runs on every start and a second registration of the same
-	// collector panics.
+	// because a collector belongs to the process while everything this callback builds
+	// belongs to the connection, and a second registration of the same collector panics.
 	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,

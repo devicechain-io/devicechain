@@ -210,32 +210,34 @@ type NatsManager struct {
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
 // instantiate the service's readers/writers (mirrors KafkaManager).
 //
-// 🔴 ONCREATE RUNS ON EVERY START, NOT ONCE. A start after a stop is a supported
-// sequence — core/core/lifecycle.go puts Stopped on startFrom and says why — so
-// ExecuteStart calls this callback a second time, and everything it constructs is
-// constructed again. That is the POINT of the callback rather than a flaw in it:
-// readers and writers are bound to the connection and to consumers this manager's
-// stop tears down, so a second start needs its own. Which is also why the duplicate
-// call cannot simply be suppressed here — a guard that skipped the second invocation
-// would trade a crash for a service that starts, reports healthy, and is wired to
-// objects the stop already unsubscribed.
+// 🔴 THIS CALLBACK IS CONNECTION-SCOPED. CONSTRUCT ONLY PER-CONNECTION OBJECTS IN IT.
+// Readers and writers are bound to this manager's connection and to the consumers its
+// stop tears down; the callback exists so that whatever holds them is built where the
+// connection is. Anything that registers with a PROCESS-scoped registry is a different
+// lifetime and belongs in the INITIALIZE phase, which is where the process's own
+// singletons are made. Concretely:
 //
-// ⚠️ A start after a stop does NOT get a fresh CONNECTION today: ExecuteStop drains
-// this one, and ExecuteStart has no reconnect. The state machine permits Initialize
-// only from Uninitialized, so nothing re-dials, and the callback's first NewReader on
-// that second start fails on a closed connection after spending its retry budget. That
-// is a gap in the restart path, not a reason to build once — a callback written to run
-// once would still be wrong the moment the connection is re-established.
-//
-// ⇒ CONSTRUCT ONLY PER-CONNECTION OBJECTS IN THIS CALLBACK. Anything that registers
-// with a process- or service-scoped registry belongs in the INITIALIZE phase, which
-// runs once (initializeFrom is Uninitialized alone). Concretely:
-//
-//   - Prometheus collectors. promauto registers on the Microservice's own registry
-//     and a duplicate registration PANICS, so a metric built here takes the service
-//     down on the second start. Build them in the service's initialize hook and pass
-//     them into whatever the callback constructs.
+//   - Prometheus collectors. promauto registers on the Microservice's own registry and
+//     a duplicate registration PANICS. Build them in the service's initialize hook and
+//     pass them into whatever this callback constructs.
 //   - http.ServeMux patterns. ServeMux.Handle panics on a duplicate pattern.
+//
+// ⚠️ THE REASON IS SCOPE, NOT CALL COUNT — AND READ THAT BEFORE CONCLUDING THE RULE IS
+// OBSOLETE. This comment used to justify itself with "a start after a stop is a
+// supported sequence, so the callback runs twice". That sequence no longer exists:
+// core/core/lifecycle.go refuses a start from Stopped, because nothing re-dialled the
+// connection the stop drained and the second start failed on a closed one after
+// spending a full retry budget. What did NOT go away is that ExecuteStart is not
+// structurally single-entry — the lifecycle's transition restores the previous state
+// when any step fails, so a start that fails leaves the component Initialized and
+// startable again with whatever the attempt already built still built, and a caller
+// that retries runs this callback a second time.
+//
+// Nothing retries a start today, and that is the argument FOR the discipline rather
+// than against it: a collector moved onto the start path sits one caller away from a
+// panic that takes the process down, and nothing driving the real lifecycle would
+// reach it. That is why each service pins it by driving the two CONSTRUCTIONS directly
+// instead — see any of the restart_metrics_test.go files.
 //
 // The name of the function passed here is no guide to any of this: a service's is
 // conventionally createNatsComponents, which reads like initialize-phase work. The
