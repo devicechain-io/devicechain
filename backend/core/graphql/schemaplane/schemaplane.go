@@ -26,12 +26,26 @@
 // production). Dir refuses a directory where two files claim one mount, which makes
 // that fold unrepresentable rather than merely unlikely.
 //
-// The other half is the extension. A schema artifact is `.graphql` and nothing
-// else, because that is the only extension the SPDX header gate can see: addlicense
-// has no handler for `.gql`, so a `.gql` schema is skipped in silence and its
-// header is present only for as long as somebody keeps typing it. Dir therefore
-// treats a schema-shaped file under any other extension as an error naming the
-// file, not as a file to ignore — an ignored one is how the split arose.
+// The other half is the extension, and it splits into two jobs that must not be
+// one function:
+//
+//   - Lint is a rule about THIS repository's tree. A schema artifact here is
+//     `.graphql` and nothing else, because that is the only extension the SPDX
+//     header gate can see: addlicense has no handler for `.gql`, so a `.gql` schema
+//     is skipped in silence and its header survives only for as long as somebody
+//     keeps typing it. Lint refuses such a file by name rather than ignoring it —
+//     an ignored one is how the split above arose.
+//   - Dir, Classify, At and SDLAt are a SCANNER, and what they are pointed at is
+//     usually not this tree. apiprobe runs them over a CHECKED-OUT RELEASE — the
+//     upgrade drill seeds the previous release and then upgrades it — and an older
+//     tree spells its schemas the way that release spelled them. So the scanner
+//     accepts every schema-shaped extension and classifies on the base name with
+//     the extension normalized. A released tree is immutable; refusing its spelling
+//     does not rename anything, it only makes the tree unreadable.
+//
+// The strictness lives entirely in Lint rather than in a mode flag on Dir, because
+// a scanner with a mode is eventually run in the wrong one, and the failure then
+// reads as a schema problem rather than as the configuration mistake it is.
 //
 // This mirrors FILENAME_CONVENTIONS in docs/scripts/schemas.manifest.mjs, which is
 // the same table for the docs publisher.
@@ -45,13 +59,16 @@ import (
 	"strings"
 )
 
-// Ext is the one extension a GraphQL schema artifact may carry.
+// Ext is the extension a GraphQL schema artifact carries in THIS repository, and
+// the one every classification normalizes to.
 const Ext = ".graphql"
 
-// refusedExts are the schema-shaped extensions that are NOT Ext. A file carrying
-// one is an error rather than a skip: silently ignoring it is precisely how a
-// service's schemas became invisible to a *.graphql consumer.
-var refusedExts = []string{".gql", ".graphqls", ".gqls", ".sdl"}
+// altExts are the other extensions a GraphQL schema artifact is written under. Lint
+// refuses them in this tree; the scanner reads them, because a release that already
+// shipped under one of them cannot be renamed after the fact. They are listed
+// rather than inferred so that a file under an unrelated extension stays a file
+// this package ignores, not a schema it guesses at.
+var altExts = []string{".gql", ".graphqls", ".gqls", ".sdl"}
 
 // Plane names the kind of token an endpoint authenticates with. It is an attribute
 // of a mount, not a way to address one — two mounts share the identity plane.
@@ -96,13 +113,45 @@ type Schema struct {
 	Plane Plane
 }
 
-// Classify resolves a schema artifact's filename to its mount and plane.
+// isSchemaShaped reports whether an extension is one a GraphQL schema artifact is
+// written under — Ext or any of altExts. The comparison is case-insensitive.
+func isSchemaShaped(ext string) bool {
+	ext = strings.ToLower(ext)
+	if ext == Ext {
+		return true
+	}
+	for _, alt := range altExts {
+		if ext == alt {
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalName is filename's base with a schema-shaped extension normalized to
+// Ext, so that one convention table answers for every spelling a release used. The
+// bool reports whether the file is schema-shaped at all; a file that is not keeps
+// its name and is left for the caller to reject or ignore.
+func canonicalName(filename string) (string, bool) {
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	if !isSchemaShaped(ext) {
+		return base, false
+	}
+	return strings.TrimSuffix(base, ext) + Ext, true
+}
+
+// Classify resolves a schema artifact's filename to its mount and plane, reading
+// through the extension: schema.gql and schema.graphql are the same artifact under
+// two spellings and classify identically, because a tree checked out from an older
+// release spells them the way that release did.
 //
 // An unrecognised name is an error. Guessing is what this package exists to stop:
 // a schema whose plane is guessed is either offered to a principal that can never
-// authorize it, or hidden from the one that can.
+// authorize it, or hidden from the one that can. The extension is normalized; the
+// NAME never is.
 func Classify(filename string) (Schema, error) {
-	base := filepath.Base(filename)
+	base, _ := canonicalName(filename)
 	for _, c := range conventions {
 		if base == c.File {
 			return Schema{Path: filename, Mount: c.Mount, Plane: c.Plane}, nil
@@ -120,12 +169,57 @@ func Classify(filename string) (Schema, error) {
 		filename, strings.Join(names, ", "))
 }
 
+// Lint holds one of THIS repository's graphql directories to the naming rule: every
+// schema artifact in it is named Ext, and named something a convention recognises.
+//
+// It is the strict half of the pair. Dir reads any release's spelling because it has
+// to; Lint refuses ours, because here the file can still be renamed and there is a
+// reason to: addlicense has no handler for the alternatives, so a schema under one
+// of them is skipped by the SPDX header gate in silence, and its header lasts only
+// as long as somebody keeps typing it by hand.
+//
+// Point it at a directory in this tree — not at a checked-out release, which is not
+// ours to rename.
+func Lint(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read schema directory %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if !isSchemaShaped(ext) || ext == Ext {
+			continue
+		}
+		return fmt.Errorf(
+			"%s: a GraphQL schema artifact must be named %q, not %q. Nothing skips this "+
+				"file quietly: the SPDX header gate has no handler for %q and would stop "+
+				"checking it, and a consumer globbing %q would stop reading it",
+			filepath.Join(dir, name), Ext, ext, ext, Ext)
+	}
+	// The rest of the naming rule — a recognised name, one file per mount — is the
+	// same in both halves, so it is asserted by running the scanner rather than
+	// restated here where the two could drift apart.
+	_, err = Dir(dir)
+	return err
+}
+
 // Dir classifies every schema artifact in one area's graphql directory, sorted by
 // path. A directory that holds no schema artifact yields an empty slice and no
 // error — not every directory named graphql serves one.
 //
-// It fails on a schema-shaped file under a refused extension, on a .graphql file no
-// convention names, and on two files claiming one mount.
+// 🔴 THIS IS THE SCANNER, NOT THE LINT. It is pointed at trees this repository does
+// not control — apiprobe reads a checked-out release — so it accepts every
+// schema-shaped extension and classifies on the normalized name. Refusing an older
+// release's spelling would not rename a single file in it; it would only make the
+// tree unreadable, which is how the upgrade drill stopped being able to seed its
+// baseline. Use Lint for the rule about our own tree.
+//
+// It fails on a schema artifact no convention names, and on two files claiming one
+// mount.
 func Dir(dir string) ([]Schema, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -139,18 +233,7 @@ func Dir(dir string) ([]Schema, error) {
 			continue
 		}
 		name := e.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-
-		for _, bad := range refusedExts {
-			if ext == bad {
-				return nil, fmt.Errorf(
-					"%s: a GraphQL schema artifact must be named %q, not %q. Nothing skips this "+
-						"file quietly: the SPDX header gate has no handler for %q and would stop "+
-						"checking it, and a consumer globbing %q would stop reading it",
-					filepath.Join(dir, name), Ext, ext, ext, Ext)
-			}
-		}
-		if ext != Ext {
+		if !isSchemaShaped(filepath.Ext(name)) {
 			continue
 		}
 
