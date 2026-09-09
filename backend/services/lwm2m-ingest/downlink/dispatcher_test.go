@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -203,18 +204,25 @@ type fakeClaimer struct {
 	observer func() // called inside Claim, to observe the world AT claim time (e.g. ops run so far)
 }
 
-func (c *fakeClaimer) Claim(_ context.Context, _, commandToken string) (bool, error) {
+// Claim answers with a nonce that VARIES per claim rather than a fixed string, for the reason
+// the real one does: the value names ONE dispatch, and a fake handing out a constant would let
+// a test pass that a second dispatch would break.
+func (c *fakeClaimer) Claim(_ context.Context, _, commandToken string) (string, bool, error) {
 	c.mu.Lock()
 	c.claimed = append(c.claimed, commandToken)
+	nonce := fmt.Sprintf("claim-nonce-%d", len(c.claimed))
 	obs := c.observer
 	c.mu.Unlock()
 	if obs != nil {
 		obs()
 	}
 	if c.err != nil {
-		return false, c.err
+		return "", false, c.err
 	}
-	return c.won, nil
+	if !c.won {
+		return "", false, nil
+	}
+	return nonce, true, nil
 }
 
 func (c *fakeClaimer) claims() []string {
@@ -364,6 +372,15 @@ func TestDrainDispatchesHeldCommands(t *testing.T) {
 	require.Len(t, resp, 2)
 	assert.Equal(t, "c1", resp[0].CommandToken, "in fetch (oldest-first) order")
 	assert.Equal(t, "c2", resp[1].CommandToken)
+	// 🔴 EACH OUTCOME NAMES THE DISPATCH ITS OWN CLAIM CREATED. This path has no delivery
+	// envelope to quote from — it dispatches rows it fetched — so the claim is the only place
+	// the nonce exists, and an outcome that named none would be refused by command-delivery:
+	// every drained command would actuate its device and then sit unanswered until it expired
+	// as TIMEOUT. The two nonces differ because the two claims do.
+	assert.Equal(t, "claim-nonce-1", resp[0].DispatchNonce,
+		"the drained command's outcome must name the dispatch its claim created")
+	assert.Equal(t, "claim-nonce-2", resp[1].DispatchNonce,
+		"each drained command names its OWN dispatch; one nonce for both would settle the wrong one")
 }
 
 // TestDrainSkipsCommandAlreadyDispatchedLive is the drain/live dedup guard: a command the live path
@@ -638,6 +655,35 @@ func TestDispatchLiveExecutesPublishesAcks(t *testing.T) {
 	assert.Equal(t, "cmd-pump-1", resp[0].CommandToken)
 	assert.True(t, resp[0].Success)
 	assert.True(t, ack.acked(), "a dispatched command is acked (seal-fate)")
+}
+
+// TestDispatchLiveEchoesTheDispatchNonce pins the return half of the wire contract on the live
+// path: this adapter answers on the device's behalf, so it must quote the nonce it was handed.
+//
+// 🔴 WITHOUT IT EVERY LwM2M COMMAND WOULD ACTUATE AND THEN NEVER SETTLE. command-delivery
+// refuses a response that names no dispatch, so the row would stay SENT until its TTL dragged
+// it to TIMEOUT — "delivered, and the device never answered" — for a command the device
+// carried out and reported on. The test asserts the value, not merely its presence: a
+// hard-coded or re-minted nonce names a dispatch nobody is holding and is refused just the
+// same.
+func TestDispatchLiveEchoesTheDispatchNonce(t *testing.T) {
+	ack := newAck()
+	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
+	pub := &fakePublisher{}
+	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+	d := newDispatcher(nil, pub, look, exec)
+
+	msg := cmdMsgNonce("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`,
+		"nonce-live-7", ack)
+	var env deliveryEnvelope
+	require.NoError(t, json.Unmarshal(msg.Value, &env))
+
+	d.dispatch(context.Background(), work{msg: msg, tenant: "acme", env: env})
+
+	resp := pub.responses()
+	require.Len(t, resp, 1, "a response is published")
+	assert.Equal(t, "nonce-live-7", resp[0].DispatchNonce,
+		"the outcome must name the dispatch it answers, quoted from the envelope it arrived in")
 }
 
 func TestDispatchNotServedAcksNoResponse(t *testing.T) {

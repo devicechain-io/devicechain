@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -53,38 +54,104 @@ func realApi(t *testing.T) *model.Api {
 	return model.NewApi(&rdb.RdbManager{Database: db})
 }
 
-// failingWriter is a device-command writer whose publish always reports an error. It is
-// the ONE ingredient the sequence needs that the platform cannot produce on demand: a
-// publish outcome that says "failed" without proving nothing was delivered.
-type failingWriter struct{ err error }
+// failingWriter is a device-command writer that RECORDS what it was handed and then reports
+// an error. It is the ONE ingredient the sequence needs that the platform cannot produce on
+// demand: a publish outcome that says "failed" without proving nothing was delivered.
+//
+// 🔴 IT RECORDS BEFORE IT FAILS, AND THAT IS THE WHOLE POINT OF IT. The case being modelled
+// is a publish that LANDED and whose acknowledgement was lost, so the envelope reached the
+// device and the platform does not know it. A writer that dropped the message would model a
+// different failure — one where nothing was delivered — and no test built on it could show a
+// device answering a dispatch it really received. The recorded envelope is also how the test
+// learns the dispatch nonce: from the wire, exactly as the device does, rather than from an
+// API call the device has no access to.
+type failingWriter struct {
+	err      error
+	messages []messaging.Message
+}
 
 func (w *failingWriter) WriteMessages(context.Context, ...messaging.Message) error { return w.err }
-func (w *failingWriter) WriteToDevice(context.Context, string, ...messaging.Message) error {
+func (w *failingWriter) WriteToDevice(_ context.Context, _ string, msgs ...messaging.Message) error {
+	w.messages = append(w.messages, msgs...)
 	return w.err
 }
 func (w *failingWriter) HandleResponse(error) {}
 
-// TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded drives the whole sequence
-// end to end, over a real database, with no step faked except the publish failure.
+// dispatchNonceOf reads the nonce out of the delivery envelope a writer captured, which is
+// the only place a device ever sees it.
+//
+// It fails the test on an absent or empty nonce rather than returning one, because every
+// test below asks a question about WHICH dispatch an answer names — and an empty string
+// silently turns all of them into the no-nonce case, which is a different test that passes
+// for different reasons.
+func dispatchNonceOf(t *testing.T, msgs []messaging.Message) string {
+	t.Helper()
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly one published command, got %d", len(msgs))
+	}
+	var env struct {
+		DispatchNonce string `json:"dispatchNonce"`
+	}
+	if err := json.Unmarshal(msgs[0].Value, &env); err != nil {
+		t.Fatalf("the published delivery envelope does not decode: %v", err)
+	}
+	if env.DispatchNonce == "" {
+		t.Fatal("the published delivery envelope names no dispatch, so nothing the device " +
+			"echoes back could ever settle this command")
+	}
+	return env.DispatchNonce
+}
+
+// answer is the JSON a device publishes: the outcome, naming the dispatch it acted on. It is
+// built as a literal rather than from the production struct so the test states the WIRE, and
+// a field renamed on that struct fails here instead of being renamed on both sides at once.
+func answer(commandToken, dispatchNonce string) []byte {
+	if dispatchNonce == "" {
+		return []byte(`{"commandToken":"` + commandToken + `","success":true}`)
+	}
+	return []byte(`{"commandToken":"` + commandToken + `","success":true,"dispatchNonce":"` +
+		dispatchNonce + `"}`)
+}
+
+// responseConsumer builds the response-consuming half of the processor over a real API, with
+// every counter this file asserts on. Built by literal, as the rest of this package's tests
+// build it — the constructor needs a live microservice.
+func responseConsumer(api *model.Api, dead *deadRecorder, body []byte) *CommandDeliveryProcessor {
+	return &CommandDeliveryProcessor{
+		Api:  api,
+		area: "command-delivery",
+		dead: deadletter.NewSink(dead, func(error) {}),
+		DeliveryMetrics: DeliveryMetrics{
+			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_total"}),
+			ResponsesRefused:       prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_e2e_total"}),
+			ResponsesWithoutNonce:  prometheus.NewCounter(prometheus.CounterOpts{Name: "without_nonce_total"}),
+			ResponsesStaleNonce:    prometheus.NewCounter(prometheus.CounterOpts{Name: "stale_nonce_total"}),
+		},
+		CommandResponsesReader: &oneMessageReader{
+			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1", body, 1, nil, nil),
+		},
+	}
+}
+
+// TestAnAnswerToAReleasedCommandSettlesItByTheNonceItNames drives the whole sequence end to
+// end, over a real database, with no step faked except the publish failure.
 //
 // 🔴 THE SEQUENCE IS AN ORDINARY DAY, NOT A CONTRIVANCE:
 //
-//  1. A dispatcher claims the command, QUEUED -> SENT.
+//  1. A dispatcher claims the command, QUEUED -> SENT, stamping a dispatch nonce and
+//     publishing it in the envelope.
 //  2. The publish reports an error. That is not proof the device did not get it — a lost
 //     acknowledgement looks exactly the same from here.
 //  3. ReleaseClaim correctly returns the row to QUEUED so it can be tried again.
-//  4. The device, which DID receive it, answers.
+//  4. The device, which DID receive it, answers — quoting the nonce it was sent.
 //
-// The answer then names a command that is QUEUED, which is not a state a response may
-// settle. Every write in this path is guarded on that, and correctly so — writing the
-// answer onto a queued row would close out a command that might never have been dispatched
-// at all. What was missing was the other half: the guard's verdict was never READ, so the
-// refusal was reported to the consumer as success, the consumer acked, and the device's
-// answer was gone with nothing anywhere recording that it had arrived.
-//
-// 🔑 WHAT THIS ASSERTS IS THE DISPOSITION, NOT THE ABSENCE OF A REFUSAL. The command is
-// still QUEUED afterwards and that is deliberate — see the note at the end.
-func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
+// 🔑 THE NONCE IS WHAT MAKES STEP 4 SETTLEABLE, AND NOTHING ELSE COULD. The row is QUEUED, a
+// state no dispatcher is holding, so a status predicate must refuse it — and did, which left
+// the answer in a dead letter and the command about to be dispatched to a device that had
+// already run it. The echoed nonce is evidence of a different kind: it can only have come
+// from an envelope the platform published, so this answer is provably for the dispatch that
+// was released. The command settles once and is not dispatched again.
+func TestAnAnswerToAReleasedCommandSettlesItByTheNonceItNames(t *testing.T) {
 	api := realApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 
@@ -96,10 +163,11 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 	}
 
 	// Steps 1-3, through the real dispatch path rather than by hand.
-	dispatcher := procWith(api, &failingWriter{err: errors.New("publish acknowledgement timed out")})
-	if err := dispatcher.deliverCommand(ctx, created, pathSweep); err == nil {
+	writer := &failingWriter{err: errors.New("publish acknowledgement timed out")}
+	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep); err == nil {
 		t.Fatal("premise lost: the publish was expected to report an error")
 	}
+	nonce := dispatchNonceOf(t, writer.messages)
 
 	// The premise, asserted rather than assumed: the release really did put a command the
 	// device may already hold back into the dispatchable set.
@@ -110,27 +178,103 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 
 	// Step 4: the device answers the dispatch it did receive.
 	dead := &deadRecorder{}
-	consumer := &CommandDeliveryProcessor{
-		Api:  api,
-		area: "command-delivery",
-		dead: deadletter.NewSink(dead, func(error) {}),
-		DeliveryMetrics: DeliveryMetrics{
-			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_total"}),
-			ResponsesRefused:       prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_e2e_total"}),
-		},
-		CommandResponsesReader: &oneMessageReader{
-			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
-				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
-		},
-	}
-
+	consumer := responseConsumer(api, dead, answer("cmd-1", nonce))
 	if stop := consumer.ProcessMessage(context.Background()); stop {
 		t.Fatal("this response must not stop the consumer loop")
 	}
 
-	// 🔴 THE ANSWER IS RECORDED. A dead letter is the only place it can now live: this
-	// consumer will not write it against a command the platform still intends to deliver,
-	// and it must not simply evaporate.
+	after := loadByToken(t, api, ctx, "cmd-1")
+	if after.Status != model.CommandSuccessful.String() {
+		t.Fatalf("status = %s, want SUCCESSFUL; the answer named the dispatch that was released, "+
+			"which is exactly the evidence that the device received it", after.Status)
+	}
+	if !after.RespondedTime.Valid {
+		t.Fatal("the command settled without recording when it was answered")
+	}
+
+	// 🔴 AND IT IS NOT DISPATCHED AGAIN. Settling it is only half the point: the defect this
+	// closes is a device being told twice to do one thing, so the row must also have left the
+	// dispatchable set. SUCCESSFUL is terminal, and the sweep's own source is asserted here
+	// rather than inferred from the status.
+	pending, err := api.PendingCommands(core.WithSystemContext(ctx))
+	if err != nil {
+		t.Fatalf("PendingCommands: %v", err)
+	}
+	for _, cmd := range pending {
+		if cmd.Token == "cmd-1" {
+			t.Fatal("the settled command is still dispatchable, so the device will be told to " +
+				"run it a second time")
+		}
+	}
+
+	// Nothing was refused, so nothing is recorded as a give-up.
+	if len(dead.msgs) != 0 {
+		t.Fatalf("wrote %d dead letters for an answer that settled its command, want 0", len(dead.msgs))
+	}
+	if got := counterValue(t, consumer.ResponsesNotAnswerable); got != 0 {
+		t.Fatalf("ResponsesNotAnswerable = %v, want 0", got)
+	}
+	if got := counterValue(t, consumer.ResponsesStaleNonce); got != 0 {
+		t.Fatalf("ResponsesStaleNonce = %v, want 0", got)
+	}
+}
+
+// TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt is the defect this whole
+// return path exists for, and it is the case a status predicate cannot see at all.
+//
+// The command is dispatched, its publish reports an error, and it is re-dispatched — so there
+// are two dispatches in flight and the row reads SENT under the SECOND one. The device's
+// answer to the FIRST then arrives.
+//
+// 🔴 SETTLING IT WOULD BE A LIE IN BOTH DIRECTIONS. The command would record an outcome for an
+// actuation the device has not performed yet, and the device's real answer to the second
+// dispatch would arrive on a terminal row and be discarded as late. Both dispatches leave the
+// row reading SENT, so the only thing that tells them apart is the nonce.
+func TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt(t *testing.T) {
+	api := realApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{
+		Token: "cmd-1", DeviceToken: "pump-1", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand: %v", err)
+	}
+
+	// The first dispatch: delivered, unacknowledged, released.
+	lost := &failingWriter{err: errors.New("publish acknowledgement timed out")}
+	if err := procWith(api, lost).deliverCommand(ctx, created, pathSweep); err == nil {
+		t.Fatal("premise lost: the publish was expected to report an error")
+	}
+	released := dispatchNonceOf(t, lost.messages)
+
+	// The second dispatch, by the sweep, on the row the release returned to the queue.
+	requeued := loadByToken(t, api, ctx, "cmd-1")
+	live := &recordingWriter{}
+	if err := procWith(api, live).deliverCommand(ctx, requeued, pathSweep); err != nil {
+		t.Fatalf("re-dispatching the released command: %v", err)
+	}
+	current := dispatchNonceOf(t, live.messages)
+	if current == released {
+		t.Fatal("premise lost: the second dispatch reused the first dispatch's nonce, so nothing " +
+			"in the exchange could tell the two apart")
+	}
+
+	// The device answers the FIRST dispatch.
+	dead := &deadRecorder{}
+	consumer := responseConsumer(api, dead, answer("cmd-1", released))
+	consumer.ProcessMessage(context.Background())
+
+	after := loadByToken(t, api, ctx, "cmd-1")
+	if after.Status != model.CommandSent.String() {
+		t.Fatalf("status = %s, want SENT untouched; the answer to a superseded dispatch settled "+
+			"the one that replaced it", after.Status)
+	}
+	if after.RespondedTime.Valid || after.ResponsePayload != nil {
+		t.Fatalf("a refused answer was still written onto the row: %+v", after)
+	}
+
+	// It is recorded rather than dropped: the answer is real and came from the right device.
 	if len(dead.msgs) != 1 {
 		t.Fatalf("wrote %d dead letters, want 1; the device's answer was discarded", len(dead.msgs))
 	}
@@ -141,64 +285,110 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 	if letter.Reference != "cmd-1" {
 		t.Fatalf("the letter must name the command answered: %q", letter.Reference)
 	}
-	// 🔑 UNPROCESSABLE, NOT EXHAUSTED, and the difference is what the letter TELLS a reader.
-	// Exhausted says the platform tried and could not finish, sending someone to look for a
-	// failing database; this work could never have been completed however many times it was
-	// attempted, and it was attempted once.
+	// 🔑 UNPROCESSABLE, NOT EXHAUSTED, and the difference is what the letter TELLS a reader —
+	// and, downstream, what the write-back does with it. Exhausted means the platform tried
+	// and lost the work, which is the reason that settles a command to FAILED; this work was
+	// looked at once and declined, and the command is legitimately still in flight.
+	if letter.Reason != deadletter.ReasonUnprocessable {
+		t.Fatalf("letter reason = %q, want %q", letter.Reason, deadletter.ReasonUnprocessable)
+	}
+	if got := dead.tenants[0]; got != "acme" {
+		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on the "+
+			"context's tenant, so a wrong one loses every letter silently", got)
+	}
+	if got := counterValue(t, consumer.ResponsesStaleNonce); got != 1 {
+		t.Fatalf("ResponsesStaleNonce = %v, want 1; this event is invisible without it", got)
+	}
+	if got := counterValue(t, consumer.ResponsesRefused); got != 0 {
+		t.Fatalf("ResponsesRefused = %v, want 0; this is a delivery outcome, not a forgery", got)
+	}
+
+	// 🔴 THE COUNTERWEIGHT, IN THE SAME TEST: the dispatch that IS in flight still settles.
+	// Without this the refusal above is satisfied by a consumer that refuses everything, and
+	// the command would be left to expire as TIMEOUT against a device that answered twice.
+	second := responseConsumer(api, &deadRecorder{}, answer("cmd-1", current))
+	second.ProcessMessage(context.Background())
+	if got := loadByToken(t, api, ctx, "cmd-1").Status; got != model.CommandSuccessful.String() {
+		t.Fatalf("status = %s, want SUCCESSFUL; the answer to the LIVE dispatch must land", got)
+	}
+}
+
+// TestAnAnswerNamingNoDispatchIsRefusedAndRecorded pins the decision that a response carrying
+// no dispatch nonce cannot settle a command.
+//
+// 🔴 THIS IS THE DELIBERATELY BREAKING HALF, AND THE COUNTER IS WHY IT IS SAFE TO SHIP. Every
+// client in this repository echoes the nonce; a device built against the older contract does
+// not, and its commands stop settling on the day this lands. The alternative — accepting it on
+// the status alone and merely counting it — leaves the platform unable to tell an answer to
+// the dispatch it holds from an answer to one it released, which is the entire property being
+// bought. So the answer is refused, written to the dead-letter stream so it is not lost, and
+// counted on its own series so an operator can see whether any such client is still out there.
+func TestAnAnswerNamingNoDispatchIsRefusedAndRecorded(t *testing.T) {
+	api := realApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	created, err := api.CreateCommand(ctx, &model.CommandCreateRequest{
+		Token: "cmd-1", DeviceToken: "pump-1", Name: "reboot",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommand: %v", err)
+	}
+	// Dispatched normally: the row is SENT, which is the state that WOULD have accepted this
+	// answer before the nonce was required. Anything weaker would pass for other reasons.
+	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep); err != nil {
+		t.Fatalf("deliverCommand: %v", err)
+	}
+
+	dead := &deadRecorder{}
+	consumer := responseConsumer(api, dead, answer("cmd-1", ""))
+	if stop := consumer.ProcessMessage(context.Background()); stop {
+		t.Fatal("this response must not stop the consumer loop")
+	}
+
+	after := loadByToken(t, api, ctx, "cmd-1")
+	if after.Status != model.CommandSent.String() {
+		t.Fatalf("status = %s, want SENT untouched; an answer that names no dispatch settled a "+
+			"command anyway", after.Status)
+	}
+	if after.RespondedTime.Valid || after.ResponsePayload != nil {
+		t.Fatalf("a refused answer was still written onto the row: %+v", after)
+	}
+	if len(dead.msgs) != 1 {
+		t.Fatalf("wrote %d dead letters, want 1; the device's answer was discarded", len(dead.msgs))
+	}
+	letter, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	if err != nil {
+		t.Fatalf("the written letter does not read back: %v", err)
+	}
 	if letter.Reason != deadletter.ReasonUnprocessable {
 		t.Fatalf("letter reason = %q, want %q", letter.Reason, deadletter.ReasonUnprocessable)
 	}
 	if len(letter.Payload) == 0 || letter.Subject == "" {
 		t.Fatalf("the letter cannot be located or understood: %+v", letter)
 	}
-	if got := dead.tenants[0]; got != "acme" {
-		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on the "+
-			"context's tenant, so a wrong one loses every letter silently", got)
+	// 🔴 THE COUNTER IS THE OPERATOR'S ONLY VIEW OF THE POPULATION THIS RULE BREAKS.
+	if got := counterValue(t, consumer.ResponsesWithoutNonce); got != 1 {
+		t.Fatalf("ResponsesWithoutNonce = %v, want 1; without it a fleet whose commands have "+
+			"silently stopped settling is invisible", got)
 	}
-
-	// 🔴 AND IT IS COUNTED. Without this the event is invisible: the shared result
-	// vocabulary can only call it "failed", the same bucket as a database outage.
-	if got := counterValue(t, consumer.ResponsesNotAnswerable); got != 1 {
-		t.Fatalf("ResponsesNotAnswerable = %v, want 1", got)
+	// It is not any of the neighbouring refusals: each names a different remedy.
+	if got := counterValue(t, consumer.ResponsesStaleNonce); got != 0 {
+		t.Fatalf("ResponsesStaleNonce = %v, want 0; this answer named no dispatch at all", got)
 	}
-	// It is NOT the refused counter. That one means a device answering for a command it
-	// does not own — an identity problem with a different remedy — and this device owns it.
+	if got := counterValue(t, consumer.ResponsesNotAnswerable); got != 0 {
+		t.Fatalf("ResponsesNotAnswerable = %v, want 0", got)
+	}
 	if got := counterValue(t, consumer.ResponsesRefused); got != 0 {
-		t.Fatalf("ResponsesRefused = %v, want 0; this is a delivery outcome, not a forgery", got)
+		t.Fatalf("ResponsesRefused = %v, want 0; this is not a device answering for another", got)
 	}
-
-	// 🔴 THE ANSWER WAS NOT WRITTEN ONTO THE ROW EITHER, and that is not an oversight. The
-	// platform cannot tell this answer apart from one for a command no transport ever
-	// carried: nothing in the response envelope names the dispatch it is answering. Settling
-	// the command here would mean reporting an actuation complete on the strength of the
-	// device's word alone, which is the hole the answerable set was made positive to close.
-	//
-	// 🔑 THIS IS ABOUT THIS CALL, NOT ABOUT THE COMMAND'S FUTURE. The letter written above
-	// reaches DeadLetterWriteback, which settles commands from letters — so "nothing can
-	// write this answer against a live command" is a claim about two consumers, not one, and
-	// it is the write-back's reason gate that makes it true. See
-	// TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle.
-	after := loadByToken(t, api, ctx, "cmd-1")
-	if after.Status != model.CommandQueued.String() {
-		t.Fatalf("status = %s, want QUEUED unchanged", after.Status)
-	}
-	if after.RespondedTime.Valid || after.ResponsePayload != nil {
-		t.Fatalf("the answer was written against a command no dispatcher was holding: %+v", after)
-	}
-
-	// ⚠️ THE COMMAND REMAINS DISPATCHABLE, SO IT WILL GO OUT AGAIN — to a device that has
-	// already run it. That half needs the response to carry the dispatch it is answering,
-	// which the wire contract does not yet do; it is not closed here and this test does not
-	// pretend otherwise. What HAS changed is that the platform now says so, on a counter and
-	// in a dead letter, instead of reporting the answer as recorded and going quiet.
 }
 
-// TestAnAnswerToADispatchedCommandStillSettlesIt is the counterweight, and without it the
+// TestAnAnswerToADispatchedCommandStillSettlesIt is the counterweight, and without it every
 // test above is satisfied by a consumer that dead-letters every response it ever sees.
 //
-// The same command, the same device, the same message — the one difference is that the
-// publish succeeds, so the row is SENT when the answer arrives. It must settle normally,
-// write no letter, and move no counter.
+// The ordinary round trip, with nothing gone wrong: the publish succeeds, the row is SENT, and
+// the device answers quoting the nonce it was sent. It must settle normally, write no letter,
+// and move no counter.
 func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 	api := realApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -209,24 +399,13 @@ func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCommand: %v", err)
 	}
-	if err := procWith(api, &recordingWriter{}).deliverCommand(ctx, created, pathSweep); err != nil {
+	writer := &recordingWriter{}
+	if err := procWith(api, writer).deliverCommand(ctx, created, pathSweep); err != nil {
 		t.Fatalf("deliverCommand: %v", err)
 	}
 
 	dead := &deadRecorder{}
-	consumer := &CommandDeliveryProcessor{
-		Api:  api,
-		area: "command-delivery",
-		dead: deadletter.NewSink(dead, func(error) {}),
-		DeliveryMetrics: DeliveryMetrics{
-			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_ok_total"}),
-		},
-		CommandResponsesReader: &oneMessageReader{
-			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
-				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
-		},
-	}
-
+	consumer := responseConsumer(api, dead, answer("cmd-1", dispatchNonceOf(t, writer.messages)))
 	consumer.ProcessMessage(context.Background())
 
 	if got := loadByToken(t, api, ctx, "cmd-1").Status; got != model.CommandSuccessful.String() {
@@ -237,6 +416,12 @@ func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 	}
 	if got := counterValue(t, consumer.ResponsesNotAnswerable); got != 0 {
 		t.Fatalf("ResponsesNotAnswerable = %v on an ordinary answer, want 0", got)
+	}
+	if got := counterValue(t, consumer.ResponsesWithoutNonce); got != 0 {
+		t.Fatalf("ResponsesWithoutNonce = %v on an ordinary answer, want 0", got)
+	}
+	if got := counterValue(t, consumer.ResponsesStaleNonce); got != 0 {
+		t.Fatalf("ResponsesStaleNonce = %v on an ordinary answer, want 0", got)
 	}
 }
 

@@ -187,7 +187,7 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 	id := seedWithStatus(t, api, ctx, "raced-expiry", CommandHeld)
 
 	// The sweep scanned it as HELD. Before its write lands, a drain claims it.
-	won, err := api.MarkSentByToken(ctx, "raced-expiry")
+	_, won, err := api.MarkSentByToken(ctx, "raced-expiry")
 	if err != nil || !won {
 		t.Fatalf("staging the claim failed: won=%v err=%v", won, err)
 	}
@@ -205,7 +205,8 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 
 	// And the device's answer still lands, which is the consequence that actually
 	// matters — a row wrongly expired here would swallow it.
-	if _, err := api.MarkResponse(ctx, "raced-expiry", "d", true, nil, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "raced-expiry", "d",
+		nonceOfToken(t, api, ctx, "raced-expiry"), true, nil, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 	assertStatus(t, api, ctx, "raced-expiry", CommandSuccessful)
@@ -317,7 +318,7 @@ func TestMarkSentByTokenClaimsExactlyOnce(t *testing.T) {
 
 	seedWithStatus(t, api, ctx, "claim-me", CommandHeld)
 
-	won, err := api.MarkSentByToken(ctx, "claim-me")
+	_, won, err := api.MarkSentByToken(ctx, "claim-me")
 	if err != nil {
 		t.Fatalf("MarkSentByToken failed: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestMarkSentByTokenClaimsExactlyOnce(t *testing.T) {
 
 	// A second claimer — the sweep, or another replica — must lose. If this ever
 	// returns true the caller dispatches again and the device acts twice.
-	won, err = api.MarkSentByToken(ctx, "claim-me")
+	_, won, err = api.MarkSentByToken(ctx, "claim-me")
 	if err != nil {
 		t.Fatalf("MarkSentByToken failed: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestMarkSentByTokenLosesOnTerminal(t *testing.T) {
 		t.Fatalf("CancelCommand failed: %v", err)
 	}
 
-	won, err := api.MarkSentByToken(ctx, "cancelled-claim")
+	_, won, err := api.MarkSentByToken(ctx, "cancelled-claim")
 	if err != nil {
 		t.Fatalf("MarkSentByToken failed: %v", err)
 	}
@@ -402,7 +403,13 @@ func TestCancelLeavesASentCommandAlone(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
-	seedWithStatus(t, api, ctx, "cancel-sent", CommandSent)
+	// Claimed, not forced: a SENT row is one a dispatcher claimed, and the answer below has to
+	// name that dispatch. A forced status would be a state the platform cannot produce.
+	id := seedWithStatus(t, api, ctx, "cancel-sent", CommandQueued)
+	nonce, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("staging the dispatch: claimed=%v err=%v", claimed, err)
+	}
 
 	got, err := api.CancelCommand(ctx, "cancel-sent")
 	if err != nil {
@@ -413,7 +420,7 @@ func TestCancelLeavesASentCommandAlone(t *testing.T) {
 	}
 
 	// The point of leaving it alone: the device's real answer still has somewhere to land.
-	answered, err := api.MarkResponse(ctx, "cancel-sent", "d", true, nil, nil)
+	answered, err := api.MarkResponse(ctx, "cancel-sent", "d", nonce, true, nil, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}

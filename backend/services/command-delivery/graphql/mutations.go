@@ -160,8 +160,8 @@ func (r *SchemaResolver) ParkCommand(ctx context.Context, args struct {
 }
 
 // MarkCommandSent claims a still-dispatchable command (QUEUED, HELD or PARKED) for
-// immediate delivery, moving it to SENT. It reports whether THIS call won the
-// claim.
+// immediate delivery, moving it to SENT. It answers with the DISPATCH NONCE it stamped,
+// and null when the claim was lost.
 //
 // It exists for a transport that dispatches a device's backlog itself instead of
 // waiting for the delivery sweep — the LwM2M wake drain, which issues a sleeping
@@ -170,11 +170,19 @@ func (r *SchemaResolver) ParkCommand(ctx context.Context, args struct {
 // still dispatchable, so a drain that dispatched without claiming would leave the
 // row HELD for the next tick to publish again.
 //
-// 🔴 It returns a BOOLEAN, not the command. A caller uses this to decide whether
-// it may actuate a physical device, and that decision must rest on whether the
-// conditional UPDATE matched — not on a status field read back afterwards, which
-// cannot distinguish "I claimed it" from "someone else did a millisecond ago".
-// Returning the row would invite exactly that misread.
+// 🔴 IT DOES NOT RETURN THE COMMAND, AND IT NEVER WILL. A caller uses this to decide
+// whether it may actuate a physical device, and that decision must rest on whether the
+// conditional UPDATE matched — not on a status field read back afterwards, which cannot
+// distinguish "I claimed it" from "someone else did a millisecond ago". Returning the
+// row would invite exactly that misread.
+//
+// 🔑 THE NONCE DOES NOT WEAKEN THAT, IT IS THE SAME FACT NAMED. It is minted by the
+// claim's own UPDATE, so a non-null answer IS "this call matched the row" — the property
+// the boolean carried — and null is the lost claim. What it adds is the identity of the
+// dispatch it created, which this caller needs for a second reason the boolean could not
+// serve: it delivers over its own session and then publishes the outcome on the device's
+// behalf, and a command response has to name the dispatch it answers or it is refused.
+// A claimer that could not learn the nonce could not settle anything it delivered.
 //
 // 🔴 IT IS GATED ON command:claim, NOT command:write, AND THAT IS THE WHOLE
 // SECURITY ARGUMENT. A claim is not a harmless status edit: it removes a command
@@ -196,13 +204,23 @@ func (r *SchemaResolver) ParkCommand(ctx context.Context, args struct {
 // tenant-scoped role — which a resolver-level check cannot police at all.
 func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
 	Token string
-}) (bool, error) {
+}) (*string, error) {
 	if err := auth.Authorize(ctx, auth.CommandClaim); err != nil {
-		return false, err
+		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	return api.MarkSentByToken(ctx, args.Token)
+	nonce, claimed, err := api.MarkSentByToken(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	if !claimed {
+		// A lost claim is null, not an empty string. The caller's test is "did I get a
+		// dispatch to name", and an empty string is a value that answers yes and names
+		// nothing — which would be published in a response envelope and refused.
+		return nil, nil
+	}
+	return &nonce, nil
 }
 
 // ReleaseHeldCommands returns a device's withheld commands to the delivery queue,

@@ -32,7 +32,7 @@ func TestMarkResponseRefusesADeviceAnsweringForAnother(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 
-	_, err = api.MarkResponse(ctx, "victim", "pump-9", true, nil, nil)
+	_, err = api.MarkResponse(ctx, "victim", "pump-9", nonceOf(t, api, ctx, created.ID), true, nil, nil)
 	if !errors.Is(err, ErrResponderNotCommandOwner) {
 		t.Fatalf("a device answering for another device returned %v, want ErrResponderNotCommandOwner", err)
 	}
@@ -65,7 +65,7 @@ func TestMarkResponseAcceptsTheOwningDevice(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 
-	got, err := api.MarkResponse(ctx, "mine", "pump-1", true, nil, nil)
+	got, err := api.MarkResponse(ctx, "mine", "pump-1", nonceOf(t, api, ctx, created.ID), true, nil, nil)
 	if err != nil {
 		t.Fatalf("the owning device's response was refused: %v", err)
 	}
@@ -98,7 +98,10 @@ func TestMarkResponseRefusesADeviceAnsweringForAnotherOnATerminalCommand(t *test
 		t.Fatalf("forcing terminal: %v", err)
 	}
 
-	if _, err := api.MarkResponse(ctx, "done", "pump-9", true, nil, nil); !errors.Is(err, ErrResponderNotCommandOwner) {
+	// A non-empty nonce, so the refusal under test is the IDENTITY one. With an empty nonce
+	// this would still fail — the nonce guard sits just below the identity check — and the
+	// test would then pass without the guard it names ever running.
+	if _, err := api.MarkResponse(ctx, "done", "pump-9", "any-dispatch", true, nil, nil); !errors.Is(err, ErrResponderNotCommandOwner) {
 		t.Fatalf("a foreign response to a TERMINAL command returned %v, want ErrResponderNotCommandOwner "+
 			"— the identity check must sit above the terminal fast path", err)
 	}
@@ -117,41 +120,63 @@ func TestMarkResponseRefusesADeviceAnsweringForAnotherOnATerminalCommand(t *test
 // test pass against a function that refused the write and reported success, which is how a
 // device's answer could be discarded with nothing recording it. The sentinel is asserted
 // too, so a return to the silent shape fails here rather than in production.
+//
+// 🔴 WHAT REFUSES IT IS NOW THE NONCE, NOT THE STATUS, AND THE TEST STATES BOTH SHAPES. A
+// command nothing has dispatched carries no dispatch nonce, so there is no value a device
+// can echo that matches it: an answer naming a dispatch is refused because the row is on
+// none, and an answer naming nothing is refused before the row's state is consulted at all.
+// The property this test has always been about — a queued actuation cannot be closed out by
+// a device that was never sent it — is unchanged; what changed is that it no longer rests on
+// the status alone, which is what let the same status mean two different dispatches.
 func TestMarkResponseRefusesStatesNoDispatcherHeld(t *testing.T) {
+	answers := []struct {
+		name  string
+		nonce string
+		want  error
+	}{
+		{"naming a dispatch the command is not on", "some-dispatch", ErrResponseNonceMismatch},
+		{"naming no dispatch at all", "", ErrResponseMissingNonce},
+	}
 	for _, status := range []CommandStatus{CommandQueued, CommandHeld} {
-		t.Run(status.String(), func(t *testing.T) {
-			api := newTestApi(t)
-			ctx := core.WithTenant(context.Background(), "A")
+		for _, answer := range answers {
+			t.Run(status.String()+"/"+answer.name, func(t *testing.T) {
+				api := newTestApi(t)
+				ctx := core.WithTenant(context.Background(), "A")
 
-			created, err := api.CreateCommand(ctx, &CommandCreateRequest{
-				Token: "early", DeviceToken: "pump-1", Name: "reboot",
-			})
-			if err != nil {
-				t.Fatalf("CreateCommand: %v", err)
-			}
-			if status != CommandQueued {
-				if err := forceStatus(api, ctx, created.ID, status); err != nil {
-					t.Fatalf("forcing %s: %v", status, err)
+				created, err := api.CreateCommand(ctx, &CommandCreateRequest{
+					Token: "early", DeviceToken: "pump-1", Name: "reboot",
+				})
+				if err != nil {
+					t.Fatalf("CreateCommand: %v", err)
 				}
-			}
+				if status != CommandQueued {
+					if err := forceStatus(api, ctx, created.ID, status); err != nil {
+						t.Fatalf("forcing %s: %v", status, err)
+					}
+				}
 
-			_, err = api.MarkResponse(ctx, "early", "pump-1", true, nil, nil)
-			if !errors.Is(err, ErrCommandNotAnswerable) {
-				t.Fatalf("MarkResponse err = %v, want ErrCommandNotAnswerable; a caller told "+
-					"nothing acks the message and the device's answer is gone", err)
-			}
-			// The status is named in the error because it is the only thing that separates a
-			// released dispatch (QUEUED) from a presence hold (HELD), and by the time anyone
-			// reads the dead letter the row has moved.
-			if !strings.Contains(err.Error(), status.String()) {
-				t.Fatalf("MarkResponse err = %q, want it to name the status %s", err, status)
-			}
-			got := loadOrFail(t, api, ctx, created.ID)
-			if got.Status != status.String() {
-				t.Fatalf("status = %s, want %s left alone — a device settled a command no "+
-					"dispatcher had handed it", got.Status, status)
-			}
-		})
+				_, err = api.MarkResponse(ctx, "early", "pump-1", answer.nonce, true, nil, nil)
+				if !errors.Is(err, answer.want) {
+					t.Fatalf("MarkResponse err = %v, want %v; a caller told nothing acks the "+
+						"message and the device's answer is gone", err, answer.want)
+				}
+				// The status at the write is named whenever the row was consulted, because it
+				// is the only thing that separates a released dispatch (QUEUED) from a
+				// presence hold (HELD), and by the time anyone reads the dead letter the row
+				// has moved. A refusal that never looked at the row cannot name one.
+				if answer.want == ErrResponseNonceMismatch && !strings.Contains(err.Error(), status.String()) {
+					t.Fatalf("MarkResponse err = %q, want it to name the status %s", err, status)
+				}
+				got := loadOrFail(t, api, ctx, created.ID)
+				if got.Status != status.String() {
+					t.Fatalf("status = %s, want %s left alone — a device settled a command no "+
+						"dispatcher had handed it", got.Status, status)
+				}
+				if got.RespondedTime.Valid {
+					t.Fatal("a refused response still stamped RespondedTime")
+				}
+			})
+		}
 	}
 }
 
@@ -198,7 +223,11 @@ func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 
 	id := seedWithStatus(t, api, ctx, "raced-terminal", CommandQueued)
-	if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
+	// The nonce comes from the claim rather than from a read-back, because the hook
+	// registered below fires on every query: reading the row here would settle it before the
+	// call under test ran, and this test would measure the terminal fast path instead.
+	nonce, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
 		t.Fatalf("staging the claim failed: claimed=%v err=%v", claimed, err)
 	}
 
@@ -225,7 +254,7 @@ func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
 		}
 	}()
 
-	got, err := api.MarkResponse(ctx, "raced-terminal", "d", true, nil, nil)
+	got, err := api.MarkResponse(ctx, "raced-terminal", "d", nonce, true, nil, nil)
 	if err != nil {
 		t.Fatalf("a response that lost a race to a terminal state must settle quietly, got %v", err)
 	}
@@ -243,48 +272,63 @@ func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
 // re-read finds an ANSWERABLE status, which is the one case where the refusal has to
 // explain itself carefully.
 //
-// The row is QUEUED when the write runs, so the write matches nothing. Before the re-read,
-// a dispatcher claims it — the sweep re-dispatching a command that a failed publish
-// returned to the queue. `current` therefore reads SENT.
+// The answer names a dispatch that has been released, so the write matches nothing. Before
+// the re-read, a dispatcher claims the row — the sweep re-dispatching a command that a
+// failed publish returned to the queue — stamping a NEW nonce. `current` therefore reads
+// SENT, on a dispatch this answer is not for.
 //
-// 🔑 IT IS STILL REFUSED, AND THAT IS THE DELIBERATE CALL. The SENT the re-read sees is a
-// NEW dispatch under a new nonce; this answer belongs to the one that was released.
-// Accepting it because the row is answerable again would settle the second dispatch with
-// the first dispatch's answer — the same mis-filing that makes retrying this message wrong.
+// 🔑 IT IS STILL REFUSED, AND THAT IS THE DELIBERATE CALL. Settling on the strength of the
+// status would close out the SECOND dispatch with the FIRST dispatch's answer, and the real
+// answer to the second would then arrive on a terminal row and be dropped as late. This is
+// the whole reason the nonce is on the return path, and the reason it is the nonce and not
+// the status that decides: both dispatches leave the row reading SENT.
 //
 // 🔴 AND THE MESSAGE MUST NOT CONTRADICT ITSELF. Reporting only the status NOW would read
-// "not in a state a response can settle ... which is SENT" to whoever opens the dead letter.
+// "could not be settled ... it reads SENT" to whoever opens the dead letter.
 func TestMarkResponseRefusesARowReclaimedUnderTheReRead(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 
+	// The released dispatch, in full: claimed, its publish reported an error, returned to the
+	// queue carrying the nonce it went out under. Staged through the real transitions rather
+	// than forced, because the nonce surviving the release is what the answer names.
 	id := seedWithStatus(t, api, ctx, "reclaimed", CommandQueued)
+	released, claimed, err := api.MarkSent(ctx, id)
+	if err != nil || !claimed {
+		t.Fatalf("staging the first dispatch: claimed=%v err=%v", claimed, err)
+	}
+	if landed, moved, err := api.ReleaseClaim(ctx, id); err != nil || !moved || landed != CommandQueued {
+		t.Fatalf("releasing the first dispatch: landed=%v moved=%v err=%v", landed, moved, err)
+	}
 
-	// Fire once AFTER the failed UPDATE, which is the only window that produces this
-	// state: a query hook would fire around the reads instead, on either side of it.
+	// Fire once, on the read MarkResponse opens with, so the SECOND dispatch lands between
+	// that read and the write. That is the real sequence: the answer to the released dispatch
+	// is in flight while the sweep re-dispatches the command. The row is therefore SENT under
+	// a NEW nonce when the write runs, so the write matches nothing, and the snapshot the
+	// error reports still reads QUEUED.
 	reclaimed := false
-	const hook = "test:reclaim_after_the_write"
+	const hook = "test:reclaim_under_the_read"
 	db := api.RDB.Database
-	if err := db.Callback().Update().After("gorm:update").Register(hook, func(*gorm.DB) {
+	if err := db.Callback().Query().After("gorm:query").Register(hook, func(*gorm.DB) {
 		if reclaimed {
 			return
 		}
 		reclaimed = true
 		if _, claimed, err := api.MarkSent(ctx, id); err != nil || !claimed {
-			t.Errorf("re-claiming under the re-read: claimed=%v err=%v", claimed, err)
+			t.Errorf("re-claiming under the read: claimed=%v err=%v", claimed, err)
 		}
 	}); err != nil {
 		t.Fatalf("registering the re-claim hook: %v", err)
 	}
 	defer func() {
-		if err := db.Callback().Update().Remove(hook); err != nil {
+		if err := db.Callback().Query().Remove(hook); err != nil {
 			t.Errorf("removing the re-claim hook: %v", err)
 		}
 	}()
 
-	_, err := api.MarkResponse(ctx, "reclaimed", "d", true, nil, nil)
-	if !errors.Is(err, ErrCommandNotAnswerable) {
-		t.Fatalf("MarkResponse err = %v, want ErrCommandNotAnswerable; this answer belongs to "+
+	_, err = api.MarkResponse(ctx, "reclaimed", "d", released, true, nil, nil)
+	if !errors.Is(err, ErrResponseNonceMismatch) {
+		t.Fatalf("MarkResponse err = %v, want ErrResponseNonceMismatch; this answer belongs to "+
 			"the dispatch that was released, not to the one now in flight", err)
 	}
 	if !reclaimed {

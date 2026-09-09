@@ -35,6 +35,19 @@ public sealed class CommandDeliveryEnvelope
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonElement? Payload { get; set; }
+
+    /// <summary>
+    /// Names the dispatch this frame is. The device echoes it in its answer, and the platform
+    /// refuses an answer that carries none.
+    /// </summary>
+    /// <remarks>
+    /// It is opaque: nothing on the device reads it, compares it, or should store it beyond the
+    /// answer it is echoed into. It is the platform's evidence that this device received THIS
+    /// dispatch — the same command can be published more than once, and only the nonce tells the
+    /// two apart, so an answer echoing the wrong one settles nothing.
+    /// </remarks>
+    [JsonPropertyName("dispatchNonce")]
+    public string? DispatchNonce { get; set; }
 }
 
 /// <summary>
@@ -59,6 +72,21 @@ public sealed class CommandResponseEnvelope
     /// <summary>An optional failure reason, set when <see cref="Success"/> is false.</summary>
     [JsonPropertyName("error")]
     public string? Error { get; set; }
+
+    /// <summary>
+    /// The dispatch nonce echoed from the delivery envelope this answer is for. REQUIRED: the
+    /// platform refuses a response that names no dispatch.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 IT IS THE NONCE OF THE FRAME BEING ANSWERED, NOT OF THE FRAME THAT RAN THE HANDLER, and
+    /// the two differ exactly when it matters. A command whose publish reported an error is
+    /// returned to the platform's queue and dispatched again under a NEW nonce; a device that
+    /// already ran it must answer that redelivery with its remembered outcome — running the
+    /// handler twice would move a machine twice — but under the nonce it has just been sent, or
+    /// the answer names a dispatch the platform has moved off and settles nothing.
+    /// </remarks>
+    [JsonPropertyName("dispatchNonce")]
+    public string? DispatchNonce { get; set; }
 }
 
 /// <summary>One command as handed to a device's handler.</summary>

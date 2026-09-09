@@ -71,6 +71,11 @@ type deliveryEnvelope struct {
 	DeviceToken string          `json:"deviceToken"`
 	Name        string          `json:"name"`
 	Payload     json.RawMessage `json:"payload,omitempty"`
+
+	// DispatchNonce names the dispatch this frame is, and the device echoes it in its answer.
+	// command-delivery refuses a response that carries none, so a receiver that ignored this
+	// field would look like a working device whose commands never reach SUCCESSFUL.
+	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
 // responseEnvelope is the JSON a device publishes back on its own command-responses
@@ -81,6 +86,11 @@ type deliveryEnvelope struct {
 type responseEnvelope struct {
 	CommandToken string `json:"commandToken"`
 	Success      bool   `json:"success"`
+
+	// DispatchNonce is quoted straight back from the delivery envelope. It is what makes this
+	// answer evidence that this device received THIS dispatch, rather than a claim that could
+	// as easily have been made about a dispatch the platform has since replaced.
+	DispatchNonce string `json:"dispatchNonce"`
 }
 
 // Tuning — bounded waits so a broker that is unreachable or a subscription that is
@@ -370,22 +380,28 @@ func (r *Receiver) onConnectionLost(ds *deviceState) mqtt.ConnectionLostHandler 
 // harmlessly retries a response whose first publish failed.
 func (r *Receiver) onMessage(ds *deviceState) mqtt.MessageHandler {
 	return func(_ mqtt.Client, msg mqtt.Message) {
-		token, ok := r.recordFrame(ds, msg.Payload())
+		token, nonce, ok := r.recordFrame(ds, msg.Payload())
 		if !ok {
 			log.Warn().Str("device", ds.token).Msg("received a malformed command envelope")
 			return
 		}
-		r.respond(ds, token)
+		r.respond(ds, token, nonce)
 	}
 }
 
 // recordFrame decodes a received frame and records it in the device's accounting:
 // a well-formed command bumps the raw counter and its token's distinct tally
-// (returning the token so the caller can respond), a malformed frame bumps the
-// malformed counter and returns ok=false. It is the pure heart of the receiver —
-// no broker, no network — so the de-dup accounting is unit-testable and
+// (returning the token AND the dispatch nonce so the caller can respond), a malformed
+// frame bumps the malformed counter and returns ok=false. It is the pure heart of the
+// receiver — no broker, no network — so the de-dup accounting is unit-testable and
 // mutation-verifiable without a live gateway.
-func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, ok bool) {
+//
+// 🔑 THE NONCE IS RETURNED, NOT VALIDATED. An empty one is not malformed as far as this
+// receiver is concerned — it is a statement about the frame it was sent, and the sim's job
+// is to be an honest witness to what the platform published. Answering with an empty nonce
+// is refused at the far end and shows up as a command that never settles, which is the
+// correct and visible outcome; refusing to answer here would hide the same fault as silence.
+func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token, nonce string, ok bool) {
 	var env deliveryEnvelope
 	// A frame that does not decode, OR decodes with an empty token, is malformed: an
 	// empty token is not a real command (every dispatched command carries its unique
@@ -395,7 +411,7 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 		ds.mu.Lock()
 		ds.malformed++
 		ds.mu.Unlock()
-		return "", false
+		return "", "", false
 	}
 
 	// 🔴 THE ENVELOPE SAYS WHO IT IS FOR, AND THIS RECEIVER READS IT.
@@ -431,14 +447,14 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 		ds.mu.Unlock()
 		log.Warn().Str("device", ds.token).Str("addressedTo", env.DeviceToken).Str("command", env.Token).
 			Msg("received a command addressed to another device; NOT answering it")
-		return "", false
+		return "", "", false
 	}
 
 	ds.mu.Lock()
 	ds.raw++
 	ds.distinct[env.Token]++
 	ds.mu.Unlock()
-	return env.Token, true
+	return env.Token, env.DispatchNonce, true
 }
 
 // respond publishes a success response for a command token on the device's own
@@ -448,15 +464,16 @@ func (r *Receiver) recordFrame(ds *deviceState, payload []byte) (token string, o
 // lives somewhere a test can reach: this function needs a live broker connection, so
 // nothing here is unit-testable, and the accounting used to be inlined among the
 // publish steps where only a comment claimed a failed publish is not a response.
-func (r *Receiver) respond(ds *deviceState, commandToken string) {
-	r.recordResponse(ds, r.publishResponse(ds, commandToken))
+func (r *Receiver) respond(ds *deviceState, commandToken, dispatchNonce string) {
+	r.recordResponse(ds, r.publishResponse(ds, commandToken, dispatchNonce))
 }
 
 // publishResponse marshals and publishes one response, returning the first failure
 // or nil once the broker has ACKED it. A timeout is a failure: an unacked QoS-1
 // publish is not a delivered response.
-func (r *Receiver) publishResponse(ds *deviceState, commandToken string) error {
-	payload, err := json.Marshal(responseEnvelope{CommandToken: commandToken, Success: true})
+func (r *Receiver) publishResponse(ds *deviceState, commandToken, dispatchNonce string) error {
+	payload, err := json.Marshal(responseEnvelope{
+		CommandToken: commandToken, Success: true, DispatchNonce: dispatchNonce})
 	if err != nil {
 		return err
 	}

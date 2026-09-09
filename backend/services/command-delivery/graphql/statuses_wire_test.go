@@ -186,10 +186,15 @@ func TestUnknownCriteriaFieldIsRejected(t *testing.T) {
 // TestMarkCommandSentClaimsThroughTheSchema exercises the claim a dispatcher makes
 // before it actuates hardware, over the wire, including the losing second claim.
 //
-// The boolean is the whole point: a caller decides whether to move physical
-// equipment based on it, so it must reflect whether the conditional UPDATE
-// matched — not a status read back afterwards, which cannot tell "I claimed it"
-// from "someone else did a millisecond ago".
+// Present-or-absent is the whole point: a caller decides whether to move physical
+// equipment on it, so it must reflect whether the conditional UPDATE matched — not
+// a status read back afterwards, which cannot tell "I claimed it" from "someone
+// else did a millisecond ago".
+//
+// 🔑 THE VALUE IT CARRIES IS THE DISPATCH NONCE, AND THE CALLER NEEDS BOTH FACTS. This
+// caller delivers over its own session and then publishes the command's outcome on the
+// device's behalf, and an outcome that names no dispatch is refused — so a claim that
+// answered only yes-or-no would leave it able to actuate and unable to settle.
 func TestMarkCommandSentClaimsThroughTheSchema(t *testing.T) {
 	ctx, api := newWireTestCtx(t)
 	seedCommand(t, ctx, api, "wire-claim", model.CommandHeld)
@@ -197,23 +202,36 @@ func TestMarkCommandSentClaimsThroughTheSchema(t *testing.T) {
 	const mutation = `mutation($token: String!) { markCommandSent(token: $token) }`
 
 	var first struct {
-		MarkCommandSent bool `json:"markCommandSent"`
+		MarkCommandSent *string `json:"markCommandSent"`
 	}
 	if err := json.Unmarshal(exec(t, ctx, mutation, map[string]any{"token": "wire-claim"}), &first); err != nil {
 		t.Fatalf("decoding the first claim failed: %v", err)
 	}
-	if !first.MarkCommandSent {
+	if first.MarkCommandSent == nil {
 		t.Fatal("the first claim on a HELD command must win")
+	}
+	if *first.MarkCommandSent == "" {
+		t.Fatal("a won claim answered with an empty dispatch nonce; the caller would publish an " +
+			"outcome naming no dispatch, which cannot settle the command it just actuated")
+	}
+	// The nonce is the one the row is actually on, or it names a dispatch nobody can match.
+	matches, err := api.CommandsByToken(ctx, []string{"wire-claim"})
+	if err != nil {
+		t.Fatalf("lookup failed: %v", err)
+	}
+	if got := matches[0].DispatchNonce; !got.Valid || got.String != *first.MarkCommandSent {
+		t.Fatalf("the claim answered nonce %q but the row is on %v", *first.MarkCommandSent, got)
 	}
 
 	var second struct {
-		MarkCommandSent bool `json:"markCommandSent"`
+		MarkCommandSent *string `json:"markCommandSent"`
 	}
 	if err := json.Unmarshal(exec(t, ctx, mutation, map[string]any{"token": "wire-claim"}), &second); err != nil {
 		t.Fatalf("decoding the second claim failed: %v", err)
 	}
-	if second.MarkCommandSent {
-		t.Fatal("a second claim must LOSE over the wire; winning it makes the caller actuate the device twice")
+	if second.MarkCommandSent != nil {
+		t.Fatalf("a second claim must LOSE over the wire and name no dispatch, got %q; winning it "+
+			"makes the caller actuate the device twice", *second.MarkCommandSent)
 	}
 }
 
@@ -306,12 +324,12 @@ func TestMarkCommandSentRequiresTheClaimAuthority(t *testing.T) {
 			TokenType:   auth.TokenTypeService,
 		})
 		var out struct {
-			MarkCommandSent bool `json:"markCommandSent"`
+			MarkCommandSent *string `json:"markCommandSent"`
 		}
 		if err := json.Unmarshal(exec(t, svc, mutation, map[string]any{"token": "svc-claim"}), &out); err != nil {
 			t.Fatalf("decoding the service claim failed: %v", err)
 		}
-		if !out.MarkCommandSent {
+		if out.MarkCommandSent == nil {
 			t.Fatal("a service token holding command:claim must be able to claim; " +
 				"the LwM2M wake drain is the only caller and it would be dead")
 		}

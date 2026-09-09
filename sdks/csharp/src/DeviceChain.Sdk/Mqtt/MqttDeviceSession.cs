@@ -72,7 +72,14 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private readonly object _stateLock = new();
 
     // Commands whose handler is RUNNING RIGHT NOW, keyed by command token. See OnMessageAsync.
-    private readonly Dictionary<string, Task<CommandResponseEnvelope>> _inFlight =
+    //
+    // 🔴 IT HOLDS THE OUTCOME, NOT THE RESPONSE ENVELOPE, AND THAT IS NOT A TIDY-UP. What is
+    // remembered per command is what the device DID, which is a fact about the command; the
+    // envelope also carries the dispatch nonce, which is a fact about one delivery of it. A
+    // redelivery is answered from here without re-running the handler, and it must be answered
+    // under the nonce IT carried — so an envelope cached whole would republish a superseded
+    // dispatch's name and the command would never settle.
+    private readonly Dictionary<string, Task<CommandOutcome>> _inFlight =
         new(StringComparer.Ordinal);
 
     private readonly object _inFlightLock = new();
@@ -437,8 +444,8 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // HEAD-OF-LINE BLOCKS every later command for that device. A machine part-way through a
         // multi-second command cannot be redirected until it finishes. That is a property to
         // design scenes around, not a defect to fix here.
-        Task<CommandResponseEnvelope>? existing = null;
-        TaskCompletionSource<CommandResponseEnvelope>? owned = null;
+        Task<CommandOutcome>? existing = null;
+        TaskCompletionSource<CommandOutcome>? owned = null;
 
         lock (_inFlightLock)
         {
@@ -452,7 +459,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             }
             else
             {
-                owned = new TaskCompletionSource<CommandResponseEnvelope>(
+                owned = new TaskCompletionSource<CommandOutcome>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 _inFlight[envelope.Token] = owned.Task;
             }
@@ -460,8 +467,13 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
         if (existing != null)
         {
+            // The remembered outcome, published under THIS frame's dispatch nonce. The handler is
+            // not run again — the machine must not move twice — but the answer names the delivery
+            // it is answering, which is what lets a re-dispatched command be settled by the device
+            // that had already carried it out.
             var previous = await existing.ConfigureAwait(false);
-            await PublishResponseAsync(previous).ConfigureAwait(false);
+            await PublishResponseAsync(envelope.Token, previous, envelope.DispatchNonce)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -480,31 +492,38 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             outcome = CommandOutcome.Failed($"the device's command handler threw: {ex.Message}");
         }
 
-        var response = new CommandResponseEnvelope
-        {
-            CommandToken = envelope.Token,
-            Success = outcome.Success,
-            Payload = outcome.Payload,
-            Error = outcome.Error,
-        };
-
         lock (_inFlightLock)
         {
-            _history.Add(envelope.Token, response);
+            _history.Add(envelope.Token, outcome);
             _inFlight.Remove(envelope.Token);
         }
 
-        owned!.TrySetResult(response);
-        await PublishResponseAsync(response).ConfigureAwait(false);
+        owned!.TrySetResult(outcome);
+        await PublishResponseAsync(envelope.Token, outcome, envelope.DispatchNonce)
+            .ConfigureAwait(false);
     }
 
-    private async Task PublishResponseAsync(CommandResponseEnvelope response)
+    private async Task PublishResponseAsync(string commandToken, CommandOutcome outcome, string? dispatchNonce)
     {
         var connection = Volatile.Read(ref _connection);
         if (connection == null || !connection.IsConnected)
         {
             return;
         }
+
+        // The envelope is built per publish rather than cached, because one of its fields belongs
+        // to the delivery and not to the command — see the nonce's own remarks. It is echoed as
+        // received, including when it is absent: inventing a value would produce an answer the
+        // platform accepts for a dispatch that may not be the one this device saw, and the honest
+        // empty is refused visibly instead.
+        var response = new CommandResponseEnvelope
+        {
+            CommandToken = commandToken,
+            Success = outcome.Success,
+            Payload = outcome.Payload,
+            Error = outcome.Error,
+            DispatchNonce = dispatchNonce,
+        };
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(response, SdkJson.Default.CommandResponseEnvelope);
         try
@@ -605,7 +624,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// A bounded most-recently-used memory of answered commands.
+    /// A bounded most-recently-used memory of what the device DID with each answered command.
     /// </summary>
     /// <remarks>
     /// Deliberately a plain dictionary plus an insertion-ordered queue rather than anything
@@ -615,18 +634,18 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private sealed class CommandHistory
     {
         private readonly int _capacity;
-        private readonly Dictionary<string, CommandResponseEnvelope> _byToken;
+        private readonly Dictionary<string, CommandOutcome> _byToken;
         private readonly Queue<string> _order;
         private readonly object _lock = new();
 
         public CommandHistory(int capacity)
         {
             _capacity = capacity < 1 ? 1 : capacity;
-            _byToken = new Dictionary<string, CommandResponseEnvelope>(StringComparer.Ordinal);
+            _byToken = new Dictionary<string, CommandOutcome>(StringComparer.Ordinal);
             _order = new Queue<string>();
         }
 
-        public bool TryGet(string token, out CommandResponseEnvelope? response)
+        public bool TryGet(string token, out CommandOutcome? response)
         {
             lock (_lock)
             {
@@ -634,7 +653,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             }
         }
 
-        public void Add(string token, CommandResponseEnvelope response)
+        public void Add(string token, CommandOutcome response)
         {
             lock (_lock)
             {

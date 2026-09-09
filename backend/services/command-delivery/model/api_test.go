@@ -146,7 +146,8 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 
 	payload := `{"result":"ok"}`
-	responded, err := api.MarkResponse(ctx, "cmd-1", "device-1", true, &payload, nil)
+	responded, err := api.MarkResponse(ctx, "cmd-1", "device-1",
+		nonceOf(t, api, ctx, created.ID), true, &payload, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
@@ -155,7 +156,8 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 	}
 
 	// A response to an already-terminal command is ignored (idempotent).
-	again, err := api.MarkResponse(ctx, "cmd-1", "device-1", false, nil, strPtr("late"))
+	again, err := api.MarkResponse(ctx, "cmd-1", "device-1",
+		nonceOf(t, api, ctx, created.ID), false, nil, strPtr("late"))
 	if err != nil {
 		t.Fatalf("MarkResponse (late) failed: %v", err)
 	}
@@ -334,7 +336,8 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 	payload := `{"ok":true}`
-	if _, err := api.MarkResponse(ctx, "cmd-race", "device-1", true, &payload, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "cmd-race", "device-1",
+		nonceOf(t, api, ctx, created.ID), true, &payload, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 
@@ -485,6 +488,35 @@ func assertStatus(t *testing.T, api *Api, ctx context.Context, token string, wan
 }
 
 func strPtr(s string) *string { return &s }
+
+// nonceOf reads the dispatch nonce a command currently carries, failing the test if the
+// command cannot be read or is not on a dispatch at all.
+//
+// It exists because a device's answer must name the dispatch it received, and a test that
+// wants a NORMAL round trip has to quote whatever the claim actually stamped. Reading it
+// back rather than accepting the value MarkSent returned is deliberate for the tests that
+// re-claim a row: the question those ask is what the row is on NOW.
+func nonceOf(t *testing.T, api *Api, ctx context.Context, id uint) string {
+	t.Helper()
+	got := loadOrFail(t, api, ctx, id)
+	if !got.DispatchNonce.Valid || got.DispatchNonce.String == "" {
+		t.Fatalf("command %d carries no dispatch nonce, so nothing can answer it", id)
+	}
+	return got.DispatchNonce.String
+}
+
+// nonceOfToken is nonceOf for a test that holds a command's token rather than its id.
+func nonceOfToken(t *testing.T, api *Api, ctx context.Context, token string) string {
+	t.Helper()
+	matches, err := api.CommandsByToken(ctx, []string{token})
+	if err != nil {
+		t.Fatalf("could not read command %q: %v", token, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one command for %q, got %d", token, len(matches))
+	}
+	return nonceOf(t, api, ctx, matches[0].ID)
+}
 
 // loadOrFail reads a command back by id, failing the test if it cannot.
 //

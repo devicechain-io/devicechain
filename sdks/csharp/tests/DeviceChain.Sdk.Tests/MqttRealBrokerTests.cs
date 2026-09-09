@@ -135,7 +135,8 @@ public class MqttRealBrokerTests
         await peer.PublishAsync(
             DevicePlane.CommandsTopic("inst", "acme", "sensor-001"),
             Encoding.UTF8.GetBytes(
-                $"{{\"token\":\"{commandToken}\",\"deviceToken\":\"sensor-001\",\"name\":\"goRefuel\"}}"),
+                $"{{\"token\":\"{commandToken}\",\"deviceToken\":\"sensor-001\",\"name\":\"goRefuel\","
+                + $"\"dispatchNonce\":\"{commandToken}-dispatch\"}}"),
             MqttQos.AtLeastOnce,
             cts.Token);
 
@@ -278,7 +279,8 @@ public class MqttRealBrokerTests
         await peer.PublishAsync(
             DevicePlane.CommandsTopic("inst", "acme", "sensor-003"),
             Encoding.UTF8.GetBytes(
-                $"{{\"token\":\"{commandToken}\",\"deviceToken\":\"sensor-003\",\"name\":\"goRefuel\"}}"),
+                $"{{\"token\":\"{commandToken}\",\"deviceToken\":\"sensor-003\",\"name\":\"goRefuel\","
+                + $"\"dispatchNonce\":\"{commandToken}-dispatch\"}}"),
             MqttQos.AtLeastOnce,
             cts.Token);
 
@@ -438,7 +440,8 @@ public class MqttRealBrokerTests
                 publishes[i] = peer.PublishAsync(
                     DevicePlane.CommandsTopic("inst", "acme", tokens[i]),
                     Encoding.UTF8.GetBytes(
-                        $"{{\"token\":\"{commands[i]}\",\"deviceToken\":\"{tokens[i]}\",\"name\":\"goRefuel\"}}"),
+                        $"{{\"token\":\"{commands[i]}\",\"deviceToken\":\"{tokens[i]}\",\"name\":\"goRefuel\","
+                        + $"\"dispatchNonce\":\"{commands[i]}-dispatch\"}}"),
                     MqttQos.AtLeastOnce,
                     cts.Token);
             }

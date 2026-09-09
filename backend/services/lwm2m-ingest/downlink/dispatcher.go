@@ -46,6 +46,13 @@ type responseEnvelope struct {
 	Success      bool    `json:"success"`
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
+
+	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
+	// response that carries none. This adapter answers on the device's behalf, so it quotes the
+	// nonce it was given: the delivery envelope's on the live path, and the one the claim
+	// returned on the wake-drain path, where there is no envelope and the claim is the only
+	// place the value exists.
+	DispatchNonce string `json:"dispatchNonce"`
 }
 
 // OpResult is the outcome of dispatching one command to a device: the CoAP exchange already
@@ -122,7 +129,7 @@ type drainFetcher interface {
 // held half, because an unclaimed dispatch is a duplicate actuation waiting for the next
 // sweep tick.
 type commandClaimer interface {
-	Claim(ctx context.Context, tenant, commandToken string) (bool, error)
+	Claim(ctx context.Context, tenant, commandToken string) (string, bool, error)
 }
 
 // commandParker is the HAND-BACK seam (*CommandParker satisfies it): it moves a command this
@@ -588,7 +595,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	// (that would re-actuate a physical device). On a mid-op eviction the publish is skipped (the
 	// result is an unreliable artifact of losing the conn — a spurious FAILED) and the command rides
 	// SENT→TIMEOUT; only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
-	d.executeAndReport(ctx, conn, w.tenant, w.env.DeviceToken, w.env.Name, w.env.Token, payload)
+	d.executeAndReport(ctx, conn, w.tenant, w.env.DeviceToken, w.env.Name, w.env.Token,
+		w.env.DispatchNonce, payload)
 	d.dedupe.mark(w.tenant, w.env.DeviceToken, w.env.Token)
 	// Seal fate: the CoAP op already ran, so ack whether or not the response published — a publish we
 	// could not land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome
@@ -637,10 +645,11 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 		}
 		// Take the command out of command-delivery's dispatchable set BEFORE actuating. A
 		// command we could not claim is one we must not fire.
-		if !d.claim(ctx, job.tenant, c) {
+		nonce, won := d.claim(ctx, job.tenant, c)
+		if !won {
 			continue
 		}
-		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, c.Payload)
+		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, nonce, c.Payload)
 		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
 		incr(d.metrics.Drained, 1)
 	}
@@ -686,7 +695,13 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 //     retries), whereas actuating on an unconfirmed claim is not. Logged at debug like the
 //     fetch-failure path: on a real outage this fires once per backlogged command per wake,
 //     and a warn per row would bury the outage in its own noise.
-func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) bool {
+//
+// 🔴 IT ALSO RETURNS THE DISPATCH NONCE, AND THE DRAIN CANNOT REPORT AN OUTCOME WITHOUT IT.
+// This path has no delivery envelope — it dispatches a row it read, not a message it consumed
+// — so the claim is the only place the identity of the dispatch it just created exists. A
+// response that names no dispatch is refused by command-delivery, so a drain that dropped this
+// value would actuate devices and settle nothing.
+func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) (string, bool) {
 	if d.claimer == nil {
 		// Claiming disabled but a claimable row arrived: refuse rather than fire. Counted as
 		// an error, not a loss — nobody else took this command, the platform simply cannot
@@ -694,24 +709,24 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) b
 		incr(d.metrics.DrainClaimErrors, 1)
 		log.Debug().Str("tenant", tenant).Str("command", c.Token).Str("status", c.Status).
 			Msg("Not dispatching a held LwM2M command: no command claimer is wired, so ownership cannot be established.")
-		return false
+		return "", false
 	}
-	won, err := d.claimer.Claim(ctx, tenant, c.Token)
+	nonce, won, err := d.claimer.Claim(ctx, tenant, c.Token)
 	if err != nil {
 		if ctx.Err() == nil { // a claim aborted by eviction is not a claim failure
 			incr(d.metrics.DrainClaimErrors, 1)
 			log.Debug().Err(err).Str("tenant", tenant).Str("command", c.Token).
 				Msg("Could not claim a held LwM2M command at wake; not dispatching it (it stays dispatchable and retries on the device's next Register/Update).")
 		}
-		return false
+		return "", false
 	}
 	if !won {
 		// Someone else moved it out of the dispatchable set first. Nothing is wrong; this is
 		// the mechanism working.
 		incr(d.metrics.DrainClaimLost, 1)
-		return false
+		return "", false
 	}
-	return true
+	return nonce, true
 }
 
 // executeAndReport runs one command's CoAP op on a live conn and, unless the term was evicted mid-op,
@@ -727,7 +742,13 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) b
 // was drainable, which is the arrangement PARKED replaced. For this window the drain path is
 // at-most-once by construction; closing it is the stranded-SENT reconciler's job, not this
 // function's. It never acks or redelivers anything itself.
-func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, deviceToken, name, token string, payload []byte) {
+//
+// dispatchNonce names the dispatch being answered and is quoted straight into the response —
+// from the delivery envelope on the live path, from the claim on the drain path. It is not
+// re-derived or defaulted here: command-delivery refuses an answer that names no dispatch, and
+// an answer this adapter invented a name for would be worse than one it refused to send.
+func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, deviceToken, name,
+	token, dispatchNonce string, payload []byte) {
 	opCtx, cancel := context.WithTimeout(ctx, d.opTimeout)
 	res := d.exec.Execute(opCtx, conn, name, payload)
 	cancel()
@@ -741,10 +762,11 @@ func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant
 		labelInc(d.metrics.Failed, res.Op, 1)
 	}
 	_ = d.publishResponse(tenant, deviceToken, responseEnvelope{
-		CommandToken: token,
-		Success:      res.Success,
-		Payload:      res.Payload,
-		Error:        res.Err,
+		CommandToken:  token,
+		Success:       res.Success,
+		Payload:       res.Payload,
+		Error:         res.Err,
+		DispatchNonce: dispatchNonce,
 	})
 }
 
