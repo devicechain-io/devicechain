@@ -1381,11 +1381,15 @@ jobs:
           echo "ok: a valid owner still renders"
 
       # Self-test first, and it plants each defect ALONE: a self-test that plants
-      # all of them at once is satisfied by a checker that finds any one. Ten
+      # all of them at once is satisfied by a checker that finds any one. Nineteen
       # defects here — a required group that stopped rendering, a render with no
       # rules at all, unparseable PromQL, a group accounted for nowhere, a listed
       # group that renders nothing, an untested alert, a stale test, a group with
-      # no alerts, a missing test file, and a rule inverted so it can never fire.
+      # no alerts, a missing test file, a rule inverted so it can never fire, and
+      # nine covering the always-firing stage: the expression that actually shipped,
+      # four respellings of it, a folded YAML block, a run under its alert floor, a
+      # rule file read only in part, and a run with no rule files at all. Two clean
+      # bundles have to come back clean for any of that to mean anything.
       - name: PrometheusRules guard self-test
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
@@ -1409,6 +1413,17 @@ jobs:
         # that does not exist parses perfectly and evaluates an empty vector —
         # which is not false, so the alert simply never fires. That gap is the
         # dashboard guard's, below.
+        #
+        # 🔴 NOR CAN IT SEE AN ALERT THAT CAN NEVER BE FALSE, which is the other
+        # instrument this script now fronts: promtool answers "is this valid?",
+        # and the question here is "can this ever return NOTHING?". Prometheus
+        # fires on the PRESENCE of a sample, so an expression with no reachable
+        # empty state is an alert that is always firing — and an always-firing
+        # alert trains its recipients to ignore the channel the real ones arrive
+        # on. `>` binds tighter than `or`, so `a or vector(0) > 0` parses as
+        # `a or (vector(0) > 0)` and leaves a bare `a`. That is a question about
+        # the parse tree, so backend/tools/promqlguard walks the AST with the
+        # parser Prometheus itself uses rather than matching the text.
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           hack/check-prometheus-rules.sh

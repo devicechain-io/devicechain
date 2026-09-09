@@ -28,10 +28,30 @@
 # that, by resolving every devicechain_* series named here back to the Go
 # registration that creates it.
 #
-# Nothing else catches this. `helm lint` checks YAML, not PromQL. The values
+# 🔴 NOR CAN promtool SEE AN ALERT THAT CAN NEVER BE FALSE, which is the second
+# instrument this script now fronts. promtool answers "is this valid PromQL?"; the
+# question an always-firing alert asks is "can this expression ever return
+# NOTHING?", because Prometheus fires on the PRESENCE of a sample rather than on
+# its value. `sum(rate(x[5m])) or vector(0) > 0` reads as "the rate, defaulting to
+# zero, above zero" and is not that — `>` binds tighter than `or`, so it parses as
+# `sum(rate(x[5m])) or (vector(0) > 0)`, the right operand is empty, and a bare
+# `sum(rate(x[5m]))` with no comparison is what remains. It shipped, it was valid,
+# every series in it was spelled correctly, and it fired permanently on every
+# instance at severity critical.
+#
+# That is answered by the PARSER rather than by matching the expression text, in
+# backend/tools/promqlguard, which walks the AST and asks whether the top of the
+# tree can be empty. A regex version of the same check was written and removed
+# before merge: trivial respellings of the very defect it was written for —
+# `or (vector(0)) > 0`, `or vector (0) > 0`, `> bool 0`, a PromQL `#` comment —
+# walked past it, while legitimate alerts were rejected. Every one of those is the
+# same tree to a parser.
+#
+# Nothing else catches any of this. `helm lint` checks YAML, not PromQL. The values
 # schema does not see rendered output. The Prometheus Operator's own admission
 # webhook DOES validate rules — but it is optional, it is not installed on every
-# cluster, and by the time it speaks the release is already being applied.
+# cluster, and by the time it speaks the release is already being applied. And no
+# admission webhook anywhere has an opinion about whether an alert can be false.
 #
 # 🔴 promtool must be able to FAIL for a pass to mean anything. Verified by
 # mutation while this was written: an unbalanced label selector
@@ -73,7 +93,7 @@ case "${1:-}" in
     ;;
 esac
 
-for tool in helm python3; do
+for tool in helm python3 go; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required but not on PATH"
 done
 python3 -c 'import yaml' 2>/dev/null || fail "python3 needs PyYAML (pip install pyyaml)"
@@ -142,6 +162,22 @@ work="$(mktemp -d)"
 chmod 755 "$work"
 trap 'rm -rf "$work"' EXIT
 
+# 🔴 BUILT ONCE, HERE, WITH ITS OWN WORDING — the same separation the promtool pull
+# above earned the expensive way. A failure to OBTAIN the instrument is not a verdict
+# about the rules, and reporting it as one teaches the next maintainer that the gate
+# is flaky. Anything the tool says after this point is genuinely the tool speaking.
+#
+# It is built rather than `go run`, and that is not a preference: `go run` collapses
+# every non-zero program exit to 1 and prints `exit status N` as text, which would
+# erase the difference between "this alert is always firing" (1) and "this check could
+# not run at all" (2). A self-test written against `go run` measured exactly that and
+# reported a broken instrument as a finding.
+promqlguard="$work/promqlguard"
+(cd "$repo_root/backend/tools/promqlguard" && go build -o "$promqlguard" ./cmd/promqlguard) ||
+  fail "could not build promqlguard -- ALERTS WERE NOT CHECKED FOR AN ALWAYS-FIRING SHAPE.
+
+This is a failure to build the tool, not a verdict about the rules."
+
 # ---------------------------------------------------------------------------
 # The checking logic, as functions over PATHS. 🔑 Every stage takes its inputs as
 # arguments rather than reaching for the work dir, which is what lets the
@@ -200,6 +236,28 @@ collect_rule_files() {
     return 1
   fi
   printf '%s\n' "${files[@]}"
+}
+
+# check_always_firing <min-alerts> <rule-file>...
+#
+# Refuses an alert whose expression has no reachable empty state. Fronts the Go tool
+# the way hack/migration-diff.sh fronts migrationdiff, because the question — does
+# the comparison bind to the WHOLE expression? — is a question about the parse tree,
+# and the only honest way to ask it is with the parser Prometheus itself uses.
+#
+# 🔴 ITS EXIT CODES ARE THREE-VALUED AND THIS FUNCTION PRESERVES THEM. 0 clean,
+# 1 findings, 2 the instrument is broken (no files, a file that will not parse, a
+# file whose two independent alert counts disagree, or fewer alerts checked than
+# the floor). A run that read nothing has no opinion about the rules, and spelling
+# that as "clean" is an absence read as an answer.
+#
+# <min-alerts> is the liveness floor. Zero findings is what a clean corpus reports
+# AND what a run over a directory that stopped containing rules reports; the floor
+# is what separates them.
+check_always_firing() {
+  local min="$1"
+  shift
+  "$promqlguard" -min-alerts="$min" "$@"
 }
 
 # check_group_accounting <dir> <tested-group>... -- <known-untested-group>...
@@ -639,7 +697,190 @@ EOF
   fi
   st_ok "a rule that parses but can never fire is caught by the unit tests"
 
-  echo "self-test passed: 10 defects, each planted alone, each caught; a clean bundle passes"
+  # -------------------------------------------------------------------------
+  # Cases 11-20 — THE ALWAYS-FIRING STAGE. Everything above this line accepts an
+  # alert that can never be false: it is valid PromQL, every series in it is
+  # spelled correctly, and a unit test asserting that it fires on the state it
+  # names passes too, because it fires on every state.
+  #
+  # 🔴 CASE 11 IS THE REAL EXPRESSION, VERBATIM — the text that shipped in
+  # v0.15.0 and fired permanently on every instance at severity critical, not a
+  # probe written to resemble it. A guard tested only against expressions its own
+  # author invented is tested against that author's model of the defect. The four
+  # cases after it are the respellings that walked past the regex version of this
+  # check before it was removed, each planted alone.
+  # -------------------------------------------------------------------------
+  d="$st/always-firing"
+  rm -rf "$d"
+  mkdir -p "$d"
+
+  # st_af_file <path> <alert-name> <expr> — one rule file, one alert. The
+  # expression is single-quoted because a bare `# comment` in YAML is a YAML
+  # comment, which would truncate case 14 into something that is not the case.
+  st_af_file() {
+    printf "groups:\n  - name: selftest\n    rules:\n      - alert: %s\n        expr: '%s'\n" \
+      "$2" "$3" >"$1"
+  }
+
+  # st_af_expect_finding <label> <alert-name> <expr> <message-fragment>
+  #
+  # Requires exit 1 specifically. 🔴 NOT "non-zero": exit 2 is this tool saying it
+  # could not answer, and a self-test that accepts either would keep passing if
+  # every case degraded into a broken instrument. The message is asserted for the
+  # same reason — a guard that rejects everything satisfies the status alone.
+  st_af_expect_finding() {
+    local label="$1" name="$2" expr="$3" want="$4" rc=0 out
+    st_af_file "$d/probe.yaml" "$name" "$expr"
+    grep -q "alert: $name" "$d/probe.yaml" ||
+      st_fail "the $label fixture did not write -- believe no verdict from this run"
+    out="$(check_always_firing 1 "$d/probe.yaml" 2>&1)" || rc=$?
+    [ "$rc" -eq 1 ] || st_fail "$label: expected exit 1 (a finding), got $rc: $out"
+    case "$out" in
+    *"$name"*) ;;
+    *) st_fail "$label: the finding does not name the alert it is about: $out" ;;
+    esac
+    case "$out" in
+    *"$want"*) ;;
+    *) st_fail "$label: caught, but not for the reason it names ($want): $out" ;;
+    esac
+    st_ok "$label"
+  }
+
+  st_af_expect_finding "the shipped always-firing expression, verbatim" DeadLetterStoreLosing \
+    'sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="devicechain"}[5m])) or vector(0) > 0' \
+    'left-hand side of the top-level `or`'
+
+  st_af_expect_finding "a parenthesised vector operand" ParenthesisedVector \
+    'sum(rate(x[5m])) or (vector(0)) > 0' \
+    'left-hand side of the top-level `or`'
+
+  st_af_expect_finding "a space before the vector argument list" SpacedVector \
+    'sum(rate(x[5m])) or vector (0) > 0' \
+    'left-hand side of the top-level `or`'
+
+  st_af_expect_finding "a PromQL comment after the expression" CommentedExpr \
+    'sum(rate(x[5m])) or vector(0) > 0 # defaulting to zero' \
+    'left-hand side of the top-level `or`'
+
+  st_af_expect_finding "a comparison carrying the bool modifier" BoolComparison \
+    'sum(rate(x[5m])) > bool 0' \
+    '`bool` modifier'
+
+  # Case 16 — A FOLDED `expr: >` BLOCK, alone. The `>` here is a YAML block-scalar
+  # marker and not a comparison at all; the regex version of this check read it as
+  # one and passed the alert. A parser sees the folded string, so the shape it
+  # actually contains is what gets checked.
+  cat >"$d/probe.yaml" <<'EOF'
+groups:
+  - name: selftest
+    rules:
+      - alert: FoldedExpr
+        expr: >
+          sum(rate(x[5m])) or vector(0) > 0
+EOF
+  grep -q 'expr: >' "$d/probe.yaml" ||
+    st_fail "the folded-block fixture did not write -- believe no verdict from this run"
+  rc=0
+  out="$(check_always_firing 1 "$d/probe.yaml" 2>&1)" || rc=$?
+  [ "$rc" -eq 1 ] || st_fail "a folded expr block: expected exit 1, got $rc: $out"
+  case "$out" in
+  *FoldedExpr*'left-hand side of the top-level `or`'*) ;;
+  *) st_fail "a folded expr block was not caught with a located diagnosis: $out" ;;
+  esac
+  st_ok "an always-firing expression written as a folded YAML block is caught"
+
+  # -------------------------------------------------------------------------
+  # Case 17 — THE COUNTERWEIGHT, and it carries as much weight as the six kills
+  # above: every kill is satisfied just as well by a checker that rejects
+  # everything. Each of these is a shape this chart ships or would legitimately
+  # ship.
+  #
+  # 🔴 `(… or vector(0)) > 0` IS NOT A NEAR-MISS OF THE DEFECT, IT IS ITS CORRECT
+  # FORM. Without the `or vector(0)`, an alert summing several services goes
+  # ABSENT rather than false the moment one of them stops being scraped — so a
+  # gate that discouraged the idiom would cause the failure it exists to prevent.
+  # -------------------------------------------------------------------------
+  cat >"$d/clean.yaml" <<'EOF'
+groups:
+  - name: selftest
+    rules:
+      - record: selftest:ratio
+        expr: a / b
+      - alert: CorrectlyParenthesised
+        expr: (sum(rate(x[5m])) or vector(0)) > 0
+      - alert: SummedAcrossServices
+        expr: (sum(rate(a[5m])) or vector(0)) + (sum(rate(b[5m])) or vector(0)) > 0
+      - alert: DeadMansSwitch
+        expr: vector(1)
+      - alert: SeriesIsAbsent
+        expr: absent(up{job="dc"})
+      - alert: UnlessGuarded
+        expr: group by (pod) (a) unless group by (pod) (b)
+      - alert: AndOnGuarded
+        expr: max(a) < 3 and on() max(b) > 1
+      - alert: OrBetweenTwoPredicates
+        expr: max(a) == 0 or absent(a)
+        keep_firing_for: 10m
+EOF
+  check_always_firing 7 "$d/clean.yaml" >/dev/null ||
+    st_fail "a legitimate rule file was rejected -- a guard that flags the whole corpus is a guard nobody keeps"
+  st_ok "correctly parenthesised, dead-man's-switch, absent, unless, and-on and or-between-predicates alerts all pass"
+
+  # -------------------------------------------------------------------------
+  # Case 18 — THE LIVENESS FLOOR, alone. Zero findings is what a clean corpus
+  # reports AND what a run over rules that stopped being rendered reports. This
+  # asks for one more alert than the clean file holds and requires exit 2, which
+  # is the code that means "no opinion", distinct from both 0 and 1.
+  # -------------------------------------------------------------------------
+  rc=0
+  out="$(check_always_firing 8 "$d/clean.yaml" 2>&1)" || rc=$?
+  [ "$rc" -eq 2 ] || st_fail "a run that read fewer alerts than its floor exited $rc, not 2: $out"
+  case "$out" in
+  *"expected at least 8"*) ;;
+  *) st_fail "the floor failed without saying what it expected: $out" ;;
+  esac
+  st_ok "a run that read fewer alerts than its floor reports a broken instrument, not a clean tree"
+
+  # -------------------------------------------------------------------------
+  # Case 19 — A FILE READ ONLY IN PART, alone. The removed regex version scraped
+  # expressions by looking ahead to `for|labels|annotations|record`, so an alert
+  # whose expr was last or was followed by `keep_firing_for:` was skipped in
+  # silence — and it still PRINTED A COUNT, which reads as coverage. Here a second
+  # YAML document holds an alert the tree walk never reaches, and the raw-text
+  # count disagrees with the walk.
+  # -------------------------------------------------------------------------
+  cat >"$d/truncated.yaml" <<'EOF'
+groups:
+  - name: first
+    rules:
+      - alert: Reached
+        expr: up == 0
+---
+groups:
+  - name: second
+    rules:
+      - alert: NeverReached
+        expr: sum(rate(x[5m])) or vector(0) > 0
+EOF
+  rc=0
+  out="$(check_always_firing 1 "$d/truncated.yaml" 2>&1)" || rc=$?
+  [ "$rc" -eq 2 ] || st_fail "a partially-read rule file exited $rc, not 2: $out"
+  case "$out" in
+  *'`alert:` key(s)'*) ;;
+  *) st_fail "a partially-read file failed without naming the disagreeing counts: $out" ;;
+  esac
+  st_ok "a rule file the walk reads only part of is refused rather than reported on"
+
+  # -------------------------------------------------------------------------
+  # Case 20 — NO RULE FILES AT ALL, alone. "Nothing to check" must never be
+  # spelled the same way as "nothing wrong", at either level.
+  # -------------------------------------------------------------------------
+  rc=0
+  out="$(check_always_firing 1 2>&1)" || rc=$?
+  [ "$rc" -eq 2 ] || st_fail "a run with no rule files exited $rc, not 2: $out"
+  st_ok "a run with no rule files is refused rather than passed"
+
+  echo "self-test passed: 19 defects, each planted alone, each caught; two clean bundles pass"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -681,6 +922,50 @@ cluster operator would see. The object stays present and healthy-looking and the
 alerts never fire."
 
 note "every rendered rule group parses"
+
+# ---------------------------------------------------------------------------
+# ALWAYS-FIRING ALERTS. Parsing is not meaning, in the other direction from the
+# unit tests below: an expression that can never return NOTHING is an alert that
+# is permanently firing, because Prometheus fires on the PRESENCE of a sample.
+#
+# 🔴 THE FLOOR IS THE LIVENESS PROBE, and it is not decoration. Zero findings is
+# what a clean corpus reports and also what a run over a chart that stopped
+# rendering its rules reports.
+#
+# 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and the exact value is derived
+# rather than chosen. The chart renders 34 alerts across six rule files, and the
+# largest single file holds 16. The floor is 20: strictly ABOVE the biggest one
+# file, so a run that read only a SUBSET of the files can never clear it, and
+# comfortably below 34, so ordinary rule churn -- adding alerts, retiring one --
+# never touches it.
+#
+# A floor set AT the current count would be a tripwire on legitimate editing
+# rather than a liveness probe. Every rule addition would have to raise it (this
+# is a `>=` test, so in fact only removals trip it -- but the reflex it teaches is
+# the same), and a probe people have to keep editing to get past is a probe people
+# route around. What it must catch is the check going blind, not a maintainer
+# deleting an alert on purpose.
+#
+# The other blindness modes are closed elsewhere, which is what lets this one stay
+# loose: no rule files at all is refused outright, the extractor's required-groups
+# control catches a group that stopped rendering, and the per-file cross-count
+# catches a file the walk reads only part of.
+say "checking every rendered alert for a reachable false state"
+check_always_firing 20 "${rule_files[@]}" || {
+  status=$?
+  if [ "$status" -eq 2 ]; then
+    fail "the always-firing check could not run, so the rules were NOT checked.
+
+This is the instrument reporting that it has no opinion, which is deliberately not
+spelled the same way as a clean result."
+  fi
+  fail "an alerting rule can never return nothing, which means it is always firing.
+
+An always-firing alert is worse than a missing one: it trains whoever receives the
+page to ignore the channel it arrives on, and the alerts that matter arrive there
+too. The expression is valid PromQL and promtool accepts it -- the defect is in
+where the comparison binds."
+}
 
 # ---------------------------------------------------------------------------
 # UNIT TESTS. Parsing is not meaning.
