@@ -38,8 +38,13 @@ func main() {
 	// 🔴 THE LIVENESS FLOOR, and it is the half of this instrument a green tick cannot
 	// otherwise distinguish from a broken one. Zero findings is what a clean corpus
 	// reports AND what a run over an empty directory, a renamed rule file or a chart
-	// that stopped rendering its rules reports. The caller passes the number of alerts
-	// the repository knows it ships; fewer than that means the run has no evidence.
+	// that stopped rendering its rules reports.
+	//
+	// The caller sets it BELOW its corpus, not at it: high enough that a run handed
+	// only some of the rule files cannot clear it, low enough that adding or retiring
+	// an alert never reaches it. A floor pinned to the exact current count is a
+	// tripwire on legitimate editing rather than a liveness probe, and a probe people
+	// have to keep editing to get past is a probe people route around.
 	minAlerts := flag.Int("min-alerts", 1, "fail (exit 2) unless at least this many alerts were checked")
 	flag.Parse()
 
@@ -61,9 +66,11 @@ func main() {
 	if checked < *minAlerts {
 		fmt.Fprintf(os.Stderr,
 			"promqlguard: checked %d alert(s) across %d file(s), expected at least %d.\n"+
-				"  Rules are not being read, so a clean result from this run means nothing. Either\n"+
-				"  the chart stopped rendering alerts, or alerts were deliberately removed and the\n"+
-				"  floor has not been lowered to match.\n",
+				"  Rules are not being read, so a clean result from this run means nothing. The\n"+
+				"  likely causes, in order: this run was handed only SOME of the rule files, or a\n"+
+				"  template stopped rendering its alerts. If instead alerts were deliberately\n"+
+				"  retired, lower the floor -- but it is set well below the corpus precisely so\n"+
+				"  that ordinary rule churn never reaches it, so read the first two first.\n",
 			checked, flag.NArg(), *minAlerts)
 		os.Exit(2)
 	}

@@ -919,16 +919,28 @@ note "every rendered rule group parses"
 #
 # 🔴 THE FLOOR IS THE LIVENESS PROBE, and it is not decoration. Zero findings is
 # what a clean corpus reports and also what a run over a chart that stopped
-# rendering its rules reports. This number is the count of alerts the repository
-# knows it ships today; adding alerts keeps clearing it, and REMOVING one is a
-# deliberate edit here rather than a silent narrowing of what gets checked.
+# rendering its rules reports.
 #
-# The extractor's own required-groups control above closes the same gap from the
-# group end. This closes it at the alert end, which the group control cannot see:
-# a template that kept its PrometheusRule object and lost its rules would satisfy
-# every check above this line.
+# 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and the exact value is derived
+# rather than chosen. The chart renders 34 alerts across six rule files, and the
+# largest single file holds 16. The floor is 20: strictly ABOVE the biggest one
+# file, so a run that read only a SUBSET of the files can never clear it, and
+# comfortably below 34, so ordinary rule churn -- adding alerts, retiring one --
+# never touches it.
+#
+# A floor set AT the current count would be a tripwire on legitimate editing
+# rather than a liveness probe. Every rule addition would have to raise it (this
+# is a `>=` test, so in fact only removals trip it -- but the reflex it teaches is
+# the same), and a probe people have to keep editing to get past is a probe people
+# route around. What it must catch is the check going blind, not a maintainer
+# deleting an alert on purpose.
+#
+# The other blindness modes are closed elsewhere, which is what lets this one stay
+# loose: no rule files at all is refused outright, the extractor's required-groups
+# control catches a group that stopped rendering, and the per-file cross-count
+# catches a file the walk reads only part of.
 say "checking every rendered alert for a reachable false state"
-check_always_firing 34 "${rule_files[@]}" || {
+check_always_firing 20 "${rule_files[@]}" || {
   status=$?
   if [ "$status" -eq 2 ]; then
     fail "the always-firing check could not run, so the rules were NOT checked.
