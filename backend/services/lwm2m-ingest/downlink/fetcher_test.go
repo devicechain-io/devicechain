@@ -4,7 +4,6 @@
 package downlink
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,11 +11,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // fakeQuerier is a stand-in for svcclient.Client: it captures the query arguments and
@@ -297,31 +295,18 @@ func TestPendingDropsNonDrainableStatus(t *testing.T) {
 // and the SILENT one is not optional — without it, a warn wired to fire unconditionally would
 // pass the loud test exactly as well as a correct one.
 
-// drainLogBuffer captures the global zerolog output for the duration of a test. It is
-// synchronized even though Pending is called from a single goroutine here: the drain runs on
-// shard workers in production, and an instrument that is only safe in the test that first used
-// it is the one that goes racy the day it is reused.
-type drainLogBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *drainLogBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *drainLogBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
+// drainLogCapture is one running capture on the package's shared log sink, carrying the
+// decoding this suite does on what it collected.
+//
+// The sink is synchronized even though Pending is called from a single goroutine here: the
+// drain runs on shard workers in production, and an instrument that is only safe in the test
+// that first used it is the one that goes racy the day it is reused.
+type drainLogCapture struct{ *dctest.LogSink }
 
 // records returns the decoded log lines whose message contains want. It matches on the
 // message's own distinctive phrase rather than on the level, so an unrelated warning from
 // elsewhere cannot inflate the count and make a per-row warn look aggregated.
-func (b *drainLogBuffer) records(want string) []map[string]any {
+func (b drainLogCapture) records(want string) []map[string]any {
 	var found []map[string]any
 	for _, line := range strings.Split(b.String(), "\n") {
 		if line == "" {
@@ -338,25 +323,27 @@ func (b *drainLogBuffer) records(want string) []map[string]any {
 	return found
 }
 
-// captureDrainLogs redirects the global logger into a buffer for the duration of a test.
+// captureDrainLogs collects log output for the duration of a test.
+//
+// 🔴 It switches collection on against a sink installed once by TestMain rather than assigning
+// a logger of its own to zerolog's global. That global has no synchronization, and the drain
+// this suite exercises runs on shard workers in production, so a swap-and-restore is a write
+// racing their reads — reported, when it is reported at all, against whichever test was
+// running at the time. What is toggled instead is the sink's mutex-guarded capture flag.
 //
 // 🔴 It also FORCES the global level, which is not belt-and-braces. zerolog's global level is
 // process-wide state any suite can leave Disabled, and a muted logger is the worst possible
 // state for a test that counts log lines: "the warning fired zero times" is precisely what the
 // control below asserts, so a muted logger reads as a PASS on the half of this pair that exists
 // to catch an unconditional warn. Setting it here makes the instrument's state a property of
-// this test rather than of whichever test ran before it.
-func captureDrainLogs(t *testing.T) *drainLogBuffer {
+// this test rather than of whichever test ran before it. The level is a separate, atomically
+// loaded int32 rather than the logger value, so writing it is not the race above.
+func captureDrainLogs(t *testing.T) drainLogCapture {
 	t.Helper()
-	buf := &drainLogBuffer{}
-	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
-	log.Logger = zerolog.New(buf)
+	prevLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.TraceLevel)
-	t.Cleanup(func() {
-		log.Logger = prevLogger
-		zerolog.SetGlobalLevel(prevLevel)
-	})
-	return buf
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+	return drainLogCapture{logSink.Capture(t)}
 }
 
 // driftWarnPhrase is the message fragment the drift warn is found by. It is a LITERAL, not a

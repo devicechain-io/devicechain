@@ -10,9 +10,12 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	zlog "github.com/rs/zerolog/log"
@@ -65,11 +68,29 @@ type LogSink struct {
 //
 // The logger's existing configuration (timestamps, hooks, level) is preserved; only
 // its writer changes.
+//
+// 🔴 A SECOND CALL PANICS, and that is the point rather than tidiness. This function
+// is the one sanctioned write to zlog.Logger in test code, so it is also the obvious
+// place for the pattern it replaces to come back: a helper that every test calls to
+// get "its own" capture would write the global once per test, from inside a package
+// the source scan below cannot see, and would race exactly as the swaps it replaced
+// did. Refusing the second install makes that shape fail on its first run instead of
+// under -race months later. One install per test binary is all the contract needs —
+// each package's tests are their own process, so every TestMain gets its own.
 func InstallLogSink() *LogSink {
+	if !sinkInstalled.CompareAndSwap(false, true) {
+		panic("the shared log sink is already installed in this test binary: " +
+			"InstallLogSink writes the global zerolog logger, which is safe only once, " +
+			"from TestMain, before any test has started a goroutine that logs. Call it " +
+			"once per test binary and toggle capture with Capture(t) instead")
+	}
 	sink := NewLogSink(os.Stderr)
 	zlog.Logger = zlog.Logger.Output(sink)
 	return sink
 }
+
+// sinkInstalled records whether this test binary has already had a sink installed.
+var sinkInstalled atomic.Bool
 
 // NewLogSink returns a sink that passes through to out. Prefer InstallLogSink; this
 // exists for tests of the sink itself and for a caller that has somewhere other than
@@ -129,28 +150,46 @@ func (s *LogSink) String() string {
 	return s.buf.String()
 }
 
-// AssertNoGlobalLoggerSwap fails t if any _test.go file in dir writes to the global
-// zerolog logger — by assigning to it by name, by taking its address, or by calling a
-// method that mutates it in place — or dot-imports the package that holds it.
+// AssertNoGlobalLoggerSwapUnder fails t if any _test.go file ANYWHERE under root
+// writes to the global zerolog logger — by assigning to it by name, by taking its
+// address, or by calling a method that mutates it in place — or dot-imports the
+// package that holds it.
 //
-// This is the gate that keeps a package on the sink above once it has adopted it. It
+// This is the gate that keeps the sink above adopted once a package has adopted it. It
 // is worth having as a separate check because the failure it guards against is only
 // visible under `go test -race`, which the required CI gates do not run — so a
 // reintroduced swap would otherwise be caught by nobody until the next person to run
 // -race by hand, at the moment they are chasing something else.
 //
+// 🔴 IT SCANS A TREE, NOT A DIRECTORY, AND THAT IS THE DIFFERENCE THAT MAKES IT A
+// GATE. The first version took one directory and was called from one package's test,
+// which meant every other package in the repository was outside its view — not by a
+// filter anyone could find and delete, but because nothing pointed it there. Three
+// packages went on swapping the logger for as long as that was true, and a fourth
+// created tomorrow would have been just as invisible. Coverage a package has to opt
+// into is coverage of whoever remembered; pointed at the workspace root, this covers
+// a package the moment it exists.
+//
 // It PARSES rather than greps: a lexical match is evaded by an import alias and fires
 // on the same text inside a comment. Production code that configures the global logger
 // at startup is none of this function's business, so only _test.go files are examined.
 //
-// # What it cannot see, and both holes are real
+// mustVisit names directories the walk is required to have descended into, and it is
+// the vacuity check: a scan that reached nothing reports the same clean result as a
+// scan that found nothing, so the caller supplies a second, independent list of where
+// the tree is (the workspace's own module list, for the repository-wide caller) and
+// this fails if the walk did not get there.
 //
-//  1. A write from ANOTHER PACKAGE. The scan reads dir's own _test.go files, so a
-//     shared helper — Swap(t, l) in some other package's non-test file — is invisible
-//     to it. That is not hypothetical: centralising a swap into a helper is exactly
-//     the shape a migration onto this sink invites, and such a helper would pass this
-//     guard while racing precisely as before. A package adopting the sink has to take
-//     the whole pattern, not just this check.
+// # What it cannot see
+//
+//  1. A write from a NON-TEST file. Only _test.go is examined, so a helper that swaps
+//     the logger on a test's behalf is invisible here. That is not hypothetical —
+//     centralising a swap into a helper is exactly the shape a migration onto this
+//     sink invites. It is answered on the other side instead, by InstallLogSink
+//     refusing to run twice: the one sanctioned helper cannot become a per-test swap.
+//     Widening the scan to every .go file is not the answer, because configuring the
+//     global logger at startup is what production code is supposed to do — the
+//     microservice bootstrap and every simulator main do it legitimately.
 //  2. Reflection. Setting the logger through reflect.Value.Set writes it without
 //     naming it in an assignable position — though reaching it that way has to take
 //     its address first, which this does catch.
@@ -158,11 +197,22 @@ func (s *LogSink) String() string {
 // The mutating-method set is pinned by NAME against zerolog v1.35.1, where
 // UpdateContext is the only method with a pointer receiver that writes through it. A
 // future release adding another is a hole until this list grows.
-func AssertNoGlobalLoggerSwap(t *testing.T, dir string) {
+func AssertNoGlobalLoggerSwapUnder(t *testing.T, root string, mustVisit []string) {
 	t.Helper()
-	swaps, err := globalLoggerSwaps(dir)
+	swaps, visited, err := globalLoggerSwapsUnder(root)
 	if err != nil {
-		t.Fatalf("scanning %s for writes to the global logger: %v", dir, err)
+		t.Fatalf("scanning %s for writes to the global logger: %v", root, err)
+	}
+	for _, dir := range mustVisit {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			t.Fatalf("resolving %s: %v", dir, err)
+		}
+		if !visited[abs] {
+			t.Errorf("the scan of %s never descended into %s, so whatever it reports about "+
+				"that tree it did not look at. A clean scan and a scan that reached nothing "+
+				"are the same answer, which is why this is checked separately", root, abs)
+		}
 	}
 	for _, at := range swaps {
 		t.Errorf("%s %s. The global zerolog logger has no synchronization and the code "+
@@ -215,66 +265,139 @@ func globalLoggerSwaps(dir string) ([]loggerWrite, error) {
 	fset := token.NewFileSet()
 	var found []loggerWrite
 	for _, file := range files {
-		parsed, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		writes, err := scanTestFile(fset, file)
 		if err != nil {
 			return nil, err
 		}
-		names, dotImport := zerologLogPackageNames(parsed)
-		if dotImport != token.NoPos {
-			found = append(found, loggerWrite{
-				pos: fset.Position(dotImport).String(),
-				what: "dot-imports the zerolog log package, which puts the global Logger in " +
-					"file scope, where a write to it names no package and cannot be checked",
-			})
+		found = append(found, writes...)
+	}
+	return found, nil
+}
+
+// globalLoggerSwapsUnder walks root and scans every _test.go file beneath it, returning
+// what it found and the set of directories it descended into. The second return is what
+// makes an empty result meaningful: see AssertNoGlobalLoggerSwapUnder's mustVisit.
+//
+// Directories the go tool itself does not treat as packages are skipped — those whose
+// name begins with "." or "_", plus testdata, vendor and node_modules. That rule is
+// borrowed rather than invented, and it is load-bearing twice over: it keeps the walk
+// out of _legacy, the archived pre-migration tree that is deliberately not maintained,
+// and out of .git and any git worktrees checked out under a dot-directory, whose
+// contents are a DIFFERENT commit of this repository and would otherwise be reported as
+// findings against this one.
+func globalLoggerSwapsUnder(root string) ([]loggerWrite, map[string]bool, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	fset := token.NewFileSet()
+	visited := map[string]bool{}
+	var found []loggerWrite
+	files := 0
+	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if len(names) == 0 {
-			continue
-		}
-		isGlobal := func(e ast.Expr) bool {
-			sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Logger" {
-				return false
+		if d.IsDir() {
+			if path != abs && skipDirInScan(d.Name()) {
+				return fs.SkipDir
 			}
-			ident, ok := ast.Unparen(sel.X).(*ast.Ident)
-			return ok && names[ident.Name]
+			visited[path] = true
+			return nil
 		}
-		record := func(e ast.Expr, what string) {
-			found = append(found, loggerWrite{pos: fset.Position(e.Pos()).String(), what: what})
+		if !strings.HasSuffix(d.Name(), "_test.go") {
+			return nil
 		}
-		ast.Inspect(parsed, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.AssignStmt:
-				for _, lhs := range node.Lhs {
-					if isGlobal(lhs) {
-						record(lhs, "assigns to the global zerolog logger")
-					}
-				}
-			case *ast.RangeStmt:
-				// Only `for k, v = range` writes existing variables; `:=` declares new ones.
-				if node.Tok != token.ASSIGN {
-					return true
-				}
-				for _, e := range []ast.Expr{node.Key, node.Value} {
-					if e != nil && isGlobal(e) {
-						record(e, "assigns to the global zerolog logger in a range clause")
-					}
-				}
-			case *ast.UnaryExpr:
-				if node.Op == token.AND && isGlobal(node.X) {
-					record(node.X, "takes the address of the global zerolog logger, which "+
-						"hands a writer to it somewhere this check cannot follow")
-				}
-			case *ast.CallExpr:
-				fun, ok := ast.Unparen(node.Fun).(*ast.SelectorExpr)
-				if !ok || !mutatingLoggerMethods[fun.Sel.Name] || !isGlobal(fun.X) {
-					return true
-				}
-				record(fun, "calls "+fun.Sel.Name+" on the global zerolog logger, which "+
-					"writes it in place")
-			}
-			return true
+		files++
+		writes, err := scanTestFile(fset, path)
+		if err != nil {
+			return err
+		}
+		found = append(found, writes...)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if files == 0 {
+		return nil, nil, fmt.Errorf("no _test.go files found under %s, so the scan asserts nothing", abs)
+	}
+	return found, visited, nil
+}
+
+// skipDirInScan reports whether the walk should refuse to descend into a directory of
+// this name. It mirrors the go tool's own rule for what is not a package directory.
+func skipDirInScan(name string) bool {
+	switch name {
+	case "testdata", "vendor", "node_modules":
+		return true
+	}
+	return strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+}
+
+// scanTestFile parses one _test.go file and returns every write to the global zerolog
+// logger in it.
+func scanTestFile(fset *token.FileSet, file string) ([]loggerWrite, error) {
+	var found []loggerWrite
+	parsed, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	names, dotImport := zerologLogPackageNames(parsed)
+	if dotImport != token.NoPos {
+		found = append(found, loggerWrite{
+			pos: fset.Position(dotImport).String(),
+			what: "dot-imports the zerolog log package, which puts the global Logger in " +
+				"file scope, where a write to it names no package and cannot be checked",
 		})
 	}
+	if len(names) == 0 {
+		return found, nil
+	}
+	isGlobal := func(e ast.Expr) bool {
+		sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Logger" {
+			return false
+		}
+		ident, ok := ast.Unparen(sel.X).(*ast.Ident)
+		return ok && names[ident.Name]
+	}
+	record := func(e ast.Expr, what string) {
+		found = append(found, loggerWrite{pos: fset.Position(e.Pos()).String(), what: what})
+	}
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				if isGlobal(lhs) {
+					record(lhs, "assigns to the global zerolog logger")
+				}
+			}
+		case *ast.RangeStmt:
+			// Only `for k, v = range` writes existing variables; `:=` declares new ones.
+			if node.Tok != token.ASSIGN {
+				return true
+			}
+			for _, e := range []ast.Expr{node.Key, node.Value} {
+				if e != nil && isGlobal(e) {
+					record(e, "assigns to the global zerolog logger in a range clause")
+				}
+			}
+		case *ast.UnaryExpr:
+			if node.Op == token.AND && isGlobal(node.X) {
+				record(node.X, "takes the address of the global zerolog logger, which "+
+					"hands a writer to it somewhere this check cannot follow")
+			}
+		case *ast.CallExpr:
+			fun, ok := ast.Unparen(node.Fun).(*ast.SelectorExpr)
+			if !ok || !mutatingLoggerMethods[fun.Sel.Name] || !isGlobal(fun.X) {
+				return true
+			}
+			record(fun, "calls "+fun.Sel.Name+" on the global zerolog logger, which "+
+				"writes it in place")
+		}
+		return true
+	})
 	return found, nil
 }
 

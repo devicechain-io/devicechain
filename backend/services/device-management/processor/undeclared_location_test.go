@@ -4,7 +4,6 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -17,8 +16,8 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -33,34 +32,26 @@ import (
 // A third property outranks both: the event is STORED regardless. The declaration
 // describes and displays; it never permits.
 
-// warnBuffer captures the global zerolog output for the duration of a test. The
-// resolver worker pool writes from several goroutines, so the buffer is synchronized.
-type warnBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *warnBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *warnBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
+// warnCapture is one running capture on the package's shared log sink, carrying the
+// single question this suite asks of what it collected.
+type warnCapture struct{ *dctest.LogSink }
 
 // undeclaredWarnings counts the undeclared-position warnings emitted so far. It matches
 // on the message's distinctive phrase rather than on the level, so an unrelated warning
 // from elsewhere in resolution cannot inflate the count and make a broken bound look fine.
-func (b *warnBuffer) undeclaredWarnings() int {
-	return strings.Count(b.String(), "reported a position its profile does not declare")
+func (w warnCapture) undeclaredWarnings() int {
+	return strings.Count(w.String(), "reported a position its profile does not declare")
 }
 
-// captureWarnings redirects the global logger into a buffer for the duration of a
-// test.
+// captureWarnings collects log output for the duration of a test.
+//
+// 🔴 It switches collection on against a sink installed once by TestMain rather than
+// assigning a logger of its own to zerolog's global. The resolver worker pool logs from
+// goroutines this test does not own and does not wait for, so a swap-and-restore writes
+// that unsynchronized global while those goroutines read it — a genuine race, and one
+// whose report names whichever test happened to be running when a worker logged rather
+// than the test that did the swapping. What is toggled instead is the sink's
+// mutex-guarded capture flag, which every writer already contends on properly.
 //
 // 🔴 It also forces the global LEVEL, which is not belt-and-braces: another suite in
 // this package sets zerolog's global level to Disabled and (until this slice) never
@@ -70,18 +61,14 @@ func (b *warnBuffer) undeclaredWarnings() int {
 // a PASS on every assertion of the form "must not warn", and only the assertions that
 // demand a warning notice anything is wrong. Setting the level here makes the
 // instrument's state a property of this test rather than of whichever test ran before
-// it.
-func captureWarnings(t *testing.T) *warnBuffer {
+// it. The level is a separate, atomically-loaded int32 rather than the logger value,
+// so writing it is not the race described above.
+func captureWarnings(t *testing.T) warnCapture {
 	t.Helper()
-	buf := &warnBuffer{}
-	prevLogger, prevLevel := log.Logger, zerolog.GlobalLevel()
-	log.Logger = zerolog.New(buf)
+	prevLevel := zerolog.GlobalLevel()
 	zerolog.SetGlobalLevel(zerolog.TraceLevel)
-	t.Cleanup(func() {
-		log.Logger = prevLogger
-		zerolog.SetGlobalLevel(prevLevel)
-	})
-	return buf
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+	return warnCapture{logSink.Capture(t)}
 }
 
 // locationFixEvent is one position report, carrying real coordinates so a test can
