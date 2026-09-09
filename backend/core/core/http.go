@@ -115,6 +115,19 @@ type HttpServer struct {
 //
 // Port 0 asks the operating system for an unused one, which is what makes a test able
 // to drive a real listener; Addr reports what was actually bound.
+//
+// 🔴 DO NOT ADD WriteTimeout OR IdleTimeout HERE. They look like the obvious companions
+// to the ReadHeaderTimeout below, and adding them reads as hardening — but this server
+// carries the GraphQL SUBSCRIPTION endpoint, whose WebSocket connections are long-lived
+// by design and idle by design between events. A WriteTimeout would sever a
+// subscription mid-stream; an IdleTimeout would sever a quiet one. Either would surface
+// as subscriptions that "randomly" drop, a long way from the line that caused it.
+//
+// ReadHeaderTimeout is safe precisely because it does not have that reach: it bounds
+// only the wait for request headers, which for a WebSocket upgrade completes before the
+// connection is hijacked, after which net/http stops accounting for it at all. Shutdown
+// does not close or wait for hijacked connections either — that gap is #949, and it is
+// the subscription layer's to close, not this constructor's.
 func (ms *Microservice) NewHttpServer(port int32) *HttpServer {
 	return &HttpServer{
 		server: &http.Server{

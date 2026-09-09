@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,19 +91,23 @@ func microserviceWithRegistry(area string) *core.Microservice {
 	return ms
 }
 
-// assertScrapeMentions scrapes the exact http.Handler ExecuteStart registers on
-// /metrics and requires every name to appear in the body.
+// assertScrapeMentions runs the manager's REAL registration and scrapes /metrics
+// through the mux it populated, requiring every name to appear in the body.
 //
-// It does not run ExecuteStart itself: that registers onto http.DefaultServeMux and
-// starts a listener, so it cannot be called twice in one binary. The uncovered gap is
-// therefore one line — that ExecuteStart registers gql.metricsHandler() — which is the
-// same seam graphiql_endpoint_test.go leaves open for the same reason.
+// It drives ExecuteInitialize rather than a handler the test builds for itself. That
+// closes the gap this helper used to carry: it drove a named wrapper, so it would have
+// kept passing if the registration had gone somewhere else entirely. Now the route has
+// to be reachable at the path the chart scrapes, on the mux the server serves.
 func assertScrapeMentions(t *testing.T, ms *core.Microservice, names ...string) {
 	t.Helper()
 
-	gql := &GraphQLManager{Microservice: ms}
+	gql := &GraphQLManager{Microservice: ms, Gate: core.NewReadinessGate()}
+	if err := gql.ExecuteInitialize(context.Background()); err != nil {
+		t.Fatalf("ExecuteInitialize: %v", err)
+	}
+
 	rec := httptest.NewRecorder()
-	gql.metricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	ms.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics returned %d, want 200: %s", rec.Code, rec.Body.String())
 	}
