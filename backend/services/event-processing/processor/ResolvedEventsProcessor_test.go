@@ -175,7 +175,7 @@ func newTestProcessor(store *model.SnapshotStore, rules []detectcore.Rule, check
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   context.Background(),
 	}
@@ -378,7 +378,7 @@ func TestRunLoopCheckpointsAndAcksOnEOF(t *testing.T) {
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  emptyReg,
-		publisher: runtime.NewPublisher(&captureWriter{}, emptyReg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(&captureWriter{}, emptyReg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 	}
 	ctx := context.Background()

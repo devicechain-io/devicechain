@@ -25,10 +25,12 @@ func (r *recordingAck) Ack() error { r.acks++; return nil }
 func testConsumer(t *testing.T, s *Store) *Consumer {
 	t.Helper()
 	c := &Consumer{
-		store:      s,
-		stored:     prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
-		unstorable: prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
-		unstored:   prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),
+		store: s,
+		Metrics: &Metrics{
+			stored:     prometheus.NewCounter(prometheus.CounterOpts{Name: "stored_total"}),
+			unstorable: prometheus.NewCounter(prometheus.CounterOpts{Name: "unstorable_total"}),
+			unstored:   prometheus.NewCounter(prometheus.CounterOpts{Name: "unstored_total"}),
+		},
 	}
 	c.procCtx, c.procCancel = context.WithCancel(context.Background())
 	t.Cleanup(c.procCancel)

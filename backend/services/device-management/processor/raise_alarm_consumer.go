@@ -49,16 +49,18 @@ type RaiseAlarmConsumer struct {
 	Reader       messaging.MessageReader
 	Api          model.DeviceManagementApi
 
-	metrics *core.ProcessorMetrics
+	// RaiseAlarmMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
+	// here. The consumer itself is constructed inside the NATS manager's oncreate
+	// callback, which runs on every start; a collector constructed there is registered
+	// again on a start after a stop, and the duplicate registration panics.
+	*RaiseAlarmMetrics
 
 	// dead records a raise-alarm edge that could not be applied (ADR-024). Nil when no
 	// dead-letter writer is configured, in which case the edge is dropped as before.
 	dead *deadletter.Sink
 	// area names this service on the letters it writes, read once at construction so the
 	// failure path never dereferences anything.
-	area           string
-	deadLettered   prometheus.Counter
-	deadLetterLost prometheus.Counter
+	area string
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -81,16 +83,26 @@ func (rc *RaiseAlarmConsumer) pacer() *core.ReadPacer {
 	return rc.readPacer
 }
 
-// NewRaiseAlarmConsumer creates the raise-alarm consumer over its dedicated reader.
-func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
-	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
-	dead deadletter.Writer) *RaiseAlarmConsumer {
-	rc := &RaiseAlarmConsumer{
-		Microservice: ms,
-		Reader:       reader,
-		Api:          api,
-		metrics:      ms.NewProcessorMetrics("raise-alarm"),
-		area:         ms.FunctionalArea,
+// RaiseAlarmMetrics is every Prometheus instrument the raise-alarm consumer exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the consumer
+// that reads it. See NewRaiseAlarmMetrics.
+type RaiseAlarmMetrics struct {
+	metrics        *core.ProcessorMetrics
+	deadLettered   prometheus.Counter
+	deadLetterLost prometheus.Counter
+}
+
+// NewRaiseAlarmMetrics builds the raise-alarm consumer's instruments.
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The consumer is built inside
+// the NATS manager's oncreate callback — it has to be, because it holds a reader bound
+// to the connection — and that callback runs on EVERY start. A Prometheus collector
+// built there is registered a second time when the service restarts in place, and
+// MustRegister panics on the duplicate.
+func NewRaiseAlarmMetrics(ms *core.Microservice) *RaiseAlarmMetrics {
+	return &RaiseAlarmMetrics{
+		metrics: ms.NewProcessorMetrics("raise-alarm"),
 		deadLettered: ms.NewCounter("raise_alarm_dead_lettered_total",
 			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
 				"them failed, so an alarm that should have been raised or cleared is visible "+
@@ -98,6 +110,23 @@ func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader
 		deadLetterLost: ms.NewCounter("raise_alarm_dead_letter_lost_total",
 			"Raise-alarm edges that could be neither applied NOR dead-lettered — the write "+
 				"failed on a delivery that will not repeat, so the edge is gone.", nil),
+	}
+}
+
+// NewRaiseAlarmConsumer creates the raise-alarm consumer over its dedicated reader.
+//
+// metrics is built once in the initialize phase (see NewRaiseAlarmMetrics) and shared by
+// every consumer this service constructs, because this constructor runs again on every
+// start.
+func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
+	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
+	dead deadletter.Writer, metrics *RaiseAlarmMetrics) *RaiseAlarmConsumer {
+	rc := &RaiseAlarmConsumer{
+		Microservice:      ms,
+		Reader:            reader,
+		Api:               api,
+		RaiseAlarmMetrics: metrics,
+		area:              ms.FunctionalArea,
 	}
 	if dead != nil {
 		rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })

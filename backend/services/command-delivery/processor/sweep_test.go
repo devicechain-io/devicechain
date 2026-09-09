@@ -647,7 +647,7 @@ func TestConstructorWiresBothDeliveryGates(t *testing.T) {
 
 	proc := NewCommandDeliveryProcessor(ms, nil, writer, core.NewNoOpLifecycleCallbacks(), api,
 		func(tenant string) bool { return tenant == "acme" },
-		absentReader{"dev-c2"}, nil)
+		absentReader{"dev-c2"}, nil, NewDeliveryMetrics(ms))
 
 	// Drive the real sweep rather than reading the fields back: a field being set proves
 	// assignment, not that the delivery path consults what was assigned.

@@ -35,6 +35,11 @@ var (
 	NotificationProcessor *processor.NotificationProcessor
 	RetentionSweeper      *processor.RetentionSweeper
 	EscalationScheduler   *processor.EscalationScheduler
+
+	// NotifyMetrics is built ONCE, in the initialize phase, and shared by every
+	// NotificationProcessor the NATS manager's oncreate callback builds. See
+	// buildMetrics.
+	NotifyMetrics *processor.NotifyMetrics
 )
 
 func main() {
@@ -89,6 +94,17 @@ func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 	)
 }
 
+// buildMetrics creates this service's Prometheus instruments exactly once.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE PROCESSOR IS BUILT.
+// The processor is built in createNatsComponents, which the NATS manager invokes on
+// EVERY start — a start after a stop is a supported sequence — and a collector
+// registered twice on this microservice's registry panics. Initialize runs once, which
+// is what makes this the safe half.
+func buildMetrics() {
+	NotifyMetrics = processor.NewNotifyMetrics(Microservice)
+}
+
 // createNatsComponents creates the messaging components used by this microservice:
 // a durable consumer of the alarm-events stream feeding the notification processor.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
@@ -121,8 +137,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 
 	// The policy-driven channel dispatcher (N.C, built in afterMicroserviceInitialized so
 	// the escalation scheduler can share it) drives the consumer behind the Notifier seam.
+	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
+	// because this callback runs on every start and a second registration of the same
+	// collector panics.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Notifier, deadWriter)
+		core.NewNoOpLifecycleCallbacks(), Notifier, deadWriter, NotifyMetrics)
 	return NotificationProcessor.Initialize(context.Background())
 }
 
@@ -203,6 +222,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Build every Prometheus instrument this service exports, before the NATS manager
+	// that consumes them.
+	buildMetrics()
 
 	// Create and initialize nats manager (which invokes createNatsComponents).
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

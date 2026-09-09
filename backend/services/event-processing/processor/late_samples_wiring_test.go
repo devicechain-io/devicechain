@@ -82,7 +82,7 @@ func TestProcessorDrainsTheEngineLateSampleCount(t *testing.T) {
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(&captureWriter{}, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   ctx,
 	}

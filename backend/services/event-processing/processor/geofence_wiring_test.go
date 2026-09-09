@@ -396,7 +396,7 @@ func newFenceProcessor(t *testing.T, reg *runtime.RuleRegistry, w *captureWriter
 			Clock:              detectcore.RealClock{},
 		},
 		registry:     reg,
-		publisher:    runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher:    runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:        detectcore.RealClock{},
 		procCtx:      context.Background(),
 		fenceUpdates: make(chan fenceUpdate, 8),

@@ -196,6 +196,30 @@ type NatsManager struct {
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
 // instantiate the service's readers/writers (mirrors KafkaManager).
+//
+// 🔴 ONCREATE RUNS ON EVERY START, NOT ONCE. A start after a stop is a supported
+// sequence — core/core/lifecycle.go puts Stopped on startFrom and says why — so
+// ExecuteStart calls this callback a second time, and everything it constructs is
+// constructed again. That is the POINT of the callback rather than a flaw in it:
+// readers and writers are bound to the connection, a restart re-establishes the
+// connection, and objects holding the old one would be dead. Which is also why the
+// duplicate call cannot simply be suppressed here — a guard that skipped the second
+// invocation would trade a crash for a service that starts, reports healthy, and is
+// wired to nothing.
+//
+// ⇒ CONSTRUCT ONLY PER-CONNECTION OBJECTS IN THIS CALLBACK. Anything that registers
+// with a process- or service-scoped registry belongs in the INITIALIZE phase, which
+// runs once (initializeFrom is Uninitialized alone). Concretely:
+//
+//   - Prometheus collectors. promauto registers on the Microservice's own registry
+//     and a duplicate registration PANICS, so a metric built here takes the service
+//     down on the second start. Build them in the service's initialize hook and pass
+//     them into whatever the callback constructs.
+//   - http.ServeMux patterns. ServeMux.Handle panics on a duplicate pattern.
+//
+// The name of the function passed here is no guide to any of this: a service's is
+// conventionally createNatsComponents, which reads like initialize-phase work. The
+// phase a function runs in is a property of its caller.
 func NewNatsManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	oncreate func(*NatsManager) error) *NatsManager {
 	nmgr := &NatsManager{

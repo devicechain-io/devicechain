@@ -15,7 +15,7 @@ import (
 // which reads as "no samples lost" rather than as "not measured". Constructing the struct directly
 // avoids needing a microservice: the field is a plain prometheus.Counter either way.
 func TestRecordLateSamplesMovesTheCounter(t *testing.T) {
-	m := &detectMetrics{lateSamplesTotal: prometheus.NewCounter(prometheus.CounterOpts{
+	m := &DetectMetrics{lateSamplesTotal: prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "detect_late_samples_total_test",
 		Help: "test",
 	})}
@@ -31,6 +31,6 @@ func TestRecordLateSamplesMovesTheCounter(t *testing.T) {
 		t.Errorf("after a zero record: counter = %v, want 10", got)
 	}
 	// Nil-safe: unit-test loops run unmeasured, like every other recorder here.
-	var nilMetrics *detectMetrics
+	var nilMetrics *DetectMetrics
 	nilMetrics.recordLateSamples(5)
 }

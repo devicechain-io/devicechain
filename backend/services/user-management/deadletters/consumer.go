@@ -62,12 +62,11 @@ type Consumer struct {
 	reader       messaging.MessageReader
 	store        *Store
 
-	stored     prometheus.Counter
-	unstorable prometheus.Counter
-	// unstored counts letters that reached their final delivery attempt and still could
-	// not be written. It is the only outcome here where a failure the platform recorded
-	// once is then lost, so it is counted apart from every other error on this path.
-	unstored prometheus.Counter
+	// Metrics is EMBEDDED, and built ONCE in the initialize phase rather than here. The
+	// consumer itself is constructed inside the NATS manager's oncreate callback, which
+	// runs on every start; a collector constructed there is registered again on a start
+	// after a stop, and the duplicate registration panics.
+	*Metrics
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -76,13 +75,28 @@ type Consumer struct {
 	lifecycle core.LifecycleManager
 }
 
-// NewConsumer builds the consumer over the dead-letter reader.
-func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *Store,
-	callbacks core.LifecycleCallbacks) *Consumer {
-	c := &Consumer{
-		Microservice: ms,
-		reader:       reader,
-		store:        store,
+// Metrics is every Prometheus instrument the dead-letter consumer exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the consumer
+// that reads it. See NewMetrics.
+type Metrics struct {
+	stored     prometheus.Counter
+	unstorable prometheus.Counter
+	// unstored counts letters that reached their final delivery attempt and still could
+	// not be written. It is the only outcome here where a failure the platform recorded
+	// once is then lost, so it is counted apart from every other error on this path.
+	unstored prometheus.Counter
+}
+
+// NewMetrics builds the dead-letter consumer's instruments.
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The consumer is built inside
+// the NATS manager's oncreate callback — it has to be, because it holds a reader bound
+// to the connection — and that callback runs on EVERY start. A Prometheus collector
+// built there is registered a second time when the service restarts in place, and
+// MustRegister panics on the duplicate.
+func NewMetrics(ms *core.Microservice) *Metrics {
+	return &Metrics{
 		stored: ms.NewCounter("dead_letters_stored_total",
 			"Dead letters written to the queryable store, so a failure a consumer gave up on "+
 				"outlives the stream's own seven-day window (ADR-024).", nil),
@@ -95,6 +109,20 @@ func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *S
 				"store was unreachable for longer than the retries last. The failure they "+
 				"described is now recorded nowhere, which is the one thing this consumer "+
 				"exists to prevent.", nil),
+	}
+}
+
+// NewConsumer builds the consumer over the dead-letter reader.
+//
+// metrics is built once in the initialize phase (see NewMetrics) and shared by every
+// consumer this service constructs, because this constructor runs again on every start.
+func NewConsumer(ms *core.Microservice, reader messaging.MessageReader, store *Store,
+	callbacks core.LifecycleCallbacks, metrics *Metrics) *Consumer {
+	c := &Consumer{
+		Microservice: ms,
+		reader:       reader,
+		store:        store,
+		Metrics:      metrics,
 	}
 	c.lifecycle = core.NewLifecycleManager(
 		fmt.Sprintf("%s-%s", ms.FunctionalArea, "dead-letter-consumer"), c, callbacks)

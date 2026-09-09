@@ -47,7 +47,10 @@ var (
 
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
-	DeadLetterStore    *deadletters.Store
+	DeadLetterStore *deadletters.Store
+	// DeadLetterMetrics is built ONCE, in the initialize phase, and shared by every
+	// consumer the NATS manager's oncreate callback builds.
+	DeadLetterMetrics  *deadletters.Metrics
 	DeadLetterConsumer *deadletters.Consumer
 	DeadLetterSweeper  *deadletters.Sweeper
 
@@ -113,6 +116,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// "nothing has failed" on every query while the table filled.
 	DeadLetterStore = deadletters.NewStore(RdbManager)
 
+	// The consumer's Prometheus instruments, built ONCE. 🔴 THEY ARE BUILT HERE AND NOT
+	// IN THE CALLBACK BELOW, and that is the other half of the note on the callback:
+	// what has to go inside it is everything bound to the CONNECTION, and what must stay
+	// out is everything registered with a registry. The callback runs on every start, so
+	// a collector built there is registered a second time on a start after a stop and
+	// MustRegister panics. Initialize runs once.
+	DeadLetterMetrics = deadletters.NewMetrics(Microservice)
+
 	// Create and initialize nats manager (the refresh-token KV store, and the ADR-024
 	// dead-letter consumer).
 	//
@@ -129,7 +140,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return err
 			}
 			DeadLetterConsumer = deadletters.NewConsumer(Microservice, reader, DeadLetterStore,
-				core.NewNoOpLifecycleCallbacks())
+				core.NewNoOpLifecycleCallbacks(), DeadLetterMetrics)
 			return DeadLetterConsumer.Initialize(context.Background())
 		})
 	if err := NatsManager.Initialize(ctx); err != nil {

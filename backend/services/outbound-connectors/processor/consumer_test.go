@@ -23,14 +23,14 @@ import (
 // nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, nil, 5*time.Second, nil, 1, 1)
+	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, nil, 5*time.Second, nil, 1, 1, nil)
 }
 
 // newTestConsumerWithRate builds a consumer with an egress rate limiter and wait budget, to exercise
 // the SD-3 rate gate.
 func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, rate, waitBudget, nil, 1, 1)
+	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, rate, waitBudget, nil, 1, 1, nil)
 }
 
 // newTestConsumerWithGate builds a consumer carrying the ADR-077 lifecycle gate, with egress rate
@@ -41,7 +41,7 @@ func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStor
 // `tenantDeleted: tenantDeleted` deletable from NewDispatchConsumer with the whole suite still green.
 func newTestConsumerWithGate(dead messaging.MessageWriter, store *fakeSecretStore, tenantDeleted func(string) bool) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, nil, 5*time.Second, tenantDeleted, 1, 1)
+	return NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, nil, 5*time.Second, tenantDeleted, 1, 1, nil)
 }
 
 // countingServer is an httptest server that records how many outbound sends actually reached it.
@@ -412,7 +412,7 @@ func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 	dead := &fakeWriter{}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
 	c := NewDispatchConsumer(nil, &fakeReader{}, dead, nil, e, rl, 40*time.Millisecond,
-		func(string) bool { return true }, 1, 1)
+		func(string) bool { return true }, 1, 1, nil)
 	ack := &fakeAck{}
 
 	c.handle(context.Background(), httpDispatch(t, srv.URL, ack))
@@ -460,7 +460,7 @@ func TestHandleRateShedBelowCapLeftUnackedOnDeadLetterWriteFailure(t *testing.T)
 // refusal recorded as "sent" would tell an operator a deleted tenant's dispatches were DELIVERED —
 // the exact opposite of what happened — and every other assertion in this file would stay green.
 //
-// The counter is built here rather than through newDispatchMetrics(ms) because that path registers
+// The counter is built here rather than through NewDispatchMetrics(ms) because that path registers
 // into the global Prometheus registry, where a second construction in this package panics.
 func TestTheRefusalIsRecordedAsTenantDeleted(t *testing.T) {
 	srv, _ := countingServer(t)
@@ -468,7 +468,7 @@ func TestTheRefusalIsRecordedAsTenantDeleted(t *testing.T) {
 		prometheus.CounterOpts{Name: "test_connector_dispatch_total"}, []string{"action", "outcome"})
 	dead := &fakeWriter{}
 	c := newTestConsumerWithGate(dead, &fakeSecretStore{}, func(string) bool { return true })
-	c.metrics = &dispatchMetrics{dispatched: vec}
+	c.metrics = &DispatchMetrics{dispatched: vec}
 
 	c.handle(context.Background(), httpDispatch(t, srv.URL, &fakeAck{}))
 

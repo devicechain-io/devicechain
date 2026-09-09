@@ -74,6 +74,12 @@ var (
 	// reaches inside a checkpoint blob — so an instance running DETECT without this responder
 	// is one whose tenant purges can never complete.
 	TenantPurgeResponder *processor.TenantPurgeResponder
+
+	// The Prometheus instruments this service exports — roughly thirty-five collectors
+	// between them. Both are built ONCE, in the initialize phase, and shared by every
+	// component the NATS manager's oncreate callback builds. See buildMetrics.
+	DetectMetrics *processor.DetectMetrics
+	ReactMetrics  *processor.ReactMetrics
 )
 
 func main() {
@@ -111,6 +117,20 @@ func parseConfiguration() error {
 }
 
 // Create messaging components used by this microservice.
+// buildMetrics creates this service's Prometheus instruments exactly once.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM createNatsComponents, WHERE THE
+// COMPONENTS THAT READ THEM ARE BUILT. That callback is invoked by the NATS manager on
+// EVERY start — a start after a stop is a supported sequence — and a collector
+// registered twice on this microservice's registry panics. This service builds the most
+// of any: roughly thirty-five collectors across DETECT and REACT, so the first duplicate
+// takes the process down before the second start has wired anything. Initialize runs
+// once, which is what makes this the safe half.
+func buildMetrics() {
+	DetectMetrics = processor.NewDetectMetrics(Microservice)
+	ReactMetrics = processor.NewReactMetrics(Microservice)
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// The leadership gate every DETECT durable below is created with (ADR-070). It is
 	// built FIRST and shared, because a reader's gate predicate is fixed at creation
@@ -218,8 +238,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		MaxLiveKeysPerTenant:        Configuration.MaxLiveKeysPerTenant,
 		MaxRetainedSamplesPerTenant: Configuration.MaxRetainedSamplesPerTenant,
 	}
+	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
+	// because this callback runs on every start and a second registration of the same
+	// collector panics.
 	ResolvedEventsProcessor = processor.NewResolvedEventsProcessor(Microservice, ResolvedEventsReader,
-		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg, core.NewNoOpLifecycleCallbacks())
+		nmgr, SnapshotStore, RuleRegistry, derivedWriter, RuleStatStore, cfg,
+		core.NewNoOpLifecycleCallbacks(), DetectMetrics)
 	// Leadership (ADR-070): DETECT fetches, acks, checkpoints and publishes only
 	// inside a held term. The chart already deploys this area as replicas:1 with
 	// strategy Recreate, so on a ROLLOUT the old pod is gone before this one starts
@@ -352,7 +376,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
-		deadWriter)
+		deadWriter, ReactMetrics)
 	return nil
 }
 
@@ -481,6 +505,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// the current-set half into the processor, whose startup reconcile seeds the containment
 	// projection from it, so it must exist by then.
 	FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
+
+	// Build every Prometheus instrument this service exports, before the NATS manager
+	// that consumes them.
+	buildMetrics()
 
 	// Create and initialize nats manager (builds the readers + checkpoint processor). The
 	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents

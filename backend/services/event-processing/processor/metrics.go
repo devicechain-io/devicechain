@@ -9,7 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// detectMetrics are the Slice-2 observability gauges/counters for the DETECT
+// DetectMetrics are the Slice-2 observability gauges/counters for the DETECT
 // checkpoint loop (ADR-051 observability thread). They are emitted from the
 // component that OWNS the state — the single-writer loop — because the operations
 // surface (Slice 8) can only render what was instrumented here. Cardinality is
@@ -24,7 +24,7 @@ import (
 // not the last sequence, so there is no last-seq to subtract applied_stream_seq from.
 // It is first-classed instead as the consumerPending/consumerAckPending gauges below,
 // read from the resolved-events durable's broker-reported backlog.
-type detectMetrics struct {
+type DetectMetrics struct {
 	checkpointsTotal    prometheus.Counter
 	eventsAppliedTotal  prometheus.Counter
 	appliedStreamSeq    prometheus.Gauge
@@ -100,10 +100,17 @@ type detectMetrics struct {
 	tenantsOverRetainedSampleBudget prometheus.Gauge
 }
 
-// newDetectMetrics registers the checkpoint-loop metrics under the service's
+// NewDetectMetrics registers the checkpoint-loop metrics under the service's
 // Prometheus namespace/subsystem.
-func newDetectMetrics(ms *core.Microservice) *detectMetrics {
-	return &detectMetrics{
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
+// NewResolvedEventsProcessor. The processor is built inside the NATS manager's oncreate
+// callback — it has to be, because it holds a reader bound to the connection — and that
+// callback runs on EVERY start. These ~27 collectors built there would be registered a
+// second time when the service restarts in place, and MustRegister panics on the first
+// duplicate.
+func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
+	return &DetectMetrics{
 		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints.", nil),
 		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine.", nil),
 		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot.", nil),
@@ -151,7 +158,7 @@ func newDetectMetrics(ms *core.Microservice) *detectMetrics {
 // recordStateBudget publishes the per-tenant state-budget gauges at a checkpoint (slice 6c): the
 // aggregate live-key total and the counts of tenants over each ceiling. Nil-safe (unit-test loops
 // run unmeasured).
-func (m *detectMetrics) recordStateBudget(s stateBudgetStats) {
+func (m *DetectMetrics) recordStateBudget(s stateBudgetStats) {
 	if m == nil {
 		return
 	}
@@ -164,7 +171,7 @@ func (m *detectMetrics) recordStateBudget(s stateBudgetStats) {
 }
 
 // recordStaleAbsenceDropped records one absence detection dropped by the publish-time membership gate.
-func (m *detectMetrics) recordStaleAbsenceDropped() {
+func (m *DetectMetrics) recordStaleAbsenceDropped() {
 	if m == nil {
 		return
 	}
@@ -173,21 +180,21 @@ func (m *detectMetrics) recordStaleAbsenceDropped() {
 
 // recordSupersededFrontierDropped records one non-absence frontier detection dropped at publish
 // because its profile version is superseded (ADR-057 D6).
-func (m *detectMetrics) recordSupersededFrontierDropped() {
+func (m *DetectMetrics) recordSupersededFrontierDropped() {
 	if m == nil {
 		return
 	}
 	m.supersededFrontierDropped.Inc()
 }
 
-// reactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
-// detectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum —
+// ReactMetrics are the Slice-5 REACT-dispatcher observability counters (ADR-051 REACT stage). Like
+// DetectMetrics they are bounded-cardinality: the one label is "action", a fixed small enum —
 // sendCommand, raiseAlarm, clearAlarm (the structural falling-edge clear, ADR-057), and the two
 // connector actions httpCall and publish (ADR-060), which reach RecordDispatched/RecordNotEnabled
 // under their own rules.ActionType string. Never a tenant or rule value (the ADR-023 G.3 lesson).
 // Every recorder is nil-safe so a dispatcher built
 // without a Microservice (unit tests) runs unmeasured.
-type reactMetrics struct {
+type ReactMetrics struct {
 	dispatched          *prometheus.CounterVec
 	notEnabled          *prometheus.CounterVec
 	connectorShed       *prometheus.CounterVec
@@ -198,14 +205,20 @@ type reactMetrics struct {
 	deadLetterLost      prometheus.Counter
 }
 
-// newReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
+// NewReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
 // Microservice (unit tests) yields nil metrics; every recorder is nil-safe, so the dispatcher runs
-// unmeasured rather than panicking on a global-registry double-registration.
-func newReactMetrics(ms *core.Microservice) *reactMetrics {
+// unmeasured rather than panicking on a double-registration.
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
+// NewReactDispatcher. The dispatcher is built inside the NATS manager's oncreate callback
+// — it has to be, because it holds a reader bound to the connection — and that callback
+// runs on EVERY start. A counter built there is registered a second time when the service
+// restarts in place, and MustRegister panics on the duplicate.
+func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 	if ms == nil {
 		return nil
 	}
-	return &reactMetrics{
+	return &ReactMetrics{
 		dispatched:          ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
@@ -218,7 +231,7 @@ func newReactMetrics(ms *core.Microservice) *reactMetrics {
 }
 
 // RecordDispatched records one action successfully handed to its sink (react.Metrics).
-func (m *reactMetrics) RecordDispatched(action string) {
+func (m *ReactMetrics) RecordDispatched(action string) {
 	if m == nil {
 		return
 	}
@@ -226,7 +239,7 @@ func (m *reactMetrics) RecordDispatched(action string) {
 }
 
 // RecordNotEnabled records one recognized-but-inert action (react.Metrics).
-func (m *reactMetrics) RecordNotEnabled(action string) {
+func (m *ReactMetrics) RecordNotEnabled(action string) {
 	if m == nil {
 		return
 	}
@@ -235,7 +248,7 @@ func (m *reactMetrics) RecordNotEnabled(action string) {
 
 // RecordPermanentlyRejected records one action dropped on a typed downstream rejection that a
 // retry cannot change (react.Metrics).
-func (m *reactMetrics) RecordPermanentlyRejected(action string) {
+func (m *ReactMetrics) RecordPermanentlyRejected(action string) {
 	if m == nil {
 		return
 	}
@@ -244,7 +257,7 @@ func (m *reactMetrics) RecordPermanentlyRejected(action string) {
 
 // RecordConnectorShed records one connector action dropped at the source for being over the tenant's
 // outbound egress quota (react.Metrics, ADR-060 SD-3).
-func (m *reactMetrics) RecordConnectorShed(action string) {
+func (m *ReactMetrics) RecordConnectorShed(action string) {
 	if m == nil {
 		return
 	}
@@ -252,7 +265,7 @@ func (m *reactMetrics) RecordConnectorShed(action string) {
 }
 
 // RecordOrphan records one derived event whose rule was gone (react.Metrics).
-func (m *reactMetrics) RecordOrphan() {
+func (m *ReactMetrics) RecordOrphan() {
 	if m == nil {
 		return
 	}
@@ -260,7 +273,7 @@ func (m *reactMetrics) RecordOrphan() {
 }
 
 // recordPoisonDropped records one derived event dropped after exhausting the redelivery cap.
-func (m *reactMetrics) recordPoisonDropped() {
+func (m *ReactMetrics) recordPoisonDropped() {
 	if m == nil {
 		return
 	}
@@ -268,7 +281,7 @@ func (m *reactMetrics) recordPoisonDropped() {
 }
 
 // recordDeadLettered records one derived event written to the dead-letter stream.
-func (m *reactMetrics) recordDeadLettered() {
+func (m *ReactMetrics) recordDeadLettered() {
 	if m == nil {
 		return
 	}
@@ -278,7 +291,7 @@ func (m *reactMetrics) recordDeadLettered() {
 // recordDeadLetterLost records one derived event that could be neither dispatched nor
 // dead-lettered. It is counted apart from the one above because it is the only outcome on
 // this path where the work is gone with no record of it anywhere.
-func (m *reactMetrics) recordDeadLetterLost() {
+func (m *ReactMetrics) recordDeadLetterLost() {
 	if m == nil {
 		return
 	}
@@ -286,7 +299,7 @@ func (m *reactMetrics) recordDeadLetterLost() {
 }
 
 // setRulesActive publishes the loaded rule count (called once at startup wiring).
-func (m *detectMetrics) setRulesActive(n int) {
+func (m *DetectMetrics) setRulesActive(n int) {
 	if m == nil {
 		return
 	}
@@ -294,7 +307,7 @@ func (m *detectMetrics) setRulesActive(n int) {
 }
 
 // RecordFanout records one message's fan-out breadth and any leaf-eval errors (runtime.Metrics).
-func (m *detectMetrics) RecordFanout(events, evalErrors int) {
+func (m *DetectMetrics) RecordFanout(events, evalErrors int) {
 	if m == nil {
 		return
 	}
@@ -307,7 +320,7 @@ func (m *detectMetrics) RecordFanout(events, evalErrors int) {
 }
 
 // recordLateSamples records samples the engine declined as late (core.DrainLateSamples).
-func (m *detectMetrics) recordLateSamples(n uint64) {
+func (m *DetectMetrics) recordLateSamples(n uint64) {
 	if m == nil || n == 0 {
 		return
 	}
@@ -315,7 +328,7 @@ func (m *detectMetrics) recordLateSamples(n uint64) {
 }
 
 // RecordDerivedPublished records one published derived event (runtime.Metrics).
-func (m *detectMetrics) RecordDerivedPublished() {
+func (m *DetectMetrics) RecordDerivedPublished() {
 	if m == nil {
 		return
 	}
@@ -323,7 +336,7 @@ func (m *detectMetrics) RecordDerivedPublished() {
 }
 
 // RecordDerivedRejected records one detection dropped before publish, by reason (runtime.Metrics).
-func (m *detectMetrics) RecordDerivedRejected(reason runtime.RejectReason) {
+func (m *DetectMetrics) RecordDerivedRejected(reason runtime.RejectReason) {
 	if m == nil {
 		return
 	}
@@ -331,7 +344,7 @@ func (m *detectMetrics) RecordDerivedRejected(reason runtime.RejectReason) {
 }
 
 // recordRestore records startup restore cost and the restored applied sequence.
-func (m *detectMetrics) recordRestore(seconds float64, appliedSeq uint64) {
+func (m *DetectMetrics) recordRestore(seconds float64, appliedSeq uint64) {
 	if m == nil {
 		return
 	}
@@ -340,7 +353,7 @@ func (m *detectMetrics) recordRestore(seconds float64, appliedSeq uint64) {
 }
 
 // recordIdleAdvance records one wall-clock idle advance that fired dets detections.
-func (m *detectMetrics) recordIdleAdvance(dets int) {
+func (m *DetectMetrics) recordIdleAdvance(dets int) {
 	if m == nil {
 		return
 	}
@@ -349,7 +362,7 @@ func (m *detectMetrics) recordIdleAdvance(dets int) {
 }
 
 // recordApplied records one resolved event that advanced the engine.
-func (m *detectMetrics) recordApplied() {
+func (m *DetectMetrics) recordApplied() {
 	if m == nil {
 		return
 	}
@@ -358,7 +371,7 @@ func (m *detectMetrics) recordApplied() {
 
 // recordConsumerLag publishes the resolved-events durable consumer's broker-reported backlog
 // (undelivered + delivered-unacked). Nil-safe (unit-test loops run unmeasured).
-func (m *detectMetrics) recordConsumerLag(pending, ackPending uint64) {
+func (m *DetectMetrics) recordConsumerLag(pending, ackPending uint64) {
 	if m == nil {
 		return
 	}
@@ -367,7 +380,7 @@ func (m *detectMetrics) recordConsumerLag(pending, ackPending uint64) {
 }
 
 // recordCheckpoint records a committed snapshot's cost, size, position, and lag.
-func (m *detectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, bytes int, lagSeconds float64) {
+func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, bytes int, lagSeconds float64) {
 	if m == nil {
 		return
 	}
@@ -381,7 +394,7 @@ func (m *detectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, byt
 // fenceGeometryMetrics reports on the geofence ARCHIVE seam: resolving a fence-set manifest
 // into evaluable geometry, and the compiled-geometry cache that makes that cheap.
 //
-// It is a type of its own rather than more fields on detectMetrics, because every one of these
+// It is a type of its own rather than more fields on DetectMetrics, because every one of these
 // is recorded by the fence-set client and none of them by the detection loop. Folding them into
 // the loop's metrics would have meant handing the client a reference to the loop's internals to
 // record a number the loop knows nothing about — and it is the loop's metrics that get read
@@ -516,7 +529,7 @@ func (m *fenceGeometryMetrics) recordFenceGeometryCache(hits, misses, evictions 
 // raised at ACQUIRE, not at the end of the term build: a build can take a snapshot
 // restore plus a full replay, and a leaderless alert firing through all of it would
 // be indistinguishable from a real outage.
-func (m *detectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader)) }
+func (m *DetectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader)) }
 
 // setDetectLive publishes whether this replica is actually CONSUMING. Paired with
 // setLeader it names the one state neither gauge can express alone — leader, but
@@ -524,7 +537,7 @@ func (m *detectMetrics) setLeader(leader bool) { m.isLeader.Set(boolGauge(leader
 // health signal is green. The chart's DetectLeaderIsNotConsuming rule is the pair's
 // consumer, and it ANDs a checkpoint term so a long replay (which checkpoints as it
 // goes) does not trip it.
-func (m *detectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
+func (m *DetectMetrics) setDetectLive(live bool) { m.detectLive.Set(boolGauge(live)) }
 
 func boolGauge(b bool) float64 {
 	if b {

@@ -60,13 +60,11 @@ type NotificationProcessor struct {
 	// Microservice at write time, because a dead letter is written on the failure path —
 	// the one place a nil dereference turns a recoverable failure into a crash.
 	area string
-	// deadLettered and deadLetterLost are counted apart: the second is the only outcome
-	// on this path where an alarm nobody was paged about leaves no record at all.
-	deadLettered   prometheus.Counter
-	deadLetterLost prometheus.Counter
-
-	// RED metrics for the per-message dispatch path (E13).
-	metrics *core.ProcessorMetrics
+	// NotifyMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
+	// here. The processor itself is constructed inside the NATS manager's oncreate
+	// callback, which runs on every start; a collector constructed there is registered
+	// again on a start after a stop, and the duplicate registration panics.
+	*NotifyMetrics
 
 	messages chan messaging.Message
 
@@ -96,21 +94,53 @@ func (np *NotificationProcessor) pacer() *core.ReadPacer {
 	return np.readPacer
 }
 
-// NewNotificationProcessor creates a notification processor over the given reader
-// and notifier.
-func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageReader,
-	callbacks core.LifecycleCallbacks, notifier Notifier, dead deadletter.Writer) *NotificationProcessor {
-	np := &NotificationProcessor{
-		Microservice: ms,
-		Reader:       reader,
-		Notifier:     notifier,
-		metrics:      ms.NewProcessorMetrics("notify"),
+// NotifyMetrics is every Prometheus instrument the notification processor exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the processor
+// that reads it. See NewNotifyMetrics.
+type NotifyMetrics struct {
+	// deadLettered and deadLetterLost are counted apart: the second is the only outcome
+	// on this path where an alarm nobody was paged about leaves no record at all.
+	deadLettered   prometheus.Counter
+	deadLetterLost prometheus.Counter
+
+	// RED metrics for the per-message dispatch path (E13).
+	metrics *core.ProcessorMetrics
+}
+
+// NewNotifyMetrics builds the notification processor's instruments.
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The processor is built inside
+// the NATS manager's oncreate callback — it has to be, because it holds a reader bound
+// to the connection — and that callback runs on EVERY start. A Prometheus collector
+// built there is registered a second time when the service restarts in place, and
+// MustRegister panics on the duplicate.
+func NewNotifyMetrics(ms *core.Microservice) *NotifyMetrics {
+	return &NotifyMetrics{
+		metrics: ms.NewProcessorMetrics("notify"),
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
 				"operator can see which pages were never sent (ADR-024).", nil),
 		deadLetterLost: ms.NewCounter("notifications_dead_letter_lost_total",
 			"Alarms that reached nobody AND could not be dead-lettered — the write failed on a "+
 				"delivery that will not repeat. An alarm in this state is invisible everywhere.", nil),
+	}
+}
+
+// NewNotificationProcessor creates a notification processor over the given reader
+// and notifier.
+//
+// metrics is built once in the initialize phase (see NewNotifyMetrics) and shared by
+// every processor this service constructs, because this constructor runs again on
+// every start.
+func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageReader,
+	callbacks core.LifecycleCallbacks, notifier Notifier, dead deadletter.Writer,
+	metrics *NotifyMetrics) *NotificationProcessor {
+	np := &NotificationProcessor{
+		Microservice:  ms,
+		Reader:        reader,
+		Notifier:      notifier,
+		NotifyMetrics: metrics,
 	}
 	np.area = ms.FunctionalArea
 	if dead != nil {

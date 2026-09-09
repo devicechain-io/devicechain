@@ -111,11 +111,13 @@ func TestAnAnswerToAReleasedCommandIsRecordedRatherThanDiscarded(t *testing.T) {
 	// Step 4: the device answers the dispatch it did receive.
 	dead := &deadRecorder{}
 	consumer := &CommandDeliveryProcessor{
-		Api:                    api,
-		area:                   "command-delivery",
-		dead:                   deadletter.NewSink(dead, func(error) {}),
-		ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_total"}),
-		ResponsesRefused:       prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_e2e_total"}),
+		Api:  api,
+		area: "command-delivery",
+		dead: deadletter.NewSink(dead, func(error) {}),
+		DeliveryMetrics: DeliveryMetrics{
+			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_total"}),
+			ResponsesRefused:       prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_e2e_total"}),
+		},
 		CommandResponsesReader: &oneMessageReader{
 			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
 				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
@@ -213,10 +215,12 @@ func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 
 	dead := &deadRecorder{}
 	consumer := &CommandDeliveryProcessor{
-		Api:                    api,
-		area:                   "command-delivery",
-		dead:                   deadletter.NewSink(dead, func(error) {}),
-		ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_ok_total"}),
+		Api:  api,
+		area: "command-delivery",
+		dead: deadletter.NewSink(dead, func(error) {}),
+		DeliveryMetrics: DeliveryMetrics{
+			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_ok_total"}),
+		},
 		CommandResponsesReader: &oneMessageReader{
 			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
 				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
@@ -299,10 +303,12 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 
 	dead := &deadRecorder{}
 	consumer := &CommandDeliveryProcessor{
-		Api:                    api,
-		area:                   "command-delivery",
-		dead:                   deadletter.NewSink(dead, func(error) {}),
-		ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_wb_total"}),
+		Api:  api,
+		area: "command-delivery",
+		dead: deadletter.NewSink(dead, func(error) {}),
+		DeliveryMetrics: DeliveryMetrics{
+			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_wb_total"}),
+		},
 		CommandResponsesReader: &oneMessageReader{
 			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
 				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),

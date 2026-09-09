@@ -153,7 +153,7 @@ func newEvictionRig(t *testing.T, store *model.SnapshotStore, tenants ...string)
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		// 🔴 THE CHANNEL HAS TO BE MADE HERE, and its absence is not a detail this rig gets to
 		// hide. A struct-literal processor (the shape every test in this package uses, because
@@ -533,9 +533,7 @@ func TestEvictionDropsTheTenantsBufferedDetectionsAndRetries(t *testing.T) {
 // an engine that is running perfectly — and the purge coordinator would record a partition
 // that "did not answer" forever.
 //
-// This is the ONLY test that builds the processor the way production does, which is why it
-// takes the cost of a real Microservice (its metric constructors register into the default
-// Prometheus registerer, so exactly one test in the package may do this).
+// This is the ONLY test that builds the processor the way production does.
 func TestTheConstructorWiresTheEvictionChannel(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "detecttenantpurgetest"}
 	rp := NewResolvedEventsProcessor(ms, &fakeReader{}, &fakeReplayOpener{}, newTestStore(t),
@@ -544,7 +542,7 @@ func TestTheConstructorWiresTheEvictionChannel(t *testing.T) {
 			CheckpointEvents:   1000,
 			CheckpointInterval: time.Hour,
 			TickInterval:       time.Hour,
-		}, core.NewNoOpLifecycleCallbacks())
+		}, core.NewNoOpLifecycleCallbacks(), NewDetectMetrics(ms))
 
 	ctx := context.Background()
 	if err := rp.ExecuteInitialize(ctx); err != nil {

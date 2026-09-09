@@ -63,7 +63,8 @@ func newFailedEventProcessor(t *testing.T) (*EventPersistenceProcessor, *recordi
 		new(msgtest.MockMessageReader),
 		failed,
 		core.NewNoOpLifecycleCallbacks(),
-		new(emtest.MockApi))
+		new(emtest.MockApi),
+		NewPersistMetrics(dmtest.DeviceManagementMicroservice))
 	require.NoError(t, eproc.Initialize(context.Background()))
 	return eproc, failed
 }
