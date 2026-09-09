@@ -46,13 +46,24 @@ const (
 //	  Banner, Mux, RegisterProbes, NewHttpServer, MetricsSubsystem, MetricsRegisterer,
 //	  MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
 //	  NewGaugeVec, NewProcessorMetrics, LoadInstanceConfiguration,
-//	  LoadMicroserviceConfiguration, ExecuteInitialize, ExecuteStart, ExecuteStop,
-//	  ExecuteTerminate, InitializeAndStart, Run, ShutDownNow, FailNow.
+//	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration, ExecuteInitialize,
+//	  ExecuteStart, ExecuteStop, ExecuteTerminate, InitializeAndStart, Run, ShutDownNow,
+//	  FailNow.
 //
 //	  The metric constructors are the one place where "safe" is not "identical": with no
 //	  registry the collectors are built UNREGISTERED. They still count, so the code under
 //	  test behaves the same; they are simply not gatherable. MetricsRegisterer says why
 //	  that is the safe direction.
+//
+//	  The two config loads are safe for a plainer reason: nothing on their path is a
+//	  constructor-only field. InstanceConfiguration and MicroserviceConfigurationRaw are
+//	  plain value fields, so a struct literal has them, and the load fills them in exactly
+//	  as it does on a constructed Microservice. LoadInstanceConfigurationFrom is therefore
+//	  not merely non-panicking here but fully FUNCTIONAL, which is why the tests for the
+//	  instance document drive it: it reads the path it is handed rather than the chart's
+//	  mount point, which is the only part of that pair a test can supply. Its no-argument
+//	  sibling is equally safe and, off a pod, simply reports that /etc/dci-config/instance
+//	  is not there.
 //
 //	Refuse, loudly, because any answer they could invent would be indistinguishable from
 //	a real one:
@@ -676,22 +687,42 @@ func (ms *Microservice) waitForShutdown() error {
 	return <-ms.outcomeCh()
 }
 
+// InstanceConfigPath is where the chart mounts the instance-wide configuration
+// document. The chart renders it into a Secret (it carries persistence credentials and
+// the secret-store root key) and mounts that Secret at /etc/dci-config on every pod.
+const InstanceConfigPath = "/etc/dci-config/instance"
+
 // LoadInstanceConfiguration reads the instance configuration from the mounted
 // config volume. It runs once at startup — a config change is rolled out by the
 // chart's checksum annotation restarting the pod, not by an in-place reload (E9),
 // hence "Load" rather than "Reload". After decoding it applies defaults and
 // validates, failing closed on an invalid instance configuration (E3).
+//
+// It goes through LoadConfiguration, the same strict decode the per-service documents
+// use, so an unknown key here is refused rather than discarded. It used to be a plain
+// json.Unmarshal, which meant this — the OPERATOR-FACING document, the one the docs site
+// tells people to edit — was the one path that silently dropped a misspelled key and
+// started healthy on the default. That is worse than never having set the key: the
+// setting was deliberately chosen, written down and deployed, so it is believed to be in
+// force and will be trusted in an incident. It also defeated every value check in this
+// document, each of which refuses a bad VALUE and never sees a mistyped NAME.
 func (ms *Microservice) LoadInstanceConfiguration() error {
-	raw, err := os.ReadFile("/etc/dci-config/instance")
+	return ms.LoadInstanceConfigurationFrom(InstanceConfigPath)
+}
+
+// LoadInstanceConfigurationFrom is LoadInstanceConfiguration against an explicit path,
+// for a caller whose mount is not at the chart's, and for the tests that exercise this
+// wiring — which is the point of the seam rather than a side effect of it. What has to be
+// gated here is that this function reaches the STRICT loader; a test that called
+// LoadConfiguration itself would pass just as happily with the plain json.Unmarshal this
+// replaced still sitting in the line below.
+func (ms *Microservice) LoadInstanceConfigurationFrom(path string) error {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	cfg := &config.InstanceConfiguration{}
-	if err := json.Unmarshal(raw, cfg); err != nil {
-		return err
-	}
-	cfg.ApplyDefaults()
-	if err := cfg.Validate(); err != nil {
+	if err := LoadConfiguration(raw, cfg); err != nil {
 		return fmt.Errorf("instance configuration invalid: %w", err)
 	}
 	ms.InstanceConfiguration = *cfg

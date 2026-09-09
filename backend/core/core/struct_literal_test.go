@@ -76,6 +76,15 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 		{name: "MetricsHandler", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.MetricsHandler()) }},
 		{name: "UseMetricsRegistry", call: func(t *testing.T, ms *Microservice) { ms.UseMetricsRegistry(nil) }},
 		{name: "LoadInstanceConfiguration", call: func(t *testing.T, ms *Microservice) { _ = ms.LoadInstanceConfiguration() }},
+		// Safe, and the only one of the pair that is also USEFUL here: it reads the path
+		// it is handed rather than the chart's mount point, so a struct literal can load
+		// a real document with it. The assertion is on the error rather than discarded,
+		// because "did not panic" would be satisfied by a method that ignored its
+		// argument — and the argument is the whole difference between the two rows.
+		{name: "LoadInstanceConfigurationFrom", call: func(t *testing.T, ms *Microservice) {
+			assert.Error(t, ms.LoadInstanceConfigurationFrom("/nonexistent/dc-instance-config"),
+				"it must read the path it was given")
+		}},
 		{name: "LoadMicroserviceConfiguration", call: func(t *testing.T, ms *Microservice) { _ = ms.LoadMicroserviceConfiguration() }},
 		{name: "ExecuteInitialize", call: func(t *testing.T, ms *Microservice) { _ = ms.ExecuteInitialize(ctx) }},
 		{name: "ExecuteStart", call: func(t *testing.T, ms *Microservice) { assert.NoError(t, ms.ExecuteStart(ctx)) }},

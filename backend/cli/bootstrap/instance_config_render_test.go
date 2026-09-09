@@ -4,7 +4,10 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"regexp"
 	"strconv"
@@ -15,22 +18,45 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"helm.sh/helm/v3/pkg/chart"
 )
 
-// The chart writes the instance configuration as a JSON blob into a Secret, and
-// every service decodes it with a plain json.Unmarshal — which IGNORES a key it
-// does not recognize. So the chart and the Go struct are joined by nothing but
-// spelling: rename a field, or mistype a key in values.yaml, and the service
-// starts cleanly on the built-in default while the value the operator wrote is
-// silently discarded. Nothing logs it and nothing fails.
+// The chart writes the instance configuration as a JSON blob into a Secret, and the
+// chart and the Go struct are joined by nothing but spelling: rename a field, or mistype
+// a key in values.yaml, and the value the operator wrote binds to nothing.
 //
-// That is the same fail-open shape as the graphql-go input-object bug the fork
-// exists to fix (CLAUDE.md), and it bites hardest exactly here: these are disk
-// ceilings, so a discarded value does not misbehave until a stream fills.
+// A key that is not a field is now REFUSED — the services load this document through the
+// strict decode, and validateRenderedInstanceConfig runs that same loader here — so the
+// silent-discard half of that is closed at the loader. What the loader cannot see is a
+// key that binds to the WRONG field, or a chart literal that has drifted away from the
+// constant it duplicates: both decode perfectly and deliver a number nobody chose. That
+// is what these tests measure, by rendering the real embedded chart through the real Helm
+// engine and reading the values off the decoded struct.
 //
-// These tests close it by rendering the real embedded chart through the real Helm
-// engine and decoding the result with the real config loader — the same three
-// pieces dcctl uses at bootstrap, in the same order.
+// They decode the rendered document PERMISSIVELY and without defaults, deliberately: the
+// question here is what the chart delivered, and both strictness and defaulting would
+// answer a different one.
+
+// renderInstanceConfigFromChart renders the chart and decodes the instance document it
+// produces the way an OBSERVER wants it: permissively, and without defaults.
+//
+// It is a test helper rather than production code because production has exactly one way
+// to read this document — core.LoadConfiguration, which is strict and defaults — and a
+// second, laxer reader living next to it would be an invitation to use the wrong one.
+// The laxness is the point here and only here: a strict decode would report a key that
+// binds to nothing as an error, and this is the one place that wants to see the resulting
+// zero on the FIELD instead, next to the field that should have received it.
+func renderInstanceConfigFromChart(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) (*config.InstanceConfiguration, error) {
+	raw, err := renderInstanceConfigDocument(ctx, ch, vals)
+	if err != nil || raw == nil {
+		return nil, err
+	}
+	cfg := &config.InstanceConfiguration{}
+	if err := json.Unmarshal(raw, cfg); err != nil {
+		return nil, fmt.Errorf("decoding rendered instance config: %w", err)
+	}
+	return cfg, nil
+}
 
 // renderInstanceConfig renders the embedded chart with the given
 // infrastructure.nats overrides and returns the decoded instance configuration
@@ -356,4 +382,119 @@ func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
 			"does not run or does not run before the cluster work, which is the only "+
 			"thing that makes it better than a readiness timeout", err)
 	}
+}
+
+// 🔴 THE COUNTERWEIGHT TO THE STRICT DECODE, and the one that matters most.
+//
+// The services refuse an instance document carrying a key that is not a field. That is
+// only safe while the document THIS CHART RENDERS is not such a document — and a chart
+// whose own output the platform refuses would be discovered on somebody's install, with
+// every pod in the instance crash-looping on a key the chart itself wrote.
+//
+// It renders the real embedded chart and runs the services' own loader over the result,
+// at the chart's defaults and at a configuration that sets essentially everything an
+// operator can set. The second half is not decoration: values.yaml is a DEEP MERGE base,
+// so a key the chart ships as a default survives into every operator's document whether
+// they wrote it or not, and the failure this catches is one shipped key, not one written
+// key.
+func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatalf("loading embedded chart: %v", err)
+	}
+	rootKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+
+	t.Run("at the chart's defaults", func(t *testing.T) {
+		vals := map[string]interface{}{
+			"instance": map[string]interface{}{
+				"id": "dctest",
+				"config": map[string]interface{}{
+					"infrastructure": map[string]interface{}{
+						"secrets": map[string]interface{}{"rootKey": rootKey},
+					},
+				},
+			},
+		}
+		if err := validateRenderedInstanceConfig(t.Context(), ch, vals); err != nil {
+			t.Errorf("the chart's own default document does not load: %v", err)
+		}
+	})
+
+	// Everything an operator can put in this document, at once: every cross-service
+	// coordinate, both credential blocks, all the ceilings, the egress allowance, the
+	// object store, the shutdown budget and both persistence stores. The profile is
+	// `full` so the ai-inference coordinate is not filtered back out of the render.
+	t.Run("fully populated", func(t *testing.T) {
+		vals := map[string]interface{}{
+			"profile": "full",
+			// mcp (in `full`) derives its resource URL from the ingress, and refuses to
+			// render without one.
+			"ingress":                       map[string]interface{}{"enabled": true, "host": "dc.example.com"},
+			"shutdownDrainSeconds":          10,
+			"terminationGracePeriodSeconds": 60,
+			"instance": map[string]interface{}{
+				"id": "dctest",
+				"config": map[string]interface{}{
+					"infrastructure": map[string]interface{}{
+						"nats": map[string]interface{}{
+							"hostname": "dc-nats.dc-system", "port": 4222,
+							"streamReplicas":        3,
+							"streamMaxBytes":        int64(2 << 30),
+							"streamMaxBytesCold":    int64(256 << 20),
+							"streamMaxMsgs":         int64(9_000_000),
+							"streamMaxMsgSize":      int64(2 << 20),
+							"mqttStoreMaxBytes":     int64(512 << 20),
+							"mqttQoS2StoreMaxBytes": int64(128 << 20),
+							"kvCacheMaxBytes":       int64(128 << 20),
+							"kvStateMaxBytes":       int64(256 << 20),
+							"tls":                   map[string]interface{}{"enabled": false, "ca": ""},
+							"auth": map[string]interface{}{
+								"user": "dc_service", "password": "p",
+								"sysUser": "dc_sys", "sysPassword": "p",
+								"calloutIssuerSeed": "s",
+							},
+						},
+						"metrics":          map[string]interface{}{"enabled": true},
+						"graphql":          map[string]interface{}{"maxSubscriptionMessageBytes": int64(8 << 20)},
+						"userManagement":   map[string]interface{}{"hostname": "user-management", "port": 8080},
+						"deviceManagement": map[string]interface{}{"hostname": "device-management", "port": 8080},
+						"eventProcessing":  map[string]interface{}{"hostname": "event-processing", "port": 8080},
+						"deviceState":      map[string]interface{}{"hostname": "device-state", "port": 8080},
+						"commandDelivery":  map[string]interface{}{"hostname": "command-delivery", "port": 8080},
+						"aiInference":      map[string]interface{}{"hostname": "ai-inference", "port": 8080},
+						"serviceAuth":      map[string]interface{}{"secret": "svc"},
+						"secrets": map[string]interface{}{
+							"backend": "postgres", "kekProvider": "instance", "rootKey": rootKey,
+						},
+						"egress": map[string]interface{}{
+							"allowedDestinations": []interface{}{"10.42.0.17/32"},
+						},
+						"blob": map[string]interface{}{
+							"backend": "s3", "directory": "", "bucket": "b", "region": "r",
+							"endpoint": "https://minio.example.com", "usePathStyle": true,
+						},
+					},
+					"persistence": map[string]interface{}{
+						"rdb": map[string]interface{}{
+							"type": "postgres95",
+							"configuration": map[string]interface{}{
+								"hostname": "h", "port": 5432, "maxConnections": 20,
+								"username": "u", "password": "p",
+							},
+						},
+						"tsdb": map[string]interface{}{
+							"type": "timescaledb",
+							"configuration": map[string]interface{}{
+								"hostname": "h", "port": 5432, "maxConnections": 20,
+								"username": "u", "password": "p",
+							},
+						},
+					},
+				},
+			},
+		}
+		if err := validateRenderedInstanceConfig(t.Context(), ch, vals); err != nil {
+			t.Errorf("a fully-populated operator configuration does not load: %v", err)
+		}
+	})
 }
