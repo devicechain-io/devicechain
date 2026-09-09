@@ -15,7 +15,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,13 +54,9 @@ func (w *recordingWriter) WriteToDevice(_ context.Context, _ string, msgs ...mes
 func (w *recordingWriter) HandleResponse(error) {}
 
 // newFailedEventProcessor builds a processor over a recording writer, isolated from the
-// suite next door so the two cannot share a metrics registry or a channel.
+// suite next door so the two cannot share a channel.
 func newFailedEventProcessor(t *testing.T) (*EventPersistenceProcessor, *recordingWriter) {
 	t.Helper()
-	registry := prometheus.NewRegistry()
-	prometheus.DefaultRegisterer = registry
-	prometheus.DefaultGatherer = registry
-
 	failed := &recordingWriter{}
 	eproc := NewEventPersistenceProcessor(
 		dmtest.DeviceManagementMicroservice,

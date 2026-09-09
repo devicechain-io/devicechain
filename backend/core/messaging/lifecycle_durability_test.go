@@ -288,12 +288,10 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 	// requires the same InstanceId, FunctionalArea and suffix, since those three are
 	// what DurableName is built from.
 	//
-	// It is a struct literal rather than a NewNatsManager call for one reason: the
-	// constructor registers stream metrics into the global promauto registry, so a
-	// second manager on this area would panic. ExecuteInitialize is still called, so
-	// the replacement connects over the real path; only the metrics are skipped.
-	// NewReader is called directly in place of Start, because the sampler Start would
-	// spawn needs the metrics this manager has none of.
+	// It is a struct literal rather than a NewNatsManager call because the replacement is
+	// driven through ExecuteInitialize + NewReader rather than Start: that connects it over
+	// the real path, while the stream metrics the constructor builds — and the sampler Start
+	// would spawn to feed them — are no part of what this test measures.
 	replacement := &NatsManager{Microservice: testMicroservice(t, srv, consumerArea)}
 	if err := replacement.ExecuteInitialize(ctx); err != nil {
 		t.Fatalf("replacement initialize: %v", err)

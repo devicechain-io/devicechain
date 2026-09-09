@@ -362,12 +362,12 @@ func TestStrandedCarriesItsCursorBetweenPasses(t *testing.T) {
 // counters are checked directly afterwards because they have no observable behaviour to
 // drive — nil is tolerated everywhere by design.
 //
-// ⚠️ The functional area differs from the one TestConstructorWiresBothDeliveryGates uses,
-// and it has to. The counters register into the process-wide default registry keyed by
-// subsystem, so two constructor tests sharing an area would panic on duplicate
-// registration rather than fail.
+// It shares a functional area with TestConstructorWiresBothDeliveryGates, which is safe: a
+// Microservice built as a struct literal has no metrics registry, so the collectors the
+// constructor builds are registered nowhere. They still count, and two constructions on one
+// area no longer collide.
 func TestConstructorWiresTheStrandedPass(t *testing.T) {
-	ms := &core.Microservice{FunctionalArea: "commanddeliverystranded"}
+	ms := &core.Microservice{FunctionalArea: "commanddelivery"}
 	api := &fakeApi{
 		strandedLockAvailable: true,
 		strandedPage:          []*model.Command{strandedCmd(1, "c1", "dev-1", "nonce-abc", time.Hour)},

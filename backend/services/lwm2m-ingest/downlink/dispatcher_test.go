@@ -270,8 +270,8 @@ func (p *fakeParker) parks() []parkCall {
 
 // parkMetrics builds REAL Prometheus counters for the park dispositions, so the metric
 // assertions measure the production code's increments rather than a test double's bookkeeping.
-// They are constructed with prometheus.NewCounter and NOT promauto: promauto registers against
-// the process-global registry, which panics the second test that builds the same metric name.
+// They are constructed with prometheus.NewCounter, so they are registered nowhere: an
+// unregistered counter still counts, and every test can build its own set.
 func parkMetrics() Metrics {
 	c := func(name string) prometheus.Counter {
 		return prometheus.NewCounter(prometheus.CounterOpts{Name: name})

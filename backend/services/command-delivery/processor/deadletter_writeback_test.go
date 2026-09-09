@@ -47,15 +47,13 @@ func (idleReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 }
 func (idleReader) HandleResponse(error) {}
 
-// areaSeq keeps every constructed write-back on its own metrics subsystem. promauto
-// registers globally and PANICS on a duplicate, so two components built with the same
-// functional area in one test binary would take the whole package down.
-var areaSeq int
-
+// newTestWriteback builds a write-back over a microservice literal, which is what makes
+// building one per test safe: a Microservice constructed as a literal has no metrics
+// registry, so its collectors are built unregistered — they still count, and two
+// write-backs sharing a functional area do not collide.
 func newTestWriteback(t *testing.T, api CommandDispositionWriter) *DeadLetterWriteback {
 	t.Helper()
-	areaSeq++
-	ms := &core.Microservice{FunctionalArea: fmt.Sprintf("cdwriteback%d", areaSeq)}
+	ms := &core.Microservice{FunctionalArea: "cdwriteback"}
 	w, err := NewDeadLetterWriteback(ms, idleReader{}, api, core.NewNoOpLifecycleCallbacks())
 	if err != nil {
 		t.Fatalf("NewDeadLetterWriteback: %v", err)

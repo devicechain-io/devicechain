@@ -18,7 +18,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
 	"github.com/stretchr/testify/assert"
@@ -40,14 +39,6 @@ type EventPersistenceProcessorTestSuite struct {
 
 // Perform common setup tasks.
 func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
-	// The persist loop's ProcessorMetrics (E13) registers collectors on the
-	// global default registry at construction. SetupTest builds a fresh
-	// processor per test method, so reset the default registry first to avoid a
-	// duplicate-registration panic across tests.
-	registry := prometheus.NewRegistry()
-	prometheus.DefaultRegisterer = registry
-	prometheus.DefaultGatherer = registry
-
 	suite.Inbound = new(msgtest.MockMessageReader)
 	suite.Failed = new(msgtest.MockMessageWriter)
 	suite.API = new(emtest.MockApi)

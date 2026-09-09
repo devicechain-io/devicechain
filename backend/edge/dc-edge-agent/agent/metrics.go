@@ -20,13 +20,12 @@ import (
 // edgeMetrics is the agent's observability surface (E3): a Prometheus registry plus a
 // loopback HTTP server exposing /metrics and /healthz.
 //
-// The registry is PER-AGENT (not the platform's default global registry). The platform
-// registers via promauto against the default registry because each service is one
-// process with one Microservice; the edge agent's tests, by contrast, construct many
-// agents in one process AND restart an agent within a single test, which would panic on
-// the default registry ("duplicate metrics collector registration"). A custom registry
-// per agent is also the honest shape for a standalone binary that owns its own registry
-// and is scraped alone, not on a shared mux.
+// The registry is PER-AGENT (not the process-global default registry). A platform service
+// registers on a registry its Microservice owns; the edge agent has no Microservice, and
+// its tests construct many agents in one process AND restart an agent within a single
+// test, which the shared default registry would answer with "duplicate metrics collector
+// registration". A custom registry per agent is also the honest shape for a standalone
+// binary that owns its own registry and is scraped alone, not on a shared mux.
 //
 // Counters are CounterFuncs reading the agent's existing atomics (single source of
 // truth — no dual-increment drift); gauges derived from stream state are Set on the

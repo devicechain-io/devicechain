@@ -18,7 +18,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
-	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
 )
 
@@ -56,12 +55,6 @@ var deviceStateMicroservice = &core.Microservice{
 // message instead of running the read loop.
 func newLocationProcessor(t *testing.T) *StateProcessor {
 	t.Helper()
-
-	// ProcessorMetrics registers collectors on the global default registry at
-	// construction, so a fresh registry per test avoids a duplicate-registration panic.
-	registry := prometheus.NewRegistry()
-	prometheus.DefaultRegisterer = registry
-	prometheus.DefaultGatherer = registry
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

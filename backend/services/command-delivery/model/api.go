@@ -185,9 +185,9 @@ type Api struct {
 	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
 	DefaultCommandTTL time.Duration
 	// BatchMetrics, when set, counts fleet-write outcomes. Nil is a fully supported
-	// state and is what every test gets: promauto registers globally and panics on a
-	// duplicate, so an Api built by literal must not register anything. Every recorder
-	// tolerates a nil receiver — see NewBatchMetrics.
+	// state and is what every test gets: the counters are built from a Microservice, and
+	// an Api built by literal has none to build them from. Every recorder tolerates a nil
+	// receiver — see NewBatchMetrics.
 	BatchMetrics *BatchMetrics
 	// Nudger, when set, is told which device a freshly created command was queued for,
 	// so the delivery path can dispatch it without waiting for the sweep's next tick.

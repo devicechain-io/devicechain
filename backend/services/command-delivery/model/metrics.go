@@ -95,12 +95,12 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 
 // BatchMetrics are the fleet-write counters.
 //
-// 🔴 IT IS NIL-TOLERANT BY CONSTRUCTION, AND THAT IS NOT DEFENSIVE STYLE. promauto
-// registers against the process-global registry and PANICS on a duplicate, while this
-// package's tests build an Api by literal, many times per run, with no Microservice.
-// So the constructor answers a nil Microservice with a nil *BatchMetrics and every
-// recorder tolerates a nil receiver — the same shape the outbound-connectors dispatch
-// metrics use, for the same reason.
+// 🔴 IT IS NIL-TOLERANT BY CONSTRUCTION, AND THAT IS NOT DEFENSIVE STYLE. The counters are
+// built from a *core.Microservice — it supplies both the registry they land on and the
+// namespace their names are composed from — and this package's tests build an Api by
+// literal, many times per run, with no Microservice at all. So the constructor answers a
+// nil Microservice with a nil *BatchMetrics and every recorder tolerates a nil receiver —
+// the same shape the outbound-connectors dispatch metrics use, for the same reason.
 type BatchMetrics struct {
 	enqueues *prometheus.CounterVec
 	devices  *prometheus.CounterVec
