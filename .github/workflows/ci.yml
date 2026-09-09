@@ -833,6 +833,21 @@ jobs:
           REQUIRE_LIVENESS: '1'
         run: hack/check-ko-base-pin.sh
 
+      # The same argument one level down: the ko base image is pinned, and every
+      # image a script pulls should be too. One was not — the upgrade drill
+      # started its local registry from the moving `registry:2` tag on Docker Hub,
+      # anonymously, and a 500 from that registry during the v0.15.0 stable tag
+      # failed the drill and skipped every publish job that depends on it.
+      #
+      # Self-test first, and it plants each of the two rules' defects alone: the
+      # inline shape (which is how the failing site was written, with no variable
+      # for a name-based rule to find) and the assignment shape.
+      - name: image-pin guard self-test
+        run: hack/check-image-pins.sh --self-test
+
+      - name: every image a script pulls is pinned by digest
+        run: hack/check-image-pins.sh
+
       # Every setup-go must take its version from go.work, not a module go.mod.
       # setup-go pins GOTOOLCHAIN=local, so a module's LANGUAGE floor (routinely
       # lower than the workspace's) installs a toolchain that `go build` inside

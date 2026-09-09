@@ -194,6 +194,27 @@ registry="localhost:5000"
 registry_container="kind-registry"
 kind_network="kind"
 
+# 🔴 PINNED BY DIGEST, and the tag is kept beside it only so a reader can see the
+# version. `registry:2` is not a version — it is a name Docker Hub can repoint, so
+# an unpinned tag is a third-party dependency that moves under a release with no
+# commit here to show for it. It is also the one image in the release path pulled
+# anonymously from Docker Hub, which is subject to that registry's rate limits and
+# to its bad days: a `500 Internal Server Error` on this exact pull failed the
+# drill during the v0.15.0 stable tag, and because every publish job depends on the
+# drill, the whole release stopped.
+#
+# The digest does not make Docker Hub reachable — nothing here can — but it makes
+# the drill reproducible, makes an upstream repush a diff rather than a silent
+# behaviour change, and lets a cache satisfy the pull by content.
+#
+# dcctl and deploy/local start this SAME container, so both pin the same reference
+# (backend/cli/bootstrap/steps.go, deploy/local/up.sh). Whichever runs first is the
+# one that decides what is running; they must not disagree.
+#
+# hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
+# from the tag you want (`crane digest registry:<version>`) and write both.
+registry_image="registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+
 # The registry the release pipeline publishes to. Read as a constant here rather
 # than pulled from the chart: this is the registry an OPERATOR pulls from, and the
 # rig asserting against the chart's current default would happily follow the chart
@@ -639,7 +660,7 @@ ensure_registry() {
     say "starting the local registry container $registry_container"
     docker rm -f "$registry_container" >/dev/null 2>&1 || true
     docker run -d --restart=always -p "127.0.0.1:$port:5000" \
-      --name "$registry_container" registry:2 >/dev/null
+      --name "$registry_container" "$registry_image" >/dev/null
   fi
   # Idempotent: ignore "already exists in network".
   docker network connect "$kind_network" "$registry_container" >/dev/null 2>&1 || true
