@@ -53,6 +53,6 @@
     "@devicechain/client": "0.0.0-dev",
     "graphql": "^17.0.2",
     "typescript": "~7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   }
 }
