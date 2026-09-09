@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -201,17 +202,82 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	}
 }
 
+// invalidEventErrorCap bounds the decode error recorded on an undecodable message.
+//
+// The error is kept, because it is the only thing that says HOW the message was
+// malformed. But it is not purely server-derived: UnmarshalUnresolvedEvent fails at
+// time.Parse for bytes that decode as an event carrying an unparseable instant, and
+// time.Parse quotes the offending string back verbatim and unboundedly. Recorded raw,
+// that puts a payload-derived blob of arbitrary size into the archived record — which
+// is the thing dropping the payload removes, arriving through a second door. The cap
+// is well clear of every decode error the platform's own encoders can produce, so
+// bounding costs nothing on the failures an operator actually reads.
+const invalidEventErrorCap = 256
+
+// boundDecodeError caps a decode error's text at invalidEventErrorCap, marking the
+// truncation so a reader is never shown a shortened error that looks complete. It cuts
+// on a rune boundary, since the text it bounds can be arbitrary decoded content and a
+// mid-rune cut would put invalid UTF-8 into a durable record.
+func boundDecodeError(text string) string {
+	if len(text) <= invalidEventErrorCap {
+		return text
+	}
+	cut := invalidEventErrorCap
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "... (truncated)"
+}
+
 // Called when a message can not be unmarshaled to an event. The tenant is
 // re-derived from the message subject (the resolver only reaches this callback
 // after confirming the subject carries a parseable tenant).
+//
+// The undecodable bytes are NOT archived on the record. They are device-originated
+// content that failed to parse, which is exactly the case where what they hold is
+// least predictable, and the record is durable — retained for the failed-events
+// stream's window and exported whole by an operator debugging ingest.
+//
+// Dropping them costs nothing that has to be paid, because this message is not the
+// only copy of itself: it was read from the inbound-events stream and it is still
+// there, untouched, at the stream sequence recorded below. So the record LOCATES the
+// original instead of copying it — the shape the platform's dead-letter envelope
+// already uses for a connector dispatch whose body lives one stream over.
+//
+// 🔴 THE POINTER IS TO THE SOURCE STREAM, AND IT IS ONLY GOOD WHILE THAT STREAM STILL
+// HOLDS THE MESSAGE. inbound-events carries every event the platform ingests, so on a
+// busy instance it rolls off its byte ceiling long before this cold error stream rolls
+// off its own. The locator is for the operator looking at a fault while it is
+// happening, which is when an undecodable message is worth looking at. It is not an
+// archive and is not written as one.
+//
+// Everything the record does carry is server-derived — the subject, the stream
+// sequence, the delivery count, the byte length — so nothing here can echo the content
+// it declines to store. What does not change is that the record still reads as a
+// failure: the reason stays Invalid and the decode error still travels, so nothing
+// downstream can mistake a message the platform could not parse for one it handled.
 func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Message) {
 	tenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
 	if !ok {
 		log.Warn().Msg(fmt.Sprintf("Dropping invalid event with no parseable tenant in subject %q", msg.Subject))
 		return
 	}
+	// Where the original is and how big it is. It goes in the record's message because
+	// FailedEvent has no structured place for it, and the failed-events stream has no
+	// consumer to give one to — this text and the log line below are what an operator
+	// actually reads.
+	locator := fmt.Sprintf("%d bytes on subject %q at stream sequence %d, delivery %d",
+		len(msg.Value), msg.Subject, msg.StreamSeq, msg.NumDelivered)
+	bounded := boundDecodeError(err.Error())
+	// Logged at warn because nothing consumes failed-events: a record published there is
+	// retained for the cold tier's window and expires unread, so without this line the
+	// only operator-visible trace of an undecodable message is a RED counter that says
+	// neither which message nor why.
+	log.Warn().Str("correlation", msg.CorrelationID()).
+		Msg(fmt.Sprintf("Dead-lettering an inbound message that could not be parsed (%s): %s", locator, bounded))
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
-		"message could not be parsed", err, msg.Value)
+		"message could not be parsed; payload not retained ("+locator+")", err, nil)
+	failed.Error = bounded
 	iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: msg.CorrelationID()}
 }
 
