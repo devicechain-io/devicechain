@@ -1,5 +1,24 @@
 module github.com/devicechain-io/dc-promqlguard
 
+// 🔴 go.sum HERE CARRIES MORE `/go.mod` HASHES THAN A FROM-SCRATCH `go mod tidy` WRITES,
+// AND THAT IS DELIBERATE. This module is the first in the workspace that has a deep
+// dependency (prometheus/prometheus, for its PromQL parser) and does NOT resolve
+// graph-gophers/graphql-go. The `graphql-go fork guard` in CI asks every module
+// `GOWORK=off go list -m github.com/graph-gophers/graphql-go` and treats "not a known
+// dependency" as nothing to check — but PROVING a module absent forces the FULL module
+// graph, not the pruned one a build needs, so the query wants the go.mod hash of every
+// module prometheus/prometheus requires. Tidy does not record those, so with a
+// minimally-tidied go.sum the guard cannot resolve the query at all and fails the module
+// with a message about the fork that has nothing to do with the fork.
+//
+// `go mod tidy` KEEPS these once they are present — it is additive over an existing
+// go.sum — so running it here is a no-op and this does not rot. If go.sum is ever deleted
+// and regenerated, or prometheus/prometheus is bumped, restore them with:
+//
+//	GOWORK=off GOFLAGS=-mod=mod go list -m github.com/graph-gophers/graphql-go
+//
+// which prints the "not a known dependency" the guard expects and writes what it needed
+// to say so.
 go 1.26.6
 
 require (
