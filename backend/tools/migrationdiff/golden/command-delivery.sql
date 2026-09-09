@@ -103,7 +103,8 @@ CREATE TABLE "command-delivery".commands (
  error text,
  batch_id bigint,
  batch_token character varying(128),
- dispatch_nonce character varying(64)
+ dispatch_nonce character varying(64),
+ dispatch_failures integer DEFAULT 0 NOT NULL
 );
 CREATE TABLE "command-delivery".purged_tenants (
  token character varying(128) NOT NULL,

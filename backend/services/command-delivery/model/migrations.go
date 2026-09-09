@@ -37,5 +37,6 @@ var (
 		NewDrainableIndexSchema(),
 		NewStrandedSentIndexSchema(),
 		NewQueuedDeviceIndexSchema(),
+		NewCommandDispatchFailuresSchema(),
 	}
 )

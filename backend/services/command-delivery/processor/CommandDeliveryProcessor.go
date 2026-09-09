@@ -90,6 +90,40 @@ type CommandDeliveryProcessor struct {
 	ClaimsLost     *prometheus.CounterVec
 	ClaimsStranded prometheus.Counter
 
+	// DispatchesExhausted counts commands the release path stopped retrying, having failed
+	// to publish them as many times as the configured bound allows.
+	//
+	// 🔴 IT IS THE ONLY THING THAT MAKES THIS FAILURE VISIBLE WHILE IT IS HAPPENING. The
+	// behaviour it replaced was silent by construction: a command nothing could publish was
+	// claimed, failed and re-queued twice a minute for a week, and the only trace was a
+	// TIMEOUT at the end of it that read as an unanswered device rather than as a platform
+	// that never sent anything. A rate here says the opposite, and says it in minutes.
+	//
+	// Read it against the publish errors beside it. A few exhaustions with no broader
+	// error rate are poison commands — an oversized payload, a device whose stream is gone
+	// — and each row's error column says so. A spike across many tenants at once is the
+	// messaging layer, and these commands are collateral: they will need re-issuing once it
+	// is back, because the bound is deliberately shorter than the TTL.
+	//
+	// 🔑 THIS COUNTER AND THE ROW ARE THE WHOLE RECORD — NO DEAD LETTER IS WRITTEN, AND
+	// THAT IS A DECISION RATHER THAN AN OVERSIGHT. A dead letter is the durable trace for
+	// work whose ORIGINAL is a message that will age off the stream, which is why every
+	// existing kind names something living elsewhere. Here the original is a ROW that
+	// survives, carrying the terminal status, the failure count and a reason a tenant can
+	// read, already queryable through the ordinary command search. Adding a kind to the
+	// platform's closed give-up vocabulary — a metric label, a query filter, and the
+	// operator-facing list of what the platform gave up on — to index a record that is
+	// already indexed would put two entries in front of an operator for one event.
+	//
+	// The near-miss is worth naming so nobody adds one casually: the only reason that
+	// could apply is the exhausted one, which is exactly the reason the dead-letter
+	// write-back acts on to drive a command to FAILED. A letter about a command the
+	// platform has ALREADY driven to FAILED would be a second consumer settling a row that
+	// is settled, filtered apart today only by its kind.
+	//
+	// Nil is tolerated (skipped) like every counter here.
+	DispatchesExhausted prometheus.Counter
+
 	// SweepInterval is the operator-configured cadence of the delivery sweep. ZERO MEANS
 	// "use the platform default" — read it through sweepInterval, never directly, for the
 	// same reason the fields below carry that warning: this struct is exported and
@@ -287,6 +321,11 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 				"issued when a command is enqueued; the two racing for one row is expected and safe "+
 				"(the claim is a compare-and-set), so read a rate on one path with none on the other "+
 				"rather than the total", []string{"path"}),
+		DispatchesExhausted: ms.NewCounter("command_delivery_dispatches_exhausted_total",
+			"Commands failed because the platform could not publish them to their device as many "+
+				"times as the configured bound allows, so it stopped retrying. Each row records "+
+				"FAILED with the platform named as the cause, rather than retrying until its TTL "+
+				"and then recording TIMEOUT against a device it never reached", nil),
 		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
 			"Commands left reading SENT because their publish failed and the release failed too. "+
 				"On LwM2M the stranded reconciler re-arms these; on MQTT they still expire as "+
@@ -758,6 +797,11 @@ func (cproc *CommandDeliveryProcessor) tenantDeleted(tenant string) bool {
 // Claiming first inverts the risk: the failure mode becomes a row claimed but not
 // published, which ReleaseClaim returns to QUEUED for the next tick. A command delivered
 // late is recoverable; a command delivered twice is not.
+//
+// 🔑 "FOR THE NEXT TICK" IS NOT FOREVER. The release counts the failed dispatch, and a
+// command whose publish keeps failing reaches the configured bound and stops on FAILED
+// rather than being re-queued another twenty thousand times over its TTL. That decision is
+// the API's, not this function's — see releaseFailedClaim and model.ReleaseClaim.
 func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *model.Command,
 	path dispatchPath) error {
 	// Publish to the command's tenant subject and mark it SENT under the same
@@ -803,11 +847,13 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	if err != nil {
 		// The claim is already placed, so a marshal failure must undo it rather than
 		// leave a row reading SENT for a command no transport will ever see.
-		if _, rerr := cproc.Api.ReleaseClaim(tenantCtx, cmd.ID); rerr != nil {
-			incr(cproc.ClaimsStranded, 1)
-			log.Error().Err(rerr).Str("command", cmd.Token).
-				Msg("Could not release a command whose envelope would not marshal.")
-		}
+		//
+		// 🔑 A MARSHAL FAILURE IS THE POISON CASE THE BOUND EXISTS FOR, not a transient
+		// one: the same envelope will not marshal on the next tick either. It goes through
+		// the same counted release as a publish failure, so it reaches the bound and stops,
+		// rather than being retried forever because it never touched the network.
+		cproc.releaseFailedClaim(tenantCtx, cmd,
+			"Could not release a command whose envelope would not marshal.")
 		return err
 	}
 	msg := messaging.Message{
@@ -822,16 +868,41 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		// up again. Release failures are logged rather than returned — the publish error
 		// is the one worth propagating, and a swallowed release is exactly the kind of
 		// silence that produced this whole class of defect, so it gets a counter too.
-		if _, rerr := cproc.Api.ReleaseClaim(tenantCtx, cmd.ID); rerr != nil {
-			incr(cproc.ClaimsStranded, 1)
-			log.Error().Err(rerr).Str("command", cmd.Token).
-				Msg("Could not release a command whose publish failed; it will read SENT until its TTL " +
-					"expires it as TIMEOUT, which wrongly blames the device.")
-		}
+		cproc.releaseFailedClaim(tenantCtx, cmd,
+			"Could not release a command whose publish failed; it will read SENT until its TTL "+
+				"expires it as TIMEOUT, which wrongly blames the device.")
 		return err
 	}
 	cproc.DeviceCommandsWriter.HandleResponse(nil)
 	return nil
+}
+
+// releaseFailedClaim hands a claimed-but-undispatched command back, counting the failed
+// dispatch, and reports what happened to the row.
+//
+// 🔑 THE RELEASE HAS TWO OUTCOMES NOW AND ONLY THE API KNOWS WHICH ONE HAPPENED. It counts
+// the failure and compares it against the bound in the same statement, so QUEUED ("we will
+// try again") and FAILED ("we have stopped trying") are decided there and reported back.
+// Deriving it here from anything read earlier would be guessing at a race with another
+// dispatcher releasing the same row.
+//
+// strandedMsg is the caller's own account of what it was releasing, used only when the
+// release itself fails — the case that leaves the row reading SENT and is why
+// ClaimsStranded exists.
+func (cproc *CommandDeliveryProcessor) releaseFailedClaim(tenantCtx context.Context,
+	cmd *model.Command, strandedMsg string) {
+	landed, _, rerr := cproc.Api.ReleaseClaim(tenantCtx, cmd.ID)
+	if rerr != nil {
+		incr(cproc.ClaimsStranded, 1)
+		log.Error().Err(rerr).Str("command", cmd.Token).Msg(strandedMsg)
+		return
+	}
+	if landed == model.CommandFailed {
+		incr(cproc.DispatchesExhausted, 1)
+		log.Warn().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
+			Msg("Stopped retrying a command the platform could not publish; it is FAILED rather " +
+				"than left to expire as TIMEOUT against a device it never reached.")
+	}
 }
 
 // ProcessMessage reads a single device response and matches it to its command.

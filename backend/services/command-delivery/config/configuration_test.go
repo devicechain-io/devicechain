@@ -209,3 +209,52 @@ func TestSweepKeysAreAcceptedFromYaml(t *testing.T) {
 	assert.Equal(t, 5, cfg.SweepIntervalSeconds, "sweepIntervalSeconds did not reach the struct")
 	assert.NoError(t, cfg.Validate())
 }
+
+// The dispatch bound gets the same fail-safe as everything around it, and the reading that
+// must never be reachable is "no bound": an unset value that meant zero would restore the
+// retry-until-the-TTL behaviour the bound exists to end.
+func TestMaxDispatchFailuresFlooredWhenNonPositive(t *testing.T) {
+	for _, v := range []int{0, -1} {
+		cfg := &CommandDeliveryConfiguration{MaxDispatchFailures: v}
+		cfg.ApplyDefaults()
+		assert.Equal(t, DefaultMaxDispatchFailures, cfg.MaxDispatchFailures)
+	}
+}
+
+// Bounded at BOTH ends, and the two ends refuse different mistakes. Below the floor the
+// bound cannot tell a transient publish failure from a command that can never go out, so it
+// turns a broker blip into a terminal state; above the ceiling it is not a bound at all.
+func TestMaxDispatchFailuresValidation(t *testing.T) {
+	kept := &CommandDeliveryConfiguration{MaxDispatchFailures: 50}
+	kept.ApplyDefaults()
+	assert.Equal(t, 50, kept.MaxDispatchFailures)
+	assert.NoError(t, kept.Validate())
+
+	tooSmall := &CommandDeliveryConfiguration{MaxDispatchFailures: MinMaxDispatchFailures - 1}
+	assert.Error(t, tooSmall.Validate(),
+		"a bound this small makes the first transient publish error terminal")
+
+	tooLarge := &CommandDeliveryConfiguration{MaxDispatchFailures: MaxMaxDispatchFailures + 1}
+	assert.Error(t, tooLarge.Validate(),
+		"a bound this large is the unbounded retry it replaced, with a longer fuse")
+}
+
+// 🔴 THE FLOOR HAS TO BE ABOVE 1 OR Validate's LOWER CHECK GUARDS NOTHING. ApplyDefaults
+// maps every non-positive value onto the default, so the only values that can ever reach
+// the lower bound are 1 up to the floor — a floor of 1 leaves that range empty and the
+// check unreachable. This is the same trap MinSweepIntervalSeconds documents.
+func TestMaxDispatchFailuresFloorIsReachable(t *testing.T) {
+	assert.Greater(t, MinMaxDispatchFailures, 1,
+		"a floor of 1 makes the lower-bound check in Validate impossible to fail")
+	assert.Less(t, MinMaxDispatchFailures, DefaultMaxDispatchFailures,
+		"the default must sit above the floor, or the shipped value is itself refused")
+}
+
+// The key must reach the struct from YAML: a bound that exists only in Go would leave an
+// operator's setting silently ignored while reading as applied.
+func TestMaxDispatchFailuresIsAcceptedFromYaml(t *testing.T) {
+	cfg := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"maxDispatchFailures": 7}`), cfg))
+	assert.Equal(t, 7, cfg.MaxDispatchFailures, "maxDispatchFailures did not reach the struct")
+	assert.NoError(t, cfg.Validate())
+}

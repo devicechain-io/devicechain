@@ -184,6 +184,17 @@ type Api struct {
 	// behavior, used by tests that construct the Api directly; production always sets
 	// it from CommandDeliveryConfiguration (floored positive in ApplyDefaults).
 	DefaultCommandTTL time.Duration
+	// MaxDispatchFailures is how many failed dispatches one command may accumulate before
+	// ReleaseClaim drives it to FAILED instead of returning it to the queue.
+	//
+	// 🔴 ZERO MEANS THE PLATFORM DEFAULT, NEVER ZERO — read it through maxDispatchFailures,
+	// never directly, and the reason is sharper here than for the fields above. This struct
+	// is built by literal in tests, so a zero is an unset field; taken literally it would
+	// make the bound `failures + 1 >= 0`, which is true of the FIRST failure, and every test
+	// and every unconfigured binary would fail every command on its first publish error.
+	// The harmless-looking value has to land on the default, exactly as it does in
+	// ApplyDefaults.
+	MaxDispatchFailures int
 	// BatchMetrics, when set, counts fleet-write outcomes. Nil is a fully supported
 	// state and is what every test gets: the counters are built from a Microservice, and
 	// an Api built by literal has none to build them from. Every recorder tolerates a nil
@@ -222,9 +233,10 @@ type CommandDeliveryApi interface {
 	// actuation. The nonce must be carried in the published envelope so a transport can
 	// park THIS dispatch and no other.
 	MarkSent(ctx context.Context, id uint) (string, bool, error)
-	// ReleaseClaim undoes a claim whose dispatch then failed, returning the row to
-	// QUEUED and clearing sent_time.
-	ReleaseClaim(ctx context.Context, id uint) (bool, error)
+	// ReleaseClaim undoes a claim whose dispatch then failed, counting the failure and
+	// clearing sent_time. It reports the status the row landed on as well as whether it
+	// moved: QUEUED for another try, or FAILED once the failures reach the bound.
+	ReleaseClaim(ctx context.Context, id uint) (CommandStatus, bool, error)
 	// HoldCommand withholds a queued command whose device is authoritatively absent.
 	HoldCommand(ctx context.Context, id uint) (bool, error)
 	// MarkUndeliverable fails a queued command whose transport carries no command path.
@@ -996,8 +1008,9 @@ func newDispatchNonce() string {
 	return uuid.NewString()
 }
 
-// ReleaseClaim returns a claimed-but-undispatched command to QUEUED, clearing the
-// sent_time the claim stamped. It reports whether this caller's release landed.
+// ReleaseClaim returns a claimed-but-undispatched command to the queue, clearing the
+// sent_time the claim stamped and counting the failed dispatch. It reports the status the
+// row landed on and whether this caller's release landed it there.
 //
 // 🔴 IT IS THE OTHER HALF OF CLAIM-BEFORE-PUBLISH, AND WITHOUT IT THE CLAIM IS A LEAK.
 // A dispatcher that claims a row and then fails to publish has produced a row that is
@@ -1027,14 +1040,12 @@ func newDispatchNonce() string {
 // never gone anywhere.
 //
 // 🔴 IT IS NO LONGER THE ONLY PATH WITH THAT PROPERTY, AND AN EARLIER VERSION OF THIS COMMENT
-// SAID IT WAS. ParkClaim is a second route out of SENT and back into the dispatchable set —
-// it shares retireClaim with this one for exactly that reason, so the cancelled-batch check is
-// written once and cannot be present on one route and missing on the other. Every OTHER route
+// SAID IT WAS. ParkClaim is a second route out of SENT and back into the dispatchable set, and
+// the exhaustion branch below is a third — all three go through stopCancelledBatchCommand for
+// exactly that reason, so the cancelled-batch check is written once and cannot be present on
+// one route and missing on another. Every OTHER route
 // still predicates on HELD or on QUEUED/HELD/PARKED, and a cancelled row is terminal, so the
 // hold reconciler and the wake drain no-op correctly.
-//
-// The two updates are ORDERED, cancelled-batch first, and both are predicated on SENT so
-// exactly one of them can move the row. That is what makes it safe without a transaction.
 //
 // ⚠️ IT IS NOT AIRTIGHT, AND AN EARLIER VERSION OF THIS COMMENT CLAIMED IT WAS. One
 // interleaving survives: the first statement evaluates its subquery and sees no committed
@@ -1044,14 +1055,93 @@ func newDispatchNonce() string {
 // on the hot path, to buy a window that needs a publish failure and a cancel to land in
 // the same microsecond. Documented and accepted rather than silently assumed away — if it
 // ever needs closing, close it at the claim, not here.
-// It collapses retireClaim's landing status: this caller is returning a command to the
-// dispatchable set after a failed publish, and both landings — QUEUED, or CANCELLED if the
-// batch was called off meanwhile — mean the same thing to it, that the row is no longer its
-// responsibility.
-func (api *Api) ReleaseClaim(ctx context.Context, id uint) (bool, error) {
-	_, released, err := api.retireClaim(ctx, "id = ?", []any{id}, CommandQueued)
-	return released, err
+//
+// 🔴 IT IS ALSO WHERE THE FAILURE IS COUNTED AND WHERE RETRYING STOPS, AND THE RETRY USED TO
+// BE UNBOUNDED. A command nothing can publish — an oversized payload, a tenant whose stream
+// is gone — was claimed, failed, released and re-queued on every tick, which at the default
+// cadence is roughly two futile publishes a minute for the whole seven-day TTL. It did end,
+// but it ended on TIMEOUT: "dispatched toward a device believed live, and never answered",
+// a statement about hardware that was never sent anything. So this write increments
+// dispatch_failures and, once the failures reach the bound, lands the row on FAILED with
+// UndispatchableReason instead of QUEUED — the same honest terminal MarkUndeliverable
+// reaches, for the same reason it reaches it.
+//
+// 🔑 THREE ORDERED WRITES, EACH PREDICATED ON SENT, SO EXACTLY ONE CAN MOVE THE ROW — which
+// is what makes this safe without a transaction, exactly as retireClaim's two are. The
+// cancelled-batch write stays FIRST: a command an operator called off is CANCELLED whatever
+// its dispatch history, because that names the ACTOR and this bound only names an outcome.
+//
+// 🔑 THE BOUND IS TESTED IN SQL AS `dispatch_failures + 1 >= bound`, NOT AGAINST A VALUE
+// READ EARLIER. The count is only correct at the instant of the write — a concurrent
+// dispatcher can have released the same row in between — and a read-then-decide would
+// re-introduce the race the from-state predicate exists to remove.
+//
+// It reports the status the row LANDED on, because the two landings are genuinely different
+// events and only this write knows which happened: QUEUED means "we will try again",
+// FAILED means "we have stopped trying", and CANCELLED means the batch was called off. The
+// caller meters the middle one — it is the whole reason the wedge was invisible.
+func (api *Api) ReleaseClaim(ctx context.Context, id uint) (CommandStatus, bool, error) {
+	where, args := "id = ?", []any{id}
+
+	stopped, err := api.stopCancelledBatchCommand(ctx, where, args)
+	if err != nil {
+		return "", false, err
+	}
+	if stopped {
+		return CommandCancelled, true, nil
+	}
+
+	exhausted := api.RDB.DB(ctx).Model(&Command{}).
+		Where(where, args...).
+		Where("status = ? AND dispatch_failures + 1 >= ?", CommandSent.String(), api.maxDispatchFailures()).
+		Updates(map[string]any{
+			"status":            CommandFailed.String(),
+			"error":             sql.NullString{String: UndispatchableReason, Valid: true},
+			"sent_time":         sql.NullTime{},
+			"dispatch_failures": gorm.Expr("dispatch_failures + 1"),
+		})
+	if exhausted.Error != nil {
+		return "", false, exhausted.Error
+	}
+	if exhausted.RowsAffected == 1 {
+		return CommandFailed, true, nil
+	}
+
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where(where, args...).
+		Where("status = ?", CommandSent.String()).
+		Updates(map[string]any{
+			"status":            CommandQueued.String(),
+			"sent_time":         sql.NullTime{},
+			"dispatch_failures": gorm.Expr("dispatch_failures + 1"),
+		})
+	if res.Error != nil {
+		return "", false, res.Error
+	}
+	if res.RowsAffected != 1 {
+		// Nothing moved, so nothing landed anywhere. The empty status is not a third
+		// outcome: it is the absence of one, and it pairs with moved=false.
+		return "", false, nil
+	}
+	return CommandQueued, true, nil
 }
+
+// UndispatchableReason is the fixed sentence written into a command's Error column when the
+// platform gives up publishing it.
+//
+// 🔴 IT IS WHAT SEPARATES THE TWO FAILURES AN OPERATOR HAS TO TELL APART, and the status
+// alone cannot do it. A command that reaches TIMEOUT was dispatched and went unanswered —
+// look at the device. A command that reaches FAILED carrying this sentence never left the
+// platform — look at the broker, the payload, or the tenant's stream. The row also carries
+// dispatch_failures, so "how many times did we try?" is answerable, and sent_time is NULL,
+// because a retired claim sent nothing.
+//
+// FIXED, NOT INTERPOLATED, for the reason ResponseLostReason is: this column is read by the
+// TENANT on its own command, and the underlying publish error's text can name brokers,
+// subjects and in-cluster hosts. The count and the cause live where an operator reads them
+// — the column beside it, and the service's own logs and counters.
+const UndispatchableReason = "The platform could not publish this command to its device, " +
+	"and stopped retrying. It was never delivered."
 
 // ParkClaim retires a claimed command whose transport found the device UNREACHABLE, taking
 // it SENT -> PARKED so the platform's record says it went nowhere. It reports whether this
@@ -1077,22 +1167,21 @@ func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (CommandStat
 	return api.retireClaim(ctx, "token = ? AND dispatch_nonce = ?", []any{token, nonce}, CommandParked)
 }
 
-// retireClaim is the shape both ReleaseClaim and ParkClaim need: take a SENT row out of the
-// dispatcher's hands, to CANCELLED if its batch has been called off and to the caller's
-// target otherwise. Callers differ only in how they name the row and where it lands.
+// stopCancelledBatchCommand is the FIRST write of every path that takes a SENT row back off
+// a dispatcher: it lands the row on CANCELLED if the batch that created it has been called
+// off, and reports whether it did.
 //
-// Both writes are predicated on SENT, so exactly one of them can move the row — which is
-// what makes this safe without a transaction — and both clear sent_time, because a retired
-// claim did not send anything.
+// 🔴 IT IS WRITTEN ONCE AND SHARED BECAUSE THERE ARE NOW THREE ROUTES OUT OF SENT AND BACK
+// INTO THE DISPATCHABLE SET — the release, the park, and the release's own exhaustion
+// branch. A batch cancel is only a brake if EVERY one of them checks it: a route that
+// omitted the check would return a called-off command to the queue and the device would
+// actuate minutes after an operator was told the fleet write had stopped. Duplicating the
+// subquery per route is how one of them ends up without it.
 //
-// 🔑 IT REPORTS WHICH STATUS THE ROW LANDED ON, NOT ONLY THAT IT MOVED, and the distinction
-// is only knowable HERE. Which branch fires depends on whether the batch was called off,
-// which can change between a caller's scan and this write — so a caller that tried to
-// derive the landing from anything it read earlier would be guessing at a race. Callers
-// that do not care collapse it at the call site; the one that meters recoveries does not
-// have to invent a label it cannot observe.
-func (api *Api) retireClaim(ctx context.Context, where string, args []any,
-	target CommandStatus) (CommandStatus, bool, error) {
+// It runs before the caller's own write and both are predicated on SENT, so exactly one of
+// the two can move the row — which is what makes the sequence safe without a transaction.
+// sent_time is cleared because a retired claim did not send anything.
+func (api *Api) stopCancelledBatchCommand(ctx context.Context, where string, args []any) (bool, error) {
 	cancelledBatches := api.RDB.DB(ctx).Model(&CommandBatch{}).
 		Select("id").Where("cancelled_at IS NOT NULL")
 	stopped := api.RDB.DB(ctx).Model(&Command{}).
@@ -1103,9 +1192,57 @@ func (api *Api) retireClaim(ctx context.Context, where string, args []any,
 			"sent_time": sql.NullTime{},
 		})
 	if stopped.Error != nil {
-		return "", false, stopped.Error
+		return false, stopped.Error
 	}
-	if stopped.RowsAffected == 1 {
+	return stopped.RowsAffected == 1, nil
+}
+
+// maxDispatchFailures is the configured bound on failed dispatches, falling back to the
+// platform default.
+//
+// 🔴 A NON-POSITIVE VALUE IS AN UNSET FIELD, NOT AN OPERATOR ASKING FOR ZERO. Taken
+// literally a zero bound would make `failures + 1 >= 0` true of the first failure, so every
+// Api built by literal — which is every test, and any binary whose wiring is incomplete —
+// would fail every command on its first publish error. This is the same direction
+// ApplyDefaults takes for the configured value; the fallback exists because the Api can be
+// built without it.
+func (api *Api) maxDispatchFailures() int {
+	if api.MaxDispatchFailures > 0 {
+		return api.MaxDispatchFailures
+	}
+	return config.DefaultMaxDispatchFailures
+}
+
+// retireClaim is the shape both ReleaseClaim and ParkClaim need: take a SENT row out of the
+// dispatcher's hands, to CANCELLED if its batch has been called off and to the caller's
+// target otherwise. Callers differ only in how they name the row and where it lands.
+//
+// The cancelled-batch write is stopCancelledBatchCommand, shared with ReleaseClaim so the
+// brake cannot be present on one route out of SENT and missing on another. Both writes are
+// predicated on SENT, so exactly one of them can move the row — which is what makes this
+// safe without a transaction — and both clear sent_time, because a retired claim did not
+// send anything.
+//
+// 🔑 IT DOES NOT TOUCH dispatch_failures, AND THAT IS THE POINT OF THE SPLIT. ParkClaim is
+// this function's other caller, and a park is not a failed dispatch: the publish succeeded
+// and the transport found the device asleep. Counting it would let a queue-mode sleeper
+// accumulate a bound's worth of "failures" over weeks of ordinary operation and then die on
+// the first real one. The increment lives in ReleaseClaim, which is the only caller whose
+// row genuinely failed to go out.
+//
+// 🔑 IT REPORTS WHICH STATUS THE ROW LANDED ON, NOT ONLY THAT IT MOVED, and the distinction
+// is only knowable HERE. Which branch fires depends on whether the batch was called off,
+// which can change between a caller's scan and this write — so a caller that tried to
+// derive the landing from anything it read earlier would be guessing at a race. Callers
+// that do not care collapse it at the call site; the one that meters recoveries does not
+// have to invent a label it cannot observe.
+func (api *Api) retireClaim(ctx context.Context, where string, args []any,
+	target CommandStatus) (CommandStatus, bool, error) {
+	stopped, err := api.stopCancelledBatchCommand(ctx, where, args)
+	if err != nil {
+		return "", false, err
+	}
+	if stopped {
 		return CommandCancelled, true, nil
 	}
 
@@ -1962,17 +2099,25 @@ func (api *Api) TryReconcileLock(ctx context.Context, fn func() error) (bool, er
 // better, and the failure is not obvious: combined with oldest-first ordering, any
 // command that can never be delivered (an oversized payload, a tenant whose stream
 // is gone) keeps the smallest id and therefore occupies a slot in EVERY subsequent
-// batch. Accumulate n of them and delivery stops platform-wide, with nothing in the
-// data model to break the tie — expiry only touches rows with an explicit
-// expires_at, and ExpiresAt is optional. A cap also silently ceilings throughput at
-// n per sweep interval for the whole instance, and global-id ordering lets one
-// tenant's backlog delay every other tenant behind it.
+// batch. Accumulate n of them and delivery stops platform-wide. A cap also silently
+// ceilings throughput at n per sweep interval for the whole instance, and global-id
+// ordering lets one tenant's backlog delay every other tenant behind it.
 //
-// A correct bound therefore needs three things this model does not yet have: an
-// attempt count so a poison command can reach a terminal FAILED state, ordering
-// that de-prioritizes what was just tried, and per-tenant fairness so one backlog
-// cannot monopolize a pass. That is its own change; until then an unbounded read
-// that always makes progress beats a bounded one that can wedge.
+// ⚠️ THE TIE-BREAKER CLAUSE THAT USED TO SIT IN THAT PARAGRAPH WAS STALE AND SAID THE
+// OPPOSITE OF THE TREE. It read "nothing in the data model breaks the tie — expiry only
+// touches rows with an explicit expires_at, and ExpiresAt is optional", which stopped
+// being true when the platform default TTL landed: both enqueue paths stamp expires_at
+// from DefaultCommandTTL whenever the caller omits one, and ApplyDefaults floors that
+// positive, so every command created through them carries a horizon. The wedge above is
+// bounded at the TTL rather than unbounded — days, not forever — and a poison command now
+// leaves the dispatchable set well before that, at the dispatch-failure bound (see
+// ReleaseClaim).
+//
+// A correct bound on this read still needs more than that, and the attempt count is only
+// the first of the three: it also needs ordering that de-prioritizes what was just tried,
+// and per-tenant fairness so one backlog cannot monopolize a pass. Neither exists, so this
+// read stays uncapped — an unbounded read that always makes progress beats a bounded one
+// that can wedge.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
 	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).

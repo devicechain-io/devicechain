@@ -89,6 +89,9 @@ type fakeApi struct {
 	// existing tests are unaffected.
 	claimFails   bool
 	releaseFails bool
+	// releaseExhausts makes ReleaseClaim report that the row landed on FAILED — the
+	// dispatch-failure bound reached — rather than going back to QUEUED.
+	releaseExhausts bool
 	// holdLoses and releaseLoses make HoldCommand / ReleaseHold report a zero-row
 	// update — the conditional write losing to another writer that moved the row after
 	// the scan that selected it.
@@ -342,14 +345,17 @@ func (f *fakeApi) MarkSent(_ context.Context, id uint) (string, bool, error) {
 	return fmt.Sprintf("nonce-%d-%d", id, len(f.markedSent)), true, nil
 }
 
-func (f *fakeApi) ReleaseClaim(_ context.Context, id uint) (bool, error) {
+func (f *fakeApi) ReleaseClaim(_ context.Context, id uint) (model.CommandStatus, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.released = append(f.released, id)
 	if f.releaseFails {
-		return false, errors.New("release failed")
+		return "", false, errors.New("release failed")
 	}
-	return true, nil
+	if f.releaseExhausts {
+		return model.CommandFailed, true, nil
+	}
+	return model.CommandQueued, true, nil
 }
 
 func (f *fakeApi) CreateCommand(context.Context, *model.CommandCreateRequest) (*model.Command, error) {

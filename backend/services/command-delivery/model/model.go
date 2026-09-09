@@ -217,6 +217,30 @@ type Command struct {
 	// It is NOT a delivery counter and must never be read as one. Comparing two values tells
 	// you only "same dispatch" or "not the same dispatch"; nothing orders them.
 	DispatchNonce sql.NullString
+
+	// DispatchFailures counts how many times dispatching this command has FAILED — the
+	// claim was placed, the publish reported an error, and ReleaseClaim took the row back.
+	// It is the bound that lets a command nothing can publish reach a terminal state
+	// instead of cycling QUEUED -> SENT -> QUEUED on every sweep tick until its TTL.
+	//
+	// 🔴 IT COUNTS FAILURES, NOT ATTEMPTS, AND THE DIFFERENCE IS NOT A NAMING PREFERENCE.
+	// Counting every claim would fold in the dispatches that went out perfectly well: a
+	// queue-mode sleeper is claimed and published on each wake and PARKED again each time
+	// it turns out to be asleep, which is the transport working exactly as designed. Such a
+	// device would accumulate claims for weeks, and the first genuine publish failure after
+	// that would find the count already past the bound and kill the command on a single
+	// transient error. So the increment lives on the failure path — ReleaseClaim, and only
+	// ReleaseClaim — where it counts the one thing the bound is a bound on. ParkClaim
+	// retires a claim too and deliberately does NOT touch this.
+	//
+	// A successfully delivered command therefore reads zero here, which is the honest
+	// answer: nothing about dispatching it failed.
+	//
+	// 🔴 NOT NULL, DEFAULT 0, in the schema — see NewCommandDispatchFailuresSchema. A
+	// nullable counter is the trap that would make this silently inert: NULL + 1 is NULL
+	// in SQL, so every increment on a pre-existing row would write NULL back and the bound
+	// would never be reached, with no error anywhere.
+	DispatchFailures int
 }
 
 // DefaultOrder implements rdb.Sortable. Newest-first is the PRODUCT requirement here,
