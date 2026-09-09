@@ -42,14 +42,23 @@ import (
 // lossless for every byte a password may contain — including the `%` that made
 // the two forms disagree. net.JoinHostPort brackets IPv6 literals, which naive
 // formatting also got wrong.
-func postgresURL(username, password, hostname string, port int32, database, sslMode string) string {
+//
+// `extra` carries runtime parameters alongside sslmode, mirroring the keyword form
+// below so the two builders stay the same shape. url.Values.Encode sorts by key, so
+// the rendered query is deterministic.
+func postgresURL(username, password, hostname string, port int32, database, sslMode string,
+	extra map[string]string) string {
 	u := &url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(username, password),
 		Host:   net.JoinHostPort(hostname, strconv.Itoa(int(port))),
 		Path:   "/" + database,
 	}
-	u.RawQuery = url.Values{"sslmode": []string{sslMode}}.Encode()
+	q := url.Values{"sslmode": []string{sslMode}}
+	for k, v := range extra {
+		q.Set(k, v)
+	}
+	u.RawQuery = q.Encode()
 	return u.String()
 }
 

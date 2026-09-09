@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -46,11 +47,11 @@ func TestSamplerReportsConfiguredNotClampedReplicas(t *testing.T) {
 			"clamped 1; without the clamp engaged this test cannot distinguish the two values", got)
 	}
 
-	nmgr.stopSampler = make(chan struct{})
+	sctx, stopSampler := context.WithCancel(context.Background())
 	nmgr.samplerWg.Add(1)
-	go nmgr.runStreamMetrics()
+	go nmgr.runStreamMetrics(sctx)
 	defer func() {
-		close(nmgr.stopSampler)
+		stopSampler()
 		nmgr.samplerWg.Wait()
 	}()
 
