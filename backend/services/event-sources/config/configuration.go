@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -208,6 +209,9 @@ func secondsOr(v, fallback int) time.Duration {
 type EventSourcesConfiguration struct {
 	EventSources    []EventSource
 	IngestRateLimit IngestRateLimit
+	// HttpIngest carries the settings of the DEVICE-FACING HTTP listeners alone; the
+	// GraphQL/management server keeps the shared platform defaults.
+	HttpIngest HttpIngest
 	// MaxReadingsPerMessage caps the readings one inbound message may carry on the JSON
 	// transports. Like the rate ceiling it is fail-safe: a non-positive value falls back
 	// to the platform default, never to unlimited.
@@ -265,9 +269,9 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 				// "/{instanceId}/{tenant}/events"; the instance and tenant are taken
 				// from the path, mirroring the MQTT topic convention (ADR-006/ADR-048).
 				Id:   "http1",
-				Type: "http",
+				Type: SourceTypeHttp,
 				Configuration: map[string]string{
-					"port": "8081",
+					"port": strconv.Itoa(DefaultHttpIngestPort),
 				},
 				Decoder: EventDecoder{
 					Type:          "json",
@@ -313,7 +317,8 @@ func (c *EventSourcesConfiguration) RetiredConfigKeys() map[string]string {
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
 // the load closed on an invalid configuration (ADR-022 decision 1): a shed floor must
-// name a level, and a source id must be usable AS the value it becomes.
+// name a level, a source id must be usable AS the value it becomes, and the listeners
+// this process binds must not ask for the same port.
 //
 // It used to say the source list was "left to the source loaders", and the loaders
 // check only that a Type is known and that no source points at the platform broker
@@ -325,7 +330,10 @@ func (c *EventSourcesConfiguration) Validate() error {
 	if c.Contention.ManualFloor < 0 || c.Contention.ManualFloor > governance.MaxShedLevel {
 		return fmt.Errorf("contention.manualFloor must be between 0 and %d (got %d)", governance.MaxShedLevel, c.Contention.ManualFloor)
 	}
-	return c.validateSourceIds()
+	if err := c.validateSourceIds(); err != nil {
+		return err
+	}
+	return c.validateListenerPorts()
 }
 
 // validateSourceIds refuses the ids that cannot serve as the value they become, and warns

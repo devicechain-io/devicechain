@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
@@ -26,9 +27,18 @@ import (
 // observed. allow is the rate-limit gate; a nil allow leaves ingest unmetered.
 func newTestHttpSource(t *testing.T, allow RateGate) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
+	return newTestHttpSourceWithIngest(t, allow, config.HttpIngest{}, nil)
+}
+
+// newTestHttpSourceWithIngest is newTestHttpSource with the device-facing listener
+// bounds and the early-close accounting spelled out, for the tests that drive them.
+func newTestHttpSourceWithIngest(t *testing.T, allow RateGate, ingest config.HttpIngest,
+	earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
+	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
-	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
+	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", ingest,
+		NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
 		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, captureSeq uint64) error {
 			dec.called = true
@@ -43,7 +53,7 @@ func newTestHttpSource(t *testing.T, allow RateGate) (*HttpEventSource, *capture
 			fail.err = err
 			return nil
 		},
-		allow)
+		allow, earlyClose)
 	assert.NoError(t, err)
 	return es, dec, fail
 }
@@ -178,24 +188,40 @@ func TestHttpEventSource_WrongMethod(t *testing.T) {
 
 // The configured port is parsed; an invalid port fails construction.
 func TestNewHttpEventSource_Port(t *testing.T) {
-	es, err := NewHttpEventSource("http-test", map[string]string{"port": "9000"}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
-		func(string, []byte) {}, nil, nil, nil)
+	newSource := func(cfg map[string]string) (*HttpEventSource, error) {
+		return NewHttpEventSource("http-test", cfg, "inst-1", config.HttpIngest{},
+			NewJsonDecoder(map[string]string{}, 0),
+			func(string, []byte) {}, nil, nil, nil, nil)
+	}
+
+	es, err := newSource(map[string]string{"port": "9000"})
 	assert.NoError(t, err)
 	assert.Equal(t, 9000, es.Port)
 
-	_, err = NewHttpEventSource("http-test", map[string]string{"port": "abc"}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
-		func(string, []byte) {}, nil, nil, nil)
+	_, err = newSource(map[string]string{"port": "abc"})
 	assert.Error(t, err)
 
 	// A number outside the TCP port range is a configuration error, refused at
 	// construction rather than carried as far as the bind.
-	_, err = NewHttpEventSource("http-test", map[string]string{"port": "70000"}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
-		func(string, []byte) {}, nil, nil, nil)
+	_, err = newSource(map[string]string{"port": "70000"})
 	assert.Error(t, err)
 
-	// Absent port falls back to the default.
-	es, err = NewHttpEventSource("http-test", map[string]string{}, "inst-1", NewJsonDecoder(map[string]string{}, 0),
-		func(string, []byte) {}, nil, nil, nil)
+	// 0 is IN range and is refused anyway: net.Listen reads it as "any free port", so
+	// the source would bind an ephemeral port, start successfully, log a healthy
+	// address and ingest nothing a device could be told to reach.
+	_, err = newSource(map[string]string{"port": "0"})
+	if assert.Error(t, err, "a device-facing listener must never be configured on port 0") {
+		assert.Contains(t, err.Error(), "any free port")
+	}
+
+	// Absent port falls back to the default — NOT to 0, which is the value the
+	// refusal above exists for.
+	es, err = newSource(map[string]string{})
+	assert.NoError(t, err)
+	assert.Equal(t, DEFAULT_HTTP_PORT, es.Port)
+
+	// An empty value is the same case as an absent key, and neither is 0.
+	es, err = newSource(map[string]string{"port": ""})
 	assert.NoError(t, err)
 	assert.Equal(t, DEFAULT_HTTP_PORT, es.Port)
 }

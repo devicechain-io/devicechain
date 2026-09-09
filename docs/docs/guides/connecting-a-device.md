@@ -262,6 +262,20 @@ curl -X POST http://localhost:8081/devicechain/acme/events \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
+### Time limits on a request
+
+The ingest listener bounds how long a request may take. A device has **5 seconds** to send its
+request headers and **60 seconds** to send the whole request, headers and body. Both are
+configurable per instance, in the `event-sources` area's `httpIngest` settings.
+
+A request that exceeds either bound has its **connection closed** — the server closes it before the
+event exists, so there is no response, no event, and nothing in the pipeline to trace it to. On a
+constrained link (NB-IoT, 2G, satellite) where several seconds to complete a request is ordinary,
+raise the bounds rather than leaving the slowest devices to fail silently; the symptom looks like
+intermittent device-side flakiness affecting only those devices. The
+`total_http_connections_closed_before_request` metric counts connections that never delivered a
+request, which is what such a device leaves behind.
+
 ## Receiving commands
 
 A device receives commands on **its own** topic:
