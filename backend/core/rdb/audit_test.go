@@ -206,3 +206,51 @@ func TestAuditJournalTenantScopedRead(t *testing.T) {
 		t.Fatalf("tenant B must not see tenant A's audit rows, got %d", len(bRows))
 	}
 }
+
+// 🔴 THE FAIL-CLOSED CONTRACT, WHICH THE TESTS ABOVE STRUCTURALLY CANNOT SEE.
+//
+// The journal's hooks are After("gorm:create"/"update"/"delete"), which gorm sorts
+// past the commit callback, and a failed journal write is reported with
+// db.AddError. So a mutation whose audit row cannot land reports FAILURE for a
+// change that has ALREADY HAPPENED. Every test above performs a mutation, asserts
+// it returned nil, and then reads the journal — none of them can observe an error
+// raised over a completed write, so nothing in this package pinned the reporting
+// half of the contract.
+//
+// This drives it: take the journal's table away, then update. The error is
+// required AND so is the changed value, because an assertion on the error alone
+// would also pass if the mutation had been refused, which is the opposite
+// behaviour — a change that did not happen, reported as failed.
+func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+
+	w := &widget{Name: "seeded"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := db.Migrator().DropTable(&AuditEvent{}); err != nil {
+		t.Fatalf("drop the audit journal's table: %v", err)
+	}
+
+	err := db.WithContext(ctx).Model(&widget{}).
+		Where("id = ?", w.ID).Update("name", "moved").Error
+	if err == nil {
+		t.Fatal("an update whose journal write could not land reported success — the journal " +
+			"fails closed by design, so a mutation it could not record must never report nil")
+	}
+
+	var reloaded []widget
+	if err := db.WithContext(ctx).Where("id = ?", w.ID).Find(&reloaded).Error; err != nil {
+		t.Fatalf("reload the widget: %v", err)
+	}
+	if len(reloaded) != 1 {
+		t.Fatalf("reloaded %d widgets, want 1", len(reloaded))
+	}
+	if reloaded[0].Name != "moved" {
+		t.Fatalf("the widget reads %q, want %q — the error above is supposed to be one raised "+
+			"over a mutation that ALREADY HAPPENED; a refused write is the opposite "+
+			"behaviour, and this test would no longer be pinning the one it names",
+			reloaded[0].Name, "moved")
+	}
+}
