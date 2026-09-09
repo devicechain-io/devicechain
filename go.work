@@ -57,6 +57,7 @@ use (
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
 	./backend/tools/muxguard
+	./backend/tools/rdbguard
 	./backend/tools/subconfirm
 	./deploy
 )

@@ -515,14 +515,24 @@ jobs:
   # GraphQL document, so that is reachable from the public API, and twenty-one
   # lookups across two services carried it at once.
   #
-  # This is a job rather than a step inside `go` because it is a property of the
-  # TREE, not of a module: the `go` matrix would run it once per module and still
-  # only ever look at the whole repo. It needs no toolchain, so it is cheap.
+  # This is a job rather than a step inside `go` because every check here is a
+  # property of the TREE, not of a module: the `go` matrix would run each of them
+  # once per module and still only ever look at the whole repo.
+  #
+  # It sets up Go because two of the guards below are analyzers that PARSE the
+  # tree rather than grep it — backend/tools/rdbguard, built from source on every
+  # run so the gate cannot drift from the analyzer it runs.
   # ---------------------------------------------------------------------------
   data-access:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
 
       # Self-test first, as with every guard here — this one is a grep, and a grep
       # whose pattern or path has drifted reports a clean tree it never read. It
@@ -565,6 +575,50 @@ jobs:
         # catch it is about a module's ABSENCE — so it is asked of the tree here
         # rather than from inside any module.
         run: hack/check-partial-update-guards.sh
+
+      # Proves the checker can still fail BEFORE its green run is read as evidence.
+      # Eleven evasion shapes, each planted alone and each required to be caught AND
+      # named with a file and line; the sanctioned pattern and the four migrations'
+      # COMMENTS about it required to pass; an empty tree and a stale allow-list
+      # required to be refused rather than reported clean.
+      - name: index-helper caller guard self-test
+        run: hack/check-index-helper-callers.sh --self-test
+
+      - name: no non-test caller of core/rdb's index helpers
+        # An index NAME and its WHERE predicate are schema. Two of the three helpers
+        # are documented in their own source as test fixtures with no non-test
+        # callers; the third has exactly one, inside core's own secrets migration.
+        # A migration that sources either from another module is silently rewritten
+        # when that module changes: fresh installs start building a different index
+        # while every existing database keeps the shape it was given, from a diff
+        # that touched neither the migration nor the service nor their module — and
+        # both then report a clean migration and hold different schemas.
+        #
+        # Until now that arrangement was comment-only. This is a parser rather than
+        # a grep for a concrete reason: four service migrations explain in PROSE
+        # that their own copy of the helper is deliberate, and a text scan reports
+        # every one of those.
+        run: hack/check-index-helper-callers.sh
+
+      # Ten shapes, each planted alone and each required to be caught and located;
+      # the scoped replacement and a comment quoting gorm's own error text — which
+      # contains db.Table("users") — required to pass; an empty tree refused.
+      - name: bare-table guard self-test
+        run: hack/check-bare-table-statements.sh --self-test
+
+      - name: no statement names its table as a string
+        # A statement that names its table as a string is not tenant-scoped. Either
+        # it carries no parseable schema, which the tenant-scope callback refuses
+        # outright, or it parses into a shape with no TenantId — a projection
+        # struct, or a Model()/Table() mismatch — which classifies as NOT
+        # tenant-scoped, injects no predicate, and returns every tenant's rows with
+        # a nil error. The second has no failure mode at the call site at all.
+        #
+        # The refusal shipped with a safety argument resting on an enumeration:
+        # `.Table(` had zero non-test occurrences, so nothing legitimate was being
+        # refused. Nothing kept that true, and the natural way to spell a bulk
+        # update is the way that reaches it. This turns the snapshot into a check.
+        run: hack/check-bare-table-statements.sh
 
   # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
