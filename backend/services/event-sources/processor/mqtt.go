@@ -197,8 +197,17 @@ func isCommandPlane(topic string) bool {
 
 // Called when message is received from topic.
 func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
+	// Record the arrival by topic and SIZE, never by content. Nothing here has
+	// decoded the body yet, so this line cannot tell what the body holds — under
+	// deviceAuthMode=required an inbound event normally carries the device's
+	// credential, and an operator raising the log level to diagnose an ingest
+	// problem is not choosing to copy that into a log pipeline. Topic and byte
+	// count are what distinguishes "nothing is arriving" from "messages are
+	// arriving and being dropped further down", which is what this line is read
+	// for; every drop below reports its own reason.
 	if log.Debug().Enabled() {
-		log.Debug().Msg(fmt.Sprintf("Received message:\n%s from MQTT topic: %s\n", msg.Payload(), msg.Topic()))
+		log.Debug().Str("topic", msg.Topic()).Int("bytes", len(msg.Payload())).
+			Msg("Received MQTT message")
 	}
 	// Derive the per-message tenant from the topic up front; a message whose topic
 	// carries no tenant cannot be published to a tenant-scoped subject, so it is
