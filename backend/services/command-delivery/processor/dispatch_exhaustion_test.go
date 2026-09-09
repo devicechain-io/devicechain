@@ -75,9 +75,11 @@ func exhaustionProc(api *model.Api, writer messaging.MessageWriter) *CommandDeli
 	return &CommandDeliveryProcessor{
 		Api:                  api,
 		DeviceCommandsWriter: writer,
-		DispatchesExhausted: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "dispatches_exhausted_total",
-		}),
+		DeliveryMetrics: DeliveryMetrics{
+			DispatchesExhausted: prometheus.NewCounter(prometheus.CounterOpts{
+				Name: "dispatches_exhausted_total",
+			}),
+		},
 	}
 }
 
@@ -292,16 +294,21 @@ func TestAParkedCommandsWakesAreNotCountedAsFailedDispatches(t *testing.T) {
 //
 // 🔴 A COUNTER THIS PACKAGE TOLERATES AS NIL IS A COUNTER THAT CAN BE UNWIRED IN EVERY
 // SHIPPED BINARY WITHOUT A SINGLE TEST NOTICING. Nil is skipped by design, so deleting the
-// line that builds this one in NewCommandDeliveryProcessor breaks nothing, fails nothing,
-// and leaves the metric permanently absent — for a failure whose entire complaint was that
-// it was invisible. So this DRIVES the path through a constructor-built processor rather
+// line that builds this one in NewDeliveryMetrics breaks nothing, fails nothing, and leaves
+// the metric permanently absent — for a failure whose entire complaint was that it was
+// invisible. So this DRIVES the path through a processor built from real instruments rather
 // than reading the field back, following the rule the stranded-pass constructor test states.
+//
+// The instruments come from NewDeliveryMetrics rather than from the processor's own
+// constructor because that is where they are built: the processor is constructed inside the
+// NATS manager's oncreate callback, which runs on every start, so building a collector there
+// would panic on the second registration when the service restarts in place.
 func TestTheConstructorWiresTheExhaustionCounter(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "commanddeliveryexhaustion"}
 	api := &fakeApi{releaseExhausts: true}
 
 	proc := NewCommandDeliveryProcessor(ms, nil, &flakyWriter{failures: 100},
-		core.NewNoOpLifecycleCallbacks(), api, nil, nil, nil)
+		core.NewNoOpLifecycleCallbacks(), api, nil, nil, nil, NewDeliveryMetrics(ms))
 
 	if err := proc.deliverCommand(context.Background(),
 		&model.Command{DeviceToken: "pump-1", Name: "reboot"}, pathSweep); err == nil {
