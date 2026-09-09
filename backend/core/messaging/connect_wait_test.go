@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestWaitForConnectedReturnsOnAConnectedConn(t *testing.T) {
 	defer nc.Close()
 
 	start := time.Now()
-	if err := waitForConnected(nc, 5*time.Second); err != nil {
+	if err := waitForConnected(context.Background(), nc, 5*time.Second); err != nil {
 		t.Fatalf("an established connection must satisfy the wait immediately: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -59,7 +60,7 @@ func TestWaitForConnectedTimesOutOnAStillDiallingConn(t *testing.T) {
 	if nc.IsConnected() {
 		t.Fatal("the fixture is wrong: this conn must NOT be connected")
 	}
-	err = waitForConnected(nc, 300*time.Millisecond)
+	err = waitForConnected(context.Background(), nc, 300*time.Millisecond)
 	if err == nil {
 		t.Fatal("a connection that never connected must not satisfy the wait; " +
 			"proceeding past it is what makes js.KeyValue report a bogus server version")

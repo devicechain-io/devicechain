@@ -21,6 +21,20 @@ import (
 // keys are arbitrary caller strings (e.g. "tenant|token"); they are base64url-
 // encoded before use because the NATS KV key charset is restricted and the
 // caller's keys are not guaranteed to fall within it.
+//
+// 🔴 THE ctx ON EVERY METHOD BELOW IS NOT OBSERVED, AND A CALLER MUST NOT PLAN
+// AROUND IT. It is not an oversight to be fixed at these call sites: the nats.go v1
+// KeyValue interface takes no context on Get, Put, Create or Delete, so there is
+// nowhere to put one. Each round trip is bounded only by the JetStream client's own
+// request timeout.
+//
+// The parameters stay because they are the right shape for the operation and because
+// removing them would make every caller's context stop here rather than merely be
+// ignored here — but a caller wrapping a cache read in a short deadline expecting to
+// fall back to Postgres when it expires does NOT get that behaviour, and writing code
+// that depends on it produces a timeout that never fires. Honouring them means moving
+// this bucket onto the jetstream package's KV, whose methods do take a context; that
+// is a migration, not an edit.
 type Cache struct {
 	kv nats.KeyValue
 }

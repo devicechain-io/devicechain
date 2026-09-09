@@ -53,6 +53,13 @@ func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock
 // held by another replica; if it cannot be obtained within the retry budget the
 // error is returned and logic never runs (fail-closed). The lock is released
 // even if logic returns an error.
+//
+// ctx is observed in exactly two places, and it is worth being precise about which:
+// the backoff between acquisition attempts, which returns the context error rather
+// than sleeping out the wait, and logic itself, which is handed the same context. The
+// KV round trips — Create here, Delete in the release — do NOT observe it, because
+// the nats.go v1 KeyValue interface takes no context; see the note on Cache. So
+// cancelling shortens the RETRYING, not an individual attempt.
 func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(ctx context.Context) error) error {
 	key := kvKey(name)
 	holder := uuid.NewString()

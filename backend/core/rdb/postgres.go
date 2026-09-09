@@ -34,11 +34,26 @@ func (rdb *RdbManager) computePostgresRootUrl(pg *PostgresConfig) (string, error
 	// Read from the typed config rather than re-deriving from the raw map: the
 	// map path formatted every value with %v, so a port that arrived as a float
 	// rendered as "5432" or "5432.000000" depending on how the JSON was decoded.
-	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port, "postgres", sslMode), nil
+	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port, "postgres", sslMode,
+		map[string]string{"connect_timeout": ownedConnectTimeoutSeconds}), nil
 }
 
+// ownedConnectTimeoutSeconds bounds a single connection attempt on the connections
+// this service OWNS, and it is the twin of guestConnectTimeoutSeconds (guest.go).
+//
+// It is here for the reason stated there and for one more that applies only to these:
+// the bootstrap connections are made INSIDE RetryInfraConnect, whose whole contract is
+// that it gives up when the caller's context is cancelled and after a bounded number
+// of attempts. Neither promise can be kept while one attempt can block forever, and a
+// blackholing host — a dropped packet rather than a refused connection — is exactly
+// the case where a dial does. The retry loop's budget was ~1 minute on paper and
+// unbounded in practice.
+//
+// Five seconds is generous for a same-cluster hop.
+const ownedConnectTimeoutSeconds = "5"
+
 // Assure that database is created before connecting to it.
-func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
+func (rdb *RdbManager) assurePostgresDatabase(ctx context.Context, pgconfig *PostgresConfig) error {
 	url, err := rdb.computePostgresRootUrl(pgconfig)
 	if err != nil {
 		return err
@@ -47,7 +62,7 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	log.Info().Str("database", rdb.Microservice.InstanceId).
 		Str("host", pgconfig.Hostname).Int32("port", pgconfig.Port).
 		Msg("Verifying that instance database exists.")
-	conn, err := pgx.Connect(context.Background(), url)
+	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		return err
 	}
@@ -55,7 +70,7 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 
 	// List all databases
 	found := false
-	result := conn.PgConn().ExecParams(context.Background(), "SELECT datname FROM pg_database WHERE datistemplate = false", [][]byte{}, nil, nil, nil)
+	result := conn.PgConn().ExecParams(ctx, "SELECT datname FROM pg_database WHERE datistemplate = false", [][]byte{}, nil, nil, nil)
 	for result.NextRow() {
 		currdb := string(result.Values()[0])
 		if rdb.Microservice.InstanceId == currdb {
@@ -71,7 +86,7 @@ func (rdb *RdbManager) assurePostgresDatabase(pgconfig *PostgresConfig) error {
 	if !found {
 		// Create instance database.
 		log.Info().Msg("Database was not found. Creating...")
-		result := conn.PgConn().ExecParams(context.Background(), fmt.Sprintf("CREATE DATABASE %s", rdb.Microservice.InstanceId),
+		result := conn.PgConn().ExecParams(ctx, fmt.Sprintf("CREATE DATABASE %s", rdb.Microservice.InstanceId),
 			[][]byte{}, nil, nil, nil)
 		_, err := result.Close()
 		if err != nil {
@@ -97,17 +112,18 @@ func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) (s
 		return "", err
 	}
 	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port,
-		rdb.Microservice.InstanceId, sslMode), nil
+		rdb.Microservice.InstanceId, sslMode,
+		map[string]string{"connect_timeout": ownedConnectTimeoutSeconds}), nil
 }
 
 // Assure that functional area schema is created before connecting to it.
-func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
+func (rdb *RdbManager) assurePostgresSchema(ctx context.Context, pgconfig *PostgresConfig) error {
 	log.Info().Str("schema", rdb.Microservice.FunctionalArea).Msg("Verifying that schema exists.")
 	url, err := rdb.computePostgresInstanceDatabaseUrl(pgconfig)
 	if err != nil {
 		return err
 	}
-	conn, err := pgx.Connect(context.Background(), url)
+	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
 		return err
 	}
@@ -115,7 +131,7 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 
 	// List all databases
 	found := false
-	result := conn.PgConn().ExecParams(context.Background(), "SELECT schema_name FROM information_schema.schemata", [][]byte{}, nil, nil, nil)
+	result := conn.PgConn().ExecParams(ctx, "SELECT schema_name FROM information_schema.schemata", [][]byte{}, nil, nil, nil)
 	for result.NextRow() {
 		currsch := string(result.Values()[0])
 		if rdb.Microservice.FunctionalArea == currsch {
@@ -131,7 +147,7 @@ func (rdb *RdbManager) assurePostgresSchema(pgconfig *PostgresConfig) error {
 	if !found {
 		// Create functional area schema.
 		log.Info().Msg("Schema was not found. Creating...")
-		result := conn.PgConn().ExecParams(context.Background(), fmt.Sprintf("CREATE SCHEMA \"%s\"", rdb.Microservice.FunctionalArea),
+		result := conn.PgConn().ExecParams(ctx, fmt.Sprintf("CREATE SCHEMA \"%s\"", rdb.Microservice.FunctionalArea),
 			[][]byte{}, nil, nil, nil)
 		_, err := result.Close()
 		if err != nil {
@@ -163,7 +179,13 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
 	// installed there (TimescaleDB's create_hypertable, etc.) remain resolvable.
 	dsn := postgresKeywordDSN(pg.Username, pg.Password, pg.Hostname, pg.Port,
 		rdb.Microservice.InstanceId, sslMode,
-		map[string]string{"search_path": rdb.Microservice.FunctionalArea + ",public"})
+		map[string]string{
+			"search_path": rdb.Microservice.FunctionalArea + ",public",
+			// gorm.Open dials as part of opening — it probes the server version — and
+			// takes no context, so this is the ONLY thing bounding that dial. Without it
+			// the retry wrapper around it can spend an unbounded time in one attempt.
+			"connect_timeout": ownedConnectTimeoutSeconds,
+		})
 	// Never log the password (C1): emit only the non-sensitive connection
 	// coordinates. PostgresConfig.Password is treated as redacted everywhere.
 	// sslMode is logged deliberately: "is this link encrypted" is the kind of
@@ -174,15 +196,22 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
 }
 
 // Boostrap a postgres database/schema.
-func (rdb *RdbManager) bootstrapPostgres(pgconf *PostgresConfig) error {
+//
+// ctx reaches every round trip below, which is what makes the RetryInfraConnect
+// wrapper around this function mean what it says. That wrapper checks the context
+// BETWEEN attempts; a bootstrap that ran on context.Background() could not be
+// interrupted DURING one, so a cancellation arriving mid-dial was not observed until
+// the dial ended on its own — which against a host that is dropping packets rather
+// than refusing connections is not a bounded wait at all.
+func (rdb *RdbManager) bootstrapPostgres(ctx context.Context, pgconf *PostgresConfig) error {
 	// Verify/create instance database.
-	err := rdb.assurePostgresDatabase(pgconf)
+	err := rdb.assurePostgresDatabase(ctx, pgconf)
 	if err != nil {
 		return err
 	}
 
 	// Verify/create functional area schema.
-	err = rdb.assurePostgresSchema(pgconf)
+	err = rdb.assurePostgresSchema(ctx, pgconf)
 	if err != nil {
 		return err
 	}
@@ -201,8 +230,8 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// of Postgres lag on a cluster restart degrades into a retry rather than a
 	// crash-loop (A6). bootstrapPostgres only creates what is missing, so a
 	// re-attempt after a partial failure is safe.
-	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
-		return rdb.bootstrapPostgres(pgconf)
+	if err := core.RetryInfraConnect(ctx, "postgres", func(ctx context.Context) error {
+		return rdb.bootstrapPostgres(ctx, pgconf)
 	}); err != nil {
 		return err
 	}

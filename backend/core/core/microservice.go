@@ -452,6 +452,93 @@ func (ms *Microservice) InitializeAndStart() error {
 // configures.
 var drainSleep = time.Sleep
 
+// shutdownTeardownMargin is what the teardown budget deliberately leaves unspent:
+// enough for the process to log its outcome and set an exit status before the kubelet's
+// clock runs out. Reaching the kubelet's bound instead means SIGKILL, which is a bare
+// 137 with nothing in the log saying which component was still working — so the whole
+// value of the budget is in ending a few seconds EARLY.
+const shutdownTeardownMargin = 2 * time.Second
+
+// minShutdownTeardownBudget keeps a pathologically small grace period from producing a
+// budget of zero, which would abandon teardown before it had begun. A budget this small
+// will not finish, but it will try, and it will say so.
+const minShutdownTeardownBudget = time.Second
+
+// teardownBudget is the total time Stop plus Terminate are given, measured from the
+// moment the readiness drain ends.
+//
+// It is DERIVED from the drain window and the grace period rather than being a third
+// number to keep in step with them. Those two are already one budget — the config
+// refuses a drain longer than half the grace period, on the argument that the drain
+// only waits while the teardown after it is what does the work — and this is the
+// remainder of that same budget. A fixed constant would have been wrong in both
+// directions: too long for a raised drain, and no longer for a raised grace period.
+//
+// A zero ShutdownConfiguration reads as the defaults, which is what a Microservice
+// built as a struct literal has; DrainWindow does the same, and for the same reason.
+func (ms *Microservice) teardownBudget() time.Duration {
+	shutdown := ms.InstanceConfiguration.Infrastructure.Shutdown
+	grace := shutdown.TerminationGracePeriodSeconds
+	if grace <= 0 {
+		grace = config.DefaultTerminationGracePeriodSeconds
+	}
+	budget := time.Duration(grace)*time.Second - shutdown.DrainWindow() - shutdownTeardownMargin
+	if budget < minShutdownTeardownBudget {
+		return minShutdownTeardownBudget
+	}
+	return budget
+}
+
+// teardown runs Stop and then Terminate under ctx, and returns when they finish OR
+// when ctx's budget runs out, whichever comes first.
+//
+// 🔴 THE BUDGET IS ENFORCED HERE AS WELL AS BEING PASSED DOWN, and both halves are
+// load-bearing. Passing it down is what lets a component unwind cleanly and early —
+// the NATS manager's stop bounds its sampler join on it, RetryInfraConnect returns
+// the context error rather than spending its budget. But a component that does not
+// consult its context at all would make the deadline decorative: the call would still
+// block, and a deadline nothing observes reads as a bound while being none. The select
+// below is what makes the bound hold regardless of who honours what.
+//
+// Abandoning teardown mid-flight is a real cost and it is the smaller one. The
+// alternative at this point is not "teardown completes" — it is SIGKILL a few seconds
+// later, which abandons exactly the same work while also destroying the process's
+// ability to say so. The goroutine is left running deliberately; the process is on its
+// way out and its remaining life is measured in milliseconds.
+func (ms *Microservice) teardown(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		if err := ms.Stop(ctx); err != nil {
+			log.Error().Err(err).Msg("Unable to stop microservice")
+			// Terminate is deliberately NOT attempted after a failed Stop. Stop restores
+			// the previous lifecycle state on any error, and Terminate refuses every state
+			// but Stopped, so the only thing a second call could produce here is a second
+			// state-guard error burying the first.
+			//
+			// ⚠️ What that costs, since the reason above explains only why it is pointless:
+			// when Stop fails in its Postprocess — after ExecuteStop already succeeded —
+			// whatever Terminate would have closed is left to the process exit instead.
+			done <- err
+			return
+		}
+		if err := ms.Terminate(ctx); err != nil {
+			log.Error().Err(err).Msg("Unable to terminate microservice")
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		err := fmt.Errorf("core: teardown did not finish within %s: %w", ms.teardownBudget(), ctx.Err())
+		log.Error().Err(err).Msg("Teardown exceeded its budget; exiting without waiting for it to finish. " +
+			"A component is blocked on a dependency that is not answering.")
+		return err
+	}
+}
+
 // Issue stop and terminate commands to microservice
 //
 // It reports an ORDERLY stop (exit 0). A component that has decided the process is
@@ -567,27 +654,14 @@ func (ms *Microservice) shutDown(fatal error) {
 	}
 
 	// Cancel the root context first so long-running loops (NATS consumers, the
-	// auth gate) observe cancellation and unwind (E10). Stop/Terminate run on
-	// fresh contexts so teardown still completes after the cancellation.
+	// auth gate) observe cancellation and unwind (E10). Teardown runs on a context
+	// DETACHED from the root — it must still complete after that cancellation — but
+	// detached is not the same as unbounded, so it carries its own deadline.
 	ms.cancelRoot()
 
-	err := ms.Stop(context.Background())
-	if err != nil {
-		log.Error().Err(err).Msg("Unable to stop microservice")
-		// Terminate is deliberately NOT attempted after a failed Stop. Stop restores
-		// the previous lifecycle state on any error, and Terminate refuses every state
-		// but Stopped, so the only thing a second call could produce here is a second
-		// state-guard error burying the first.
-		//
-		// ⚠️ What that costs, since the reason above explains only why it is pointless:
-		// when Stop fails in its Postprocess — after ExecuteStop already succeeded —
-		// whatever Terminate would have closed is left to the process exit instead.
-		ms.finished(err)
-		return
-	}
-	err = ms.Terminate(context.Background())
-	if err != nil {
-		log.Error().Err(err).Msg("Unable to terminate microservice")
+	ctx, cancel := context.WithTimeout(context.Background(), ms.teardownBudget())
+	defer cancel()
+	if err := ms.teardown(ctx); err != nil {
 		ms.finished(err)
 		return
 	}

@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -170,10 +171,28 @@ func currentPeers(info *nats.StreamInfo) int {
 // is the right place for it. Replication is different: it is a correctness
 // property, it is the same property for a bucket as for a stream, and for
 // dc_leases it is the one that decides whether failover works at all.
-func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string, desired int, clustered bool) {
+// ctx bounds the whole pass, and it does so at the level that matters: every
+// StreamInfo below carries it, so a cancellation lands on the request in flight
+// rather than at the next turn of the loop. That distinction is the point — with no
+// context the calls fall back to the JetStream default request wait, and against a
+// broker that has stopped answering a pass over a dozen streams and buckets is that
+// wait a dozen times over, all of it inside the join that shutdown blocks on.
+//
+// The per-name error handling is unchanged for a cancelled pass — a cancelled
+// StreamInfo is an error like any other, logged at debug and skipped — but the loops
+// then stop rather than working through the remaining names to fail identically on
+// each. Note this DROPS the replication series for the names not reached, which is
+// correct: they are dropped by forgetReplication on an ordinary failure too, and a
+// sampler that has been told to stop should not leave a gauge asserting a value it
+// can no longer refresh.
+func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, names, buckets []string,
+	desired int, clustered bool) {
 	m.brokerClustered.Set(boolGauge(clustered))
 	for _, name := range buckets {
-		info, err := js.StreamInfo(name)
+		if ctx.Err() != nil {
+			return
+		}
+		info, err := js.StreamInfo(name, nats.Context(ctx))
 		if err != nil {
 			log.Debug().Err(err).Str("bucket", name).Msg("KV bucket replication sample failed")
 			m.forgetReplication(name)
@@ -182,7 +201,10 @@ func (m *streamMetrics) sample(js nats.JetStreamContext, names, buckets []string
 		m.sampleReplication(name, info, desired)
 	}
 	for _, name := range names {
-		info, err := js.StreamInfo(name)
+		if ctx.Err() != nil {
+			return
+		}
+		info, err := js.StreamInfo(name, nats.Context(ctx))
 		if err != nil {
 			log.Debug().Err(err).Str("stream", name).Msg("Stream utilization sample failed")
 			m.forgetReplication(name)

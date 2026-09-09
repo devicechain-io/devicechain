@@ -164,8 +164,21 @@ type NatsManager struct {
 	streamNames []string
 	bucketNames []string
 	metrics     *streamMetrics
-	stopSampler chan struct{}
 	samplerWg   sync.WaitGroup
+
+	// samplerCancel ends the metrics sampler. It is a CancelFunc rather than a plain
+	// signalling channel because closing a channel only tells the loop to stop at its
+	// next turn — it does nothing about the StreamInfo call the loop is INSIDE, and
+	// against an unreachable broker that call is where all the time goes. The context
+	// it cancels is threaded into those calls (nats.Context), so cancelling aborts the
+	// request in flight rather than waiting for it to time out on its own.
+	//
+	// nil means no sampler is running, which is what ExecuteStart's re-entry guard
+	// reads and what ExecuteStop restores.
+	//
+	// 🔴 The CANCEL FUNC is stored, not the context: a context belongs in a parameter,
+	// and the sampler's is passed to the goroutine that uses it.
+	samplerCancel context.CancelFunc
 
 	// shuttingDown distinguishes a connection we closed from one that died.
 	//
@@ -569,6 +582,23 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
 	// handled by creating it, not retried.
+	//
+	// ⚠️ context.Background() HERE IS A GAP, not a decision, and it is recorded rather
+	// than papered over. RetryInfraConnect's one advertised property is that it returns
+	// as soon as its context is cancelled; passing a context that is never cancelled
+	// opts out of it, so a bring-up against a broker that is not answering spends the
+	// full retry budget per stream with nothing able to shorten it.
+	//
+	// What bounds the damage today is that this runs only during ExecuteStart, and a
+	// signal arriving before startup completes takes the phase gate in
+	// Microservice.shutDown that reports "nothing to tear down" and lets the process
+	// exit — the startup goroutine goes with it. So this does not hold a pod past its
+	// grace period; it burns time in a process that is leaving anyway.
+	//
+	// Closing it properly means giving the callers a context to pass: NewWriter,
+	// NewReader and NewReplayReader are all reached from the oncreate callback, which
+	// takes only the manager. That is a signature change across every service and is
+	// deliberately not folded in here.
 	err := core.RetryInfraConnect(context.Background(), "nats jetstream", func(context.Context) error {
 		info, err := nmgr.js.StreamInfo(name)
 		if err == nil {
@@ -763,20 +793,25 @@ func (nmgr *NatsManager) trackedBuckets() []string {
 // DiscardOld eviction (ADR-023) and a stream that is not actually replicated
 // (ADR-020 A0) are observable rather than silent. It re-snapshots the tracked sets
 // each tick to pick up anything a runtime SubscribeLive ensured after startup.
-func (nmgr *NatsManager) runStreamMetrics() {
+//
+// ctx ends the sampler, and it ends it in two places rather than one: the select
+// below, which is the loop's turn, and inside sample, which is where an unreachable
+// broker actually parks. Only the second one bounds a stop issued while a sample is
+// in flight.
+func (nmgr *NatsManager) runStreamMetrics(ctx context.Context) {
 	defer nmgr.samplerWg.Done()
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
 	// Seed promptly, don't wait a full interval.
 	nmgr.reportReplicaClamp()
-	nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 	for {
 		select {
-		case <-nmgr.stopSampler:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			nmgr.reportReplicaClamp()
-			nmgr.metrics.sample(nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+			nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 		}
 	}
 }
@@ -1833,7 +1868,7 @@ func (nmgr *NatsManager) lastConnectedServer() string {
 }
 
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
-func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
+func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	url := nmgr.NatsUrl()
 	natscfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
 	opts := []nats.Option{
@@ -1893,7 +1928,18 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 	// running, the connection handlers log the arrival, and the caller's own
 	// RetryInfraConnect wrappers still apply. Failing startup here would trade a
 	// confusing error for an outage.
-	if err := waitForConnected(nc, connectWaitTimeout); err != nil {
+	if err := waitForConnected(ctx, nc, connectWaitTimeout); err != nil {
+		// A CANCELLATION IS NOT A TIMEOUT, and the two must not share an outcome. The
+		// paragraph above argues that running out of the 30s wait is survivable — the
+		// broker may still arrive and the retry wrappers still apply. A cancelled
+		// context says something different: the caller has stopped wanting this service
+		// at all, so there is nothing left for a degraded start to be useful for.
+		// Continuing would build a JetStream context and report a successful initialize
+		// for a process that is on its way out.
+		if ctx.Err() != nil {
+			nc.Close()
+			return err
+		}
 		log.Warn().Err(err).Str("url", url).Msg(
 			"NATS connection is not established yet; continuing to retry in the background. " +
 				"Components that read connection state during initialization may degrade until it lands")
@@ -1917,20 +1963,34 @@ func (nmgr *NatsManager) ExecuteInitialize(context.Context) error {
 // that comes up degraded and says so.
 const connectWaitTimeout = 30 * time.Second
 
-// waitForConnected blocks until the connection reports CONNECTED, or the timeout
-// elapses. It polls rather than using a handler because the connection may
-// ALREADY be connected by the time we get here — the common case — and a
-// handler-based wait would miss the event that already happened.
-func waitForConnected(nc *nats.Conn, timeout time.Duration) error {
+// waitForConnected blocks until the connection reports CONNECTED, the timeout
+// elapses, or ctx is cancelled. It polls rather than using a handler because the
+// connection may ALREADY be connected by the time we get here — the common case —
+// and a handler-based wait would miss the event that already happened.
+//
+// The poll sleeps in a select rather than a time.Sleep, which is the whole of what
+// makes ctx observable here: a bare sleep would still have to run out its 100ms and,
+// worse, would keep going round for the remainder of the 30s. Cancellation is checked
+// before the first IsConnected too, so an already-cancelled caller never waits at all.
+func waitForConnected(ctx context.Context, nc *nats.Conn, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("still %s when the wait was cancelled: %w", nc.Status(), err)
+		}
 		if nc.IsConnected() {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("still %s after %s", nc.Status(), timeout)
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("still %s when the wait was cancelled: %w", nc.Status(), ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -1941,17 +2001,23 @@ func (nmgr *NatsManager) Start(ctx context.Context) error {
 
 // ExecuteStart instantiates the service's readers/writers via oncreate, then starts
 // the stream-utilization sampler over the streams they ensured.
-func (nmgr *NatsManager) ExecuteStart(context.Context) error {
+//
+// The sampler's context is derived from the START context, so cancelling the root
+// context ends the sampler without anything else having to ask — which is what E10
+// says a long-running loop started by a lifecycle transition should do, and what the
+// signalling channel this replaced could not do.
+func (nmgr *NatsManager) ExecuteStart(ctx context.Context) error {
 	if err := nmgr.oncreate(nmgr); err != nil {
 		return err
 	}
 	// Guard against starting a second sampler if Start is ever retried without an
-	// intervening Stop (a real Starter.Postprocess failure): a nil stopSampler means
+	// intervening Stop (a real Starter.Postprocess failure): a nil samplerCancel means
 	// none is running. ExecuteStop nils it back out.
-	if nmgr.stopSampler == nil {
-		nmgr.stopSampler = make(chan struct{})
+	if nmgr.samplerCancel == nil {
+		sctx, cancel := context.WithCancel(ctx)
+		nmgr.samplerCancel = cancel
 		nmgr.samplerWg.Add(1)
-		go nmgr.runStreamMetrics()
+		go nmgr.runStreamMetrics(sctx)
 	}
 	log.Info().Msg("NATS component creation completed successfully.")
 	return nil
@@ -1965,14 +2031,42 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 // ExecuteStop stops the metrics sampler, unsubscribes readers, and drains the
 // connection. The sampler is stopped first (before Drain) so it is not mid-
 // StreamInfo when the connection closes.
-func (nmgr *NatsManager) ExecuteStop(context.Context) error {
+//
+// 🔴 THAT ORDERING IS WHY THE JOIN HAS TO BE BOUNDED. Waiting for the sampler comes
+// BEFORE every reader unsubscribe and before the drain, so however long the join
+// takes is time no reader spends unsubscribing. The sampler is a straight-line run of
+// StreamInfo calls over every stream and bucket this service tracks, and against a
+// broker that has stopped answering each of those is a full JetStream request wait —
+// so a service tracking a dozen of them could spend the entire termination grace
+// period here and be SIGKILLed before reaching the clean shutdown this ordering
+// exists to produce.
+//
+// ctx bounds it, and two separate things observe the cancellation:
+//
+//   - samplerCancel ends the sampler's own context, which is threaded into the
+//     StreamInfo calls, so a request in flight is aborted rather than waited out;
+//   - the select below, so that even a sampler which somehow does not return still
+//     cannot hold the stop past the caller's deadline. Continuing without it is safe:
+//     the sampler only reads, and the reader unsubscribes and the drain that follow
+//     are what a terminating pod actually owes its peers.
+func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 	// Before anything that can close the connection: Drain below fires the
 	// ClosedHandler, and it must know this was asked for.
 	nmgr.shuttingDown.Store(true)
-	if nmgr.stopSampler != nil {
-		close(nmgr.stopSampler)
-		nmgr.samplerWg.Wait()
-		nmgr.stopSampler = nil
+	if nmgr.samplerCancel != nil {
+		nmgr.samplerCancel()
+		joined := make(chan struct{})
+		go func() {
+			nmgr.samplerWg.Wait()
+			close(joined)
+		}()
+		select {
+		case <-joined:
+		case <-ctx.Done():
+			log.Warn().Err(ctx.Err()).Msg("Stream-metrics sampler did not stop within the shutdown budget; " +
+				"continuing with reader shutdown rather than holding the whole teardown for it.")
+		}
+		nmgr.samplerCancel = nil
 	}
 	log.Info().Msg("Shutting down NATS readers.")
 	for _, r := range nmgr.readers {

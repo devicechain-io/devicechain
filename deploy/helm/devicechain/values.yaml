@@ -641,6 +641,14 @@ rollingUpdate:
 # to render if you do, because it would be a second source for one budget. Under
 # instance.existingSecret the chart cannot write the block at all, so put it in the
 # Secret yourself, with the same two numbers you set here.
+#
+# The teardown after the drain is BOUNDED, and its budget is derived from these two
+# numbers rather than being a third one to keep in step: it is the grace period minus
+# the drain, minus a small margin for the process to write its exit. Teardown talks to
+# the broker and the database, which on a bad day are the things that have stopped
+# answering, so the budget is what turns a component stuck on one of them into a logged,
+# non-zero exit instead of a SIGKILL that says nothing. Raising the drain shortens it;
+# raising the grace period lengthens it.
 terminationGracePeriodSeconds: 30
 shutdownDrainSeconds: 5
 
