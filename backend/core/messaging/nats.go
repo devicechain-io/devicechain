@@ -201,11 +201,18 @@ type NatsManager struct {
 // sequence — core/core/lifecycle.go puts Stopped on startFrom and says why — so
 // ExecuteStart calls this callback a second time, and everything it constructs is
 // constructed again. That is the POINT of the callback rather than a flaw in it:
-// readers and writers are bound to the connection, a restart re-establishes the
-// connection, and objects holding the old one would be dead. Which is also why the
-// duplicate call cannot simply be suppressed here — a guard that skipped the second
-// invocation would trade a crash for a service that starts, reports healthy, and is
-// wired to nothing.
+// readers and writers are bound to the connection and to consumers this manager's
+// stop tears down, so a second start needs its own. Which is also why the duplicate
+// call cannot simply be suppressed here — a guard that skipped the second invocation
+// would trade a crash for a service that starts, reports healthy, and is wired to
+// objects the stop already unsubscribed.
+//
+// ⚠️ A start after a stop does NOT get a fresh CONNECTION today: ExecuteStop drains
+// this one, and ExecuteStart has no reconnect. The state machine permits Initialize
+// only from Uninitialized, so nothing re-dials, and the callback's first NewReader on
+// that second start fails on a closed connection after spending its retry budget. That
+// is a gap in the restart path, not a reason to build once — a callback written to run
+// once would still be wrong the moment the connection is re-established.
 //
 // ⇒ CONSTRUCT ONLY PER-CONNECTION OBJECTS IN THIS CALLBACK. Anything that registers
 // with a process- or service-scoped registry belongs in the INITIALIZE phase, which
