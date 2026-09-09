@@ -112,10 +112,10 @@ func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
 		deadLettered: ms.NewCounter("raise_alarm_dead_lettered_total",
 			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
 				"them failed, so an alarm that should have been raised or cleared is visible "+
-				"rather than only logged (ADR-024).", nil),
+				"rather than only logged (ADR-024)."),
 		deadLetterLost: ms.NewCounter("raise_alarm_dead_letter_lost_total",
 			"Raise-alarm edges that could be neither applied NOR dead-lettered — the write "+
-				"failed on a delivery that will not repeat, so the edge is gone.", nil),
+				"failed on a delivery that will not repeat, so the edge is gone."),
 	}
 }
 

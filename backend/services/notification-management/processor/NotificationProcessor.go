@@ -124,10 +124,10 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 		metrics: ms.NewProcessorMetrics("notify"),
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
-				"operator can see which pages were never sent (ADR-024).", nil),
+				"operator can see which pages were never sent (ADR-024)."),
 		deadLetterLost: ms.NewCounter("notifications_dead_letter_lost_total",
 			"Alarms that reached nobody AND could not be dead-lettered — the write failed on a "+
-				"delivery that will not repeat. An alarm in this state is invisible everywhere.", nil),
+				"delivery that will not repeat. An alarm in this state is invisible everywhere."),
 	}
 }
 

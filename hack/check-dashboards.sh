@@ -354,8 +354,8 @@ if [ "${1:-}" = "--self-test" ]; then
 package selftestarea
 
 func register(ms *Microservice) {
-	ms.NewCounter("probe_total", "A probe counter.", nil)
-	ms.NewCounter("other_probe_total", "A second probe counter.", nil)
+	ms.NewCounter("probe_total", "A probe counter.")
+	ms.NewCounter("other_probe_total", "A second probe counter.")
 }
 EOF
 

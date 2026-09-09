@@ -294,91 +294,91 @@ func registerHttpRoutes() {
 func buildMetrics() {
 	serverMetrics = server.Metrics{
 		Handshakes: Microservice.NewCounter("handshakes_total",
-			"Completed DTLS handshakes (each is a new authenticated LwM2M session).", nil),
+			"Completed DTLS handshakes (each is a new authenticated LwM2M session)."),
 		HandshakeFailures: Microservice.NewCounter("handshake_failures_total",
-			"DTLS handshakes refused because the client presented an unprovisioned PSK identity (the fail-closed auth floor).", nil),
+			"DTLS handshakes refused because the client presented an unprovisioned PSK identity (the fail-closed auth floor)."),
 		ActiveSessions: Microservice.NewGauge("active_sessions",
-			"Live DTLS sessions currently held.", nil),
+			"Live DTLS sessions currently held."),
 		SessionsRejected: Microservice.NewCounter("sessions_rejected_total",
-			"New sessions refused because the live-session ceiling (maxSessions) was reached.", nil),
+			"New sessions refused because the live-session ceiling (maxSessions) was reached."),
 		Requests: Microservice.NewCounterVec("coap_requests_total",
 			"Transport-level CoAP requests handled by the L0 health probe, by response code. The /rd registration outcomes are metered by the registrations/updates/deregistrations/expiries counters.", []string{"code"}),
 	}
 
 	leaderGauge = Microservice.NewGauge("is_leader",
-		"1 when this replica holds the LwM2M leadership lease and is serving the transport, else 0 (warm standby).", nil)
+		"1 when this replica holds the LwM2M leadership lease and is serving the transport, else 0 (warm standby).")
 
 	registryMetrics = registry.Metrics{
 		Registrations: Microservice.NewCounter("registrations_total",
-			"LwM2M /rd registrations accepted (a CONNECTED presence event was emitted).", nil),
+			"LwM2M /rd registrations accepted (a CONNECTED presence event was emitted)."),
 		Updates: Microservice.NewCounter("registration_updates_total",
-			"LwM2M registration lifetime refreshes (POST /rd/{id}).", nil),
+			"LwM2M registration lifetime refreshes (POST /rd/{id})."),
 		Deregistrations: Microservice.NewCounter("deregistrations_total",
-			"LwM2M explicit deregistrations (DELETE /rd/{id}).", nil),
+			"LwM2M explicit deregistrations (DELETE /rd/{id})."),
 		Expiries: Microservice.NewCounter("registration_expiries_total",
-			"LwM2M registrations that lapsed with no update (DISCONNECTED by lifetime timer).", nil),
+			"LwM2M registrations that lapsed with no update (DISCONNECTED by lifetime timer)."),
 		ActiveRegistrations: Microservice.NewGauge("active_registrations",
-			"LwM2M registrations currently held. INCLUDES failover-reconstruction shadows immediately after a leadership takeover (ADR-075 L3b) — cross-check shadows_reconstructed_total and the per-tenant reconstruction log to tell a healthy takeover from a live fleet.", nil),
+			"LwM2M registrations currently held. INCLUDES failover-reconstruction shadows immediately after a leadership takeover (ADR-075 L3b) — cross-check shadows_reconstructed_total and the per-tenant reconstruction log to tell a healthy takeover from a live fleet."),
 		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
-			"Devices auto-created on their first LwM2M registration.", nil),
+			"Devices auto-created on their first LwM2M registration."),
 		ShadowsReconstructed: Microservice.NewCounter("shadows_reconstructed_total",
-			"Shadow registrations rebuilt from device-state on a leadership acquisition (ADR-075 L3b failover reconstruction) — a takeover marker; each is superseded by a re-Register or DISCONNECTED when its lifetime lapses.", nil),
+			"Shadow registrations rebuilt from device-state on a leadership acquisition (ADR-075 L3b failover reconstruction) — a takeover marker; each is superseded by a re-Register or DISCONNECTED when its lifetime lapses."),
 		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
-			"Presence StateChange events (ADR-067) durably written on an LwM2M register/deregister/expiry.", nil),
+			"Presence StateChange events (ADR-067) durably written on an LwM2M register/deregister/expiry."),
 		Dropped: Microservice.NewCounter("presence_dropped_total",
-			"Presence transitions dropped: an unregistered device on a no-auto-register credential, or a durable-emit budget exhausted.", nil),
+			"Presence transitions dropped: an unregistered device on a no-auto-register credential, or a durable-emit budget exhausted."),
 		AuthErrors: Microservice.NewCounter("auth_errors_total",
-			"/rd requests refused because no authenticated PSK identity (or its tenancy binding) could be recovered.", nil),
+			"/rd requests refused because no authenticated PSK identity (or its tenancy binding) could be recovered."),
 		BadRequests: Microservice.NewCounter("bad_requests_total",
-			"Malformed /rd requests (e.g. a registration-item request with no location).", nil),
+			"Malformed /rd requests (e.g. a registration-item request with no location)."),
 		ObservationOverflow: Microservice.NewCounter("observation_overflow_total",
-			"Telemetry object instances a registration declared beyond the per-registration observe cap (dropped, not observed).", nil),
+			"Telemetry object instances a registration declared beyond the per-registration observe cap (dropped, not observed)."),
 	}
 
 	ingestMetrics = adapter.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
-			"Individual measurement samples durably written from LwM2M Observe/Notify.", nil),
+			"Individual measurement samples durably written from LwM2M Observe/Notify."),
 		DevicesRegistered: Microservice.NewCounter("telemetry_devices_registered_total",
-			"Devices auto-created on a first telemetry sample (rare: LwM2M devices are created at /rd registration).", nil),
+			"Devices auto-created on a first telemetry sample (rare: LwM2M devices are created at /rd registration)."),
 		UnknownDropped: Microservice.NewCounter("telemetry_unknown_dropped_total",
-			"Telemetry samples dropped for an unregistered device (auto-registration off for the credential).", nil),
+			"Telemetry samples dropped for an unregistered device (auto-registration off for the credential)."),
 		TenantGoneDropped: Microservice.NewCounter("telemetry_tenant_deleted_dropped_total",
-			"Telemetry samples dropped because the tenant has been deleted and its data is being reclaimed.", nil),
+			"Telemetry samples dropped because the tenant has been deleted and its data is being reclaimed."),
 	}
 
 	obsMetrics = observe.Metrics{
 		NotifiesReceived: Microservice.NewCounter("notifies_received_total",
-			"LwM2M Notify messages received on an observed object instance.", nil),
+			"LwM2M Notify messages received on an observed object instance."),
 		DecodeFailures: Microservice.NewCounter("notify_decode_failures_total",
-			"LwM2M Notify payloads that could not be decoded (malformed or unreadable).", nil),
+			"LwM2M Notify payloads that could not be decoded (malformed or unreadable)."),
 		UnknownContentFormat: Microservice.NewCounter("notify_unknown_content_format_total",
-			"LwM2M Notify payloads in a content format this adapter does not decode (e.g. TLV; SenML-JSON only).", nil),
+			"LwM2M Notify payloads in a content format this adapter does not decode (e.g. TLV; SenML-JSON only)."),
 		ObserveEstablishRefused: Microservice.NewCounter("observe_establish_refused_total",
-			"Observe requests refused or failed (dominant cause: a conformant LwM2M 1.0-only client answering the SenML Observe with 4.06).", nil),
+			"Observe requests refused or failed (dominant cause: a conformant LwM2M 1.0-only client answering the SenML Observe with 4.06)."),
 		TerminalNotifications: Microservice.NewCounter("observe_terminal_notifications_total",
-			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted).", nil),
+			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted)."),
 		SamplesTruncated: Microservice.NewCounter("notify_samples_truncated_total",
-			"Samples dropped from a single Notify past the per-message cap (decode.MaxSamplesPerNotify).", nil),
+			"Samples dropped from a single Notify past the per-message cap (decode.MaxSamplesPerNotify)."),
 		RecordsNonNumeric: Microservice.NewCounter("notify_records_non_numeric_total",
 			"SenML records skipped for carrying no numeric value (boolean/string/opaque readings, or sum-only). "+
-				"Expected for a fleet whose objects are not measurements; it is what tells that apart from silence.", nil),
+				"Expected for a fleet whose objects are not measurements; it is what tells that apart from silence."),
 		RecordsNonFinite: Microservice.NewCounter("notify_records_non_finite_total",
 			"SenML records skipped because the value resolved to NaN or infinity. Always a device fault: "+
-				"a non-finite value would otherwise be accepted by the resolver and stored.", nil),
+				"a non-finite value would otherwise be accepted by the resolver and stored."),
 		RecordsUnnamed: Microservice.NewCounter("notify_records_unnamed_total",
 			"SenML records skipped because the resolved name was empty. Always a device fault: "+
-				"a sample with no resource path has no series to belong to.", nil),
+				"a sample with no resource path has no series to belong to."),
 		IngestDropped: Microservice.NewCounter("notify_ingest_dropped_total",
-			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes).", nil),
+			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes)."),
 		ActiveObservations: Microservice.NewGauge("active_observations",
-			"Live LwM2M observations currently held across all sessions.", nil),
+			"Live LwM2M observations currently held across all sessions."),
 	}
 
 	limiterMetrics = adapter.IngestLimiterMetrics{
 		MessagesShed: Microservice.NewCounter("ingest_messages_shed_total",
-			"Device messages shed at the per-tenant ingest message-rate ceiling (Register/Update/Notify).", nil),
+			"Device messages shed at the per-tenant ingest message-rate ceiling (Register/Update/Notify)."),
 		SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
-			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling.", nil),
+			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling."),
 	}
 
 	// Downlink command dispatch (ADR-075 L4a). The op label is a BOUNDED set (read/write/execute/
@@ -394,44 +394,44 @@ func buildMetrics() {
 		Failed: Microservice.NewCounterVec("commands_failed_total",
 			"LwM2M commands the device rejected (4.xx/5.xx), timed out, or that failed local validation, by operation.", []string{"op"}),
 		NotServed: Microservice.NewCounter("commands_not_served_total",
-			"Commands ack-dropped because no device this adapter serves matches (another protocol's device, or none) — a mirror of the instance's command traffic, not an anomaly.", nil),
+			"Commands ack-dropped because no device this adapter serves matches (another protocol's device, or none) — a mirror of the instance's command traffic, not an anomaly."),
 		ServedOffline: Microservice.NewCounter("commands_served_offline_total",
-			"Commands for a device this adapter serves that had no live connection — parked in command-delivery and drained on the device's next wake (L4b), or EXPIRED at their TTL if it never wakes.", nil),
+			"Commands for a device this adapter serves that had no live connection — parked in command-delivery and drained on the device's next wake (L4b), or EXPIRED at their TTL if it never wakes."),
 		// Park outcomes are SPLIT for the reason the claim outcomes below are: they mean
 		// opposite things. Settled is the mechanism working — the command finished under us.
 		// Errors mean command-delivery could not be reached, so the row is still SENT and will
 		// blame the device with TIMEOUT if the retries run out. Skipped means parking was not
 		// attempted at all, which on a configured instance should be flat zero.
 		ParkErrors: Microservice.NewCounter("command_park_errors_total",
-			"Undeliverable commands that could NOT be handed back to command-delivery; left unacked to retry on redelivery, and stuck in SENT until one succeeds.", nil),
+			"Undeliverable commands that could NOT be handed back to command-delivery; left unacked to retry on redelivery, and stuck in SENT until one succeeds."),
 		ParkSettled: Microservice.NewCounter("command_park_settled_total",
-			"Hand-backs that moved no row because the command had already been answered, cancelled, expired or re-claimed — a settled outcome, not a fault.", nil),
+			"Hand-backs that moved no row because the command had already been answered, cancelled, expired or re-claimed — a settled outcome, not a fault."),
 		ParkSkipped: Microservice.NewCounter("command_park_skipped_total",
-			"Undeliverable commands NOT handed back because no parker is wired or the delivery envelope carried no dispatch nonce; they stay SENT and ride their TTL.", nil),
+			"Undeliverable commands NOT handed back because no parker is wired or the delivery envelope carried no dispatch nonce; they stay SENT and ride their TTL."),
 		Poison: Microservice.NewCounter("commands_poison_total",
-			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope).", nil),
+			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope)."),
 		ResponseFails: Microservice.NewCounter("command_response_publish_failures_total",
-			"Command outcomes that could not be published to command-responses after local retries (the op already ran, so the command is not redelivered; it will TIMEOUT).", nil),
+			"Command outcomes that could not be published to command-responses after local retries (the op already ran, so the command is not redelivered; it will TIMEOUT)."),
 		// L4b wake-drain (ADR-075): commands held for an offline device and delivered on its wake.
 		Drained: Microservice.NewCounter("commands_drained_total",
-			"Held commands dispatched to a device on its Register/Update wake (LwM2M queue-mode drain).", nil),
+			"Held commands dispatched to a device on its Register/Update wake (LwM2M queue-mode drain)."),
 		DrainErrors: Microservice.NewCounter("command_drain_errors_total",
-			"Wake-drain fetches that failed (retried on the device's next Register/Update).", nil),
+			"Wake-drain fetches that failed (retried on the device's next Register/Update)."),
 		DrainDropped: Microservice.NewCounter("command_drain_dropped_total",
-			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers).", nil),
+			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers)."),
 		DrainDedup: Microservice.NewCounter("command_drain_dedup_total",
-			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided.", nil),
+			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided."),
 		// The two claim outcomes are SPLIT because they mean opposite things: a lost claim is the
 		// exclusion mechanism working (someone else owns that command, so we correctly did not
 		// actuate it twice), while a claim error is command-delivery being unreachable and a
 		// deliverable command going undelivered. Summed into one series, an outage would look like
 		// ordinary contention.
 		DrainClaimLost: Microservice.NewCounter("command_drain_claims_lost_total",
-			"Held commands another dispatcher or the delivery sweep claimed first, so this wake did not dispatch them — a duplicate actuation avoided, not a fault.", nil),
+			"Held commands another dispatcher or the delivery sweep claimed first, so this wake did not dispatch them — a duplicate actuation avoided, not a fault."),
 		DrainClaimErrors: Microservice.NewCounter("command_drain_claim_errors_total",
-			"Held commands NOT dispatched because ownership could not be established with command-delivery (fail-closed; retried on the device's next Register/Update).", nil),
+			"Held commands NOT dispatched because ownership could not be established with command-delivery (fail-closed; retried on the device's next Register/Update)."),
 		TenantGoneRefused: Microservice.NewCounter("commands_tenant_deleted_total",
-			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware.", nil),
+			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware."),
 	}
 }
 

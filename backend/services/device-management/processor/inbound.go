@@ -144,8 +144,7 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		red: ms.NewProcessorMetrics("resolve"),
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
-			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling",
-			nil),
+			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
 	}
 }
 

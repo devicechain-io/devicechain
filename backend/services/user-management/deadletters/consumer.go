@@ -103,16 +103,16 @@ func NewMetrics(ms *core.Microservice) Metrics {
 	return Metrics{
 		stored: ms.NewCounter("dead_letters_stored_total",
 			"Dead letters written to the queryable store, so a failure a consumer gave up on "+
-				"outlives the stream's own seven-day window (ADR-024).", nil),
+				"outlives the stream's own seven-day window (ADR-024)."),
 		unstorable: ms.NewCounter("dead_letters_unstorable_total",
 			"Dead-letter messages this consumer could not make sense of — no parseable tenant, "+
 				"or a body that is not an envelope. They are ACKED and counted rather than "+
-				"retried, because no redelivery makes a malformed message parse.", nil),
+				"retried, because no redelivery makes a malformed message parse."),
 		unstored: ms.NewCounter("dead_letters_unstored_total",
 			"Dead letters that exhausted every delivery attempt without being stored — the "+
 				"store was unreachable for longer than the retries last. The failure they "+
 				"described is now recorded nowhere, which is the one thing this consumer "+
-				"exists to prevent.", nil),
+				"exists to prevent."),
 	}
 }
 

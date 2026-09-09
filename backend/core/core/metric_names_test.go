@@ -47,9 +47,9 @@ func TestMetricConstructorsRefuseAnIllegalName(t *testing.T) {
 			// four callers can still walk around.
 			constructors := map[string]func(ms *Microservice){
 				"NewProcessorMetrics": func(ms *Microservice) { ms.NewProcessorMetrics(tc.name) },
-				"NewCounter":          func(ms *Microservice) { ms.NewCounter(tc.name, "help", nil) },
+				"NewCounter":          func(ms *Microservice) { ms.NewCounter(tc.name, "help") },
 				"NewCounterVec":       func(ms *Microservice) { ms.NewCounterVec(tc.name, "help", []string{"result"}) },
-				"NewGauge":            func(ms *Microservice) { ms.NewGauge(tc.name, "help", nil) },
+				"NewGauge":            func(ms *Microservice) { ms.NewGauge(tc.name, "help") },
 				"NewGaugeVec":         func(ms *Microservice) { ms.NewGaugeVec(tc.name, "help", []string{"result"}) },
 			}
 			for ctor, call := range constructors {
@@ -106,7 +106,7 @@ func TestMetricConstructorsRefuseAnIllegalFunctionalArea(t *testing.T) {
 			t.Errorf("panic %v does not name the offending functional area", r)
 		}
 	}()
-	ms.NewCounter("probe_total", "help", nil)
+	ms.NewCounter("probe_total", "help")
 }
 
 // 🔴 THE COUNTERWEIGHT. "Refuses an illegal name" is satisfied just as well by a

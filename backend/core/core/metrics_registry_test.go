@@ -73,7 +73,7 @@ func TestEachMicroserviceGetsItsOwnMetricsRegistry(t *testing.T) {
 // keeps being wrong here: an invariant asserted by a comment with nothing enforcing it.
 func TestUseMetricsRegistryRefusesALateCall(t *testing.T) {
 	ms := &Microservice{FunctionalArea: "late-swap"}
-	ms.NewCounter("built_first_total", "A metric constructed before the swap.", nil)
+	ms.NewCounter("built_first_total", "A metric constructed before the swap.")
 
 	defer func() {
 		if recover() == nil {
@@ -90,7 +90,7 @@ func TestUseMetricsRegistryRefusesALateCall(t *testing.T) {
 func TestUseMetricsRegistryAcceptsTheOrdinaryOrder(t *testing.T) {
 	ms := &Microservice{FunctionalArea: "early-swap"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	ms.NewCounter("built_after_total", "A metric constructed after the swap.", nil)
+	ms.NewCounter("built_after_total", "A metric constructed after the swap.")
 
 	families, err := ms.metricsReg.Gather()
 	if err != nil {
@@ -117,7 +117,7 @@ func TestALiteralMicroserviceRegistersNowhereButStillCounts(t *testing.T) {
 		t.Fatal("a literal Microservice reported a registerer; MetricsRegisterer must return an untyped nil so promauto skips registration")
 	}
 
-	counter := ms.NewCounter("literal_probe_total", "Probe metric.", nil)
+	counter := ms.NewCounter("literal_probe_total", "Probe metric.")
 	counter.Inc()
 
 	families, err := prometheus.DefaultGatherer.Gather()

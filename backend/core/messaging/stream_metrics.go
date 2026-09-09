@@ -101,7 +101,7 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		brokerClustered: ms.NewGauge("jetstream_broker_clustered",
 			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
 				"jetstream_replicas_desired == 1 this is the false-HA state: a replicated broker "+
-				"storing one copy of everything.", nil),
+				"storing one copy of everything."),
 		warned: map[string]bool{},
 	}
 }
