@@ -196,6 +196,37 @@ type NatsManager struct {
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
 // instantiate the service's readers/writers (mirrors KafkaManager).
+//
+// 🔴 ONCREATE RUNS ON EVERY START, NOT ONCE. A start after a stop is a supported
+// sequence — core/core/lifecycle.go puts Stopped on startFrom and says why — so
+// ExecuteStart calls this callback a second time, and everything it constructs is
+// constructed again. That is the POINT of the callback rather than a flaw in it:
+// readers and writers are bound to the connection and to consumers this manager's
+// stop tears down, so a second start needs its own. Which is also why the duplicate
+// call cannot simply be suppressed here — a guard that skipped the second invocation
+// would trade a crash for a service that starts, reports healthy, and is wired to
+// objects the stop already unsubscribed.
+//
+// ⚠️ A start after a stop does NOT get a fresh CONNECTION today: ExecuteStop drains
+// this one, and ExecuteStart has no reconnect. The state machine permits Initialize
+// only from Uninitialized, so nothing re-dials, and the callback's first NewReader on
+// that second start fails on a closed connection after spending its retry budget. That
+// is a gap in the restart path, not a reason to build once — a callback written to run
+// once would still be wrong the moment the connection is re-established.
+//
+// ⇒ CONSTRUCT ONLY PER-CONNECTION OBJECTS IN THIS CALLBACK. Anything that registers
+// with a process- or service-scoped registry belongs in the INITIALIZE phase, which
+// runs once (initializeFrom is Uninitialized alone). Concretely:
+//
+//   - Prometheus collectors. promauto registers on the Microservice's own registry
+//     and a duplicate registration PANICS, so a metric built here takes the service
+//     down on the second start. Build them in the service's initialize hook and pass
+//     them into whatever the callback constructs.
+//   - http.ServeMux patterns. ServeMux.Handle panics on a duplicate pattern.
+//
+// The name of the function passed here is no guide to any of this: a service's is
+// conventionally createNatsComponents, which reads like initialize-phase work. The
+// phase a function runs in is a property of its caller.
 func NewNatsManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 	oncreate func(*NatsManager) error) *NatsManager {
 	nmgr := &NatsManager{

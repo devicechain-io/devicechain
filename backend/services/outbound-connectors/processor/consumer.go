@@ -41,7 +41,7 @@ type DispatchConsumer struct {
 	reader   messaging.MessageReader
 	dead     messaging.MessageWriter
 	executor *Executor
-	metrics  *dispatchMetrics
+	metrics  *DispatchMetrics
 
 	// deadIndex writes the platform-wide (ADR-024) index entry for a give-up, so an outbound
 	// dispatch the service abandoned appears in the one list an operator reads rather than only on
@@ -75,16 +75,22 @@ type DispatchConsumer struct {
 // executor. rate is the per-tenant egress limiter (nil disables egress rate limiting); waitBudget is
 // how long a worker blocks for a token before shedding. tenantDeleted is the ADR-077 lifecycle gate
 // (nil disables the refusal). workers is the outbound concurrency ceiling; backlog is the
-// reader→worker hand-off buffer. A nil Microservice (unit tests) leaves metrics nil (every recorder
-// is nil-safe).
+// reader→worker hand-off buffer. Nil metrics (unit tests) run the consumer unmeasured (every
+// recorder is nil-safe).
+//
+// metrics is built once in the initialize phase (see NewDispatchMetrics) and shared by every
+// consumer this service constructs, because this constructor runs again on every start.
+//
+// 🔴 IT TAKES NO Microservice, DELIBERATELY. It used to, for one purpose: building the
+// counters right here — which is what made a restart panic. Leaving the parameter behind
+// with nothing reading it would leave the hook the defect hung on in place.
 //
 // tenantDeleted is a CONSTRUCTOR ARGUMENT rather than a setter for the same reason the rate limiter
 // is: this is the only consumer in the service, so the property worth buying is that a second one
 // added later cannot be constructed without answering the question.
-func NewDispatchConsumer(ms *core.Microservice, reader messaging.MessageReader, dead messaging.MessageWriter,
+func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageWriter,
 	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
-	tenantDeleted func(string) bool, workers, backlog int) *DispatchConsumer {
-	metrics := newDispatchMetrics(ms)
+	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics) *DispatchConsumer {
 	var index *deadletter.Sink
 	if deadIndex != nil {
 		index = deadletter.NewSink(deadIndex, func(error) { metrics.recordOutcome(actionUnknown, outcomeDeadIndexFailed) })

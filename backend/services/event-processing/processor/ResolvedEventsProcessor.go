@@ -359,7 +359,7 @@ type ResolvedEventsProcessor struct {
 	registry  *runtime.RuleRegistry
 	publisher *runtime.Publisher
 	clock     detectcore.Clock
-	metrics   *detectMetrics
+	metrics   *DetectMetrics
 	// backlogProbe reports the broker-confirmed pending + ack-pending backlog on the resolved-
 	// events consumer, gating idle-advance on positive caught-up evidence (see consumerBacklog).
 	// It is resolved from ResolvedEventsReader in ExecuteStart (a test may pre-set it); a nil
@@ -535,10 +535,14 @@ type fenceUpdate struct {
 // caller. A nil registry is treated as the empty set (the scaffold path — no rules, no
 // detections). The publisher is built over the writer + registry so it and the loop share
 // this processor's bounded-cardinality metrics.
+//
+// metrics is built once in the initialize phase (see NewDetectMetrics) and shared by
+// every processor this service constructs, because this constructor runs again on every
+// start.
 func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	replay ReplayOpener, store *model.SnapshotStore, registry *runtime.RuleRegistry,
 	derivedWriter messaging.MessageWriter, ruleStats *model.RuleStatStore, cfg Config,
-	callbacks core.LifecycleCallbacks) *ResolvedEventsProcessor {
+	callbacks core.LifecycleCallbacks, metrics *DetectMetrics) *ResolvedEventsProcessor {
 	if cfg.Clock == nil {
 		cfg.Clock = detectcore.RealClock{}
 	}
@@ -556,7 +560,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		cfg:                  cfg,
 		registry:             registry,
 		clock:                cfg.Clock,
-		metrics:              newDetectMetrics(ms),
+		metrics:              metrics,
 		// Buffered so a burst of published-rule facts does not block the fact consumer on the
 		// loop between resolved-event batches; the loop drains it promptly (rule updates are rare).
 		ruleUpdates: make(chan ruleUpdate, 64),

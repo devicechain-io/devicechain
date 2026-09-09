@@ -36,6 +36,11 @@ var (
 	EventPersistenceProcessor *processor.EventPersistenceProcessor
 	FailedEventsWriter        messaging.MessageWriter
 
+	// PersistMetrics is built ONCE, in the initialize phase, and shared by every
+	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
+	// buildMetrics.
+	PersistMetrics *core.ProcessorMetrics
+
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
 
@@ -76,6 +81,17 @@ func parseConfiguration() error {
 	return nil
 }
 
+// buildMetrics creates this service's Prometheus instruments exactly once.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE PROCESSOR IS BUILT.
+// The processor is built in createNatsComponents, which the NATS manager invokes on
+// EVERY start — a start after a stop is a supported sequence — and a collector
+// registered twice on this microservice's registry panics. Initialize runs once, which
+// is what makes this the safe half.
+func buildMetrics() {
+	PersistMetrics = processor.NewPersistMetrics(Microservice)
+}
+
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for resolved events (wildcard across tenants).
@@ -93,8 +109,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	FailedEventsWriter = fevents
 
 	// Add and initialize inbound events processor.
+	// Its instruments were built once in afterMicroserviceInitialized and are handed
+	// in, because this callback runs on every start and a second registration of the
+	// same collector panics.
 	EventPersistenceProcessor = processor.NewEventPersistenceProcessor(Microservice, ResolvedEventsReader,
-		FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api)
+		FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api, PersistMetrics)
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
@@ -169,6 +188,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// unless an operator disables it.
 	Api = model.NewApi(RdbManager)
 	Api.RollupReadsDisabled = Configuration.Lifecycle.DisableRollupReads
+
+	// Build every Prometheus instrument this service exports, before the NATS manager
+	// that consumes them.
+	buildMetrics()
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)

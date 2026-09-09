@@ -54,7 +54,8 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 		core.NewNoOpLifecycleCallbacks(),
 		suite.API,
 		config.AuthModeOptional,
-		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second)
+		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
+		NewResolveMetrics(dmtest.DeviceManagementMicroservice))
 	ctx := context.Background()
 	suite.IP.Initialize(ctx)
 }

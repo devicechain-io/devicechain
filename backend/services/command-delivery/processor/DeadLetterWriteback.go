@@ -70,6 +70,24 @@ type DeadLetterWriteback struct {
 	reader       messaging.MessageReader
 	api          CommandDispositionWriter
 
+	// WritebackMetrics is EMBEDDED, and built ONCE in the initialize phase rather than
+	// here. The write-back itself is constructed inside the NATS manager's oncreate
+	// callback, which runs on every start; a counter constructed there is registered
+	// again on a start after a stop, and the duplicate registration panics.
+	*WritebackMetrics
+
+	procCtx    context.Context
+	procCancel context.CancelFunc
+	wg         sync.WaitGroup
+
+	lifecycle core.LifecycleManager
+}
+
+// WritebackMetrics is every Prometheus instrument the dead-letter write-back exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the consumer that
+// reads it. See NewWritebackMetrics.
+type WritebackMetrics struct {
 	// settled counts commands this consumer drove to a terminal state.
 	settled prometheus.Counter
 	// notAnswerable counts letters whose command was not in a state a response could
@@ -106,39 +124,17 @@ type DeadLetterWriteback struct {
 	// their TTL, then TIMEOUT, blaming a device that answered — which is exactly what this
 	// consumer exists to correct, so it is counted apart from every other failure here.
 	stranded prometheus.Counter
-
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	wg         sync.WaitGroup
-
-	lifecycle core.LifecycleManager
 }
 
-// NewDeadLetterWriteback builds the write-back over the dead-letter reader and the
-// command API.
+// NewWritebackMetrics builds the dead-letter write-back's counters.
 //
-// 🔴 IT REFUSES A NIL DEPENDENCY RATHER THAN TOLERATING ONE. A nil-tolerant handler here
-// would turn a wiring mistake into a consumer that reads every letter, writes nothing,
-// and reports no error — permanently and silently, on the path whose entire job is to
-// stop a record going quiet. The caller builds this inside the NatsManager's create
-// callback, where the reader exists; anything wrong there must stop the service starting.
-func NewDeadLetterWriteback(ms *core.Microservice, reader messaging.MessageReader,
-	api CommandDispositionWriter, callbacks core.LifecycleCallbacks) (*DeadLetterWriteback, error) {
-	if ms == nil {
-		return nil, errors.New("dead-letter write-back needs a microservice")
-	}
-	if reader == nil {
-		return nil, errors.New("dead-letter write-back needs a dead-letter reader; without one " +
-			"every command whose response was lost keeps the wrong outcome")
-	}
-	if api == nil {
-		return nil, errors.New("dead-letter write-back needs the command API; without one it " +
-			"would read every letter and write nothing")
-	}
-	w := &DeadLetterWriteback{
-		Microservice: ms,
-		reader:       reader,
-		api:          api,
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The write-back is built inside
+// the NATS manager's oncreate callback — it has to be, because it holds a reader bound
+// to the connection — and that callback runs on EVERY start. A counter built there is
+// registered a second time when the service restarts in place, and MustRegister panics
+// on the duplicate.
+func NewWritebackMetrics(ms *core.Microservice) *WritebackMetrics {
+	return &WritebackMetrics{
 		settled: ms.NewCounter("command_response_lost_settled_total",
 			"Commands driven to a terminal state because the device's answer to them was "+
 				"dead-lettered, so a command whose response the platform lost stops reading "+
@@ -166,6 +162,45 @@ func NewDeadLetterWriteback(ms *core.Microservice, reader messaging.MessageReade
 			"Dead-lettered responses that exhausted every delivery attempt without their "+
 				"command's disposition being written. Those commands read as in flight until "+
 				"their TTL and then lapse to TIMEOUT, blaming a device that did answer.", nil),
+	}
+}
+
+// NewDeadLetterWriteback builds the write-back over the dead-letter reader and the
+// command API.
+//
+// 🔴 IT REFUSES A NIL DEPENDENCY RATHER THAN TOLERATING ONE. A nil-tolerant handler here
+// would turn a wiring mistake into a consumer that reads every letter, writes nothing,
+// and reports no error — permanently and silently, on the path whose entire job is to
+// stop a record going quiet. The caller builds this inside the NatsManager's create
+// callback, where the reader exists; anything wrong there must stop the service starting.
+//
+// metrics is built once in the initialize phase (see NewWritebackMetrics) and shared by
+// every write-back this service constructs, because this constructor runs again on every
+// start.
+func NewDeadLetterWriteback(ms *core.Microservice, reader messaging.MessageReader,
+	api CommandDispositionWriter, callbacks core.LifecycleCallbacks,
+	metrics *WritebackMetrics) (*DeadLetterWriteback, error) {
+	if ms == nil {
+		return nil, errors.New("dead-letter write-back needs a microservice")
+	}
+	if reader == nil {
+		return nil, errors.New("dead-letter write-back needs a dead-letter reader; without one " +
+			"every command whose response was lost keeps the wrong outcome")
+	}
+	if api == nil {
+		return nil, errors.New("dead-letter write-back needs the command API; without one it " +
+			"would read every letter and write nothing")
+	}
+	if metrics == nil {
+		return nil, errors.New("dead-letter write-back needs its metrics, built once in the " +
+			"initialize phase; a nil set is not an unmeasured consumer but one that panics on " +
+			"the first letter it reads")
+	}
+	w := &DeadLetterWriteback{
+		Microservice:     ms,
+		reader:           reader,
+		api:              api,
+		WritebackMetrics: metrics,
 	}
 	w.lifecycle = core.NewLifecycleManager(
 		fmt.Sprintf("%s-%s", ms.FunctionalArea, "dead-letter-writeback"), w, callbacks)

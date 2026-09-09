@@ -39,7 +39,10 @@ var (
 	SecretStore secrets.SecretStore
 	RateLimiter *core.TenantRateLimiter
 	Consumer    *processor.DispatchConsumer
-	Api         *model.Api
+	// DispatchMetrics is built ONCE, in the initialize phase, and shared by every
+	// DispatchConsumer the NATS manager's oncreate callback builds. See buildMetrics.
+	DispatchMetrics *processor.DispatchMetrics
+	Api             *model.Api
 )
 
 func main() {
@@ -91,6 +94,17 @@ func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 		RdbManager.Database,
 		cfg.DecodedRootKey,
 	)
+}
+
+// buildMetrics creates this service's Prometheus instruments exactly once.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE CONSUMER IS BUILT.
+// The consumer is built in createNatsComponents, which the NATS manager invokes on
+// EVERY start — a start after a stop is a supported sequence — and a collector
+// registered twice on this microservice's registry panics. Initialize runs once, which
+// is what makes this the safe half.
+func buildMetrics() {
+	DispatchMetrics = processor.NewDispatchMetrics(Microservice)
 }
 
 // createNatsComponents wires the durable connector-dispatch consumer and its dead-letter writer.
@@ -153,9 +167,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	executor := processor.NewExecutor(resolver, Api, &http.Client{Transport: egressGuard.Transport()},
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
-	Consumer = processor.NewDispatchConsumer(Microservice, reader, dead, deadIndex, executor,
+	// Its counters were built once in afterMicroserviceInitialized and are handed in,
+	// because this callback runs on every start and a second registration of the same
+	// collector panics.
+	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
-		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog)
+		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,
+		DispatchMetrics)
 	return nil
 }
 
@@ -224,6 +242,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
 	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
 		&model.ConnectorVersion{}))
+
+	// Build every Prometheus instrument this service exports, before the NATS manager
+	// that consumes them.
+	buildMetrics()
 
 	// Create and initialize the nats manager (which invokes createNatsComponents to build the
 	// consumer). The secret store must already exist so the executor's resolver can bind it.

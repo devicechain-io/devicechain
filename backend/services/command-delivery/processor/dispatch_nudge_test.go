@@ -574,7 +574,7 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 	api := &fakeApi{}
 
 	proc := NewCommandDeliveryProcessor(ms, nil, &recordingWriter{}, core.NewNoOpLifecycleCallbacks(),
-		api, nil, nil, nil)
+		api, nil, nil, nil, NewDeliveryMetrics(ms))
 
 	nudger := proc.Nudger()
 	if nudger == nil {

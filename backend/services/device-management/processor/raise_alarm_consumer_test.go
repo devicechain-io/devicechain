@@ -65,7 +65,12 @@ type fakeAck struct {
 func (a *fakeAck) Ack() error { a.acks++; return nil }
 
 func newTestConsumer(api model.DeviceManagementApi) *RaiseAlarmConsumer {
-	rc := &RaiseAlarmConsumer{Api: api, metrics: nil}
+	// RaiseAlarmMetrics is embedded by pointer and the tests below write through it
+	// (rc.deadLettered), so it has to exist. An empty one leaves every instrument nil,
+	// which is what this helper had before the instruments moved into their own type:
+	// the RED metrics are nil-safe, and the dead-letter counters are set by the tests
+	// that assert on them.
+	rc := &RaiseAlarmConsumer{Api: api}
 	rc.procCtx = context.Background()
 	return rc
 }

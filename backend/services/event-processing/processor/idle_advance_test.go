@@ -67,7 +67,7 @@ func absenceProcessor(t *testing.T, clock detectcore.Clock, w *captureWriter, gu
 			Clock:              clock,
 		},
 		registry:     reg,
-		publisher:    runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher:    runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:        clock,
 		procCtx:      ctx,
 		procCancel:   cancel,

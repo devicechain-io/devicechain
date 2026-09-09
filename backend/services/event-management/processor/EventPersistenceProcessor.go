@@ -76,15 +76,32 @@ func (eproc *EventPersistenceProcessor) pacer() *core.ReadPacer {
 	return eproc.readPacer
 }
 
+// NewPersistMetrics builds this processor's RED instrumentation.
+//
+// 🔴 IT IS SEPARATE FROM THE CONSTRUCTOR BECAUSE THE TWO RUN IN DIFFERENT PHASES.
+// The processor is built inside the NATS manager's oncreate callback, which runs on
+// EVERY start — it has to, because the processor holds a reader bound to the
+// connection — while a Prometheus collector may be registered only once or the second
+// registration panics. So the caller builds this in the INITIALIZE phase and hands the
+// same instruments to every start's processor.
+func NewPersistMetrics(ms *core.Microservice) *core.ProcessorMetrics {
+	return ms.NewProcessorMetrics("persist")
+}
+
 // Create a new inbound events processor.
+//
+// metrics is built once in the initialize phase (see NewPersistMetrics) and shared by
+// every processor this service constructs, because this constructor runs again on
+// every start.
 func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader,
-	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi) *EventPersistenceProcessor {
+	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi,
+	metrics *core.ProcessorMetrics) *EventPersistenceProcessor {
 	eproc := &EventPersistenceProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: resolved,
 		FailedEventsWriter:   failed,
 		Api:                  api,
-		metrics:              ms.NewProcessorMetrics("persist"),
+		metrics:              metrics,
 	}
 
 	// Create lifecycle manager.

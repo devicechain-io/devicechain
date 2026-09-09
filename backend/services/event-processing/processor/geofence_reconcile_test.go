@@ -97,7 +97,7 @@ func newLoopRig(t *testing.T, reg *runtime.RuleRegistry, src runtime.CurrentFenc
 			Clock:              detectcore.RealClock{},
 		},
 		registry:     reg,
-		publisher:    runtime.NewPublisher(&recordingWriter{}, reg, (*detectMetrics)(nil)),
+		publisher:    runtime.NewPublisher(&recordingWriter{}, reg, (*DetectMetrics)(nil)),
 		clock:        detectcore.RealClock{},
 		procCtx:      loopCtx,
 		procCancel:   cancel,

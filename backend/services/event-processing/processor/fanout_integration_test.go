@@ -99,7 +99,7 @@ func TestFanoutPublishesDerivedEventThenAcks(t *testing.T) {
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   ctx,
 	}
@@ -144,7 +144,7 @@ func TestDeliverBeforeCheckpointDefersOnPublishError(t *testing.T) {
 			Clock:              detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   ctx,
 	}
@@ -228,7 +228,7 @@ func newScopedDurationProcessor(t *testing.T, ctx context.Context, w *captureWri
 			TickInterval: time.Hour, Clock: detectcore.RealClock{},
 		},
 		registry:  reg,
-		publisher: runtime.NewPublisher(w, reg, (*detectMetrics)(nil)),
+		publisher: runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),
 		clock:     detectcore.RealClock{},
 		procCtx:   ctx,
 	}

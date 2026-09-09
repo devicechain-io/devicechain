@@ -17,7 +17,7 @@ import (
 // on this service's own subject AND in the platform's dead-letter list.
 func newIndexingConsumer(dead, index messaging.MessageWriter) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(nil, &fakeReader{}, dead, index, e, nil, 5*time.Second, nil, 1, 1)
+	return NewDispatchConsumer(&fakeReader{}, dead, index, e, nil, 5*time.Second, nil, 1, 1, nil)
 }
 
 func indexEnvelope(t *testing.T, w *fakeWriter) deadletter.Envelope {

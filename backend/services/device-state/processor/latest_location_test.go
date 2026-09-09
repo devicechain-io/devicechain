@@ -69,7 +69,8 @@ func newLocationProcessor(t *testing.T) *StateProcessor {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})
-	return NewStateProcessor(deviceStateMicroservice, nil, core.NewNoOpLifecycleCallbacks(), api)
+	return NewStateProcessor(deviceStateMicroservice, nil, core.NewNoOpLifecycleCallbacks(), api,
+		NewStateMetrics(deviceStateMicroservice))
 }
 
 // str is a pointer to a literal, the shape every resolved location coordinate arrives in.

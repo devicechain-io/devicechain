@@ -51,6 +51,11 @@ func (f *fakeNotifier) Notify(_ context.Context, e *dmmodel.AlarmStateChangeEven
 // newTestProcessor builds a processor with nil metrics (ProcessorMetrics is
 // nil-safe) so dispatchOne can be exercised without a Prometheus registry.
 func newTestProcessor(n Notifier) *NotificationProcessor {
+	// NotifyMetrics is embedded by pointer and the tests below write through it
+	// (np.deadLettered), so it has to exist. An empty one leaves every instrument nil,
+	// which is what this helper had before the instruments moved into their own type:
+	// the RED metrics are nil-safe, and the dead-letter counters are set by the tests
+	// that assert on them.
 	return &NotificationProcessor{Notifier: n}
 }
 

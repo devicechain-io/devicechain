@@ -40,6 +40,12 @@ var (
 	DeviceCommandsWriter     messaging.MessageWriter
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
 	DeadLetterWriteback      *processor.DeadLetterWriteback
+
+	// The Prometheus instruments the two components above export. Both are built ONCE,
+	// in the initialize phase, and shared by every component the NATS manager's oncreate
+	// callback builds. See buildMetrics.
+	DeliveryMetrics  processor.DeliveryMetrics
+	WritebackMetrics *processor.WritebackMetrics
 )
 
 func main() {
@@ -77,6 +83,14 @@ func parseConfiguration() error {
 }
 
 // Create messaging components used by this microservice.
+// buildMetrics creates this service's per-component Prometheus instruments exactly once.
+// See the call site in afterMicroserviceInitialized for why it is not called from
+// createNatsComponents, where the components that read them are built.
+func buildMetrics() {
+	DeliveryMetrics = processor.NewDeliveryMetrics(Microservice)
+	WritebackMetrics = processor.NewWritebackMetrics(Microservice)
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound device responses (wildcard across tenants).
 	responses, err := nmgr.NewReader(streams.CommandResponses)
@@ -111,7 +125,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
-		presenceReader(infra), deadWriter)
+		presenceReader(infra), deadWriter, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -163,7 +177,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	DeadLetterWriteback, err = processor.NewDeadLetterWriteback(Microservice, deadReader, Api,
-		core.NewNoOpLifecycleCallbacks())
+		core.NewNoOpLifecycleCallbacks(), WritebackMetrics)
 	if err != nil {
 		return err
 	}
@@ -316,6 +330,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// initializer runs once. Every test builds its Api by literal, leaves this nil, and
 	// records nothing.
 	Api.BatchMetrics = model.NewBatchMetrics(Microservice)
+
+	// The delivery processor's and write-back's instruments, built here for the same
+	// reason and NOT where those two components are: they are constructed in
+	// createNatsComponents, which the NATS manager invokes on EVERY start — a start after
+	// a stop is a supported sequence — and a collector registered twice on this
+	// microservice's registry panics. This initializer runs once.
+	buildMetrics()
 
 	// The held-command ceiling this instance falls back to. It is floored positive in
 	// ApplyDefaults, so this is always a real bound: a missing or zero configured value

@@ -35,7 +35,7 @@ import (
 type ReactDispatcher struct {
 	reader     messaging.MessageReader
 	dispatcher *react.Dispatcher
-	metrics    *reactMetrics
+	metrics    *ReactMetrics
 	// dead records an event whose actions could not be dispatched (ADR-024). Nil when no
 	// dead-letter writer is configured, in which case the event is dropped as before.
 	dead *deadletter.Sink
@@ -56,10 +56,12 @@ type ReactDispatcher struct {
 // egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging (connector dispatches metered
 // only by the downstream outbound-connectors egress limiter). The dispatcher is constructed here so
 // the whole REACT wiring lives behind one type.
+//
+// m is built once in the initialize phase (see NewReactMetrics) and shared by every
+// dispatcher this service constructs, because this constructor runs again on every start.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
-	connectorRate react.ConnectorRateGate, dead deadletter.Writer) *ReactDispatcher {
-	m := newReactMetrics(ms)
+	connectorRate react.ConnectorRateGate, dead deadletter.Writer, m *ReactMetrics) *ReactDispatcher {
 	rd := &ReactDispatcher{
 		reader:     reader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),

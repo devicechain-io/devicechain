@@ -47,7 +47,8 @@ func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 		suite.Inbound,
 		suite.Failed,
 		core.NewNoOpLifecycleCallbacks(),
-		suite.API)
+		suite.API,
+		NewPersistMetrics(dmtest.DeviceManagementMicroservice))
 	ctx := context.Background()
 	suite.EP.Initialize(ctx)
 }

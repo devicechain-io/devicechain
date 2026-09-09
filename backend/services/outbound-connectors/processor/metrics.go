@@ -61,22 +61,28 @@ const (
 // metric's action label stays a bounded enum {httpCall, publish, unknown}.
 const actionUnknown = "unknown"
 
-// dispatchMetrics are the outbound-connectors observability counters (ADR-060 SD-3). Cardinality is
+// DispatchMetrics are the outbound-connectors observability counters (ADR-060 SD-3). Cardinality is
 // bounded to a fixed action enum × a fixed outcome enum — never a per-tenant/per-connector label
 // (the ADR-023 G.3 DoS lesson). Every recorder is nil-safe so a consumer built without a
 // Microservice (unit tests) runs unmeasured rather than panicking on a global-registry
 // double-registration.
-type dispatchMetrics struct {
+type DispatchMetrics struct {
 	dispatched *prometheus.CounterVec
 }
 
-// newDispatchMetrics registers the counters under the service's Prometheus namespace. A nil
+// NewDispatchMetrics registers the counters under the service's Prometheus namespace. A nil
 // Microservice (unit tests) yields nil metrics.
-func newDispatchMetrics(ms *core.Microservice) *dispatchMetrics {
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE, AND PASS THE RESULT TO
+// NewDispatchConsumer. The consumer is built inside the NATS manager's oncreate callback
+// — it has to be, because it holds a reader bound to the connection — and that callback
+// runs on EVERY start. A counter built there is registered a second time when the
+// service restarts in place, and MustRegister panics on the duplicate.
+func NewDispatchMetrics(ms *core.Microservice) *DispatchMetrics {
 	if ms == nil {
 		return nil
 	}
-	return &dispatchMetrics{
+	return &DispatchMetrics{
 		dispatched: ms.NewCounterVec("connector_dispatch_total",
 			"Outbound connector dispatch requests processed, by action and terminal outcome (bounded enums).",
 			[]string{"action", "outcome"}),
@@ -85,7 +91,7 @@ func newDispatchMetrics(ms *core.Microservice) *dispatchMetrics {
 
 // recordOutcome records one message's terminal disposition. action is the connectorwire kind (or
 // actionUnknown for a message too malformed to classify); outcome is one of the outcome* enum.
-func (m *dispatchMetrics) recordOutcome(action, outcome string) {
+func (m *DispatchMetrics) recordOutcome(action, outcome string) {
 	if m == nil {
 		return
 	}

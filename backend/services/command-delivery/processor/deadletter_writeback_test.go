@@ -54,7 +54,7 @@ func (idleReader) HandleResponse(error) {}
 func newTestWriteback(t *testing.T, api CommandDispositionWriter) *DeadLetterWriteback {
 	t.Helper()
 	ms := &core.Microservice{FunctionalArea: "cdwriteback"}
-	w, err := NewDeadLetterWriteback(ms, idleReader{}, api, core.NewNoOpLifecycleCallbacks())
+	w, err := NewDeadLetterWriteback(ms, idleReader{}, api, core.NewNoOpLifecycleCallbacks(), NewWritebackMetrics(ms))
 	if err != nil {
 		t.Fatalf("NewDeadLetterWriteback: %v", err)
 	}
@@ -265,10 +265,10 @@ func TestWritebackAcksALetterWhoseCommandIsNotAnswerable(t *testing.T) {
 // job is to stop a record going quiet.
 func TestWritebackRefusesToBeBuiltWithoutItsDependencies(t *testing.T) {
 	ms := &core.Microservice{FunctionalArea: "cdwritebacknil"}
-	if _, err := NewDeadLetterWriteback(ms, nil, &dispositionRecorder{}, core.NewNoOpLifecycleCallbacks()); err == nil {
+	if _, err := NewDeadLetterWriteback(ms, nil, &dispositionRecorder{}, core.NewNoOpLifecycleCallbacks(), nil); err == nil {
 		t.Fatal("built a write-back with no reader; it would read nothing and report success")
 	}
-	if _, err := NewDeadLetterWriteback(ms, idleReader{}, nil, core.NewNoOpLifecycleCallbacks()); err == nil {
+	if _, err := NewDeadLetterWriteback(ms, idleReader{}, nil, core.NewNoOpLifecycleCallbacks(), nil); err == nil {
 		t.Fatal("built a write-back with no command API; it would read every letter and write nothing")
 	}
 }

@@ -18,6 +18,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -79,9 +80,16 @@ type InboundEventsProcessor struct {
 	resolved  chan resolvedItem
 	resolvers []*EventResolver
 
-	// metrics records RED instrumentation for the resolve loop (E13); it is
-	// shared across every resolver worker.
-	metrics *core.ProcessorMetrics
+	// metrics is every Prometheus instrument this processor exports. It is built ONCE,
+	// in the initialize phase, and handed in — NOT built here — because the processor
+	// itself is constructed inside the NATS manager's oncreate callback, which runs on
+	// every start; a collector constructed there is registered again on a start after a
+	// stop, and the duplicate registration panics.
+	//
+	// A value rather than a pointer because this struct is also assembled by literal in
+	// tests that never run the constructor: a zero value gives them the all-nil
+	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
+	metrics ResolveMetrics
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
@@ -109,12 +117,48 @@ func (iproc *InboundEventsProcessor) pacer() *core.ReadPacer {
 	return iproc.readPacer
 }
 
+// ResolveMetrics is every Prometheus instrument the inbound resolve loop exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the processor
+// that reads it. See NewResolveMetrics.
+type ResolveMetrics struct {
+	// red is RED instrumentation for the resolve loop (E13); it is shared across every
+	// resolver worker.
+	red *core.ProcessorMetrics
+
+	// eventTimeBounded counts reported event times refused for leading the server clock.
+	// ONE counter for the whole worker pool: the workers share the inbound channel, so a
+	// per-worker counter would report a fleet's clock skew as N unrelated series.
+	eventTimeBounded prometheus.Counter
+}
+
+// NewResolveMetrics builds the inbound resolve loop's instruments.
+//
+// 🔴 CALL IT FROM THE INITIALIZE PHASE, WHICH RUNS ONCE. The processor is built inside
+// the NATS manager's oncreate callback — it has to be, because it holds a reader bound
+// to the connection — and that callback runs on EVERY start. A Prometheus collector
+// built there is registered a second time when the service restarts in place, and
+// MustRegister panics on the duplicate.
+func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
+	return ResolveMetrics{
+		red: ms.NewProcessorMetrics("resolve"),
+		eventTimeBounded: ms.NewCounter(
+			"resolve_event_time_bounded_total",
+			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling",
+			nil),
+	}
+}
+
 // Create a new inbound events processor. authMode is the device authentication
 // policy applied while resolving inbound events (transport security, ADR-014);
 // maxFutureSkew bounds a device-reported event time against the server's own clock.
+//
+// metrics is built once in the initialize phase (see NewResolveMetrics) and shared by
+// every processor this service constructs, because this constructor runs again on every
+// start.
 func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
 	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
-	maxFutureSkew time.Duration) *InboundEventsProcessor {
+	maxFutureSkew time.Duration, metrics ResolveMetrics) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,
@@ -123,6 +167,7 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 		Api:                  api,
 		AuthMode:             authMode,
 		MaxFutureSkew:        maxFutureSkew,
+		metrics:              metrics,
 	}
 
 	// Create lifecycle manager.
@@ -304,17 +349,16 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	locationMemo := newUndeclaredLocationMemo()
 	// ONE counter for the whole pool, for the same reason as the memo above: the
 	// workers share the inbound channel, so a per-worker counter would report a
-	// fleet's clock skew as N unrelated series.
+	// fleet's clock skew as N unrelated series. It comes from the instruments built in
+	// the initialize phase rather than being constructed here, because this runs again
+	// on every start.
 	eventTime := EventTimePolicy{
 		MaxFutureSkew: iproc.MaxFutureSkew,
-		Bounded: iproc.Microservice.NewCounter(
-			"resolve_event_time_bounded_total",
-			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling",
-			nil),
+		Bounded:       iproc.metrics.eventTimeBounded,
 	}
 	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
-			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics,
+			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
 			locationMemo)
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
@@ -343,10 +387,6 @@ func (iproc *InboundEventsProcessor) Initialize(ctx context.Context) error {
 func (iproc *InboundEventsProcessor) ExecuteInitialize(ctx context.Context) error {
 	// Derive the cancelable context the read loop runs under (E10/A5).
 	iproc.procCtx, iproc.procCancel = context.WithCancel(ctx)
-
-	// Build RED instrumentation for the resolve loop before the resolvers are
-	// created so it can be shared across every worker (E13).
-	iproc.metrics = iproc.Microservice.NewProcessorMetrics("resolve")
 
 	// Initialize pool of event resolvers.
 	iproc.initializeEventResolvers(ctx)

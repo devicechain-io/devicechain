@@ -58,6 +58,13 @@ var (
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
 	CalloutResponder *processor.CalloutResponder
+
+	// The Prometheus instruments this service exports. All are built ONCE, in the
+	// initialize phase, and shared by every component the NATS manager's oncreate
+	// callback builds. See buildMetrics.
+	ResolveMetrics       processor.ResolveMetrics
+	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
+	GeoFencePublishFails prometheus.Counter
 )
 
 func main() {
@@ -95,6 +102,22 @@ func parseConfiguration() error {
 }
 
 // Create messaging components used by this microservice.
+// buildMetrics creates this service's Prometheus instruments exactly once.
+//
+// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM createNatsComponents, WHERE THE
+// COMPONENTS THAT READ THEM ARE BUILT. That callback is invoked by the NATS manager on
+// EVERY start — a start after a stop is a supported sequence — and a collector
+// registered twice on this microservice's registry panics. Initialize runs once, which
+// is what makes this the safe half.
+func buildMetrics() {
+	ResolveMetrics = processor.NewResolveMetrics(Microservice)
+	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
+	GeoFencePublishFails = Microservice.NewCounter(
+		"geofence_set_publish_failures_total",
+		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.",
+		nil)
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
 	ievents, err := nmgr.NewReader(streams.InboundEvents)
@@ -195,17 +218,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	//
+	// The failure counter is NOT built here: it comes from buildMetrics, which runs in
+	// the initialize phase, because this callback runs again on every start.
 	Api.GeoFenceSetPublisher = processor.NewGeoFenceSetWriter(fencepub,
 		Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxMsgSize,
-		Microservice.NewCounter(
-			"geofence_set_publish_failures_total",
-			"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.",
-			nil))
+		GeoFencePublishFails)
 
 	// Add and initialize inbound events processor.
 	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
 		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
-		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second)
+		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics)
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
@@ -224,7 +247,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// here, with the same consequence — a raise that does not re-emit until the condition
 	// re-breaches, a resolve that strands its alarm.
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi, deadWriter)
+		core.NewNoOpLifecycleCallbacks(), CachedApi, deadWriter, RaiseAlarmMetrics)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -314,6 +337,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Build every Prometheus instrument this service exports, before the NATS manager
+	// that consumes them.
+	buildMetrics()
 
 	// Create and initialize nats manager before the caches, which are backed by
 	// NATS JetStream KV buckets built from it (ADR-007: NATS KV cache backend).
