@@ -19,7 +19,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"gorm.io/gorm"
 
@@ -43,14 +42,6 @@ type InboundEventsProcessorTestSuite struct {
 
 // Perform common setup tasks.
 func (suite *InboundEventsProcessorTestSuite) SetupTest() {
-	// The resolve loop's ProcessorMetrics (E13) registers collectors on the
-	// global default registry in ExecuteInitialize. SetupTest builds a fresh
-	// processor per test method, so reset the default registry first to avoid a
-	// duplicate-registration panic across tests.
-	registry := prometheus.NewRegistry()
-	prometheus.DefaultRegisterer = registry
-	prometheus.DefaultGatherer = registry
-
 	suite.Inbound = new(msgtest.MockMessageReader)
 	suite.Resolved = new(msgtest.MockMessageWriter)
 	suite.Failed = new(msgtest.MockMessageWriter)

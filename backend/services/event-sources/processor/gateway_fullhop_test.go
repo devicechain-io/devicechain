@@ -52,9 +52,8 @@ import (
 // captureReader builds a durable reader over the real DeviceEventsCapture stream,
 // pointed at the already-running embedded gateway. It is a NatsManager struct
 // literal driven through ExecuteInitialize + NewReader rather than NewNatsManager,
-// for two reasons: the constructor registers stream metrics against the global
-// promauto registry (so building two managers on one area panics), and the source
-// owns the read loop, so none of the manager's Start machinery is wanted here. The
+// because the source owns the read loop, so none of the manager's Start machinery —
+// nor the stream metrics the constructor builds to feed it — is wanted here. The
 // area is shared across the two readers on purpose — the durable name is built from
 // instance+area+suffix, so the replacement must reuse it to resume the same durable.
 func captureReader(t *testing.T, nc *nats.Conn, area string) messaging.MessageReader {

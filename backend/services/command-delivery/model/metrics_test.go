@@ -17,10 +17,10 @@ import (
 
 // observableBatchMetrics builds a BatchMetrics against vectors this test owns.
 //
-// 🔴 IT DOES NOT USE NewBatchMetrics, AND IT MUST NOT. That constructor goes through
-// promauto, which registers against the process-global registry and panics on a duplicate
-// — a test calling it twice would take the whole package down. Building the vectors
-// directly keeps the counters observable while leaving the global registry untouched.
+// 🔴 IT DOES NOT USE NewBatchMetrics, AND IT MUST NOT. That constructor takes a
+// *core.Microservice and answers a nil one with a nil *BatchMetrics, so it cannot hand back
+// anything this test could read. Building the vectors directly keeps the counters
+// observable without needing a microservice at all.
 //
 // The cost is that this mirrors the constructor's label sets instead of sharing them,
 // which is a drift risk. It is worth paying: without SOME observer, every recorder in this
@@ -295,13 +295,15 @@ func TestTargetKindLabelsCoverEveryShape(t *testing.T) {
 }
 
 // TestNilBatchMetricsRecordNothing. Every test in this package builds an Api by literal,
-// so a recorder that dereferenced a nil receiver would panic across the whole suite —
-// but the reason it is nil is worth pinning: promauto registers against the global
-// registry and panics on a duplicate, so tests must not register at all.
+// so a recorder that dereferenced a nil receiver would panic across the whole suite — but
+// the reason it is nil is worth pinning: the counters are built from a Microservice, and a
+// literal Api has none, so the constructor must answer nil rather than something partly
+// built.
 func TestNilBatchMetricsRecordNothing(t *testing.T) {
 	if got := NewBatchMetrics(nil); got != nil {
-		t.Fatal("NewBatchMetrics(nil) returned a registered metric set; a test Api would " +
-			"then register against the global registry, and the second one would panic")
+		t.Fatal("NewBatchMetrics(nil) returned a metric set; with no Microservice there is " +
+			"neither a registry to build the counters on nor a namespace to name them " +
+			"under, so nil is the only answer it can give")
 	}
 	var metrics *BatchMetrics
 	metrics.recordEnqueue(targetKindGroupLabel, outcomeCreated)

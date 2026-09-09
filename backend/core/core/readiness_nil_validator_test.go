@@ -90,10 +90,9 @@ func TestTheTwoDoorsAreStillOneGate(t *testing.T) {
 // governs traffic must not disagree: a gauge set because MarkReady was CALLED would read 1
 // for a service the gate had just kept closed.
 func TestTheReadyGaugeFollowsTheGateNotTheCall(t *testing.T) {
-	// An UNREGISTERED gauge, assigned to the unexported field directly: NewGauge goes
-	// through promauto and the default registry, so building one the normal way here would
-	// collide with every other test in the package. The field is what MarkReady writes, so
-	// this reads exactly what a scrape would.
+	// An UNREGISTERED gauge, assigned to the unexported field directly, so the test owns a
+	// collector it can read without building a whole Microservice around it. The field is
+	// what MarkReady writes, so this reads exactly what a scrape would.
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "ready"})
 	ms := &Microservice{Readiness: NewReadinessGate(), readyGauge: gauge}
 

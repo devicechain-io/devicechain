@@ -40,8 +40,9 @@ func nudgeable(id uint, token, device string) *model.Command {
 }
 
 // nudgeMetered wires real (unregistered) counters onto a processor so a test can read the
-// nudge's declines. Unregistered on purpose: promauto's global registry panics on a
-// duplicate, and a test must never depend on registration order.
+// nudge's declines. They are built with prometheus.NewCounter rather than through a
+// Microservice, so they are registered nowhere at all — an unregistered counter still
+// counts, which is the whole of what these assertions read.
 func nudgeMetered(proc *CommandDeliveryProcessor) {
 	proc.NudgeMetrics = NudgeMetrics{
 		Requested: prometheus.NewCounter(prometheus.CounterOpts{Name: "nudges_requested_test"}),
@@ -564,11 +565,12 @@ func TestTheLifecycleStartsAndStopsTheNudgeQueue(t *testing.T) {
 // read is the first thing only the real queue, a real worker and the real drainer can
 // produce together.
 //
-// ⚠️ The functional area differs from every other constructor test's, and it has to: the
-// counters register into the process-wide default registry keyed by subsystem, so two
-// constructor tests sharing an area panic on duplicate registration rather than fail.
+// The functional area is the one every other constructor test in this package uses, and
+// sharing it is safe: a Microservice built as a struct literal has no metrics registry, so
+// the collectors the constructor builds are registered nowhere. They still count — which is
+// what the assertions below read — and two constructions on one area no longer collide.
 func TestConstructorWiresTheDispatchNudge(t *testing.T) {
-	ms := &core.Microservice{FunctionalArea: "commanddeliverynudge"}
+	ms := &core.Microservice{FunctionalArea: "commanddelivery"}
 	api := &fakeApi{}
 
 	proc := NewCommandDeliveryProcessor(ms, nil, &recordingWriter{}, core.NewNoOpLifecycleCallbacks(),

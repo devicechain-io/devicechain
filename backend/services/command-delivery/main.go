@@ -304,10 +304,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Api = model.NewApi(RdbManager)
 	Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
 
-	// Fleet-write counters. This is the only place they are registered: promauto
-	// registers against the process-global registry and panics on a duplicate, and the
-	// lifecycle manager guarantees this initializer runs once. Every test builds its Api
-	// by literal, leaves this nil, and records nothing.
+	// Fleet-write counters. This is the only place they are built: they register on the
+	// registry this Microservice owns, and the lifecycle manager guarantees this
+	// initializer runs once. Every test builds its Api by literal, leaves this nil, and
+	// records nothing.
 	Api.BatchMetrics = model.NewBatchMetrics(Microservice)
 
 	// The held-command ceiling this instance falls back to. It is floored positive in

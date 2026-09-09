@@ -619,10 +619,10 @@ func TestSweepDeliversWithNoLifecycleGateWired(t *testing.T) {
 // the constructor carries it. (The same defect shipped an entirely inert tier carriage
 // elsewhere in the platform, one missing assignment, every test passing.)
 //
-// It calls the real constructor ONCE, and that is a hard limit rather than a preference:
-// NewProcessorMetrics registers into prometheus' default registry via promauto, so a
-// second construction in this package panics on duplicate registration. Both gates are
-// therefore proven in this one pass, which is why it carries two tenants:
+// It calls the real constructor ONCE and proves both gates in that single pass, which is
+// why it carries two tenants. Sharing one construction is a preference, not a limit: a
+// Microservice built as a struct literal has no metrics registry, so NewProcessorMetrics
+// builds its collectors unregistered and a second construction here does not collide.
 //
 //   - acme is DELETED, so its command must not publish — the ADR-077 gate arrived.
 //   - other is live but its device is authoritatively ABSENT, so its command must be
