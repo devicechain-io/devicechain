@@ -234,8 +234,10 @@ type NatsManager struct {
 // that retries runs this callback a second time.
 //
 // Nothing retries a start today, and that is the argument FOR the discipline rather
-// than against it: a collector moved onto the start path is a defect no test in this
-// tree can show you, sitting one caller away from a panic that takes the process down.
+// than against it: a collector moved onto the start path sits one caller away from a
+// panic that takes the process down, and nothing driving the real lifecycle would
+// reach it. That is why each service pins it by driving the two CONSTRUCTIONS directly
+// instead — see any of the restart_metrics_test.go files.
 //
 // The name of the function passed here is no guide to any of this: a service's is
 // conventionally createNatsComponents, which reads like initialize-phase work. The
