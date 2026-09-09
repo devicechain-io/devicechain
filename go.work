@@ -56,6 +56,7 @@ use (
 	./backend/tools/apiprobe
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
+	./backend/tools/muxguard
 	./backend/tools/subconfirm
 	./deploy
 )

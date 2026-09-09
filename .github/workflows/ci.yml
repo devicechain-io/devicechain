@@ -471,6 +471,42 @@ jobs:
         run: hack/check-subscribe-confirmed.sh
 
   # ---------------------------------------------------------------------------
+  # HTTP routing: nothing may register on net/http's package-global mux.
+  #
+  # 🔴 Every HTTP server here serves an EXPLICIT Handler — the mux its Microservice
+  # owns — which makes http.DefaultServeMux a mux NOTHING SERVES. A registration on
+  # it compiles, runs and returns; the route is simply absent, with no error and no
+  # log line, and the endpoint answers 404. The one that matters most is
+  # /auth/jwks: every peer fetches it to validate tokens, so losing it takes the
+  # whole instance out of its Service endpoints while presenting as an auth fault.
+  #
+  # The guard parses rather than greps because a grep of this rule was written first
+  # and defeated three ways that all compile — an alias through a variable, a call
+  # split across lines, and a helper one directory outside the scanned subtree. What
+  # it still cannot see is written in the script.
+  # ---------------------------------------------------------------------------
+  http-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # Proves the checker can still fail BEFORE its green run is read as evidence.
+      # It plants seven distinct evasion shapes, requires each to be caught AND
+      # named with a file and line, requires the correct replacement shape to pass,
+      # and requires an empty tree to be REFUSED rather than reported clean.
+      - name: default-mux guard self-test
+        run: hack/check-default-servemux.sh --self-test
+
+      - name: nothing registers on http.DefaultServeMux
+        run: hack/check-default-servemux.sh
+
+  # ---------------------------------------------------------------------------
   # Data access: the query shapes that are unsafe in a way no call site shows.
   #
   # gorm's inline-condition form, `db.Find(&out, ids)`, DROPS an empty slice
@@ -1649,6 +1685,7 @@ jobs:
       - discover
       - go
       - subscriptions
+      - http-routing
       - data-access
       - migrations
       - integration
