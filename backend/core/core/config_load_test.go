@@ -197,3 +197,111 @@ func TestLoadConfiguration_RetiredKeyDoesNotSwallowTrailingData(t *testing.T) {
 
 	assert.Error(t, err, "trailing data must be refused whether or not a retired key is present")
 }
+
+// nestedRetiringConfig retires a key that is NOT at the top level. That is the shape the
+// instance configuration document needs: it is nested, so a retirement named by a bare
+// key would match nothing in it, and the load would fail closed on the very key the
+// retirement exists to admit.
+//
+// It carries a LIVE field beside the retired one, and a second branch entirely, so these
+// tests can tell "the retired key was removed" apart from "its object was" and from "the
+// document was rewritten wholesale".
+type nestedRetiringConfig struct {
+	Infrastructure struct {
+		Metrics struct {
+			Enabled bool
+		}
+		Nats struct {
+			Hostname string
+		}
+	}
+}
+
+func (c *nestedRetiringConfig) RetiredConfigKeys() map[string]string {
+	return map[string]string{
+		"infrastructure.metrics.httpPort": "There is no separate metrics listener; delete the key.",
+	}
+}
+
+// The nested case of the defect this whole mechanism exists for.
+func TestLoadConfiguration_RetiredNestedKeyDoesNotFailTheLoad(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(
+		`{"infrastructure":{"metrics":{"enabled":true,"httpPort":9090},"nats":{"hostname":"broker"}}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.True(t, cfg.Infrastructure.Metrics.Enabled, "the live key beside a retired one must still apply")
+	assert.Equal(t, "broker", cfg.Infrastructure.Nats.Hostname, "an untouched branch must survive the rewrite")
+}
+
+// Every segment matches case-insensitively, because encoding/json binds field names that
+// way at every level: a document that capitalised any part of the path reached the same
+// fields, so retiring one spelling leaves the crash-loop reachable by capitalisation.
+func TestLoadConfiguration_RetiredNestedKeyMatchesCaseInsensitivelyAtEverySegment(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(
+		`{"Infrastructure":{"Metrics":{"enabled":true,"HttpPort":9090}}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.True(t, cfg.Infrastructure.Metrics.Enabled)
+}
+
+// 🔴 THE COUNTERWEIGHT FOR THE NESTED CASE. Retiring a nested key must relax the posture
+// for that ONE path, not for the object holding it. If this ever passes a nil error, the
+// path syntax has turned a whole branch of the document into a place typos are ignored.
+func TestLoadConfiguration_NestedRetirementDoesNotAdmitUnknownSiblings(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(
+		`{"infrastructure":{"metrics":{"httpPort":9090,"enabeld":true}}}`), cfg)
+
+	assert.Error(t, err, "an unknown key beside a retired one must still fail closed")
+	assert.Contains(t, err.Error(), "enabeld", "the error must name the key the operator got wrong")
+}
+
+// ...nor for a different branch of the same document.
+func TestLoadConfiguration_NestedRetirementDoesNotAdmitUnknownKeysElsewhere(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(
+		`{"infrastructure":{"metrics":{"httpPort":9090},"nats":{"hostnmae":"broker"}}}`), cfg)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "hostnmae")
+}
+
+// A path is matched whole, not by its leaf. Retiring infrastructure.metrics.httpPort must
+// not excuse a top-level httpPort, nor the same leaf under a different parent — one
+// retirement quietly admitting a key somewhere nobody looked is how a path syntax turns
+// into a hole.
+func TestLoadConfiguration_NestedRetirementDoesNotMatchTheLeafElsewhere(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+
+	err := LoadConfiguration([]byte(`{"httpPort":9090}`), cfg)
+	assert.Error(t, err, "the leaf of a retired path is not retired at the root")
+	assert.Contains(t, err.Error(), "httpPort")
+
+	err = LoadConfiguration([]byte(`{"infrastructure":{"nats":{"httpPort":9090}}}`), cfg)
+	assert.Error(t, err, "the leaf of a retired path is not retired under a different parent")
+	assert.Contains(t, err.Error(), "httpPort")
+}
+
+// A path segment whose value is not an object cannot hold the rest of the path. The walk
+// stops with no match and the strict decode reports the document the operator actually
+// wrote, rather than this mechanism failing on it.
+func TestLoadConfiguration_NestedRetirementAgainstANonObjectIsANoOp(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(`{"infrastructure":{"metrics":9090}}`), cfg)
+
+	assert.Error(t, err, "a scalar where an object belongs is still a decode error")
+	assert.NotContains(t, err.Error(), "httpPort", "the error must describe the document, not the retirement")
+}
+
+// The no-op control for the walk: a document carrying none of the retired path's segments
+// must reach the decoder byte-for-byte, so declaring a retirement for a branch a document
+// does not have cannot change how that document loads.
+func TestLoadConfiguration_NestedRetirementLeavesAnUnrelatedDocumentUntouched(t *testing.T) {
+	cfg := &nestedRetiringConfig{}
+	err := LoadConfiguration([]byte(`{"infrastructure":{"nats":{"hostname":"broker"}}}`), cfg)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "broker", cfg.Infrastructure.Nats.Hostname)
+}

@@ -198,8 +198,15 @@ instance:
           sysUser: ""
           sysPassword: ""
       metrics:
+        # Informational only: scrape discovery is gated by the chart's top-level
+        # metrics.enabled (the ServiceMonitor), not by the running service.
+        #
+        # There is no port here. /metrics rides on the GraphQL/HTTP port through the
+        # shared mux, so the httpPort this block used to carry was never bound by
+        # anything. It has been retired: a document that still sets it — a copied values
+        # file, or a pre-created instance Secret — logs a warning naming the key and
+        # starts, rather than being refused as unknown.
         enabled: true
-        httpPort: 9090
       graphql:
         # The largest single inbound WebSocket message the GraphQL subscription
         # endpoint will read, in bytes.
@@ -401,7 +408,7 @@ frontend:
 # Prometheus scrape integration. Metrics are NOT served on a dedicated port:
 # /metrics rides on the graphql port 8080 (the shared HTTP mux), so the
 # ServiceMonitor scrapes the Service's named `graphql` port at path /metrics.
-# (The instance.config.infrastructure.metrics.httpPort 9090 is not used here.)
+# (There is no separate metrics port anywhere in this chart to point it at.)
 #
 # enabled renders one monitoring.coreos.com/v1 ServiceMonitor per enabled
 # functional area. This REQUIRES the Prometheus Operator CRDs to be installed on

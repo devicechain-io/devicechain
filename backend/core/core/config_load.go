@@ -49,11 +49,16 @@ type ConfigValidator interface {
 // replaces was at least loud: an operator who reads "ignored" and does nothing is in the
 // same place as one who never set it, which is the outcome we are choosing.
 //
-// Keys are matched case-insensitively and at the TOP LEVEL of the document only, which
-// is how encoding/json matches field names and where every retired key has lived. A
-// nested key would need its own path syntax; nothing has needed one, so nothing offers
-// one — a retired key that is not top-level will simply not match, and the load will
-// fail closed as it does today.
+// A key is named by its PATH from the document root, dot-separated, and every segment is
+// matched case-insensitively — which is how encoding/json matches field names, so both
+// spellings of a key reached the field while it existed and both must be retired
+// together. A name with no dot is a top-level key, which is what every retirement was
+// until the instance configuration document needed one: that document is nested
+// (infrastructure.metrics.httpPort), so top-level-only matching would leave a retired key
+// inside it unmatched and fail the load closed — precisely the upgrade-stopping outcome
+// this exists to prevent. Nothing in this platform's configuration has a dot IN a key
+// name, so the separator is unambiguous; a document that did carry one would simply not
+// match, and the load would fail closed as it does for any unknown key.
 type ConfigRetirer interface {
 	RetiredConfigKeys() map[string]string
 }
@@ -115,21 +120,9 @@ func stripRetiredKeys(raw []byte, retired map[string]string) []byte {
 		return raw
 	}
 	stripped := false
-	for present := range doc {
-		for key, guidance := range retired {
-			// Case-insensitively, because encoding/json matches field names that way: a
-			// document writing MaxEventFutureSkewSeconds bound to the field just as well
-			// as maxEventFutureSkewSeconds did. Matching exactly here would retire one
-			// spelling and leave the other to fail the load as unknown — the same
-			// crash-loop this exists to prevent, reachable by capitalisation.
-			if !strings.EqualFold(present, key) {
-				continue
-			}
-			log.Warn().Str("key", present).
-				Msg("Configuration key is RETIRED and its value is NOT being applied — the service is starting without it. " + guidance)
-			delete(doc, present)
+	for key, guidance := range retired {
+		if stripRetiredPath(doc, strings.Split(key, "."), nil, guidance) {
 			stripped = true
-			break
 		}
 	}
 	if !stripped {
@@ -142,4 +135,62 @@ func stripRetiredKeys(raw []byte, retired map[string]string) []byte {
 		return raw
 	}
 	return out
+}
+
+// stripRetiredPath removes one retired key, named by the remaining path segments, from
+// the object obj, and reports whether it removed anything. seen carries the segment
+// spellings already matched, so the WARN names the path AS THE OPERATOR WROTE IT rather
+// than as this code declares it — an operator searching their values file for the key to
+// delete needs their own spelling back.
+//
+// Every segment is matched case-insensitively, because encoding/json binds field names
+// that way: a document writing Infrastructure.Metrics.HttpPort reached the same field as
+// infrastructure.metrics.httpPort did, so retiring one spelling and leaving the other to
+// fail the load as unknown would leave the crash-loop this exists to prevent reachable by
+// capitalisation.
+//
+// It iterates every matching key at a level rather than stopping at the first, because
+// JSON permits an object to carry two keys that differ only in case; encoding/json would
+// bind either of them, so both are retired.
+//
+// A path segment whose value is not an object stops the walk with no match, and so does a
+// segment that is absent. That is the same no-op as a top-level key the document does not
+// carry: this function only ever REMOVES what a retirement names, and everything it does
+// not remove is left to the strict decode to judge.
+func stripRetiredPath(obj map[string]json.RawMessage, path []string, seen []string, guidance string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	stripped := false
+	for present, value := range obj {
+		if !strings.EqualFold(present, path[0]) {
+			continue
+		}
+		matched := append(append([]string{}, seen...), present)
+		if len(path) == 1 {
+			log.Warn().Str("key", strings.Join(matched, ".")).
+				Msg("Configuration key is RETIRED and its value is NOT being applied — the service is starting without it. " + guidance)
+			delete(obj, present)
+			stripped = true
+			continue
+		}
+		var child map[string]json.RawMessage
+		if err := json.Unmarshal(value, &child); err != nil {
+			// Not an object, so the rest of the path cannot exist under it. The decode
+			// that follows describes the document the operator actually wrote.
+			continue
+		}
+		if !stripRetiredPath(child, path[1:], matched, guidance) {
+			continue
+		}
+		// The child is rewritten only when something was removed from it, so an
+		// untouched branch keeps its original bytes.
+		rewritten, err := json.Marshal(child)
+		if err != nil {
+			continue
+		}
+		obj[present] = rewritten
+		stripped = true
+	}
+	return stripped
 }

@@ -725,6 +725,31 @@ func (c *NatsConfiguration) tierMaxBytesFor(suffix string) int64 {
 	return DefaultStreamMaxBytes
 }
 
+// RetiredConfigKeys names the keys the instance configuration document accepted in an
+// earlier release and no longer has a field for, so a document still carrying one is
+// reported rather than refused. Each is a PATH from the document root: this document is
+// nested, unlike the per-service ones, and a bare key name would match nothing here.
+//
+// infrastructure.metrics.httpPort was a second HTTP listener for Prometheus. There is no
+// second listener: /metrics rides on the GraphQL port through the shared mux, so the
+// field was dead config and was removed. The chart shipped it as a DEFAULT under
+// instance.config, which means every operator who copied values.yaml has it, and an
+// operator running a pre-created instance Secret (instance.existingSecret) has it in a
+// document this chart cannot edit. Refusing it would stop every pod in the instance on
+// upgrade over a value that has not been read by anything for several releases.
+//
+// The value is not honoured anywhere. Nothing listens on it, and nothing did when it was
+// still a field — which is why the guidance says to delete the key rather than where to
+// set it instead.
+func (c *InstanceConfiguration) RetiredConfigKeys() map[string]string {
+	return map[string]string{
+		"infrastructure.metrics.httpPort": "Metrics are served on the GraphQL/HTTP port (8080) at /metrics " +
+			"through the shared mux; there is no separate metrics listener and this port was never bound. " +
+			"Delete the key. Scrape discovery is controlled by the chart's metrics.enabled value, which " +
+			"renders the ServiceMonitor against the graphql port.",
+	}
+}
+
 // ApplyDefaults fills unset infrastructure fields with their defaults so an
 // instance document that omits them is still well-formed (ADR-022 decision 1 /
 // review E3). It is applied after decoding and before Validate.
