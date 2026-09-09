@@ -261,9 +261,9 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	// Readiness/auth-degrade observability (E17): a gauge that is 1 once the data
 	// plane is ready and counters for the background auth-gate attempts/failures,
 	// so degraded-for-N is a first-class, alertable app signal.
-	ms.readyGauge = ms.NewGauge("ready", "1 when the data plane is ready (auth live), else 0", nil)
-	ms.authAttempts = ms.NewCounter("auth_gate_attempts_total", "Background auth-gate JWKS fetch attempts", nil)
-	ms.authFailures = ms.NewCounter("auth_gate_failures_total", "Background auth-gate JWKS fetch failures", nil)
+	ms.readyGauge = ms.NewGauge("ready", "1 when the data plane is ready (auth live), else 0")
+	ms.authAttempts = ms.NewCounter("auth_gate_attempts_total", "Background auth-gate JWKS fetch attempts")
+	ms.authFailures = ms.NewCounter("auth_gate_failures_total", "Background auth-gate JWKS fetch failures")
 
 	// Create lifecycle manager and channels for tracking shutdown.
 	ms.lifecycle = NewLifecycleManager(ms.FunctionalArea, ms, callbacks)
@@ -758,9 +758,22 @@ func (ms *Microservice) LoadMicroserviceConfiguration() error {
 	return nil
 }
 
-// Create a new counter with the namespace and subsystem auto-filled based on microservice.
-// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
-func (ms *Microservice) NewCounter(name string, help string, labels []string) prometheus.Counter {
+// NewCounter builds an unlabelled counter with the namespace and subsystem auto-filled
+// based on microservice. It panics if name cannot appear in a Prometheus metric name
+// (see requireMetricName).
+//
+// It takes no label names because it has nothing to do with them: a prometheus.Counter
+// is one series with no dimensions. Use NewCounterVec for a counter with labels.
+//
+// 🔴 It used to take a labels []string it never read. An unused PARAMETER is not a
+// compile error the way an unused local is, so a call site asking for a labelled counter
+// got an unlabelled one that registered, incremented and exported without complaint — the
+// gap surfacing later as a dashboard query returning one undifferentiated series, at which
+// point the dashboard is the natural suspect. Dropping the parameter is what makes that
+// call site a compile error instead. Do not re-add it "for symmetry" with NewCounterVec:
+// the symmetry is the trap, since the two signatures then read alike and mean different
+// things. TestUnlabelledMetricConstructorsTakeNoLabelNames enforces this.
+func (ms *Microservice) NewCounter(name string, help string) prometheus.Counter {
 	sub, name := ms.requireMetricName("NewCounter", name)
 	return promauto.With(ms.MetricsRegisterer()).NewCounter(prometheus.CounterOpts{
 		Namespace: METRICS_NAMESPACE,
@@ -782,9 +795,14 @@ func (ms *Microservice) NewCounterVec(name string, help string, labels []string)
 	}, labels)
 }
 
-// Create a new gauge with the namespace and subsystem auto-filled based on microservice.
-// It panics if name cannot appear in a Prometheus metric name (see requireMetricName).
-func (ms *Microservice) NewGauge(name string, help string, labels []string) prometheus.Gauge {
+// NewGauge builds an unlabelled gauge with the namespace and subsystem auto-filled based
+// on microservice. It panics if name cannot appear in a Prometheus metric name (see
+// requireMetricName).
+//
+// It takes no label names, for the reason given on NewCounter — a prometheus.Gauge is one
+// series with no dimensions, and the labels []string this used to accept was never read.
+// Use NewGaugeVec for a gauge with labels.
+func (ms *Microservice) NewGauge(name string, help string) prometheus.Gauge {
 	sub, name := ms.requireMetricName("NewGauge", name)
 	return promauto.With(ms.MetricsRegisterer()).NewGauge(prometheus.GaugeOpts{
 		Namespace: METRICS_NAMESPACE,

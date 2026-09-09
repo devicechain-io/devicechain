@@ -201,24 +201,24 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		ClaimsStranded: ms.NewCounter("command_delivery_claims_stranded_total",
 			"Commands left reading SENT because their publish failed and the release failed too. "+
 				"On LwM2M the stranded reconciler re-arms these; on MQTT they still expire as "+
-				"TIMEOUT, wrongly blaming the device", nil),
+				"TIMEOUT, wrongly blaming the device"),
 		DispatchesExhausted: ms.NewCounter("command_delivery_dispatches_exhausted_total",
 			"Commands failed because the platform could not publish them to their device as many "+
 				"times as the configured bound allows, so it stopped retrying. Each row records "+
 				"FAILED with the platform named as the cause, rather than retrying until its TTL "+
-				"and then recording TIMEOUT against a device it never reached", nil),
+				"and then recording TIMEOUT against a device it never reached"),
 		HoldsPlaced: ms.NewCounter("command_delivery_holds_placed_total",
-			"Commands withheld from dispatch because the device is authoritatively absent", nil),
+			"Commands withheld from dispatch because the device is authoritatively absent"),
 		UndeliverableFailed: ms.NewCounter("command_delivery_undeliverable_total",
-			"Commands failed because the device's transport carries no command path at all", nil),
+			"Commands failed because the device's transport carries no command path at all"),
 		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
 			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
-				"standing rate here means commands are being dispatched ungated", nil),
+				"standing rate here means commands are being dispatched ungated"),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
-			"Withheld commands returned to the dispatch queue because their device came back", nil),
+			"Withheld commands returned to the dispatch queue because their device came back"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
 			"Commands found sitting in SENT with no outcome for longer than the platform could "+
-				"still have been retrying them", nil),
+				"still have been retrying them"),
 		StrandedRecovered: ms.NewCounterVec("command_delivery_stranded_recovered_total",
 			"Stranded commands re-armed instead of expiring as TIMEOUT against a device that was "+
 				"never sent them, by the status they landed on. PARKED means the command will be "+
@@ -230,29 +230,29 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		ResponsesDeadLettered: ms.NewCounter("command_delivery_responses_dead_lettered_total",
 			"Device command responses written to the dead-letter stream after every attempt to "+
 				"record them failed, so an answer the device did give can be seen rather than "+
-				"leaving its command looking unanswered (ADR-024).", nil),
+				"leaving its command looking unanswered (ADR-024)."),
 		ResponsesDeadLetterLost: ms.NewCounter("command_delivery_responses_dead_letter_lost_total",
 			"Device command responses that could be neither recorded NOR dead-lettered — the "+
-				"write failed on a delivery that will not repeat, so the device's answer is gone.", nil),
+				"write failed on a delivery that will not repeat, so the device's answer is gone."),
 		ResponsesRefused: ms.NewCounter("command_delivery_responses_refused_total",
 			"Device responses rejected because the publishing device does not own the command "+
 				"they name. Expected to be zero: either a device is answering for another device, "+
-				"or dispatch addressed a command to the wrong one", nil),
+				"or dispatch addressed a command to the wrong one"),
 		ResponsesNotAnswerable: ms.NewCounter("command_delivery_responses_not_answerable_total",
 			"Answers from a command's OWN device that named a command the platform could not "+
 				"settle from, because the row was queued or held rather than dispatched. The "+
 				"ordinary cause is a publish that reported an error and returned the command to "+
 				"the queue while the device had in fact received it, so a standing rate here also "+
 				"means those commands are being dispatched a second time. Each one is written to "+
-				"the dead-letter stream rather than dropped", nil),
+				"the dead-letter stream rather than dropped"),
 		NudgeMetrics: NudgeMetrics{
 			Requested: ms.NewCounter("command_delivery_nudges_requested_total",
 				"Dispatch nudges accepted onto the enqueue-time dispatch queue, one per command "+
-					"created through createCommand (a fleet batch issues none)", nil),
+					"created through createCommand (a fleet batch issues none)"),
 			Dropped: ms.NewCounter("command_delivery_nudges_dropped_total",
 				"Dispatch nudges discarded because the queue was full. A LATENCY signal, not an error "+
 					"rate: the command still goes out on the delivery sweep, which is the net under "+
-					"every nudge", nil),
+					"every nudge"),
 			Declined: ms.NewCounterVec("command_delivery_nudges_declined_total",
 				"Dispatch nudges the drain refused to act on, by reason. A high and steady "+
 					"reason=\"not_sole\" rate is expected — the nudge stands down whenever a device has "+
@@ -260,7 +260,7 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 			Applied: ms.NewCounter("command_delivery_nudges_applied_total",
 				"Dispatch nudges that found exactly one queued command and put it through the delivery "+
 					"gates. NOT a count of publishes: the presence gate may still hold or fail the "+
-					"command, exactly as it would on a sweep tick", nil),
+					"command, exactly as it would on a sweep tick"),
 		},
 	}
 }

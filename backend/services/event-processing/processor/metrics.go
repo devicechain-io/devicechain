@@ -111,47 +111,47 @@ type DetectMetrics struct {
 // duplicate.
 func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	return &DetectMetrics{
-		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints.", nil),
-		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine.", nil),
-		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot.", nil),
-		checkpointSeconds:   ms.NewGauge("detect_checkpoint_seconds", "Wall-clock cost of the last snapshot commit.", nil),
-		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload.", nil),
-		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint.", nil),
-		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup.", nil),
+		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints."),
+		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine."),
+		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot."),
+		checkpointSeconds:   ms.NewGauge("detect_checkpoint_seconds", "Wall-clock cost of the last snapshot commit."),
+		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload."),
+		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint."),
+		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup."),
 		// Leadership (ADR-070). Two gauges rather than one, because the interesting
 		// failure is a pod that HAS the partition and is not detecting on it: a term
 		// build runs a snapshot restore, three view builds and a full replay, and a
 		// single "am I the leader" series cannot tell that apart from a healthy leader.
 		// isLeader goes up at ACQUIRE so a long build does not read as leaderless.
-		isLeader:   ms.NewGauge("detect_is_leader", "1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build.", nil),
-		detectLive: ms.NewGauge("detect_live", "1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired.", nil),
+		isLeader:   ms.NewGauge("detect_is_leader", "1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build."),
+		detectLive: ms.NewGauge("detect_live", "1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired."),
 
-		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal).", nil),
-		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work).", nil),
+		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal)."),
+		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work)."),
 
-		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine.", nil),
-		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out.", nil),
-		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match).", nil),
-		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived after their own trailing window had passed the watermark and so were not folded into a sliding-window rule (Repeating, SlidingAgg, Correlation). A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent.", nil),
-		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037).", nil),
+		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
+		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
+		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
+		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived after their own trailing window had passed the watermark and so were not folded into a sliding-window rule (Repeating, SlidingAgg, Correlation). A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
+		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
 		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 
-		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection.", nil),
-		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence).", nil),
+		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection."),
+		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence)."),
 
-		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded).", nil),
-		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6).", nil),
+		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded)."),
+		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6)."),
 
-		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate).", nil),
-		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023).", nil),
-		tenantsOverLiveKeyBudget: ms.NewGauge("detect_tenants_over_live_key_budget", "Tenants currently exceeding the per-tenant live-key budget (ADR-023).", nil),
+		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate)."),
+		tenantsOverRuleBudget:    ms.NewGauge("detect_tenants_over_rule_budget", "Tenants currently exceeding the per-tenant rule-count budget (ADR-023)."),
+		tenantsOverLiveKeyBudget: ms.NewGauge("detect_tenants_over_live_key_budget", "Tenants currently exceeding the per-tenant live-key budget (ADR-023)."),
 
 		// The retained-sample axis (ADR-051 slice 6c). detect_live_keys counts state ENTRIES, which
 		// is flat in the samples a long window holds — a 30-day window on one series is one key. This
 		// pair is what a long-window memory overrun actually moves.
-		retainedSamples:                 ms.NewGauge("detect_retained_samples", "Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members).", nil),
-		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap. Grows per EVENT for absence/session rules (a deadline reset pushes a new entry and the superseded one lingers until its deadline), so neither of the two gauges above can see it.", nil),
-		tenantsOverRetainedSampleBudget: ms.NewGauge("detect_tenants_over_retained_sample_budget", "Tenants currently exceeding the per-tenant retained-sample budget (ADR-023).", nil),
+		retainedSamples:                 ms.NewGauge("detect_retained_samples", "Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members)."),
+		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap. Grows per EVENT for absence/session rules (a deadline reset pushes a new entry and the superseded one lingers until its deadline), so neither of the two gauges above can see it."),
+		tenantsOverRetainedSampleBudget: ms.NewGauge("detect_tenants_over_retained_sample_budget", "Tenants currently exceeding the per-tenant retained-sample budget (ADR-023)."),
 	}
 }
 
@@ -223,10 +223,10 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
-		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched).", nil),
-		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness.", nil),
-		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024).", nil),
-		deadLetterLost:      ms.NewCounter("react_events_dead_letter_lost_total", "Derived events that could be neither dispatched NOR dead-lettered — the write to the dead-letter stream failed on a delivery that will not repeat. This is the one outcome on this path where work is silently gone, and it is the reason the counter exists separately from the one above.", nil),
+		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
+		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
+		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
+		deadLetterLost:      ms.NewCounter("react_events_dead_letter_lost_total", "Derived events that could be neither dispatched NOR dead-lettered — the write to the dead-letter stream failed on a delivery that will not repeat. This is the one outcome on this path where work is silently gone, and it is the reason the counter exists separately from the one above."),
 	}
 }
 
@@ -470,13 +470,13 @@ type fenceGeometryMetrics struct {
 // newFenceGeometryMetrics registers the archive-seam metrics under the service's namespace.
 func newFenceGeometryMetrics(ms *core.Microservice) *fenceGeometryMetrics {
 	return &fenceGeometryMetrics{
-		fenceGeometryUnresolved:     ms.NewCounter("detect_fence_geometry_unresolved_total", "Geofence manifest entries whose geometry could not be obtained from device-management's archive. Each one leaves that fence reporting unresolvable rather than answering, repaired by the next reconcile sweep if the cause was transient.", nil),
-		fenceGeometryHashMismatch:   ms.NewCounter("detect_fence_geometry_hash_mismatch_total", "Geofence geometry documents that did not hash to the content address they were requested under. Always a bug, never transient: the peer served the wrong row, something re-encoded the document in transit, or the archive is corrupt.", nil),
-		fenceArchiveSkew:            ms.NewCounter("detect_fence_archive_skew_total", "Geofence archive reads that failed because device-management does not serve the manifest doors — it is running a build from before manifest delivery. Repairs itself when that service rolls forward.", nil),
-		fenceGeometryCacheHits:      ms.NewCounter("detect_fence_geometry_cache_hits_total", "Compiled-geometry cache lookups served from cache, avoiding both a cross-service read and a recompile.", nil),
-		fenceGeometryCacheMisses:    ms.NewCounter("detect_fence_geometry_cache_misses_total", "Compiled-geometry cache lookups that had to fetch and compile the document.", nil),
-		fenceGeometryCacheEvictions: ms.NewCounter("detect_fence_geometry_cache_evictions_total", "Compiled-geometry cache entries dropped to stay inside the cache's vertex bound.", nil),
-		fenceGeometryCacheVertices:  ms.NewGauge("detect_fence_geometry_cache_vertices", "Total vertices held in the compiled-geometry cache — the quantity its bound is counted in.", nil),
+		fenceGeometryUnresolved:     ms.NewCounter("detect_fence_geometry_unresolved_total", "Geofence manifest entries whose geometry could not be obtained from device-management's archive. Each one leaves that fence reporting unresolvable rather than answering, repaired by the next reconcile sweep if the cause was transient."),
+		fenceGeometryHashMismatch:   ms.NewCounter("detect_fence_geometry_hash_mismatch_total", "Geofence geometry documents that did not hash to the content address they were requested under. Always a bug, never transient: the peer served the wrong row, something re-encoded the document in transit, or the archive is corrupt."),
+		fenceArchiveSkew:            ms.NewCounter("detect_fence_archive_skew_total", "Geofence archive reads that failed because device-management does not serve the manifest doors — it is running a build from before manifest delivery. Repairs itself when that service rolls forward."),
+		fenceGeometryCacheHits:      ms.NewCounter("detect_fence_geometry_cache_hits_total", "Compiled-geometry cache lookups served from cache, avoiding both a cross-service read and a recompile."),
+		fenceGeometryCacheMisses:    ms.NewCounter("detect_fence_geometry_cache_misses_total", "Compiled-geometry cache lookups that had to fetch and compile the document."),
+		fenceGeometryCacheEvictions: ms.NewCounter("detect_fence_geometry_cache_evictions_total", "Compiled-geometry cache entries dropped to stay inside the cache's vertex bound."),
+		fenceGeometryCacheVertices:  ms.NewGauge("detect_fence_geometry_cache_vertices", "Total vertices held in the compiled-geometry cache — the quantity its bound is counted in."),
 	}
 }
 

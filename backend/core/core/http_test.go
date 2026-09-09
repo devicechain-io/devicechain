@@ -122,7 +122,7 @@ func TestRegisterProbesServesTheMicroservicesOwnMetrics(t *testing.T) {
 	// A plain Counter: it exports a sample as soon as it is built. A CounterVec exports
 	// nothing until a label combination is used, so it could not tell a missing metric
 	// from an idle one.
-	ms.NewCounter("probe_wiring_total", "Probe metric for the /metrics route.", nil)
+	ms.NewCounter("probe_wiring_total", "Probe metric for the /metrics route.")
 	ms.RegisterProbes(NewReadinessGate())
 
 	rec := httptest.NewRecorder()

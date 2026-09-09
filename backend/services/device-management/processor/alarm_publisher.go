@@ -88,10 +88,10 @@ func NewAlarmEventWriter(ms *core.Microservice, writer messaging.MessageWriter,
 			"Alarm state-change events that could not be published to the alarm-events "+
 				"stream and were written to the dead-letter stream instead. Each one is an "+
 				"alarm transition that reached the database but not the bus, so nobody was "+
-				"paged about it — it is visible to an operator rather than only logged.", nil),
+				"paged about it — it is visible to an operator rather than only logged."),
 		deadLetterLost: ms.NewCounter("alarm_event_dead_letter_lost_total",
 			"Alarm state-change events that could be neither published NOR dead-lettered, "+
-				"so the transition is recorded nowhere but the alarm row itself.", nil),
+				"so the transition is recorded nowhere but the alarm row itself."),
 	}
 	if dead != nil {
 		w.dead = deadletter.NewSink(dead, func(error) { w.deadLetterLost.Inc() })

@@ -36,7 +36,7 @@ func TestMetricsRouteServesTheMicroservicesOwnCollectors(t *testing.T) {
 	// means the endpoint did not read this registry. A CounterVec exports NOTHING
 	// until some label combination is used — so a vec probe reads absent-and-fine and
 	// absent-and-broken identically, and would pass against the defect.
-	ms.NewCounter("registry_probe_total", "Probe metric for the /metrics wiring test.", nil)
+	ms.NewCounter("registry_probe_total", "Probe metric for the /metrics wiring test.")
 
 	// The NATS manager's collectors are built through the same Microservice
 	// constructors, so this is the half that pins the messaging layer's metrics to the

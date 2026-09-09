@@ -102,22 +102,32 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 		// unregistered. A counter that still counts is what keeps the code under test
 		// behaving the same way it does in a service.
 		{name: "NewCounter", call: func(t *testing.T, ms *Microservice) {
-			c := ms.NewCounter("literal_counter", "h", nil)
+			c := ms.NewCounter("literal_counter", "h")
 			if assert.NotNil(t, c) {
 				c.Inc()
 			}
 		}},
+		// The Vec rows drive a labelled child rather than stopping at NotNil, because
+		// applying the label names is the only thing that distinguishes these two
+		// constructors from the two unlabelled ones — and WithLabelValues panics on an
+		// arity its collector was not built with, so the call is the assertion.
 		{name: "NewCounterVec", call: func(t *testing.T, ms *Microservice) {
-			assert.NotNil(t, ms.NewCounterVec("literal_counter_vec", "h", []string{"l"}))
+			cv := ms.NewCounterVec("literal_counter_vec", "h", []string{"l"})
+			if assert.NotNil(t, cv) {
+				cv.WithLabelValues("v").Inc()
+			}
 		}},
 		{name: "NewGauge", call: func(t *testing.T, ms *Microservice) {
-			g := ms.NewGauge("literal_gauge", "h", nil)
+			g := ms.NewGauge("literal_gauge", "h")
 			if assert.NotNil(t, g) {
 				g.Set(1)
 			}
 		}},
 		{name: "NewGaugeVec", call: func(t *testing.T, ms *Microservice) {
-			assert.NotNil(t, ms.NewGaugeVec("literal_gauge_vec", "h", []string{"l"}))
+			gv := ms.NewGaugeVec("literal_gauge_vec", "h", []string{"l"})
+			if assert.NotNil(t, gv) {
+				gv.WithLabelValues("v").Set(1)
+			}
 		}},
 		{name: "NewProcessorMetrics", call: func(t *testing.T, ms *Microservice) {
 			pm := ms.NewProcessorMetrics("literal")

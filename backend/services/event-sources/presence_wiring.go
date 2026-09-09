@@ -801,12 +801,10 @@ func initializePresenceMetrics() {
 		[]string{"reason"})
 	PresenceRefusedCounter = Microservice.NewCounter(
 		"presence_events_refused_total",
-		"Presence transitions refused by the ingest admission gate (deleted tenant or tenant ceiling)",
-		nil)
+		"Presence transitions refused by the ingest admission gate (deleted tenant or tenant ceiling)")
 	PresenceFailedCounter = Microservice.NewCounter(
 		"presence_events_failed_total",
-		"Presence transitions that could not be written to the inbound stream",
-		nil)
+		"Presence transitions that could not be written to the inbound stream")
 	// 🔴 THE OLD HELP TEXT SAID "which the projection rejects as stale", AND THAT STOPPED
 	// BEING TRUE when reconciliation gained a compare-and-set: a regressed session that
 	// names the session the projection is holding is now ACCEPTED and re-files the device.
@@ -816,8 +814,7 @@ func initializePresenceMetrics() {
 		"presence_sessions_regressed_total",
 		"Presence transitions observed with a session id lower than this replica's high-water mark "+
 			"(a broker node's clock may be trailing its peers). Diagnostic only: whether such a "+
-			"transition is applied is decided downstream by the projection",
-		nil)
+			"transition is applied is decided downstream by the projection")
 	PresenceReconcileCounter = Microservice.NewCounterVec(
 		"presence_reconcile_runs_total",
 		"Presence reconciliation passes, by outcome",
@@ -828,13 +825,11 @@ func initializePresenceMetrics() {
 		[]string{"direction"})
 	PresenceWithheldCounter = Microservice.NewCounter(
 		"presence_reconcile_withheld_disconnects_total",
-		"Devices that would have been marked offline had the broker inventory been provably complete",
-		nil)
+		"Devices that would have been marked offline had the broker inventory been provably complete")
 	PresenceRegressedGauge = Microservice.NewGauge(
 		"presence_reconcile_regressed_sessions",
 		"Devices found LIVE on a session id lower than the one the projection holds, as of the last "+
-			"reconciliation pass. A standing non-zero value means the repairs are not converging",
-		nil)
+			"reconciliation pass. A standing non-zero value means the repairs are not converging")
 	PresenceTapOffGauge = Microservice.NewGaugeVec(
 		"presence_tap_off",
 		"1 when broker-asserted MQTT presence is NOT running on this replica, labelled by why. A "+
@@ -844,21 +839,17 @@ func initializePresenceMetrics() {
 	PresenceReleasedCounter = Microservice.NewCounter(
 		"presence_released_total",
 		"Devices handed back from asserted to inferred presence because this source stopped reading "+
-			"the broker",
-		nil)
+			"the broker")
 	PresenceStillAssertedGauge = Microservice.NewGauge(
 		"presence_still_asserted",
 		"Devices this source still had asserted at the start of the last release pass. The work "+
-			"empties itself, so a healthy drain walks this to zero and stays there",
-		nil)
+			"empties itself, so a healthy drain walks this to zero and stays there")
 	PresenceCanaryOkCounter = Microservice.NewCounter(
 		"presence_canary_observed_total",
-		"Canary probes whose own broker connection was observed end to end",
-		nil)
+		"Canary probes whose own broker connection was observed end to end")
 	PresenceCanaryMissCounter = Microservice.NewCounter(
 		"presence_canary_missed_total",
-		"Canary probes whose own broker connection was NOT observed — presence is not being read",
-		nil)
+		"Canary probes whose own broker connection was NOT observed — presence is not being read")
 
 	// The command-wake counters. 🔑 READ Dropped AND Failed AS LATENCY, NOT AS ERRORS:
 	// both mean a returning device's withheld commands wait for command-delivery's
@@ -868,19 +859,15 @@ func initializePresenceMetrics() {
 	// something to release.
 	CommandWakeRequestedCounter = Microservice.NewCounter(
 		"command_wake_requested_total",
-		"Returning devices queued for a command wake",
-		nil)
+		"Returning devices queued for a command wake")
 	CommandWakeDroppedCounter = Microservice.NewCounter(
 		"command_wake_dropped_total",
 		"Command wakes discarded because the queue was full; their commands are released later by "+
-			"command-delivery's reconcile pass, so this is a latency signal rather than a loss",
-		nil)
+			"command-delivery's reconcile pass, so this is a latency signal rather than a loss")
 	CommandWakeFailedCounter = Microservice.NewCounter(
 		"command_wake_failed_total",
-		"Command wakes that could not reach command-delivery; the reconcile pass covers them",
-		nil)
+		"Command wakes that could not reach command-delivery; the reconcile pass covers them")
 	CommandWakeReleasedCounter = Microservice.NewCounter(
 		"command_wake_released_total",
-		"Withheld commands returned to the delivery queue because their device reconnected",
-		nil)
+		"Withheld commands returned to the delivery queue because their device reconnected")
 }

@@ -206,19 +206,19 @@ func registerHttpRoutes() {
 // which is what it claims — this replica is not connecting sources.
 func buildMetrics() host.Metrics {
 	leaderGauge = Microservice.NewGauge("is_leader",
-		"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).", nil)
+		"1 when this replica holds the Sparkplug leadership lease and is connecting sources, else 0 (warm standby).")
 
 	return host.Metrics{
 		Messages: Microservice.NewCounterVec("messages_total",
 			"Sparkplug messages received, by message type.", []string{"type"}),
 		DecodeErrors: Microservice.NewCounter("decode_errors_total",
-			"Sparkplug messages that failed topic parse or payload decode.", nil),
+			"Sparkplug messages that failed topic parse or payload decode."),
 		RebirthRequests: Microservice.NewCounter("rebirth_requests_total",
-			"Sparkplug node rebirth commands emitted by the session machine.", nil),
+			"Sparkplug node rebirth commands emitted by the session machine."),
 		ConnectFailures: Microservice.NewCounter("connect_failures_total",
-			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces).", nil),
+			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces)."),
 		IngestFailures: Microservice.NewCounter("ingest_failures_total",
-			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable).", nil),
+			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable)."),
 	}
 }
 
@@ -281,15 +281,15 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 
 	ingestMetrics := host.IngestMetrics{
 		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
-			"Numeric Sparkplug samples durably written to the inbound-events stream.", nil),
+			"Numeric Sparkplug samples durably written to the inbound-events stream."),
 		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
-			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH.", nil),
+			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH."),
 		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
-			"Devices auto-registered on first sight of their Sparkplug identity.", nil),
+			"Devices auto-registered on first sight of their Sparkplug identity."),
 		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
-			"Samples/presence dropped for an unregistered device on a source with auto-registration off.", nil),
+			"Samples/presence dropped for an unregistered device on a source with auto-registration off."),
 		TenantGoneDropped: Microservice.NewCounter("tenant_deleted_dropped_total",
-			"Samples/presence dropped because the tenant has been deleted and its data is being reclaimed.", nil),
+			"Samples/presence dropped because the tenant has been deleted and its data is being reclaimed."),
 	}
 	// The ADR-077 gate. A Sparkplug publisher's devices do pass the broker auth-callout,
 	// so this is the second gate rather than the only one — but the callout stops a

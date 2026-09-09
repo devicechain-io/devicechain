@@ -138,30 +138,30 @@ func NewWritebackMetrics(ms *core.Microservice) *WritebackMetrics {
 		settled: ms.NewCounter("command_response_lost_settled_total",
 			"Commands driven to a terminal state because the device's answer to them was "+
 				"dead-lettered, so a command whose response the platform lost stops reading "+
-				"as though it were still in flight.", nil),
+				"as though it were still in flight."),
 		notAnswerable: ms.NewCounter("command_response_lost_not_answerable_total",
 			"Dead-lettered responses whose command was not in a state a response could settle: "+
 				"it had already reached a terminal outcome some other way, or it has gone back "+
 				"to being live (re-dispatched or held) since the answer was lost. Nothing is "+
 				"written in either case — a late dead letter must not overwrite an outcome that "+
-				"really happened, nor fail a command the platform still intends to deliver.", nil),
+				"really happened, nor fail a command the platform still intends to deliver."),
 		notOurs: ms.NewCounter("command_dead_letters_not_ours_total",
 			"Dead letters read from the shared stream that describe some other kind of work. "+
-				"Acked and ignored — every producer writes to one stream.", nil),
+				"Acked and ignored — every producer writes to one stream."),
 		notActionable: ms.NewCounter("command_response_lost_not_actionable_total",
 			"Dead-lettered command responses this consumer left alone because their reason says "+
 				"the platform declined to write the answer rather than tried and failed. Nothing "+
 				"is settled: there is no lost outcome to record, and the command named may still "+
 				"be live. A rising rate on a reason nobody expected is worth looking at, because "+
-				"this gate is deliberately closed by default.", nil),
+				"this gate is deliberately closed by default."),
 		unreadable: ms.NewCounter("command_dead_letters_unreadable_total",
 			"Dead letters this consumer could not act on — no parseable tenant, a body that is "+
 				"not an envelope, or an envelope naming no command. Acked and counted rather "+
-				"than retried, because no redelivery makes a malformed message parse.", nil),
+				"than retried, because no redelivery makes a malformed message parse."),
 		stranded: ms.NewCounter("command_response_lost_unsettled_total",
 			"Dead-lettered responses that exhausted every delivery attempt without their "+
 				"command's disposition being written. Those commands read as in flight until "+
-				"their TTL and then lapse to TIMEOUT, blaming a device that did answer.", nil),
+				"their TTL and then lapse to TIMEOUT, blaming a device that did answer."),
 	}
 }
 
