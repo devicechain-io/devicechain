@@ -11,8 +11,8 @@
 #
 # 🔴 WHY A SCRIPT AND NOT `run: go test -race ./...` BEHIND AN `if:`.
 #
-# The race step rides the per-module `go` matrix, so it is asked about all ~27
-# workspace modules and runs on a handful. A step that skips renders in the GitHub
+# The race step rides the per-module `go` matrix, so it is asked about every
+# workspace module and runs on four. A step that skips renders in the GitHub
 # UI as the same green tick as a step that ran, which makes "this module was race
 # checked" and "this module was never race checked" indistinguishable at exactly
 # the moment somebody wants to know. So the step is UNCONDITIONAL and the verdict
@@ -50,9 +50,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Paths exactly as go.work writes them, minus the leading "./" — the same strings
 # the ci.yml `go` matrix carries.
 #
-# Chosen by measuring goroutine surface across all 27 workspace modules
+# Chosen by measuring goroutine surface across every workspace module
 # (goroutines spawned in non-test code, goroutines spawned by the TESTS, and
-# references to sync primitives) and then timing each candidate both ways.
+# references to sync primitives), then timing each candidate both ways on a real
+# CI runner.
 #
 # 🔑 BOTH HALVES OF THE SURFACE MATTER, AND THE SECOND IS THE ONE THAT DECIDES.
 # The detector reports on accesses that actually happen — it is not a static
@@ -63,42 +64,49 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # position, and outbound-connectors would be the most expensive module in the
 # workspace to instrument because of its Bento dependency tree.
 #
-#   module                    go(prod)  go(test)  sync   plain -> race
-#   backend/core                    18        66    53    165s -> 168s
-#   .../event-processing            14        21    22     69s -> 386s
-#   .../event-sources                9        13    19     39s ->  41s
-#   .../lwm2m-ingest                12        15    39      8s ->  10s
-#   .../command-delivery             3        10    17      5s ->  59s
-#   ---- above this line: in the set ----------------------------------
-#   .../device-management            7         3    11      8s ->  69s
-#   sims/dc-simulator               15         2    33      7s ->  14s
-#   .../sparkplug-ingest             6         2    11      2s ->   2s
-#   edge/dc-edge-agent               4         2     6     30s ->  37s
-#   .../device-state                 3         3     4      1s ->   4s
+#   module                    go(prod)  go(test)  sync   `go` job: base -> race
+#   backend/core                    18        66    53      147s ->  271s
+#   .../event-sources                9        13    19       71s ->  161s
+#   .../command-delivery             3        10    17       34s ->  127s
+#   .../lwm2m-ingest                12        15    39       31s ->   96s
+#   ---- in the set above; below, measured and not taken ---------------
+#   .../event-processing            14        21    22      101s ->  647s
+#   .../device-management            7         3    11       54s
+#   sims/dc-simulator               15         2    33       33s
+#   .../sparkplug-ingest             6         2    11       24s
+#   edge/dc-edge-agent               4         2     6       56s
+#   .../device-state                 3         3     4       37s
 #
-# (`go test -count=1 -p 4 ./...`, warm build cache, 20-core host. Re-measure
-# the surface with:
+# (Whole-job durations on ubuntu-latest, both columns from real runs of this
+# workflow. Re-measure the surface with:
 #   grep -rhE '^[[:space:]]*go (func|[a-zA-Z_])' <module> --include='*.go' )
 #
-# The line falls where the tests stop driving the concurrency hard: the five
-# above it are the modules whose own suites spin up ten or more goroutines, and
-# they are also where every data race this repository has actually found has
-# lived. dc-simulator is the interesting near-miss — 15 production goroutines,
-# more than anything but core — but its tests start two, and it is a load
-# generator rather than a service on the data path. Adding it costs 7s, so the
-# argument for it is cheap to revisit.
+# The four in the set cost +372s of runner time between them and, because they
+# run as separate matrix entries, nothing on the critical path: the longest of
+# them lands at 271s against a `ci` run whose slowest job is already 333s.
 #
-# 🔴 THE COST IS THE REASON THIS IS A SET AND NOT THE WHOLE MATRIX, and it is
-# concentrated in one package. Instrumented builds are separate build-cache
-# entries and instrumented tests run slower — mostly by a little, but
-# event-processing's `processor` suite goes from 66s to 378s on its own, which
-# is the single largest line item here and the one to look at first if this ever
-# needs to get cheaper.
+# 🔴 EVENT-PROCESSING IS THE ONE THIS COULD NOT AFFORD, AND IT IS NOT BECAUSE
+# THE MODULE IS WRONG — it has the most concurrency of any service here, and it
+# is the one you would pick first. Instrumented, its `go` job goes from 101s to
+# 647s and becomes the slowest job in the workflow by a factor of two; measured
+# end to end, the `ci` run went from 5m42s to 15m47s, since the extra runner
+# minutes also queue behind a pool that is regularly saturated. A warm build
+# cache does not help: a second run measured 676s, so the cost is instrumented
+# EXECUTION, not an instrumented build.
+#
+# It is worth knowing where that time goes before anyone re-litigates the entry,
+# because it is not the concurrency. All of the module's goroutine surface is in
+# one package, `processor` (13 production goroutines and 19 in its tests; every
+# other package has none). Within it, nine tests that each stand up an embedded
+# NATS server account for 338s of the 354s, at roughly 7x their uninstrumented
+# time, while the lease, sweep and dead-letter tests — the ones actually
+# exercising the concurrency — are sub-second either way. So the bill is the
+# FIXTURE, and a cheaper shape for those nine would bring the module inside
+# budget without giving up anything this set is for.
 race_modules() {
   cat <<'EOF'
 backend/core
 backend/services/command-delivery
-backend/services/event-processing
 backend/services/event-sources
 backend/services/lwm2m-ingest
 EOF

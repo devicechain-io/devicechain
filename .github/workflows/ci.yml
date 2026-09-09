@@ -178,7 +178,7 @@ jobs:
         run: hack/go-race.sh --self-test
 
       # Which modules the detector covers, said once, as a table. The race step
-      # rides the ~27-entry `go` matrix and runs on a handful of them, and a step
+      # rides the whole per-module `go` matrix and runs on four of them, and a step
       # that decides not to run renders as the same green tick as one that ran —
       # so a reader cannot recover the covered set from the matrix. This is where
       # that set is legible.
