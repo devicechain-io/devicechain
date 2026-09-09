@@ -64,7 +64,21 @@ type RaiseAlarmConsumer struct {
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (rc *RaiseAlarmConsumer) pacer() *core.ReadPacer {
+	if rc.readPacer == nil {
+		rc.readPacer = core.NewReadPacer(rc.Microservice, "raise-alarm")
+	}
+	return rc.readPacer
 }
 
 // NewRaiseAlarmConsumer creates the raise-alarm consumer over its dedicated reader.
@@ -124,7 +138,10 @@ func (rc *RaiseAlarmConsumer) ExecuteStart(ctx context.Context) error {
 }
 
 // readMessage reads and handles one raise-alarm request. It returns true when the stream is
-// exhausted or shutting down.
+// exhausted, when the loop is shutting down, or when a run of non-EOF read errors has
+// outlasted the pacer's budget — in which case the pacer has already ended the process,
+// because a restart is the remedy for most of what gets a read loop into that state, and a
+// pod that reports ready while raising no alarms is not.
 func (rc *RaiseAlarmConsumer) readMessage(ctx context.Context) bool {
 	msg, err := rc.Reader.ReadMessage(ctx)
 	if err != nil {
@@ -133,8 +150,9 @@ func (rc *RaiseAlarmConsumer) readMessage(ctx context.Context) bool {
 			return true
 		}
 		rc.Reader.HandleResponse(err)
-		return false
+		return rc.pacer().PauseAfterError(ctx, err)
 	}
+	rc.pacer().Succeeded()
 	rc.handle(ctx, msg)
 	return ctx.Err() != nil
 }

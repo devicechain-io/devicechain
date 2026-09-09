@@ -35,7 +35,21 @@ type EntityAnchorReconciler struct {
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
 
+	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
+	// the errors stop clearing. Built on first use by pacer(), because this struct is also
+	// assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
+
 	lifecycle core.LifecycleManager
+}
+
+// pacer returns the read loop's error pacer, building it on first use. It is touched only
+// by the single read goroutine, which is the pacer's own contract.
+func (r *EntityAnchorReconciler) pacer() *core.ReadPacer {
+	if r.readPacer == nil {
+		r.readPacer = core.NewReadPacer(r.Microservice, "entity-deleted")
+	}
+	return r.readPacer
 }
 
 // NewEntityAnchorReconciler builds the reconciler over the entity-deleted reader.
@@ -97,8 +111,17 @@ func (r *EntityAnchorReconciler) ExecuteTerminate(context.Context) error {
 	return nil
 }
 
-// processOne reads and handles one entity-deletion message. Returns true on EOF
-// (shutdown) so the loop exits.
+// processOne reads and handles one entity-deletion message. Returns true on EOF (shutdown)
+// so the loop exits, and also when a run of non-EOF read errors has outlasted the pacer's
+// budget — in which case the pacer has already ended the process.
+//
+// 🔑 THAT ENDS THE WHOLE SERVICE, NOT JUST THIS RECONCILER, AND THAT IS THE POINT. This loop
+// is the only thing that removes anchors for deleted entities; if it stops, nothing here
+// reports it and the anchors accumulate silently against a service that still looks
+// healthy. The errors that get this far are broker-level, so they are the same ones the
+// persistence loop in this process is facing — and a restart, which re-dials the broker and
+// re-creates the durable, is the remedy for most of them. Both loops leave their messages
+// unacked, so a restart costs redelivery, not data.
 func (r *EntityAnchorReconciler) processOne(ctx context.Context) bool {
 	msg, err := r.Reader.ReadMessage(ctx)
 	if err != nil {
@@ -107,8 +130,9 @@ func (r *EntityAnchorReconciler) processOne(ctx context.Context) bool {
 			return true
 		}
 		r.Reader.HandleResponse(err)
-		return false
+		return r.pacer().PauseAfterError(ctx, err)
 	}
+	r.pacer().Succeeded()
 	r.handle(ctx, msg)
 	return false
 }
