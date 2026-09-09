@@ -20,6 +20,6 @@
     "lint": "npm run lint --workspaces --if-present"
   },
   "devDependencies": {
-    "esbuild": "^0.25.12"
+    "esbuild": "^0.28.2"
   }
 }
