@@ -57,12 +57,22 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // this now runs at a moment when CNPG, cert-manager and the monitoring stack do
 // not exist yet.
 //
-// A Watches/Owns source registered against a missing CRD does not degrade — the
-// informer never syncs, the manager's cache-sync deadline expires, and the whole
-// controller exits. Observed state for a resource that may be absent is read by
-// an unstructured Get on a requeue instead, where "the CRD is not installed"
-// (meta.IsNoMatchError) and "the object is not there" are two different answers
-// and neither is health. restore.go:273-282 in the CLI is the worked example.
+// A Watches/Owns source registered against a missing CRD does not fail fast and
+// does not recover on its own either. controller-runtime retries GetInformer
+// every 10s, but the controller wraps that wait in CacheSyncTimeout — 2 minutes
+// by default, and this manager sets no override — and when it expires the
+// manager returns the error and the process exits. A CRD that lands inside the
+// window is picked up; anything slower is a crash-loop until it appears.
+//
+// Observed state for a resource that MAY be absent is read by an unstructured Get
+// on a requeue instead, where the manager's mapper-backed client answers
+// meta.IsNoMatchError for a missing CRD and IsNotFound for a missing object.
+// Neither is health, and they are different answers: "CloudNativePG is not
+// installed" and "the database has not been created yet" call for different
+// reports. (clusterArchivePath in the CLI's restore.go is NOT the model — it
+// deliberately collapses both into "not there", and it reads through the dynamic
+// client, which has no RESTMapper, so a missing resource type comes back as a
+// plain 404 and NoMatch never arises there at all.)
 func (r *InstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1beta1.Instance{}).

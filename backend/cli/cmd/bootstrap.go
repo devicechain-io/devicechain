@@ -411,7 +411,7 @@ var bootstrapCmd = &cobra.Command{
 		// the instance name and the cluster it was resolved to are both in hand; every
 		// later command used to re-derive the second from the first, and that derivation
 		// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
-		// the pipeline is deliberate: a bootstrap that dies at step 4 has still created a
+		// the pipeline is deliberate: a bootstrap that dies partway through has still created a
 		// cluster, and an instance that cannot be destroyed because its record was never
 		// written would be the same orphan this record exists to prevent.
 		//

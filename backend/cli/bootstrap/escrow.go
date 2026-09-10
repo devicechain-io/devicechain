@@ -483,7 +483,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 	//
 	// The refusal used to assert that any bytes at this path were "the only copy of
 	// ITS root key", which is false for the most common way to get here: a bootstrap
-	// that failed after step 1 leaves an artifact for a cluster that was never built,
+	// that failed after the render step leaves an artifact for a cluster that was never built,
 	// and the corrected retry then hits a message sending the operator to hunt for an
 	// instance that never existed. A zero-length stub from a failed write triggered
 	// the same speech while dcctl's own reader called the file unreadable.

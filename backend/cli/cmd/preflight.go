@@ -208,7 +208,7 @@ func (d *doctor) checkKubeContexts() {
 // `kubeVersion: '>=1.29.0-0'` — helm refuses the release outright below that.
 //
 // This is worth a preflight check specifically because of WHEN it would otherwise
-// bite: the infra apply is step 2 of bootstrap, so the failure lands after the
+// bite: the infra apply runs after the render step, so the failure lands once the
 // instance credentials and the root-key escrow file have already been written.
 // Finding it here costs a second.
 const (

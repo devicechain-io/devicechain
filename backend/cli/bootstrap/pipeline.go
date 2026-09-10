@@ -181,8 +181,8 @@ var GreenUnderline = color.New(color.Underline, color.FgHiGreen).SprintFunc()
 //     broker with them (see broker_record.go, and the test that pins it).
 //
 // The image source is settled before any of this, in the command layer — see
-// ResolveImageSource. Steps 1 and 2 both consume it, and neither can wait for
-// the render step to fill it in.
+// ResolveImageSource. Step 2 always consumes it and step 1 does on --build, and
+// neither can wait for the render step to fill it in.
 func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
@@ -216,9 +216,9 @@ type ImageSource struct {
 //
 // It also has to be settled before the first step that CONSUMES it, and after
 // the ADR-080 reorder that is no longer the render step: the operator Deployment
-// installed by stepInstallCore names an image, and stepLocalRegistry is what
-// builds and pushes that image on the --build path. Both now run ahead of
-// stepRenderConfig, which is where this used to live.
+// installed by stepInstallCore always names an image, and stepLocalRegistry
+// builds and pushes that image on the --build path (it returns early otherwise).
+// Both now run ahead of stepRenderConfig, which is where this used to live.
 //
 // Idempotent, and deliberately so: re-resolving an already-settled pair returns
 // it unchanged, which is what lets stepRenderConfig keep calling it for the

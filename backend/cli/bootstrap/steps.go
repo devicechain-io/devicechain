@@ -236,8 +236,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		notes = append(notes, "NATS broker credentials reused from the running instance")
 	default:
 		// NO DEPLOYED INSTANCE — WHICH IS NOT THE SAME AS NO DEPLOYED BROKER. The
-		// lookup above reads the instance chart's config, written in step 5, while the
-		// BROKER is configured in step 3. A run that died between them left a live
+		// lookup above reads the instance chart's config, written by the chart install,
+		// while the BROKER is configured by the infrastructure apply — two steps earlier.
+		// A run that died between them left a live
 		// broker whose credentials this branch would happily rotate out from under it,
 		// permanently, because nothing the cluster still holds can be turned back into
 		// the seed and plaintexts. broker_record.go is the bridge, and this is the only
@@ -252,7 +253,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// 🔴 A RECORD THAT DOES NOT WORK IS A RECORD THAT IS NOT THERE. readBrokerRecord
 			// screens shape, not cryptography: a hand-edited file can carry a non-empty seed
 			// that is not a valid nkey, and CredentialsFromDeployed rejects it on the CRC.
-			// Returning that error would be a bootstrap that fails at step 1 where it used to
+			// Returning that error would be a bootstrap that fails in the render step where it used to
 			// succeed — the standing objection to adding this read at all — so it falls
 			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
 			// broker's next roll; a refused run does not converge on anything.
@@ -297,7 +298,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	//
 	// Failing the run on a write error is deliberate and costs nothing: the directory is
 	// the one OpenTofu is about to write its state into, so a run that cannot write here
-	// was going to die at step 3 anyway, later and with a worse message.
+	// was going to die at the infrastructure apply anyway, later and with a worse message.
 	if st.DryRun {
 		// 🔑 REPORTED, NOT USED, AND WORDED FOR WHAT A REHEARSAL CAN ACTUALLY KNOW. A dry run
 		// skips the deployed-instance lookup, so it cannot tell which of the two sources a
@@ -405,7 +406,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		case st.DryRun:
 			// A dry run must predict the same outcome the real run produces, so it
 			// checks the destination rather than assuming it is free. Reporting a clean
-			// plan for a run that dies at step 1 is the defect this whole line exists
+			// plan for a run that dies in the render step is the defect this whole line exists
 			// to avoid.
 			if _, statErr := os.Stat(st.Escrow.Path); statErr == nil {
 				notes = append(notes, fmt.Sprintf(

@@ -137,6 +137,9 @@ sequence (ADR-032), at which point the middle of the script collapses to a singl
 5. **OpenTofu apply** of [`deploy/opentofu`](../opentofu) — NATS, Postgres,
    TimescaleDB, ingress-nginx, cert-manager — targeting `kind-devicechain`.
 6. **Install core** — CRDs + operator (`backend/k8s` `make install deploy`).
+   Note `dcctl bootstrap` does this BEFORE the OpenTofu apply rather than after,
+   so that the Instance CRD exists before anything declares an instance (ADR-080);
+   this script has no such requirement and keeps the simpler order.
 7. **Install the instance chart** — `helm install` of
    [`deploy/helm/devicechain`](../helm/devicechain) at the resolved registry/version.
 8. **Seed** an admin credential / example data via `dcctl`.

@@ -13,24 +13,25 @@ import (
 
 // The broker credential record bridges a gap in the bootstrap's own ordering.
 //
-// 🔴 THE BROKER IS CONFIGURED IN STEP 3; THE FIRST DURABLE COPY OF ITS CREDENTIALS IS
-// WRITTEN IN STEP 5. A run that dies in between leaves a live broker holding credentials
+// 🔴 THE BROKER IS CONFIGURED BY THE INFRASTRUCTURE APPLY; THE FIRST DURABLE COPY OF ITS
+// CREDENTIALS IS WRITTEN BY THE CHART INSTALL, which is two steps later. A run that dies
+// in between leaves a live broker holding credentials
 // that no later run can reuse, because the only place dcctl looks for them — the instance
 // chart's config Secret — does not exist yet. Each retry mints fresh ones.
 //
-// It cannot be fixed by reading the cluster harder. Step 3 receives the callout issuer's
+// It cannot be fixed by reading the cluster harder. The apply receives the callout issuer's
 // PUBLIC key and two BCRYPT hashes and nothing else; the ConfigMap it renders carries
 // hashes; the OpenTofu state carries hashes, the public key and TLS material. Neither a
 // public nkey nor a bcrypt hash can be inverted, so DeployedBrokerHashes can only ever
-// return hashes — useless without the plaintexts they verify. Before step 5 the seed and
-// both plaintexts exist only in this process's memory. They have to be written down before
-// step 3 runs, or they are gone. (broker_record_test.go asserts that premise still holds,
+// return hashes — useless without the plaintexts they verify. Before the chart install the
+// seed and both plaintexts exist only in this process's memory. They have to be written down
+// before the apply runs, or they are gone. (broker_record_test.go asserts that premise holds,
 // because it is a property of what infraVars passes and nothing else enforces it.)
 //
 // WHY LOCAL DISK AND NOT A CLUSTER SECRET
 //
 // A Secret in dc-system is the instinct. On a fresh install that namespace does not exist
-// until OpenTofu creates it in step 3; dcctl could create it first and turn the module's
+// until the infrastructure apply creates it; dcctl could create it first and turn the module's
 // toggle off, but flipping that toggle on an EXISTING instance moves a count from 1 to 0
 // and plans destruction of dc-system — cascading the broker, both databases and the object
 // store. Writing the Secret after the apply does not close the window either, since dying
@@ -64,7 +65,7 @@ import (
 // transient hash-read failure would then mint against a perfectly healthy broker.
 const brokerRecordFile = "broker-credentials.json"
 
-// brokerRecord is the material the cluster cannot yield after step 3.
+// brokerRecord is the material the cluster cannot yield once the apply has run.
 //
 // The bcrypt hashes are deliberately absent: they are derived from these plaintexts,
 // DeployedBrokerHashes already reads them back from the broker itself, and a second copy is

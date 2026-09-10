@@ -9,8 +9,13 @@
 # for the developer path (build from source via ko into a local registry).
 #
 # This performs the steps directly; the `dcctl bootstrap local` pipeline (ADR-032)
-# is being implemented to automate exactly this sequence, after which the
-# INFRA→CORE→CHART→SEED block collapses to one `dcctl bootstrap local` call.
+# reaches the same instance, after which the INFRA→CORE→CHART→SEED block collapses
+# to one `dcctl bootstrap local` call.
+#
+# It is no longer the same SEQUENCE, and the difference is deliberate rather than
+# drift: dcctl installs the CRDs and operator BEFORE the infrastructure apply, so
+# that the definition of an instance exists before anything declares one (ADR-080).
+# This script keeps its own order because nothing here declares an instance.
 #
 # Idempotent: safe to re-run for a fresh cluster. NOTE (ADR-025): each run mints
 # FRESH NATS auth credentials, so re-running against a LIVE cluster rotates them —
