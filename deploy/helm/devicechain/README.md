@@ -75,6 +75,34 @@ mirrors `backend/k8s/functionalarea`, the Go source of truth.)
 > **fails the render** rather than shipping a crash-loop. `dcctl bootstrap` mints one
 > automatically. The chart deliberately does NOT generate one: Helm's random functions
 > re-run on every upgrade, which would rotate the KEK and orphan every stored secret.
+>
+> The render check applies to config supplied **inline**. With
+> `instance.existingSecret` the chart cannot read the document at all, so it cannot
+> check the key — the responsibility moves to whoever writes that Secret, and the
+> chart asks them to say so by requiring `instance.existingSecretChecksum`. See
+> below.
+
+### Supplying the instance config from a Secret the chart does not write
+
+`instance.existingSecret` mounts a Secret you manage (External Secrets, a sealed
+secret, `dcctl`) instead of the one the chart renders. Four constraints come with it,
+and each exists because the chart stops being the document's author:
+
+| Value | Why |
+| --- | --- |
+| `instance.existingSecret` must be `dci-<instance.id>-config` | `dcctl` reads the config back by that name to decide whether the instance already exists, and reads a missing Secret as a **fresh install**. Any other name makes the next bootstrap re-run mint a new root key and new database and broker credentials over a live instance. |
+| `instance.existingSecretChecksum` is **required** — the sha256 of the `instance` document | The pod annotation that rolls workloads on a config change normally hashes the document the chart writes. With an external Secret there is none, so the annotation would be a constant and a rotated credential would apply cleanly, restart nothing, and report success. |
+| `metrics.natsBrokerHost` is required when `metrics.natsPodMonitor` is on | The PodMonitor's target namespace is derived from the broker hostname in the config. The chart would otherwise use its own default and monitor a namespace this instance may not use — collecting nothing, silently. |
+| `networkPolicy.externalConfigPorts` is required when `networkPolicy.enabled` is on | The egress rule's ports come from the config for the same reason. A port that does not match silently blocks the services' own egress, which presents as a broker or database outage. |
+
+The chart also stops applying two transforms it normally performs while writing the
+document: it injects `infrastructure.shutdown` from the top-level
+`shutdownDrainSeconds` and `terminationGracePeriodSeconds`, and it removes
+`infrastructure.aiInference` when that area is not deployed. **Both are yours to
+reproduce.** Neither omission is invalid — a service will start on a document with a
+grace period that disagrees with its pod, and then be SIGKILLed mid-drain — so the
+document being accepted is not evidence that it is right. `dcctl` checks both before
+installing.
 
 `default` is the standard system. `full` is exhaustive — it ships **every** area this
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of

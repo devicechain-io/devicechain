@@ -64,7 +64,8 @@
         },
         "existingSecretChecksum": {
           "type": "string",
-          "description": "Required whenever existingSecret is set: the sha256 of the `instance` document inside that Secret. The chart cannot read the Secret, so this is what the pod annotation hashes; without it a config change would apply cleanly, roll no pods and report success."
+          "pattern": "^([0-9a-f]{64})?$",
+          "description": "Required whenever existingSecret is set: the sha256 of the `instance` document inside that Secret, as 64 lowercase hex characters. The chart cannot read the Secret, so this is what the pod annotation carries; without it a config change would apply cleanly, roll no pods and report success. The shape is constrained because the value lands in an annotation: a blank or YAML-null string would render as a constant, and one carrying a colon or newline would corrupt the pod template."
         },
         "config": { "type": "object" }
       }
@@ -94,6 +95,7 @@
         "grafanaDashboards": { "type": "boolean" },
         "alerts": { "type": "boolean" },
         "natsPodMonitor": { "type": "boolean" },
+        "natsBrokerHost": { "type": "string" },
         "databaseBackups": { "type": "boolean" },
         "databaseNamespace": { "type": "string", "minLength": 1 },
         "cnpgNamespace": { "type": "string" }
@@ -165,7 +167,17 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         },
-        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } }
+        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } },
+        "externalConfigPorts": {
+          "type": "object",
+          "description": "Only for instance.existingSecret deployments: restates the NATS and relational-database ports the egress rule would otherwise read from instance.config, which the chart cannot see there. Both keys required when set.",
+          "properties": {
+            "nats": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "rdb": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          },
+          "required": ["nats", "rdb"],
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

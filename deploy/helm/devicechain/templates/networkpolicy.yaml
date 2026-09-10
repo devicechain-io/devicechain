@@ -169,15 +169,19 @@ spec:
 
     # NATS and PostgreSQL. Ports come from the instance config rather than being
     # written here, so a port change in one place cannot leave the policy behind.
+    # Under instance.existingSecret the chart cannot READ that config, so the ports
+    # are restated in networkPolicy.externalConfigPorts — required there by
+    # devicechain.validateInstanceConfigSource, because falling back to the
+    # defaults would render a policy that blocks the very egress it is scoping.
     - to:
         - namespaceSelector:
             matchLabels:
               {{- toYaml $np.infrastructureNamespaceSelector | nindent 14 }}
       ports:
         - protocol: TCP
-          port: {{ $infra.nats.port }}
+          port: {{ if $np.externalConfigPorts }}{{ $np.externalConfigPorts.nats }}{{ else }}{{ $infra.nats.port }}{{ end }}
         - protocol: TCP
-          port: {{ $root.Values.instance.config.persistence.rdb.configuration.port }}
+          port: {{ if $np.externalConfigPorts }}{{ $np.externalConfigPorts.rdb }}{{ else }}{{ $root.Values.instance.config.persistence.rdb.configuration.port }}{{ end }}
 
     # user-management, in this same namespace: the service-token mint, the
     # governance GraphQL read, and JWKS. All three ride one port.

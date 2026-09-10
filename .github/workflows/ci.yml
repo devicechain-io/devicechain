@@ -1402,6 +1402,67 @@ jobs:
       - name: helm lint
         run: helm lint deploy/helm/devicechain
 
+      - name: chart refusals actually refuse
+        # 🔴 `helm lint` CANNOT FAIL ON A `fail`. It renders in LintMode, where a
+        # template calling `fail` is reported as `[INFO] Fail: <message>` and the
+        # run still exits 0 with "0 chart(s) failed". Every guard this chart states
+        # in prose — the root key, the external-config constraints — is therefore
+        # invisible to the step above, which is the gate-that-cannot-fail shape
+        # applied to CI itself.
+        #
+        # So each refusal is asserted through `helm template`, which does exit
+        # non-zero, and each has a POSITIVE control beside it: a suite that only
+        # ever refuses is indistinguishable from a chart that cannot render at all.
+        run: |
+          set -euo pipefail
+
+          refuses() { # <label> <expected fragment> <helm args...>
+            local label="$1" want="$2"; shift 2
+            local out
+            if out="$(helm template deploy/helm/devicechain "$@" 2>&1)"; then
+              echo "::error::$label rendered cleanly; the guard did not fire"; exit 1
+            fi
+            case "$out" in
+              *"$want"*) echo "ok (refused): $label" ;;
+              *) echo "::error::$label failed for another reason: $out"; exit 1 ;;
+            esac
+          }
+
+          renders() { # <label> <helm args...>
+            local label="$1"; shift
+            helm template deploy/helm/devicechain "$@" >/dev/null || {
+              echo "::error::$label did not render, so the refusals above prove nothing"
+              exit 1
+            }
+            echo "ok (renders): $label"
+          }
+
+          KEY="$(openssl rand -base64 32)"
+          SUM="$(printf inline | sha256sum | cut -d' ' -f1)"
+          NAME="--set instance.existingSecret=dci-devicechain-config"
+          # natsBrokerHost is the PodMonitor's own restate-value. It rides along in
+          # EXT so that each case below fails for the reason it names, rather than
+          # for the first unrelated gate the external path happens to trip.
+          EXT="$NAME --set metrics.natsBrokerHost=dc-nats.dc-system"
+
+          refuses "no root key" "rootKey is required"
+          refuses "external, renamed Secret" "must be named" \
+            --set instance.existingSecret=somewhere-else \
+            --set instance.existingSecretChecksum="$SUM" \
+            --set metrics.natsBrokerHost=dc-nats.dc-system
+          refuses "external, no checksum" "existingSecretChecksum must be set" $EXT
+          refuses "external, malformed checksum" "must be a sha256 digest" \
+            --skip-schema-validation $EXT \
+            --set-string instance.existingSecretChecksum=notadigest
+          refuses "external, PodMonitor host not restated" "natsBrokerHost set" \
+            $NAME --set instance.existingSecretChecksum="$SUM"
+          refuses "hand-set shutdown block" "set by the chart, not by hand" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set instance.config.infrastructure.shutdown.drainSeconds=9
+
+          renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
+          renders "external config" $EXT --set instance.existingSecretChecksum="$SUM"
+
       - name: cnpg-cluster chart
         # The database-store chart (ADR-020 A2.3). It lives under the OpenTofu
         # modules tree rather than in deploy/helm because it is an implementation
