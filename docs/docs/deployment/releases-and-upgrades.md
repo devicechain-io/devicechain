@@ -988,12 +988,17 @@ newer one with the older one's outcome.
 Nothing in the platform can enumerate devices built elsewhere, so the platform counts them for you
 instead. After upgrading, watch:
 
-- **`command_delivery_responses_without_nonce_total`** — devices that have not been updated. On a
-  fleet where every device speaks the current contract this should be **zero**. A standing rate is
-  the list of devices you still need to update.
-- **`command_delivery_responses_stale_nonce_total`** — the defect this change exists to fix: an
-  answer arriving for a dispatch that had already been replaced. A standing rate here means
-  commands are being published more than once.
+- **`devicechain_commanddelivery_command_delivery_responses_without_nonce_total`** — answers that
+  named no dispatch at all. Mostly devices that have not been updated, and on a fleet where every
+  device speaks the current contract this should be **zero**. It counts any answer with no nonce,
+  though, so a duplicate or late answer to an already-settled command lands here too.
+- **`devicechain_commanddelivery_command_delivery_responses_stale_nonce_total`** — answers naming a
+  dispatch the command has moved off. The usual reading is that commands are being published more
+  than once, which is the defect this change exists to fix; a device replaying an old outbox entry
+  produces it too.
+
+(The doubled `command_delivery` is not a typo — the series carries the platform namespace and the
+functional area as prefixes, so the name above is what you paste into a query.)
 
 A refused answer is **not discarded.** It is written as a dead letter, because the device's report
 of what it did exists nowhere else — so you can find those answers while you work through the
@@ -1004,11 +1009,11 @@ If your devices use the **.NET/Unity SDK**, upgrading the SDK is the whole fix �
 nonce for you in both directions. The LwM2M downlink adapter and the device simulator were updated
 in the same change. The edge agent is unaffected: it sends telemetry and receives no commands.
 
-One related counter changes meaning rather than value:
-`command_delivery_responses_not_answerable_total` used to count an answer arriving for a command
-that had been released and then answered. That case is now caught by the nonce, so this counter
-should read **zero forever**; it survives only to catch a command state being added later without
-anyone deciding whether an answer may settle it.
+A related counter arrives alongside them:
+`devicechain_commanddelivery_command_delivery_responses_not_answerable_total` counts an answer that
+named the dispatch its command is on and still could not settle it. No command state in today's
+vocabulary produces that, so it should read **zero**; it exists to catch a state being added later
+without anyone deciding whether an answer may settle it.
 
 #### Services now refuse to start on things they used to accept
 
@@ -1016,24 +1021,28 @@ Each of these is a fail-closed correction, and each can stop a pod that previous
 
 | What | The condition that now refuses |
 | --- | --- |
-| Secret store | a backend that is named but not built (`vault`, a cloud KMS) — previously accepted and quietly served by the Postgres store |
 | Secret store | an instance root key that is well-formed but **wrong** — previously started and failed at the first secret it was asked for |
 | Instance configuration | a **misspelled key** — previously discarded in silence, with the default applied |
 | Instance configuration | `DC_SHUTDOWN_DRAIN_SECONDS` still set — the environment variable is gone; the value is `infrastructure.shutdown.drainSeconds` |
 | Instance configuration | a shutdown drain window longer than **half** the pod's `terminationGracePeriodSeconds` |
 | Listeners | two listeners on one port, or a device-facing `port: "0"` |
 | Any HTTP listener | a port already in use — previously logged from inside a goroutine while the service reported a successful start |
-| Metrics | a metric name that could never appear in a legal Prometheus name |
 
 The misspelled-key one is worth a moment. A typo in `maxSubscriptionMessageBytes` measurably
 halved the effective frame ceiling with nothing logged — the key was dropped and the default
 applied, which looks exactly like a working configuration. Strict decoding means you find out at
 startup instead.
 
-#### Metrics: five new series, none renamed or removed
+#### Metrics: eleven new series, none renamed or removed
 
-Every existing series keeps its name. Added: two governance and dead-letter counters, the two
-Sparkplug rebirth counters below, and `is_serving` on `lwm2m-ingest`.
+Every series that existed in v0.15.0 keeps its exact name — nothing was renamed and nothing was
+dropped, including through the change that gave each service its own metrics registry.
+
+What is new: five counters on `command-delivery` (the two nonce counters above, plus exhausted
+dispatches, answers a command's state could not accept, and responses lost because a dead letter
+could not be written), two alarm dead-letter counters on `device-management`, one early-close
+counter on `event-sources`, `is_serving` on `lwm2m-ingest`, and the two Sparkplug rebirth counters
+below.
 
 :::caution `is_leader` changes meaning on `lwm2m-ingest`, and the docs recommend alerting on it
 The gauge is now raised when the replica **acquires** the lease, rather than after it has finished
@@ -1041,10 +1050,12 @@ building its term. A term build takes up to 30 seconds per bound tenant, so a re
 just won a failover previously reported `is_leader=0` for as long as 30 seconds per tenant while
 actually holding the lease.
 
-If you follow the recommended `sum(...is_leader) != 1` alert, that false-leaderless window
-disappears. The new **`is_serving`** gauge is what now distinguishes "leader, still building its
+If you follow the `sum(devicechain_lwm2mingest_is_leader) != 1` alert the deployment guide
+recommends, that false-leaderless window disappears. The new
+**`devicechain_lwm2mingest_is_serving`** gauge is what now distinguishes "leader, still building its
 term" from "leader and serving" — the state one gauge could not express. `is_leader == 1` with
-`is_serving == 0` sustained is a leader wedged in its build.
+`is_serving == 0` sustained is a leader wedged in its build. Note the chart ships no alerting rule
+for either; this is guidance to author, not a rule you inherit.
 :::
 
 **`sparkplug-ingest` gains `rebirth_enqueued_total` and `rebirth_dropped_total`.** A saturated
@@ -1058,8 +1069,9 @@ healthy publisher; drops climbing while requests stay flat points at the broker 
 - **A command the platform cannot publish now fails.** Previously it cycled between queued and
   sent on every sweep until its TTL elapsed days later, and then recorded a timeout — which says a
   device did not answer, when nothing had ever been dispatched. It now stops at a bound (20 attempts
-  by default, about ten minutes at the default sweep cadence) and records failure naming the
-  platform.
+  by default, about ten minutes at the default 30-second sweep cadence) and records failure naming
+  the platform. The bound is yours to change under
+  `functionalAreas.command-delivery.config.maxDispatchFailures`.
 - **A dead letter's `reason` for a blocked connector destination is now `unprocessable`** rather
   than `exhausted`. Update any alert or saved query keyed on the old value; existing records read
   back unchanged.
@@ -1070,13 +1082,23 @@ healthy publisher; drops climbing while requests stay flat points at the broker 
 - **GraphQL subscriptions are closed cleanly at shutdown** with a `1001` frame, and an inbound
   frame is now capped — `infrastructure.graphql.maxSubscriptionMessageBytes`, default 4 MiB. This
   is the only new chart value in the release, and it has a default.
-- **Governance refresh is rate-bounded** (50 lookups/sec, burst 100, per resolver) with a 10-second
-  negative cache on failure. Above roughly 3000 tenants in one governed dimension some tenants will
-  transiently get the platform default. A platform default of `0` is now floored to 100/sec rather
-  than admitting nothing.
-- **Shutdown is bounded** by a budget derived from the grace period minus the drain window, and
-  honours cancellation throughout. **Consumer read loops** back off and then fail the process rather
+- **Governance refresh is rate-bounded** — 50 lookups/sec with a burst of 100, per governed
+  dimension, and a 10-second negative cache after a failed lookup. One resolver keeps roughly 3000
+  tenants warm without ever reaching the bound. Past it, a tenant that has already been resolved
+  keeps serving its **last-known value** rather than dropping to the platform default; only a tenant
+  that has never resolved gets the default.
+- **Separately**, a platform-default ingest ceiling of `0` is now floored to 100 messages/sec with a
+  burst of 200, rather than admitting nothing. That is a different axis from the lookup rate above.
+- **Shutdown is bounded** by a budget derived from the grace period, minus the drain window and a
+  two-second margin, and honours cancellation throughout. **Consumer read loops** back off and then fail the process rather
   than spinning or retrying forever.
+- **Two chart details that are easy to trip over.**
+  `instance.config.infrastructure.metrics.httpPort` is **retired** — a document that still carries it
+  logs a warning naming the key and starts normally, and the chart no longer writes it. And
+  `instance.config.infrastructure.shutdown` is now **written for you** by the chart from the
+  top-level `shutdownDrainSeconds` and `terminationGracePeriodSeconds`; setting that block by hand
+  makes `helm` fail the render rather than silently disagreeing with the pod spec. If you supply the
+  instance config through `instance.existingSecret`, that block is yours to add.
 - **A pod that ends itself releases its leadership lease on the way out.** On `lwm2m-ingest` both
   paths that used to exit while still holding it are fixed. The 30-second wait before a replacement
   can take over is now what follows an **abrupt** loss — a node failure, a `kill -9` — not what
