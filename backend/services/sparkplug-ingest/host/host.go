@@ -105,6 +105,29 @@ type Metrics struct {
 	Messages        *prometheus.CounterVec // labeled "type" (NBIRTH/NDATA/STATE/…)
 	DecodeErrors    prometheus.Counter
 	RebirthRequests prometheus.Counter // rebirth NCMDs the session machine emitted
+	// RebirthEnqueued counts rebirth requests accepted onto the publish queue and
+	// RebirthDropped counts the ones discarded because that queue was already full.
+	//
+	// 🔑 A DROP IS A LATENCY SIGNAL, NOT AN ERROR RATE. The request is not lost: the
+	// per-node backoff re-requests on its next window, so the cost of a drop is that the
+	// node re-emits its births a window later than it could have.
+	//
+	// What the pair buys is visibility, and nothing else here provides it. RebirthRequests
+	// moves only on a successful publish, so once the queue is saturating it is CAPPED at
+	// what the single publisher goroutine can get onto the wire — pinned at that ceiling,
+	// or flat if the publishes are themselves timing out. It does not decrease; it stops
+	// tracking DEMAND, which is the number an operator is actually reading it for, and
+	// flat is indistinguishable from an idle deployment. Enqueued is the counterweight:
+	// it is demand, so it separates "the queue is overflowing" from "nothing is asking
+	// for a rebirth".
+	//
+	// They cover the QUEUE, which is not every rebirth this Host emits: the failover
+	// reconcile probe runs off the receive goroutine and so publishes synchronously,
+	// bypassing the queue entirely. It moves RebirthRequests and neither of these, which
+	// is why a saturated queue is read off RebirthDropped directly rather than inferred
+	// from the two counters diverging.
+	RebirthEnqueued prometheus.Counter
+	RebirthDropped  prometheus.Counter
 	// ConnectFailures counts failed broker connect attempts across all sources.
 	// Readiness is intentionally NOT gated on broker reachability (a customer broker
 	// outage must not kill the pod), so this counter is the machine-readable signal
@@ -726,12 +749,19 @@ func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop
 // enqueueRebirth is the session machine's rebirth callback. It runs on paho's
 // ordered receive goroutine, so it must NOT block: it hands the request to the
 // async publisher via a buffered channel and returns. A full channel is dropped
-// (the per-node backoff re-requests on the next window), logged so saturation is
-// visible.
+// (the per-node backoff re-requests on the next window), logged and counted so
+// saturation is visible on a series and not only in a log line — see
+// Metrics.RebirthEnqueued for why the accepted side is counted too.
 func (c *Client) enqueueRebirth(group, node string) {
 	select {
 	case c.rebirthCh <- nodeKey{group, node}:
+		if c.metrics.RebirthEnqueued != nil {
+			c.metrics.RebirthEnqueued.Inc()
+		}
 	default:
+		if c.metrics.RebirthDropped != nil {
+			c.metrics.RebirthDropped.Inc()
+		}
 		log.Warn().Str("tenant", c.tenant).Str("group", group).Str("node", node).Msg("Rebirth queue full; dropping request.")
 	}
 }
