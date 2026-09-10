@@ -147,6 +147,15 @@ func TestStartPhaseRestartDoesNotPanic(t *testing.T) {
 	// buildMetrics that builds nothing at all.
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_is_leader",
 		"the leader gauge is not built in the initialize phase")
+	// The rebirth queue's counters are named here for the same reason, and they are the
+	// half of buildMetrics most likely to be added later by someone reaching for the
+	// nearest constructor: a plain Counter yields a series the moment it is built, so if
+	// one of these moved onto the start path the equality check below would catch it —
+	// but only while something asserts it was in the initialize snapshot to begin with.
+	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_enqueued_total",
+		"the rebirth enqueued counter is not built in the initialize phase")
+	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_dropped_total",
+		"the rebirth dropped counter is not built in the initialize phase")
 
 	// start runs everything afterMicroserviceStarted does that a test can drive.
 	start := func() {
