@@ -30,7 +30,7 @@ prom-exporter container the operator generates no targets at all, rather than a
 permanently-down one.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.natsPodMonitor }}
-{{- $host := .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the NATS PodMonitor; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
+{{- $host := .Values.metrics.natsBrokerHost | default .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the NATS PodMonitor; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
 {{- $parts := splitList "." $host }}
 {{- $release := index $parts 0 }}
 {{- $natsNamespace := .Values.instance.id }}

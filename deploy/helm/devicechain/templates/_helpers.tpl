@@ -341,6 +341,135 @@ concern — any install owes a root key.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The hand-set shutdown refusal, split out of devicechain.instanceConfig so it runs
+on BOTH config sources.
+
+🔴 IT WAS INSIDE THE DOCUMENT RENDERER, AND THAT IS EXACTLY THE PLACE IT COULD
+STOP RUNNING. Under instance.existingSecret the chart writes no document, so
+every check living inside the renderer leaves with it — silently, because a
+template that is not rendered raises nothing. Splitting the refusal out lets
+devicechain.validateInstanceConfigSource invoke it unconditionally, and the
+renderer still invokes it too, so the inline path is unchanged.
+*/}}
+{{- define "devicechain.validateShutdownNotHandSet" -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- if hasKey $infra "shutdown" -}}
+  {{- fail "instance.config.infrastructure.shutdown is set by the chart, not by hand: it is written from the top-level shutdownDrainSeconds and terminationGracePeriodSeconds values so the drain window and the pod's grace period cannot disagree. Remove the block and set those two values instead." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+🔴 THE GATE THAT SURVIVES BOTH CONFIG SOURCES. Invoked unconditionally from
+instance-config.yaml — outside the block that renders the Secret, so it runs on
+the path where no Secret is rendered at all.
+
+The chart has two config sources and they are not symmetrical. With inline
+config the chart is the AUTHOR: it can read the root key, refuse a hand-set
+shutdown block, drop the ai-inference coordinates a disabled area must not see,
+and hash the exact bytes it is about to write. Under instance.existingSecret the
+chart is only the MOUNTER — the document is opaque to it — so every one of those
+checks becomes something it cannot do.
+
+Which is fine, and is not what this gate is about. The danger is that they
+disappear with nothing said: one value switches five checks off, the templates
+still render, the install still succeeds, and the tests that covered them keep
+passing against an inline-config fixture no deployment uses any more. That is the
+shape this project keeps finding, and it does not need a fourteenth instance.
+
+So the gate makes the handover EXPLICIT. Whoever supplies the Secret must also
+supply instance.existingSecretChecksum — a digest of the document they wrote. It
+is not decoration:
+
+  - It is what keeps pods rolling when the config changes. The checksum annotation
+    hashes the rendered document, which under an external Secret is empty and
+    therefore constant: a credential rotation would apply cleanly, roll nothing,
+    and report success.
+What it does NOT do, stated here because the first draft of this comment claimed
+otherwise: it does not prove the supplier holds the document, and it does not
+make the document valid. A digest is 64 hex characters; anyone can type 64 hex
+characters. The requirement buys one specific thing — a rollout trigger the
+supplier declares and is responsible for changing — and the checks the chart lost
+are closed elsewhere, in the pre-flight that strict-loads the authored bytes
+(backend/cli/bootstrap/instance_config.go). Reading more into it than that is how
+a gate ends up trusted for something it never checked.
+*/}}
+{{- define "devicechain.validateInstanceConfigSource" -}}
+{{- include "devicechain.validateShutdownNotHandSet" . -}}
+{{- $external := .Values.instance.existingSecret | default "" -}}
+{{- if $external -}}
+  {{/* 🔴 THE NAME IS NOT FREE, AND LETTING IT BE FREE COSTS EVERY CREDENTIAL.
+  dcctl reads this Secret back by the name the chart would have given it — see
+  DeployedInstanceConfig — and a NotFound there does not mean "cannot tell", it
+  means "fresh install, mint everything". So an external Secret under any other
+  name does not fail: the next bootstrap re-run reads nothing, decides the
+  instance is new, and rotates the root key, both database passwords and every
+  broker credential out from under a live instance. This project has already had
+  that incident once from a different cause. The chart offered the flexibility;
+  nothing anywhere enforced the constraint it depends on. */}}
+  {{- $want := printf "dci-%s-config" .Values.instance.id -}}
+  {{- if ne $external $want -}}
+    {{- fail (printf "instance.existingSecret must be named %q and is %q. dcctl reads the instance config back by that exact name to decide whether this instance already exists, and reads a missing Secret as a FRESH INSTALL — so a differently-named Secret would make the next bootstrap re-run mint a new root key and new database and broker credentials over a live instance. Rename the Secret, or supply the config inline." $want $external) -}}
+  {{- end -}}
+  {{- $sum := .Values.instance.existingSecretChecksum | default "" -}}
+  {{- if not $sum -}}
+    {{- fail (printf "instance.existingSecret is set to %q, so instance.existingSecretChecksum must be set too. The chart cannot read that Secret, so it cannot hash what the pods will actually mount: without a digest supplied by whoever wrote it, changing the instance config would apply cleanly, roll no pods, and report success. Set it to the sha256 of the `instance` document in that Secret. Supplying the config inline instead leaves the chart to compute it." $external) -}}
+  {{- end -}}
+  {{/* 🔴 SHAPE-CHECKED, NOT MERELY NON-EMPTY, and the difference is the whole
+  guard. This value is interpolated into a pod annotation, so anything that is
+  not a digest is one of two failures and both defeat the check: a whitespace or
+  YAML-null string ("&nbsp;", "~", "null") renders as a NULL annotation — the
+  constant this gate exists to prevent, reached through a gate that passed — and
+  a value carrying a newline or a colon either breaks the manifest or injects
+  further annotation keys. values.schema.json carries the same pattern, but a
+  schema can be skipped (--skip-schema-validation) and this cannot. */}}
+  {{- if not (regexMatch "^[0-9a-f]{64}$" $sum) -}}
+    {{- fail (printf "instance.existingSecretChecksum must be a sha256 digest — 64 lowercase hex characters — and is %q. It becomes a pod annotation, so a value that is blank, YAML-null, or carries a colon or newline would either render as a constant (rolling no pods when the config changes, which is the failure this value exists to prevent) or corrupt the pod template." $sum) -}}
+  {{- end -}}
+  {{/* 🔴 TEMPLATES THAT READ instance.config CANNOT SEE THE MOUNTED DOCUMENT.
+  values.schema.json makes instance.config REQUIRED, so under an external Secret
+  that block is not absent — it is the chart's defaults, and every template
+  reading it renders happily from coordinates the pods may not be using. Two do
+  so in ways nothing downstream would notice: the NetworkPolicy takes its egress
+  ports from the config, and the NATS PodMonitor takes its namespace from the
+  broker hostname. A wrong port silently blocks outbound egress; a wrong
+  namespace silently monitors nothing. Both are refused here rather than
+  rendered from a guess, because a guess that happens to match the default is
+  indistinguishable from a correct one until it does not. */}}
+  {{/* Each takes the same escape hatch blobStorage.persistence.mountPath already
+  uses: restate the coordinate as a top-level value, where the supplier of the
+  document can set it to what the document actually says. Refusing outright was
+  the first draft and was wrong — metrics.natsPodMonitor is ON by default, so it
+  would have made the external path fail out of the box for a monitoring
+  nicety. */}}
+  {{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.externalConfigPorts) -}}
+    {{- fail "networkPolicy.enabled with instance.existingSecret needs networkPolicy.externalConfigPorts set (keys `nats` and `rdb`). The egress ports are normally read from instance.config, which under an external Secret is the chart's DEFAULTS rather than the document the pods mount — and a port that does not match silently blocks the services' own egress, which looks like a broker or database outage. Restate them, or set networkPolicy.enabled=false." -}}
+  {{- end -}}
+  {{- if and .Values.metrics.enabled .Values.metrics.natsPodMonitor (not .Values.metrics.natsBrokerHost) -}}
+    {{- fail "metrics.natsPodMonitor with instance.existingSecret needs metrics.natsBrokerHost set (the broker's <service>.<namespace> hostname). The PodMonitor's target namespace is normally derived from instance.config.infrastructure.nats.hostname, which under an external Secret is the chart's DEFAULT rather than the broker the pods use — and a wrong namespace monitors nothing, silently. Restate it, or set metrics.natsPodMonitor=false." -}}
+  {{- end -}}
+{{- else -}}
+  {{- include "devicechain.validateSecretsRootKey" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The value of the checksum/instance-secret pod annotation: what must change when
+the mounted instance config changes.
+
+With inline config that is the digest of the document the chart is about to
+write. Under instance.existingSecret the chart cannot see the document, so it is
+the digest its supplier declared — required by
+devicechain.validateInstanceConfigSource, for this reason.
+*/}}
+{{- define "devicechain.instanceConfigChecksum" -}}
+{{- if .Values.instance.existingSecret | default "" -}}
+{{- .Values.instance.existingSecretChecksum -}}
+{{- else -}}
+{{- include "devicechain.instanceConfig" . | sha256sum -}}
+{{- end -}}
+{{- end -}}
+
 {{/* The dedicated ServiceAccount name (E7). */}}
 {{- define "devicechain.serviceAccountName" -}}
 {{- .Values.serviceAccount.name | default (printf "dc-%s" .Values.instance.id) -}}
@@ -500,6 +629,12 @@ sit unread until some unrelated change restarted the pod, and the feature would
 stay dead. Same reasoning as devicechain.microserviceConfig on the next line of
 that annotation block.
 
+The annotation now reads devicechain.instanceConfigChecksum rather than this
+helper directly, and only because a second config source exists: under
+instance.existingSecret this renders a document nothing mounts, so hashing it
+would produce a value that never moves. The two paths are the same requirement —
+the annotation must change when the mounted config does — reached differently.
+
 WHY ANYTHING IS FILTERED. values.yaml ships
 infrastructure.aiInference.hostname non-empty by default and the whole
 instance.config rides through verbatim, so a profile that never deploys
@@ -537,9 +672,7 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
-{{- if hasKey $infra "shutdown" -}}
-  {{- fail "instance.config.infrastructure.shutdown is set by the chart, not by hand: it is written from the top-level shutdownDrainSeconds and terminationGracePeriodSeconds values so the drain window and the pod's grace period cannot disagree. Remove the block and set those two values instead." -}}
-{{- end -}}
+{{- include "devicechain.validateShutdownNotHandSet" . -}}
 {{- $_ := set $infra "shutdown" (dict
     "drainSeconds" (int .Values.shutdownDrainSeconds)
     "terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds)) -}}

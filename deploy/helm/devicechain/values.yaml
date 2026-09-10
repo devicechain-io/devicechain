@@ -49,8 +49,23 @@ instance:
   # External Secrets / a pre-created Secret over committing passwords here: set
   # `existingSecret` to the name of a Secret that already holds the full instance
   # config JSON under an `instance` key, and the chart will mount it and skip
-  # rendering its own Secret (the `config` block below is then unused).
+  # rendering its own Secret.
+  #
+  # 🔴 The `config` block below is NOT then unused, which this comment used to say.
+  # values.schema.json makes it REQUIRED, so under an external Secret it is not
+  # absent — it is whatever these defaults say, and every template that reads it
+  # keeps rendering from a document the pods are not mounting. The two that matter
+  # (the NetworkPolicy's egress ports, the NATS PodMonitor's namespace) demand their
+  # coordinates restated instead; see README.md. What IS unused is the block's role
+  # as the config document itself.
   existingSecret: ""
+  # Required whenever existingSecret is set: the sha256 of the `instance` document
+  # inside that Secret. The chart cannot read the Secret, so it cannot hash what
+  # the pods will actually mount — and the pod annotation that rolls workloads on a
+  # config change would otherwise be a constant. Without it, rotating a credential
+  # applies cleanly, restarts nothing and reports success. Ignored (and unnecessary)
+  # when the config is supplied inline below.
+  existingSecretChecksum: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
@@ -440,6 +455,11 @@ metrics:
   # e.g. a managed/shared NATS outside the operator's reach. Ignored when
   # metrics.enabled is false.
   natsPodMonitor: true
+  # natsBrokerHost restates the broker's <service>.<namespace> hostname for the
+  # PodMonitor above. Only for instance.existingSecret deployments, where the chart
+  # cannot read instance.config.infrastructure.nats.hostname and would otherwise
+  # derive the target namespace from its own default — monitoring nothing, silently.
+  natsBrokerHost: ""
 
   # databaseBackups renders the WAL-archiving and base-backup alerting rules
   # (ADR-028, ADR-020 A2.5).
@@ -709,6 +729,13 @@ serviceAccount:
 # why. The defaults enumerate everything outbound-connectors needs.
 networkPolicy:
   enabled: false
+  # externalConfigPorts restates the NATS and relational-database ports for the
+  # egress rule below. Only for instance.existingSecret deployments, where the chart
+  # cannot read them from instance.config and would otherwise fall back to its own
+  # defaults — rendering a policy that silently blocks the egress it exists to scope.
+  # Set both keys, e.g. {nats: 4222, rdb: 5432}. Deliberately absent rather than
+  # defaulted to {}: the schema requires both keys once the block exists, so an
+  # empty default would fail every render that never asked for it.
   # Labels selecting the namespace that holds NATS and PostgreSQL. The OpenTofu-created
   # infrastructure namespace carries the pair below. If you brought your own, set this to
   # whatever labels your namespace actually has — an empty selector is refused at render
