@@ -87,11 +87,13 @@ func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
 //
 // 🔴 IT DELIBERATELY DOES NOT IMPLEMENT LifecycleComponent AND MUST NEVER REGISTER
 // ITSELF FOR AUTOMATIC TEARDOWN. Where the HTTP stop belongs relative to the NATS stop
-// is a per-service decision, and the two services that have thought about it reached
+// is a per-service decision, and the services that have thought about it reached
 // OPPOSITE answers, both correct:
 //
-//   - device-management stops HTTP FIRST, so an in-flight mutation cannot publish onto
-//     a connection that is already draining.
+//   - device-management stops HTTP FIRST, so a request still inside a resolver cannot
+//     reach a connection that is already draining. Every other service that serves
+//     GraphQL over a NATS connection follows it, and several pin the order with a test
+//     of their own stopper — grep for TestGraphQLServerStopsBeforeTheNatsConnection.
 //   - lwm2m-ingest stops it LAST, because hoisting the NATS stop above it makes the
 //     leadership lease release fail.
 //

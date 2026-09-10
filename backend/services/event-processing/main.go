@@ -616,10 +616,18 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Stop(ctx); err != nil {
 		return err
 	}
-	if err := NatsManager.Stop(ctx); err != nil {
+	// Stop the GraphQL server before the NATS manager. The detections subscription reads
+	// the tenant's derived-event stream over this connection for as long as a socket is
+	// open, and GraphQLManager's stop is what closes those sockets — so closing them
+	// first gives each subscriber a clean close instead of a stream that vanishes under
+	// a still-open socket. The DETECT partition lease is unaffected either way: the
+	// processor's stop above waits for the term to end, which flushes the final
+	// checkpoint and releases the lease, and both of those happen before either of these
+	// two lines runs.
+	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
 	}
-	if err := GraphQLManager.Stop(ctx); err != nil {
+	if err := NatsManager.Stop(ctx); err != nil {
 		return err
 	}
 	return RdbManager.Stop(ctx)

@@ -330,14 +330,19 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
+	// Stop the GraphQL server before the NATS manager. The GraphQL plane here holds live
+	// broker state, not just database reads: the events subscription reads the tenant's
+	// resolved-event stream over this connection for as long as a socket is open, and
+	// GraphQLManager's stop is what closes those sockets. Doing that first means each
+	// subscriber gets a clean close from the server it asked; the reverse order pulls the
+	// stream out from under a socket that is still open and reports it as a broker fault.
+	err = GraphQLManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Stop graphql manager.
-	err = GraphQLManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}

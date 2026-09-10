@@ -295,10 +295,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := NatsManager.Stop(ctx); err != nil {
+	// Stop the GraphQL server before the NATS manager. Nothing in this service's GraphQL
+	// plane touches the broker today — connector authoring and publishing are database
+	// writes, and the dispatch consumer that does read the broker is stopped above — so
+	// this is the platform's one shutdown order rather than a local requirement. It is
+	// worth holding anyway: the day a connector mutation publishes anything, the safe
+	// order is already the one in the file.
+	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
 	}
-	if err := GraphQLManager.Stop(ctx); err != nil {
+	if err := NatsManager.Stop(ctx); err != nil {
 		return err
 	}
 	return RdbManager.Stop(ctx)

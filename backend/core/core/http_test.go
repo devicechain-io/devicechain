@@ -361,8 +361,9 @@ func TestHttpServerAddrIsSafeConcurrentlyWithStart(t *testing.T) {
 // HttpServer must NOT satisfy LifecycleComponent.
 //
 // Where the HTTP stop sits relative to the NATS stop is a per-service decision, and the
-// two services that reasoned about it reached opposite answers — device-management
-// stops HTTP first so an in-flight mutation cannot publish onto a draining connection,
+// services that reasoned about it reached opposite answers — device-management stops
+// HTTP first so a request still inside a resolver cannot reach a draining connection,
+// and every other service that serves GraphQL over a NATS connection follows it, while
 // lwm2m-ingest stops it last because hoisting the NATS stop breaks its lease release.
 // A component that can be handed to NewLifecycleManager will eventually be handed to
 // one, and that picks an order for every service at once.
