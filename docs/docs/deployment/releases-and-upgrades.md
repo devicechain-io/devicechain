@@ -943,6 +943,151 @@ language its console opens in.
 The published npm packages and the .NET/Unity SDK carry no source changes in this release. If
 your own code sends update mutations through them, though, that code is yours to regenerate.
 
+### v0.16.0 — devices must name the dispatch they are answering {#v0160-upgrade}
+
+`v0.16.0` is a plain `helm upgrade` from `v0.15.x`. One new migration runs itself as
+`command-delivery` starts — it adds a column with a default, backfills existing rows in the same
+statement, and needs nothing from you.
+
+There is **one pre-flight worth doing before you upgrade**, and one breaking change that affects
+devices rather than API callers. Beyond those, this release is mostly about services refusing to
+start on configuration that used to be accepted and quietly ignored — which is safer, and which
+can stop a pod that has been running happily for months.
+
+#### Before you upgrade: audit your listener ports for a collision
+
+`event-sources` runs more than one HTTP listener in a single process — GraphQL on its own port,
+plus every HTTP event source you have configured. Until now, two of them landing on the same port
+killed one ingest transport **silently**: the losing listener died inside a goroutine and was
+never mentioned again.
+
+Binds are now synchronous and a failure is fatal, so a collision that has been quietly broken for
+months **crash-loops the deployment instead.** That is the right behaviour and it is also the one
+change here most likely to surprise you, because nothing warns you about it today.
+
+Check each source's `port` against the others and against the GraphQL port, and check that the
+chart's `extraPorts` entry agrees with each source's own `port`. A device-facing `port: "0"` is
+also refused now.
+
+#### Any device that answers a command must echo the dispatch nonce
+
+This is the release's one breaking wire change, and **the population it affects is devices built
+outside this repository** — firmware, gateways, anything speaking the command protocol directly.
+
+A delivery envelope carries a `dispatchNonce`. A device answering that command must now send the
+same value back in its response envelope. An answer that omits it, or that names a dispatch the
+command has already moved off, is **refused and recorded as a dead letter** rather than settling
+the command.
+
+The reason is a real defect, not tidiness: the same command can legitimately be published more
+than once — released back to the queue and dispatched again — and without a nonce there is no way
+to tell which dispatch an answer belongs to. An answer to a superseded dispatch was settling the
+newer one with the older one's outcome.
+
+:::caution How to tell whether this is safe for your fleet
+Nothing in the platform can enumerate devices built elsewhere, so the platform counts them for you
+instead. After upgrading, watch:
+
+- **`command_delivery_responses_without_nonce_total`** — devices that have not been updated. On a
+  fleet where every device speaks the current contract this should be **zero**. A standing rate is
+  the list of devices you still need to update.
+- **`command_delivery_responses_stale_nonce_total`** — the defect this change exists to fix: an
+  answer arriving for a dispatch that had already been replaced. A standing rate here means
+  commands are being published more than once.
+
+A refused answer is **not discarded.** It is written as a dead letter, because the device's report
+of what it did exists nowhere else — so you can find those answers while you work through the
+first counter.
+:::
+
+If your devices use the **.NET/Unity SDK**, upgrading the SDK is the whole fix — it carries the
+nonce for you in both directions. The LwM2M downlink adapter and the device simulator were updated
+in the same change. The edge agent is unaffected: it sends telemetry and receives no commands.
+
+One related counter changes meaning rather than value:
+`command_delivery_responses_not_answerable_total` used to count an answer arriving for a command
+that had been released and then answered. That case is now caught by the nonce, so this counter
+should read **zero forever**; it survives only to catch a command state being added later without
+anyone deciding whether an answer may settle it.
+
+#### Services now refuse to start on things they used to accept
+
+Each of these is a fail-closed correction, and each can stop a pod that previously ran:
+
+| What | The condition that now refuses |
+| --- | --- |
+| Secret store | a backend that is named but not built (`vault`, a cloud KMS) — previously accepted and quietly served by the Postgres store |
+| Secret store | an instance root key that is well-formed but **wrong** — previously started and failed at the first secret it was asked for |
+| Instance configuration | a **misspelled key** — previously discarded in silence, with the default applied |
+| Instance configuration | `DC_SHUTDOWN_DRAIN_SECONDS` still set — the environment variable is gone; the value is `infrastructure.shutdown.drainSeconds` |
+| Instance configuration | a shutdown drain window longer than **half** the pod's `terminationGracePeriodSeconds` |
+| Listeners | two listeners on one port, or a device-facing `port: "0"` |
+| Any HTTP listener | a port already in use — previously logged from inside a goroutine while the service reported a successful start |
+| Metrics | a metric name that could never appear in a legal Prometheus name |
+
+The misspelled-key one is worth a moment. A typo in `maxSubscriptionMessageBytes` measurably
+halved the effective frame ceiling with nothing logged — the key was dropped and the default
+applied, which looks exactly like a working configuration. Strict decoding means you find out at
+startup instead.
+
+#### Metrics: five new series, none renamed or removed
+
+Every existing series keeps its name. Added: two governance and dead-letter counters, the two
+Sparkplug rebirth counters below, and `is_serving` on `lwm2m-ingest`.
+
+:::caution `is_leader` changes meaning on `lwm2m-ingest`, and the docs recommend alerting on it
+The gauge is now raised when the replica **acquires** the lease, rather than after it has finished
+building its term. A term build takes up to 30 seconds per bound tenant, so a replica that had
+just won a failover previously reported `is_leader=0` for as long as 30 seconds per tenant while
+actually holding the lease.
+
+If you follow the recommended `sum(...is_leader) != 1` alert, that false-leaderless window
+disappears. The new **`is_serving`** gauge is what now distinguishes "leader, still building its
+term" from "leader and serving" — the state one gauge could not express. `is_leader == 1` with
+`is_serving == 0` sustained is a leader wedged in its build.
+:::
+
+**`sparkplug-ingest` gains `rebirth_enqueued_total` and `rebirth_dropped_total`.** A saturated
+rebirth queue used to be indistinguishable from an idle one on every series the service exported,
+because `rebirth_requests_total` counts successful publishes — so saturation made it *stop rising*.
+Read the new pair together: drops climbing while requests hold at a ceiling is fan-out outrunning a
+healthy publisher; drops climbing while requests stay flat points at the broker connection.
+
+#### Other behaviour worth knowing about
+
+- **A command the platform cannot publish now fails.** Previously it cycled between queued and
+  sent on every sweep until its TTL elapsed days later, and then recorded a timeout — which says a
+  device did not answer, when nothing had ever been dispatched. It now stops at a bound (20 attempts
+  by default, about ten minutes at the default sweep cadence) and records failure naming the
+  platform.
+- **A dead letter's `reason` for a blocked connector destination is now `unprocessable`** rather
+  than `exhausted`. Update any alert or saved query keyed on the old value; existing records read
+  back unchanged.
+- **An alarm state change that could not be published is now dead-lettered and counted**, and
+  `alarm_event_dead_letter_lost_total` joins the `DeadLetterWriteLost` alert.
+- **An inbound message that cannot be decoded is no longer archived whole.** The record points at
+  the original by subject and stream sequence instead.
+- **GraphQL subscriptions are closed cleanly at shutdown** with a `1001` frame, and an inbound
+  frame is now capped — `infrastructure.graphql.maxSubscriptionMessageBytes`, default 4 MiB. This
+  is the only new chart value in the release, and it has a default.
+- **Governance refresh is rate-bounded** (50 lookups/sec, burst 100, per resolver) with a 10-second
+  negative cache on failure. Above roughly 3000 tenants in one governed dimension some tenants will
+  transiently get the platform default. A platform default of `0` is now floored to 100/sec rather
+  than admitting nothing.
+- **Shutdown is bounded** by a budget derived from the grace period minus the drain window, and
+  honours cancellation throughout. **Consumer read loops** back off and then fail the process rather
+  than spinning or retrying forever.
+- **A pod that ends itself releases its leadership lease on the way out.** On `lwm2m-ingest` both
+  paths that used to exit while still holding it are fixed. The 30-second wait before a replacement
+  can take over is now what follows an **abrupt** loss — a node failure, a `kill -9` — not what
+  follows a pod deciding to stop.
+
+#### The published packages
+
+The **.NET/Unity SDK carries the command-nonce change** described above; upgrading it is how a
+device built on it keeps answering commands. `@devicechain/client`, `@devicechain/dashboards`,
+`@devicechain/widgets` and `@devicechain/brand` have no source changes in this release.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
