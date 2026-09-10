@@ -6,28 +6,48 @@ package v1beta1_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"sigs.k8s.io/yaml"
+
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
-// 🔴 WHAT THIS TEST CAN AND CANNOT DO, STATED UP FRONT SO NOBODY TRUSTS IT FOR
-// MORE. The CEL rules below are enforced by the API SERVER, so proving they
-// behave correctly needs one — envtest, whose binaries CI does not currently
-// download. A test that silently skipped without them would report success on
-// every CI run while checking nothing, which is the failure this project keeps
-// finding.
+// These read the GENERATED manifest, which is the artifact the API server
+// actually enforces. What the rules DO is tested against a real API server in
+// controllers/instance_cel_test.go; a structural check cannot see whether a rule
+// fires, and the first version of this file proved that by asserting a rule was
+// present while the rule was bypassable.
 //
-// So this asserts what it can actually see: that the rules are PRESENT, on the
-// fields they belong to. That catches a marker being dropped in a refactor, which
-// is the realistic way they would be lost. It does not catch a rule that is
-// present and wrong.
-//
-// The rules are a BACKSTOP in any case. dcctl is the only supported writer of
-// this object and refuses the same changes itself, in Go, with tests that do run
-// (ValidateInstanceSpecChange). CEL is what stops a hand-edited CR — worth
-// having, and not the primary guard.
+// 🔴 NOTHING HERE MAY HARD-CODE THE FIELD LIST. It did, twice — once here and
+// once in dcctl — and two literals maintained side by side are not two checks.
+// A reviewer changed `managed` to `omitempty`, which drops it from the CRD's
+// required set and lets an adopted instance be created without it and then given
+// it: the exact "flipping it turns a scoped teardown into a cluster deletion"
+// the rule's own message describes. Every test in this file passed. The list is
+// derived from the Go type now, so the manifest is checked against the type
+// rather than against a copy of the author's intent.
+
+// specJSONFields reads the JSON names off InstanceSpec itself.
+func specJSONFields(t *testing.T) []string {
+	t.Helper()
+	rt := reflect.TypeOf(dcv1beta1.InstanceSpec{})
+	var out []string
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			t.Fatalf("field %s has no json tag, so what it is called in the cluster is a guess",
+				rt.Field(i).Name)
+		}
+		out = append(out, strings.Split(tag, ",")[0])
+	}
+	sort.Strings(out)
+	return out
+}
+
 func loadInstanceCRD(t *testing.T) map[string]interface{} {
 	t.Helper()
 	path := filepath.Join("..", "..", "config", "crd", "bases", "core.devicechain.io_instances.yaml")
@@ -73,14 +93,14 @@ func rulesOf(node map[string]interface{}) []string {
 	return out
 }
 
-// The three fields that make up the cluster binding are fixed at bootstrap,
-// because `dcctl destroy` reads them to decide which cluster to act on — and, for
-// `managed`, whether it may delete the cluster at all.
-func TestTheClusterBindingFieldsAreDeclaredImmutable(t *testing.T) {
+// provider and managed are required, so a field-level rule is sound on them.
+// cluster is optional by design and its rule lives at the spec level; see
+// TestTheClusterRuleSurvivesRemoval.
+func TestTheRequiredBindingFieldsAreDeclaredImmutable(t *testing.T) {
 	spec := specSchema(t, loadInstanceCRD(t))
 	props := spec["properties"].(map[string]interface{})
 
-	for _, field := range []string{"provider", "cluster", "managed"} {
+	for _, field := range []string{"provider", "managed"} {
 		node, ok := props[field].(map[string]interface{})
 		if !ok {
 			t.Errorf("the declaration has no %q field at all", field)
@@ -98,8 +118,8 @@ func TestTheClusterBindingFieldsAreDeclaredImmutable(t *testing.T) {
 		}
 	}
 
-	// The counterweight: a rule on everything would be just as wrong, and would
-	// make every ordinary re-run fail. imageVersion changes on any upgrade.
+	// The counterweight: a rule on everything would be just as wrong and would fail
+	// every upgrade. imageVersion changes on any of them.
 	if node, ok := props["imageVersion"].(map[string]interface{}); ok {
 		for _, rule := range rulesOf(node) {
 			if strings.Contains(strings.ReplaceAll(rule, " ", ""), "self==oldSelf") {
@@ -109,14 +129,14 @@ func TestTheClusterBindingFieldsAreDeclaredImmutable(t *testing.T) {
 	}
 }
 
-// profile and enabledFunctionalAreas name the same set two ways, and the chart
-// treats them as mutually exclusive.
-func TestTheCRDRefusesBothWaysOfNamingTheAreaSet(t *testing.T) {
+// A restore is a fact about the instance and the ordinary re-run that follows it
+// restores nothing, so the naive read-modify-write would erase it.
+func TestTheCRDKeepsTheRestoreFact(t *testing.T) {
 	spec := specSchema(t, loadInstanceCRD(t))
 	joined := strings.Join(rulesOf(spec), "\n")
-	if !strings.Contains(joined, "profile") || !strings.Contains(joined, "enabledFunctionalAreas") {
-		t.Errorf("the spec carries no rule mentioning both profile and enabledFunctionalAreas, "+
-			"so a CR naming the area set twice would be accepted. Rules found: %q", joined)
+	if !strings.Contains(joined, "oldSelf.restored") {
+		t.Errorf("the spec carries no rule preventing restored from being unset, so an ordinary "+
+			"re-run would erase it. Rules found: %q", joined)
 	}
 }
 
@@ -126,23 +146,71 @@ func TestTheGeneratedCRDMatchesTheGoType(t *testing.T) {
 	spec := specSchema(t, loadInstanceCRD(t))
 	props := spec["properties"].(map[string]interface{})
 
-	want := []string{
-		"cluster", "compact", "enabledFunctionalAreas", "ha", "host",
-		"imageRegistry", "imageVersion", "managed", "monitoring", "profile",
-		"provider", "restored", "restoredAt", "tls",
+	var got []string
+	for k := range props {
+		got = append(got, k)
 	}
-	for _, f := range want {
-		if _, ok := props[f]; !ok {
-			t.Errorf("the generated CRD has no %q; run `make manifests`", f)
+	sort.Strings(got)
+
+	want := specJSONFields(t)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the generated CRD and the Go type describe different objects.\n"+
+			"crd: %v\ntype: %v\n\nThey are joined by nothing but `make manifests` having "+
+			"been run. Run it, or explain the difference.", got, want)
+	}
+}
+
+// 🔴 A FIELD-LEVEL TRANSITION RULE IS ONLY SOUND ON A REQUIRED FIELD, and this
+// is the property that had no test. CEL evaluates `self == oldSelf` only when the
+// field is present on BOTH sides, so on an optional field the rule silently
+// permits absent to value and value to absent — which is a two-edit bypass, not a
+// theoretical one. Any field carrying such a rule must therefore be required, or
+// the rule must live at the spec level where an object is always present.
+func TestEveryFieldLevelImmutabilityRuleSitsOnARequiredField(t *testing.T) {
+	spec := specSchema(t, loadInstanceCRD(t))
+	props := spec["properties"].(map[string]interface{})
+
+	required := map[string]bool{}
+	if raw, ok := spec["required"].([]interface{}); ok {
+		for _, r := range raw {
+			required[r.(string)] = true
 		}
 	}
-	if len(props) != len(want) {
-		var got []string
-		for k := range props {
-			got = append(got, k)
+
+	checked := 0
+	for name, node := range props {
+		field, ok := node.(map[string]interface{})
+		if !ok {
+			continue
 		}
-		t.Errorf("the generated CRD carries %d fields and the Go type %d.\ngot:  %v\nwant: %v\n"+
-			"Either the manifest is stale, or a field reached the cluster without passing the "+
-			"closed-list check in dcctl.", len(props), len(want), got, want)
+		for _, rule := range rulesOf(field) {
+			if !strings.Contains(strings.ReplaceAll(rule, " ", ""), "self==oldSelf") {
+				continue
+			}
+			checked++
+			if !required[name] {
+				t.Errorf("%q carries a field-level immutability rule but is OPTIONAL. CEL skips "+
+					"a transition rule whenever the field is absent on either side, so the value "+
+					"can be removed and then re-set to anything — the rule's message would be "+
+					"describing something it does not prevent. Make the field required, or move "+
+					"the rule to the spec level where it always runs.", name)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no field carries an immutability rule at all, so this test examined nothing")
+	}
+}
+
+// The cluster binding must be immutable in a way that survives REMOVAL, which a
+// field-level rule cannot do for an optional field. `cluster` is optional by
+// design — an adopted instance has no provider-side cluster name — so its rule
+// belongs at the spec level.
+func TestTheClusterRuleSurvivesRemoval(t *testing.T) {
+	spec := specSchema(t, loadInstanceCRD(t))
+	joined := strings.Join(rulesOf(spec), "\n")
+	if !strings.Contains(joined, "has(self.cluster)") || !strings.Contains(joined, "has(oldSelf.cluster)") {
+		t.Errorf("the spec carries no rule comparing cluster's PRESENCE on both sides, so "+
+			"removing it and setting it again would repoint the binding. Rules found: %q", joined)
 	}
 }

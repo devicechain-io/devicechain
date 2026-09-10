@@ -7,15 +7,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Provenance annotations. These are METADATA rather than status fields, and the
-// choice is deliberate rather than stylistic.
+// Provenance annotations.
 //
-// dcctl is the only writer of the spec; the operator is the only writer of the
-// status. Putting "which dcctl last applied this" in the status would give that
-// subresource two writers with no field-ownership split between them — a
-// conflict this design has not settled and should not create in passing for a
-// value that is pure provenance. An annotation has exactly one writer here and
-// needs no arbitration.
+// These are METADATA rather than status fields, and the choice is a scheduling
+// one rather than a principle. The claim protocol that lands next puts a holder
+// and a heartbeat in the status, written by dcctl, alongside the conditions the
+// operator writes — two writers on one subresource, which that design records as
+// an open question. Provenance does not need to wait on the answer, and putting
+// it in the status now would pre-commit to one.
 const (
 	// AnnotationLastAppliedBy records the dcctl version that last wrote the spec.
 	AnnotationLastAppliedBy = "core.devicechain.io/last-applied-by"
@@ -23,80 +22,86 @@ const (
 	AnnotationLastAppliedAt = "core.devicechain.io/last-applied-at"
 )
 
-// InstanceSpec is the DESIRED state of a DeviceChain instance: everything dcctl
-// needs to reproduce this bootstrap from a different machine, and nothing else.
+// InstanceSpec is the DESIRED state of a DeviceChain instance.
 //
-// 🔴 THE LIST IS CLOSED, AND IT IS TIGHTER THAN THE FILE IT REPLACES. dcctl used
-// to record this in ~/.devicechain/<instance>/instance.json, under a rule
-// already stated there: identifiers only — a name, a flag or a timestamp,
-// nothing else. That file sits in a 0700 directory beside a private key, so its
-// threat model is the worst available and the rule was still worth writing down.
+// WHAT BELONGS HERE, AND THE TEST THAT MATTERS MOST. Two questions have to be
+// asked of every candidate field, and only one of them is about safety.
 //
-// A CLUSTER-SCOPED CR IS DIFFERENT IN KIND. It is readable by anything holding
-// cluster-wide get, and it turns up in `kubectl get -o yaml`, in GitOps diffs,
-// in support bundles and in screenshots. So the rule tightens rather than
-// relaxes, and two categories are named here so that nobody adds them later:
+// The first is whether it is safe to publish. This object is cluster-scoped, so
+// it appears in `kubectl get -o yaml`, in GitOps diffs, in support bundles and
+// in screenshots — a wider audience than the 0700 directory the local instance
+// record lives in. Nothing that names a filesystem path may appear here, and
+// nothing derived from a secret: not a password, not a hash, not a seed, not a
+// key. Credentials live in Secrets, and what a consumer gets is a name.
 //
-//   - NO VALUE THAT NAMES A FILESYSTEM PATH. --escrow-file,
-//     --escrow-passphrase-file, --backup-credentials-file, --lwm2m-identities and
-//     the --restore-* artifacts are reconnaissance on the operator's own machine,
-//     and they are one-shot intents rather than properties of the instance.
-//   - NO SECRET, AND NOTHING DERIVED FROM ONE. Not a password, not a hash, not a
-//     seed, not a key. Credentials live in Secrets that dcctl writes; what a
-//     consumer gets is a name.
+// The second question is the one a closed list makes easy to forget: is anything
+// MISSING that a second operator needs? A declaration exists so that someone on
+// another machine can re-run the bootstrap and converge to the same instance. A
+// field that changes what gets deployed and is not recorded here does not make
+// the object safer — it makes it wrong, silently, and the failure lands on
+// whoever trusted it. This list was audited flag by flag against what
+// `helmValues` and `infraVars` actually emit, and it grew when it was.
 //
-// kubeContext is dropped for a third reason: it is a name in the WRITER's
-// kubeconfig, meaningless on anyone else's machine, and circular — you need the
-// context to reach the CR that would tell you the context. It stays local, as
-// the one thing that legitimately remains machine-scoped.
+// The two rules pull in opposite directions and both are load-bearing. A field
+// that is unsafe to publish and needed for convergence is a design problem to
+// solve elsewhere, not a field to add quietly.
 //
-// createdAt is dropped too, and not moved to the status: metadata.creationTimestamp
-// is the same fact, maintained by the API server, and impossible to disagree with.
+// Three CEL rules live at the SPEC level rather than on the fields they govern,
+// and that is not a style choice. A transition rule on a field is only evaluated
+// when the field is present on BOTH sides, so `self == oldSelf` on an optional
+// field silently permits absent→value and value→absent — which for `cluster`
+// meant a two-edit repoint of the binding that `dcctl destroy` reads. The spec
+// object is always present, so a rule written here always runs.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.profile) && size(self.profile) > 0 && has(self.enabledFunctionalAreas) && size(self.enabledFunctionalAreas) > 0)",message="set profile or enabledFunctionalAreas, not both: they are two ways of naming the same set and the chart treats them as mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="(has(self.cluster) ? self.cluster : ”) == (has(oldSelf.cluster) ? oldSelf.cluster : ”)",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
+// +kubebuilder:validation:XValidation:rule="!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored) && self.restored)",message="restored cannot be unset: it records that this instance's databases came from an archive, which stays true. An ordinary re-run does not restore anything and must not erase the fact that an earlier one did"
+// +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
 type InstanceSpec struct {
-	// Provider names the infrastructure provider that resolved the cluster
-	// ("local" today).
+	// Provider is the infrastructure provider that resolved this instance's
+	// cluster. Immutable: an instance cannot move between providers in place.
 	//
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="provider is immutable: it identifies the cluster this instance was bootstrapped into, and an instance cannot move between providers in place"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="provider is immutable: it identifies the kind of cluster this instance was bootstrapped into"
 	Provider string `json:"provider"`
 
-	// Cluster is the provider's name for the cluster holding this instance.
-	//
-	// 🔴 EMPTY IS A REAL VALUE AND IS HONEST. An instance bootstrapped into a
-	// cluster dcctl did not create — an adopted --kube-context — has no
-	// provider-side cluster name, and inventing one would make `dcctl destroy`
-	// confident about a cluster nobody named.
+	// Cluster is the provider's name for the cluster holding this instance. Empty
+	// is a real value: an instance bootstrapped into a cluster dcctl did not create
+	// has no provider-side cluster name, and inventing one would make destroy
+	// confident about a cluster nobody named. Immutable, enforced at the spec level
+	// so that removing it is refused too.
 	//
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it would point destroy at a different cluster"
 	Cluster string `json:"cluster,omitempty"`
 
 	// Managed reports whether the cluster itself is dcctl's to delete, as opposed
-	// to one it was pointed at. `dcctl destroy` reads it: removing an instance from
-	// a cluster somebody else owns must not remove the cluster.
+	// to one it was pointed at. Immutable, and required rather than optional: this
+	// decides whether destroy may remove the CLUSTER, so an absent value must not
+	// be able to mean anything.
 	//
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="managed is immutable: it decides whether destroy may delete the cluster, and flipping it turns a scoped teardown into a cluster deletion"
 	Managed bool `json:"managed"`
 
-	// Profile names a curated set of functional areas to deploy (e.g. "default",
-	// "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually exclusive
-	// with EnabledFunctionalAreas; an empty profile with no explicit set resolves
-	// to "default": the standard system. "full" additionally ships the areas that
-	// reach outside the instance (AI inference, outbound connectors, MCP).
+	// Profile names a curated set of functional areas ("default", "full",
+	// "telemetry", "ingest-only"). Empty means the default profile.
 	//
 	// +optional
 	Profile string `json:"profile,omitempty"`
 
-	// EnabledFunctionalAreas is an explicit set of functional areas to deploy, as
-	// an alternative to a named Profile (ADR-022 decision 2). The set is rejected
-	// if it omits a required core area or an enabled area's hard dependency.
+	// ExtraFunctionalAreas are areas deployed on TOP of the profile.
+	//
+	// This records the operator's request rather than the set it expanded to, and
+	// the difference matters on a re-run. A profile's membership is a property of
+	// the release: "full" is contractually exhaustive, so it gains an area whenever
+	// the platform does. Freezing the expansion would make a later dcctl deploy the
+	// OLD contents of a profile from this declaration while deploying the new ones
+	// from the equivalent command line — two paths to the same instance that no
+	// longer agree. What was actually deployed is an observation, and belongs in
+	// the status.
 	//
 	// +optional
-	EnabledFunctionalAreas []string `json:"enabledFunctionalAreas,omitempty"`
+	ExtraFunctionalAreas []string `json:"extraFunctionalAreas,omitempty"`
 
-	// HA applies the replicated messaging topology (ADR-020 A0).
+	// HA applies the replicated messaging topology.
 	//
 	// +optional
 	HA bool `json:"ha,omitempty"`
@@ -107,20 +112,47 @@ type InstanceSpec struct {
 	Compact bool `json:"compact,omitempty"`
 
 	// Monitoring reports whether the observability stack is part of this instance.
-	// Stated positively rather than as the --no-monitoring flag it comes from: a
-	// declaration reads as what the instance IS, and a reader should not have to
-	// invert a negative to learn that Prometheus is installed.
+	//
+	// Stated positively, like CNPG and TLS below, rather than as the --no-monitoring
+	// flag it comes from. A command line has an implicit default and can afford a
+	// negative; a declaration is read by someone asking what this instance IS, and
+	// making them invert a negative to learn that Prometheus is installed puts a
+	// step in front of the answer.
 	//
 	// +optional
 	Monitoring bool `json:"monitoring,omitempty"`
 
-	// Host is the hostname the instance ingress is exposed on.
+	// CNPG reports whether this instance installs the CloudNativePG operator and
+	// the backup plugin, as opposed to using ones the cluster already runs.
+	//
+	// It is recorded because leaving it out does not make the declaration safer, it
+	// makes it wrong: Helm cannot adopt objects it did not create, so a second
+	// operator who re-runs without knowing this fails the infrastructure apply with
+	// an ownership error on a cluster that was fine.
+	//
+	// +optional
+	CNPG bool `json:"cnpg,omitempty"`
+
+	// GrafanaSSO reports whether Grafana's login is wired to DeviceChain SSO.
+	//
+	// Recorded for the same reason and with a sharper edge: this seeds an OAuth
+	// client into the user-management config and turns the integration on in the
+	// infrastructure apply, so a re-run without it does not merely skip the feature
+	// — it removes both halves from a live instance.
+	//
+	// +optional
+	GrafanaSSO bool `json:"grafanaSSO,omitempty"`
+
+	// Host is the hostname the instance ingress is exposed on, resolved rather than
+	// copied from the flag: an omitted host would leave the next reader to
+	// re-derive a default that may have moved between releases.
 	//
 	// +optional
 	Host string `json:"host,omitempty"`
 
-	// TLS reports whether the ingress serves HTTPS. Positive for the same reason
-	// as Monitoring; it comes from --no-tls.
+	// TLS reports whether the ingress serves HTTPS. This describes the INGRESS and
+	// nothing else — the broker's own TLS is configured separately and is on by
+	// default regardless of this value.
 	//
 	// +optional
 	TLS bool `json:"tls,omitempty"`
@@ -136,43 +168,41 @@ type InstanceSpec struct {
 	ImageVersion string `json:"imageVersion,omitempty"`
 
 	// Restored reports that this instance's databases were recovered from an
-	// archive rather than created empty.
+	// archive rather than created empty. A fact about the instance, never a path:
+	// that a restore happened belongs to anyone reading this, while WHERE the
+	// archive was is one operator's command line.
 	//
-	// 🔴 A FACT, NEVER A PATH. That a restore happened is a property of the
-	// instance and belongs to anyone reading it; WHERE the archive was is a
-	// one-shot argument on one operator's command line. Recording the second here
-	// would put a filesystem layout into a cluster-readable object to no one's
-	// benefit.
+	// Write-once. An ordinary re-run restores nothing and must not erase it.
 	//
 	// +optional
 	Restored bool `json:"restored,omitempty"`
 
-	// RestoredAt is when that happened.
+	// RestoredAt is when the restore that produced this instance completed.
 	//
 	// +optional
 	RestoredAt *metav1.Time `json:"restoredAt,omitempty"`
 }
 
-// InstanceStatus is the OBSERVED state, and it is the operator's to write.
+// InstanceStatus is the OBSERVED state.
 //
-// Nothing here is an input. If dcctl needs a value to reproduce a bootstrap it
-// belongs in the spec, and if a value is only ever read by a human it belongs in
-// a condition with a reason that says what was seen.
+// Nothing here is an input: if dcctl needs a value to reproduce a bootstrap it
+// belongs in the spec.
 type InstanceStatus struct {
 	// ObservedGeneration is the spec generation this status was computed from.
 	// Without it a reader cannot tell a status that reflects the current spec from
-	// one left over from the previous — and "stale but plausible" is the failure
-	// mode a status exists to prevent.
+	// one left over from the previous, and "stale but plausible" is the failure a
+	// status exists to prevent.
 	//
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Conditions report what the operator can see of the instance's workloads.
 	//
-	// 🔴 ABSENCE IS REPORTED WITH A REASON, NEVER AS HEALTH. A resource whose CRD
-	// is not installed, one that has not been created yet, and one that is failing
-	// are three different answers, and collapsing any of them into "not Ready"
-	// throws away the only part a human can act on.
+	// Nothing writes these yet; the reconciler that will is a later slice. When it
+	// does, absence must be reported with a reason rather than as health: a
+	// resource whose CRD is not installed, one not created yet, and one that is
+	// failing are three different answers, and collapsing any of them into "not
+	// Ready" throws away the part a human can act on.
 	//
 	// +optional
 	// +patchMergeKey=type
@@ -193,17 +223,20 @@ type InstanceStatus struct {
 
 // Instance is the declaration of a DeviceChain instance.
 //
-// 🔴 CLUSTER-SCOPED, AND THAT IS LOAD-BEARING RATHER THAN INCIDENTAL. The
-// instance namespace does not exist when this object is created — creating it is
-// part of the bootstrap this object describes — so a namespaced CR would have
-// nowhere to live at the one moment it is needed. Cluster scope also makes the
-// instance id unique cluster-wide, which is what lets the object serve as the
-// claim two operators race for rather than as a record each of them keeps.
+// Cluster-scoped, and that is load-bearing rather than incidental. The instance
+// namespace does not exist when this object is created — creating it is part of
+// the bootstrap this object describes — so a namespaced CR would have nowhere to
+// live at the one moment it is needed. Cluster scope also makes the instance id
+// unique cluster-wide, which is what lets the object serve as a claim two
+// operators race for rather than as a record each of them keeps.
 type Instance struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   InstanceSpec   `json:"spec,omitempty"`
+	// Spec is required. Without this an Instance carrying no spec at all is valid,
+	// because the required fields INSIDE the spec are only checked once a spec
+	// exists — so the object that declares nothing would pass every rule below.
+	Spec   InstanceSpec   `json:"spec"`
 	Status InstanceStatus `json:"status,omitempty"`
 }
 

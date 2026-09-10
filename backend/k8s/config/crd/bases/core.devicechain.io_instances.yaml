@@ -35,13 +35,15 @@ spec:
     name: v1beta1
     schema:
       openAPIV3Schema:
-        description: "Instance is the declaration of a DeviceChain instance.\n\n\U0001F534
-          CLUSTER-SCOPED, AND THAT IS LOAD-BEARING RATHER THAN INCIDENTAL. The\ninstance
-          namespace does not exist when this object is created — creating it is\npart
-          of the bootstrap this object describes — so a namespaced CR would have\nnowhere
-          to live at the one moment it is needed. Cluster scope also makes the\ninstance
-          id unique cluster-wide, which is what lets the object serve as the\nclaim
-          two operators race for rather than as a record each of them keeps."
+        description: |-
+          Instance is the declaration of a DeviceChain instance.
+
+          Cluster-scoped, and that is load-bearing rather than incidental. The instance
+          namespace does not exist when this object is created — creating it is part of
+          the bootstrap this object describes — so a namespaced CR would have nowhere to
+          live at the one moment it is needed. Cluster scope also makes the instance id
+          unique cluster-wide, which is what lets the object serve as a claim two
+          operators race for rather than as a record each of them keeps.
         properties:
           apiVersion:
             description: |-
@@ -61,64 +63,64 @@ spec:
           metadata:
             type: object
           spec:
-            description: "InstanceSpec is the DESIRED state of a DeviceChain instance:
-              everything dcctl\nneeds to reproduce this bootstrap from a different
-              machine, and nothing else.\n\n\U0001F534 THE LIST IS CLOSED, AND IT
-              IS TIGHTER THAN THE FILE IT REPLACES. dcctl used\nto record this in
-              ~/.devicechain/<instance>/instance.json, under a rule\nalready stated
-              there: identifiers only — a name, a flag or a timestamp,\nnothing else.
-              That file sits in a 0700 directory beside a private key, so its\nthreat
-              model is the worst available and the rule was still worth writing down.\n\nA
-              CLUSTER-SCOPED CR IS DIFFERENT IN KIND. It is readable by anything holding\ncluster-wide
-              get, and it turns up in `kubectl get -o yaml`, in GitOps diffs,\nin
-              support bundles and in screenshots. So the rule tightens rather than\nrelaxes,
-              and two categories are named here so that nobody adds them later:\n\n
-              \ - NO VALUE THAT NAMES A FILESYSTEM PATH. --escrow-file,\n    --escrow-passphrase-file,
-              --backup-credentials-file, --lwm2m-identities and\n    the --restore-*
-              artifacts are reconnaissance on the operator's own machine,\n    and
-              they are one-shot intents rather than properties of the instance.\n
-              \ - NO SECRET, AND NOTHING DERIVED FROM ONE. Not a password, not a hash,
-              not a\n    seed, not a key. Credentials live in Secrets that dcctl writes;
-              what a\n    consumer gets is a name.\n\nkubeContext is dropped for a
-              third reason: it is a name in the WRITER's\nkubeconfig, meaningless
-              on anyone else's machine, and circular — you need the\ncontext to reach
-              the CR that would tell you the context. It stays local, as\nthe one
-              thing that legitimately remains machine-scoped.\n\ncreatedAt is dropped
-              too, and not moved to the status: metadata.creationTimestamp\nis the
-              same fact, maintained by the API server, and impossible to disagree
-              with."
+            description: |-
+              Spec is required. Without this an Instance carrying no spec at all is valid,
+              because the required fields INSIDE the spec are only checked once a spec
+              exists — so the object that declares nothing would pass every rule below.
             properties:
               cluster:
-                description: "Cluster is the provider's name for the cluster holding
-                  this instance.\n\n\U0001F534 EMPTY IS A REAL VALUE AND IS HONEST.
-                  An instance bootstrapped into a\ncluster dcctl did not create —
-                  an adopted --kube-context — has no\nprovider-side cluster name,
-                  and inventing one would make `dcctl destroy`\nconfident about a
-                  cluster nobody named."
+                description: |-
+                  Cluster is the provider's name for the cluster holding this instance. Empty
+                  is a real value: an instance bootstrapped into a cluster dcctl did not create
+                  has no provider-side cluster name, and inventing one would make destroy
+                  confident about a cluster nobody named. Immutable, enforced at the spec level
+                  so that removing it is refused too.
                 type: string
-                x-kubernetes-validations:
-                - message: 'cluster is immutable: it is half of the binding between
-                    this instance and the cluster it lives in, and rewriting it would
-                    point destroy at a different cluster'
-                  rule: self == oldSelf
+              cnpg:
+                description: |-
+                  CNPG reports whether this instance installs the CloudNativePG operator and
+                  the backup plugin, as opposed to using ones the cluster already runs.
+
+                  It is recorded because leaving it out does not make the declaration safer, it
+                  makes it wrong: Helm cannot adopt objects it did not create, so a second
+                  operator who re-runs without knowing this fails the infrastructure apply with
+                  an ownership error on a cluster that was fine.
+                type: boolean
               compact:
                 description: Compact applies the small-footprint sizing preset.
                 type: boolean
-              enabledFunctionalAreas:
+              extraFunctionalAreas:
                 description: |-
-                  EnabledFunctionalAreas is an explicit set of functional areas to deploy, as
-                  an alternative to a named Profile (ADR-022 decision 2). The set is rejected
-                  if it omits a required core area or an enabled area's hard dependency.
+                  ExtraFunctionalAreas are areas deployed on TOP of the profile.
+
+                  This records the operator's request rather than the set it expanded to, and
+                  the difference matters on a re-run. A profile's membership is a property of
+                  the release: "full" is contractually exhaustive, so it gains an area whenever
+                  the platform does. Freezing the expansion would make a later dcctl deploy the
+                  OLD contents of a profile from this declaration while deploying the new ones
+                  from the equivalent command line — two paths to the same instance that no
+                  longer agree. What was actually deployed is an observation, and belongs in
+                  the status.
                 items:
                   type: string
                 type: array
+              grafanaSSO:
+                description: |-
+                  GrafanaSSO reports whether Grafana's login is wired to DeviceChain SSO.
+
+                  Recorded for the same reason and with a sharper edge: this seeds an OAuth
+                  client into the user-management config and turns the integration on in the
+                  infrastructure apply, so a re-run without it does not merely skip the feature
+                  — it removes both halves from a live instance.
+                type: boolean
               ha:
-                description: HA applies the replicated messaging topology (ADR-020
-                  A0).
+                description: HA applies the replicated messaging topology.
                 type: boolean
               host:
-                description: Host is the hostname the instance ingress is exposed
-                  on.
+                description: |-
+                  Host is the hostname the instance ingress is exposed on, resolved rather than
+                  copied from the flag: an omitted host would leave the next reader to
+                  re-derive a default that may have moved between releases.
                 type: string
               imageRegistry:
                 description: ImageRegistry is where this instance's images are pulled
@@ -130,8 +132,9 @@ spec:
               managed:
                 description: |-
                   Managed reports whether the cluster itself is dcctl's to delete, as opposed
-                  to one it was pointed at. `dcctl destroy` reads it: removing an instance from
-                  a cluster somebody else owns must not remove the cluster.
+                  to one it was pointed at. Immutable, and required rather than optional: this
+                  decides whether destroy may remove the CLUSTER, so an absent value must not
+                  be able to mean anything.
                 type: boolean
                 x-kubernetes-validations:
                 - message: 'managed is immutable: it decides whether destroy may delete
@@ -141,71 +144,82 @@ spec:
               monitoring:
                 description: |-
                   Monitoring reports whether the observability stack is part of this instance.
-                  Stated positively rather than as the --no-monitoring flag it comes from: a
-                  declaration reads as what the instance IS, and a reader should not have to
-                  invert a negative to learn that Prometheus is installed.
+
+                  Stated positively, like CNPG and TLS below, rather than as the --no-monitoring
+                  flag it comes from. A command line has an implicit default and can afford a
+                  negative; a declaration is read by someone asking what this instance IS, and
+                  making them invert a negative to learn that Prometheus is installed puts a
+                  step in front of the answer.
                 type: boolean
               profile:
                 description: |-
-                  Profile names a curated set of functional areas to deploy (e.g. "default",
-                  "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually exclusive
-                  with EnabledFunctionalAreas; an empty profile with no explicit set resolves
-                  to "default": the standard system. "full" additionally ships the areas that
-                  reach outside the instance (AI inference, outbound connectors, MCP).
+                  Profile names a curated set of functional areas ("default", "full",
+                  "telemetry", "ingest-only"). Empty means the default profile.
                 type: string
               provider:
                 description: |-
-                  Provider names the infrastructure provider that resolved the cluster
-                  ("local" today).
+                  Provider is the infrastructure provider that resolved this instance's
+                  cluster. Immutable: an instance cannot move between providers in place.
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: 'provider is immutable: it identifies the cluster this
-                    instance was bootstrapped into, and an instance cannot move between
-                    providers in place'
+                - message: 'provider is immutable: it identifies the kind of cluster
+                    this instance was bootstrapped into'
                   rule: self == oldSelf
               restored:
-                description: "Restored reports that this instance's databases were
-                  recovered from an\narchive rather than created empty.\n\n\U0001F534
-                  A FACT, NEVER A PATH. That a restore happened is a property of the\ninstance
-                  and belongs to anyone reading it; WHERE the archive was is a\none-shot
-                  argument on one operator's command line. Recording the second here\nwould
-                  put a filesystem layout into a cluster-readable object to no one's\nbenefit."
+                description: |-
+                  Restored reports that this instance's databases were recovered from an
+                  archive rather than created empty. A fact about the instance, never a path:
+                  that a restore happened belongs to anyone reading this, while WHERE the
+                  archive was is one operator's command line.
+
+                  Write-once. An ordinary re-run restores nothing and must not erase it.
                 type: boolean
               restoredAt:
-                description: RestoredAt is when that happened.
+                description: RestoredAt is when the restore that produced this instance
+                  completed.
                 format: date-time
                 type: string
               tls:
                 description: |-
-                  TLS reports whether the ingress serves HTTPS. Positive for the same reason
-                  as Monitoring; it comes from --no-tls.
+                  TLS reports whether the ingress serves HTTPS. This describes the INGRESS and
+                  nothing else — the broker's own TLS is configured separately and is on by
+                  default regardless of this value.
                 type: boolean
             required:
             - managed
             - provider
             type: object
             x-kubernetes-validations:
-            - message: 'set profile or enabledFunctionalAreas, not both: they are
-                two ways of naming the same set and the chart treats them as mutually
-                exclusive'
-              rule: '!(has(self.profile) && size(self.profile) > 0 && has(self.enabledFunctionalAreas)
-                && size(self.enabledFunctionalAreas) > 0)'
+            - message: 'cluster is immutable: it is half of the binding between this
+                instance and the cluster it lives in, and rewriting it (including
+                by removing or adding it) would point destroy at a different cluster'
+              rule: '(has(self.cluster) ? self.cluster : '''') == (has(oldSelf.cluster)
+                ? oldSelf.cluster : '''')'
+            - message: 'restored cannot be unset: it records that this instance''s
+                databases came from an archive, which stays true. An ordinary re-run
+                does not restore anything and must not erase the fact that an earlier
+                one did'
+              rule: '!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored)
+                && self.restored)'
+            - message: restoredAt is set on an instance that says it was not restored
+              rule: '!(has(self.restoredAt) && !(has(self.restored) && self.restored))'
           status:
             description: |-
-              InstanceStatus is the OBSERVED state, and it is the operator's to write.
+              InstanceStatus is the OBSERVED state.
 
-              Nothing here is an input. If dcctl needs a value to reproduce a bootstrap it
-              belongs in the spec, and if a value is only ever read by a human it belongs in
-              a condition with a reason that says what was seen.
+              Nothing here is an input: if dcctl needs a value to reproduce a bootstrap it
+              belongs in the spec.
             properties:
               conditions:
-                description: "Conditions report what the operator can see of the instance's
-                  workloads.\n\n\U0001F534 ABSENCE IS REPORTED WITH A REASON, NEVER
-                  AS HEALTH. A resource whose CRD\nis not installed, one that has
-                  not been created yet, and one that is failing\nare three different
-                  answers, and collapsing any of them into \"not Ready\"\nthrows away
-                  the only part a human can act on."
+                description: |-
+                  Conditions report what the operator can see of the instance's workloads.
+
+                  Nothing writes these yet; the reconciler that will is a later slice. When it
+                  does, absence must be reported with a reason rather than as health: a
+                  resource whose CRD is not installed, one not created yet, and one that is
+                  failing are three different answers, and collapsing any of them into "not
+                  Ready" throws away the part a human can act on.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -268,11 +282,13 @@ spec:
                 description: |-
                   ObservedGeneration is the spec generation this status was computed from.
                   Without it a reader cannot tell a status that reflects the current spec from
-                  one left over from the previous — and "stale but plausible" is the failure
-                  mode a status exists to prevent.
+                  one left over from the previous, and "stale but plausible" is the failure a
+                  status exists to prevent.
                 format: int64
                 type: integer
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

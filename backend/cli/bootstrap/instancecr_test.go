@@ -13,7 +13,10 @@ import (
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
-// specJSONFields lists the JSON names InstanceSpec actually serialises.
+// specJSONFields lists the JSON names InstanceSpec actually serialises, read off
+// the type rather than written down. The k8s module checks the generated CRD
+// against the same reflection, so the manifest, the type and this list cannot
+// drift apart in pairs.
 func specJSONFields(t *testing.T) []string {
 	t.Helper()
 	rt := reflect.TypeOf(dcv1beta1.InstanceSpec{})
@@ -41,17 +44,90 @@ func specJSONFields(t *testing.T) []string {
 // in something that many people can read? Answer it, then edit the list.
 func TestInstanceSpecIsAClosedList(t *testing.T) {
 	want := []string{
-		"cluster", "compact", "enabledFunctionalAreas", "ha", "host",
-		"imageRegistry", "imageVersion", "managed", "monitoring", "profile",
+		"cluster", "cnpg", "compact", "extraFunctionalAreas", "grafanaSSO", "ha",
+		"host", "imageRegistry", "imageVersion", "managed", "monitoring", "profile",
 		"provider", "restored", "restoredAt", "tls",
 	}
 	got := specJSONFields(t)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the instance declaration's fields have changed.\n got: %v\nwant: %v\n\n"+
-			"Adding one is a decision, not an edit: this object is readable by anything with "+
-			"cluster-wide get. Nothing that names a filesystem path and nothing derived from a "+
-			"secret may appear here. If the new field is neither, add it to this list deliberately.",
+			"Changing this list is a decision, and it has TWO halves.\n\n"+
+			"ADDING a field: this object is readable by anything with cluster-wide get, and "+
+			"appears in GitOps diffs and support bundles. Nothing that names a filesystem path "+
+			"and nothing derived from a secret may appear here.\n\n"+
+			"REMOVING one, or leaving one out: a declaration exists so a second operator can "+
+			"re-run the bootstrap and converge to the SAME instance. If the field changes what "+
+			"gets deployed, dropping it does not make this safer — it makes it wrong, and the "+
+			"failure lands on whoever trusted it.",
 			got, want)
+	}
+}
+
+// 🔴 AND THE SECOND HALF OF THAT RULE HAS ITS OWN TEST, because a closed list
+// makes it easy to check only the first. Every flag that changes what gets
+// deployed must be recorded, and the first version of this schema missed three:
+// --no-cnpg, --grafana-sso and the operator's --enable-area intent. Nothing about
+// the leak test below would have noticed, because they are omissions rather than
+// additions.
+func TestEveryDeploymentAlteringFlagIsRecorded(t *testing.T) {
+	// A State with every deployment-altering flag set AWAY from its default.
+	st := &State{
+		Instance:      "prod",
+		Profile:       "full",
+		EnableAreas:   []string{"lwm2m-ingest"},
+		EnabledAreas:  []string{"device-management", "lwm2m-ingest"},
+		HA:            true,
+		Compact:       true,
+		NoMonitoring:  true,
+		NoCNPG:        true,
+		NoTLS:         true,
+		IngressHost:   "dc.example.com",
+		ImageRegistry: "registry.example/dc",
+		ImageVersion:  "v0.17.0",
+	}
+	spec := InstanceSpecFrom(st, ClusterBinding{Cluster: "c", Managed: true}, "local")
+
+	for _, tc := range []struct {
+		flag string
+		got  bool
+		want bool
+	}{
+		{"--ha", spec.HA, true},
+		{"--compact", spec.Compact, true},
+		{"--no-monitoring", spec.Monitoring, false},
+		{"--no-cnpg", spec.CNPG, false},
+		{"--no-tls", spec.TLS, false},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s did not reach the declaration (recorded %v)", tc.flag, tc.got)
+		}
+	}
+	if spec.Host != "dc.example.com" {
+		t.Errorf("--host did not reach the declaration: %q", spec.Host)
+	}
+	if !reflect.DeepEqual(spec.ExtraFunctionalAreas, []string{"lwm2m-ingest"}) {
+		t.Errorf("--enable-area did not reach the declaration: %v", spec.ExtraFunctionalAreas)
+	}
+	if spec.Profile != "full" {
+		t.Errorf("--profile did not reach the declaration: %q", spec.Profile)
+	}
+
+	// 🔴 THE DEFAULT SIDE, and it is the half that catches an inverted flag. Every
+	// boolean above reads its default as the opposite value, so a builder that
+	// hard-coded any of them would still satisfy the loop.
+	def := InstanceSpecFrom(&State{Profile: "default"}, ClusterBinding{}, "local")
+	if !def.Monitoring || !def.CNPG || !def.TLS {
+		t.Errorf("a default instance recorded monitoring=%v cnpg=%v tls=%v; all three are on "+
+			"unless opted out", def.Monitoring, def.CNPG, def.TLS)
+	}
+	if def.HA || def.Compact {
+		t.Errorf("a default instance recorded ha=%v compact=%v", def.HA, def.Compact)
+	}
+	// The host is RESOLVED, not copied: an omitted host would leave the next reader
+	// to re-derive a default that may have moved between releases.
+	if def.Host != DefaultIngressHost {
+		t.Errorf("a default instance recorded host %q, not the resolved default %q",
+			def.Host, DefaultIngressHost)
 	}
 }
 
@@ -172,30 +248,56 @@ func TestTheClusterBindingCannotBeRewrittenByARerun(t *testing.T) {
 	})
 }
 
-// profile and enabledFunctionalAreas are two ways of naming one set, and the
-// chart treats them as mutually exclusive. A declaration carrying both would
-// leave the next run to pick one.
-func TestAProfileAndAnExplicitAreaSetAreMutuallyExclusive(t *testing.T) {
+// 🔴 THE DECLARATION RECORDS THE OPERATOR'S REQUEST, NOT ITS EXPANSION, and the
+// difference only shows up on a re-run. A profile's membership is a property of
+// the release — "full" is contractually exhaustive, so it gains an area whenever
+// the platform does. Freezing the expansion would make a later dcctl deploy the
+// OLD contents of a profile from this object while deploying the new ones from
+// the equivalent command line: two paths to one instance that no longer agree.
+func TestTheDeclarationRecordsTheAreaRequestNotItsExpansion(t *testing.T) {
+	st := &State{
+		Profile:      "default",
+		EnableAreas:  []string{"lwm2m-ingest"},
+		EnabledAreas: []string{"device-management", "user-management", "lwm2m-ingest"},
+	}
+	spec := InstanceSpecFrom(st, ClusterBinding{}, "local")
+
+	if spec.Profile != "default" {
+		t.Errorf("the base profile was lost: %q. It cannot be recovered from the expansion, so "+
+			"a re-run could not tell which profile was asked for", spec.Profile)
+	}
+	if !reflect.DeepEqual(spec.ExtraFunctionalAreas, []string{"lwm2m-ingest"}) {
+		t.Errorf("extraFunctionalAreas is %v, want just the delta", spec.ExtraFunctionalAreas)
+	}
+	// The expansion must NOT be what is stored, or the release-drift above is baked in.
+	if len(spec.ExtraFunctionalAreas) > 1 {
+		t.Errorf("the resolved union was stored instead of the request: %v", spec.ExtraFunctionalAreas)
+	}
+}
+
+// A declaration is an INPUT to a later run, so an area set this build cannot
+// deploy has to be refused when it is read — not left to fail inside the chart,
+// minutes into a bootstrap.
+func TestADeclarationNamingAnUnknownAreaIsRefused(t *testing.T) {
 	err := ValidateInstanceSpec(dcv1beta1.InstanceSpec{
-		Provider:               "local",
-		Profile:                "default",
-		EnabledFunctionalAreas: []string{"device-management"},
+		Provider:             "local",
+		Profile:              "default",
+		ExtraFunctionalAreas: []string{"no-such-area"},
 	})
 	if err == nil {
-		t.Fatal("a declaration carrying both a profile and an explicit area set was accepted")
+		t.Fatal("a declaration naming an area that does not exist was accepted")
+	}
+	if !strings.Contains(err.Error(), "area set") {
+		t.Errorf("the refusal does not say what is wrong: %v", err)
 	}
 
-	// ...and the builder must not produce one. An explicit set REPLACES the
-	// profile; State carries both because the profile is still the base the extras
-	// were resolved against.
-	st := &State{Profile: "default", EnableAreas: []string{"lwm2m-ingest"},
-		EnabledAreas: []string{"device-management", "lwm2m-ingest"}}
-	spec := InstanceSpecFrom(st, ClusterBinding{}, "local")
-	if spec.Profile != "" {
-		t.Errorf("the builder recorded profile %q alongside an explicit area set", spec.Profile)
-	}
-	if err := ValidateInstanceSpec(spec); err != nil {
-		t.Errorf("the builder produced a declaration it will not accept: %v", err)
+	// The counterweight: a real area must pass, or this bans the feature.
+	if err := ValidateInstanceSpec(dcv1beta1.InstanceSpec{
+		Provider:             "local",
+		Profile:              "default",
+		ExtraFunctionalAreas: []string{"lwm2m-ingest"},
+	}); err != nil {
+		t.Errorf("a valid area set was refused: %v", err)
 	}
 }
 
@@ -212,5 +314,39 @@ func TestTheDeclarationStatesExposureAndMonitoringPositively(t *testing.T) {
 	off := InstanceSpecFrom(&State{NoTLS: true, NoMonitoring: true}, ClusterBinding{}, "local")
 	if off.TLS || off.Monitoring {
 		t.Errorf("--no-tls/--no-monitoring recorded tls=%v monitoring=%v", off.TLS, off.Monitoring)
+	}
+}
+
+// 🔴 THE ANNOTATIONS ARE PART OF THE PUBLISHED OBJECT AND SAT OUTSIDE EVERY
+// CLOSED-LIST CHECK. Both lists above look at the spec, so a path or a secret
+// could reach the cluster through an annotation with nothing able to notice —
+// the same leak the spec is guarded against, one field away from the guard.
+func TestOnlyProvenanceAnnotationsAreWritten(t *testing.T) {
+	want := map[string]bool{
+		dcv1beta1.AnnotationLastAppliedBy: true,
+		dcv1beta1.AnnotationLastAppliedAt: true,
+	}
+
+	inst := &dcv1beta1.Instance{}
+	applyProvenance(inst, "v0.17.0")
+
+	if len(inst.Annotations) != len(want) {
+		t.Fatalf("the declaration carries %d annotations, want %d: %v",
+			len(inst.Annotations), len(want), inst.Annotations)
+	}
+	for k, v := range inst.Annotations {
+		if !want[k] {
+			t.Errorf("unexpected annotation %q=%q. Annotations are published with the object; "+
+				"nothing that names a path and nothing derived from a secret may go here either", k, v)
+		}
+	}
+
+	// Foreign annotations — kubectl's last-applied, a GitOps tracking id — must
+	// survive, or dcctl would strip other tools' bookkeeping on every re-run.
+	existing := &dcv1beta1.Instance{}
+	existing.Annotations = map[string]string{"argocd.argoproj.io/tracking-id": "x"}
+	applyProvenance(existing, "v0.17.0")
+	if existing.Annotations["argocd.argoproj.io/tracking-id"] != "x" {
+		t.Error("a foreign annotation was dropped")
 	}
 }

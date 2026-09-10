@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,6 +40,17 @@ var instanceGVR = schema.GroupVersionResource{
 // making them invert a negative to learn that Prometheus is installed is a
 // needless step in front of the answer.
 func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1beta1.InstanceSpec {
+	// The ingress host is RESOLVED here, not copied. stepRenderConfig defaults it
+	// into st.Values, and the declaration is written before that step runs — so
+	// reading the raw field would record an omitted host on every default
+	// bootstrap, which is precisely the "leave the next reader to re-derive a
+	// default that may have changed between releases" this function exists to
+	// avoid. One definition of the default, consulted twice.
+	host := st.IngressHost
+	if host == "" {
+		host = DefaultIngressHost
+	}
+
 	spec := dcv1beta1.InstanceSpec{
 		Provider:      provider,
 		Cluster:       binding.Cluster,
@@ -47,17 +59,23 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 		HA:            st.HA,
 		Compact:       st.Compact,
 		Monitoring:    !st.NoMonitoring,
-		Host:          st.IngressHost,
+		CNPG:          !st.NoCNPG,
+		GrafanaSSO:    grafanaSSOEnabled(st),
+		Host:          host,
 		TLS:           !st.NoTLS,
 		ImageRegistry: st.ImageRegistry,
 		ImageVersion:  st.ImageVersion,
 		Restored:      st.Restore.Active(),
 	}
-	// The chart treats the two as mutually exclusive, so the declaration must too:
-	// an explicit set REPLACES the profile rather than adding to it.
-	if len(st.EnabledAreas) > 0 {
-		spec.Profile = ""
-		spec.EnabledFunctionalAreas = append([]string(nil), st.EnabledAreas...)
+	// The DELTA, not the expansion. st.EnabledAreas is the resolved union the chart
+	// is told about; st.EnableAreas is what the operator asked for on top of the
+	// profile. Recording the union would freeze a profile's membership into the
+	// declaration, and a profile's membership is a property of the RELEASE — "full"
+	// is contractually exhaustive, so it gains an area whenever the platform does.
+	// A later dcctl would then deploy the old contents from this object and the new
+	// ones from the equivalent command line.
+	if len(st.EnableAreas) > 0 {
+		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
 	}
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
@@ -77,15 +95,23 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 		return fmt.Errorf("the instance declaration names no provider, so nothing could later " +
 			"tell which kind of cluster this instance lives in")
 	}
-	if spec.Profile != "" && len(spec.EnabledFunctionalAreas) > 0 {
-		return fmt.Errorf("the instance declaration carries both a profile (%q) and an explicit "+
-			"area set (%v). They are two ways of naming the same thing and the chart treats them as "+
-			"mutually exclusive, so recording both would leave the next run to pick one",
-			spec.Profile, spec.EnabledFunctionalAreas)
-	}
 	if spec.RestoredAt != nil && !spec.Restored {
 		return fmt.Errorf("the instance declaration carries a restore timestamp and says the " +
 			"instance was not restored")
+	}
+	if spec.Restored && spec.RestoredAt == nil {
+		return fmt.Errorf("the instance declaration says this instance was restored and carries " +
+			"no timestamp for it")
+	}
+	// 🔴 THE AREA SET IS JUDGED AGAINST THE CATALOG, not merely against itself.
+	// This is the read-back check: a declaration is an INPUT to a later run, and an
+	// unknown area or an unmet hard dependency in it is a bootstrap that fails
+	// somewhere in the chart, minutes in, rather than here. ResolveEnabledAreas is
+	// the same function the command layer runs over the same two values, so a
+	// declaration that passes here is one dcctl can act on.
+	if _, err := ResolveEnabledAreas(spec.Profile, spec.ExtraFunctionalAreas); err != nil {
+		return fmt.Errorf("the instance declaration names an area set this build cannot "+
+			"deploy: %w", err)
 	}
 	return nil
 }
@@ -144,7 +170,7 @@ func ReadInstanceCR(ctx context.Context, kubeContext, id string) (*dcv1beta1.Ins
 func readInstanceCR(ctx context.Context, dyn dynamic.Interface, id string) (*dcv1beta1.Instance, error) {
 	obj, err := dyn.Resource(instanceGVR).Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if isInstanceNotFound(err, id) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading the instance declaration %q: %w. Refusing to continue: "+
@@ -156,6 +182,31 @@ func readInstanceCR(ctx context.Context, dyn dynamic.Interface, id string) (*dcv
 		return nil, fmt.Errorf("decoding the instance declaration %q: %w", id, err)
 	}
 	return inst, nil
+}
+
+// isInstanceNotFound distinguishes "this instance is not declared" from "the
+// Instance CRD is not installed", which the dynamic client reports IDENTICALLY.
+//
+// 🔴 THIS IS THE DISTINCTION THE FUNCTION ABOVE PROMISES AND ALMOST DID NOT MAKE.
+// A Get through the dynamic client carries no RESTMapper, so a missing resource
+// TYPE comes back from the API server as a plain 404 — apierrors.IsNotFound is
+// true for both, and meta.IsNoMatchError never fires. Reading the first as "no
+// declaration" is the direction that re-bootstraps over a live instance: an
+// operator pointed at a cluster whose CRDs have not been installed yet would be
+// told the instance is new.
+//
+// The two are separable by the Details the API server attaches: a missing OBJECT
+// names the object and its group, a missing RESOURCE TYPE names neither.
+func isInstanceNotFound(err error, id string) bool {
+	if !apierrors.IsNotFound(err) {
+		return false
+	}
+	var se apierrors.APIStatus
+	if !errors.As(err, &se) {
+		return false
+	}
+	d := se.Status().Details
+	return d != nil && d.Name == id && d.Group == instanceGVR.Group
 }
 
 // instanceToUnstructured converts the typed object for the dynamic client.
@@ -206,12 +257,21 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 		inst = existing.DeepCopy()
 	}
 	inst.Name = id
-	inst.Spec = spec
-	if inst.Annotations == nil {
-		inst.Annotations = map[string]string{}
+	if existing != nil {
+		// 🔴 THE RESTORE FACT IS CARRIED FORWARD, and this is the difference between
+		// a declaration and a transcript of the last command line. A restore only
+		// happens when the cluster is CREATED; every re-run after it is flagless, so
+		// a wholesale spec replacement would write restored=false over an instance
+		// whose databases genuinely did come from an archive — quietly, on a green
+		// run. The API server refuses the write too; this is what stops dcctl
+		// attempting it.
+		if existing.Spec.Restored && !spec.Restored {
+			spec.Restored = true
+			spec.RestoredAt = existing.Spec.RestoredAt
+		}
 	}
-	inst.Annotations[dcv1beta1.AnnotationLastAppliedBy] = dcctlVersion
-	inst.Annotations[dcv1beta1.AnnotationLastAppliedAt] = time.Now().UTC().Format(time.RFC3339)
+	inst.Spec = spec
+	applyProvenance(inst, dcctlVersion)
 
 	obj, err := instanceToUnstructured(inst)
 	if err != nil {
@@ -228,4 +288,18 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 		return fmt.Errorf("updating the instance declaration %q: %w", id, err)
 	}
 	return nil
+}
+
+// applyProvenance stamps who wrote this declaration and when, leaving every other
+// annotation alone.
+//
+// A named function rather than four inline lines so the set it writes can be
+// asserted on: annotations are published with the object and sit outside the
+// closed-list checks that cover the spec.
+func applyProvenance(inst *dcv1beta1.Instance, dcctlVersion string) {
+	if inst.Annotations == nil {
+		inst.Annotations = map[string]string{}
+	}
+	inst.Annotations[dcv1beta1.AnnotationLastAppliedBy] = dcctlVersion
+	inst.Annotations[dcv1beta1.AnnotationLastAppliedAt] = time.Now().UTC().Format(time.RFC3339)
 }
