@@ -1216,8 +1216,12 @@ database. The drill would read its verdict out of a database this rig did not
 choose. Free the port, or set DC_DR_PG_PORT to one that is free, and re-run."
 }
 
+# $@ are extra flags handed to `drdrill verify`. Only the negative control passes
+# any: --secret-area-refused, because the area that stores the secret is expected
+# not to be serving there. See checkRestoredWithoutSecretArea in the tool.
 run_verify() {
   local rc=0 waited=0
+  local extra=("$@")
   # Read the credentials FIRST, and CHECK THEM. Neither half is optional.
   #
   # 🔴 `set -e` does not protect this, and a comment here used to claim it did.
@@ -1287,7 +1291,7 @@ testing nothing."
     timeout --kill-after=10 300 "$drdrill" verify --receipt "$receipt_file" \
     --db-host 127.0.0.1 --db-port "$pg_local_port" \
     --db-user "$user" \
-    --server "$api_server" --scheme "$api_scheme" || rc=$?
+    --server "$api_server" --scheme "$api_scheme" "${extra[@]+"${extra[@]}"}" || rc=$?
 
   stop_port_forward
 
@@ -1630,7 +1634,20 @@ rig does not know about. Nothing below would be evidence."
 
   say "NEGATIVE CONTROL, LEG TWO — the same archive, recovered under a different root key"
   local rc=0
-  run_verify || rc=$?
+  # 🔴 --secret-area-refused, and it is NOT "skip the API check".
+  #
+  # `verify`'s ordinary precheck asks notification-management whether the channel is
+  # back. In this phase that area has refused to start — which is the very thing leg
+  # one just asserted — so the question cannot be answered, and a live run died here
+  # on a wrong-reason setup failure rather than on the key.
+  #
+  # The flag swaps that premise for a harder pair: the seeded identity must log in to
+  # user-management and still hold this run's tenant membership (so the relational
+  # restore demonstrably landed, on rows THIS run wrote), and the secret-storing area
+  # must NOT answer. Passing it against a healthy instance fails; passing it against
+  # an instance that restored nothing fails. It cannot be used to delete the check,
+  # which is what happened to the --skip-api flag that used to exist.
+  run_verify --secret-area-refused || rc=$?
 
   case "$rc" in
     "$DRDRILL_EXIT_OK")
