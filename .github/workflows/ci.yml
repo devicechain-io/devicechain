@@ -1439,29 +1439,32 @@ jobs:
 
           KEY="$(openssl rand -base64 32)"
           SUM="$(printf inline | sha256sum | cut -d' ' -f1)"
-          NAME="--set instance.existingSecret=dci-devicechain-config"
+          # Arrays, not strings: these hold several arguments each, and a bare
+          # "$EXT" would pass them to helm as one word while an unquoted $EXT
+          # relies on word-splitting (which shellcheck rightly refuses).
+          NAME=(--set instance.existingSecret=dci-devicechain-config)
           # natsBrokerHost is the PodMonitor's own restate-value. It rides along in
           # EXT so that each case below fails for the reason it names, rather than
           # for the first unrelated gate the external path happens to trip.
-          EXT="$NAME --set metrics.natsBrokerHost=dc-nats.dc-system"
+          EXT=("${NAME[@]}" --set metrics.natsBrokerHost=dc-nats.dc-system)
 
           refuses "no root key" "rootKey is required"
           refuses "external, renamed Secret" "must be named" \
             --set instance.existingSecret=somewhere-else \
             --set instance.existingSecretChecksum="$SUM" \
             --set metrics.natsBrokerHost=dc-nats.dc-system
-          refuses "external, no checksum" "existingSecretChecksum must be set" $EXT
+          refuses "external, no checksum" "existingSecretChecksum must be set" "${EXT[@]}"
           refuses "external, malformed checksum" "must be a sha256 digest" \
-            --skip-schema-validation $EXT \
+            --skip-schema-validation "${EXT[@]}" \
             --set-string instance.existingSecretChecksum=notadigest
           refuses "external, PodMonitor host not restated" "natsBrokerHost set" \
-            $NAME --set instance.existingSecretChecksum="$SUM"
+            "${NAME[@]}" --set instance.existingSecretChecksum="$SUM"
           refuses "hand-set shutdown block" "set by the chart, not by hand" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set instance.config.infrastructure.shutdown.drainSeconds=9
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
-          renders "external config" $EXT --set instance.existingSecretChecksum="$SUM"
+          renders "external config" "${EXT[@]}" --set instance.existingSecretChecksum="$SUM"
 
       - name: cnpg-cluster chart
         # The database-store chart (ADR-020 A2.3). It lives under the OpenTofu
