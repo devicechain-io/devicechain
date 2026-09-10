@@ -1085,8 +1085,13 @@ healthy publisher; drops climbing while requests stay flat points at the broker 
 #### The published packages
 
 The **.NET/Unity SDK carries the command-nonce change** described above; upgrading it is how a
-device built on it keeps answering commands. `@devicechain/client`, `@devicechain/dashboards`,
-`@devicechain/widgets` and `@devicechain/brand` have no source changes in this release.
+device built on it keeps answering commands.
+
+`@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets` and `@devicechain/brand`
+have no source changes in this release. One thing to know if you install `@devicechain/widgets`
+yourself: its **`maplibre-gl` peer range moves from `^6.6.0` to `^6.7.0`**. If you pin maplibre-gl
+at 6.6.x you will see an unmet-peer warning, or an install failure under a package manager that
+enforces peers strictly. Nothing else about the packages changed.
 
 ### The one-time durable-ingest cutover
 

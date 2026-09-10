@@ -1154,8 +1154,13 @@ descartes que suben mientras las solicitudes siguen planas apunta a la conexión
 
 El **SDK de .NET/Unity incorpora el cambio del nonce de comando** descrito arriba; actualizarlo es
 la forma de que un dispositivo construido sobre él siga respondiendo a comandos.
+
 `@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets` y `@devicechain/brand` no
-tienen cambios de código en esta versión.
+tienen cambios de código en esta versión. Una cosa que conviene saber si instala
+`@devicechain/widgets` por su cuenta: su **rango de dependencia par `maplibre-gl` pasa de `^6.6.0`
+a `^6.7.0`**. Si fija maplibre-gl en 6.6.x verá un aviso de dependencia par no satisfecha, o un
+fallo de instalación con un gestor de paquetes que las exija estrictamente. Nada más cambió en los
+paquetes.
 
 ### La transición única a la ingesta duradera
 
