@@ -387,6 +387,18 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
+		// Settle which images this run deploys, here and now — before EnsureCluster,
+		// for the same reason the escrow and restore plans are settled above. A dcctl
+		// with no pinned image version can never complete a published-image bootstrap,
+		// and it used to learn that after spinning up a kind cluster to hold the run.
+		// It also has to be settled before the pipeline, whose first two steps both
+		// consume it now. See bootstrap.ResolveImageSource.
+		img, err := bootstrap.ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, opts.BuildImages)
+		if err != nil {
+			return err
+		}
+		opts.ImageRegistry, opts.ImageVersion = img.Registry, img.Version
+
 		ctx := cmd.Context()
 		// EnsureCluster resolves WHICH CLUSTER we should target, not merely how to reach
 		// it — see bootstrap.ClusterBinding.

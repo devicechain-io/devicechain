@@ -377,19 +377,29 @@ func nodes(ready, cordoned, tainted int) []corev1.Node {
 // tofu and apply infrastructure. A version of this test that relied on the real
 // apply failing would, the moment someone deleted the guard, have CI run a live
 // `tofu apply` against a nonexistent context to prove a point.
+//
+// 🔴 WHAT IT READS CHANGED, AND THE SEAM DID NOT. The guard used to FAIL a dry
+// run that could not reach the cluster, and this test read that failure as proof
+// the step had called it. That was the same defect wearing a useful hat: a dry
+// run does not create a cluster, so `--ha --dry-run` before the cluster exists —
+// the rehearsal's best case — died with a connection error instead of printing a
+// plan. Being unable to READ is now a warning on a dry run and fatal on a real
+// one (see checkHaNodeCapacity), so the wiring is proved by the warning the step
+// prints rather than by the run it kills. The counting result is still fatal on
+// both paths; only the "could not look" branch differs.
 func TestInfraApplyConsultsTheNodeGuard(t *testing.T) {
 	st := haState(true)
 	st.KubeContext = "definitely-not-a-real-kube-context"
 	st.DryRun = true
 
-	err := stepInfraApply(t.Context(), st)
-	if err == nil {
-		t.Fatal("stepInfraApply proceeded with --ha without consulting the node-capacity " +
-			"guard: an undersized cluster would be discovered as a helm timeout instead")
+	var err error
+	out := captureOutput(t, func() { err = stepInfraApply(t.Context(), st) })
+	if err != nil {
+		t.Fatalf("the dry run failed instead of reporting what it could not check: %v", err)
 	}
-	if !strings.Contains(err.Error(), "--ha topology") {
-		t.Fatalf("stepInfraApply failed for some other reason than the HA guard, so this "+
-			"proves nothing about the wiring: %v", err)
+	if !strings.Contains(out, "--ha topology") {
+		t.Fatalf("stepInfraApply reached the tofu plan without consulting the node-capacity "+
+			"guard: an undersized cluster would be discovered as a helm timeout instead.\nOutput:\n%s", out)
 	}
 }
 

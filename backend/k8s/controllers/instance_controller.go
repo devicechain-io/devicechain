@@ -48,6 +48,21 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // SetupWithManager wires the controller to reconcile on Instance changes.
+//
+// 🔴 NOTHING REGISTERED HERE MAY WATCH A CRD THE BOOTSTRAP INSTALLS LATER, and
+// that constraint is newer than it looks. The operator used to be installed
+// after the infrastructure apply, so CloudNativePG's CRDs were already present
+// by the time this ran; ADR-080 moves the operator to the FRONT of the pipeline
+// so the Instance CRD exists before anything declares an instance, which means
+// this now runs at a moment when CNPG, cert-manager and the monitoring stack do
+// not exist yet.
+//
+// A Watches/Owns source registered against a missing CRD does not degrade — the
+// informer never syncs, the manager's cache-sync deadline expires, and the whole
+// controller exits. Observed state for a resource that may be absent is read by
+// an unstructured Get on a requeue instead, where "the CRD is not installed"
+// (meta.IsNoMatchError) and "the object is not there" are two different answers
+// and neither is health. restore.go:273-282 in the CLI is the worked example.
 func (r *InstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1beta1.Instance{}).

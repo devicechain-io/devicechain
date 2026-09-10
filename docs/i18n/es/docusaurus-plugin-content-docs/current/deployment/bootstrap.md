@@ -46,7 +46,13 @@ datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de h
 instancia que parece perfectamente sana y no tiene ningún dato.
 :::
 
-1. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
+1. **Instalar el núcleo (core)** — renderiza el operador (CRDs + RBAC +
+   controlador) y lo aplica directamente con la API de Kubernetes. Va primero
+   porque la definición de una instancia debe existir en el clúster antes de que
+   nada pueda describirle una. En la ruta de desarrollo `--build`, el registro
+   local se prepara justo antes de este paso, ya que la imagen del propio operador
+   es una de las que esa ruta construye.
+2. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
    el perfil y todas las credenciales generadas: el material de autenticación del
    bróker (la contraseña de servicio compartida y la clave del emisor del callout),
    el secreto de autenticación entre servicios y la **clave raíz del almacén de
@@ -58,15 +64,13 @@ instancia que parece perfectamente sana y no tiene ningún dato.
    ejecución interrumpida a mitad de camino se retome con solo volver a ejecutarla.
    Además, la clave raíz se deposita en un archivo cifrado que tú conservas; consulta
    [Recuperación ante desastres](./disaster-recovery.md).
-2. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
+3. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
    OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
    cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud,
    y el almacén de objetos al que ese plugin archiva)
    vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
    El estado se guarda en `~/.devicechain/<instance>/infra`, de modo que las
    ejecuciones posteriores son incrementales.
-3. **Instalar el núcleo (core)** — renderiza el operador (CRDs + RBAC +
-   controlador) y lo aplica directamente con la API de Kubernetes.
 4. **Instalar la instancia** — despliega el chart de Helm vía el SDK de Helm para
    Go, bloqueando hasta que las cargas de trabajo estén listas.
 5. **Sembrar (seed) e informar** — la credencial de superusuario se siembra

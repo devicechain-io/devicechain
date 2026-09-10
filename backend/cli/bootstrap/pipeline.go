@@ -153,16 +153,118 @@ func (p Pipeline) Run(ctx context.Context, st *State) error {
 // GreenUnderline mirrors the cmd package house style for section headers.
 var GreenUnderline = color.New(color.Underline, color.FgHiGreen).SprintFunc()
 
-// NewDefaultPipeline returns the MVP Phase-B steps in execution order.
+// NewDefaultPipeline returns the bootstrap steps in execution order.
+//
+// 🔴 THE ORDER IS THE DESIGN, AND THREE OF ITS EDGES ARE LOAD-BEARING (ADR-080).
+// EnsureCluster runs before all of this, in the command layer, so every step
+// below may assume a reachable cluster.
+//
+//  1. The CRDs and the operator go in FIRST, ahead of the infrastructure apply
+//     they used to follow. An instance is declared in the cluster now, so the
+//     Instance CRD has to exist before anything can write the declaration — and
+//     the thing that writes it is the next step. Nothing blocks the move: the
+//     operator overlay creates its own namespace, its webhook/cert-manager
+//     patches are not enabled, and it consumes nothing OpenTofu produces.
+//
+//  2. The local registry goes in AHEAD of that, which is the one place this
+//     order departs from the sequence ADR-080 wrote down. Installing the
+//     operator means applying a Deployment that names an image, and on the
+//     --build path stepLocalRegistry is what builds and pushes that image. Put
+//     the operator first and a developer bootstrap installs a Deployment
+//     pointing at a registry that does not exist yet: it recovers on its own
+//     once the push lands, but only after a pull-backoff long enough to look
+//     like a broken install. Registry-first costs nothing — it needs only the
+//     cluster — and the CRD still lands before the claim.
+//
+//  3. Render still precedes the infrastructure apply, because the broker
+//     credentials it mints must be recorded before OpenTofu configures the
+//     broker with them (see broker_record.go, and the test that pins it).
+//
+// The image source is settled before any of this, in the command layer — see
+// ResolveImageSource. Steps 1 and 2 both consume it, and neither can wait for
+// the render step to fill it in.
 func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
-		{Name: "Render configuration", Run: stepRenderConfig},
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
-		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install core components", Run: stepInstallCore},
+		{Name: "Render configuration", Run: stepRenderConfig},
+		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install instance (Helm)", Run: stepHelmInstall},
 		{Name: "Seed admin credential", Run: stepSeedAdmin},
 		{Name: "Wait for readiness", Run: stepWaitReady},
 		{Name: "Report access info", Run: stepReport},
 	}}
+}
+
+// ImageSource is the settled answer to "which images does this run deploy" —
+// where they are pulled from, at what tag, and how to say so in a report.
+type ImageSource struct {
+	Registry string
+	Version  string
+	// Label is the human-readable form the access report prints.
+	Label string
+}
+
+// ResolveImageSource settles the image source from argv alone: published images
+// at a pinned tag, or a local registry fed by --build.
+//
+// 🔴 IT RUNS IN THE COMMAND LAYER, BEFORE ANY CLUSTER EXISTS, for the same
+// reason ResolveEscrowPlan and ResolveRestorePlan do — every way it can be wrong
+// is knowable from argv, and the way that matters (a dcctl build carrying no
+// pinned image version) used to surface only after EnsureCluster had spun a kind
+// cluster up to hold the run that was never going to work.
+//
+// It also has to be settled before the first step that CONSUMES it, and after
+// the ADR-080 reorder that is no longer the render step: the operator Deployment
+// installed by stepInstallCore names an image, and stepLocalRegistry is what
+// builds and pushes that image on the --build path. Both now run ahead of
+// stepRenderConfig, which is where this used to live.
+//
+// Idempotent, and deliberately so: re-resolving an already-settled pair returns
+// it unchanged, which is what lets stepRenderConfig keep calling it for the
+// label without needing to know whether the command layer got there first.
+func ResolveImageSource(registry, version string, build bool) (ImageSource, error) {
+	if registry == "" {
+		if build {
+			registry = LocalRegistry
+		} else {
+			registry = DefaultImageRegistry
+		}
+	}
+	if version == "" {
+		if build {
+			version = "dev"
+		} else {
+			version = DefaultImageVersion
+		}
+	}
+	// Deploying an image tag that was never published fails as an
+	// ImagePullBackOff on every workload, several minutes into a run that looked
+	// healthy — so reject it here, where we can say why.
+	if !build && IsUnpublishedImageVersion(version) {
+		return ImageSource{}, fmt.Errorf(
+			"this dcctl build has no pinned image version (%q is not a published tag); deploy a tagged release with --version <tag>, or build from source with --build",
+			version)
+	}
+
+	label := fmt.Sprintf("%s/<area>:%s (published)", registry, version)
+	if build {
+		label = fmt.Sprintf("built from source → %s/<area>:%s", registry, version)
+	}
+	return ImageSource{Registry: registry, Version: version, Label: label}, nil
+}
+
+// requireResolvedImages is the fail-loud half of the rule above. A step that
+// deploys an image reference must never build one out of an empty registry or
+// tag: "/operator:" is a syntactically valid reference that pulls nothing, so
+// the run would proceed and die minutes later as an ImagePullBackOff naming an
+// image nobody asked for. The steps that need this all run before the render
+// step now, so "the render step will have filled it in" is no longer true.
+func requireResolvedImages(st *State, what string) error {
+	if st.ImageRegistry == "" || st.ImageVersion == "" {
+		return fmt.Errorf(
+			"%s needs a settled image source and has none (registry %q, version %q); "+
+				"ResolveImageSource must run before the pipeline", what, st.ImageRegistry, st.ImageVersion)
+	}
+	return nil
 }

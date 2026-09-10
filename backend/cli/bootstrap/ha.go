@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -192,18 +193,36 @@ func (h haTopology) summary() string {
 // asked for" is the single most useful thing a dry run can say about --ha. A
 // dry-run that cheerfully describes an install which could never schedule is
 // describing something that will not happen.
+//
+// 🔴 BUT IT IS BEST-EFFORT ON A DRY RUN, AND ONLY THERE. A dry run does not
+// create a cluster — EnsureCluster returns a binding and stops (local.go) — so
+// `bootstrap local x --ha --dry-run` on a machine with no cluster reached this
+// check, failed to connect, and died with a connection error instead of printing
+// the plan. That is the rehearsal breaking for the case it serves best: the run
+// before the cluster exists. The asymmetry is the same one readLiveArchiveState
+// draws two files over, for the same reason — being unable to READ costs nothing
+// when nothing will be applied. The COUNTING result is still fatal on a dry run:
+// if the cluster answers and cannot host the topology, that is the finding.
 func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	ha := haFor(st.HA)
 	if !ha.Replicated() {
 		return nil
 	}
+	unreachable := func(err error) error {
+		if st.DryRun {
+			fmt.Println(color.YellowString(
+				"  could not check whether this cluster can host the --ha topology (%v); the plan below assumes it can.", err))
+			return nil
+		}
+		return err
+	}
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
-		return fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err)
+		return unreachable(fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err))
 	}
 	nodes, err := typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err)
+		return unreachable(fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err))
 	}
 	return schedulableShortfall(ha, nodes.Items)
 }
