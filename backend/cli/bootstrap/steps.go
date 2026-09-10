@@ -236,8 +236,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		notes = append(notes, "NATS broker credentials reused from the running instance")
 	default:
 		// NO DEPLOYED INSTANCE — WHICH IS NOT THE SAME AS NO DEPLOYED BROKER. The
-		// lookup above reads the instance chart's config, written in step 5, while the
-		// BROKER is configured in step 3. A run that died between them left a live
+		// lookup above reads the instance chart's config, written by the chart install,
+		// while the BROKER is configured by the infrastructure apply — two steps earlier.
+		// A run that died between them left a live
 		// broker whose credentials this branch would happily rotate out from under it,
 		// permanently, because nothing the cluster still holds can be turned back into
 		// the seed and plaintexts. broker_record.go is the bridge, and this is the only
@@ -252,7 +253,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// 🔴 A RECORD THAT DOES NOT WORK IS A RECORD THAT IS NOT THERE. readBrokerRecord
 			// screens shape, not cryptography: a hand-edited file can carry a non-empty seed
 			// that is not a valid nkey, and CredentialsFromDeployed rejects it on the CRC.
-			// Returning that error would be a bootstrap that fails at step 1 where it used to
+			// Returning that error would be a bootstrap that fails in the render step where it used to
 			// succeed — the standing objection to adding this read at all — so it falls
 			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
 			// broker's next roll; a refused run does not converge on anything.
@@ -297,7 +298,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	//
 	// Failing the run on a write error is deliberate and costs nothing: the directory is
 	// the one OpenTofu is about to write its state into, so a run that cannot write here
-	// was going to die at step 3 anyway, later and with a worse message.
+	// was going to die at the infrastructure apply anyway, later and with a worse message.
 	if st.DryRun {
 		// 🔑 REPORTED, NOT USED, AND WORDED FOR WHAT A REHEARSAL CAN ACTUALLY KNOW. A dry run
 		// skips the deployed-instance lookup, so it cannot tell which of the two sources a
@@ -405,7 +406,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		case st.DryRun:
 			// A dry run must predict the same outcome the real run produces, so it
 			// checks the destination rather than assuming it is free. Reporting a clean
-			// plan for a run that dies at step 1 is the defect this whole line exists
+			// plan for a run that dies in the render step is the defect this whole line exists
 			// to avoid.
 			if _, statErr := os.Stat(st.Escrow.Path); statErr == nil {
 				notes = append(notes, fmt.Sprintf(
@@ -462,35 +463,18 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		st.Values["grafanaOAuthSecretBcrypt"] = string(hash)
 	}
 
-	// Resolve the image source. Default to published images at a pinned version;
-	// the developer path builds from source into a local registry instead.
-	if st.ImageRegistry == "" {
-		if st.BuildImages {
-			st.ImageRegistry = LocalRegistry
-		} else {
-			st.ImageRegistry = DefaultImageRegistry
-		}
+	// Re-settle the image source. The command layer resolves this before the
+	// cluster exists and the two steps ahead of this one consume it, so on the
+	// bootstrap path the call below is a no-op that recomputes the label. It stays
+	// here because it is idempotent and because a State assembled by anything
+	// other than the bootstrap command still gets a sane answer rather than an
+	// empty registry. See ResolveImageSource.
+	img, err := ResolveImageSource(st.ImageRegistry, st.ImageVersion, st.BuildImages)
+	if err != nil {
+		return fail("resolving image source", err)
 	}
-	if st.ImageVersion == "" {
-		if st.BuildImages {
-			st.ImageVersion = "dev"
-		} else {
-			st.ImageVersion = DefaultImageVersion
-		}
-	}
-	// Deploying an image tag that was never published fails as an
-	// ImagePullBackOff on every workload, several minutes into a run that looked
-	// healthy — so reject it here, where we can say why.
-	if !st.BuildImages && IsUnpublishedImageVersion(st.ImageVersion) {
-		return fail("resolving image source", fmt.Errorf(
-			"this dcctl build has no pinned image version (%q is not a published tag); deploy a tagged release with --version <tag>, or build from source with --build",
-			st.ImageVersion))
-	}
-
-	imageSource := fmt.Sprintf("%s/<area>:%s (published)", st.ImageRegistry, st.ImageVersion)
-	if st.BuildImages {
-		imageSource = fmt.Sprintf("built from source → %s/<area>:%s", st.ImageRegistry, st.ImageVersion)
-	}
+	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+	imageSource := img.Label
 
 	st.Values["instance"] = st.Instance
 	st.Values["namespace"] = namespace
@@ -549,6 +533,9 @@ func stepLocalRegistry(ctx context.Context, st *State) error {
 		doing("local image registry")
 		fmt.Println(color.GreenString("not needed (using published images)."))
 		return nil
+	}
+	if err := requireResolvedImages(st, "building images from source"); err != nil {
+		return err
 	}
 
 	if st.DryRun {
@@ -775,6 +762,9 @@ func stepInfraApply(ctx context.Context, st *State) error {
 // The manifests are rendered in-process from manifests embedded in the binary —
 // no source checkout or kubectl/kustomize binary required.
 func stepInstallCore(ctx context.Context, st *State) error {
+	if err := requireResolvedImages(st, "installing the operator"); err != nil {
+		return err
+	}
 	operatorImage := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
 	doing("installing core components (CRDs + operator)")
 	if st.DryRun {

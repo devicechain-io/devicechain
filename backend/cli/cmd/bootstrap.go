@@ -387,6 +387,18 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
+		// Settle which images this run deploys, here and now — before EnsureCluster,
+		// for the same reason the escrow and restore plans are settled above. A dcctl
+		// with no pinned image version can never complete a published-image bootstrap,
+		// and it used to learn that after spinning up a kind cluster to hold the run.
+		// It also has to be settled before the pipeline, whose first two steps both
+		// consume it now. See bootstrap.ResolveImageSource.
+		img, err := bootstrap.ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, opts.BuildImages)
+		if err != nil {
+			return err
+		}
+		opts.ImageRegistry, opts.ImageVersion = img.Registry, img.Version
+
 		ctx := cmd.Context()
 		// EnsureCluster resolves WHICH CLUSTER we should target, not merely how to reach
 		// it — see bootstrap.ClusterBinding.
@@ -399,7 +411,7 @@ var bootstrapCmd = &cobra.Command{
 		// the instance name and the cluster it was resolved to are both in hand; every
 		// later command used to re-derive the second from the first, and that derivation
 		// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
-		// the pipeline is deliberate: a bootstrap that dies at step 4 has still created a
+		// the pipeline is deliberate: a bootstrap that dies partway through has still created a
 		// cluster, and an instance that cannot be destroyed because its record was never
 		// written would be the same orphan this record exists to prevent.
 		//

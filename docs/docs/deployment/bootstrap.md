@@ -43,7 +43,12 @@ the point: without it the old database would be removed and a new, empty one wou
 the same hostname, leaving an instance that looks perfectly healthy and has no data in it.
 :::
 
-1. **Render configuration** — resolve the instance id, namespace, profile, and every
+1. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
+   with the Kubernetes API directly. It runs first because the definition of an
+   instance has to exist in the cluster before anything can describe one to it. On
+   the `--build` developer path the local registry is prepared immediately before
+   this, since the operator's own image is one of the images that path builds.
+2. **Render configuration** — resolve the instance id, namespace, profile, and every
    generated credential: the broker-auth material (the shared service password and
    the callout issuer key), the cross-service auth secret, and the **secret-store
    root key**. All of them are minted on a first install and **reused as-is when the
@@ -54,14 +59,12 @@ the same hostname, leaving an instance that looks perfectly healthy and has no d
    through can be resumed by simply running it again. The root key is additionally
    escrowed to an encrypted file you keep; see
    [Disaster Recovery](./disaster-recovery.md).
-2. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
+3. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
    operator and its Barman Cloud backup plugin, and the object store the backup
    plugin archives to) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
-3. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
-   with the Kubernetes API directly.
 4. **Install the instance** — deploy the Helm chart via the Helm Go SDK, blocking
    until the workloads are ready.
 5. **Seed & report** — the superuser credential is seeded automatically by the
@@ -143,7 +146,7 @@ pipeline, chart, and operator are identical.
 | `--compact` | Small-footprint preset — see below. |
 | `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the infra apply fails without this. |
-| `--dry-run` | Print what each step would do without changing anything. |
+| `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
 | `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |

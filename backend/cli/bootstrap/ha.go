@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -192,20 +193,58 @@ func (h haTopology) summary() string {
 // asked for" is the single most useful thing a dry run can say about --ha. A
 // dry-run that cheerfully describes an install which could never schedule is
 // describing something that will not happen.
+//
+// 🔴 BUT IT IS BEST-EFFORT ON A DRY RUN, AND ONLY THERE. A dry run does not
+// create a cluster — EnsureCluster returns a binding and stops (local.go) — so
+// `bootstrap local x --ha --dry-run` on a machine with no cluster reached this
+// check, failed to connect, and died with a connection error instead of printing
+// the plan. That is the rehearsal breaking for the case it serves best: the run
+// before the cluster exists. The asymmetry is the same one readLiveArchiveState
+// draws two files over, for the same reason — being unable to READ costs nothing
+// when nothing will be applied. The COUNTING result is still fatal on a dry run:
+// if the cluster answers and cannot host the topology, that is the finding.
 func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	ha := haFor(st.HA)
 	if !ha.Replicated() {
 		return nil
 	}
-	_, _, typed, err := kubeClients(st.KubeContext)
+	unreachable := func(err error) error {
+		if st.DryRun {
+			fmt.Println(color.YellowString(
+				"  could not check whether this cluster can host the --ha topology (%v); the plan below assumes it can.", err))
+			return nil
+		}
+		return err
+	}
+	nodes, err := listNodes(ctx, st.KubeContext)
 	if err != nil {
-		return fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err)
+		return unreachable(err)
+	}
+	// 🔴 OUTSIDE unreachable(), AND A TEST HOLDS THAT LINE. The dry-run softening
+	// above applies to being unable to LOOK, never to what was seen: a cluster
+	// that answers and cannot host the topology is the finding, on both paths.
+	// Wrapping this call in unreachable() too is a one-token edit that silently
+	// passes an undersized cluster on a dry run, and it SURVIVED the package's
+	// whole test suite when a reviewer tried it — because the only way to reach
+	// this line was against a real cluster. Hence listNodes.
+	return schedulableShortfall(ha, nodes)
+}
+
+// listNodes reads the cluster's nodes. A variable rather than an inline call so
+// the counting rule above can be reached without a cluster: the seam is the same
+// one lookupDeployedInstance and readLiveArchiveState already use, and it exists
+// for the same reason — the branch on the far side of the API call is the one
+// worth testing.
+var listNodes = func(ctx context.Context, kubeContext string) ([]corev1.Node, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err)
 	}
 	nodes, err := typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err)
+		return nil, fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err)
 	}
-	return schedulableShortfall(ha, nodes.Items)
+	return nodes.Items, nil
 }
 
 // schedulableShortfall is the counting rule, split from the cluster access above

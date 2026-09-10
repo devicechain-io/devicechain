@@ -161,29 +161,31 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 // watching, leaving the cluster on the old operator while this command reported
 // success. Refusing here is the difference between a failed upgrade and a silent
 // one.
+//
+// 🔴 IT DELEGATES RATHER THAN REPEATING. This function and ResolveImageSource
+// applied the same rules from two bodies, and they had already drifted: the
+// empty-version check documented below existed only here, so the bootstrap path
+// accepted a broken ldflags stamp that this path refused. Two resolvers that must
+// agree are one resolver with two callers. What stays here is the MESSAGE, which
+// is genuinely different — an upgrade names the release it is upgrading TO.
 func resolveOperatorImageSource(opts Options) (registry, version string, err error) {
-	registry, version = opts.ImageRegistry, opts.ImageVersion
-	if registry == "" {
-		registry = DefaultImageRegistry
-	}
-	if version == "" {
-		version = DefaultImageVersion
-	}
-	// The empty check is not defensive padding: `version` reaches here empty only
-	// if DefaultImageVersion is itself empty, which is what a broken ldflags stamp
-	// produces — and IsUnpublishedImageVersion does NOT catch it, because "" is
-	// neither "dev" nor a dev stamp. Without this the command renders
-	// "…/operator:" with no tag at all, which Kubernetes reads as :latest.
-	if version == "" || IsUnpublishedImageVersion(version) {
+	// upgrade never builds from source: it deploys a published operator image, or
+	// one the caller names with --registry/--version.
+	img, rerr := ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, false)
+	if rerr != nil {
 		// fmt.Errorf, not fail(): fail() prints a red "failed." meant to close out
 		// an in-flight doing() line, and nothing has been started yet here. It
 		// rendered a bare "failed." above the message with no step to attach to.
+		version = opts.ImageVersion
+		if version == "" {
+			version = DefaultImageVersion
+		}
 		return "", "", fmt.Errorf(
 			"resolving the operator image: this dcctl build has no pinned image version "+
 				"(%q names no published image); pass --version <tag> to name the release you are "+
 				"upgrading to, or --registry/--version together to point at images you built yourself", version)
 	}
-	return registry, version, nil
+	return img.Registry, img.Version, nil
 }
 
 // deploymentRef names one Deployment in the rendered stream.
