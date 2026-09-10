@@ -846,9 +846,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			runLeadership(lctx, lease)
 		}()
 	} else if inertServer != nil {
-		inertStop = superviseServe(inertServer, func(err error) {
-			log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
-		})
+		inertStop = superviseInertTransport(inertServer)
 	}
 	// NO VALIDATOR, DELIBERATELY. This service's HTTP surface is /healthz, /readyz and
 	// /metrics; devices authenticate at DTLS-PSK and nothing here verifies a JWT, so there
@@ -857,6 +855,29 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	Microservice.MarkReadyWithoutAuthSurface()
 
 	return startHttpServer(httpPort)
+}
+
+// superviseInertTransport supervises the always-on health-only transport of an identity-less
+// deployment, returning the stop function that records serve intent for the shutdown path.
+//
+// The inert transport takes NO lease, so unlike a leadership term nothing here has to be released
+// before the process ends — but a dead transport still has to END the pod. Left unsupervised, an
+// inert pod whose socket died would sit Ready and answer no probe, with nothing restarting it. It
+// routes through failProcess rather than log.Fatal for the reason failProcess documents: log.Fatal
+// is an immediate os.Exit that skips the readiness drain and the HTTP server's shutdown, severing
+// whatever probe or scrape was in flight. failProcess is off-goroutine for the same reason as the
+// leadership fuse — beforeMicroserviceStopped calls inertStop, which waits on the very serve
+// goroutine that would otherwise be parked inside FailNow.
+//
+// 🔴 It is a named function rather than a closure inline above so a test can drive the wiring
+// ITSELF, for the reason registerHttpRoutes gives: a test that hand-built the same closure would
+// be asserting against its own copy, and would keep passing if this call were dropped. The
+// uncovered remainder is one line — that the starter assigns inertStop from this — because
+// reaching that line needs a bound listener on the fixed service port.
+func superviseInertTransport(srv serveServer) func() {
+	return superviseServe(srv, func(err error) {
+		failProcess(transportDeathError(err))
+	})
 }
 
 // startHttpServer builds this service's HTTP server over the microservice's own mux
@@ -905,10 +926,12 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 			}
 			continue
 		}
-		// A false return means the term-build fuse has ended the process. Looping would
-		// re-Acquire the partition this pod has just released, on a replica that is
-		// shutting down and cannot serve it — taking it back from whichever standby was
-		// about to, for as long as the teardown runs.
+		// A false return means the term has ended the process — the term-build fuse blew, or
+		// this term's transport died. Looping would re-Acquire the partition this pod has
+		// just released, on a replica that is shutting down and cannot serve it — taking it
+		// back from whichever standby was about to, for as long as the teardown runs. Note
+		// that neither of those cancels ctx, so this return is the ONLY thing that stops the
+		// loop on either path.
 		if !serveAsLeader(ctx, held) {
 			return
 		}
@@ -916,8 +939,8 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 }
 
 // leaseTerm is the narrow slice of *messaging.Lease that a leadership term drives. It exists so
-// the term's teardown — in particular that the lease is RELEASED before the build fuse ends the
-// process — can be exercised deterministically by a unit test with a fake lease, the way
+// the term's teardown — in particular that the lease is RELEASED before either of the two paths
+// that end the process does so — can be exercised deterministically by a unit test with a fake lease, the way
 // serveServer below lets the serve supervision be tested with a fake transport.
 // *messaging.Lease satisfies it.
 type leaseTerm interface {
@@ -941,8 +964,11 @@ var buildTermFn = buildTerm
 // renewal (ADR-070 M4). The Server is built fresh here (it binds at construction, its Stop is
 // one-shot) and torn down on eviction, so only the leader ever holds the socket.
 //
-// It returns false when the acquire/serve/standby loop must NOT continue, which today means only
-// one thing: the term-build fuse has blown and the process is ending.
+// It returns false when the acquire/serve/standby loop must NOT continue. That means the term has
+// ENDED THE PROCESS, and there are two ways it can: the term-build fuse blew after
+// maxConsecutiveTermBuildFailures, or this term's transport died under it. Both release the lease
+// first and then hand the reason to failProcess; what the false says to the caller is not which of
+// them happened but that this replica is on its way out and must not take the partition again.
 func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired LwM2M leadership; building the transport and serving.")
 
@@ -1044,14 +1070,34 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 
 	// Serve this term's transport (after the dispatcher can accept wake drains). A Serve return while
 	// the term still intends to serve is a downed socket on the single serving replica — a total
-	// ingest outage a Ready pod would hide — so it is fatal. stopServing records intent so the
+	// ingest outage a Ready pod would hide — so it ends the pod. stopServing records intent so the
 	// eviction Stop below is graceful, not fatal.
+	//
+	// 🔴 onDeath DOES NOT END THE PROCESS WHERE IT STANDS, AND IT DOES NOT JUST RECORD EITHER.
+	// It runs on the serve goroutine, and this term still holds the partition, so both halves are
+	// needed:
+	//
+	//   - It CANCELS the term, because nothing else observes a Serve return. superviseServe reports
+	//     a death to onDeath and to no one else, and the line below is parked on leaderCtx — so
+	//     without the cancel this replica goes on holding the lease with a dead transport until
+	//     something else cancels it, which on the fuse path is FailNow's teardown, and that sleeps
+	//     the readiness drain window first. A leader serving nothing, reporting is_serving=1.
+	//   - It does NOT call failProcess, because failProcess must run AFTER the unwind below has
+	//     released the lease. Ending the process first leaves the entry in place for a full
+	//     DefaultLeaseTTL, and the replacement pod cannot Acquire for that whole window — on the
+	//     one exit path taken precisely because this pod can no longer serve.
+	// A plain send, not a guarded one: superviseServe calls onDeath AT MOST ONCE — one Serve, one
+	// goroutine, one intent check — so the buffer of one is never contended and this never blocks.
+	// That is the enforcer, not a convention: a select/default here would have to either describe a
+	// second call that cannot happen or silently drop it if the shape below ever changed.
+	transportDeath := make(chan error, 1)
 	stopServing := superviseServe(srv, func(err error) {
-		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
+		transportDeath <- err
+		cancel()
 	})
 	setServing(true) // the read loop is running: this replica is now both the leader AND live
 
-	<-leaderCtx.Done() // eviction (lease lost) or shutdown (parent ctx cancelled)
+	<-leaderCtx.Done() // eviction (lease lost), shutdown (parent ctx cancelled), or a transport death
 
 	setServing(false)
 	setLeader(false)
@@ -1059,8 +1105,47 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
+
+	// The lease is released; only now is it safe to end the process. Returning false stops the
+	// acquire loop for the same reason the term-build fuse does: left looping it would immediately
+	// re-Acquire the partition it has just released — the transport death has not cancelled the
+	// loop's own context, and FailNow's teardown does not reach that cancel until it has slept the
+	// drain window — taking the partition back from whichever standby had just picked it up, on a
+	// replica that is shutting down and whose transport is dead.
+	select {
+	case err := <-transportDeath:
+		failProcess(transportDeathError(err))
+		return false
+	default:
+	}
+
 	log.Info().Msg("Released LwM2M leadership; returning to standby.")
 	return true
+}
+
+// transportDeathError says why the pod is going away when the CoAP/DTLS transport stops serving
+// while it was still meant to, wrapping the Serve error when there is one. It is worded for both
+// callers — a leadership term and the leaseless inert transport — because the verdict is the same
+// on both: this replica can no longer ingest. What differs is the ORDERING around it, and that is
+// enforced by where each caller puts the call, not by what the message says.
+//
+// 🔴 THE NIL CASE IS THE COMMON ONE, NOT AN EDGE CASE, and the wording matters because a reader
+// who assumes otherwise treats the wrapped branch as the message operators actually see. go-coap's
+// DTLS Serve returns nil on both of the ways a LIVE listener stops — the listener being closed,
+// and its context being cancelled — and continues its accept loop on every other accept error. So
+// a transport death that reaches here in production carries no error at all. The %w branch is
+// reachable only from Serve's two pre-loop checks (an invalid blockwise size, and a second Serve
+// on a server already serving), neither of which is a running transport dying.
+//
+// Formatting the two apart is therefore not tidiness: %w over a nil error wraps nothing and prints
+// %!w(<nil>), which would make the only message an operator ever sees the malformed one.
+func transportDeathError(err error) error {
+	const reason = "lwm2m-ingest: the CoAP/DTLS transport stopped serving and this replica can no " +
+		"longer ingest, so the pod exits to be replaced"
+	if err == nil {
+		return errors.New(reason + " (Serve returned without an error)")
+	}
+	return fmt.Errorf("%s: %w", reason, err)
 }
 
 // failProcess ends the process with a non-zero status, off this goroutine.
@@ -1143,15 +1228,22 @@ type serveServer interface {
 
 // superviseServe runs srv.Serve() on a goroutine and watches for its return. Until the returned
 // stopServing is called, a Serve return is treated as an unexpected transport death and onDeath
-// runs (production wires it to log.Fatal — a single serving replica whose socket dies is a total
-// ingest outage; the Serve error is passed through so the fatal log names the cause). stopServing
-// records serve intent, THEN Stops the transport, so the ensuing Serve return is recognised as
-// graceful and onDeath does not fire. This replaces a process-global "stopping" flag with
+// runs (production wires it to ending the pod — a single serving replica whose socket dies is a
+// total ingest outage; the Serve error is passed through so the exit names the cause).
+//
+// 🔴 onDeath IS THE ONLY REPORT OF A DEATH. Nothing here signals the caller — no channel it can
+// select on, no error from stopServing — so a caller that is parked on something else (the
+// leadership term is parked on its term context) learns about a dead transport if and only if
+// onDeath tells it. That is why serveAsLeader's onDeath cancels the term rather than only
+// recording the error.
+//
+// stopServing records serve intent, THEN Stops the transport, so the ensuing Serve return is
+// recognised as graceful and onDeath does not fire. This replaces a process-global "stopping" flag with
 // per-serve-term intent: a leadership eviction Stops the socket without killing the pod (the "fix
 // the shape, not the instance" case — any Stop outside shutdown is safe). The store happens-before
 // Stop, and Stop causes the Serve return, so the goroutine always reads intent=true on the graceful
 // path (no race); the only interleaving that fatals during a stop is a genuine socket death that
-// returned before intent was recorded, which is correctly fatal.
+// returned before intent was recorded, and ending the pod is the right answer to that.
 func superviseServe(srv serveServer, onDeath func(error)) (stopServing func()) {
 	var leaving atomic.Bool
 	done := make(chan struct{})
