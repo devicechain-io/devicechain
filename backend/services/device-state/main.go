@@ -217,14 +217,19 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
+	// Stop the GraphQL server before the NATS manager. This service has a mutation that
+	// publishes on the caller's own goroutine: DemoteAssertedPresence writes a synthetic
+	// presence event through InboundEventsWriter, which is a writer on this connection.
+	// Draining the HTTP server first is what keeps a demotion that is already in flight
+	// from failing on a connection that has begun to go away — and its failure is not a
+	// tidy one, since the caller is told no devices in that page were demoted.
+	err = GraphQLManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Stop graphql manager.
-	err = GraphQLManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}

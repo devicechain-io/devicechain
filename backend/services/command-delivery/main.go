@@ -452,14 +452,20 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
+	// Stop the GraphQL server before the NATS manager, so that the last mutation of a
+	// rolling restart finishes against a broker connection that is still whole rather
+	// than one that is already draining. Nothing in this service's GraphQL plane
+	// publishes on the caller's own goroutine today — CreateCommand's dispatch nudge
+	// hands the device to the processor's queue, and that processor is stopped above —
+	// but the enqueue path is the one that grows a publish, and the order that survives
+	// it costs nothing to hold now.
+	err = GraphQLManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Stop graphql manager.
-	err = GraphQLManager.Stop(ctx)
+	// Stop nats manager.
+	err = NatsManager.Stop(ctx)
 	if err != nil {
 		return err
 	}
