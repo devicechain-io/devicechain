@@ -42,6 +42,11 @@ type verifyOptions struct {
 
 	server string
 	scheme string
+
+	// secretAreaRefused says the area that STORES the secret is expected not to be
+	// serving, because it refused to start on a root key that does not open its
+	// stored ciphertext. Only the restore drill's negative control passes it.
+	secretAreaRefused bool
 }
 
 func runVerify(ctx context.Context, argv []string) error {
@@ -61,6 +66,9 @@ func runVerify(ctx context.Context, argv []string) error {
 	fs.StringVar(&o.sslMode, "db-sslmode", "prefer", "libpq sslmode for the database connection")
 	fs.StringVar(&o.server, "server", "localhost", "instance ingress host the API is reachable on")
 	fs.StringVar(&o.scheme, "scheme", "http", "http or https for the API check")
+	fs.BoolVar(&o.secretAreaRefused, "secret-area-refused", false,
+		"the secret-storing area is EXPECTED not to serve (it refused a wrong root key); "+
+			"swaps the API precheck for a stronger one — see checkRestoredWithoutSecretArea")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
@@ -91,14 +99,25 @@ func runVerify(ctx context.Context, argv []string) error {
 	// only remaining explanation is the key. Without it, a negative control could
 	// "fail at the decrypt" on an instance where nothing had been restored at all.
 	//
-	// There is deliberately no flag to skip it. One existed, and it was a way to
+	// There is deliberately no flag to SKIP it. One existed, and it was a way to
 	// silently delete the precheck without any assertion changing: the rig reads
 	// only the exit code, so a caller that passed --skip-api would still get a 3
 	// and still be told the control held.
-	if err := checkChannelVisible(ctx, o, receipt); err != nil {
-		return failWith(exitSetup, "%w", err)
+	//
+	// --secret-area-refused is not that flag, and the difference is the whole point.
+	// It does not remove the premise; it REPLACES it with one that is strictly
+	// harder to satisfy by accident, and that FAILS on a healthy instance. See
+	// checkRestoredWithoutSecretArea.
+	if o.secretAreaRefused {
+		if err := checkRestoredWithoutSecretArea(ctx, o, receipt); err != nil {
+			return failWith(exitSetup, "%w", err)
+		}
+	} else {
+		if err := checkChannelVisible(ctx, o, receipt); err != nil {
+			return failWith(exitSetup, "%w", err)
+		}
+		fmt.Printf("ok   the instance still lists channel %q, and reports it holds a secret\n", receipt.ChannelToken)
 	}
-	fmt.Printf("ok   the instance still lists channel %q, and reports it holds a secret\n", receipt.ChannelToken)
 
 	// CHECK 2 — the row decrypts under the root key this cluster carries.
 	db, err := openInstanceDB(ctx, o, receipt.Schema)
@@ -456,6 +475,129 @@ func checkChannelVisible(ctx context.Context, o verifyOptions, r Receipt) error 
 		return nil
 	}
 	return fmt.Errorf("the restored instance does not have channel %q — the relational restore did not land", r.ChannelToken)
+}
+
+// checkRestoredWithoutSecretArea is the API precheck for the one case where the
+// ordinary one cannot run: the area that STORES the secret has refused to start.
+//
+// 🔴 WHY THIS EXISTS AT ALL, because "the check could not run, so skip it" is the
+// exact reasoning this drill refuses everywhere else.
+//
+// A service that stores secrets checks its instance root key against its own stored
+// ciphertext as it builds the secret store, and refuses to start if the key does not
+// open it. That is correct, and it is the behaviour the negative control is trying to
+// provoke — but it also means notification-management cannot answer the ordinary
+// precheck's channel query in that phase. Not "is slow to", not "usually will not":
+// cannot, by design. A premise that is impossible to satisfy is not a premise, and
+// leaving it in place made the control die on a wrong-reason setup failure.
+//
+// So the premise is REPLACED, not dropped, and the replacement is asserted BOTH ways:
+//
+//  1. POSITIVE — the relational store really did restore, proved by logging in as the
+//     identity `seed` minted and finding this run's tenant among its memberships. That
+//     exercises identity, credential and membership rows written by THIS run, which is
+//     a stronger statement about the restore than "a channel is listed" was.
+//  2. NEGATIVE — the secret-storing area must NOT answer. If it does, the instance did
+//     not refuse, so whatever this invocation was called for, it is not a control, and
+//     saying so is a setup failure rather than a verdict.
+//
+// Together those make the flag impossible to use as a way to quietly delete the
+// precheck: passing it against a healthy instance fails at (2), and passing it against
+// an instance that restored nothing fails at (1).
+//
+// It deliberately does NOT try to establish WHY the area is not serving. A pod that is
+// down for any other reason would satisfy (2) just as well, which is why the caller
+// asserts the specific root-key refusal in that area's own log before running this —
+// see assert_startup_refusal in hack/dr-rig.sh. This function checks that the world is
+// in the shape that assertion described; it is not a second copy of it.
+func checkRestoredWithoutSecretArea(ctx context.Context, o verifyOptions, r Receipt) error {
+	if r.Identity == "" || r.Password == "" {
+		return fmt.Errorf("the receipt carries no identity, so the restore cannot be confirmed at all; re-seed — this receipt was written by a seed that did not complete")
+	}
+	base := fmt.Sprintf("%s://%s", o.scheme, o.server)
+
+	auth, err := userclient.Login(ctx, drillHTTPClient(o.scheme), base+"/api/user-management/graphql", r.Identity, r.Password)
+	if err != nil {
+		return fmt.Errorf("logging in to the restored instance as %q: %w\nThe relational store did not come back, or did not come back with this run's identity in it. "+
+			"Nothing below would be evidence about the root key", r.Identity, err)
+	}
+	found := false
+	for _, m := range auth.Memberships {
+		if m.Tenant == r.Tenant {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("identity %q is back but is not a member of tenant %q, which this run created; "+
+			"the relational restore is not the one this receipt describes", r.Identity, r.Tenant)
+	}
+	fmt.Printf("ok   the relational store restored: identity %q is back and still a member of tenant %q\n", r.Identity, r.Tenant)
+
+	serving, detail, err := areaIsServing(ctx, o, areaNotification)
+	if err != nil {
+		return fmt.Errorf("could not determine whether %s is serving: %w\n"+
+			"This mode's whole premise is that it is NOT, and an unanswered question is not a premise", areaNotification, err)
+	}
+	if serving {
+		return fmt.Errorf("--secret-area-refused was given, but %s IS serving (%s).\n"+
+			"That area stores the secret, so a service that is answering built its secret store — its root "+
+			"key OPENS the stored ciphertext. The instance did not refuse, and this run is not a negative "+
+			"control. Refusing rather than reporting a verdict, because a decrypt result from here would be "+
+			"read as evidence about a key that was never wrong", areaNotification, detail)
+	}
+	fmt.Printf("ok   %s is NOT serving (%s), which is what this mode requires\n", areaNotification, detail)
+	return nil
+}
+
+// areaIsServing answers ONE narrow question: is there a live backend behind the
+// instance's ingress for this functional area?
+//
+// 🔴 IT IS NOT `checkChannelVisible` INVERTED, and the first draft of this code made
+// exactly that mistake. checkChannelVisible fails for a refused login, a failed tenant
+// selection, a network blip, a channel that is absent, a channel that reports no
+// secret, AND for an area that is down — one error path, six causes. Reading "it
+// returned an error" as "the area refused its root key" is a control that holds for
+// any reason at all, which is the shape this whole rig exists to argue against. It was
+// caught by TestRefusedAreaModeRefusesAHealthyInstance, which passed a HEALTHY instance
+// and was told the area had refused.
+//
+// So this asks the question directly and unauthenticated. A trivial introspection POST
+// needs no token: any answer the SERVICE produces — 200, 400, 401 — means something
+// live is behind the route, and only a gateway error or a dead connection means there
+// is not. That is the same rule wait_for_api uses in hack/dr-rig.sh, read in the
+// opposite direction.
+//
+// It deliberately does not try to say WHY a silent area is silent. The caller asserts
+// the specific root-key refusal in that area's own log before getting here.
+func areaIsServing(ctx context.Context, o verifyOptions, area string) (bool, string, error) {
+	url := fmt.Sprintf("%s://%s/api/%s/graphql", o.scheme, o.server, area)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
+		strings.NewReader(`{"query":"{__typename}"}`))
+	if err != nil {
+		return false, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := drillHTTPClient(o.scheme).Do(req)
+	if err != nil {
+		// Nothing accepted the connection at all. Distinguishable from a gateway
+		// error, and both mean the same thing here.
+		return false, "the connection was refused", nil //nolint:nilerr // the transport error IS the answer
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch {
+	case resp.StatusCode >= 500:
+		// 502/503/504 is the ingress saying it has no healthy upstream — the shape a
+		// crash-looping area produces. A 500 from the service itself would also land
+		// here; that is a service which is up but broken, and calling it "not serving"
+		// understates it, so the detail carries the code for a reader of the log.
+		return false, fmt.Sprintf("HTTP %d from the ingress, no healthy backend", resp.StatusCode), nil
+	case resp.StatusCode == http.StatusNotFound:
+		// ingress-nginx's default backend, served until the route is admitted.
+		return false, "HTTP 404 — the route is not admitted, so nothing is behind it", nil
+	default:
+		return true, fmt.Sprintf("HTTP %d — the service answered", resp.StatusCode), nil
+	}
 }
 
 // drillHTTPClient builds the client used for every API call. With https it skips

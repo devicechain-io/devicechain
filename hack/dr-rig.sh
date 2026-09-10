@@ -60,9 +60,12 @@
 #                             and the telemetry MUST come back intact
 #   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half: the identical
 #                             restore under a DIFFERENT root key, with the event
-#                             store NOT restored at all. The secret must fail AT
-#                             THE DECRYPT, and the telemetry must be reported
-#                             MISSING — each with its own exact exit code
+#                             store NOT restored at all. The secret half now fails
+#                             TWICE, at two different depths — the area that stores
+#                             secrets REFUSES TO START, naming the root key, and the
+#                             ciphertext then fails AT THE DECRYPT — and the
+#                             telemetry must be reported MISSING, each with its own
+#                             exact exit code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
 #   hack/dr-rig.sh down       delete the cluster, the object store and the rig's
 #                             working directory
@@ -1123,7 +1126,12 @@ rebuild() {
   # $3 is the EVENT store's source serverName, and an EMPTY value means "do not
   # restore the event store". That is not a convenience flag — it is how the
   # event half's negative control is expressed. See cmd_control.
-  local artifact="$1" what="$2" tsdb_from="${3:-}"
+  #
+  # $4, when non-empty, says THE BOOTSTRAP IS EXPECTED TO FAIL and names why. Only
+  # the negative control passes it, and only because a service that refuses a wrong
+  # root key can no longer become ready. Everywhere else a failed bootstrap is
+  # still fatal.
+  local artifact="$1" what="$2" tsdb_from="${3:-}" expected_failure="${4:-}"
   create_cluster
   require_no_instance
   backup_env
@@ -1141,9 +1149,34 @@ rebuild() {
     note "event store: NOT restored — it comes up empty, and that is deliberate"
   fi
 
+  local boot_rc=0
   "$dcctl" bootstrap local "$instance" --yes --compact --no-tls=false \
     --kube-context "$kube_context" --host localhost \
-    "${restore_args[@]}" "${image_args[@]}"
+    "${restore_args[@]}" "${image_args[@]}" || boot_rc=$?
+
+  # 🔴 A TOLERATED FAILURE IS ASSERTED IN BOTH DIRECTIONS, and the second direction
+  # is the one that matters. A bare `|| true` would let the negative control accept
+  # a bootstrap that SUCCEEDED — and under a decoy root key a clean bring-up means
+  # the decoy was never installed, or the archive did not bring the sealed row back,
+  # or the startup check did not run. Each of those leaves an instance that is not a
+  # control, and the phase would carry on and report a verdict from it. So an
+  # unexpected SUCCESS stops the run exactly as an unexpected failure does.
+  if [[ -n "$expected_failure" ]]; then
+    if (( boot_rc == 0 )); then
+      fail "the bootstrap SUCCEEDED, and this phase requires that it not.
+
+$expected_failure
+
+An instance that came up cleanly here is not a control, and every explanation is
+unwelcome: --restore-root-key did not take effect and this instance is running a key
+of its own, the archive did not restore the sealed row so the key was checked
+against nothing, or the startup check that should have refused did not run. Nothing
+below this point would be evidence."
+    fi
+    note "bootstrap exited $boot_rc, which this phase expects (see below)"
+  elif (( boot_rc != 0 )); then
+    fail "dcctl bootstrap exited $boot_rc; the instance was not recovered."
+  fi
 
   # The bootstrap's exit code is not evidence that either database recovered. See
   # wait_for_cluster_healthy. BOTH are waited on: a recovering cluster that cannot
@@ -1183,8 +1216,12 @@ database. The drill would read its verdict out of a database this rig did not
 choose. Free the port, or set DC_DR_PG_PORT to one that is free, and re-run."
 }
 
+# $@ are extra flags handed to `drdrill verify`. Only the negative control passes
+# any: --secret-area-refused, because the area that stores the secret is expected
+# not to be serving there. See checkRestoredWithoutSecretArea in the tool.
 run_verify() {
   local rc=0 waited=0
+  local extra=("$@")
   # Read the credentials FIRST, and CHECK THEM. Neither half is optional.
   #
   # 🔴 `set -e` does not protect this, and a comment here used to claim it did.
@@ -1254,7 +1291,7 @@ testing nothing."
     timeout --kill-after=10 300 "$drdrill" verify --receipt "$receipt_file" \
     --db-host 127.0.0.1 --db-port "$pg_local_port" \
     --db-user "$user" \
-    --server "$api_server" --scheme "$api_scheme" || rc=$?
+    --server "$api_server" --scheme "$api_scheme" "${extra[@]+"${extra[@]}"}" || rc=$?
 
   stop_port_forward
 
@@ -1376,34 +1413,121 @@ the cluster that replaced it, and the telemetry that cluster recorded is served 
 its replacement, from two archives and an escrow artifact alone."
 }
 
+# 🔴 THE SENTENCE THE NEGATIVE CONTROL'S FIRST LEG RESTS ON.
+#
+# A literal copy of part of core/secrets' refusal, carried across a process and a
+# language boundary — which is the shape load_exit_codes exists to avoid. Rewording
+# the Go message would leave every Go test green and every build clean while this
+# rig stopped finding its sentence forever, and "the refusal never appeared" reads
+# as a broken cluster rather than as a stale string.
+#
+# There is no `drdrill codes` equivalent to import it from: the refusal is produced
+# by a SERVICE running inside the cluster, not by a tool this rig executes. So the
+# coupling is pinned from the other side instead — TestRigGrepsForTheRefusalItAsserts
+# in backend/core/secrets reads THIS assignment out of THIS file and fails if the
+# real refusal no longer contains it. Change either and the Go suite says so.
+root_key_refusal="the configured instance root key does not open this service"
+
+# assert_startup_refusal is the negative control's FIRST leg, and it is new. Until a
+# service checked its root key against its own stored ciphertext at startup, the
+# control's only evidence arrived at the end, from a failed decrypt.
+#
+# It asserts the SPECIFIC refusal, from the SPECIFIC area, in that area's own log.
+# "The area never became ready" is not evidence: an image that would not pull, a node
+# under memory pressure and a database that never came back all produce it, and a
+# control that holds for any of those has tested nothing. That is the exact shape
+# this rig exists to argue against, so the assertion names the cause or stops.
+assert_startup_refusal() {
+  local area="$1" waited=0 limit=300 pods pod logs state
+  say "asserting $area refused to start, and refused ON THE ROOT KEY"
+  while true; do
+    pods="$(kubectl --context "$kube_context" -n "$instance" get pods \
+      -l "devicechain.io/functional-area=$area" -o name 2>/dev/null || true)"
+    for pod in $pods; do
+      # BOTH the current container's log and the last TERMINATED one, concatenated.
+      # A service that exits during startup is restarted, so the evidence usually
+      # lives in a container that no longer exists; and while the pod sits in
+      # CrashLoopBackOff there may be no current container to read at all. Reading
+      # only one of the two makes the verdict depend on where in the backoff cycle
+      # this call happened to land, which is a control that passes intermittently.
+      logs="$(kubectl --context "$kube_context" -n "$instance" logs "$pod" --tail=-1 2>/dev/null || true)
+$(kubectl --context "$kube_context" -n "$instance" logs "$pod" --previous --tail=-1 2>/dev/null || true)"
+      if grep -qF -- "$root_key_refusal" <<<"$logs"; then
+        say "REFUSAL OBSERVED — $area named the instance root key and did not start.
+The self-test unwrapped this instance's stored DEK with the key it was given, failed,
+and said so once at startup instead of serving a credential it cannot open. That is
+the first half of the control, and it is the half that did not exist before."
+        return 0
+      fi
+      # A READY pod ends this immediately rather than after the timeout: a service
+      # that is serving has built its secret store, so the key it was given opens the
+      # ciphertext and the decoy did not take. Waiting five more minutes to report
+      # that as "no refusal found" would describe it as the wrong problem.
+      if [[ "$(kubectl --context "$kube_context" -n "$instance" get "$pod" \
+        -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" == "True" ]]; then
+        fail "$area is READY, and this phase requires that it refuse to start.
+
+It built its secret store, so the root key this instance is running DOES open the
+ciphertext recovered from the archive. Either the decoy artifact was not honoured, or
+the archive restored something other than the sealed row. This is not a control."
+      fi
+    done
+    if (( waited >= limit )); then
+      state="$(kubectl --context "$kube_context" -n "$instance" get pods \
+        -l "devicechain.io/functional-area=$area" -o wide 2>&1 || true)"
+      [[ -n "$pods" ]] || fail "no $area pod exists in namespace $instance after ${waited}s.
+
+The control needs that service to START and REFUSE. One that was never scheduled
+refuses nothing, so there is no evidence here in either direction — the deploy did
+not get far enough to run the thing under test.
+
+$state"
+      fail "$area did not refuse on the root key within ${waited}s.
+
+Its log — current container and previous — does not contain:
+
+  $root_key_refusal
+
+🔴 That is INCONCLUSIVE, not a control that held. Either the service is down for some
+other reason, in which case the check under test never ran, or the sentence has moved
+and this rig is now grepping for something nobody emits. Read its state and its log
+before reading anything below.
+
+$state"
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
 # cmd_control is the check on the check.
 #
-# 🔴 THIS PHASE NEEDS REWORKING, AND THE REASON IS A DELIBERATE CHANGE ELSEWHERE.
-# A service that stores secrets now checks its instance root key against its own
-# stored ciphertext when it builds the secret store, and refuses to start if the
-# key does not open it. So the decoy rebuild below no longer produces a running
-# instance: notification-management refuses to start, `dcctl bootstrap` never sees
-# every area become ready, and this phase dies inside `rebuild` with a readiness
-# timeout — a wrong-reason failure that reads as an environment problem.
+# 🔴 THE SECRET HALF'S CONTROL FAILS TWICE, AT TWO DIFFERENT DEPTHS, and both are
+# asserted. That is not belt-and-braces: they are separate claims, and until #991
+# only the second one existed.
 #
-# The control has not weakened; its evidence has moved EARLIER. What used to be
-# "the instance comes up and then cannot decrypt" is now "the instance refuses to
-# come up, naming the key". Reworking the phase means:
+#   1. A service that stores secrets now checks its instance root key against its
+#      own stored ciphertext as it builds the secret store, and refuses to start if
+#      the key does not open it. So this rebuild does NOT produce a fully running
+#      instance — notification-management refuses, `dcctl bootstrap` never sees
+#      every area become ready, and the phase tolerates that (see the fourth
+#      argument to rebuild). What it does NOT tolerate is a bring-up that failed
+#      without that refusal in the log: a readiness timeout is the least specific
+#      failure this rig can produce, and a control that holds for "the cluster was
+#      slow" has stopped being evidence for the key. assert_startup_refusal is what
+#      keeps the two apart.
+#   2. The ciphertext itself still does not decrypt, and run_verify still says so
+#      with its own exact exit code. It reads the database through its own
+#      port-forward rather than through the area's API, so it stands as a genuinely
+#      independent leg — it does not care that the area refused to serve, and it
+#      would report the same code if the refusal had never been implemented.
 #
-#   - letting the decoy `rebuild` fail without aborting, since a failed bring-up is
-#     now the expected outcome rather than an error;
-#   - asserting the SPECIFIC refusal in notification-management's logs, not merely
-#     that it is down. A pod that is down for any other reason would otherwise make
-#     the control "hold" while testing nothing, which is the exact shape this rig
-#     exists to avoid;
-#   - dropping `wait_for_api notification-management` from this phase only (that
-#     area is deliberately not serving here; user-management stores no secrets and
-#     still comes up); and
-#   - keeping run_verify afterwards. It reads the database through its own
-#     port-forward rather than through the area's API, so it still stands as the
-#     second, independent leg: the ciphertext does not decrypt under this key.
-#
-# Until that is done and RUN, this phase's verdict is not evidence either way.
+# 🔴 `wait_for_api notification-management` is deliberately ABSENT from this phase,
+# and only from this phase. That area cannot become ready here by design, so waiting
+# for it would be waiting for something this phase has just made impossible: the run
+# would die on a timeout instead of reading its own result. user-management stores no
+# secrets, comes up normally, and is what proves the ingress and the recovered
+# relational store are actually serving.
 #
 # It recovers the SAME instance from the SAME archive under a root key that is not
 # the instance's. Everything else is identical. If the secret still decrypts, then
@@ -1452,7 +1576,11 @@ cmd_control() {
   # the control asserts the telemetry is ABSENT, which needs no archive of its own,
   # and this cluster is destroyed by `down`. Worth knowing before reading its logs
   # and mistaking the archiving errors for the finding.
-  rebuild "$decoy_file" "a DECOY root key (the negative control)" ""
+  rebuild "$decoy_file" "a DECOY root key (the negative control)" "" \
+    "notification-management stores secrets, so under a decoy root key it refuses to
+start and the instance never becomes fully ready. The bootstrap reporting that as a
+readiness timeout is the EXPECTED outcome of this phase, and the refusal itself is
+asserted immediately below."
 
   # The control's premise, asserted BOTH ways. Either half alone is insufficient:
   #
@@ -1494,13 +1622,32 @@ not means the instance survived the disaster, or the key came from somewhere thi
 rig does not know about. Nothing below would be evidence."
   fi
 
+  # LEG ONE. Asserted after the two escrow checks above rather than before them, so
+  # that "the decoy key is genuinely installed" is already established when this
+  # reads the refusal — otherwise a missing refusal would be reported as a stale
+  # grep string when the truth was that the wrong key never took effect.
+  assert_startup_refusal notification-management
+
+  # user-management ONLY — see the 🔴 note on this function.
   say "waiting for the recovered instance API to route"
   wait_for_api user-management
-  wait_for_api notification-management
 
-  say "NEGATIVE CONTROL — the same archive, recovered under a different root key"
+  say "NEGATIVE CONTROL, LEG TWO — the same archive, recovered under a different root key"
   local rc=0
-  run_verify || rc=$?
+  # 🔴 --secret-area-refused, and it is NOT "skip the API check".
+  #
+  # `verify`'s ordinary precheck asks notification-management whether the channel is
+  # back. In this phase that area has refused to start — which is the very thing leg
+  # one just asserted — so the question cannot be answered, and a live run died here
+  # on a wrong-reason setup failure rather than on the key.
+  #
+  # The flag swaps that premise for a harder pair: the seeded identity must log in to
+  # user-management and still hold this run's tenant membership (so the relational
+  # restore demonstrably landed, on rows THIS run wrote), and the secret-storing area
+  # must NOT answer. Passing it against a healthy instance fails; passing it against
+  # an instance that restored nothing fails. It cannot be used to delete the check,
+  # which is what happened to the --skip-api flag that used to exist.
+  run_verify --secret-area-refused || rc=$?
 
   case "$rc" in
     "$DRDRILL_EXIT_OK")
