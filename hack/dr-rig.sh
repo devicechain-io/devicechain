@@ -635,10 +635,10 @@ pg_pod() {
 
 # wait_for_cluster_healthy asserts on the DATABASE, not on dcctl's exit code.
 #
-# 🔴 This exists because of a live finding: `dcctl bootstrap` step 3/8 does not
-# wait for the database. In the drill's first successful restore the infra apply
-# returned and the bootstrap moved on to steps 4 and 5 while BOTH CNPG Clusters
-# were still 14 seconds into `Setting up primary`. It converged that time — but it
+# 🔴 This exists because of a live finding: `dcctl bootstrap`'s infrastructure
+# apply does not wait for the database. In the drill's first successful restore
+# that step returned and the bootstrap moved on to the chart install and the admin
+# seed while BOTH CNPG Clusters were still 14 seconds into `Setting up primary`. It converged that time — but it
 # means a WEDGED restore would not fail the bootstrap. It would surface later, or
 # not at all, as a running instance with an empty database. A recovering cluster
 # that cannot reach its archive sits in `Setting up primary` indefinitely, and

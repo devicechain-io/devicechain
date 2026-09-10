@@ -241,7 +241,24 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 	// Deploying an image tag that was never published fails as an
 	// ImagePullBackOff on every workload, several minutes into a run that looked
 	// healthy — so reject it here, where we can say why.
-	if !build && IsUnpublishedImageVersion(version) {
+	//
+	// 🔴 THE EMPTY CHECK IS NOT DEFENSIVE PADDING, and leaving it out was a real
+	// hole rather than a tidiness point. `version` reaches here empty only when
+	// DefaultImageVersion is itself empty, which is what a broken ldflags stamp
+	// produces — and IsUnpublishedImageVersion does NOT catch it, since "" is
+	// neither "dev" nor a dev stamp. Without it a published-path bootstrap sails
+	// through this function, creates a cluster, and then dies inside
+	// stepInstallCore saying ResolveImageSource must run before the pipeline —
+	// which is both false (it did run) and late (the cluster now exists), the
+	// exact failure this function was moved forward to remove. Only the published
+	// path can reach it — --build defaults to the literal "dev" — but the check is
+	// written unconditionally because a reference with no tag at all is read by
+	// Kubernetes as :latest, whatever produced it.
+	//
+	// resolveOperatorImageSource carried this check and this reasoning first;
+	// `dcctl upgrade` now calls through here so there is one resolver rather than
+	// two that must be kept in agreement.
+	if version == "" || (!build && IsUnpublishedImageVersion(version)) {
 		return ImageSource{}, fmt.Errorf(
 			"this dcctl build has no pinned image version (%q is not a published tag); deploy a tagged release with --version <tag>, or build from source with --build",
 			version)

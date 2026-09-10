@@ -216,15 +216,35 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 		}
 		return err
 	}
-	_, _, typed, err := kubeClients(st.KubeContext)
+	nodes, err := listNodes(ctx, st.KubeContext)
 	if err != nil {
-		return unreachable(fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err))
+		return unreachable(err)
+	}
+	// 🔴 OUTSIDE unreachable(), AND A TEST HOLDS THAT LINE. The dry-run softening
+	// above applies to being unable to LOOK, never to what was seen: a cluster
+	// that answers and cannot host the topology is the finding, on both paths.
+	// Wrapping this call in unreachable() too is a one-token edit that silently
+	// passes an undersized cluster on a dry run, and it SURVIVED the package's
+	// whole test suite when a reviewer tried it — because the only way to reach
+	// this line was against a real cluster. Hence listNodes.
+	return schedulableShortfall(ha, nodes)
+}
+
+// listNodes reads the cluster's nodes. A variable rather than an inline call so
+// the counting rule above can be reached without a cluster: the seam is the same
+// one lookupDeployedInstance and readLiveArchiveState already use, and it exists
+// for the same reason — the branch on the far side of the API call is the one
+// worth testing.
+var listNodes = func(ctx context.Context, kubeContext string) ([]corev1.Node, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err)
 	}
 	nodes, err := typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return unreachable(fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err))
+		return nil, fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err)
 	}
-	return schedulableShortfall(ha, nodes.Items)
+	return nodes.Items, nil
 }
 
 // schedulableShortfall is the counting rule, split from the cluster access above

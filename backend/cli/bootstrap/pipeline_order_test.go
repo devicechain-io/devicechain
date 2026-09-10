@@ -5,12 +5,16 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // stepIndex reports where each named step function sits in the default pipeline.
@@ -47,8 +51,10 @@ func TestPipelineOrderInvariants(t *testing.T) {
 		t.Errorf("stepLocalRegistry runs at %d and stepInstallCore at %d: a --build bootstrap "+
 			"would install the operator against an image nothing has pushed yet", registry, core)
 	}
-	// The Instance CRD has to exist before anything declares an instance, and the
-	// declaration is written from the render step onward.
+	// The Instance CRD has to exist before anything declares an instance. Nothing
+	// in dcctl writes an Instance CR YET — the claim step is a later slice — so
+	// this edge is pinned ahead of the code that needs it, deliberately: it is
+	// cheap now and it is the whole reason the operator install moved.
 	if core >= render {
 		t.Errorf("stepInstallCore runs at %d and stepRenderConfig at %d: the Instance CRD would "+
 			"not exist when the instance is claimed", core, render)
@@ -63,26 +69,55 @@ func TestPipelineOrderInvariants(t *testing.T) {
 }
 
 func TestResolveImageSource(t *testing.T) {
-	t.Run("published defaults", func(t *testing.T) {
-		// DefaultImageVersion is "dev" in any build that is not a goreleaser build,
-		// which is every test binary — so the published path with no --version is the
-		// REFUSAL case here, not a happy path. Asserting that is the point: it is the
-		// check that used to fire only after a kind cluster had been created.
+	// 🔴 BOTH ARMS RUN, and that took swapping the variable. DefaultImageVersion is
+	// "dev" in every test binary (only goreleaser stamps it), so a subtest that
+	// branches on IsUnpublishedImageVersion(DefaultImageVersion) executes one arm
+	// and leaves the other as prose. The released build's behaviour is the arm that
+	// never ran. upgrade_test.go swaps the variable for the same reason.
+	t.Run("an unstamped build refuses the published path", func(t *testing.T) {
+		defer func(orig string) { DefaultImageVersion = orig }(DefaultImageVersion)
+		DefaultImageVersion = "dev"
+
 		got, err := ResolveImageSource("", "", false)
-		if !IsUnpublishedImageVersion(DefaultImageVersion) {
-			if err != nil {
-				t.Fatalf("a build with a pinned image version was refused: %v", err)
-			}
-			if got.Registry != DefaultImageRegistry || got.Version != DefaultImageVersion {
-				t.Fatalf("published defaults resolved to %+v", got)
-			}
-			return
-		}
 		if err == nil {
 			t.Fatalf("a dcctl with no pinned image version resolved to %+v instead of refusing", got)
 		}
 		if !strings.Contains(err.Error(), "--version") || !strings.Contains(err.Error(), "--build") {
 			t.Errorf("the refusal does not name either way out of it: %v", err)
+		}
+	})
+
+	// A BROKEN ldflags stamp leaves it empty rather than "dev", and
+	// IsUnpublishedImageVersion does not catch "" — it is neither "dev" nor a dev
+	// stamp. Unrefused, that reference has no tag at all, which Kubernetes reads
+	// as :latest. Only the published path can reach it: --build defaults to the
+	// literal "dev" and so is never empty, which the second arm pins.
+	t.Run("an empty version is refused", func(t *testing.T) {
+		defer func(orig string) { DefaultImageVersion = orig }(DefaultImageVersion)
+		DefaultImageVersion = ""
+
+		if got, err := ResolveImageSource("", "", false); err == nil {
+			t.Errorf("an empty image version resolved to %+v instead of refusing", got)
+		}
+		got, err := ResolveImageSource("", "", true)
+		if err != nil {
+			t.Fatalf("--build does not read DefaultImageVersion and must be unaffected: %v", err)
+		}
+		if got.Version != "dev" {
+			t.Errorf("--build resolved to version %q, so it is reading the broken stamp", got.Version)
+		}
+	})
+
+	t.Run("a stamped build takes the published defaults", func(t *testing.T) {
+		defer func(orig string) { DefaultImageVersion = orig }(DefaultImageVersion)
+		DefaultImageVersion = "v0.17.0"
+
+		got, err := ResolveImageSource("", "", false)
+		if err != nil {
+			t.Fatalf("a build with a pinned image version was refused: %v", err)
+		}
+		if got.Registry != DefaultImageRegistry || got.Version != "v0.17.0" {
+			t.Fatalf("published defaults resolved to %+v", got)
 		}
 	})
 
@@ -144,15 +179,24 @@ func TestResolveImageSource(t *testing.T) {
 // that pulls nothing, so a step running before the image source is settled would
 // not fail here — it would apply a Deployment and fail minutes later as an
 // ImagePullBackOff naming an image nobody asked for.
+//
+// 🔴 DryRun IS SET ON EVERY FIXTURE, for the reason its sibling
+// TestInfraApplyConsultsTheNodeGuard states: a test that proves a guard exists by
+// watching the unguarded path fail must not let that path DO anything. Without
+// it, deleting either guard made this test pass — but by server-side-applying
+// "/operator:v0.17.0" into whatever the developer's current kube-context points
+// at, and by starting a registry container, taking 30 seconds per subtest to do
+// it. Both guards sit before the dry-run branch in their steps, so the assertion
+// is unchanged and now costs nothing.
 func TestStepsThatDeployImagesRefuseAnUnsettledSource(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		st   *State
 		run  func(context.Context, *State) error
 	}{
-		{"install core, no registry", &State{ImageVersion: "v0.17.0"}, stepInstallCore},
-		{"install core, no version", &State{ImageRegistry: "registry.example/dc"}, stepInstallCore},
-		{"build path, no registry", &State{BuildImages: true, ImageVersion: "dev"}, stepLocalRegistry},
+		{"install core, no registry", &State{ImageVersion: "v0.17.0", DryRun: true}, stepInstallCore},
+		{"install core, no version", &State{ImageRegistry: "registry.example/dc", DryRun: true}, stepInstallCore},
+		{"build path, no registry", &State{BuildImages: true, ImageVersion: "dev", DryRun: true}, stepLocalRegistry},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.run(t.Context(), tc.st)
@@ -226,4 +270,68 @@ func TestHaCapacityCheckIsBestEffortOnlyOnADryRun(t *testing.T) {
 	if err := check(&State{HA: false, KubeContext: "dead"}); err != nil {
 		t.Errorf("a run with no --ha consulted the cluster anyway: %v", err)
 	}
+}
+
+// 🔴 THE OTHER HALF, AND IT HAD NO TEST AT ALL. The softening above applies to
+// being unable to LOOK; what the cluster SAYS stays fatal on both paths. A
+// reviewer moved the counting call inside the same dry-run softening — a
+// one-token edit that passes an undersized cluster on `--ha --dry-run` — and it
+// survived the entire package, because the only way to reach that line was
+// against a real multi-node cluster. The listNodes seam is what makes the branch
+// reachable; this is what holds it.
+func TestTheClusterSayingNoIsFatalEvenOnADryRun(t *testing.T) {
+	oneNode := []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "control-plane"}}}
+
+	stub := func(t *testing.T, nodes []corev1.Node, err error) {
+		t.Helper()
+		orig := listNodes
+		t.Cleanup(func() { listNodes = orig })
+		listNodes = func(context.Context, string) ([]corev1.Node, error) { return nodes, err }
+	}
+
+	t.Run("an undersized cluster fails a dry run", func(t *testing.T) {
+		stub(t, oneNode, nil)
+		err := checkHaNodeCapacity(t.Context(), &State{HA: true, DryRun: true})
+		if err == nil {
+			t.Fatal("a dry run described an --ha install this cluster could never schedule")
+		}
+		if !strings.Contains(err.Error(), "--ha places") {
+			t.Errorf("the refusal is not the counting rule's: %v", err)
+		}
+	})
+
+	t.Run("an undersized cluster fails a real run", func(t *testing.T) {
+		stub(t, oneNode, nil)
+		if err := checkHaNodeCapacity(t.Context(), &State{HA: true}); err == nil {
+			t.Fatal("an --ha bootstrap proceeded onto a cluster that cannot host it")
+		}
+	})
+
+	// The counterweight, twice over: a cluster that CAN host it must pass on both
+	// paths, or the guard fails bring-ups that would have worked.
+	t.Run("a cluster that can host it passes", func(t *testing.T) {
+		three := []corev1.Node{
+			{ObjectMeta: metav1.ObjectMeta{Name: "w1"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "w2"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "w3"}},
+		}
+		stub(t, three, nil)
+		for _, dry := range []bool{false, true} {
+			if err := checkHaNodeCapacity(t.Context(), &State{HA: true, DryRun: dry}); err != nil {
+				t.Errorf("dry-run=%v: a three-node cluster was refused: %v", dry, err)
+			}
+		}
+	})
+
+	// And the seam must not have changed which errors are softened: a lister that
+	// cannot answer is still fatal on a real run and a warning on a dry one.
+	t.Run("a lister that cannot answer keeps the old asymmetry", func(t *testing.T) {
+		stub(t, nil, errors.New("connecting to the cluster to verify it can host the --ha topology: nope"))
+		if err := checkHaNodeCapacity(t.Context(), &State{HA: true, DryRun: true}); err != nil {
+			t.Errorf("a dry run failed on an unreadable cluster: %v", err)
+		}
+		if err := checkHaNodeCapacity(t.Context(), &State{HA: true}); err == nil {
+			t.Error("a real run proceeded without being able to see the cluster's nodes")
+		}
+	})
 }

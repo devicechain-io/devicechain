@@ -158,7 +158,7 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 | `--compact` | Preajuste de huella pequeña —ver más abajo. |
 | `--ha` | Alta disponibilidad de mensajería —ver más abajo. Requiere al menos **3 nodos planificables**. |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera el apply de infraestructura falla. |
-| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
 
 ### `--compact`
