@@ -44,6 +44,12 @@ render either area at more than one replica, and that refusal is keyed on **the 
 the rollout strategy it happens to be configured with: overriding `strategy` to `RollingUpdate` does
 not get past it.
 
+A pod that ends **itself** — because it decided it can no longer serve, which on LwM2M ingestion
+means a leadership term it could not build or a CoAP/DTLS transport that stopped reading — releases
+the lease on its way out, so the replacement acquires it as soon as it starts rather than waiting.
+The 30-second window above is what a replacement waits after an **abrupt** loss, where nothing got
+the chance to release: a node failure, a `SIGKILL`, an out-of-memory kill.
+
 :::warning Neither ingest service gets a pod disruption budget
 The chart skips a disruption budget for any area running a single replica, because a budget demanding
 one available pod would block a node drain outright. Draining the node an edge service happens to be

@@ -47,6 +47,13 @@ niega a renderizar cualquiera de las dos áreas con más de una réplica, y ese 
 **al área en sí**, no a la estrategia de despliegue con la que esté configurada: cambiar `strategy`
 a `RollingUpdate` no lo esquiva.
 
+Un pod que se termina **a sí mismo** —porque ha concluido que ya no puede servir, lo que en la
+ingesta LwM2M significa un turno de liderazgo que no pudo construir o un transporte CoAP/DTLS que
+dejó de leer— libera el arrendamiento al salir, de modo que el reemplazo lo adquiere en cuanto
+arranca, sin esperar. La ventana de 30 segundos de arriba es lo que espera un reemplazo tras una
+pérdida **abrupta**, en la que nadie tuvo ocasión de liberar nada: un fallo de nodo, un `SIGKILL`,
+una muerte por falta de memoria.
+
 :::warning Ningún servicio de ingesta recibe un presupuesto de interrupción de pods
 El chart omite el presupuesto de interrupción para cualquier área que se ejecute con una sola réplica,
 porque un presupuesto que exigiera un pod disponible bloquearía el drenaje de nodo por completo. Por
