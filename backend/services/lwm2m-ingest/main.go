@@ -69,9 +69,12 @@ const (
 	// leaseRenewInterval renews well inside the TTL (<= TTL/3) on the KeepAlive goroutine,
 	// decoupled from any processing loop (ADR-070 M4).
 	leaseRenewInterval = messaging.DefaultLeaseTTL / 3
-	// standbyRetryInterval is how often a warm standby re-attempts acquisition.
-	standbyRetryInterval = 5 * time.Second
 )
+
+// standbyRetryInterval is how often a warm standby re-attempts acquisition, and how long a term
+// whose build failed backs off before returning to the acquire loop. A var (not a const) only so a
+// test can shorten it; production runs at five seconds.
+var standbyRetryInterval = 5 * time.Second
 
 // reconcileQueryTimeout bounds EACH per-tenant device-state read that floors the epoch source
 // AND rebuilds the shadow registration table on a leadership acquisition (ADR-075 L3b). A
@@ -132,6 +135,7 @@ var (
 	limiterMetrics  adapter.IngestLimiterMetrics
 	downlinkMetrics downlink.Metrics
 	leaderGauge     prometheus.Gauge
+	servingGauge    prometheus.Gauge
 
 	Lease      *messaging.DistributedLease
 	httpServer *core.HttpServer
@@ -307,7 +311,9 @@ func buildMetrics() {
 	}
 
 	leaderGauge = Microservice.NewGauge("is_leader",
-		"1 when this replica holds the LwM2M leadership lease and is serving the transport, else 0 (warm standby).")
+		"1 while this replica holds the LwM2M leadership lease, from acquisition rather than from the end of the term build, else 0 (warm standby).")
+	servingGauge = Microservice.NewGauge("is_serving",
+		"1 while this replica's CoAP/DTLS read loop is running; 0 while standing by OR while building a term it has already acquired. Read it WITH is_leader: is_leader=1 and is_serving=0 for more than a takeover's worth of time is a leader wedged in its term build, which every other health signal on this pod reports as healthy.")
 
 	registryMetrics = registry.Metrics{
 		Registrations: Microservice.NewCounter("registrations_total",
@@ -899,9 +905,33 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 			}
 			continue
 		}
-		serveAsLeader(ctx, held)
+		// A false return means the term-build fuse has ended the process. Looping would
+		// re-Acquire the partition this pod has just released, on a replica that is
+		// shutting down and cannot serve it — taking it back from whichever standby was
+		// about to, for as long as the teardown runs.
+		if !serveAsLeader(ctx, held) {
+			return
+		}
 	}
 }
+
+// leaseTerm is the narrow slice of *messaging.Lease that a leadership term drives. It exists so
+// the term's teardown — in particular that the lease is RELEASED before the build fuse ends the
+// process — can be exercised deterministically by a unit test with a fake lease, the way
+// serveServer below lets the serve supervision be tested with a fake transport.
+// *messaging.Lease satisfies it.
+type leaseTerm interface {
+	Epoch() uint64
+	KeepAlive(ctx context.Context, interval time.Duration) error
+	Release() error
+}
+
+// buildTermFn is the term builder serveAsLeader drives, behind a variable for the same reason
+// core's exitProcess is: the decision it feeds — release the lease, then end the process on the
+// consecutive-failure fuse — is only reachable through a build that FAILS, and a real buildTerm
+// needs a broker, a bindable socket and a device-state to read before it can fail for the right
+// reason. Only a test ever replaces it.
+var buildTermFn = buildTerm
 
 // serveAsLeader builds this term's presence layer + transport, floors the epoch from
 // device-state, and serves until the lease is definitively lost (KeepAlive returns ErrNotHolder)
@@ -910,8 +940,27 @@ func runLeadership(ctx context.Context, lease *messaging.DistributedLease) {
 // standby can take over. KeepAlive runs on its OWN goroutine so no processing stall can starve
 // renewal (ADR-070 M4). The Server is built fresh here (it binds at construction, its Stop is
 // one-shot) and torn down on eviction, so only the leader ever holds the socket.
-func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
+//
+// It returns false when the acquire/serve/standby loop must NOT continue, which today means only
+// one thing: the term-build fuse has blown and the process is ending.
+func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	log.Info().Uint64("epoch", lease.Epoch()).Msg("Acquired LwM2M leadership; building the transport and serving.")
+
+	// is_leader goes up HERE, at ACQUIRE, not at the end of the term build. The build reads each
+	// bound tenant's asserted-active devices from device-state with reconcileQueryTimeout per
+	// tenant, serially — so raising the gauge afterwards reports this replica as leaderless for up
+	// to that × the tenant count while it demonstrably holds the lease and is the only replica that
+	// can serve. The no-leader alert this service's operations documentation asks for is written on
+	// exactly this series, and it would fire through every one of those seconds on a HEALTHY
+	// takeover, indistinguishable from the real outage it exists to catch.
+	//
+	// is_serving is the counterweight and is deliberately NOT touched here. It is already 0 — a
+	// fresh gauge starts there and every exit from this function leaves it there — so from
+	// acquisition until the read loop starts, the pair reads leader=1 serving=0 with no statement
+	// needed to make it so. That pair is what names the one state neither gauge can express alone,
+	// a leader wedged in its term build, which is otherwise a silent stall on a pod whose
+	// readiness, liveness and is_leader are all green.
+	setLeader(true)
 
 	// leaderCtx is this term's lifetime: cancelled on eviction (lease lost) or shutdown (parent
 	// ctx). It gates the /rd handlers (5.03 once cancelled) and bounds the epoch floor read.
@@ -944,7 +993,7 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 		}
 	}
 
-	srv, reg, dispatcher, err := buildTerm(leaderCtx, Configuration.Bindings())
+	srv, reg, dispatcher, err := buildTermFn(leaderCtx, Configuration.Bindings())
 	if err != nil {
 		// A term build that fails (e.g. the transport cannot bind) cannot serve. Release the lease
 		// and back off before returning to the acquire loop, so a TRANSIENT local fault is a slow
@@ -954,17 +1003,23 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 		consecutiveTermBuildFailures++
 		log.Error().Err(err).Int("consecutiveFailures", consecutiveTermBuildFailures).
 			Msg("Could not build the LwM2M leadership term; releasing the lease and retrying.")
-		if consecutiveTermBuildFailures >= maxConsecutiveTermBuildFailures {
-			log.Fatal().Err(err).Int("consecutiveFailures", consecutiveTermBuildFailures).
-				Msg("LwM2M leadership term build failed repeatedly; terminating so the pod is restarted (a persistent local fault, e.g. a bad listen address).")
-		}
+		// 🔴 EVICT BEFORE DECIDING WHETHER TO END THE PROCESS, NOT AFTER. evict() is what calls
+		// Release, and the fuse below exits down its own path — so with the two the other way
+		// round a blown fuse takes the partition to the grave with it, and the replacement pod's
+		// Acquire is refused until the entry ages out a full DefaultLeaseTTL. Nothing serves the
+		// transport for that window, on the one exit path taken precisely because nothing here can.
 		setLeader(false)
 		evict()
+		if consecutiveTermBuildFailures >= maxConsecutiveTermBuildFailures {
+			failProcess(fmt.Errorf("lwm2m-ingest: the leadership term build failed %d times in a row and "+
+				"this replica cannot serve the transport, so the pod exits to be replaced (a persistent "+
+				"local fault, e.g. a bad listen address): %w", consecutiveTermBuildFailures, err))
+			return false
+		}
 		sleepCtx(ctx, standbyRetryInterval)
-		return
+		return true
 	}
 	consecutiveTermBuildFailures = 0 // a successful build clears the fuse
-	setLeader(true)
 
 	// Start the command dispatcher for THIS term (ADR-075 L4a/L4b) BEFORE serving: it pulls
 	// device-commands and dispatches to this term's conn table, only while leaderCtx is live.
@@ -994,15 +1049,42 @@ func serveAsLeader(ctx context.Context, lease *messaging.Lease) {
 	stopServing := superviseServe(srv, func(err error) {
 		log.Fatal().Err(err).Msg("LwM2M CoAP/DTLS transport exited unexpectedly; terminating so the pod is restarted.")
 	})
+	setServing(true) // the read loop is running: this replica is now both the leader AND live
 
 	<-leaderCtx.Done() // eviction (lease lost) or shutdown (parent ctx cancelled)
 
+	setServing(false)
 	setLeader(false)
 	stopServing()    // records intent, THEN Stops the socket, so the ensuing Serve return is graceful
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
 	log.Info().Msg("Released LwM2M leadership; returning to standby.")
+	return true
+}
+
+// failProcess ends the process with a non-zero status, off this goroutine.
+//
+// Off this goroutine because FailNow tears the microservice down, which runs
+// beforeMicroserviceStopped — which cancels the leadership loop and then WAITS on
+// leadershipDone, the channel this goroutine closes when it returns. Calling it inline would
+// deadlock the shutdown it is asking for. event-processing's own leadership fuse is written the
+// same way, for the same reason.
+//
+// It is FailNow rather than log.Fatal because log.Fatal is an immediate os.Exit: it skips every
+// lifecycle callback, including the shutdown ordering beforeMicroserviceStopped establishes (the
+// leadership unwind must release its lease BEFORE the NATS manager drains the connection that
+// release is written over) and the readiness drain. FailNow runs the whole teardown and still
+// exits non-zero, which is what distinguishes a pod that failed from one that was rolled.
+//
+// It sits behind a variable so the fuse can be exercised by a test without ending the test
+// binary. Only a test ever replaces it.
+var failProcess = func(err error) {
+	if Microservice == nil {
+		log.Error().Err(err).Msg("LwM2M ingest cannot end the process; it has no microservice handle.")
+		return
+	}
+	go Microservice.FailNow(err)
 }
 
 // consecutiveTermBuildFailures counts back-to-back leadership-term build failures; it is only ever
@@ -1090,15 +1172,29 @@ func superviseServe(srv serveServer, onDeath func(error)) (stopServing func()) {
 	}
 }
 
-// setLeader records leadership on the gauge (0/1), tolerating a nil gauge.
+// setLeader records leadership on the gauge (0/1), tolerating a nil gauge. It is raised at
+// ACQUIRE, not at the end of the term build — see the comment at the top of serveAsLeader.
 func setLeader(leader bool) {
-	if leaderGauge == nil {
+	setGauge(leaderGauge, leader)
+}
+
+// setServing records whether this replica's transport read loop is actually running (0/1),
+// tolerating a nil gauge. Paired with setLeader it names the one state neither gauge can express
+// alone: holding the lease but not yet serving, i.e. still inside a term build. Without the pair
+// that state is either invisible (is_leader raised at acquire) or reported as a real outage
+// (is_leader raised after the build) — see the comment at the top of serveAsLeader.
+func setServing(serving bool) {
+	setGauge(servingGauge, serving)
+}
+
+func setGauge(g prometheus.Gauge, on bool) {
+	if g == nil {
 		return
 	}
-	if leader {
-		leaderGauge.Set(1)
+	if on {
+		g.Set(1)
 	} else {
-		leaderGauge.Set(0)
+		g.Set(0)
 	}
 }
 

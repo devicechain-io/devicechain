@@ -511,6 +511,11 @@ source is configured, so a pod running with its sources unset publishes the seri
 and `!= 1` over an empty result is itself empty, which is a silent alert, not a firing one. That is
 exactly the case the alert exists for. LwM2M registers its gauge unconditionally, so only the
 Sparkplug expression needs the pairing.
+
+Both services' `is_leader` gauges go up when the replica **acquires** the lease, not when it
+finishes building its term, so a normal takeover does not read as leaderless while the new leader
+rebuilds its state. The state that hides in that window instead is a leader **stuck** in a build,
+and on LwM2M a second gauge is what names it — see `is_serving` below.
 :::
 
 All metrics carry the `devicechain_` prefix and their service's own segment —
@@ -535,7 +540,8 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 
 | Signal | Means |
 |---|---|
-| `is_leader` | As above. **Alert on the sum not being 1.** |
+| `is_leader` | 1 on the pod holding the lease, from the moment it acquires it. **Alert on the sum not being 1.** |
+| `is_serving` | 1 once that pod's CoAP/DTLS read loop is actually running. Read it **with** `is_leader`: the pair is the only thing that separates a leader still rebuilding its registration table from a leader wedged in that rebuild, and every other signal on the pod — readiness, liveness, `is_leader` — is green for both. `is_leader == 1 and is_serving == 0` sustained for longer than a takeover takes is worth an alert of its own. |
 | `active_registrations` / `active_sessions` / `active_observations` | The live fleet as the service sees it. **Watch `active_observations` across a restart** — it is how you see the observation loss described above, and how you see it recover. |
 | `registrations_total` / `registration_updates_total` | Devices arriving and keeping their sessions alive. |
 | `registration_expiries_total` | Registrations that lapsed rather than deregistering — devices that vanished. |

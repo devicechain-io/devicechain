@@ -553,6 +553,12 @@ menos una fuente configurada, así que un pod que se ejecute sin fuentes no publ
 absoluto**, y un `!= 1` sobre un resultado vacío está vacío a su vez: una alerta muda, no una alerta
 que se dispara. Y ese es justo el caso para el que existe la alerta. LwM2M registra su indicador de
 forma incondicional, así que solo la expresión de Sparkplug necesita el emparejamiento.
+
+Los indicadores `is_leader` de ambos servicios suben cuando la réplica **adquiere** el
+arrendamiento, no cuando termina de construir su turno, de modo que un relevo normal no se lee como
+«sin líder» mientras el nuevo líder reconstruye su estado. Lo que sí se esconde en esa ventana es un
+líder **atascado** en la construcción, y en LwM2M un segundo indicador es lo que le pone nombre: vea
+`is_serving` más abajo.
 :::
 
 Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio servicio:
@@ -578,7 +584,8 @@ rasparla.
 
 | Señal | Significa |
 |---|---|
-| `is_leader` | Como arriba. **Alerte si la suma no es 1.** |
+| `is_leader` | 1 en el pod que tiene el arrendamiento, desde el momento en que lo adquiere. **Alerte si la suma no es 1.** |
+| `is_serving` | 1 cuando el bucle de lectura CoAP/DTLS de ese pod ya está en marcha. Léalo **junto a** `is_leader`: la pareja es lo único que separa a un líder que todavía reconstruye su tabla de registros de un líder atascado en esa reconstrucción, y todas las demás señales del pod —disponibilidad, vitalidad, `is_leader`— están en verde en ambos casos. `is_leader == 1 and is_serving == 0` sostenido durante más de lo que tarda un relevo merece una alerta propia. |
 | `active_registrations` / `active_sessions` / `active_observations` | La flota viva tal como la ve el servicio. **Vigile `active_observations` a través de un reinicio**: es como se ve la pérdida de observaciones descrita más arriba, y como se ve su recuperación. |
 | `registrations_total` / `registration_updates_total` | Dispositivos que llegan y que mantienen vivas sus sesiones. |
 | `registration_expiries_total` | Registros que caducaron en lugar de darse de baja: dispositivos que se desvanecieron. |
