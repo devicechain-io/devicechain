@@ -322,7 +322,7 @@ func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
 	// streams the largest on disk.
 	err = validateRenderedInstanceConfig(t.Context(), ch, vals(map[string]interface{}{
 		"streamMaxBytes": int64(64 << 20),
-	}))
+	}), nil)
 	if err == nil {
 		t.Fatal("a half-lowered stream bound passed the bootstrap gate: the operator " +
 			"will learn about it as a readiness timeout instead")
@@ -337,10 +337,10 @@ func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
 	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(map[string]interface{}{
 		"streamMaxBytes":     int64(64 << 20),
 		"streamMaxBytesCold": int64(16 << 20),
-	})); err != nil {
+	}), nil); err != nil {
 		t.Errorf("a correctly lowered pair was rejected: %v", err)
 	}
-	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(nil)); err != nil {
+	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(nil), nil); err != nil {
 		t.Errorf("the chart's own defaults were rejected: %v", err)
 	}
 }
@@ -415,7 +415,7 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 				},
 			},
 		}
-		if err := validateRenderedInstanceConfig(t.Context(), ch, vals); err != nil {
+		if err := validateRenderedInstanceConfig(t.Context(), ch, vals, nil); err != nil {
 			t.Errorf("the chart's own default document does not load: %v", err)
 		}
 	})
@@ -493,7 +493,7 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 				},
 			},
 		}
-		if err := validateRenderedInstanceConfig(t.Context(), ch, vals); err != nil {
+		if err := validateRenderedInstanceConfig(t.Context(), ch, vals, nil); err != nil {
 			t.Errorf("a fully-populated operator configuration does not load: %v", err)
 		}
 	})

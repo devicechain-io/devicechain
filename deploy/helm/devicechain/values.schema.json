@@ -60,7 +60,11 @@
         "createNamespace": { "type": "boolean" },
         "existingSecret": {
           "type": "string",
-          "description": "C2: name of a pre-created Secret (e.g. External Secrets) holding the instance-config JSON under an `instance` key. When set, the chart mounts it and renders no Secret of its own."
+          "description": "C2: name of a pre-created Secret (e.g. External Secrets) holding the instance-config JSON under an `instance` key. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required."
+        },
+        "existingSecretChecksum": {
+          "type": "string",
+          "description": "Required whenever existingSecret is set: the sha256 of the `instance` document inside that Secret. The chart cannot read the Secret, so this is what the pod annotation hashes; without it a config change would apply cleanly, roll no pods and report success."
         },
         "config": { "type": "object" }
       }

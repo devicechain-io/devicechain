@@ -55,7 +55,7 @@ func helmInstall(ctx context.Context, st *State) error {
 	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
 	// reason only in the logs of pods that are already gone. Rendering costs
 	// milliseconds and turns that into a sentence.
-	if err := validateRenderedInstanceConfig(ctx, ch, vals); err != nil {
+	if err := validateRenderedInstanceConfig(ctx, ch, vals, nil); err != nil {
 		return err
 	}
 

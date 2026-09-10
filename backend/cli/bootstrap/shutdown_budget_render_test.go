@@ -167,7 +167,7 @@ func TestBootstrapRejectsADrainWindowTheGracePeriodCannotHold(t *testing.T) {
 	// 60 seconds of drain inside the chart's 30-second grace period: the process
 	// would sleep out the window and be killed halfway through it, so the broker
 	// consumers and the database pool would never be closed at all.
-	err = validateRenderedInstanceConfig(t.Context(), ch, vals(60))
+	err = validateRenderedInstanceConfig(t.Context(), ch, vals(60), nil)
 	if err == nil {
 		t.Fatal("a drain window longer than the grace period passed the bootstrap gate")
 	}
@@ -177,10 +177,10 @@ func TestBootstrapRejectsADrainWindowTheGracePeriodCannotHold(t *testing.T) {
 
 	// The counterweight, twice: the chart's own default budget, and a deliberately
 	// larger window that still leaves room for the teardown.
-	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(5)); err != nil {
+	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(5), nil); err != nil {
 		t.Errorf("the chart's own default budget was rejected: %v", err)
 	}
-	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(15)); err != nil {
+	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(15), nil); err != nil {
 		t.Errorf("a window taking exactly half the grace period was rejected: %v", err)
 	}
 }

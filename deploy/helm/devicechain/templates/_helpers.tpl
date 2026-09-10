@@ -341,6 +341,84 @@ concern — any install owes a root key.
 {{- end -}}
 {{- end -}}
 
+{{/*
+The hand-set shutdown refusal, split out of devicechain.instanceConfig so it runs
+on BOTH config sources.
+
+🔴 IT WAS INSIDE THE DOCUMENT RENDERER, AND THAT IS EXACTLY THE PLACE IT COULD
+STOP RUNNING. Under instance.existingSecret the chart writes no document, so
+every check living inside the renderer leaves with it — silently, because a
+template that is not rendered raises nothing. Splitting the refusal out lets
+devicechain.validateInstanceConfigSource invoke it unconditionally, and the
+renderer still invokes it too, so the inline path is unchanged.
+*/}}
+{{- define "devicechain.validateShutdownNotHandSet" -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- if hasKey $infra "shutdown" -}}
+  {{- fail "instance.config.infrastructure.shutdown is set by the chart, not by hand: it is written from the top-level shutdownDrainSeconds and terminationGracePeriodSeconds values so the drain window and the pod's grace period cannot disagree. Remove the block and set those two values instead." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+🔴 THE GATE THAT SURVIVES BOTH CONFIG SOURCES. Invoked unconditionally from
+instance-config.yaml — outside the block that renders the Secret, so it runs on
+the path where no Secret is rendered at all.
+
+The chart has two config sources and they are not symmetrical. With inline
+config the chart is the AUTHOR: it can read the root key, refuse a hand-set
+shutdown block, drop the ai-inference coordinates a disabled area must not see,
+and hash the exact bytes it is about to write. Under instance.existingSecret the
+chart is only the MOUNTER — the document is opaque to it — so every one of those
+checks becomes something it cannot do.
+
+Which is fine, and is not what this gate is about. The danger is that they
+disappear with nothing said: one value switches five checks off, the templates
+still render, the install still succeeds, and the tests that covered them keep
+passing against an inline-config fixture no deployment uses any more. That is the
+shape this project keeps finding, and it does not need a fourteenth instance.
+
+So the gate makes the handover EXPLICIT. Whoever supplies the Secret must also
+supply instance.existingSecretChecksum — a digest of the document they wrote. It
+is not decoration:
+
+  - It is what keeps pods rolling when the config changes. The checksum annotation
+    hashes the rendered document, which under an external Secret is empty and
+    therefore constant: a credential rotation would apply cleanly, roll nothing,
+    and report success.
+  - Producing it requires having the document in hand, which is the same thing as
+    being able to run the checks the chart just lost. A supplier that can compute
+    the digest can strict-load the JSON and confirm the root key; one that cannot
+    was never in a position to own the document.
+*/}}
+{{- define "devicechain.validateInstanceConfigSource" -}}
+{{- include "devicechain.validateShutdownNotHandSet" . -}}
+{{- $external := .Values.instance.existingSecret | default "" -}}
+{{- if $external -}}
+  {{- if not (.Values.instance.existingSecretChecksum | default "") -}}
+    {{- fail (printf "instance.existingSecret is set to %q, so instance.existingSecretChecksum must be set too. The chart cannot read that Secret, so it cannot hash what the pods will actually mount: without a digest supplied by whoever wrote it, changing the instance config would apply cleanly, roll no pods, and report success. Set it to the sha256 of the `instance` document in that Secret. Supplying the config inline instead leaves the chart to compute it." $external) -}}
+  {{- end -}}
+{{- else -}}
+  {{- include "devicechain.validateSecretsRootKey" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The value of the checksum/instance-secret pod annotation: what must change when
+the mounted instance config changes.
+
+With inline config that is the digest of the document the chart is about to
+write. Under instance.existingSecret the chart cannot see the document, so it is
+the digest its supplier declared — required by
+devicechain.validateInstanceConfigSource, for this reason.
+*/}}
+{{- define "devicechain.instanceConfigChecksum" -}}
+{{- if .Values.instance.existingSecret | default "" -}}
+{{- .Values.instance.existingSecretChecksum -}}
+{{- else -}}
+{{- include "devicechain.instanceConfig" . | sha256sum -}}
+{{- end -}}
+{{- end -}}
+
 {{/* The dedicated ServiceAccount name (E7). */}}
 {{- define "devicechain.serviceAccountName" -}}
 {{- .Values.serviceAccount.name | default (printf "dc-%s" .Values.instance.id) -}}
@@ -500,6 +578,12 @@ sit unread until some unrelated change restarted the pod, and the feature would
 stay dead. Same reasoning as devicechain.microserviceConfig on the next line of
 that annotation block.
 
+The annotation now reads devicechain.instanceConfigChecksum rather than this
+helper directly, and only because a second config source exists: under
+instance.existingSecret this renders a document nothing mounts, so hashing it
+would produce a value that never moves. The two paths are the same requirement —
+the annotation must change when the mounted config does — reached differently.
+
 WHY ANYTHING IS FILTERED. values.yaml ships
 infrastructure.aiInference.hostname non-empty by default and the whole
 instance.config rides through verbatim, so a profile that never deploys
@@ -537,9 +621,7 @@ the filtered document by accident.
   {{- $_ := set $cfg "infrastructure" dict -}}
 {{- end -}}
 {{- $infra := index $cfg "infrastructure" -}}
-{{- if hasKey $infra "shutdown" -}}
-  {{- fail "instance.config.infrastructure.shutdown is set by the chart, not by hand: it is written from the top-level shutdownDrainSeconds and terminationGracePeriodSeconds values so the drain window and the pod's grace period cannot disagree. Remove the block and set those two values instead." -}}
-{{- end -}}
+{{- include "devicechain.validateShutdownNotHandSet" . -}}
 {{- $_ := set $infra "shutdown" (dict
     "drainSeconds" (int .Values.shutdownDrainSeconds)
     "terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds)) -}}

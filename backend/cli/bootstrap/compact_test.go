@@ -429,7 +429,7 @@ func TestCompactPassesTheConfigTheServicesEnforce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)
 	}
-	if err := validateRenderedInstanceConfig(t.Context(), ch, helmValues(compactState(true))); err != nil {
+	if err := validateRenderedInstanceConfig(t.Context(), ch, helmValues(compactState(true)), nil); err != nil {
 		t.Fatalf("the compact preset renders a config the services refuse: %v", err)
 	}
 }

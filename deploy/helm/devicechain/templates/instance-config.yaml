@@ -15,6 +15,10 @@ credentials to values: set instance.existingSecret to the name of a Secret that
 already holds the `instance` key (the full instance-config JSON), and this
 template is skipped.
 */}}
+{{/* 🔴 OUTSIDE THE BLOCK BELOW, DELIBERATELY. The validation has to run on the
+path where this Secret is NOT rendered — that is the path it exists for. See
+devicechain.validateInstanceConfigSource. */}}
+{{- include "devicechain.validateInstanceConfigSource" . }}
 {{- if not .Values.instance.existingSecret }}
 apiVersion: v1
 kind: Secret
@@ -24,7 +28,6 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 type: Opaque
-{{- include "devicechain.validateSecretsRootKey" . }}
 stringData:
   instance: {{ include "devicechain.instanceConfig" . | quote }}
 {{- end }}

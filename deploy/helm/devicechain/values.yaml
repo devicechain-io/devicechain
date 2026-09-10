@@ -51,6 +51,13 @@ instance:
   # config JSON under an `instance` key, and the chart will mount it and skip
   # rendering its own Secret (the `config` block below is then unused).
   existingSecret: ""
+  # Required whenever existingSecret is set: the sha256 of the `instance` document
+  # inside that Secret. The chart cannot read the Secret, so it cannot hash what
+  # the pods will actually mount — and the pod annotation that rolls workloads on a
+  # config change would otherwise be a constant. Without it, rotating a credential
+  # applies cleanly, restarts nothing and reports success. Ignored (and unnecessary)
+  # when the config is supplied inline below.
+  existingSecretChecksum: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.

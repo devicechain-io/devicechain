@@ -64,8 +64,9 @@ func renderInstanceConfigDocument(ctx context.Context, ch *chart.Chart, vals map
 		return []byte(raw), nil
 	}
 	// The chart deliberately renders no Secret when instance.existingSecret points
-	// at one the operator manages. There is nothing to check in that case, and
-	// nothing wrong either.
+	// at one supplied out of band. Whether that is fine is not this function's
+	// call — see validateRenderedInstanceConfig, which is the one that has to know
+	// whether anybody authored a document at all.
 	return nil, nil
 }
 
@@ -87,14 +88,44 @@ func renderInstanceConfigDocument(ctx context.Context, ch *chart.Chart, vals map
 // this pre-flight exists to convert into a sentence. The loader also applies defaults
 // before validating, as the services do, so an omitted key is judged the way it will
 // actually be judged and not as a zero.
-func validateRenderedInstanceConfig(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) error {
-	raw, err := renderInstanceConfigDocument(ctx, ch, vals)
+// 🔴 authored IS THE SECOND CONFIG SOURCE, AND IT IS A PARAMETER SO THAT "NOBODY
+// AUTHORED ONE" CANNOT PASS AS "NOTHING TO CHECK".
+//
+// The chart renders no Secret when instance.existingSecret names one supplied out
+// of band, and this function used to read that as success and return nil. Nothing
+// sets that value today, so the branch was unreachable — which is the only reason
+// it was harmless. The moment dcctl writes the Secret itself, an unreachable
+// "return nil" becomes a live one: the pre-flight would answer "valid" for every
+// document, including the ones it exists to catch, and it would do so on the
+// exact path where the chart's own guards are also switched off.
+//
+// So the check is now about SOURCES rather than about bytes. Exactly one side
+// must have authored the document; whichever did, the same strict load runs over
+// it. Passing bytes here when the chart also rendered a Secret is a contradiction
+// — two documents, and the pods mount only one — and is refused rather than
+// resolved by precedence, because a silent precedence rule is how the two drift.
+func validateRenderedInstanceConfig(ctx context.Context, ch *chart.Chart, vals map[string]interface{}, authored []byte) error {
+	rendered, err := renderInstanceConfigDocument(ctx, ch, vals)
 	if err != nil {
 		return err
 	}
-	if raw == nil {
-		return nil
+
+	var raw []byte
+	switch {
+	case rendered != nil && authored != nil:
+		return fmt.Errorf("two instance configuration documents were produced for one deploy: " +
+			"the chart rendered its own Secret AND a document was supplied for instance.existingSecret. " +
+			"The pods mount exactly one, so this is not a preference to resolve")
+	case rendered != nil:
+		raw = rendered
+	case authored != nil:
+		raw = authored
+	default:
+		return fmt.Errorf("no instance configuration document was produced for this deploy: " +
+			"the chart rendered no Secret (instance.existingSecret is set) and nothing was supplied " +
+			"in its place, so the services would mount a Secret this run never validated")
 	}
+
 	if err := core.LoadConfiguration(raw, &config.InstanceConfiguration{}); err != nil {
 		return fmt.Errorf("the instance configuration this deploy would render is one "+
 			"the services will refuse to start on: %w", err)
