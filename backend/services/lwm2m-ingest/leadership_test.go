@@ -85,6 +85,53 @@ func leadershipTestGlobals(t *testing.T, build func(context.Context, map[string]
 	return fuse
 }
 
+// supervisionRecorder collects one is_serving reading per transport supervision a term starts,
+// taken at the moment that supervision is started.
+type supervisionRecorder struct {
+	mu             sync.Mutex
+	servingAtStart []float64
+}
+
+func (r *supervisionRecorder) record(serving float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.servingAtStart = append(r.servingAtStart, serving)
+}
+
+func (r *supervisionRecorder) recorded() []float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]float64(nil), r.servingAtStart...)
+}
+
+// recordSupervisions installs that recorder over the term's transport supervision and puts the
+// real one back afterwards.
+//
+// 🔴 THE READING IT TAKES IS THE ONLY THING THAT PINS WHERE setServing(true) SITS. Every other
+// observation a test can make of a successful term — the gauge once it is up, the gauge once the
+// term has ended, the lease steps, the return value — is satisfied by a setServing(true) placed
+// ANYWHERE after a successful build, including above the dispatcher wait and above the
+// supervision, where the pair reads leader=1 serving=1 on precisely the state it exists to name:
+// a leader with no read loop. Measured, not assumed — hoisting the call to just below the fuse
+// reset leaves every test in this module green.
+//
+// The count matters as well as the value, which is why the recorder appends rather than
+// overwrites: "the term never supervised anything" and "the term supervised something, with
+// is_serving already up" are different failures and neither is a passing state.
+func recordSupervisions(t *testing.T) *supervisionRecorder {
+	t.Helper()
+
+	prev := superviseServeFn
+	t.Cleanup(func() { superviseServeFn = prev })
+
+	rec := &supervisionRecorder{}
+	superviseServeFn = func(srv serveServer, onDeath func(error)) func() {
+		rec.record(testutil.ToFloat64(servingGauge))
+		return prev(srv, onDeath)
+	}
+	return rec
+}
+
 // fuseRecorder stands in for the process-ending failProcess so the fuse can be driven without
 // tearing down the test binary. It records the error the fuse reported and, so the ORDER against
 // the lease release can be asserted, appends to the lease's own step log.
@@ -227,6 +274,13 @@ func TestIsLeaderIsRaisedAtAcquireNotAfterTheTermBuild(t *testing.T) {
 // This is the only test that drives a SUCCESSFUL term, so it also covers the ordering that the
 // build-failure tests cannot see: the read loop starts, and only then does the replica report
 // itself as serving.
+//
+// 🔴 THAT ORDERING IS PINNED BY THE RECORDER, NOT BY THE Eventually BELOW. "is_serving reaches 1
+// on a term that built and served" is true of a setServing(true) placed anywhere after a
+// successful build — above the dispatcher wait, above the supervision, immediately after the fuse
+// reset — and every one of those placements leaves this package green without it. The recorder
+// reads the gauge at the one instant that separates them: the moment the term starts its
+// transport's read loop.
 func TestIsServingIsRaisedOnceTheTransportServes(t *testing.T) {
 	// Built out here, not inside the builder: the builder runs on serveAsLeader's goroutine, where
 	// a require would call t.FailNow from the wrong goroutine and hang the test rather than fail it.
@@ -238,6 +292,8 @@ func TestIsServingIsRaisedOnceTheTransportServes(t *testing.T) {
 	leadershipTestGlobals(t, func(context.Context, map[string]config.PskBinding) (*server.Server, *registry.Registry, *downlink.Dispatcher, error) {
 		return srv, reg, nil, nil // no dispatcher: this term serves the transport and nothing else
 	})
+
+	supervisions := recordSupervisions(t)
 
 	lease := &recordingLease{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -254,6 +310,14 @@ func TestIsServingIsRaisedOnceTheTransportServes(t *testing.T) {
 			"leader as one wedged in its build")
 	assert.Equal(t, float64(1), testutil.ToFloat64(leaderGauge), "is_leader came back down on a serving term")
 
+	// The gauge is at 1, so the supervision that precedes it has already run and its reading is
+	// recorded — no wait is needed here. A required-presence check, not a value one: an empty
+	// slice means the term raised is_serving without ever starting a read loop, which is the
+	// failure this reading exists to catch and is NOT a passing state.
+	require.Equal(t, []float64{0}, supervisions.recorded(),
+		"is_serving was already up when this term started its transport's read loop, so the pair "+
+			"reads leader=1 serving=1 on a leader that is not yet serving — the one state it exists to name")
+
 	cancel()
 	select {
 	case <-done:
@@ -264,6 +328,77 @@ func TestIsServingIsRaisedOnceTheTransportServes(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(servingGauge), "a term that ended still reports this replica as serving")
 	assert.Equal(t, float64(0), testutil.ToFloat64(leaderGauge), "a term that ended still reports this replica as the leader")
 	assert.Equal(t, []string{"release"}, lease.recorded(), "an orderly term end releases the lease exactly once")
+}
+
+// 🔴 A TERM THAT IS ALREADY EVICTED MUST NOT START ITS READ LOOP.
+//
+// The eviction can land at any point in a term, and the window this drives — after the acquire,
+// while the build is still running — is a real one: the build reads every bound tenant from
+// device-state serially with a 30-second per-tenant budget, which is the longest stretch of a
+// term and the one most likely to outlive the lease. What used to happen on the far side of it
+// was that the term opened the socket, raised is_serving, fell straight through the wait and
+// closed the socket again.
+//
+// The assertion that carries the property is the SUPERVISION count, not the gauge. is_serving is
+// back at 0 by the time the term returns whichever way this goes — the unwind lowers it — so a
+// gauge read here is satisfied by a term that raised it, served nothing and lowered it again. A
+// read loop that was started at all is the observable that separates them.
+//
+// The lease step is the counterweight: "never serves" is also satisfied by a term that returns
+// early and strands the partition, which is the failure every other test in this file is about.
+func TestATermEvictedBeforeItServesNeverStartsTheReadLoop(t *testing.T) {
+	// Built out here for the reason the serving test gives: a require inside the builder runs on
+	// serveAsLeader's goroutine, where FailNow hangs the test rather than failing it.
+	srv, err := server.New(server.Config{Addr: "127.0.0.1:0", MaxSessions: 1}, server.Metrics{})
+	require.NoError(t, err, "could not bind an ephemeral CoAP/DTLS socket for the term")
+	reg := registry.New(&mainResolver{}, &mainEmitter{}, adapter.NewEpochSource(nil),
+		registry.Metrics{}, registry.Options{Source: registry.SourceLwM2M})
+
+	inBuild := make(chan struct{})
+	finishBuild := make(chan struct{})
+	leadershipTestGlobals(t, func(context.Context, map[string]config.PskBinding) (*server.Server, *registry.Registry, *downlink.Dispatcher, error) {
+		close(inBuild)
+		<-finishBuild
+		return srv, reg, nil, nil // the build SUCCEEDS: this is the eviction path, not the fuse path
+	})
+	supervisions := recordSupervisions(t)
+
+	lease := &recordingLease{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveAsLeader(ctx, lease)
+	}()
+
+	select {
+	case <-inBuild:
+	case <-time.After(5 * time.Second):
+		close(finishBuild)
+		t.Fatal("serveAsLeader never entered the term build")
+	}
+
+	// Evict while the build is still running. context.CancelFunc cancels its children before it
+	// returns, so leaderCtx is observably done by the time the build is released — the race this
+	// would otherwise have with the term's own progress is closed here, not slept away.
+	cancel()
+	close(finishBuild)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("serveAsLeader did not unwind after its term was evicted during the build")
+	}
+
+	assert.Empty(t, supervisions.recorded(),
+		"an already-evicted term started its transport's read loop; it reports is_serving=1 and "+
+			"closes the socket again in the same breath")
+	assert.Equal(t, float64(0), testutil.ToFloat64(servingGauge), "a term that never served reports this replica as serving")
+	assert.Equal(t, []string{"release"}, lease.recorded(),
+		"an evicted term must still release the lease, or the standby waits out a full TTL for a "+
+			"partition nothing is serving")
 }
 
 // 🔴 RETURNING false IS NOT THE FIX; THE LOOP ACTING ON IT IS.
@@ -550,6 +685,77 @@ func TestTheLeadershipLoopStopsAndLeavesThePartitionTakeableWhenTheTransportDies
 	require.NoError(t, err, "a standby could not take the LwM2M partition after the serving replica's "+
 		"transport died, so nothing serves the transport until the lease entry ages out its full TTL")
 	require.NoError(t, held.Release())
+}
+
+// 🔴 THE START PHASE IS WHAT WIRES THE INERT SUPERVISION, AND THAT LINE HAS TO BE GATED ITSELF.
+//
+// The test below drives superviseInertTransport directly, which pins what the supervision DOES.
+// It says nothing about whether anything calls it: delete the assignment in
+// afterMicroserviceStarted and that test still passes, along with the whole package — measured,
+// not assumed. What ships then is an identity-less pod whose transport is its entire service,
+// sitting Ready with a dead socket and nothing to restart it, which is the exact outcome the
+// supervision exists to prevent.
+//
+// 🔑 THE DEATH IS DRIVEN THROUGH THE SERVER, NOT THROUGH inertStop. Stopping the server directly
+// records no serve intent, so the Serve return the supervision sees is an unexpected death — and
+// that is only observable at all if the START PHASE actually supervised THIS server. A non-nil
+// inertStop alone would be satisfied by any function assigned there; the process ending is
+// satisfied only by the real wiring.
+func TestTheStartPhaseSupervisesTheInertTransport(t *testing.T) {
+	newTestMicroservice(t) // a Microservice with its own mux, metrics registry and readiness gate
+
+	prevNats, prevSrv, prevStop := NatsManager, inertServer, inertStop
+	prevPort, prevFail := httpPort, failProcess
+	t.Cleanup(func() {
+		NatsManager, inertServer, inertStop = prevNats, prevSrv, prevStop
+		httpPort, failProcess = prevPort, prevFail
+	})
+
+	fired := make(chan error, 1)
+	failProcess = func(err error) {
+		select {
+		case fired <- err:
+		default:
+		}
+	}
+
+	srv, err := server.New(server.Config{Addr: "127.0.0.1:0", MaxSessions: 1}, server.Metrics{})
+	require.NoError(t, err, "could not bind an ephemeral CoAP/DTLS socket for the inert transport")
+
+	// The inert shape: no credentials, so no NATS manager and no lease — one always-on
+	// health-only transport instead.
+	NatsManager, inertServer, inertStop = nil, srv, nil
+	// An ephemeral HTTP port. This is the ONLY thing that stood between this path and a test:
+	// afterMicroserviceStarted ends in startHttpServer, which already takes the port as a
+	// parameter — it was the caller's baked-in 8080 that could not be asked for anything else.
+	httpPort = 0
+
+	require.NoError(t, afterMicroserviceStarted(context.Background()))
+	t.Cleanup(func() {
+		if httpServer != nil {
+			_ = httpServer.Shutdown(context.Background())
+		}
+	})
+
+	require.NotNil(t, inertStop,
+		"the start phase left the inert transport unsupervised; a socket death on the one pod that "+
+			"serves it would leave it Ready, answering no probe, with nothing to restart it")
+
+	// Not inertStop(): that records serve intent, which is the graceful direction the test below
+	// covers. Closing the listener under the supervision is the death direction.
+	srv.Stop()
+
+	select {
+	case err := <-fired:
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "the CoAP/DTLS transport stopped serving",
+			"the inert transport died and the process was ended without saying why")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start phase's inert transport died and nothing ended the process, so the " +
+			"supervision it returns is not the one wired into inertStop")
+	}
+
+	inertStop() // join the serve goroutine before the test's globals are put back
 }
 
 // 🔴 THE INERT TRANSPORT HAS TO END THE POD TOO, AND NOTHING ELSE WILL.

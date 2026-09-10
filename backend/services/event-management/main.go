@@ -333,9 +333,21 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// Stop the GraphQL server before the NATS manager. The GraphQL plane here holds live
 	// broker state, not just database reads: the events subscription reads the tenant's
 	// resolved-event stream over this connection for as long as a socket is open, and
-	// GraphQLManager's stop is what closes those sockets. Doing that first means each
-	// subscriber gets a clean close from the server it asked; the reverse order pulls the
-	// stream out from under a socket that is still open and reports it as a broker fault.
+	// GraphQLManager's stop is what closes those sockets. Doing that first cancels each
+	// subscription's context while its broker subscription is still live, so the feed
+	// unwinds from the top and every subscriber is closed by the server it asked.
+	//
+	// 🔴 THE REVERSE ORDER REPORTS NOTHING AT ALL — IT DOES NOT SURFACE AS A BROKER FAULT,
+	// AND THAT IS WHY IT IS WORTH ORDERING RATHER THAN LEAVING TO CHANCE. Draining the
+	// connection first removes the subscription, and nats.go's removeSub closes a
+	// subscription's delivery channel only for a SyncSubscription; SubscribeLive is built on
+	// ChanSubscribe, so the channel is set to nil and never closed. Its forwarding goroutine
+	// stays parked on its select, the channel it feeds is never closed, and the resolver's
+	// `for msg := range live` simply blocks. Nor does anything else complain: the manager
+	// sets its shutting-down flag before Drain, so the connection's ClosedHandler logs an
+	// expected shutdown rather than the permanent-failure error. The subscriber is left with
+	// neither data nor a close until the GraphQL stop finally drops its socket — a silent
+	// stall for the length of the teardown, indistinguishable at the client from an idle feed.
 	err = GraphQLManager.Stop(ctx)
 	if err != nil {
 		return err

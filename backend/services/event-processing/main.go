@@ -618,12 +618,23 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	// Stop the GraphQL server before the NATS manager. The detections subscription reads
 	// the tenant's derived-event stream over this connection for as long as a socket is
-	// open, and GraphQLManager's stop is what closes those sockets — so closing them
-	// first gives each subscriber a clean close instead of a stream that vanishes under
-	// a still-open socket. The DETECT partition lease is unaffected either way: the
-	// processor's stop above waits for the term to end, which flushes the final
-	// checkpoint and releases the lease, and both of those happen before either of these
-	// two lines runs.
+	// open, and GraphQLManager's stop is what closes those sockets — so closing them first
+	// cancels each subscription's context while its broker subscription is still live, and
+	// the feed unwinds from the top.
+	//
+	// 🔴 THE REVERSE ORDER REPORTS NOTHING AT ALL, WHICH IS THE REASON TO ORDER IT. Draining
+	// the connection first removes the subscription, and nats.go's removeSub closes a
+	// subscription's delivery channel only for a SyncSubscription; SubscribeLive is built on
+	// ChanSubscribe, so the channel is set to nil and never closed. Its forwarding goroutine
+	// stays parked, the channel it feeds is never closed, and the resolver's range over it
+	// simply blocks — with no error anywhere, since the manager sets its shutting-down flag
+	// before Drain and the ClosedHandler then logs an expected shutdown. The subscriber gets
+	// neither data nor a close until the GraphQL stop drops its socket: a silent stall for
+	// the length of the teardown, not a fault anyone can see.
+	//
+	// The DETECT partition lease is unaffected either way: the processor's stop above waits
+	// for the term to end, which flushes the final checkpoint and releases the lease, and
+	// both of those happen before either of these two lines runs.
 	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
 	}

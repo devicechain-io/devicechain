@@ -179,6 +179,58 @@ func TestResolveSourcesBuildsOnePerSource(t *testing.T) {
 	assert.Empty(t, empty)
 }
 
+// 🔴 A CLIENT WITH NO METRICS IS SILENT, NOT BROKEN — WHICH IS WHY THIS WIRING NEEDS ITS OWN GATE.
+//
+// Every field of host.Metrics is optional and every use of one is nil-guarded, which is what lets
+// the host be driven in a test with no registry. It is also what makes a slip here invisible:
+// resolveSources handing NewClient an empty host.Metrics compiles, vets clean and — measured, not
+// assumed — leaves every other test in both packages green. The counters are still constructed in
+// the initialize phase, still registered and still exported, and permanently zero, because every
+// guard in the receive path then takes the silent branch. On a dashboard that reads exactly like a
+// fleet that has never dropped a rebirth.
+//
+// Nothing above catches it. The host tests build their OWN counters and assert which arm of the
+// enqueue select moves which field; the http-surface test asserts both NAMES are registered in the
+// initialize phase; the name-binding test asserts each field is exported under its own name. All
+// three are satisfied by a client that was handed none of them.
+//
+// The two assertions here are deliberately different in kind:
+//
+//   - the set comparison is the whole-struct one. It fails for ANY field resolveSources drops or
+//     substitutes, including ones added later that this test does not name.
+//   - the registry round trip is the counterweight, and it is the one that would still be worth
+//     having if the struct were compared some other way: it increments THROUGH the client the
+//     service built and reads the number back out BY NAME, so it ties the client to the identifier
+//     an operator types into PromQL rather than to a value the test is holding.
+func TestResolveSourcesGivesEachClientTheRegisteredMetrics(t *testing.T) {
+	registry := newTestMicroservice(t)
+	// The SERVICE's own constructor, not a hand-built set: a test that made its own counters
+	// would be asserting against its own copy of the wiring.
+	metrics := buildMetrics()
+
+	cfg := &config.SparkplugConfiguration{Sources: []config.SparkplugSource{
+		src("tcp://a:1883"), src("ssl://b:8883"),
+	}}
+	clients, err := resolveSources(cfg, "inst", nil, nil, metrics)
+	require.NoError(t, err)
+	require.Len(t, clients, 2)
+
+	for i, client := range clients {
+		require.Equal(t, metrics, client.Metrics(),
+			"source %d's client was not given the metrics the service registered; its counters export "+
+				"and stay at zero, which reads as a fleet that never dropped a rebirth", i)
+		client.Metrics().RebirthEnqueued.Inc()
+		client.Metrics().RebirthDropped.Add(2)
+	}
+
+	require.Equal(t, float64(len(clients)),
+		seriesValue(t, registry, "devicechain_sparkplugingest_rebirth_enqueued_total"),
+		"incrementing through the client the service built did not move the exported series")
+	require.Equal(t, float64(2*len(clients)),
+		seriesValue(t, registry, "devicechain_sparkplugingest_rebirth_dropped_total"),
+		"incrementing through the client the service built did not move the exported series")
+}
+
 // leaseTermRecorder is a fake leaseTerm that makes a leadership term's teardown ORDER
 // observable. Its KeepAlive parks once the term context is cancelled — standing in for
 // a Renew whose KV Update is still in flight, widened from the microseconds it really
