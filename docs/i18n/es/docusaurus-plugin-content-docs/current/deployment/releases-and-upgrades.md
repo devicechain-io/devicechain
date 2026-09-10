@@ -1003,6 +1003,189 @@ Los paquetes npm publicados y el SDK para .NET/Unity no llevan cambios de códig
 Ahora bien, si su propio código envía mutaciones de actualización a través de ellos, ese código sí
 tendrá que regenerarlo usted.
 
+### v0.16.0 — los dispositivos deben nombrar el despacho que responden {#v0160-upgrade}
+
+`v0.16.0` es una actualización `helm upgrade` normal desde `v0.15.x`. Una migración nueva se
+ejecuta sola al arrancar `command-delivery`: añade una columna con un valor por defecto, rellena
+las filas existentes en la misma sentencia y no requiere nada de usted.
+
+Hay **una comprobación previa que conviene hacer antes de actualizar** y un cambio incompatible
+que afecta a los dispositivos, no a quienes llaman a la API. Más allá de eso, esta versión trata
+sobre todo de servicios que se niegan a arrancar ante configuraciones que antes se aceptaban y se
+ignoraban en silencio — lo cual es más seguro, y también puede detener un pod que llevaba meses
+funcionando sin problemas.
+
+#### Antes de actualizar: revise si sus puertos de escucha colisionan
+
+`event-sources` ejecuta más de un servidor HTTP en un mismo proceso — GraphQL en su propio puerto,
+más cada fuente de eventos HTTP que tenga configurada. Hasta ahora, que dos de ellos coincidieran
+en el mismo puerto mataba un transporte de ingesta **en silencio**: el servidor perdedor moría
+dentro de una gorutina y nunca se volvía a mencionar.
+
+Ahora los enlaces son síncronos y un fallo es fatal, de modo que una colisión que llevaba meses
+rota **hace que el despliegue entre en ciclo de reinicios.** Ese es el comportamiento correcto y
+es también el cambio que con más probabilidad le sorprenderá, porque hoy nada le avisa de ello.
+
+Compare el `port` de cada fuente con los demás y con el puerto de GraphQL, y compruebe que la
+entrada `extraPorts` del chart coincide con el `port` de cada fuente. Un `port: "0"` de cara al
+dispositivo también se rechaza ahora.
+
+#### Todo dispositivo que responda a un comando debe devolver el nonce del despacho
+
+Este es el único cambio incompatible de protocolo de la versión, y **la población a la que afecta
+son los dispositivos construidos fuera de este repositorio** — firmware, pasarelas, cualquier cosa
+que hable directamente el protocolo de comandos.
+
+El sobre de entrega lleva un `dispatchNonce`. Un dispositivo que responda a ese comando debe ahora
+devolver el mismo valor en el sobre de su respuesta. Una respuesta que lo omita, o que nombre un
+despacho que el comando ya ha abandonado, se **rechaza y se registra como carta muerta** en lugar
+de resolver el comando.
+
+El motivo es un defecto real, no una cuestión de orden: el mismo comando puede publicarse
+legítimamente más de una vez — devuelto a la cola y despachado de nuevo — y sin un nonce no hay
+forma de saber a qué despacho pertenece una respuesta. Una respuesta a un despacho ya superado
+estaba resolviendo el más reciente con el resultado del anterior.
+
+:::caution Cómo saber si esto es seguro para su flota
+La plataforma no puede enumerar dispositivos construidos en otro lugar, así que los cuenta por
+usted. Después de actualizar, vigile:
+
+- **`devicechain_commanddelivery_command_delivery_responses_without_nonce_total`** — respuestas que
+  no nombraron ningún despacho. Sobre todo dispositivos sin actualizar, y en una flota donde todos
+  hablan el contrato actual debería ser **cero**. Cuenta cualquier respuesta sin nonce, así que una
+  respuesta duplicada o tardía a un comando ya resuelto también acaba aquí.
+- **`devicechain_commanddelivery_command_delivery_responses_stale_nonce_total`** — respuestas que
+  nombran un despacho que el comando ya abandonó. La lectura habitual es que se están publicando
+  comandos más de una vez, que es el defecto que este cambio corrige; un dispositivo que reenvía una
+  entrada antigua de su bandeja de salida también lo produce.
+
+(El `command_delivery` duplicado no es una errata: la serie lleva como prefijos el espacio de
+nombres de la plataforma y el área funcional, así que el nombre de arriba es el que se pega en una
+consulta.)
+
+Una respuesta rechazada **no se descarta.** Se escribe como carta muerta, porque el informe del
+dispositivo sobre lo que hizo no existe en ningún otro sitio — así puede consultar esas respuestas
+mientras resuelve el primer contador.
+:::
+
+Si sus dispositivos usan el **SDK de .NET/Unity**, actualizar el SDK es toda la solución: lleva el
+nonce por usted en ambos sentidos. El adaptador de bajada LwM2M y el simulador de dispositivos se
+actualizaron en el mismo cambio. El agente de borde no se ve afectado: envía telemetría y no
+recibe comandos.
+
+Junto a ellos llega un contador relacionado:
+`devicechain_commanddelivery_command_delivery_responses_not_answerable_total` cuenta una respuesta
+que nombró el despacho en el que está su comando y aun así no pudo resolverlo. Ningún estado de
+comando del vocabulario actual produce eso, así que debería marcar **cero**; existe para detectar
+que se añada más adelante un estado sin que nadie haya decidido si una respuesta puede resolverlo.
+
+#### Ahora los servicios se niegan a arrancar ante cosas que antes aceptaban
+
+Cada uno de estos es una corrección que falla de forma cerrada, y cada uno puede detener un pod que
+antes funcionaba:
+
+| Qué | La condición que ahora se rechaza |
+| --- | --- |
+| Almacén de secretos | una clave raíz de instancia bien formada pero **incorrecta** — antes arrancaba y fallaba en el primer secreto que se le pedía |
+| Configuración de instancia | una **clave mal escrita** — antes se descartaba en silencio y se aplicaba el valor por defecto |
+| Configuración de instancia | `DC_SHUTDOWN_DRAIN_SECONDS` todavía definida — la variable de entorno ya no existe; el valor es `infrastructure.shutdown.drainSeconds` |
+| Configuración de instancia | una ventana de drenaje mayor que **la mitad** del `terminationGracePeriodSeconds` del pod |
+| Puertos de escucha | dos servidores en un mismo puerto, o un `port: "0"` de cara al dispositivo |
+| Cualquier servidor HTTP | un puerto ya en uso — antes se registraba desde dentro de una gorutina mientras el servicio informaba de un arranque correcto |
+
+La de la clave mal escrita merece un momento. Una errata en `maxSubscriptionMessageBytes` redujo a
+la mitad el techo real de trama sin registrar nada — la clave se descartaba y se aplicaba el valor
+por defecto, lo que se parece exactamente a una configuración que funciona. La decodificación
+estricta hace que se entere al arrancar.
+
+#### Métricas: once series nuevas, ninguna renombrada ni eliminada
+
+Todas las series que existían en v0.15.0 conservan su nombre exacto — nada se renombró y nada
+desapareció, ni siquiera con el cambio que dio a cada servicio su propio registro de métricas.
+
+Lo nuevo: cinco contadores en `command-delivery` (los dos del nonce de arriba, más despachos
+agotados, respuestas que el estado del comando no pudo aceptar, y respuestas perdidas porque no se
+pudo escribir una carta muerta), dos contadores de cartas muertas de alarma en `device-management`,
+un contador de cierre temprano en `event-sources`, `is_serving` en `lwm2m-ingest`, y los dos
+contadores de renacimiento de Sparkplug de más abajo.
+
+:::caution `is_leader` cambia de significado en `lwm2m-ingest`, y la documentación recomienda alertar sobre él
+El indicador se levanta ahora cuando la réplica **adquiere** el arrendamiento, en lugar de después
+de terminar de construir su mandato. Construir un mandato tarda hasta 30 segundos por cada
+inquilino asignado, así que una réplica que acababa de ganar una conmutación por error informaba
+antes `is_leader=0` durante hasta 30 segundos por inquilino mientras sí tenía el arrendamiento.
+
+Si sigue la alerta `sum(devicechain_lwm2mingest_is_leader) != 1` que recomienda la guía de
+despliegue, esa ventana de falsa ausencia de líder desaparece. El nuevo indicador
+**`devicechain_lwm2mingest_is_serving`** es lo que ahora distingue «líder, todavía construyendo su
+mandato» de «líder y sirviendo» — el estado que un solo indicador no podía expresar. `is_leader == 1`
+con `is_serving == 0` de forma sostenida es un líder atascado en su construcción. Tenga en cuenta
+que el chart no incluye ninguna regla de alerta para ninguno de los dos: esto es orientación para
+que la escriba usted, no una regla que hereda.
+:::
+
+**`sparkplug-ingest` añade `rebirth_enqueued_total` y `rebirth_dropped_total`.** Una cola de
+renacimiento saturada era antes indistinguible de una inactiva en todas las series que el servicio
+exportaba, porque `rebirth_requests_total` cuenta publicaciones exitosas — así que la saturación
+hacía que *dejara de subir*. Lea el par nuevo en conjunto: descartes que suben mientras las
+solicitudes se mantienen en un techo es un abanico de salida que supera a un publicador sano;
+descartes que suben mientras las solicitudes siguen planas apunta a la conexión con el broker.
+
+#### Otros comportamientos que conviene conocer
+
+- **Un comando que la plataforma no puede publicar ahora falla.** Antes alternaba entre en cola y
+  enviado en cada barrido hasta que su TTL vencía días después, y entonces registraba un tiempo de
+  espera agotado — lo que dice que un dispositivo no respondió, cuando nunca se había despachado
+  nada. Ahora se detiene en un límite (20 intentos por defecto, unos diez minutos con la cadencia
+  de barrido por defecto de 30 segundos) y registra el fallo nombrando a la plataforma. El límite
+  puede cambiarlo en `functionalAreas.command-delivery.config.maxDispatchFailures`.
+- **El `reason` de una carta muerta por un destino de conector bloqueado es ahora `unprocessable`**
+  en lugar de `exhausted`. Actualice cualquier alerta o consulta guardada que use el valor
+  anterior; los registros existentes se leen igual que antes.
+- **Un cambio de estado de alarma que no se pudo publicar ahora se registra como carta muerta y se
+  cuenta**, y `alarm_event_dead_letter_lost_total` se suma a la alerta `DeadLetterWriteLost`.
+- **Un mensaje entrante que no se puede decodificar ya no se archiva entero.** El registro apunta
+  al original por asunto y número de secuencia del flujo.
+- **Las suscripciones GraphQL se cierran limpiamente al apagar** con una trama `1001`, y una trama
+  entrante tiene ahora un tope — `infrastructure.graphql.maxSubscriptionMessageBytes`, 4 MiB por
+  defecto. Es el único valor nuevo del chart en esta versión, y tiene valor por defecto.
+- **El refresco de gobernanza tiene un límite de ritmo** — 50 consultas/s con una ráfaga de 100, por
+  dimensión gobernada, y una caché negativa de 10 segundos tras una consulta fallida. Un resolutor
+  mantiene al día a unos 3000 inquilinos sin llegar nunca al límite. Por encima, un inquilino ya
+  resuelto sigue sirviendo su **último valor conocido** en lugar de caer al valor por defecto de la
+  plataforma; solo un inquilino que nunca se ha resuelto recibe el valor por defecto.
+- **Aparte**, un techo de ingesta por defecto de la plataforma de `0` se eleva ahora a 100
+  mensajes/s con una ráfaga de 200, en lugar de no admitir nada. Es un eje distinto del ritmo de
+  consultas anterior.
+- **El apagado tiene un límite** derivado del periodo de gracia, menos la ventana de drenaje y un
+  margen de dos segundos, y respeta la cancelación en todo momento. **Los bucles de lectura de los consumidores** aplican
+  espera creciente y luego hacen fallar el proceso, en lugar de girar en vacío o reintentar
+  indefinidamente.
+- **Dos detalles del chart con los que es fácil tropezar.**
+  `instance.config.infrastructure.metrics.httpPort` está **retirada** — un documento que aún la lleve
+  registra un aviso nombrando la clave y arranca con normalidad, y el chart ya no la escribe. Y
+  `instance.config.infrastructure.shutdown` la **escribe ahora el chart** por usted a partir de
+  `shutdownDrainSeconds` y `terminationGracePeriodSeconds` de nivel superior; definir ese bloque a
+  mano hace que `helm` falle al renderizar, en lugar de discrepar en silencio con la especificación
+  del pod. Si aporta la configuración de instancia mediante `instance.existingSecret`, ese bloque le
+  corresponde añadirlo a usted.
+- **Un pod que se termina a sí mismo libera su arrendamiento de liderazgo al salir.** En
+  `lwm2m-ingest` se han corregido las dos rutas que salían mientras aún lo tenían. La espera de 30
+  segundos antes de que un sustituto pueda tomar el relevo es ahora lo que sigue a una pérdida
+  **abrupta** — un fallo de nodo, un `kill -9` — no lo que sigue a un pod que decide detenerse.
+
+#### Los paquetes publicados
+
+El **SDK de .NET/Unity incorpora el cambio del nonce de comando** descrito arriba; actualizarlo es
+la forma de que un dispositivo construido sobre él siga respondiendo a comandos.
+
+`@devicechain/client`, `@devicechain/dashboards`, `@devicechain/widgets` y `@devicechain/brand` no
+tienen cambios de código en esta versión. Una cosa que conviene saber si instala
+`@devicechain/widgets` por su cuenta: su **rango de dependencia par `maplibre-gl` pasa de `^6.6.0`
+a `^6.7.0`**. Si fija maplibre-gl en 6.6.x verá un aviso de dependencia par no satisfecha, o un
+fallo de instalación con un gestor de paquetes que las exija estrictamente. Nada más cambió en los
+paquetes.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
