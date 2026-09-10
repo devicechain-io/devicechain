@@ -56,15 +56,19 @@ func TestEmptyConfigurationIsValid(t *testing.T) {
 // fakeServe is a serveServer whose Serve() blocks until Stop() (or an explicit die) unblocks it,
 // recording how many times Stop was called. A test drives the serve-intent supervision without a
 // real DTLS transport.
+//
+// serveErr is what the released Serve() returns. Set it BEFORE the supervision is started: the
+// serve goroutine reads it only after release, so that write happens-before the read.
 type fakeServe struct {
 	release  chan struct{}
+	serveErr error
 	stops    atomic.Int32
 	stopOnce sync.Once
 }
 
 func newFakeServe() *fakeServe { return &fakeServe{release: make(chan struct{})} }
 
-func (f *fakeServe) Serve() error { <-f.release; return nil }
+func (f *fakeServe) Serve() error { <-f.release; return f.serveErr }
 
 func (f *fakeServe) Stop() {
 	f.stops.Add(1)
@@ -99,16 +103,31 @@ func TestSuperviseServeGracefulStopDoesNotFatal(t *testing.T) {
 // TestSuperviseServeUnexpectedDeathFatals is the counterweight: when Serve returns while the term
 // still intends to serve (a socket death on the single serving replica), the fatal callback DOES
 // fire — the total-ingest-outage guard that a Ready pod would otherwise hide — and it is handed the
-// Serve error so the production fatal log names the cause.
+// Serve error, so the production fatal log can name the cause.
+//
+// 🔴 THE VALUE IS READ, NOT JUST THE ARRIVAL. A callback invoked with a hard-coded nil satisfies
+// "the fatal path fired" exactly as well as one handed the Serve error, and the two are
+// indistinguishable to a test that only waits on the channel — while in production they are the
+// difference between an exit that names why the transport went away and one that does not.
+//
+// The error is deliberately NOT one of the nil returns a real DTLS Serve gives on a closed
+// listener: transportDeathError's own comment records that the nil case is the common one, so a
+// non-nil error is the only input that can tell "the error is passed through" apart from "the
+// parameter is ignored".
 func TestSuperviseServeUnexpectedDeathFatals(t *testing.T) {
 	f := newFakeServe()
+	serveErr := errors.New("blockwise transfer size is invalid")
+	f.serveErr = serveErr
 	died := make(chan error, 1)
 	superviseServe(f, func(err error) { died <- err })
 
 	f.die() // Serve returns with no intent recorded → the unexpected-death path
 
 	select {
-	case <-died:
+	case err := <-died:
+		require.ErrorIs(t, err, serveErr,
+			"the supervision reported a death without the Serve error, so the production fatal log "+
+				"cannot name what took the transport down")
 	case <-time.After(2 * time.Second):
 		t.Fatal("an unexpected Serve return must trigger the fatal path")
 	}

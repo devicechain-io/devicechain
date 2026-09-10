@@ -263,6 +263,21 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 	return c
 }
 
+// Metrics returns the metric set this client updates, so the SERVICE's own wiring can be
+// gated rather than only the behaviour behind it.
+//
+// 🔴 IT EXISTS BECAUSE A CLIENT BUILT WITH A ZERO Metrics IS SILENT, NOT BROKEN. Every field
+// here is optional and every use of one is nil-guarded, which is what lets the host be driven
+// in a test with no registry — and is also what makes a wiring slip invisible: resolveSources
+// handing NewClient an empty Metrics leaves the counters registered, exported and permanently
+// zero, which on a dashboard is indistinguishable from a fleet that never dropped a rebirth.
+// Nothing inside this package reads it; it is the seam the service's own wiring test asserts
+// against, so that test can compare against the counters it registered rather than a copy of
+// them.
+func (c *Client) Metrics() Metrics {
+	return c.metrics
+}
+
 // SetReconciler binds the device-state reconciler that repopulates presence on
 // (re)connect (ADR-067 SP4b). It is shared across connections and set once at wiring
 // time before Connect; a nil reconciler (the default) disables reconciliation.

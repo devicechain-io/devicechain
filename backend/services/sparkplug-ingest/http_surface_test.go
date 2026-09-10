@@ -149,9 +149,11 @@ func TestStartPhaseRestartDoesNotPanic(t *testing.T) {
 		"the leader gauge is not built in the initialize phase")
 	// The rebirth queue's counters are named here for the same reason, and they are the
 	// half of buildMetrics most likely to be added later by someone reaching for the
-	// nearest constructor: a plain Counter yields a series the moment it is built, so if
-	// one of these moved onto the start path the equality check below would catch it —
-	// but only while something asserts it was in the initialize snapshot to begin with.
+	// nearest constructor. The equality check below does not need them: it compares the
+	// snapshot against itself and so catches a plain Counter moved onto the start path
+	// whether or not this test ever names it. What these two lines catch is the other
+	// failure — a counter that is not built ANYWHERE, which leaves the snapshot and the
+	// post-start set identical and every assertion below satisfied.
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_enqueued_total",
 		"the rebirth enqueued counter is not built in the initialize phase")
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_dropped_total",

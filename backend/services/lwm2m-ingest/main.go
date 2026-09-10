@@ -59,7 +59,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
-const httpPort = 8080
+// httpPort is this service's fixed HTTP surface port. A var (not a const) only so a test can ask
+// afterMicroserviceStarted for an ephemeral one rather than racing whatever holds 8080;
+// production never assigns it.
+var httpPort int32 = 8080
 
 const (
 	// leasePartition names this service's single ownership lease within the shared instance
@@ -871,9 +874,15 @@ func afterMicroserviceStarted(ctx context.Context) error {
 //
 // 🔴 It is a named function rather than a closure inline above so a test can drive the wiring
 // ITSELF, for the reason registerHttpRoutes gives: a test that hand-built the same closure would
-// be asserting against its own copy, and would keep passing if this call were dropped. The
-// uncovered remainder is one line — that the starter assigns inertStop from this — because
-// reaching that line needs a bound listener on the fixed service port.
+// be asserting against its own copy, and would keep passing if this call were dropped.
+//
+// That is not the whole gate, because a test driving THIS function directly passes just as well
+// with the call in afterMicroserviceStarted deleted — the supervision would simply never be
+// wired, on a path whose entire purpose is to end a pod nothing else will restart. The start
+// phase is therefore driven end to end by a test of its own, which is what httpPort being a var
+// rather than a const is for: the only thing that used to stand in the way was
+// afterMicroserviceStarted's final startHttpServer, and startHttpServer already takes the port
+// as a parameter.
 func superviseInertTransport(srv serveServer) func() {
 	return superviseServe(srv, func(err error) {
 		failProcess(transportDeathError(err))
@@ -955,6 +964,14 @@ type leaseTerm interface {
 // needs a broker, a bindable socket and a device-state to read before it can fail for the right
 // reason. Only a test ever replaces it.
 var buildTermFn = buildTerm
+
+// superviseServeFn is the transport supervision a leadership term starts, behind a variable for a
+// reason of its own: it is the only point in a term that lies strictly BETWEEN "the build
+// returned" and "this replica reports itself as serving", and that gap is the whole content of
+// the is_serving/is_leader pair. Every other observation a test can make — the gauge afterwards,
+// the lease steps, the return value — is satisfied by a setServing(true) placed anywhere after a
+// successful build, including before the read loop exists. Only a test replaces it.
+var superviseServeFn = superviseServe
 
 // serveAsLeader builds this term's presence layer + transport, floors the epoch from
 // device-state, and serves until the lease is definitively lost (KeepAlive returns ErrNotHolder)
@@ -1062,7 +1079,7 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 		}()
 		select {
 		case <-dispatcher.Ready():
-		case <-leaderCtx.Done(): // evicted before the dispatcher came up — do not serve
+		case <-leaderCtx.Done(): // evicted before the dispatcher came up; the guard below is what then skips the serve
 		}
 	} else {
 		close(dispatcherDone)
@@ -1091,17 +1108,36 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	// That is the enforcer, not a convention: a select/default here would have to either describe a
 	// second call that cannot happen or silently drop it if the shape below ever changed.
 	transportDeath := make(chan error, 1)
-	stopServing := superviseServe(srv, func(err error) {
-		transportDeath <- err
-		cancel()
-	})
-	setServing(true) // the read loop is running: this replica is now both the leader AND live
+
+	// 🔴 A TERM THAT IS ALREADY EVICTED DOES NOT START ITS READ LOOP. leaderCtx is cancelled by a
+	// lost lease, by shutdown, or by the dispatcher wait above falling through, and without this
+	// check every one of those still opens the socket, raises is_serving, falls straight through
+	// the wait below and closes it again. The gauge is the part that matters: is_serving says
+	// "this replica's read loop is running", and a term on its way out has no read loop to report.
+	//
+	// It is best-effort BY CONSTRUCTION, not by oversight: leaderCtx can be cancelled one
+	// instruction after this reads it, and that case is already covered — the wait below returns
+	// at once and the unwind stops the transport. What the check removes is the case where the
+	// cancellation is ALREADY VISIBLE and the term serves anyway.
+	//
+	// stopServing is assigned on BOTH arms because it is what closes this term's socket, and the
+	// socket is bound by buildTerm whether or not the term ever serves. superviseServe's version
+	// adds the serve-intent record that makes the ensuing Serve return graceful; where there is no
+	// serve there is no return to make graceful, so a bare Stop is the whole job.
+	stopServing := srv.Stop
+	if leaderCtx.Err() == nil {
+		stopServing = superviseServeFn(srv, func(err error) {
+			transportDeath <- err
+			cancel()
+		})
+		setServing(true) // the read loop is running: this replica is now both the leader AND live
+	}
 
 	<-leaderCtx.Done() // eviction (lease lost), shutdown (parent ctx cancelled), or a transport death
 
 	setServing(false)
 	setLeader(false)
-	stopServing()    // records intent, THEN Stops the socket, so the ensuing Serve return is graceful
+	stopServing()    // on a term that served: records intent, THEN Stops the socket, so the ensuing Serve return is graceful. On one that did not: the bare Stop that closes the bound socket
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
