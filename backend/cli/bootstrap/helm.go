@@ -26,6 +26,29 @@ const helmReleaseName = "dc"
 // workloads to become ready.
 const helmTimeout = 10 * time.Minute
 
+// helmMaxHistory bounds the release revisions Helm keeps for this instance.
+//
+// 🔴 THE SDK DEFAULT IS UNLIMITED, WHICH IS NOT THE `helm` COMMAND'S DEFAULT. The
+// CLI passes --history-max 10; a program driving action.Upgrade gets 0, and 0 means
+// keep everything (storage.go: the prune is guarded by `MaxHistory > 0`). So every
+// bootstrap this command has ever run is still recorded, and each revision holds the
+// values it was rendered with.
+//
+// That matters because those values have carried credentials. Rotating one does not
+// retract it: the previous revision still holds the previous value, readable by
+// exactly whoever could read the new one. Bounding the history does not make that
+// property go away — only dcctl owning the Secrets does, so the chart renders a NAME
+// instead of a plaintext — but it stops the record growing without limit in the
+// meantime, and it prunes what is already there. Helm's removeLeastRecent trims down
+// to the bound on the next write rather than only capping growth from now on, so one
+// upgrade collapses a long history.
+//
+// Ten matches the `helm` command, so `helm history dc` shows an operator what they
+// would expect from a chart installed any other way. Nothing in dcctl reads the
+// history for anything but an existence check (hist.Max = 1, below), so the number
+// is chosen for that familiarity rather than for a rollback depth we rely on.
+const helmMaxHistory = 10
+
 // helmInstall installs (or upgrades) the embedded per-instance chart via the
 // Helm Go SDK, blocking until the rendered workloads are ready. The chart ships
 // inside the binary, so no chart repo, no `helm` CLI and no source are needed.
@@ -75,12 +98,23 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	upg := action.NewUpgrade(actionConfig)
-	upg.Namespace = releaseNamespace
+	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, helmReleaseName, ch, vals)
+	return err
+}
+
+// newHelmUpgrade builds the upgrade action every re-run of the chart goes through.
+//
+// Separated from helmInstall so the history bound has somewhere to be checked. The
+// bound is one assignment, and a silently missing one assignment is precisely the
+// failure it guards against: MaxHistory's zero value is not "a small default", it is
+// "keep every revision forever".
+func newHelmUpgrade(cfg *action.Configuration, namespace string) *action.Upgrade {
+	upg := action.NewUpgrade(cfg)
+	upg.Namespace = namespace
 	upg.Wait = true
 	upg.Timeout = helmTimeout
-	_, err = upg.RunWithContext(ctx, helmReleaseName, ch, vals)
-	return err
+	upg.MaxHistory = helmMaxHistory
+	return upg
 }
 
 // helmValues builds the value map the chart is installed with.

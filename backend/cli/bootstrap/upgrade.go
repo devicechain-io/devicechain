@@ -13,6 +13,7 @@ import (
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	dck8s "github.com/devicechain-io/dc-k8s/config"
 	"github.com/fatih/color"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -280,6 +281,23 @@ func currentOperatorImages(ctx context.Context, typed kubernetes.Interface, targ
 //   - AvailableReplicas >= UpdatedReplicas: the new ones actually came up.
 const rolloutPollInterval = 3 * time.Second
 
+// deploymentRolledOut is that four-condition check, as one function, because two
+// callers need it and a restatement is how the wrong one spreads. The naive form
+// it replaces is not merely weaker — it is true of the pods the rollout is
+// replacing, so a second copy written from memory reintroduces a check that
+// passes before the work starts.
+func deploymentRolledOut(d *appsv1.Deployment) bool {
+	desired := int32(1)
+	if d.Spec.Replicas != nil {
+		desired = *d.Spec.Replicas
+	}
+	s := d.Status
+	return s.ObservedGeneration >= d.Generation &&
+		s.UpdatedReplicas == desired &&
+		s.Replicas == s.UpdatedReplicas &&
+		s.AvailableReplicas >= s.UpdatedReplicas
+}
+
 func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []deploymentRef, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -290,17 +308,14 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 				pending = fmt.Sprintf("%s (%v)", t, err)
 				break
 			}
+			if deploymentRolledOut(d) {
+				continue
+			}
 			desired := int32(1)
 			if d.Spec.Replicas != nil {
 				desired = *d.Spec.Replicas
 			}
 			s := d.Status
-			if s.ObservedGeneration >= d.Generation &&
-				s.UpdatedReplicas == desired &&
-				s.Replicas == s.UpdatedReplicas &&
-				s.AvailableReplicas >= s.UpdatedReplicas {
-				continue
-			}
 			pending = fmt.Sprintf("%s (%d/%d updated, %d available)",
 				t, s.UpdatedReplicas, desired, s.AvailableReplicas)
 			break
