@@ -231,8 +231,40 @@ func helmValues(st *State) map[string]interface{} {
 		infraVals["secrets"] = map[string]interface{}{"rootKey": rootKey}
 	}
 	instanceVals := map[string]interface{}{"id": st.Instance}
+	configVals := map[string]interface{}{}
 	if len(infraVals) > 0 {
-		instanceVals["config"] = map[string]interface{}{"infrastructure": infraVals}
+		configVals["infrastructure"] = infraVals
+	}
+	// THE DATABASE PASSWORDS THE SERVICES CONNECT WITH.
+	//
+	// 🔴 UNTIL THIS LINE THEY CAME FROM THE CHART'S OWN DEFAULTS — the literal
+	// `password: devicechain` in values.yaml, identical on every instance anyone has
+	// ever built, and identical to the OpenTofu variable default that created the
+	// role. Stating them here is what makes the value an instance's own.
+	//
+	// 🔑 IT IS THE SAME VALUE THAT WENT INTO THE CREDENTIALS SECRET, by construction:
+	// both come from the one credentialSet this run settled. That is the entire
+	// reason the credentials are resolved in one place before anything is applied —
+	// the role and the connection string cannot be given different passwords if
+	// there is only one to give.
+	if creds := st.Credentials; creds != nil {
+		configVals["persistence"] = map[string]interface{}{
+			"rdb": map[string]interface{}{
+				"configuration": map[string]interface{}{
+					"username": dbRoleUsername,
+					"password": creds.RDBPassword,
+				},
+			},
+			"tsdb": map[string]interface{}{
+				"configuration": map[string]interface{}{
+					"username": dbRoleUsername,
+					"password": creds.TSDBPassword,
+				},
+			},
+		}
+	}
+	if len(configVals) > 0 {
+		instanceVals["config"] = configVals
 	}
 
 	vals := map[string]interface{}{

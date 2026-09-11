@@ -25,6 +25,36 @@
 # clean down.sh + up.sh for a re-provision.
 set -euo pipefail
 
+# 🔴 THIS SCRIPT NO LONGER STANDS UP A WORKING INSTANCE, AND IT FAILS HERE RATHER
+# THAN PROVING IT TWENTY MINUTES IN.
+#
+# Every credential this stack runs on used to be created by the infrastructure
+# apply, from OpenTofu variables whose defaults were literals in this repository.
+# They are minted per instance by dcctl now and written BEFORE the apply, because
+# CloudNativePG builds the database role from a Secret when it CREATES the Cluster
+# and never again. This script applies the same tree directly and mints none of
+# them, so what it produces is a broker with an empty certificate authority and two
+# databases whose roles nobody holds the password to -- an instance that comes up,
+# reports healthy, and cannot authenticate anything.
+#
+# `dcctl bootstrap local` reaches the same instance and is what this script's own
+# header has pointed at since ADR-032. Teaching this one to mint would mean a second
+# implementation of the credential rules, which is the thing that made a shared
+# default credential possible in the first place.
+cat >&2 <<'WHY'
+deploy/local/up.sh is no longer usable: it applies the infrastructure tree directly,
+and that tree no longer creates the credentials the stack runs on -- dcctl mints them
+per instance and writes them before the apply.
+
+Use instead:
+
+  dcctl bootstrap local <instance>          # published images
+  dcctl bootstrap local <instance> --build  # build from source
+
+down.sh still works for tearing a local cluster down.
+WHY
+exit 1
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 TF_DIR="$ROOT/deploy/opentofu"

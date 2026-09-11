@@ -53,6 +53,35 @@ type stateImporter interface {
 // The labels are the module's own, so that importing this object into state produces
 // no diff. See adoptInfraNamespace for why import rather than a toggle.
 func ensureInfraNamespace(ctx context.Context, typed kubernetes.Interface, namespace string) error {
+	return ensureNamespace(ctx, typed, namespace, map[string]string{
+		tofuManagedByLabel: tofuManagedByValue,
+		tofuComponentLabel: tofuComponentValue,
+	})
+}
+
+// ensureMonitoringNamespace creates the observability stack's namespace if it is not
+// there, for the same reason and one step earlier than anything else needs it.
+//
+// 🔴 THE DASHBOARD CREDENTIAL LIVES HERE, AND THE APPLY IS WHAT CREATES THIS
+// NAMESPACE. Grafana is installed by its own release with `create_namespace = true`,
+// so before this the namespace first existed part-way THROUGH the apply — while the
+// Secret holding the dashboard login has to be written BEFORE it, like every other
+// credential. Writing into a namespace that does not exist yet is the whole failure.
+//
+// Creating it here is safe rather than a race with the release: Helm's own
+// CreateNamespace ignores an AlreadyExists (`pkg/action/install.go`), and the
+// namespace is not part of the release's manifest, so no ownership check applies to
+// it. The labels are deliberately NOT the infrastructure module's — this namespace is
+// the monitoring stack's, and stamping it as infrastructure would misreport what owns
+// it to anyone reading the cluster.
+func ensureMonitoringNamespace(ctx context.Context, typed kubernetes.Interface, namespace string) error {
+	return ensureNamespace(ctx, typed, namespace, map[string]string{
+		"app.kubernetes.io/managed-by": "dcctl",
+		tofuComponentLabel:             "monitoring",
+	})
+}
+
+func ensureNamespace(ctx context.Context, typed kubernetes.Interface, namespace string, labels map[string]string) error {
 	api := typed.CoreV1().Namespaces()
 	existing, err := api.Get(ctx, namespace, metav1.GetOptions{})
 	switch {
@@ -67,13 +96,7 @@ func ensureInfraNamespace(ctx context.Context, typed kubernetes.Interface, names
 		return fmt.Errorf("reading namespace %q: %w", namespace, err)
 	}
 
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name: namespace,
-		Labels: map[string]string{
-			tofuManagedByLabel: tofuManagedByValue,
-			tofuComponentLabel: tofuComponentValue,
-		},
-	}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace, Labels: labels}}
 	if _, err := api.Create(ctx, ns, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil

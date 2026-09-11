@@ -145,6 +145,15 @@ type State struct {
 	// pipelines assembled by anything but the bootstrap command, where writing a
 	// minted Secret is refused rather than done without an owner.
 	InstanceUID string
+	// Credentials are the values this run settled — minted where the instance is
+	// new, read back where it is already running on one. Settled by the render step
+	// and written by the infrastructure step, which is the only ordering in which
+	// CloudNativePG builds the database role from the same value the services get.
+	Credentials *credentialSet
+	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
+	// than during the apply so the private half never reaches the infrastructure
+	// state. Only the public CA is passed to OpenTofu.
+	NATSTLS *natsTLSMaterial
 	// OperatorNamespace is where the operator overlay puts itself, read from the
 	// rendered manifests rather than assumed. The cluster lock lives here too, so
 	// this is set before the claim step runs.

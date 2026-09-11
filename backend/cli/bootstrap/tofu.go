@@ -137,6 +137,23 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
+	// EVERY MINTED CREDENTIAL, WRITTEN BEFORE THE APPLY THAT CONSUMES IT.
+	//
+	// 🔴 THIS IS THE HALF THAT CANNOT BE REORDERED. CloudNativePG reads the
+	// credentials Secret when it CREATES a Cluster and never again — the owner role
+	// is declared under `managed.roles` with no `passwordSecret`, so nothing
+	// reconciles it afterwards. A Secret written after this apply would leave the
+	// role on a password no service has and every service on one the role has never
+	// been told about, with nothing failing in between.
+	//
+	// The object store's root credentials and the broker's TLS material are here for
+	// the weaker version of the same reason: each is read by a workload the apply
+	// stands up, so a value that arrives later is a value something has already
+	// started without.
+	if err := writeMintedSecrets(ctx, typed, st); err != nil {
+		return err
+	}
+
 	opts := make([]tfexec.ApplyOption, 0, 16)
 	for _, v := range vars {
 		opts = append(opts, tfexec.Var(v))
@@ -337,6 +354,18 @@ func databaseNamespaceFor(st *State) string {
 // only means something if it reads the vars the apply actually passes.
 func infraVars(st *State) []string {
 	vars := []string{"kubeconfig_context=" + st.KubeContext}
+	// The broker's certificate authority, PUBLIC HALF ONLY.
+	//
+	// 🔴 THE DIRECTION OF THIS ARROW IS THE POINT. The authority used to be created
+	// BY the apply — `tls_private_key.ca` — which put its private key in the
+	// infrastructure state in cleartext, and made the CA an OUTPUT the Helm step had
+	// to wait for. dcctl mints it now, so what crosses this boundary is a
+	// certificate anyone may hold, and the key that signs with it never leaves this
+	// process. The module still renders the CA-only ConfigMap its chart references;
+	// it just receives the material instead of generating it.
+	if st.NATSTLS != nil {
+		vars = append(vars, "nats_ca_cert_pem="+st.NATSTLS.CACertPEM)
+	}
 	// The OpenTofu half of the HA topology. Emitted UNCONDITIONALLY, including for
 	// the single-node case, so the two halves are rendered from one value on every
 	// path rather than only when the flag is set — a conditional here would leave

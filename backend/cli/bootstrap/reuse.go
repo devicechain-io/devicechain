@@ -12,6 +12,25 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// settleCredentials is the seam the render step asks through, so the decision can be
+// exercised without a cluster — the same indirection, for the same reason, as
+// readLiveArchiveState and lookupDeployedInstance.
+//
+// The client is built here rather than threaded through State because a dry run
+// needs none: it deploys nothing, so it has nothing to read back and nothing to
+// preserve.
+var settleCredentials = func(ctx context.Context, st *State, live liveArchiveState) (*credentialSet, error) {
+	if st.DryRun {
+		return resolveCredentials(ctx, nil, st, live)
+	}
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the cluster to see which credentials this "+
+			"instance is already running on: %w", err)
+	}
+	return resolveCredentials(ctx, typed, st, live)
+}
+
 // mintedCredentialRef locates one value dcctl has written on an earlier run.
 type mintedCredentialRef struct {
 	Namespace string

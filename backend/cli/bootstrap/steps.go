@@ -170,6 +170,36 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		notes = append(notes, fmt.Sprintf(
 			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
 	}
+	// SETTLE EVERY CREDENTIAL THIS RUN NEEDS, BEFORE ANYTHING IS APPLIED.
+	//
+	// 🔴 THE ORDER IS THE WHOLE POINT, AND IT IS NOT THE OBVIOUS ONE. These values
+	// used to be OpenTofu's: the two databases got theirs from a variable whose
+	// default was a literal in this repository, and the broker's authority was an
+	// OUTPUT of the apply that the Helm step consumed afterwards. CloudNativePG
+	// builds the owner role when it CREATES the Cluster, so a credential settled
+	// after the apply is one the role never hears about — and a CA that only exists
+	// after the apply cannot be in the document the apply's own release mounts.
+	// Settling here reverses both arrows: the apply RECEIVES these, and the private
+	// half of the authority never reaches its state at all.
+	//
+	// resolveCredentials decides which of them a live instance keeps; see the reuse
+	// policy there for why that answer differs per credential.
+	st.Credentials, err = settleCredentials(ctx, st, live)
+	if err != nil {
+		return fail("settling this instance's credentials", err)
+	}
+
+	// The broker's authority and leaf. Minted on every run for now: reuse would keep
+	// a certificate, and what a live instance actually needs is RENEWAL — a leaf
+	// kept forever expires a year after bootstrap with nothing to re-issue it. That
+	// belongs to the verb that evolves an instance rather than the one that creates
+	// it, and the two answer opposite questions.
+	st.NATSTLS, err = mintNATSTLS(natsReleaseName, infraNamespace, haFor(st.HA).ServerReplicas, time.Now().UTC())
+	if err != nil {
+		return fail("minting the broker's certificate authority", err)
+	}
+	st.Values["natsCA"] = st.NATSTLS.CACertPEM
+
 	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
 	st.Values["backupServerNameRdb"] = paths.Rdb
 	st.Values["backupServerNameTsdb"] = paths.Tsdb

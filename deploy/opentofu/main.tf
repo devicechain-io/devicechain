@@ -20,6 +20,7 @@ module "nats" {
   cluster_replicas         = var.nats_cluster_replicas
   enable_prom_exporter     = var.nats_prom_exporter
   enable_tls               = var.nats_enable_tls
+  ca_cert_pem              = var.nats_ca_cert_pem
   reject_qos2_publish      = var.nats_mqtt_reject_qos2_publish
   enable_auth              = var.nats_enable_auth
   callout_issuer_public    = var.nats_callout_issuer_public
@@ -292,10 +293,13 @@ module "object_store" {
   source = "./modules/object-store"
   count  = local.backups_on && var.backup_destination == "in-cluster" ? 1 : 0
 
-  namespace     = var.namespace
-  buckets       = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
-  access_key    = var.backup_access_key
-  secret_key    = var.backup_secret_key
+  namespace = var.namespace
+  buckets   = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
+  # 🔴 NO CREDENTIALS PASSED. dcctl mints the store's root credentials per instance
+  # and writes them into the Secret this module names, before this apply -- so the
+  # variables that used to carry them here provision nothing. They still serve the
+  # EXTERNAL destination above, where the credentials belong to somebody else's
+  # object store and are supplied rather than minted.
   storage       = var.backup_object_store_storage
   storage_class = var.backup_object_store_storage_class
 
@@ -543,7 +547,6 @@ module "cnpg_rdb" {
   image              = var.postgres_image
   database           = var.postgres_database
   username           = var.postgres_username
-  password           = var.postgres_password
   storage            = var.postgres_storage
   storage_class      = var.postgres_storage_class
 
@@ -683,7 +686,6 @@ module "cnpg_tsdb" {
   image              = var.timescale_image
   database           = var.timescale_database
   username           = var.timescale_username
-  password           = var.timescale_password
   storage            = var.timescale_storage
   storage_class      = var.timescale_storage_class
 
@@ -897,11 +899,11 @@ module "monitoring" {
   # kube-state-metrics (ADR-020 A1.5). Read from enable_cnpg rather than offered as
   # a preference: with no CNPG CRDs there is nothing to watch, and the alerts that
   # consume these series would load, select nothing and never fire.
-  cnpg_cluster_metrics   = var.enable_cnpg
-  grafana_admin_password = var.monitoring_grafana_admin_password
-  prometheus_retention   = var.monitoring_prometheus_retention
-  prometheus_storage     = var.monitoring_prometheus_storage
-  storage_class          = var.monitoring_storage_class
+  cnpg_cluster_metrics = var.enable_cnpg
+
+  prometheus_retention = var.monitoring_prometheus_retention
+  prometheus_storage   = var.monitoring_prometheus_storage
+  storage_class        = var.monitoring_storage_class
 
   # Grafana SSO (ADR-047): operator-tier-only OAuth against user-management + the
   # /grafana ingress. Off unless the bring-up mints a client secret and supplies URLs.

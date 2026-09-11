@@ -147,25 +147,10 @@ variable "buckets" {
   }
 }
 
-variable "access_key" {
-  description = "Object store access key. Stable across applies rather than minted per run, matching postgres_password -- see the credentials Secret below for why that is load-bearing and not just convenient."
+variable "credentials_secret_name" {
+  description = "Name of the Secret in this namespace holding the store's root credentials, under keys MINIO_ROOT_USER / MINIO_ROOT_PASSWORD. Written by dcctl before the apply; this module is told where to look, never what the value is."
   type        = string
-  default     = "devicechain"
-}
-
-variable "secret_key" {
-  description = "Object store secret key. Override for any deploy that is not a local one."
-  type        = string
-  default     = "devicechain"
-  sensitive   = true
-
-  validation {
-    # MinIO refuses to start below 8 characters. Catching it here names the
-    # variable; catching it at runtime is a CrashLoopBackOff whose logs nobody
-    # is reading because the databases came up fine.
-    condition     = length(var.secret_key) >= 8
-    error_message = "secret_key must be at least 8 characters -- MinIO refuses to start with a shorter one."
-  }
+  default     = "dc-object-store-credentials"
 }
 
 variable "storage" {
@@ -226,38 +211,25 @@ locals {
   }
 }
 
-# 🔴 STABLE, NOT MINTED, and this is the A8 lesson applied rather than re-learned.
+# 🔴 THE ROOT CREDENTIALS ARE NOT CREATED HERE ANY MORE, AND THE A8 LESSON IS WHY
+# THEY MOVED RATHER THAN WHY THEY STAYED.
 #
-# A bootstrap re-run that rotates a generated credential leaves the two sides of
-# it disagreeing until everything that holds a copy has been restarted. A8 found
-# exactly that across five credentials and fixed it by making every generated
-# value reuse what the cluster is already running. The cheapest way not to have
-# that problem at all is not to generate the value: these come from OpenTofu
-# variables whose defaults do not change between applies, the same posture
-# postgres_password already has.
+# A8's rule is that a bootstrap re-run must not rotate a generated credential,
+# because MinIO would come back with new ones while the plugin sidecars kept
+# presenting the old, and WAL archiving would then fail SILENTLY -- the database
+# keeps accepting writes, nothing crashes, and the only signal is the archive-lag
+# alert. This module satisfied that rule by not generating the value at all: it
+# came from variables whose defaults do not change between applies.
 #
-# It matters more here than it looks. If these rotated, MinIO would come back
-# with new credentials while the plugin sidecars kept presenting the old ones, so
-# WAL archiving would start failing SILENTLY -- the database keeps accepting
-# writes, nothing crashes, and the only signal is the archive-lag alert this
-# slice also ships. That is a credential rotation whose symptom is "backups
-# quietly stopped three weeks ago".
-resource "kubernetes_secret_v1" "credentials" {
-  metadata {
-    name      = "${var.name}-credentials"
-    namespace = var.namespace
-    labels    = local.labels
-  }
-
-  data = {
-    # The key names are what the ObjectStore's s3Credentials reference by
-    # `key:`, and what MinIO's own container reads via envFrom-equivalent
-    # value_from below. One Secret, two readers, so the names are part of this
-    # module's contract -- see the outputs.
-    MINIO_ROOT_USER     = var.access_key
-    MINIO_ROOT_PASSWORD = var.secret_key
-  }
-}
+# What that actually bought was one credential shared by every instance ever built
+# from this repository, sitting in the state file, guarding every backup taken.
+# dcctl now mints it per instance and reads back what a live instance is already
+# running on -- the same A8 rule, kept by remembering the value instead of by
+# having no secret worth remembering.
+#
+# The key names stay this module's contract: the ObjectStore's s3Credentials
+# reference them by `key:` and MinIO's own container reads them below. One Secret,
+# two readers, named in the outputs.
 
 resource "kubernetes_persistent_volume_claim_v1" "data" {
   metadata {
@@ -372,7 +344,7 @@ resource "kubernetes_deployment_v1" "this" {
             name = "MINIO_ROOT_USER"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.credentials.metadata[0].name
+                name = var.credentials_secret_name
                 key  = "MINIO_ROOT_USER"
               }
             }
@@ -382,7 +354,7 @@ resource "kubernetes_deployment_v1" "this" {
             name = "MINIO_ROOT_PASSWORD"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.credentials.metadata[0].name
+                name = var.credentials_secret_name
                 key  = "MINIO_ROOT_PASSWORD"
               }
             }
@@ -508,7 +480,7 @@ output "endpoint_url" {
 
 output "credentials_secret" {
   description = "Name of the Secret holding the access key and secret key. The ObjectStore resources reference this by name, with the key names below."
-  value       = kubernetes_secret_v1.credentials.metadata[0].name
+  value       = var.credentials_secret_name
 }
 
 output "access_key_id_key" {

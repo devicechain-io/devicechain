@@ -369,7 +369,15 @@ instance:
           port: 5432
           maxConnections: 5
           username: devicechain
-          password: devicechain
+          # 🔴 NO DEFAULT, DELIBERATELY. This was `devicechain` — the same literal
+          # as the OpenTofu variable that created the database role, so one working
+          # credential opened every instance built the supported way. dcctl mints a
+          # per-instance password, writes it into the Secret CloudNativePG builds
+          # the role from, and points the release at a configuration Secret it owns
+          # (instance.existingSecret), so this default is not on that path at all.
+          # It is left EMPTY rather than re-defaulted: empty fails at connect, which
+          # is loud, and a shared default succeeds, which is not.
+          password: ""
       tsdb:
         type: timescaledb
         configuration:
@@ -383,7 +391,8 @@ instance:
           # in step with timescale_username in deploy/opentofu/variables.tf and
           # with the compiled-in default in backend/core/config/instance.go.
           username: devicechain
-          password: devicechain
+          # Empty for the same reason as the relational store's above.
+          password: ""
 
 # Container image defaults. The image for an area is
 # "{registry}/{area}:{tag}" unless overridden under functionalAreas.<area>.image.

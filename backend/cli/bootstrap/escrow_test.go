@@ -944,7 +944,7 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// developer's desk — where a kubeconfig exists and the Clusters do not — and
 	// failed in CI, where building the config is the first thing that errors. A test
 	// that only passes next to a cluster is testing the cluster.
-	// TestDeployedInstanceStubCoversBothClusterLookups is the standing check that
+	// TestDeployedInstanceStubCoversEveryOutsideRead is the standing check that
 	// this line is still here.
 	withArchiveState(t, liveArchiveState{}, nil)
 	// And the THIRD cluster read: the broker's existing password hashes. Defaults to
@@ -963,6 +963,30 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// instance, the suite would have overwritten its bridge copy. Defaults to "no
 	// record", which is the fresh-install answer.
 	withBrokerRecord(t, nil)
+	// And the FIFTH: which credentials this instance is already running on. Defaults
+	// to a freshly minted set, which is the fresh-install answer — reuse has its own
+	// tests, and a test about the root key should not have to say anything about a
+	// database password to keep working.
+	//
+	// 🔴 Unstubbed, this one does not degrade quietly like the others: resolving it
+	// BUILDS a kube client, so every test driving stepRenderConfig fails outright
+	// where there is no kubeconfig. That is the better failure of the two, but it is
+	// still not this suite's business to have a cluster.
+	withSettledCredentials(t, nil)
+}
+
+// withSettledCredentials stubs the credential decision. A nil set means "mint a
+// fresh one", which is what a first bootstrap gets.
+func withSettledCredentials(t *testing.T, set *credentialSet) {
+	t.Helper()
+	orig := settleCredentials
+	t.Cleanup(func() { settleCredentials = orig })
+	settleCredentials = func(_ context.Context, st *State, _ liveArchiveState) (*credentialSet, error) {
+		if set != nil {
+			return set, nil
+		}
+		return mintNewCredentials(st)
+	}
 }
 
 // withBrokerRecord stubs the local bootstrap record. A nil rec means there is none;

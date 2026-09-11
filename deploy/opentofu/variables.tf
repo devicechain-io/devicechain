@@ -181,6 +181,12 @@ variable "nats_enable_tls" {
   default     = true
 }
 
+variable "nats_ca_cert_pem" {
+  description = "PEM-encoded certificate of the authority that signed the broker's server certificate (ADR-025). dcctl mints the authority and writes the TLS Secret the broker mounts BEFORE this apply, so only this public half crosses into the infrastructure state -- the private key that signs with it never does. Empty leaves the CA-only ConfigMap and the nats_ca output empty, which is a broker clients cannot verify."
+  type        = string
+  default     = ""
+}
+
 variable "nats_enable_auth" {
   description = "Enable broker authentication + the device auth-callout (ADR-025). Defaults false because it needs credentials minted out-of-band (nkeys aren't a TF primitive); the bring-up (dcctl / up.sh) mints them, sets this true, and threads the corresponding plaintext credential into the services' instance config (the broker gets the bcrypt hash). The broker flag and the client flag MUST agree."
   type        = bool
@@ -304,13 +310,6 @@ variable "postgres_username" {
   description = "Superuser/username for the relational Postgres."
   type        = string
   default     = "devicechain"
-}
-
-variable "postgres_password" {
-  description = "Password for the relational Postgres. Override for any non-local deploy (use a tfvars file or a pre-created Secret)."
-  type        = string
-  default     = "devicechain"
-  sensitive   = true
 }
 
 variable "postgres_storage" {
@@ -545,15 +544,15 @@ variable "backup_bucket_tsdb" {
 }
 
 variable "backup_access_key" {
-  description = "Access key for the backup destination. For the in-cluster store this is also the credential MinIO is provisioned with. Stable across applies rather than minted per run — a rotated object-store credential makes WAL archiving fail silently while the database keeps accepting writes."
+  description = "Access key for an EXTERNAL backup destination -- somebody else's object store, so this credential is SUPPLIED rather than minted. 🔴 It no longer provisions the in-cluster store: dcctl mints those root credentials per instance and writes them before the apply. Unused when backup_destination is \"in-cluster\"."
   type        = string
-  default     = "devicechain"
+  default     = ""
 }
 
 variable "backup_secret_key" {
-  description = "Secret key for the backup destination. Override for any deploy that is not a local one."
+  description = "Secret key for an EXTERNAL backup destination. Supplied, never minted -- see backup_access_key. Unused when backup_destination is \"in-cluster\"."
   type        = string
-  default     = "devicechain"
+  default     = ""
   sensitive   = true
 }
 
@@ -853,13 +852,6 @@ variable "timescale_username" {
   default     = "devicechain"
 }
 
-variable "timescale_password" {
-  description = "Password for TimescaleDB. Override for any non-local deploy."
-  type        = string
-  default     = "devicechain"
-  sensitive   = true
-}
-
 variable "timescale_analytics_readers" {
   description = <<-EOT
     Read-only SQL/BI login roles on the event store -- the roles a Metabase,
@@ -1028,13 +1020,6 @@ variable "monitoring_slim" {
   description = "Reduce the footprint for a local/kind cluster: Prometheus keeps its TSDB on emptyDir (no PVC) and requests fewer resources. The bring-up sets this true on a local context."
   type        = bool
   default     = false
-}
-
-variable "monitoring_grafana_admin_password" {
-  description = "Grafana admin password. Native admin auth for now; OIDC via user-management (ADR-047) is a follow-up. Override for any non-local deploy."
-  type        = string
-  default     = "devicechain"
-  sensitive   = true
 }
 
 variable "monitoring_prometheus_retention" {
