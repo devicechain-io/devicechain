@@ -1100,6 +1100,16 @@ jobs:
       - name: No ADR references in published docs
         run: hack/check-docs-adr-refs.sh
 
+      # Same rule, one surface the guard above does not scan: .github/release-highlights.json
+      # publishes `theme` and `highlights[]` verbatim into the GitHub release body and into
+      # devicechain.io/releases.json, while its `_comment` block is maintainer prose that
+      # cites ADRs on purpose — so the check is two fields, not a file, and it lives with the
+      # rest of that file's rules. The guard proper needs a tag and therefore runs only on a
+      # release; this mode needs none, so the citation is caught on the PR that writes it
+      # rather than on the tag that ships it.
+      - name: No ADR references in the published release highlights
+        run: hack/check-release-highlights.sh --publish-safety
+
       # Same reasoning as the guard above: prove it can fail first. This one
       # greps the tree for names, and a grep that finds everything is
       # indistinguishable from a tree that still matches.

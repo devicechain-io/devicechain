@@ -17,7 +17,9 @@
 # security posture for a convenience. Serving our own JSON from our own origin needs no CSP
 # change, no rate limit, and no third party being up. It also carries things the GitHub API
 # cannot: per-artifact checksums, a curated highlight list, and a `breaking` flag the site
-# and docs can act on without a human noticing first.
+# and docs can act on without a human noticing first. `theme` rides along with them: one
+# phrase naming the release, written by hand in the same file, so the download menu can say
+# what a version was about without a human copying it across.
 #
 # The checksums matter more than they look. They come from the goreleaser-produced
 # checksums.txt, so an install script can verify what it downloaded against a file we
@@ -94,6 +96,7 @@ jq -n \
   | {
       schemaVersion: 1,
       version: $tag,
+      theme: ($h.theme // error("the highlights file has no .theme — the phrase that names the release")),
       released: $released,
       breaking: ($h.breaking // false),
       notes: $notes,

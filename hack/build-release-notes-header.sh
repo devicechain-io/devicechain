@@ -21,6 +21,13 @@
 # copy nobody reads until it is wrong. The same reasoning retired a duplicated
 # highlights check: two guards that must agree are one guard with two callers.
 #
+# THE HEADING CARRIES THE THEME. `theme` is the one phrase naming the release, and it is
+# joined to the version in the `What's in` heading -- the same `vX.Y.Z — phrase` shape the
+# published upgrade guide's own section headings use, so a reader arriving from one lands
+# on a title they have already seen. It is NOT re-validated here: the gate above already
+# refuses an absent, blank or over-long theme, and this file's whole argument is that two
+# guards which must agree are one guard with two callers.
+#
 # 🔴 THE PRE-1.0 WARNING LIVES HERE, NOT IN .goreleaser.yaml. It used to sit in
 # the config's `release.header`, which `--release-header` OVERRIDES -- so leaving
 # it there would have left a paragraph that looks load-bearing, is never emitted,
@@ -43,6 +50,7 @@ emit() { # <tag> <highlights.json> <docs-file-or-empty>
   local tag="$1" hl="$2" docs="$3"
   local base="${tag%%-*}"
   local anchor; anchor="$(anchor_for "$tag")"
+  local theme; theme="$(jq -r '(.theme // "") | gsub("^\\s+|\\s+$";"")' "$hl")"
   local url="https://docs.devicechain.io/deployment/releases-and-upgrades#${anchor}"
 
   # An anchor that does not exist silently lands the reader at the top of a long
@@ -61,7 +69,7 @@ emit() { # <tag> <highlights.json> <docs-file-or-empty>
 > APIs, schemas, or behavior without a compatibility shim.
 > See [Pre-1.0 stability](https://docs.devicechain.io/deployment/releases-and-upgrades#pre-10-stability).
 
-## What's in ${base}
+## What's in ${base} — ${theme}
 
 EOF
 
@@ -87,7 +95,10 @@ if [ "${1:-}" = "--self-test" ]; then
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
   hl="$tmp/hl.json"; docs="$tmp/docs.md"
   printf '### v0.9.0 — x {#v090-upgrade}\n' > "$docs"
-  write() { printf '{"version":"%s","breaking":%s,"highlights":["first thing","second thing"]}\n' "$1" "$2" > "$hl"; }
+  write() {
+    printf '{"version":"%s","breaking":%s,"theme":"a named release","highlights":["first thing","second thing"]}\n' \
+      "$1" "$2" > "$hl"
+  }
 
   write v0.9.0 false
   out="$(emit v0.9.0 "$hl" "$docs")"
@@ -95,6 +106,10 @@ if [ "${1:-}" = "--self-test" ]; then
   grep -q -- '- first thing' <<<"$out" || { echo "  FAIL: highlight missing" >&2; exit 1; }
   grep -q -- '- second thing' <<<"$out" || { echo "  FAIL: highlight missing" >&2; exit 1; }
   grep -q 'v090-upgrade' <<<"$out" || { echo "  FAIL: wrong or missing anchor" >&2; exit 1; }
+  # The theme leads, joined to the version. A heading of 'What's in v0.9.0 — ' with nothing
+  # after the dash is what an unchecked empty theme looks like, so assert the whole line.
+  grep -q "^## What's in v0.9.0 — a named release$" <<<"$out" \
+    || { echo "  FAIL: the heading does not lead with the theme" >&2; exit 1; }
   # THE COUNTERWEIGHT: a non-breaking release must NOT get the callout, or the
   # callout means nothing on the release that has one.
   grep -q 'IMPORTANT' <<<"$out" && { echo "  FAIL: breaking callout on a non-breaking release" >&2; exit 1; }
@@ -110,7 +125,7 @@ if [ "${1:-}" = "--self-test" ]; then
   # highlights guard uses -- v0.9.0-rc.1 must not look for a v091-rc1 anchor.
   out="$(emit v0.9.0-rc.1 "$hl" "$docs")"
   grep -q 'v090-upgrade' <<<"$out" || { echo "  FAIL: an rc did not resolve to its release's anchor" >&2; exit 1; }
-  grep -q "What's in v0.9.0" <<<"$out" || { echo "  FAIL: an rc did not title itself with the base version" >&2; exit 1; }
+  grep -q "What's in v0.9.0 — a named release" <<<"$out" || { echo "  FAIL: an rc did not title itself with the base version and theme" >&2; exit 1; }
   echo "  ok: a release candidate points at its release's section"
 
   # 🔴 THE ONE THAT MATTERS MOST: a missing anchor must FAIL, not silently link

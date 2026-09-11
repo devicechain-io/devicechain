@@ -22,6 +22,8 @@
 #   NuGet package readme     the file a csproj names as its <PackageReadmeFile>,
 #                            scanned whole -> NO ADR refs
 #   Published GraphQL SDL    the schemas served at /schema/  -> NO ADR refs, CHECKED ELSEWHERE
+#   Release highlights       .github/release-highlights.json, .theme + .highlights[]
+#                            -> NO ADR refs, CHECKED ELSEWHERE
 #   Source and maintainer    everything else, incl. docusaurus.config.ts -> ADR refs fine
 #
 # The distinguishing question is not "is this file public?" — the whole repo is
@@ -42,6 +44,17 @@
 # "Schema publishing self-tests" step. It is named here rather than left
 # implicit because two guards that each look complete, while one has a hole, is
 # precisely how a citation gets back in.
+#
+# 🔴 THE SECOND ONE CHECKED ELSEWHERE, for the same reason stated the same way.
+# .github/release-highlights.json publishes `theme` and `highlights[]` verbatim into the
+# GitHub release body and into devicechain.io/releases.json, which makes them a served
+# surface by the test above — but the file's `_comment` block is maintainer prose that is
+# published nowhere and cites ADRs deliberately, so a scan of the FILE would be wrong and a
+# scan of two FIELDS needs jq and the file's own rules. It lives in
+# hack/check-release-highlights.sh, which is what the release workflow runs first and what
+# build-release-manifest.sh calls before it writes anything; its `--publish-safety` mode
+# runs that one rule with no tag, and ci.yml's docs job calls it beside this guard so a
+# citation is caught on the PR that writes it rather than on the tag that ships it.
 #
 #   hack/check-docs-adr-refs.sh              # check
 #   hack/check-docs-adr-refs.sh --self-test  # prove the check can fail
