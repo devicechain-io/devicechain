@@ -6,8 +6,8 @@
 #
 # Decoupled from bring-up on purpose: dcctl bootstrap's image model is
 # "pull by reference from the registry, never side-load" (ADR-032 §image-model),
-# so populating the registry is a separate, upstream step. `make images` calls this
-# before the Helm install; CI/release publishes to ghcr the same way.
+# so populating the registry is a separate, upstream step -- run this directly,
+# before the Helm install. CI/release publishes to ghcr the same way.
 #
 # Uses ko (the repo's image tool — services use local 'replace' directives that
 # Dockerfiles can't resolve) with --bare so each image is named EXACTLY what the

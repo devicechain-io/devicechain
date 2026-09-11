@@ -22,11 +22,10 @@ get captured here as we find them.
 
 ```bash
 cd deploy/local
-./preflight.sh                        # check the host is ready (prints fixes for anything missing)
-kind create cluster --config kind-cluster.yaml
-dcctl bootstrap local <instance>      # infra, core, chart, credentials, seed
+dcctl preflight local   # check the host is ready (prints fixes for anything missing)
+dcctl bootstrap local <instance>   # cluster, infra, core, chart, credentials, seed
 # ... test ...
-make down                             # tear the cluster down
+dcctl destroy <instance>           # deletes the cluster too (--keep-cluster to keep it)
 ```
 
 The cluster is named **`devicechain`**, so its kube-context is
@@ -54,10 +53,11 @@ Tooling (the [preflight](#preflight) script checks all of these):
 
 ## Host baseline (WSL2 and Linux)
 
-These are the environment tweaks the stack needs. `preflight.sh` verifies each
+These are the environment tweaks the stack needs. `dcctl preflight` verifies each
 one and prints the fix if it's missing. **When we discover new requirements, add
-them here and as a check in `preflight.sh`** — that's the whole point of this
-directory.
+them here and as a check in `dcctl preflight`** (the host checks live in
+[`backend/cli/cmd/preflight_linux.go`](../../backend/cli/cmd/preflight_linux.go))
+— that's the whole point of writing them down.
 
 ### 1. Run Docker natively, not via Docker Desktop
 
@@ -135,21 +135,28 @@ open every instance in the first place.
 What remains here is the part dcctl does not own: the **cluster** itself, the
 **host diagnosis**, and the **image registry**.
 
-1. **Preflight** — `./preflight.sh`, or `dcctl preflight`. Fails fast if the host
+1. **Preflight** — `dcctl preflight local`. Fails fast if the host
    baseline isn't met.
-2. **Create the kind cluster** from [`kind-cluster.yaml`](kind-cluster.yaml)
-   (single control-plane node by default). `dcctl bootstrap local` creates one
-   itself if there is none.
+2. **The kind cluster** — `dcctl bootstrap local` creates one from the embedded
+   copy of [`kind-cluster.yaml`](kind-cluster.yaml) (single control-plane node by
+   default) if there is none, and `dcctl destroy` deletes it again.
 3. **`dcctl bootstrap local <instance>`** — everything else, in the order ADR-080
    settled: CRDs and the operator FIRST, so the definition of an instance exists
    before anything declares one; then the credentials, minted and written; then the
    infrastructure apply; then the chart; then the seed.
 
-`cloud-provider-kind` runs in the background so `type: LoadBalancer` services
-(ingress-nginx, the NATS MQTT device ingress) get real IPs.
+`cloud-provider-kind` is **optional and nothing here starts it**. The default
+bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no
+`type: LoadBalancer` service has to resolve. Run it yourself only if you want real
+LoadBalancer IPs — and then stop it yourself (`pkill -x cloud-provider-kind`).
 
-`make down` deletes the cluster and that background process (and the registry with
-`make purge`).
+`dcctl destroy <instance>` deletes the cluster along with the instance. Two things
+survive it deliberately, both one-liners if you want them gone:
+
+```bash
+docker rm -f kind-registry          # the local image registry (kept as a warm cache)
+pkill -x cloud-provider-kind        # only if you started it
+```
 
 ### Images — published by default, build is a developer opt-in
 
@@ -175,11 +182,12 @@ releases — `dcctl bootstrap` refuses rather than guessing a version that would
 
 ```bash
 dcctl bootstrap local dev --build  # ko-build all images → local registry → deploy those
-make images             # just build & push (no cluster changes)
+./build-images.sh                  # just build & push (no cluster changes)
 ```
 
-`BUILD_IMAGES=1` flips the registry to `localhost:5000` (tag `dev`), starts the
-local registry, and runs [`build-images.sh`](build-images.sh). That script uses
+`--build` flips the registry to `localhost:5000` (tag `dev`), starts the local
+registry, and builds the same images [`build-images.sh`](build-images.sh) does.
+That script uses
 **`ko`** (the repo's image tool — services use local `replace` directives that
 Dockerfiles can't resolve, so CI builds with ko too) with `--bare`, so each image
 is named exactly what the Helm chart pulls: `{REGISTRY}/{area}:{TAG}` for services
@@ -230,11 +238,12 @@ re-run `dcctl bootstrap local <instance>`.
 
 ## Troubleshooting / discovered tweaks
 
-Append new findings here (and as checks in `preflight.sh`) so the baseline stays
-current.
+Append new findings here (and as checks in `dcctl preflight`) so the baseline
+stays current.
 
 - **`LoadBalancer` service stuck `<pending>`** — `cloud-provider-kind` isn't
-  running. `dcctl bootstrap local` starts it; check `pgrep -a cloud-provider-kind`.
+  running, and nothing starts it for you. The default bootstrap needs no
+  LoadBalancer at all; start it by hand only if you want one.
 - **`too many open files` / controllers crashlooping** — inotify limits (step 2).
 - **Image `ErrImagePull` from `localhost:5000`** — the registry container isn't
   connected to the kind network, or images weren't pushed. Re-run the bootstrap
