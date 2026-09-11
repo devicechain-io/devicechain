@@ -13,7 +13,7 @@ Es una reconstrucción desde cero de la plataforma SiteWhere que conserva el mod
 ## Por qué DeviceChain
 
 - **Microservicios nativos de Go** — arranque en menos de un segundo, huella de memoria pequeña, servicios de binario único.
-- **Operador + CRDs** — un operador de Kubernetes con un recurso declarativo `DeviceChainInstance`, no scripts de shell; los inquilinos son registros de base de datos del plano de control gestionados a través de la consola de administración.
+- **Operador + CRDs** — un operador de Kubernetes con un recurso declarativo `Instance`, no scripts de shell; los inquilinos son registros de base de datos del plano de control gestionados a través de la consola de administración.
 - **API GraphQL primero** — introspectable y autodocumentada; sin stubs de cliente generados.
 - **Un stack ágil y totalmente de código abierto** — NATS JetStream es toda la columna vertebral de mensajería / MQTT / KV, JWT nativo gestiona la autenticación, TimescaleDB es el único almacén de datos, y OpenTofu aprovisiona la infraestructura. Dos dependencias para ejecutar localmente: **NATS + TimescaleDB**.
 - **Un modelo de relaciones uniforme** — el contexto del dispositivo es un grafo de relaciones tipado en lugar de asignaciones rígidas, de modo que los nuevos tipos de entidad se componen sin agitación de esquema.

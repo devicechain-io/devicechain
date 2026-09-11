@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -30,6 +31,12 @@ const (
 // working directory and runs init+apply through terraform-exec. The config (.tf
 // + modules) is refreshed from the binary on every run, but terraform.tfstate
 // lives in that directory and persists across runs so the apply is idempotent.
+// tofuGracefulStopBudget is how long a cancelled tofu is given to finish its
+// current operation and write state before it is killed. It must exceed the
+// longest single resource timeout in the infrastructure root (900s today) or the
+// kill lands in the middle of exactly the slow operation it was sized for.
+const tofuGracefulStopBudget = 20 * time.Minute
+
 func applyInfra(ctx context.Context, st *State) (err error) {
 	tofuBin, err := findTofu()
 	if err != nil {
@@ -62,6 +69,32 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// Stream tofu's own progress so a long apply is not a silent wait.
 	tf.SetStdout(os.Stdout)
 	tf.SetStderr(os.Stderr)
+
+	// 🔴 GIVE A CANCELLED APPLY LONG ENOUGH TO STOP THE WAY IT WANTS TO.
+	// terraform-exec cancels by sending SIGINT — tofu's graceful stop, which
+	// finishes the operation in flight and writes state — and then escalates to
+	// SIGKILL once WaitDelay expires. The default is 60 seconds, and the operation
+	// in flight here is routinely a helm_release whose own timeout is 600 or 900
+	// seconds, so the default turns every interrupt during a slow release back
+	// into the SIGKILL that loses the state file.
+	//
+	// The cost of the larger value is that an interrupt during a genuinely stuck
+	// apply does not return the terminal promptly. That is the right trade only
+	// BECAUSE a second interrupt exits immediately — and that is a property
+	// cmd.Execute has to arrange deliberately, not one signal.NotifyContext
+	// provides. An earlier version of this comment cited it as a given; it was
+	// wrong, and this number is exactly what made that mistake expensive rather
+	// than cosmetic. If that escape hatch is ever removed, this budget must shrink
+	// with it.
+	//
+	// 🔴 A SECOND CONSEQUENCE, WITH NO INTERRUPT INVOLVED. WaitDelay also bounds
+	// how long Wait blocks for the child's stdout/stderr pipes to close after it
+	// exits, and terraform-exec reads through pipes. A provider plugin that
+	// outlives tofu holding the inherited pipe therefore hangs dcctl for this
+	// budget rather than the default minute. The same escape hatch applies, and
+	// the trade is the same one: a rare long hang is preferable to routinely
+	// killing an apply that was about to write its state.
+	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {
 		return fmt.Errorf("tofu init: %w", err)

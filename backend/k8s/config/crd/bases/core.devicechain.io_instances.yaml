@@ -194,8 +194,8 @@ spec:
             - message: 'cluster is immutable: it is half of the binding between this
                 instance and the cluster it lives in, and rewriting it (including
                 by removing or adding it) would point destroy at a different cluster'
-              rule: '(has(self.cluster) ? self.cluster : '''') == (has(oldSelf.cluster)
-                ? oldSelf.cluster : '''')'
+              rule: has(self.cluster) == has(oldSelf.cluster) && (!has(self.cluster)
+                || self.cluster == oldSelf.cluster)
             - message: 'restored cannot be unset: it records that this instance''s
                 databases came from an archive, which stays true. An ordinary re-run
                 does not restore anything and must not erase the fact that an earlier

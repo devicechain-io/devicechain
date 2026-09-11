@@ -43,12 +43,29 @@ the point: without it the old database would be removed and a new, empty one wou
 the same hostname, leaving an instance that looks perfectly healthy and has no data in it.
 :::
 
-1. **Install core** — render the operator (CRDs + RBAC + controller) and apply it
-   with the Kubernetes API directly. It runs first because the definition of an
-   instance has to exist in the cluster before anything can describe one to it. On
-   the `--build` developer path the local registry is prepared immediately before
-   this, since the operator's own image is one of the images that path builds.
-2. **Render configuration** — resolve the instance id, namespace, profile, and every
+The steps below are the ones the run prints as it goes (`[3/10] Install core
+components`), so a failure names a step you can find here:
+
+1. **Ensure local registry** — the developer `--build` path only: provision a local
+   registry and build every image into it. On the published-image path it does nothing
+   and says so. It goes first because the operator installed two steps later names an
+   image, and on the `--build` path this is the step that produces it.
+2. **Claim the cluster** — create the operator's namespace and take the **cluster
+   lock**, before anything is applied. While it is held, a second `dcctl bootstrap`
+   against the same cluster is refused rather than quietly applying over this one. See
+   [The Cluster Lock](./cluster-lock.md) — that page also covers what to do when the
+   cluster turns out to be claimed by somebody else.
+3. **Install core components** — render the operator (CRDs + RBAC + controller) and
+   apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
+   because the definition of an instance has to exist in the cluster before anything can
+   describe one to it — and describing one is the very next step.
+4. **Declare the instance** — write the instance's **declaration** into the cluster: the
+   provider and cluster it belongs to, the profile, the image version, whether its
+   databases are being recovered from an archive. It is then read back, and every step
+   below works from what came back rather than from the flags that produced it — so the
+   cluster, not your laptop, is the record of what this instance is. See [the instance
+   declaration](./kubernetes-operator.md#instance-declaration).
+5. **Render configuration** — resolve the instance id, namespace, profile, and every
    generated credential: the broker-auth material (the shared service password and
    the callout issuer key), the cross-service auth secret, and the **secret-store
    root key**. All of them are minted on a first install and **reused as-is when the
@@ -59,17 +76,29 @@ the same hostname, leaving an instance that looks perfectly healthy and has no d
    through can be resumed by simply running it again. The root key is additionally
    escrowed to an encrypted file you keep; see
    [Disaster Recovery](./disaster-recovery.md).
-3. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
+6. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
    operator and its Barman Cloud backup plugin, and the object store the backup
    plugin archives to) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
-4. **Install the instance** — deploy the Helm chart via the Helm Go SDK, blocking
+7. **Install instance (Helm)** — deploy the Helm chart via the Helm Go SDK, blocking
    until the workloads are ready.
-5. **Seed & report** — the superuser credential is seeded automatically by the
-   user-management service on first start; the command prints it (and the
-   namespace and access pointers) at the end.
+8. **Seed admin credential** — the superuser credential is seeded by the
+   user-management service on first start; this step settles the values the final report
+   prints.
+9. **Wait for readiness** — poll each enabled area's Deployment until it reports
+   available, as an explicit confirmation gate rather than trusting the Helm step's own
+   wait.
+10. **Report access info** — print the namespace, the superuser credential, and how to
+    reach the instance.
+
+:::tip `Ctrl+C` stops a run cleanly
+An interrupted run stops the infrastructure tool gracefully — it finishes what it is
+doing and writes its state — and hands the cluster lock back, so re-running is all that
+is needed. A **second** `Ctrl+C` exits immediately and gives up both of those. See
+[Interrupting a run](./cluster-lock.md#interrupt).
+:::
 
 Because the embedded artifacts are the *same* ones the platform ships, a
 bootstrapped instance exercises the real deployment — it cannot drift from a
@@ -146,7 +175,7 @@ pipeline, chart, and operator are identical.
 | `--compact` | Small-footprint preset — see below. |
 | `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the infra apply fails without this. |
-| `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
+| `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster and takes no cluster lock, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal; it does still report whether another operator is holding the cluster. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
 | `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |

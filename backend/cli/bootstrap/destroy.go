@@ -79,7 +79,7 @@ func announceBinding(binding ClusterBinding, source BindingSource, instance stri
 
 // destroyInstanceOnly removes just the instance's Helm release, leaving the
 // cluster and platform (infra + operator) warm for a fast re-bootstrap.
-func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) error {
+func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	binding, source := ResolveBinding(opts.Options)
 	if err := refuseUnreadable(source, opts.Instance); err != nil {
 		return err
@@ -98,6 +98,10 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) error {
 		return errDestroyAborted
 	}
 
+	// Lock and intent BEFORE the first deletion. See beginDestroy.
+	claim := beginDestroy(ctx, kubeContext, opts.Instance)
+	defer func() { endDestroy(ctx, claim, kubeContext, opts.Instance, true, &err) }()
+
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext); err != nil {
 		return fail("uninstalling release", err)
@@ -110,7 +114,7 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) error {
 
 // destroyEverything deletes the whole cluster and clears the instance's local
 // state (and, with PurgeRegistry, the shared local registry container).
-func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptions) error {
+func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptions) (err error) {
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nDestroy instance %q on provider %q", opts.Instance, provider.Name())))
 
 	binding, source := ResolveBinding(opts.Options)
@@ -227,6 +231,15 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 		return fail("checking whether the cluster exists", err)
 	}
 	clusterWasDeleted := exists
+
+	// Lock and intent BEFORE the first deletion, as on every other destroy path,
+	// but AFTER the existence check — taking a lock on a cluster that is already
+	// gone only produces a confusing "could not reach the cluster" warning in front
+	// of an outcome that has nothing to do with locking. Nothing has been deleted
+	// between the check and here.
+	claim := beginDestroy(ctx, binding.KubeContext, opts.Instance)
+	defer func() { endDestroy(ctx, claim, binding.KubeContext, opts.Instance, false, &err) }()
+
 	if !exists {
 		fmt.Println(color.YellowString(
 			"Cluster %s is already gone — nothing to delete. Clearing local state only.", binding.describe()))

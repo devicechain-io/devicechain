@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -236,17 +237,53 @@ func instanceToUnstructured(inst *dcv1beta1.Instance) (*unstructured.Unstructure
 // with a compare-and-swap, and a heartbeat) are a separate concern and land with
 // them. What is here is the declaration itself.
 func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
-	if err := ValidateInstanceSpec(spec); err != nil {
-		return err
-	}
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to record the instance declaration: %w", err)
 	}
+	return writeInstanceCR(ctx, dyn, id, spec, dcctlVersion)
+}
 
+// writeInstanceCR is WriteInstanceCR with the client supplied.
+//
+// Split for the same reason ReadInstanceCR/readInstanceCR is, two functions up:
+// the refusals this function makes — a declaration that is terminating, and one
+// whose phase says a destroy did not finish — are the part worth testing, and
+// they were unreachable while the only entry point built its own client from a
+// kubeconfig. A branch that needs a live cluster to reach is a branch that goes
+// untested.
+func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
+	if err := ValidateInstanceSpec(spec); err != nil {
+		return err
+	}
 	existing, err := readInstanceCR(ctx, dyn, id)
 	if err != nil {
 		return err
+	}
+	if existing != nil && existing.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
+		// 🔴 THIS IS THE READER THE PHASE ANNOTATION EXISTS FOR. Writing it and
+		// never consulting it would make it the thing this slice criticises
+		// elsewhere: recorded correctly, connected to nothing.
+		//
+		// A declaration reading Destroying means a destroy started and did not
+		// finish, so the cluster holds some part of an instance and no longer holds
+		// the rest. Bootstrapping over that produces a half-old, half-new instance
+		// whose failures are attributed to the new run.
+		return fmt.Errorf("instance %q was part-way through being destroyed and the destroy did not finish; "+
+			"the cluster still holds some of it. Finish the teardown with `dcctl destroy %s` and bootstrap "+
+			"afterwards, or, if you are certain nothing of it remains, drop the declaration with "+
+			"`dcctl instances release %s`", id, id, id)
+	}
+	if existing != nil && existing.DeletionTimestamp != nil {
+		// 🔴 A TERMINATING DECLARATION IS NOT ADOPTABLE, and saying so is more
+		// honest than appearing to resume it. Kubernetes deletion is one-way:
+		// once deletionTimestamp is set there is no API to clear it, so an
+		// "adopt" here would write a spec into an object that is going to vanish
+		// the moment its finalizer clears — a bootstrap that reports success over
+		// a declaration with a delete already committed against it.
+		return fmt.Errorf("instance %q is being destroyed (its declaration is marked for deletion); "+
+			"finish it with `dcctl destroy %s`, or release the declaration without destroying "+
+			"anything with `dcctl instances release %s`", id, id, id)
 	}
 
 	inst := &dcv1beta1.Instance{}
@@ -272,6 +309,8 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 	}
 	inst.Spec = spec
 	applyProvenance(inst, dcctlVersion)
+	setPhase(inst, dcv1beta1.PhaseBootstrapping)
+	addFinalizer(inst)
 
 	obj, err := instanceToUnstructured(inst)
 	if err != nil {
@@ -284,10 +323,59 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 		}
 		return nil
 	}
+	// The object carries the resourceVersion the read returned, which makes this
+	// Update a compare-and-swap: a declaration that changed underneath us is
+	// refused with a Conflict rather than overwritten.
+	//
+	// Its job is narrower than it was in the design's first draft. Mutual
+	// exclusion between two dcctl runs is the claim Lease's (claim.go); what is
+	// left for the precondition to catch is a HUMAN editing the CR during a run,
+	// which the Lease knows nothing about. A conflict here refuses — it does not
+	// re-read and retry, because a retry loop against a concurrent editor is how
+	// the edit gets silently reverted.
 	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return fmt.Errorf("the declaration for instance %q changed while this run was writing it; "+
+				"something else is editing it — re-run once you know what", id)
+		}
 		return fmt.Errorf("updating the instance declaration %q: %w", id, err)
 	}
 	return nil
+}
+
+// setPhase records what this run is TRYING to do. See AnnotationPhase: it is
+// intent, and it is deliberately not in status, which belongs to the operator.
+func setPhase(inst *dcv1beta1.Instance, phase string) {
+	if inst.Annotations == nil {
+		inst.Annotations = map[string]string{}
+	}
+	inst.Annotations[dcv1beta1.AnnotationPhase] = phase
+}
+
+// addFinalizer keeps a hand-deleted declaration readable until destroy has run.
+// See FinalizerInstance for why the immutability rules depend on it.
+func addFinalizer(inst *dcv1beta1.Instance) {
+	for _, f := range inst.Finalizers {
+		if f == dcv1beta1.FinalizerInstance {
+			return
+		}
+	}
+	inst.Finalizers = append(inst.Finalizers, dcv1beta1.FinalizerInstance)
+}
+
+// removeFinalizer drops it, reporting whether it was there.
+func removeFinalizer(inst *dcv1beta1.Instance) bool {
+	out := inst.Finalizers[:0]
+	found := false
+	for _, f := range inst.Finalizers {
+		if f == dcv1beta1.FinalizerInstance {
+			found = true
+			continue
+		}
+		out = append(out, f)
+	}
+	inst.Finalizers = out
+	return found
 }
 
 // applyProvenance stamps who wrote this declaration and when, leaving every other
@@ -302,4 +390,92 @@ func applyProvenance(inst *dcv1beta1.Instance, dcctlVersion string) {
 	}
 	inst.Annotations[dcv1beta1.AnnotationLastAppliedBy] = dcctlVersion
 	inst.Annotations[dcv1beta1.AnnotationLastAppliedAt] = time.Now().UTC().Format(time.RFC3339)
+}
+
+// SetInstancePhase records intent on an existing declaration, leaving the spec
+// untouched.
+//
+// 🔴 Callers that are about to DELETE something must call this first, not after.
+// The value of the phase is entirely in its ordering: written before the first
+// destructive act, a process killed at any later point leaves a declaration that
+// says Destroying, which is true. Written afterwards, the same kill leaves one
+// that still says Ready over an instance that is half gone — which is the failure
+// the field exists to prevent, reintroduced by call-site ordering.
+//
+// A declaration that is not there is not an error. Phase is a courtesy to the next
+// reader, and failing a destroy because the thing it is destroying was never
+// declared would be the tail wagging the dog.
+func SetInstancePhase(ctx context.Context, kubeContext, id, phase string) error {
+	dyn, _, _, err := kubeClients(kubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to record the instance phase: %w", err)
+	}
+	existing, err := readInstanceCR(ctx, dyn, id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return nil
+	}
+
+	// 🔴 A MERGE PATCH ON ONE ANNOTATION, NOT AN UPDATE OF THE WHOLE OBJECT, and
+	// the difference is not stylistic. An Update carries the resourceVersion it
+	// read, which makes it a compare-and-swap — correct for the spec, wrong here.
+	// The operator writes status.conditions on this same object, and a status
+	// write bumps resourceVersion like any other; a phase write that lost that
+	// race would fail, and by the spec path's own rule a failure refuses. That
+	// would let a routine status update abort a bootstrap, or worse, stop destroy
+	// recording that it had started.
+	//
+	// Nothing contends for this annotation. dcctl is its only writer, so there is
+	// no lost update to protect against, and a patch that touches one key leaves
+	// every other field — including whatever the operator just wrote — alone.
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, dcv1beta1.AnnotationPhase, phase)
+	if _, err := dyn.Resource(instanceGVR).Patch(ctx, id, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("recording phase %q on instance %q: %w", phase, id, err)
+	}
+	return nil
+}
+
+// ReleaseInstanceDeclaration removes the finalizer so the declaration can be
+// deleted, and deletes it if a delete is already pending.
+//
+// 🔴 This is the escape hatch a finalizer obliges, and it is a real command rather
+// than a documented `kubectl patch` because the alternative is a cluster carrying
+// an object nobody can remove. It destroys NOTHING: the namespaces, databases and
+// volumes the declaration describes are all still there afterwards, which is
+// exactly why the caller has to say out loud that it is what they want.
+func ReleaseInstanceDeclaration(ctx context.Context, kubeContext, id string) (released bool, err error) {
+	dyn, _, _, err := kubeClients(kubeContext)
+	if err != nil {
+		return false, fmt.Errorf("connecting to the cluster to release the instance declaration: %w", err)
+	}
+	existing, err := readInstanceCR(ctx, dyn, id)
+	if err != nil {
+		return false, err
+	}
+	if existing == nil {
+		return false, fmt.Errorf("instance %q is not declared on this cluster", id)
+	}
+	inst := existing.DeepCopy()
+	if !removeFinalizer(inst) && inst.DeletionTimestamp == nil {
+		return false, nil
+	}
+	obj, err := instanceToUnstructured(inst)
+	if err != nil {
+		return false, err
+	}
+	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		return false, fmt.Errorf("removing the finalizer from instance %q: %w", id, err)
+	}
+	// With the finalizer gone a pending delete completes on its own. When there is
+	// no pending delete the caller asked to release a live declaration, so delete
+	// it explicitly — otherwise the command would report success having done
+	// nothing a reader can see.
+	if inst.DeletionTimestamp == nil {
+		if err := dyn.Resource(instanceGVR).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("deleting the declaration for instance %q: %w", id, err)
+		}
+	}
+	return true, nil
 }

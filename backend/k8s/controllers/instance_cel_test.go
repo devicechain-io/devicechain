@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,7 +60,50 @@ func withAPIServer(t *testing.T) client.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireCELIsEvaluated(t, c)
 	return c
+}
+
+// requireCELIsEvaluated proves the API server under this suite actually runs CEL
+// before any test trusts it to.
+//
+// 🔴 WITHOUT THIS, AN API SERVER THAT IGNORES CEL LOOKS EXACTLY LIKE A CRD WHOSE
+// RULES ARE ALL BROKEN, and that is not a hypothetical — it happened while this
+// check was being written. `x-kubernetes-validations` does not exist before
+// Kubernetes 1.25, so an older envtest binary accepts every object silently.
+// Every test below then fails with a message blaming the rule ("removing the
+// cluster was accepted, which is half of a repoint"), pointing an investigation
+// at a CEL expression that is perfectly correct.
+//
+// The failing direction is merely misleading. The dangerous one is a test that
+// asserts something IS accepted: on such a server it passes for the wrong reason,
+// and the suite goes green having evaluated nothing at all. This is the
+// gate-that-cannot-fail shape, one layer down — the tests can fail, but what they
+// are testing may not be running.
+//
+// The probe is the API server's own behaviour rather than its version string,
+// because the version is a proxy for the thing we care about and this is the
+// thing itself: CEL can also be disabled by feature gate on a new-enough server.
+func requireCELIsEvaluated(t *testing.T, c client.Client) {
+	t.Helper()
+
+	// restoredAt without restored is refused by a spec-level rule. If this is
+	// ACCEPTED, no rule ran — nothing else about this object is invalid.
+	at := metav1.NewTime(time.Now().UTC())
+	probe := newInstance("cel-probe", func(i *dcv1beta1.Instance) {
+		i.Spec.Restored = false
+		i.Spec.RestoredAt = &at
+	})
+	err := c.Create(context.Background(), probe)
+	if err == nil {
+		_ = c.Delete(context.Background(), probe)
+		t.Fatalf("this API server accepted an Instance that every CEL rule in the CRD forbids, "+
+			"so it is not evaluating CEL at all and nothing below is being tested.\n"+
+			"x-kubernetes-validations needs Kubernetes 1.25 or newer; KUBEBUILDER_ASSETS is %q.\n"+
+			"Point it at the version in the Makefile:\n"+
+			"  cd backend/k8s && KUBEBUILDER_ASSETS=$(bin/setup-envtest use 1.33.0 -p path) go test ./controllers/...",
+			os.Getenv("KUBEBUILDER_ASSETS"))
+	}
 }
 
 func newInstance(name string, mutate func(*dcv1beta1.Instance)) *dcv1beta1.Instance {
@@ -119,6 +163,29 @@ func TestTheAPIServerRefusesToRepointTheClusterBinding(t *testing.T) {
 			i.Spec.Cluster = ""
 		}); err == nil {
 			t.Fatal("removing the cluster was accepted, which is half of a repoint")
+		}
+	})
+
+	// 🔴 THE QUADRANT THE REWRITE COULD HAVE SILENTLY CHANGED, AND NOTHING COVERED.
+	// The rule was rewritten to avoid a string literal (gofmt mangles one in a doc
+	// comment; see the marker's own comment). The old form compared two ternaries
+	// defaulting to an empty string, so it treated an ABSENT cluster and an EXPLICIT
+	// EMPTY ONE as equal. The new form distinguishes them — which is stricter, and
+	// deliberate, but it is a behaviour change that no test would have noticed.
+	//
+	// What must NOT change is that an adopted instance, which records no cluster at
+	// all, can still be re-run: both sides absent has to be accepted, or every
+	// --kube-context bootstrap breaks on its second run. That is the case this pins.
+	t.Run("an adopted instance with no cluster can be re-run", func(t *testing.T) {
+		c := withAPIServer(t)
+		inst := newInstance("adopted-rerun", func(i *dcv1beta1.Instance) { i.Spec.Cluster = "" })
+		if err := c.Create(context.Background(), inst); err != nil {
+			t.Fatalf("creating an adopted instance: %v", err)
+		}
+		inst.Spec.Profile = "full"
+		if err := c.Update(context.Background(), inst); err != nil {
+			t.Fatalf("an adopted instance could not be re-run with no cluster on either side, "+
+				"which would break every --kube-context bootstrap on its second run: %v", err)
 		}
 	})
 

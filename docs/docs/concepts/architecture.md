@@ -24,7 +24,7 @@ DeviceChain is a set of stateless Go microservices over a shared core library, c
 | **ai-inference** _(opt-in)_ | Drafts a detection rule from a natural-language description and runs it through the *same* compiler the other authoring surfaces use, so the model proposes and the compiler decides. Never sits in the path that evaluates rules. See [AI Authoring](./ai-authoring.md). |
 | **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook call and a `publish` to message brokers and cloud queues (MQTT, Kafka, AWS SNS/SQS) — over tenant-scoped, versioned connectors with credentials held in the secret store. Runs in its own process so a slow or misbehaving external system can't touch the detection pipeline. See [Outbound Connectors](./outbound-connectors.md). |
 | **mcp** _(opt-in)_ | A read-only Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. A thin OAuth 2.1 resource server over the GraphQL API carrying the caller's own tenant-scoped token — no service token, curated read tools only. See [AI Access (MCP)](./mcp.md). |
-| **operator** | A controller-runtime operator that manages the `DeviceChainInstance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
+| **operator** | A controller-runtime operator that manages the `Instance` lifecycle (status aggregation, config hot-reload). Workloads themselves are rendered by the Helm chart; tenants are control-plane database records, not reconciled resources. |
 
 Fanning one command out to many devices is part of `command-delivery` rather than a separate service — see [One command, many devices](./commands.md#command-batches). Scheduling is still planned. See the repository for current status.
 
@@ -49,7 +49,7 @@ During resolution, device-management looks up the device's **tracked** relations
 
 ## Deployment model
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`default` / `full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles the `DeviceChainInstance` lifecycle rather than stamping workloads (tenants are control-plane database records, not reconciled resources). This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
+Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`default` / `full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles the `Instance` lifecycle rather than stamping workloads (tenants are control-plane database records, not reconciled resources). This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
 
 ## Configuration, health, and startup
 

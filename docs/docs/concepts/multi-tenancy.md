@@ -10,7 +10,7 @@ DeviceChain runs a **single shared set of microservices per instance** that serv
 
 One Kubernetes custom resource models the platform itself:
 
-- **`DeviceChainInstance`** (cluster-scoped) — one per installation. Represents the platform.
+- **`Instance`** (cluster-scoped) — one per installation. Represents the platform.
 
 Tenants are **not** Kubernetes resources. A tenant is a control-plane **database record** — a registry entry plus per-tenant configuration — created on demand through the instance admin API and the `/admin` console. Tenants share the instance's services and do **not** get their own pods. A fresh instance is **tenant-less**: it seeds only a superuser, who creates the first tenant from the admin console.
 
