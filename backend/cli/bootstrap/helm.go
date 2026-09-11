@@ -70,15 +70,60 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	vals := helmValues(st)
+	// 🔴 TWO VALUE MAPS, AND THE DIFFERENCE BETWEEN THEM IS THE SLICE. The authoring
+	// values carry the instance's credentials inside instance.config; the install
+	// values carry the NAME of a Secret dcctl wrote instead. Helm records the values
+	// of every revision it keeps, so anything that stays in this map stays readable
+	// for as long as that revision does — which is what makes rotating a credential
+	// something other than retracting it.
+	authoring := helmValues(st)
+	doc, err := composeInstanceConfig(ctx, ch, authoring)
+	if err != nil {
+		return err
+	}
+	vals, err := installValuesFor(authoring, st.Instance, doc)
+	if err != nil {
+		return err
+	}
 
-	// Check the instance config the chart is about to render BEFORE handing it to
+	// Check the instance config the chart is about to be handed BEFORE handing it to
 	// the cluster. Everything below waits on workload readiness, so a config a
 	// service refuses to load does not surface as a config error at all — it
 	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
 	// reason only in the logs of pods that are already gone. Rendering costs
 	// milliseconds and turns that into a sentence.
-	if err := validateRenderedInstanceConfig(ctx, ch, vals, nil); err != nil {
+	//
+	// 🔑 IT IS NOW THE AUTHORED PATH, which is the one it was written for. The
+	// document is passed in because the chart no longer renders one: with nothing
+	// supplied here this returns "no instance configuration document was produced",
+	// and the strict load that turns an unloadable config into a sentence would
+	// simply not run. Handing it the exact bytes about to be written also makes this
+	// a check on the COMPOSITION — a document the chart transformed one way and
+	// dcctl wrote another is refused here rather than mounted.
+	if err := validateRenderedInstanceConfig(ctx, ch, vals, doc); err != nil {
+		return err
+	}
+
+	// The namespace, then the document, then the release. The pods mount the Secret
+	// at container start, so it has to be there before the workloads Helm waits on;
+	// and the namespace has to be there before the Secret. See
+	// ensureNamespaceForRelease for why creating it here does not move its ownership.
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to write the instance configuration: %w", err)
+	}
+	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseName, releaseNamespace); err != nil {
+		return err
+	}
+	// On an instance built before dcctl owned this document, the Secret is there and
+	// the chart wrote it — so the writer below would refuse it as somebody else's.
+	// See adoptChartWrittenInstanceConfig for why that is a takeover and not a guess.
+	if err := adoptChartWrittenInstanceConfig(ctx, typed, st.Instance, st.InstanceUID,
+		helmReleaseName, releaseNamespace); err != nil {
+		return err
+	}
+	if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID,
+		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
 	}
 

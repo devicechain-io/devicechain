@@ -44,7 +44,12 @@ type ownedSecret struct {
 	// Labels a controller keys on. `cnpg.io/reload` is the example that matters:
 	// without it CloudNativePG does not act on a credential change.
 	Labels map[string]string
-	Data   map[string]string
+	// Annotations something OUTSIDE dcctl keys on, merged rather than replaced so
+	// they cannot displace the ownership stamps below — or each other.
+	// `helm.sh/resource-policy: keep` is the example that matters: without it Helm
+	// deletes a Secret that has left the chart's manifest.
+	Annotations map[string]string
+	Data        map[string]string
 }
 
 // secretOwnership says who wrote a Secret, as far as its annotations admit.
@@ -194,6 +199,12 @@ func applyOwnedSecretFields(s *corev1.Secret, spec ownedSecret) {
 	}
 	for k, v := range spec.Labels {
 		s.Labels[k] = v
+	}
+	if len(spec.Annotations) > 0 && s.Annotations == nil {
+		s.Annotations = map[string]string{}
+	}
+	for k, v := range spec.Annotations {
+		s.Annotations[k] = v
 	}
 }
 

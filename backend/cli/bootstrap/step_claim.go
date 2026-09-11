@@ -71,6 +71,19 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {
 		return fmt.Errorf("the declaration read back from the cluster is not usable: %w", err)
 	}
+	// 🔴 THE UID IS TAKEN FROM THE READ-BACK, AND ONLY THE READ-BACK CAN SUPPLY IT.
+	// It is assigned by the API server when the object is created, so the spec this
+	// step sent does not carry one. Every Secret dcctl mints is stamped with it to
+	// separate this instance from a previous one that had the same name, and the
+	// writer refuses to mint without it — so an empty value here is a bootstrap that
+	// stops at the first Secret rather than one that adopts a dead generation's
+	// credentials.
+	st.InstanceUID = string(inst.UID)
+	if st.InstanceUID == "" {
+		return fmt.Errorf("the declaration for instance %q came back from the cluster with no UID, "+
+			"so a Secret left behind by a previous instance of the same name could not be told "+
+			"from this one's", st.Instance)
+	}
 	applyDeclaration(st, inst.Spec)
 	return nil
 }

@@ -814,7 +814,9 @@ func stepHelmInstall(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing("installing instance chart (Helm)")
 		fmt.Println()
-		wouldDo("helm upgrade --install the devicechain chart into namespace " + st.Values["namespace"])
+		wouldDo("write the instance configuration to Secret " +
+			instanceConfigSecretName(st.Instance) + " in namespace " + st.Values["namespace"] +
+			", then helm upgrade --install the devicechain chart pointing at it")
 		return nil
 	}
 	return runStreamed("installing instance chart (Helm)", "instance chart",

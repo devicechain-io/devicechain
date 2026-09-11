@@ -221,15 +221,31 @@ func validateRenderedInstanceConfig(ctx context.Context, ch *chart.Chart, vals m
 			"in its place, so the services would mount a Secret this run never validated")
 	}
 
-	loaded := &config.InstanceConfiguration{}
-	if err := core.LoadConfiguration(raw, loaded); err != nil {
-		return fmt.Errorf("the instance configuration this deploy would render is one "+
-			"the services will refuse to start on: %w", err)
+	loaded, err := loadInstanceConfigDocument(raw)
+	if err != nil {
+		return err
 	}
 	if authored != nil {
 		return checkAuthoredTransforms(ch, vals, manifest, loaded)
 	}
 	return nil
+}
+
+// loadInstanceConfigDocument runs the services' own startup load over a document and
+// says so in the verdict.
+//
+// 🔴 ONE SENTENCE FOR ONE VERDICT. Two callers now strict-load the same bytes — the
+// pre-flight above, and the composition that reads the coordinates the chart has to
+// be told — and a second phrasing of "the services will not start on this" is a
+// second thing an operator has to recognise as the same problem. The pre-flight's
+// wording is the one that has been read in anger, so it is the one that stays.
+func loadInstanceConfigDocument(raw []byte) (*config.InstanceConfiguration, error) {
+	loaded := &config.InstanceConfiguration{}
+	if err := core.LoadConfiguration(raw, loaded); err != nil {
+		return nil, fmt.Errorf("the instance configuration this deploy would render is one "+
+			"the services will refuse to start on: %w", err)
+	}
+	return loaded, nil
 }
 
 // 🔴 THE TWO THINGS THE CHART DOES TO THE DOCUMENT THAT VALIDITY CANNOT SEE.

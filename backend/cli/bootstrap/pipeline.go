@@ -134,6 +134,17 @@ type State struct {
 	// bootstrapped with --kube-context.
 	Binding  ClusterBinding
 	Provider string
+	// InstanceUID is the declaration's own UID, read back from the cluster by the
+	// declare step.
+	//
+	// 🔴 IT IS WHAT TELLS THIS INSTANCE FROM THE ONE THAT HAD ITS NAME BEFORE.
+	// Every Secret dcctl mints is stamped with it, and names are reused: an instance
+	// destroyed and rebuilt under the same name gets a new declaration and a new
+	// UID, so a Secret left behind by a destroy that died halfway is recognisable as
+	// a dead generation rather than adopted as this run's own. Empty in tests and in
+	// pipelines assembled by anything but the bootstrap command, where writing a
+	// minted Secret is refused rather than done without an owner.
+	InstanceUID string
 	// OperatorNamespace is where the operator overlay puts itself, read from the
 	// rendered manifests rather than assumed. The cluster lock lives here too, so
 	// this is set before the claim step runs.
