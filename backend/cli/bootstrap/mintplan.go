@@ -242,26 +242,26 @@ func resolveCredentials(
 			infraNamespace, tsdbClusterName + "-app-credentials", secretKeyPassword,
 		}, tsdbClusterName, live.Tsdb.Exists},
 	} {
-		reused, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID, c.ref)
+		found, reused, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID, c.ref)
 		if err != nil {
 			return nil, err
 		}
-		if err := refuseUnrecoverableDatabaseCredential(c.exists, reused, c.cluster, c.ref.Name); err != nil {
+		if err := refuseUnrecoverableDatabaseCredential(c.exists, found, c.cluster, c.ref.Name); err != nil {
 			return nil, err
 		}
-		if reused != "" {
+		if found == reuseRecovered {
 			*c.into = reused
 		}
 	}
 
 	if databaseBackupsEnabled(st) {
 		name := objectStoreName + "-credentials"
-		user, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+		foundUser, user, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
 			mintedCredentialRef{infraNamespace, name, keyMinioUser})
 		if err != nil {
 			return nil, err
 		}
-		pass, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+		foundPass, pass, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
 			mintedCredentialRef{infraNamespace, name, keyMinioPassword})
 		if err != nil {
 			return nil, err
@@ -271,15 +271,23 @@ func resolveCredentials(
 		// existed — which authenticates against nothing, on a run that reports
 		// success. An object store holding one half and not the other is malformed,
 		// and malformed is not absent.
+		//
+		// Keyed on the OUTCOMES rather than on the strings being non-empty: a Secret
+		// that is present but not ours yields two empty strings, and treating that as
+		// "nothing to reuse" is how the database guard came to report a live Secret as
+		// gone. Here it means the same thing it means there — leave it for the writer
+		// to refuse by name.
 		switch {
-		case user != "" && pass != "":
+		case foundUser == reuseRecovered && foundPass == reuseRecovered:
 			set.ObjectStoreUser, set.ObjectStoreSecret = user, pass
-		case user != "" || pass != "":
+		case foundUser == reuseRecovered || foundPass == reuseRecovered:
 			return nil, fmt.Errorf("Secret %s/%s holds only one half of the object store's "+
-				"root credential (%s=%t, %s=%t), so the identity it is running under cannot be "+
-				"recovered. Minting a replacement would leave the archiver presenting a "+
-				"credential the store has never been told about",
-				infraNamespace, name, keyMinioUser, user != "", keyMinioPassword, pass != "")
+				"root credential (%s recovered=%t, %s recovered=%t), so the identity it is "+
+				"running under cannot be recovered. Minting a replacement would leave the "+
+				"archiver presenting a credential the store has never been told about",
+				infraNamespace, name,
+				keyMinioUser, foundUser == reuseRecovered,
+				keyMinioPassword, foundPass == reuseRecovered)
 		}
 	}
 

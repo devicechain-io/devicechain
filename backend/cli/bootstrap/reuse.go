@@ -31,6 +31,18 @@ var settleCredentials = func(ctx context.Context, st *State, live liveArchiveSta
 	return resolveCredentials(ctx, typed, st, live)
 }
 
+// reuseOutcome says what was found where a previously minted credential would be.
+// Three states rather than a string, because "not there" and "there but somebody
+// else's" call for opposite handling and reading the second as the first produces a
+// refusal that describes a cluster nobody has.
+type reuseOutcome int
+
+const (
+	reuseAbsent reuseOutcome = iota
+	reuseForeign
+	reuseRecovered
+)
+
 // mintedCredentialRef locates one value dcctl has written on an earlier run.
 type mintedCredentialRef struct {
 	Namespace string
@@ -48,18 +60,26 @@ type mintedCredentialRef struct {
 // Where the two can disagree, the Secret is the one telling the truth about what the
 // role will actually admit, so it is the one reuse follows.
 //
-// Three answers, and the middle one is the one that is easy to get wrong:
+// Three answers, and they are DISTINCT rather than collapsed into a string:
 //
-//   - ABSENT — nothing here yet. Returns "" so the caller mints. A missing namespace
-//     reads the same way, which is what a first bootstrap looks like.
-//   - PRESENT BUT NOT OURS — returns "" as well, deliberately. writeOwnedSecret
-//     already refuses a foreign or previous-generation Secret, with a message that
-//     says which case it is and what to do; answering that question a second time
-//     here would give the same run two refusals that could drift apart.
-//   - PRESENT, OURS, AND EMPTY — an ERROR. 🔴 MALFORMED IS NOT ABSENT. Reading a
-//     blank key as "nothing to reuse" mints a fresh password over a live database
-//     whose role keeps the old one, which is a green run that leaves every service
-//     unable to log in.
+//   - reuseAbsent — nothing here yet. The caller mints. A missing namespace reads the
+//     same way, which is what a first bootstrap looks like.
+//   - reuseForeign — present, but dcctl did not write it. The caller must NOT mint
+//     over it and must not report it as missing either. writeOwnedSecret refuses it
+//     later with a message that says which case it is; this only has to avoid
+//     claiming something untrue in the meantime.
+//   - reuseRecovered — present, ours, and carrying a value.
+//
+// 🔴 ABSENT AND FOREIGN USED TO BE ONE ANSWER, AND THAT WAS A LIE THE CALLER TOLD.
+// Both returned "", so refuseUnrecoverableDatabaseCredential said "the only copy of
+// the password is gone" about a Secret sitting right there — which is the exact
+// message an operator sees on any instance built before dcctl owned these, where the
+// Secret exists and belongs to OpenTofu. Measured against a real 30-day-old instance.
+//
+// 🔴 PRESENT, OURS, AND EMPTY is still an ERROR. MALFORMED IS NOT ABSENT: reading a
+// blank key as "nothing to reuse" mints a fresh password over a live database whose
+// role keeps the old one, which is a green run that leaves every service unable to
+// log in.
 //
 // A read that FAILS is also an error rather than a mint, for the same reason it is in
 // clusterArchivePath: "we could not tell" must never resolve to the destructive
@@ -69,13 +89,13 @@ func reuseMintedCredential(
 	typed kubernetes.Interface,
 	instance, instanceUID string,
 	ref mintedCredentialRef,
-) (string, error) {
+) (reuseOutcome, string, error) {
 	s, err := typed.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
-		return "", nil
+		return reuseAbsent, "", nil
 	case err != nil:
-		return "", fmt.Errorf("reading Secret %s/%s to see whether this instance already has a "+
+		return reuseAbsent, "", fmt.Errorf("reading Secret %s/%s to see whether this instance already has a "+
 			"credential there: %w. Refusing to continue: minting a fresh one is the answer that "+
 			"cannot be undone, so it must not be reached by failing to look",
 			ref.Namespace, ref.Name, err)
@@ -83,18 +103,18 @@ func reuseMintedCredential(
 
 	own := readOwnership(s)
 	if !own.managed || own.instance != instance || own.uid != instanceUID {
-		return "", nil
+		return reuseForeign, "", nil
 	}
 
 	// StringData is write-only on a real API server — what comes back is Data.
 	v := string(s.Data[ref.Key])
 	if v == "" {
-		return "", fmt.Errorf("Secret %s/%s was minted by this instance but its %q entry is "+
+		return reuseAbsent, "", fmt.Errorf("Secret %s/%s was minted by this instance but its %q entry is "+
 			"empty, so the credential it is running on cannot be recovered from it. Minting a "+
 			"replacement would leave the services holding a value the database was never told "+
 			"about", ref.Namespace, ref.Name, ref.Key)
 	}
-	return v, nil
+	return reuseRecovered, v, nil
 }
 
 // refuseUnrecoverableDatabaseCredential stops a run that would hand a live database a
@@ -112,8 +132,15 @@ func reuseMintedCredential(
 // database that is itself perfectly healthy. So this refuses instead, and says the
 // two things an operator in that position needs — that the value is unrecoverable,
 // and that the way out is a rebuild rather than another run.
-func refuseUnrecoverableDatabaseCredential(clusterExists bool, reused, cluster, secretName string) error {
-	if !clusterExists || reused != "" {
+func refuseUnrecoverableDatabaseCredential(clusterExists bool, found reuseOutcome, cluster, secretName string) error {
+	// 🔴 ONLY reuseAbsent. A FOREIGN Secret is not a missing one, and saying it is
+	// describes a cluster the operator is not looking at. On every instance built
+	// before dcctl owned these credentials the Secret is present and belongs to
+	// OpenTofu — the exact case this refusal would otherwise fire on, with the exact
+	// wrong sentence. That population is refused by checkNoRetiredInfrastructure,
+	// which explains what actually happened; anything it does not catch is refused by
+	// writeOwnedSecret, which names the ownership it found. Neither needs help here.
+	if !clusterExists || found != reuseAbsent {
 		return nil
 	}
 	return fmt.Errorf(

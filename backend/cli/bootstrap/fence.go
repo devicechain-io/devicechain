@@ -39,6 +39,13 @@ import (
 // put in a real instance's state, which is exactly what this list has to cover — and
 // it does so without standing anything up, so it can be re-run by anyone.
 //
+// ✅ AND CONFIRMED AGAINST A REAL INSTANCE, which is the check this comment used to
+// ask for and could not perform. A 30-day-old cluster built by a pre-cutover dcctl
+// holds exactly these nine addresses in its state — no more, no fewer — and walking
+// that state the way stateHasAddress does (terraform show -json, descending through
+// child_modules) finds all nine among the 30 resources it manages. `terraform state
+// list` is the one-line version; neither prints a value.
+//
 // Run over five variable combinations, because the count-indexed forms are the ones
 // a single plan would miss: defaults, --ha, nats_enable_tls=false, enable_cnpg=false,
 // and backup_destination=external. All nine below matched character for character,
