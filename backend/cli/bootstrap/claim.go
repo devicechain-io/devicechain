@@ -457,8 +457,10 @@ func (c *Claim) setLost(err error) {
 // 🔴 IT ASKS THE API SERVER RATHER THAN READING A FLAG. The renewal goroutine sets
 // that flag on a 10s ticker, and a step can finish and the next one begin inside
 // that window — so a cached answer can be a full interval out of date at exactly
-// the moment it is consulted. One extra GET per step boundary, eight per run, is
-// not a cost worth trading a stale answer for.
+// the moment it is consulted.
+//
+// The cost is one extra GET per step boundary after the claim is taken, which is
+// a handful per run — not a trade worth making for a possibly-stale answer.
 //
 // A transient API failure falls back to what the renewal loop knows. That is
 // deliberate in both directions: it does not abort a healthy run over one failed
@@ -537,7 +539,22 @@ func (c *Claim) Release(ctx context.Context) {
 // between the confirmation and the steal wins — the reclaim fails with a Conflict
 // instead of silently overwriting a live claim.
 func Reclaim(ctx context.Context, client kubernetes.Interface, ns string) (*Claim, error) {
-	abandoned, existing, err := confirmAbandoned(ctx, client, ns, sleepCtx)
+	return reclaim(ctx, client, ns, sleepCtx)
+}
+
+// reclaim is Reclaim with its wait injected.
+//
+// The seam exists because the alternative is untested branches. confirmAbandoned
+// already takes its sleep as a parameter so a test can reach its decision without
+// waiting a minute for it; Reclaim had no equivalent, which left the refusal, the
+// success path and the Conflict-means-alive branch reachable only by a test
+// willing to spend a real lease duration each. A branch nobody can afford to
+// exercise is a branch nobody exercises.
+//
+// A parameter rather than a package var: a var is mutable global state that one
+// test can leave pointing somewhere the next test does not expect.
+func reclaim(ctx context.Context, client kubernetes.Interface, ns string, sleep func(context.Context, time.Duration) error) (*Claim, error) {
+	abandoned, existing, err := confirmAbandoned(ctx, client, ns, sleep)
 	if err != nil {
 		return nil, fmt.Errorf("checking the cluster lock: %w", err)
 	}
