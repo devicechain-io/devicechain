@@ -106,6 +106,19 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	if err := helmUninstall(ctx, kubeContext); err != nil {
 		return fail("uninstalling release", err)
 	}
+	// 🔴 AND THE NAMESPACE, WHICH THE UNINSTALL DOES NOT ALWAYS REACH. dcctl writes the
+	// instance configuration Secret — the root key with it — before Helm installs
+	// anything, so a run that died in between leaves a namespace with no release to
+	// uninstall, and the uninstall above reports that as success. See
+	// removeInstanceNamespace for why the leftover makes this very command the remedy
+	// that does not work.
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return fail("connecting to the cluster to remove the instance namespace", err)
+	}
+	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
+		return fail("removing the instance namespace", err)
+	}
 	done()
 
 	fmt.Println(color.HiGreenString("\nInstance %q uninstalled; cluster %s left running.", opts.Instance, kubeContext))

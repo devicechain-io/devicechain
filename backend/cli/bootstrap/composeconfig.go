@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"github.com/fatih/color"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/kube"
 	corev1 "k8s.io/api/core/v1"
@@ -361,7 +362,13 @@ func adoptChartWrittenInstanceConfig(
 	adopted.Annotations[annotationOwnerName] = instance
 	adopted.Annotations[annotationOwnerUID] = instanceUID
 	adopted.Annotations[annotationMintedAt] = existing.CreationTimestamp.UTC().Format(mintedAtTimeFormat)
-	adopted.Annotations[kube.ResourcePolicyAnno] = kube.KeepPolicy
+	// 🔑 helm.sh/resource-policy IS DELIBERATELY NOT SET HERE. Ownership and the keep
+	// policy look like one act, and writing both here reads as thorough — but the only
+	// caller writes the Secret through writeOwnedSecret one line later, which sets the
+	// policy from the spec on every write, fresh installs included. A second copy in
+	// this function can never be the one that matters, and a line that cannot matter is
+	// worse than no line: it invites the reader to believe this function is what keeps
+	// the document alive. instanceConfigSecret is.
 	if _, err := api.Update(ctx, adopted, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("taking over the instance configuration Secret %s/%s from the chart: %w",
 			instance, existing.Name, err)
@@ -397,9 +404,22 @@ func ensureNamespaceForRelease(
 	instance, releaseName, releaseNamespace string,
 ) error {
 	api := typed.CoreV1().Namespaces()
-	if _, err := api.Get(ctx, instance, metav1.GetOptions{}); err == nil {
+	existing, err := api.Get(ctx, instance, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		// 🔑 A NAMESPACE ON ITS WAY OUT IS NOT A NAMESPACE. Kubernetes refuses new
+		// content in a terminating namespace, so the Secret write below would fail with
+		// "unable to create new content in namespace ... because it is being
+		// terminated" — which reads as a defect rather than as a destroy that has not
+		// finished. Teardown waits on finalizers and is not instant, so this is exactly
+		// what an operator who runs bootstrap straight after destroy hits.
+		if existing.DeletionTimestamp != nil {
+			return fmt.Errorf("namespace %q is still being deleted, so this instance cannot be "+
+				"built into it yet: a previous `dcctl destroy` has not finished. Wait for the "+
+				"namespace to go and run this again", instance)
+		}
 		return nil
-	} else if !apierrors.IsNotFound(err) {
+	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("reading namespace %q before writing the instance configuration: %w",
 			instance, err)
 	}
@@ -422,6 +442,46 @@ func ensureNamespaceForRelease(
 			return nil
 		}
 		return fmt.Errorf("creating namespace %q for the instance configuration: %w", instance, err)
+	}
+	return nil
+}
+
+// removeInstanceNamespace deletes the instance's namespace once its release is gone.
+//
+// 🔴 THE UNINSTALL DOES NOT ALWAYS REACH IT, AND WHAT IS LEFT BEHIND IS THE ROOT KEY.
+// dcctl writes the instance configuration Secret — which carries the secret-store root
+// key — BEFORE Helm installs anything, because the pods mount it at container start. A
+// run that dies between those two leaves a namespace holding that document and no
+// release to uninstall, and `helm uninstall` on a release that does not exist is a
+// no-op destroy reports as success.
+//
+// 🔑 WHAT THAT COSTS IS A REMEDY THAT DOES NOT WORK. The next bootstrap of the same
+// name finds the leftover Secret, sees it was minted for a declaration that is gone,
+// refuses it, and tells the operator to run `dcctl destroy` — which they just did.
+//
+// So this makes the command do what its own dry run already says: "helm uninstall the
+// instance release and delete namespace <instance>".
+//
+// Guarded on the chart's instance label, so what goes is a namespace this instance
+// owns rather than one that merely shares its name. A namespace already gone, or one
+// deleted between the read and the delete, is success: destroy is re-run precisely
+// when something went wrong the first time.
+func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance string) error {
+	api := typed.CoreV1().Namespaces()
+	ns, err := api.Get(ctx, instance, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("reading namespace %q: %w", instance, err)
+	}
+	if ns.Labels["devicechain.io/instance"] != instance {
+		fmt.Println(color.YellowString(
+			"  namespace %q is not labelled as this instance's, so it was left alone; "+
+				"anything dcctl wrote inside it is still there", instance))
+		return nil
+	}
+	if err := api.Delete(ctx, instance, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting namespace %q: %w", instance, err)
 	}
 	return nil
 }

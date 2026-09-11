@@ -562,6 +562,17 @@ func TestOnlyTheReleasesOwnConfigSecretIsTakenOver(t *testing.T) {
 		}(),
 		"claimed by another release":   helmWrittenConfigSecret("someone-else", "default"),
 		"claimed in another namespace": helmWrittenConfigSecret("dc", "somewhere-else"),
+		// 🔴 THE CASE THE FIRST THREE COULD NOT SEE. Each of those breaks one of the
+		// meta.helm.sh annotations, so all three decline whether or not the managed-by
+		// LABEL is checked at all — mutation found that removing that check changed no
+		// outcome any of them could observe. Helm requires all three together
+		// (checkOwnership), and an object carrying the annotations without the label is
+		// one Helm itself would refuse to adopt.
+		"annotated like the chart's but not labelled": func() *corev1.Secret {
+			s := helmWrittenConfigSecret("dc", "default")
+			delete(s.Labels, "app.kubernetes.io/managed-by")
+			return s
+		}(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := fake.NewSimpleClientset(existing)
@@ -640,5 +651,76 @@ func TestRestatingACoordinateDoesNotDropTheBlockItLandsIn(t *testing.T) {
 	}
 	if after["natsBrokerHost"] == nil || after["natsBrokerHost"] == "" {
 		t.Error("the restated broker host is not in the block it was merged into")
+	}
+}
+
+// 🔴 DESTROY MUST TAKE THE NAMESPACE, BECAUSE THE UNINSTALL DOES NOT ALWAYS REACH IT.
+//
+// dcctl writes the config Secret — the root key with it — before Helm installs
+// anything. A run that died in between leaves a namespace with no release, and
+// `helm uninstall` on a release that does not exist is a no-op destroy reports as
+// success. The leftover then makes the NEXT bootstrap refuse, telling the operator to
+// run the very command that just failed to clean it up.
+func TestDestroyRemovesTheNamespaceTheUninstallCannotReach(t *testing.T) {
+	c := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "dctest",
+			Labels: map[string]string{"devicechain.io/instance": "dctest"},
+		}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-config", Namespace: "dctest"}},
+	)
+
+	if err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+		t.Fatalf("removing the namespace: %v", err)
+	}
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{}); err == nil {
+		t.Error("the namespace survived destroy, so the instance configuration it holds did too")
+	}
+}
+
+// ...and it must take only a namespace this instance owns. A namespace that merely
+// shares the name is somebody else's, and deleting it cascades everything in it.
+func TestDestroyLeavesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "dctest",
+		Labels: map[string]string{"devicechain.io/instance": "somebody-else"},
+	}})
+
+	if err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+		t.Fatalf("a namespace this instance does not own was treated as a failure: %v", err)
+	}
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{}); err != nil {
+		t.Error("a namespace belonging to something else was deleted, cascading everything in it")
+	}
+}
+
+// Destroy is re-run precisely when something went wrong the first time, so a
+// namespace that is already gone is success and not an error.
+func TestRemovingAnAbsentNamespaceIsSuccess(t *testing.T) {
+	if err := removeInstanceNamespace(context.Background(), fake.NewSimpleClientset(), "dctest"); err != nil {
+		t.Errorf("an already-deleted namespace failed the destroy: %v", err)
+	}
+}
+
+// 🔑 AND THE OTHER END OF THE SAME FACT: a namespace on its way out cannot be built
+// into. Kubernetes refuses new content in a terminating namespace, so bootstrapping
+// straight after a destroy would fail inside the Secret write with a sentence about
+// "new content" — which reads as a defect rather than as a destroy that has not
+// finished.
+func TestBootstrappingIntoATerminatingNamespaceIsRefusedClearly(t *testing.T) {
+	deleting := metav1.NewTime(time.Now())
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "dctest",
+		DeletionTimestamp: &deleting,
+		Finalizers:        []string{"kubernetes"},
+	}})
+
+	err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc", "default")
+	if err == nil {
+		t.Fatal("a terminating namespace was accepted; the failure would surface several " +
+			"calls later as a message about new content")
+	}
+	if !strings.Contains(err.Error(), "still being deleted") {
+		t.Errorf("the refusal does not say what is happening: %v", err)
 	}
 }
