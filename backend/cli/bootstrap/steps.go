@@ -917,7 +917,13 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 			fmt.Println(color.GreenString("done (%d/%d ready).", ready, total))
 			return nil
 		}
-		if time.Now().After(deadline) {
+		// ONE deadline decision, asked as "how much time is left". Asking it twice —
+		// once as a comparison and once as a subtraction — gives two answers that
+		// disagree at the boundary, and the branch that disagreement produced was a
+		// re-list with no sleep in front of it: a spin, reachable only in the instant
+		// the two forms differ, which is exactly the kind nobody finds by reading.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			fmt.Println(color.RedString("timed out (%d/%d ready).", ready, total))
 			if total == 0 {
 				return fmt.Errorf("no area workloads exist in namespace %q after %s: "+
@@ -930,17 +936,16 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 			return fmt.Errorf("not all areas became ready in namespace %q within %s (%d/%d): %s",
 				ns, timeout, ready, total, strings.Join(pending, ", "))
 		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			continue
-		}
-		if remaining < poll {
-			poll = remaining
+		// A local, so the caller's interval is not narrowed permanently by one short
+		// final wait.
+		wait := poll
+		if remaining < wait {
+			wait = remaining
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(poll):
+		case <-time.After(wait):
 		}
 	}
 }

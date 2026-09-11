@@ -5,13 +5,16 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // areaDeployment builds an area Deployment with the status counts a rollout moves.
@@ -102,8 +105,16 @@ func TestWaitForAreasRefusesAnEmptyNamespace(t *testing.T) {
 	}
 }
 
-// The wait must abandon a cancelled run rather than holding the pipeline to its own
-// deadline — the claim fence in Run() cannot be reached while this is sleeping.
+// Ctrl+C must abandon the wait rather than hold the operator for the rest of a
+// five-minute deadline. The root command turns a signal into a cancelled context,
+// and this step is the longest-sleeping one in the pipeline — note that the pipeline
+// deliberately does NOT cancel between steps, so a signal is the only thing that
+// cancels this.
+//
+// The assertion is errors.Is rather than ==, and the difference is not pedantry: the
+// fake client ignores ctx, so the loop reaches the select and returns the bare
+// error. A real client fails inside List(ctx) first and the error comes back wrapped,
+// which an == comparison would call a failure while the behaviour was correct.
 func TestWaitForAreasHonoursCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -111,8 +122,37 @@ func TestWaitForAreasHonoursCancellation(t *testing.T) {
 	// test fails for cancellation and not because the fixture happened to settle.
 	client := fake.NewSimpleClientset(areaDeployment("device-management", 4, 3, 2, 0, 0, 0))
 	err := waitForAreas(ctx, client, "dc-inst", time.Hour, time.Second)
-	if err != context.Canceled {
-		t.Fatalf("want context.Canceled, got %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want a cancelled context, got %v", err)
+	}
+}
+
+// 🔴 EVERY OTHER TEST HERE IS SATISFIED BY A FUNCTION THAT LISTS ONCE AND RETURNS.
+// The ready fixture passes on the first pass, the unready ones only need some error,
+// and the cancelled one never reaches the sleep — so a loop that gave up after one
+// poll would pass all of them, and waiting is the entire job. This is the test that
+// requires a second pass: the first List reports a rollout in progress, the second
+// reports it finished, and only a function that actually polls again can return nil.
+//
+// A reactor rather than a goroutine updating the object, so the two passes are
+// ordered by construction instead of by a sleep racing the poll interval.
+func TestWaitForAreasPollsUntilTheRolloutFinishes(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var lists int
+	client.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		lists++
+		d := areaDeployment("device-management", 4, 4, 2, 2, 2, 2) // finished
+		if lists == 1 {
+			d = areaDeployment("device-management", 4, 4, 2, 1, 2, 2) // still rolling
+		}
+		return true, &appsv1.DeploymentList{Items: []appsv1.Deployment{*d}}, nil
+	})
+
+	if err := waitForAreas(context.Background(), client, "dc-inst", time.Second, time.Millisecond); err != nil {
+		t.Fatalf("gave up on a rollout that finished while it was waiting: %v", err)
+	}
+	if lists < 2 {
+		t.Fatalf("listed %d time(s); the wait returned without ever polling again, so nothing here measures waiting", lists)
 	}
 }
 
@@ -149,5 +189,50 @@ func TestTheEmptyNamespaceSaysNothingWasRendered(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rendered nothing") {
 		t.Errorf("an empty namespace reports as a stalled rollout, not as an empty install:\n%s", err)
+	}
+}
+
+// 🔴 TWO OF THE FOUR ROLLOUT CONDITIONS ARE NOT COVERED BY THIS FILE, AND CANNOT BE.
+// The table above guards its own fixtures with `available >= desired`, and with
+// `updated <= desired` in every row the fourth condition is then always satisfied —
+// so "every replica recreated" and "the new ones actually came up" are held up by
+// TestWaitForRolloutRejectsStatesTheNaiveCheckAccepts and
+// TestWaitForRolloutWaitsForAnUnavailableNewPod in upgrade_test.go instead.
+//
+// That is sound only while the predicate is shared. If anyone ever gives waitForAreas
+// its own copy, this file silently stops covering half the check — so the copy is the
+// thing to refuse, not the coverage gap.
+func TestTheRolloutPredicateIsSharedWithTheUpgradePath(t *testing.T) {
+	// Reached from both callers, so a divergence has to be deliberate rather than
+	// accidental. If this ever needs deleting, read the comment above first.
+	d := areaDeployment("device-management", 4, 4, 2, 2, 2, 2)
+	if !deploymentRolledOut(d) {
+		t.Fatal("the shared predicate rejects a fully rolled-over Deployment")
+	}
+}
+
+// The timeout a caller passes has to be the timeout enforced, or the number this
+// function reports in its own error message is a fiction. The assertion is a LOWER
+// bound on elapsed time, which is the direction that cannot flake: a loaded machine
+// only ever makes the wait longer, while any arithmetic that shortens the deadline —
+// halving it, dropping a unit, starting the clock in the wrong place — comes back
+// early and fails.
+func TestTheWaitLastsAsLongAsItWasGiven(t *testing.T) {
+	const timeout = 60 * time.Millisecond
+	client := fake.NewSimpleClientset(areaDeployment("device-management", 4, 4, 2, 1, 2, 2))
+
+	start := time.Now()
+	err := waitForAreas(context.Background(), client, "dc-inst", timeout, time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("reported ready over a stalled rollout")
+	}
+	if elapsed < timeout {
+		t.Fatalf("gave up after %s on a %s deadline; the timeout it enforces is not the "+
+			"one it was given, nor the one it names in its error", elapsed, timeout)
+	}
+	if !strings.Contains(err.Error(), timeout.String()) {
+		t.Errorf("the error does not name the deadline it enforced (%s):\n%s", timeout, err)
 	}
 }
