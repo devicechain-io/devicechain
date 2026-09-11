@@ -350,3 +350,110 @@ func TestOnlyProvenanceAnnotationsAreWritten(t *testing.T) {
 		t.Error("a foreign annotation was dropped")
 	}
 }
+
+// The finalizer is what keeps a hand-deleted declaration readable until destroy
+// has run, and dcctl writes it on every bootstrap — so "already there" is the
+// normal case, not the edge one. Appending a duplicate produces an object the API
+// server rejects, which would turn a routine re-run into a failed write.
+func TestAddFinalizerIsIdempotent(t *testing.T) {
+	inst := &dcv1beta1.Instance{}
+	inst.Finalizers = []string{"someone.else/keep-around"}
+
+	addFinalizer(inst)
+	addFinalizer(inst)
+
+	seen := 0
+	for _, f := range inst.Finalizers {
+		if f == dcv1beta1.FinalizerInstance {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("the declaration carries dcctl's finalizer %d times: %v", seen, inst.Finalizers)
+	}
+	// A foreign finalizer is another controller's promise to clean something up.
+	// Dropping it would leave that cleanup undone, silently.
+	if len(inst.Finalizers) != 2 || inst.Finalizers[0] != "someone.else/keep-around" {
+		t.Errorf("another controller's finalizer did not survive: %v", inst.Finalizers)
+	}
+}
+
+// removeFinalizer's RETURN VALUE is what ReleaseInstanceDeclaration decides on:
+// false with no deletion pending means there was nothing to release, and the
+// command says so instead of reporting a success it did not achieve.
+func TestRemoveFinalizerReportsWhetherItRemovedAnything(t *testing.T) {
+	t.Run("it reports removing the one that was there", func(t *testing.T) {
+		inst := &dcv1beta1.Instance{}
+		inst.Finalizers = []string{"someone.else/keep-around", dcv1beta1.FinalizerInstance}
+
+		if !removeFinalizer(inst) {
+			t.Error("removing a finalizer that was present reported that nothing changed, so the " +
+				"release command would claim there was nothing to do")
+		}
+		if len(inst.Finalizers) != 1 || inst.Finalizers[0] != "someone.else/keep-around" {
+			t.Errorf("the remaining finalizers are %v; dcctl removed more than its own",
+				inst.Finalizers)
+		}
+	})
+
+	t.Run("it reports removing nothing from a declaration that has none", func(t *testing.T) {
+		inst := &dcv1beta1.Instance{}
+		inst.Finalizers = []string{"someone.else/keep-around"}
+
+		if removeFinalizer(inst) {
+			t.Error("removing an absent finalizer reported a removal; the release command would " +
+				"then write and delete a declaration it was never holding")
+		}
+		if len(inst.Finalizers) != 1 {
+			t.Errorf("the remaining finalizers are %v", inst.Finalizers)
+		}
+	})
+
+	t.Run("an empty finalizer list is not a special case", func(t *testing.T) {
+		inst := &dcv1beta1.Instance{}
+		if removeFinalizer(inst) {
+			t.Error("removing from an empty list reported a removal")
+		}
+		if len(inst.Finalizers) != 0 {
+			t.Errorf("the remaining finalizers are %v", inst.Finalizers)
+		}
+	})
+}
+
+// The phase is one annotation on an object several writers annotate. Writing it as
+// a wholesale replacement would strip kubectl's last-applied, a GitOps tracking id,
+// or dcctl's own provenance — quietly, on a green run.
+func TestSetPhaseLeavesOtherAnnotationsAlone(t *testing.T) {
+	inst := &dcv1beta1.Instance{}
+	inst.Annotations = map[string]string{
+		"argocd.argoproj.io/tracking-id":  "x",
+		dcv1beta1.AnnotationLastAppliedBy: "v0.17.0",
+	}
+
+	setPhase(inst, dcv1beta1.PhaseBootstrapping)
+
+	if inst.Annotations[dcv1beta1.AnnotationPhase] != dcv1beta1.PhaseBootstrapping {
+		t.Errorf("the phase was not recorded: %v", inst.Annotations)
+	}
+	if inst.Annotations["argocd.argoproj.io/tracking-id"] != "x" {
+		t.Error("another tool's annotation was dropped when the phase was recorded")
+	}
+	if inst.Annotations[dcv1beta1.AnnotationLastAppliedBy] != "v0.17.0" {
+		t.Error("dcctl's own provenance was dropped when the phase was recorded")
+	}
+
+	// A declaration with no annotations at all is the fresh-install case, and it
+	// must not panic on the nil map.
+	fresh := &dcv1beta1.Instance{}
+	setPhase(fresh, dcv1beta1.PhaseBootstrapping)
+	if fresh.Annotations[dcv1beta1.AnnotationPhase] != dcv1beta1.PhaseBootstrapping {
+		t.Errorf("a fresh declaration recorded no phase: %v", fresh.Annotations)
+	}
+
+	// And the phase MOVES: it records what this run is trying to do now, so a
+	// destroy has to be able to overwrite a bootstrap's value.
+	setPhase(inst, dcv1beta1.PhaseDestroying)
+	if inst.Annotations[dcv1beta1.AnnotationPhase] != dcv1beta1.PhaseDestroying {
+		t.Errorf("the phase did not move: %v", inst.Annotations)
+	}
+}
