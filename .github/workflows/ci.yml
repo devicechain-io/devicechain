@@ -310,6 +310,34 @@ jobs:
           echo "envtest $version at $assets"
           echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
 
+      # 🔴 THE GENERATED CRD MUST MATCH THE SOURCE IT IS GENERATED FROM, and until
+      # this step existed nothing checked it. That gap is not theoretical: the
+      # committed CRD and the kubebuilder marker it comes from had already drifted
+      # apart. A CEL rule's empty-string literals in the Go marker had been
+      # corrupted into Unicode smart quotes, the YAML had been repaired by hand,
+      # and the two disagreed silently — so the next person to run `make manifests`
+      # would have regenerated a CRD carrying a CEL syntax error, which the API
+      # server refuses outright. A bootstrap would have failed at the step that
+      # installs the CRDs, several layers away from the comment that caused it.
+      #
+      # Committing generated output and never checking it is the same shape as a
+      # gate that cannot fail: the artifact looks authoritative precisely because
+      # nothing is comparing it to its source.
+      - name: generated manifests are up to date
+        if: matrix.module == 'backend/k8s'
+        working-directory: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          make manifests generate
+          # Only the GENERATED artifacts are compared. `api/` also holds the
+          # hand-written types, and including the whole directory would let an
+          # ordinary source edit report itself as generated drift — a gate that
+          # cries wolf is one somebody eventually stops reading.
+          if ! git diff --exit-code -- config/crd/bases config/rbac 'api/**/zz_generated*'; then
+            echo "::error::the committed CRDs/RBAC/deepcopy do not match what the source generates; run 'make manifests generate' in backend/k8s and commit the result"
+            exit 1
+          fi
+
       # The workspace sum must already contain every hash this module's build
       # needs. It is checked HERE, right after the build, because the build is
       # what reveals the gap: a `go` command in workspace mode silently APPENDS
