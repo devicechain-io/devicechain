@@ -30,7 +30,18 @@
 # `-rc.N` still in the manifest — the precise outcome this guard exists to prevent. The
 # BASE version must still match exactly, so a forgotten update is caught on the rc, which
 # is the earliest anyone could catch it.
+#
+# THE THEME. `theme` is the phrase that names the release; it leads the GitHub release
+# notes and it reaches the published manifest. It is checked here for the same reason the
+# highlights are: it is hand-written, so it is forgettable, and an absent one degrades into
+# a release notes header with an empty title line rather than into an error. The cap is a
+# character count and nothing more — a guard can tell a phrase from a paragraph, and cannot
+# tell a good phrase from a bad one. That part is a human's job and the file says so.
 set -euo pipefail
+
+# The width of a git commit subject. A title that does not fit in one is a sentence, and a
+# sentence about what changed belongs in `highlights`, where there is already a list of them.
+THEME_MAX_CHARS=72
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -61,6 +72,26 @@ check() {
   count="$(jq -r '.highlights | length' "$hl" 2>/dev/null || echo 0)"
   if [ "$count" -eq 0 ]; then
     echo "$hl carries no highlights for $tag"
+    return 0
+  fi
+
+  # Trimmed in jq, so a theme of three spaces is the empty one it actually is rather than a
+  # non-empty string that renders as a blank heading.
+  #
+  # The LENGTH is jq's too, deliberately. `${#theme}` counts characters in a UTF-8 locale and
+  # BYTES in the C locale, so a theme with an em-dash in it would measure three longer on a
+  # runner with LC_ALL=C than on the laptop it was written on — a gate whose verdict depends
+  # on the caller's environment. jq counts codepoints wherever it runs.
+  local theme len
+  theme="$(jq -r '(.theme // "") | gsub("^\\s+|\\s+$";"")' "$hl" 2>/dev/null || true)"
+  if [ -z "$theme" ]; then
+    echo "$hl has no .theme — the one phrase that names $tag"
+    return 0
+  fi
+  len="$(jq -r '(.theme // "") | gsub("^\\s+|\\s+$";"") | length' "$hl" 2>/dev/null || echo 0)"
+  if [ "$len" -gt "$THEME_MAX_CHARS" ]; then
+    echo "$hl has a .theme of $len characters (cap $THEME_MAX_CHARS): '$theme'"
+    return 0
   fi
 }
 
@@ -70,7 +101,12 @@ if [ "${1:-}" = "--self-test" ]; then
   trap 'rm -rf "$tmp"' EXIT
   hl="$tmp/hl.json"
 
-  write() { printf '{"version":"%s","breaking":false,"highlights":%s}\n' "$1" "${2:-[\"a\"]}" > "$hl"; }
+  # <version> [highlights] [theme] — a theme is written by default so every case below
+  # tests the rule it names and not the one added last.
+  write() {
+    printf '{"version":"%s","breaking":false,"highlights":%s,"theme":"%s"}\n' \
+      "$1" "${2:-[\"a\"]}" "${3-a theme}" > "$hl"
+  }
   expect() { # <label> <tag> <want: ok|fail>
     local out; out="$(check "$2" "$hl")"
     if [ "$3" = "ok" ] && [ -n "$out" ]; then
@@ -99,6 +135,29 @@ if [ "${1:-}" = "--self-test" ]; then
   write v0.11.0 '[]'
   expect "the right version with no highlights"            v0.11.0      fail
 
+  # The theme rules. An absent one and a blank one are the same failure — the release notes
+  # would lead with an empty line — so both have to be rejected, and the key being present
+  # must not be enough on its own.
+  printf '{"version":"v0.11.0","breaking":false,"highlights":["a"]}\n' > "$hl"
+  expect "no .theme key at all"                            v0.11.0      fail
+
+  write v0.11.0 '["a"]' ''
+  expect "an empty theme"                                  v0.11.0      fail
+
+  write v0.11.0 '["a"]' '   '
+  expect "a whitespace-only theme"                         v0.11.0      fail
+
+  # The cap, from both sides. Rejecting the long one proves the bound exists; accepting the
+  # one that is exactly at it proves the bound is where it says it is and not one short.
+  # 72 is written out rather than read from $THEME_MAX_CHARS on purpose: a fixture built
+  # from the constant moves with it, so it would pass just as happily if the cap were
+  # silently changed to 10 — which is the edit this pair exists to catch.
+  at_cap="$(head -c 72 /dev/zero | tr '\0' x)"
+  write v0.11.0 '["a"]' "$at_cap"
+  expect "a theme exactly at the cap"                      v0.11.0      ok
+  write v0.11.0 '["a"]' "${at_cap}x"
+  expect "a theme one character past the cap"              v0.11.0      fail
+
   rm -f "$hl"
   expect "a missing file"                                  v0.11.0      fail
 
@@ -111,7 +170,7 @@ HL="${2:-$ROOT/.github/release-highlights.json}"
 
 findings="$(check "$TAG" "$HL")"
 if [ -n "$findings" ]; then
-  echo "::error::$findings. Update .github/release-highlights.json (highlights + breaking) before tagging." >&2
+  echo "::error::$findings. Update .github/release-highlights.json (theme + highlights + breaking) before tagging." >&2
   exit 1
 fi
 
