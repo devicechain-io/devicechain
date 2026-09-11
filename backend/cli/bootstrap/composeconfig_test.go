@@ -613,3 +613,32 @@ func TestTheTakeoverIsANoOpOnAFreshInstall(t *testing.T) {
 		t.Error("the takeover created a Secret; it is meant only to re-stamp one that exists")
 	}
 }
+
+// The install values must keep everything the authoring values put beside the
+// document, not just the coordinates restated over them.
+//
+// metrics and networkPolicy are the two blocks this rewrites, and rewriting is where
+// a whole block goes missing: helmValues decides from the infrastructure apply
+// whether the backup alerts can fire and which namespaces they select, and losing
+// those leaves rules that load, evaluate nothing and never fire — an instance that
+// looks monitored and is not.
+func TestRestatingACoordinateDoesNotDropTheBlockItLandsIn(t *testing.T) {
+	st := composeStateForTest()
+	st.Values[databaseBackupsKey] = "true"
+	st.Values[cnpgNamespaceKey] = "cnpg-system"
+
+	authoring := helmValues(st)
+	before := authoring["metrics"].(map[string]interface{})
+	_, install := composedForTest(t, st)
+	after := install["metrics"].(map[string]interface{})
+
+	for _, key := range []string{"enabled", "databaseBackups", "databaseNamespace", "cnpgNamespace"} {
+		if after[key] != before[key] {
+			t.Errorf("metrics.%s was %v before the restatement and %v after: rewriting the "+
+				"block dropped what the infrastructure apply reported", key, before[key], after[key])
+		}
+	}
+	if after["natsBrokerHost"] == nil || after["natsBrokerHost"] == "" {
+		t.Error("the restated broker host is not in the block it was merged into")
+	}
+}

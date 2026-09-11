@@ -48,7 +48,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 
 	doing(fmt.Sprintf("declaring instance %q", st.Instance))
-	if err := WriteInstanceCR(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion); err != nil {
+	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion); err != nil {
 		return err
 	}
 	done()
@@ -58,7 +58,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// applies defaults, CEL rules and the immutability checks on the way in, so
 	// what lands is not necessarily what was sent. Reading it is what makes the
 	// object the source of truth rather than a log of it.
-	inst, err := ReadInstanceCR(ctx, st.KubeContext, st.Instance)
+	inst, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 	if err != nil {
 		return err
 	}
@@ -87,6 +87,19 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	applyDeclaration(st, inst.Spec)
 	return nil
 }
+
+// The two cluster calls this step makes, as seams.
+//
+// Both build their own client from the kube context, which is right for a step that
+// runs against a real cluster and wrong for testing the step itself — and what this
+// step does with what comes BACK is now load-bearing in a way it was not: the
+// declaration's UID is what separates this instance from a previous one of the same
+// name, and every minted Secret is stamped with it. A step whose only test is "the
+// functions it calls are correct" cannot see that value being dropped on the floor.
+var (
+	writeInstanceDeclaration = WriteInstanceCR
+	readInstanceDeclaration  = ReadInstanceCR
+)
 
 // reportExistingClaim prints who holds the cluster lock, without taking it.
 func reportExistingClaim(ctx context.Context, st *State) error {
