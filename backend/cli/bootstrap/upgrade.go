@@ -111,6 +111,23 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 		return fmt.Errorf("building kube clients: %w", err)
 	}
 
+	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO, AND FORGETTING IT WOULD HAVE LEFT A
+	// HOLE SHAPED EXACTLY LIKE THIS COMMAND. The lock exists so that two operators
+	// cannot mutate one cluster at once, and this command server-side-applies the
+	// CRDs, the RBAC and the controller Deployment — cluster-scoped objects that a
+	// concurrent bootstrap is also applying. A lock that only bootstrap and destroy
+	// take is a lock with a documented bypass.
+	//
+	// It is announced and not enforced, for the same reason destroy's is: an
+	// operator repairing a stuck instance must not be blocked by a lock held by
+	// the very run that got stuck.
+	upgradeClaim := beginUpgradeClaim(ctx, kubeContext, opts.Instance)
+	defer func() {
+		if upgradeClaim != nil {
+			upgradeClaim.Release(ctx)
+		}
+	}()
+
 	// Read what is running BEFORE anything is applied. An upgrade that reports
 	// only its destination cannot be told apart from a no-op, and "no-op" is the
 	// answer an operator most wants confirmed on a cluster they are unsure about.
@@ -310,4 +327,21 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 		case <-time.After(wait):
 		}
 	}
+}
+
+// beginUpgradeClaim takes the cluster lock for an operator upgrade, warning rather
+// than refusing when it cannot. See the call site for why it does not enforce.
+func beginUpgradeClaim(ctx context.Context, kubeContext, instance string) *Claim {
+	ns, typed, err := ClaimClients(kubeContext)
+	if err != nil {
+		fmt.Println(color.YellowString("warning: could not take the cluster lock before upgrading (%v); continuing", err))
+		return nil
+	}
+	claim, err := AcquireClaim(ctx, typed, ns, instance)
+	if err != nil {
+		fmt.Println(color.YellowString("warning: %v", err))
+		fmt.Println(color.YellowString("  continuing with the upgrade anyway — but if that run is live, this will fight it"))
+		return nil
+	}
+	return claim
 }

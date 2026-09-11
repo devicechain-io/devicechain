@@ -4,7 +4,10 @@
 package cmd
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -60,9 +63,32 @@ Command line interface for interacting with DeviceChain components`),
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
+//
+// 🔴 THE SIGNAL HANDLING IS NOT HOUSEKEEPING — WITHOUT IT, CTRL+C CORRUPTS AN
+// APPLY. dcctl runs `tofu` through terraform-exec, which starts the child in its
+// own process group with Pdeathsig set to SIGKILL. That combination means the
+// terminal's SIGINT never reaches tofu: it goes to dcctl, dcctl has no handler
+// and dies, and the kernel then SIGKILLs tofu — which is the one way to stop an
+// apply that guarantees it cannot write its state file, leaving every resource
+// created since the last write untracked.
+//
+// Cancelling the context instead produces the opposite outcome. terraform-exec
+// sets cmd.Cancel to send os.Interrupt, so tofu gets its graceful-stop signal,
+// finishes the operation in flight and writes state before exiting.
+//
+// It is also what lets a run give up the cluster lock it holds. Without a
+// cancellable context the deferred release never runs, and every interrupted
+// bootstrap would strand the lock until another operator waited out a full lease
+// duration and reclaimed it by hand.
+//
+// A SECOND SIGNAL EXITS IMMEDIATELY, which NotifyContext gives us by restoring
+// the default disposition after the first. Someone who has decided they want out
+// now must not be made to argue with a cleanup path.
 func Execute() {
-	err := rootCmd.Execute()
-	if err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
 }

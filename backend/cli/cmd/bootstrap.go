@@ -4,11 +4,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -438,6 +440,9 @@ var bootstrapCmd = &cobra.Command{
 		st := &bootstrap.State{
 			Instance:             opts.Instance,
 			KubeContext:          binding.KubeContext,
+			Binding:              binding,
+			Provider:             provider.Name(),
+			DcctlVersion:         Version,
 			Profile:              opts.Profile,
 			DryRun:               opts.DryRun,
 			AssumeYes:            opts.AssumeYes,
@@ -459,7 +464,9 @@ var bootstrapCmd = &cobra.Command{
 			Restore:              restorePlan,
 			Values:               map[string]string{},
 		}
-		return bootstrap.NewDefaultPipeline().Run(ctx, st)
+		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
+		finishClaim(ctx, st, runErr)
+		return runErr
 	},
 	SilenceUsage: true,
 }
@@ -519,4 +526,38 @@ func init() {
 		"stop the event store's recovery at this RFC3339 timestamp. Needs --restore-tsdb-from")
 
 	rootCmd.AddCommand(bootstrapCmd)
+}
+
+// finishClaim records how the run ended and gives the cluster lock back.
+//
+// 🔴 IT RUNS ON A CONTEXT THAT CANNOT BE CANCELLED, deliberately. The run's own
+// context is what Ctrl+C cancels, and Ctrl+C is precisely the case where giving
+// the lock back matters most — a stranded lock makes the next operator wait out a
+// full lease duration and type a holder identity back to recover from a keystroke.
+// Cleanup that only runs on the happy path is cleanup for the case that did not
+// need it.
+//
+// 🔴 A FENCED RUN WRITES NOTHING. Once the claim is lost, the declaration belongs
+// to whoever reclaimed it, and stamping Failed on it would overwrite the phase of
+// a bootstrap that is running right now and doing fine. Release is still called,
+// and it is a no-op by its own precondition check.
+func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) {
+	if st.Claim == nil {
+		return
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	if !st.Claim.Lost() {
+		phase := dcv1beta1.PhaseReady
+		if runErr != nil {
+			phase = dcv1beta1.PhaseFailed
+		}
+		if err := bootstrap.SetInstancePhase(cleanup, st.KubeContext, st.Instance, phase); err != nil {
+			// Reporting, not correctness. A bootstrap that worked must not be
+			// reported as failed because a courtesy annotation did not land.
+			fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
+		}
+	}
+	st.Claim.Release(cleanup)
 }

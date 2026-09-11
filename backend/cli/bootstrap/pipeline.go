@@ -123,7 +123,26 @@ type State struct {
 	// knowable from argv, and an incident is the wrong time to learn it. The zero
 	// value is an ordinary install.
 	Restore RestorePlan
-	Values  map[string]string
+	// DcctlVersion is the build that is running, recorded on the declaration as
+	// provenance. Set in the command layer from cmd.Version; empty in tests and in
+	// internal pipeline constructions, which record nothing rather than guessing.
+	DcctlVersion string
+	// Binding is the cluster this run resolved to, and Provider is what resolved
+	// it. Both are settled by EnsureCluster in the command layer, and both are
+	// recorded on the declaration — so the pipeline carries them rather than
+	// re-deriving them, which is the derivation that was wrong for every instance
+	// bootstrapped with --kube-context.
+	Binding  ClusterBinding
+	Provider string
+	// OperatorNamespace is where the operator overlay puts itself, read from the
+	// rendered manifests rather than assumed. The cluster lock lives here too, so
+	// this is set before the claim step runs.
+	OperatorNamespace string
+	// Claim is the lock this run holds on the cluster, taken by the claim step and
+	// released by the command layer. Nil on a dry run and in tests, which take no
+	// lock because they write nothing.
+	Claim  *Claim
+	Values map[string]string
 }
 
 // Step is a single named unit of bootstrap work.
@@ -142,6 +161,35 @@ type Pipeline struct {
 func (p Pipeline) Run(ctx context.Context, st *State) error {
 	total := len(p.Steps)
 	for i, step := range p.Steps {
+		// 🔴 THE FENCE LIVES IN THE LOOP, NOT IN THE STEPS, and that placement is
+		// the point. Once the claim is held, every step boundary is checked by
+		// construction — including the boundary before a step somebody adds later,
+		// who would otherwise have to know to write the check. A guard that each
+		// new call site must remember is a guard with a hole in it the first time
+		// somebody forgets.
+		//
+		// 🔴 WHAT THIS DOES NOT DO, STATED IN FULL BECAUSE THE HONEST NUMBER IS
+		// UNCOMFORTABLE: it cannot stop a step already running. A reclaim that
+		// lands one second into "Apply infrastructure" is not acted on until that
+		// step returns, and that step is a single tofu apply whose helm_release
+		// resources carry timeouts of 600–900 seconds EACH, run sequentially,
+		// followed by a second apply. The exposure is therefore the remainder of
+		// the current step — tens of minutes in the worst case — and NOT the
+		// renewal interval. An earlier draft of this design claimed a ten-second
+		// bound; it was reading the detection latency and calling it the window.
+		//
+		// Closing it means cancelling the run's context mid-step. That is safe for
+		// tofu (tfexec sets cmd.Cancel to SIGINT, so tofu stops gracefully and
+		// writes its state) but not yet for the in-process Helm install, which on
+		// cancellation can leave the release in pending-upgrade with no resume path
+		// in this tree. Until that path exists, the window is bounded by the
+		// reclaim ceremony instead: a reclaim cannot happen until the lock has gone
+		// a full lease duration untouched, and a human has typed the holder back.
+		if st.Claim != nil {
+			if err := st.Claim.CheckHeld(ctx); err != nil {
+				return fmt.Errorf("stopping before %q: %w", step.Name, err)
+			}
+		}
 		fmt.Println(GreenUnderline(fmt.Sprintf("\n[%d/%d] %s", i+1, total, step.Name)))
 		if err := step.Run(ctx, st); err != nil {
 			return fmt.Errorf("step %q: %w", step.Name, err)
@@ -187,6 +235,7 @@ func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
 		{Name: "Install core components", Run: stepInstallCore},
+		{Name: "Claim and declare the instance", Run: stepClaimAndDeclare},
 		{Name: "Render configuration", Run: stepRenderConfig},
 		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install instance (Helm)", Run: stepHelmInstall},

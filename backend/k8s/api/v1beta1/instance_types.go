@@ -20,7 +20,48 @@ const (
 	AnnotationLastAppliedBy = "core.devicechain.io/last-applied-by"
 	// AnnotationLastAppliedAt records when it did.
 	AnnotationLastAppliedAt = "core.devicechain.io/last-applied-at"
+
+	// AnnotationPhase records what the last dcctl run was TRYING to do:
+	// Bootstrapping, Ready, Failed or Destroying.
+	//
+	// This is intent, not observation, which is why it is an annotation rather
+	// than a status field — status belongs to the operator and describes what it
+	// can see of the workloads. The two answer different questions and a reader
+	// needs both: "someone is part-way through destroying this" is not something
+	// the workloads can report, because the thing it warns about is that they are
+	// about to stop existing.
+	//
+	// 🔴 dcctl destroy writes PhaseDestroying BEFORE it deletes anything. That
+	// ordering is the whole value of the field: a destroy killed at any later
+	// point leaves a CR that says Destroying rather than one that still says
+	// Ready over an instance that is half gone.
+	AnnotationPhase = "core.devicechain.io/phase"
 )
+
+// The values AnnotationPhase takes.
+const (
+	PhaseBootstrapping = "Bootstrapping"
+	PhaseReady         = "Ready"
+	PhaseFailed        = "Failed"
+	PhaseDestroying    = "Destroying"
+)
+
+// FinalizerInstance keeps a hand-deleted Instance readable until dcctl has
+// destroyed what it declares.
+//
+// 🔴 It protects the immutability rules below, not just the object. Those rules
+// are CEL transition rules, and a transition rule compares self against oldSelf —
+// so a CR that has been deleted and recreated has no oldSelf and every one of
+// them passes vacuously. Without this finalizer, `kubectl delete` followed by a
+// fresh apply repoints `cluster` in two steps that each look legitimate, and
+// destroy then runs against someone else's cluster. The finalizer makes the
+// delete half of that sequence not complete.
+//
+// The cost is the one every finalizer has: an object whose remover is gone cannot
+// be deleted. `dcctl instances release` exists for exactly that, and it is
+// documented rather than left as folklore, because an undocumented finalizer is
+// how a cluster acquires an object nobody can remove.
+const FinalizerInstance = "core.devicechain.io/instance"
 
 // InstanceSpec is the DESIRED state of a DeviceChain instance.
 //

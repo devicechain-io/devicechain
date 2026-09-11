@@ -767,16 +767,27 @@ func stepInstallCore(ctx context.Context, st *State) error {
 	}
 	operatorImage := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
 	doing("installing core components (CRDs + operator)")
+
+	// Rendered BEFORE the dry-run branch, and on both paths, because the overlay
+	// is where the operator's namespace is decided and the next step takes the
+	// cluster lock inside it. Rendering is pure — no cluster is touched — so a dry
+	// run that renders here also stops reporting a plan it could not have built.
+	manifests, err := dck8s.RenderOperator(operatorImage)
+	if err != nil {
+		return fail("rendering operator manifests", err)
+	}
+	ns, err := operatorNamespace(manifests)
+	if err != nil {
+		return fail("reading the operator namespace from the rendered overlay", err)
+	}
+	st.OperatorNamespace = ns
+
 	if st.DryRun {
 		fmt.Println()
 		wouldDo("render the operator overlay and apply CRDs/RBAC/operator (" + operatorImage + ") to " + st.KubeContext)
 		return nil
 	}
 
-	manifests, err := dck8s.RenderOperator(operatorImage)
-	if err != nil {
-		return fail("rendering operator manifests", err)
-	}
 	dyn, disco, _, err := kubeClients(st.KubeContext)
 	if err != nil {
 		return fail("building kube clients", err)

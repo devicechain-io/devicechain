@@ -98,6 +98,10 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) error {
 		return errDestroyAborted
 	}
 
+	// Lock and intent BEFORE the first deletion. See beginDestroy.
+	claim := beginDestroy(ctx, kubeContext, opts.Instance)
+	defer endDestroy(ctx, claim, kubeContext, opts.Instance, true)
+
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext); err != nil {
 		return fail("uninstalling release", err)
@@ -216,6 +220,13 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 		fmt.Println(color.YellowString("Aborted."))
 		return nil
 	}
+
+	// Lock and intent BEFORE the first deletion, as on every other destroy path.
+	// The cluster is going away wholesale here, so the declaration goes with it and
+	// there is nothing to unfinalize — but a destroy that fails partway still wants
+	// to have left a declaration reading Destroying rather than Ready.
+	claim := beginDestroy(ctx, binding.KubeContext, opts.Instance)
+	defer endDestroy(ctx, claim, binding.KubeContext, opts.Instance, false)
 
 	// 🔴 ASKED, NOT ASSUMED. `kind delete cluster` on a cluster that does not exist exits
 	// 0 — which is exactly how the old command turned "there was nothing here" into
