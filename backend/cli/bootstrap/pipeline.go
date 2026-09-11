@@ -150,6 +150,9 @@ type State struct {
 	// and written by the infrastructure step, which is the only ordering in which
 	// CloudNativePG builds the database role from the same value the services get.
 	Credentials *credentialSet
+	// BackupDestination is an off-site archive the operator already owns, read from
+	// --backup-credentials-file. Nil means the in-cluster object store.
+	BackupDestination *BackupDestination
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.

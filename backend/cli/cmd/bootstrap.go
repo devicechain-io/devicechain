@@ -18,33 +18,34 @@ import (
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext     string
-	bootstrapProfile         string
-	bootstrapDryRun          bool
-	bootstrapAssumeYes       bool
-	bootstrapSkipPreflight   bool
-	bootstrapRegistry        string
-	bootstrapVersion         string
-	bootstrapBuild           bool
-	bootstrapHost            string
-	bootstrapNoTLS           bool
-	bootstrapNoMonitoring    bool
-	bootstrapNoCNPG          bool
-	bootstrapAllowLegacyDb   bool
-	bootstrapGrafanaSSO      bool
-	bootstrapDev             bool
-	bootstrapCompact         bool
-	bootstrapHA              bool
-	bootstrapEnableAreas     []string
-	bootstrapLwm2mIdentities string
-	bootstrapEscrowFile      string
-	bootstrapEscrowPassFile  string
-	bootstrapNoEscrow        bool
-	bootstrapRestoreRootKey  string
-	bootstrapRestoreRdbFrom  string
-	bootstrapRestoreRdbAt    string
-	bootstrapRestoreTsdbFrom string
-	bootstrapRestoreTsdbAt   string
+	bootstrapKubeContext       string
+	bootstrapProfile           string
+	bootstrapDryRun            bool
+	bootstrapAssumeYes         bool
+	bootstrapSkipPreflight     bool
+	bootstrapRegistry          string
+	bootstrapVersion           string
+	bootstrapBuild             bool
+	bootstrapHost              string
+	bootstrapNoTLS             bool
+	bootstrapNoMonitoring      bool
+	bootstrapNoCNPG            bool
+	bootstrapAllowLegacyDb     bool
+	bootstrapGrafanaSSO        bool
+	bootstrapDev               bool
+	bootstrapCompact           bool
+	bootstrapHA                bool
+	bootstrapEnableAreas       []string
+	bootstrapLwm2mIdentities   string
+	bootstrapBackupCredentials string
+	bootstrapEscrowFile        string
+	bootstrapEscrowPassFile    string
+	bootstrapNoEscrow          bool
+	bootstrapRestoreRootKey    string
+	bootstrapRestoreRdbFrom    string
+	bootstrapRestoreRdbAt      string
+	bootstrapRestoreTsdbFrom   string
+	bootstrapRestoreTsdbAt     string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -292,6 +293,29 @@ var bootstrapCmd = &cobra.Command{
 			return fmt.Errorf("--lwm2m-identities: %w", err)
 		}
 
+		// Parse + validate --backup-credentials-file up front, for a sharper version of
+		// the same reason: a bad object-store credential does not crash anything. WAL
+		// archiving simply stops, the databases stay healthy, and the first symptom is
+		// an archive-lag alert — or a restore that finds no base backup.
+		backupDestination, err := bootstrap.ParseBackupDestination(bootstrapBackupCredentials)
+		if err != nil {
+			return fmt.Errorf("--backup-credentials-file: %w", err)
+		}
+		// 🔴 AN OFF-SITE ARCHIVE IS MEANINGLESS WITHOUT THE BACKUPS IT ARCHIVES. The
+		// flags that switch the backup subsystem off do so as a CONSEQUENCE of other
+		// choices (--no-cnpg removes the operator the plugin extends; --compact --no-tls
+		// drops the cert-manager the plugin needs for its own Issuer), so an operator
+		// can reach this combination without ever having asked for it — and the silent
+		// outcome is a destination that is configured, believed, and never written to.
+		if backupDestination.Configured() &&
+			!bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS) {
+			return fmt.Errorf("--backup-credentials-file names an off-site archive, but this " +
+				"combination of flags leaves the instance with no database backups to send there " +
+				"(--no-cnpg removes the operator the backup plugin extends; --compact with " +
+				"--no-tls drops the cert-manager it needs). Drop the flag, or drop whichever of " +
+				"those turned backups off")
+		}
+
 		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
 		// and the report label see the same clean set. A stray `--enable-area " "` then
 		// correctly takes the untouched-profile path instead of silently switching to an
@@ -460,6 +484,7 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          opts.EnableAreas,
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
+			BackupDestination:    backupDestination,
 			Escrow:               escrowPlan,
 			Restore:              restorePlan,
 			Values:               map[string]string{},
@@ -489,6 +514,7 @@ func init() {
 			"HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying "+
 			"with it set destroys those StatefulSets and brings up empty databases on the same "+
 			"hostnames. Dump first, or use it deliberately to discard a local instance")
+	bootstrapCmd.Flags().StringVar(&bootstrapBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the instance provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. The credentials are written to a Secret before the apply and never reach the infrastructure state — keep the file readable only by you")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")

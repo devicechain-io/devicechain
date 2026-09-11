@@ -366,6 +366,21 @@ func infraVars(st *State) []string {
 	if st.NATSTLS != nil {
 		vars = append(vars, "nats_ca_cert_pem="+st.NATSTLS.CACertPEM)
 	}
+	// The off-site archive, when one was supplied. Everything here is an ADDRESS
+	// rather than a credential — the two keys travel in a Secret dcctl writes, and
+	// the variables that used to carry them are gone.
+	//
+	// 🔴 EMITTED ONLY WHEN A DESTINATION WAS SUPPLIED, because the default is
+	// in-cluster and stating it here on every run would make `backup_destination`
+	// something dcctl decides rather than something the operator does.
+	if d := st.BackupDestination; d.Configured() {
+		vars = append(vars,
+			"backup_destination=external",
+			"backup_endpoint_url="+d.EndpointURL,
+			"backup_bucket_rdb="+d.BucketRdb,
+			"backup_bucket_tsdb="+d.BucketTsdb,
+		)
+	}
 	// The OpenTofu half of the HA topology. Emitted UNCONDITIONALLY, including for
 	// the single-node case, so the two halves are rendered from one value on every
 	// path rather than only when the flag is set — a conditional here would leave

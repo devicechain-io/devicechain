@@ -151,15 +151,38 @@ func TestTheInfrastructureNoLongerDeclaresACredentialItGaveUp(t *testing.T) {
 	}
 }
 
-// The counterweight: the credential that is SUPPLIED rather than minted stays where
-// it is. An external backup destination is somebody else's object store, so its
-// credentials cannot be minted by anyone here — and a sweep that retired this one
-// along with the rest would leave no way to reach the archive at all.
-func TestTheSuppliedBackupCredentialIsNotRetiredWithTheMintedOnes(t *testing.T) {
+// The counterweight, and it has MOVED RATHER THAN GONE.
+//
+// 🔑 THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, AND THAT IS THE POINT OF IT. While
+// dcctl had no way to supply an external destination, retiring OpenTofu's
+// `kubernetes_secret_v1.backup_credentials` would have left an external archive
+// unreachable — so the test demanded it stay, saying in its own failure message that
+// it could go once --backup-credentials-file landed. It landed; the test failed, in
+// front of the change that made it safe; and the invariant it protects is now the
+// other half of the same rule.
+//
+// What must remain true either way: SOMETHING writes that Secret. It is supplied
+// rather than minted, so nobody here can regenerate it, and an archive whose
+// credentials went missing is only discovered at a restore.
+func TestTheSuppliedBackupCredentialIsWrittenBySomething(t *testing.T) {
 	tree := readTofuTree(t)
-	if !tofuTreeContains(tree, `resource "kubernetes_secret_v1" "backup_credentials"`) {
-		t.Error("the external backup destination's Secret was retired along with the minted " +
-			"credentials. It is supplied, not minted — removing it leaves an external archive " +
-			"unreachable, with nothing to replace it until --backup-credentials-file lands")
+	if tofuTreeDeclares(tree, `resource "kubernetes_secret_v1" "backup_credentials"`) {
+		t.Error("the infrastructure tree declares the external backup credential again. " +
+			"dcctl writes it from --backup-credentials-file now, so two writers would " +
+			"overwrite each other — and a SUPPLIED credential would be back in the state file")
+	}
+	// The tree must still name it, or the archiver is pointed at nothing.
+	if !tofuTreeContains(tree, `default     = "dc-backup-credentials"`) {
+		t.Error("the infrastructure tree no longer names dc-backup-credentials, so the " +
+			"archiver has no Secret to present to an external destination")
+	}
+	// ...and dcctl must still write it under exactly that name.
+	d := &BackupDestination{
+		EndpointURL: "https://s3.example.com", BucketRdb: "a", BucketTsdb: "b",
+		AccessKeyID: "k", SecretAccessKey: "not-a-real-secret-value",
+	}
+	if got := backupCredentialsSecret(d).Name; got != "dc-backup-credentials" {
+		t.Errorf("dcctl writes the archiver's credential as %q, which is not the name the "+
+			"infrastructure tree reads", got)
 	}
 }

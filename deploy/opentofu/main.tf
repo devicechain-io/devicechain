@@ -113,7 +113,11 @@ locals {
       access_key = module.object_store[0].access_key_id_key
       secret_key = module.object_store[0].secret_access_key_key
       } : {
-      secret     = kubernetes_secret_v1.backup_credentials[0].metadata[0].name
+      # Written by dcctl from --backup-credentials-file, before this apply. Named
+      # here as a STRING because that is all this tree needs -- and because reading
+      # it back with a data source would put the supplied credential into state,
+      # which is the whole thing moving it out was for.
+      secret     = var.backup_credentials_secret
       access_key = "ACCESS_KEY_ID"
       secret_key = "SECRET_ACCESS_KEY"
     }
@@ -262,30 +266,21 @@ resource "terraform_data" "cutover_guard" {
 # The credentials the ObjectStore resources present to the endpoint.
 #
 # For the in-cluster destination this is the object-store module's own Secret,
-# reused rather than copied — MinIO's root credentials and the credentials the
+# reused rather than copied -- MinIO's root credentials and the credentials the
 # archiver presents ARE the same credentials, and two Secrets holding one value
-# is two things to rotate and one of them to forget. For an external destination
-# there is no module, so the root writes one.
-resource "kubernetes_secret_v1" "backup_credentials" {
-  count = local.backups_on && var.backup_destination == "external" ? 1 : 0
-
-  metadata {
-    name      = "dc-backup-credentials"
-    namespace = var.namespace
-    labels = {
-      "app.kubernetes.io/name"       = "dc-backup"
-      "app.kubernetes.io/component"  = "database-backup"
-      "app.kubernetes.io/managed-by" = "opentofu"
-    }
-  }
-
-  data = {
-    ACCESS_KEY_ID     = var.backup_access_key
-    SECRET_ACCESS_KEY = var.backup_secret_key
-  }
-
-  depends_on = [module.namespace]
-}
+# is two things to rotate and one of them to forget.
+#
+# 🔴 FOR AN EXTERNAL DESTINATION THIS MODULE NO LONGER WRITES ONE. The credentials
+# belong to somebody else's object store: they are SUPPLIED, not minted, and putting
+# a supplied secret into a variable puts it in the state file just as surely as a
+# generated one. dcctl reads them from --backup-credentials-file and writes
+# `dc-backup-credentials` before this apply; the name below is all this tree needs.
+#
+# That also removed the last credential this configuration declared. The variables
+# that carried them (backup_access_key / backup_secret_key) are gone with the
+# resource, and hack/dr-rig.sh -- the only thing that ever set them -- moved to the
+# file in the same change, because a validation rig that cannot run is worse than
+# one that fails.
 
 # The in-cluster object store. Only for backup_destination = "in-cluster"; an
 # external destination provisions nothing here.

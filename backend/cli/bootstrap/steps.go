@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1049,6 +1050,22 @@ func stepReport(ctx context.Context, st *State) error {
 	//
 	// Before this existed, the only surfaces stating it were the OpenTofu README
 	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
+	// 🔴 A DRY RUN HAS NO OUTPUTS TO READ, AND READING THEIR ABSENCE AS "NO BACKUPS"
+	// MAKES THE REHEARSAL SAY THE OPPOSITE OF WHAT THE REAL RUN DOES. The two values
+	// below are read back from the apply, deliberately — reality rather than our own
+	// request. A dry run never applies, so both are empty and every rehearsal printed
+	// "Backups: NONE", including one that had just been handed an off-site
+	// destination. Same rule, and the same fix, as the archive-path read above.
+	//
+	// Predicted from what THIS RUN decided, not from a default: the flags settle
+	// whether backups exist at all, and --backup-credentials-file settles whether
+	// they leave the cluster.
+	if st.DryRun {
+		if databaseBackupsEnabled(st) {
+			st.Values[databaseBackupsKey] = "true"
+			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(backupsAreExternal(st))
+		}
+	}
 	switch {
 	case st.Values[databaseBackupsKey] != "true":
 		fmt.Printf("  %s %s\n",
@@ -1065,7 +1082,7 @@ func stepReport(ctx context.Context, st *State) error {
 		fmt.Printf("           %s\n",
 			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
 		fmt.Printf("           %s\n",
-			color.YellowString("failure domain and are lost with it. Set backup_destination=\"external\" for off-site."))
+			color.YellowString("failure domain and are lost with it. Pass --backup-credentials-file for off-site."))
 	}
 	// The archive path each store OWNS — which is the INPUT to the next restore.
 	//

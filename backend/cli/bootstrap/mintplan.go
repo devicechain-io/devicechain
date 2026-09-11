@@ -94,6 +94,17 @@ func databaseBackupsEnabled(st *State) bool {
 // therefore whether a dashboard credential is needed at all.
 func monitoringEnabled(st *State) bool { return !st.NoMonitoring }
 
+// backupsAreExternal reports whether this run archives to an object store the
+// operator already owns rather than one it stands up.
+//
+// 🔴 THE TWO DESTINATIONS ARE MUTUALLY EXCLUSIVE, AND GETTING THAT WRONG WRITES A
+// CREDENTIAL NOTHING READS. An external destination provisions no object store, so
+// minting root credentials for one produces `dc-object-store-credentials` with no
+// MinIO to authenticate against — while `dc-backup-credentials`, the Secret the
+// archiver actually presents, goes unwritten. Measured as a real gap in this package
+// before the supplied path existed: dcctl knew only "backups on or off".
+func backupsAreExternal(st *State) bool { return st.BackupDestination.Configured() }
+
 // planOwnedSecrets says which Secrets this run writes, and what goes in each.
 //
 // Deciding the whole set before writing any of it is deliberate: a plan can be shown
@@ -164,7 +175,13 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 		})
 	}
 
-	if databaseBackupsEnabled(st) {
+	if databaseBackupsEnabled(st) && backupsAreExternal(st) {
+		// Supplied, not minted — see BackupDestination. It is written through the same
+		// writer as everything else, because ownership is about who writes the object.
+		out = append(out, backupCredentialsSecret(st.BackupDestination))
+	}
+
+	if databaseBackupsEnabled(st) && !backupsAreExternal(st) {
 		out = append(out, ownedSecret{
 			Name:      objectStoreName + "-credentials",
 			Namespace: infraNamespace,
@@ -315,7 +332,11 @@ func mintNewCredentials(st *State) (*credentialSet, error) {
 	if set.TSDBPassword, err = mintPassword(); err != nil {
 		return nil, err
 	}
-	if databaseBackupsEnabled(st) {
+	// 🔴 ONLY FOR AN IN-CLUSTER STORE. An external destination's credentials are
+	// supplied, so minting here would generate entropy that lands in a Secret no
+	// workload reads — and TestEveryMintedCredentialIsPlacedSomewhere would then be
+	// satisfied by a placement that is itself pointless.
+	if databaseBackupsEnabled(st) && !backupsAreExternal(st) {
 		if set.ObjectStoreUser, err = mintPassword(); err != nil {
 			return nil, err
 		}

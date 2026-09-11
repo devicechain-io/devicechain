@@ -543,17 +543,10 @@ variable "backup_bucket_tsdb" {
   default     = "devicechain-tsdb"
 }
 
-variable "backup_access_key" {
-  description = "Access key for an EXTERNAL backup destination -- somebody else's object store, so this credential is SUPPLIED rather than minted. 🔴 It no longer provisions the in-cluster store: dcctl mints those root credentials per instance and writes them before the apply. Unused when backup_destination is \"in-cluster\"."
+variable "backup_credentials_secret" {
+  description = "Name of the Secret holding the credentials the archiver presents to an EXTERNAL backup destination, under keys ACCESS_KEY_ID / SECRET_ACCESS_KEY. 🔴 This tree is told the NAME, never the value: those credentials belong to somebody else's object store, so they are SUPPLIED rather than minted, and a supplied secret in a variable lands in the state file exactly as a generated one would. dcctl writes it from --backup-credentials-file before the apply. Unused when backup_destination is \"in-cluster\"."
   type        = string
-  default     = ""
-}
-
-variable "backup_secret_key" {
-  description = "Secret key for an EXTERNAL backup destination. Supplied, never minted -- see backup_access_key. Unused when backup_destination is \"in-cluster\"."
-  type        = string
-  default     = ""
-  sensitive   = true
+  default     = "dc-backup-credentials"
 }
 
 variable "backup_server_name_rdb" {
