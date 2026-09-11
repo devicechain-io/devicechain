@@ -98,8 +98,12 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    de superusuario la siembra el servicio user-management en el primer arranque; este paso
    fija los valores que imprimirá el informe final.
 9. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
-   área habilitada hasta que se declare disponible, como puerta de confirmación explícita
-   en lugar de confiar en la espera del propio paso de Helm.
+   área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
+   producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en
+   la espera del propio paso de Helm. Que haya réplicas disponibles no basta: en una
+   reejecución eso ya es cierto de los pods a los que sustituye, así que el paso espera
+   además a que se observe la nueva plantilla, a que todas las réplicas se hayan recreado
+   sobre ella y a que no quede ninguna réplica antigua en ejecución.
 10. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
     credencial de superusuario y cómo llegar a la instancia.
 

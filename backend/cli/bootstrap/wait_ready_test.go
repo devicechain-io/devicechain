@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +113,41 @@ func TestWaitForAreasHonoursCancellation(t *testing.T) {
 	err := waitForAreas(ctx, client, "dc-inst", time.Hour, time.Second)
 	if err != context.Canceled {
 		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+// A gate that can now fail has to say what failed. The counts alone ("3/5 ready")
+// send the operator to kubectl to work out which area stalled and on which of the
+// four conditions — so the message names the Deployment and its numbers, the way
+// the operator-upgrade path already does.
+func TestTheTimeoutNamesTheAreaThatDidNotConverge(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		areaDeployment("device-management", 4, 4, 2, 2, 2, 2), // converged
+		areaDeployment("event-processing", 7, 7, 3, 1, 3, 3),  // stuck
+	)
+	err := waitForAreas(context.Background(), client, "dc-inst", 30*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("reported ready over a stalled area")
+	}
+	msg := err.Error()
+	for _, want := range []string{"event-processing", "1/3 updated", "dc-inst"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("timeout message does not mention %q; an operator cannot act on it:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "device-management") {
+		t.Errorf("timeout message names an area that had converged, which buries the real one:\n%s", msg)
+	}
+}
+
+// The empty namespace fails for a different reason and must say so — "0/0 ready" is
+// a rollout that stalled only if you already know nothing was installed.
+func TestTheEmptyNamespaceSaysNothingWasRendered(t *testing.T) {
+	err := waitForAreas(context.Background(), fake.NewSimpleClientset(), "dc-inst", 30*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("reported ready for a namespace holding no Deployments")
+	}
+	if !strings.Contains(err.Error(), "rendered nothing") {
+		t.Errorf("an empty namespace reports as a stalled rollout, not as an empty install:\n%s", err)
 	}
 }

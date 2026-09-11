@@ -108,6 +108,7 @@ locals {
 }
 
 resource "helm_release" "ingress_nginx" {
+  max_history      = local.helm_max_history
   name             = var.release_name
   namespace        = var.namespace
   create_namespace = true

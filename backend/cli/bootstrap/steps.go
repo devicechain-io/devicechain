@@ -899,10 +899,19 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 			return fail("listing deployments", err)
 		}
 		ready, total := 0, len(deps.Items)
+		var pending []string
 		for i := range deps.Items {
-			if deploymentRolledOut(&deps.Items[i]) {
+			d := &deps.Items[i]
+			if deploymentRolledOut(d) {
 				ready++
+				continue
 			}
+			want := int32(1)
+			if d.Spec.Replicas != nil {
+				want = *d.Spec.Replicas
+			}
+			pending = append(pending, fmt.Sprintf("%s (%d/%d updated, %d available)",
+				d.Name, d.Status.UpdatedReplicas, want, d.Status.AvailableReplicas))
 		}
 		if total > 0 && ready == total {
 			fmt.Println(color.GreenString("done (%d/%d ready).", ready, total))
@@ -910,7 +919,16 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 		}
 		if time.Now().After(deadline) {
 			fmt.Println(color.RedString("timed out (%d/%d ready).", ready, total))
-			return fmt.Errorf("not all areas became ready in namespace %q (%d/%d)", ns, ready, total)
+			if total == 0 {
+				return fmt.Errorf("no area workloads exist in namespace %q after %s: "+
+					"the chart install rendered nothing to wait for", ns, timeout)
+			}
+			// Name what did not converge. The counts alone send the operator back to
+			// kubectl to work out which area stalled and on which of the four
+			// conditions — and this gate can now actually fail, so that is a question
+			// it has to answer rather than one it can leave open.
+			return fmt.Errorf("not all areas became ready in namespace %q within %s (%d/%d): %s",
+				ns, timeout, ready, total, strings.Join(pending, ", "))
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {

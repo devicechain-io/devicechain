@@ -4,9 +4,14 @@
 package bootstrap
 
 import (
+	"context"
+	"io"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chartutil"
+	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	"helm.sh/helm/v3/pkg/storage/driver"
@@ -75,5 +80,67 @@ func TestTheChartUpgradeCarriesTheHistoryBound(t *testing.T) {
 	}
 	if helmMaxHistory <= 0 {
 		t.Fatal("helmMaxHistory must be positive; zero and below are how Helm spells 'keep everything'")
+	}
+}
+
+// 🔴 THE TWO TESTS ABOVE PIN THE FIELD AND THE STORE, AND NOTHING PINNED THE LINK
+// BETWEEN THEM. Helm copies the action's MaxHistory onto the storage inside
+// RunWithContext (action/upgrade.go:170) — a line this repo had read but not
+// observed, which is the exact gap the tests above exist to close. A Helm bump that
+// moved or dropped that copy would leave both of them green and the bound inert.
+//
+// So this drives a real upgrade through newHelmUpgrade against an in-memory store
+// and a fake cluster, and asserts on the history that survives. It covers the whole
+// chain: the constant, the assignment in newHelmUpgrade, Helm's copy onto the
+// storage, and the prune.
+func TestAChartUpgradeActuallyTrimsTheStoredHistory(t *testing.T) {
+	store := storage.Init(driver.NewMemory())
+	over := helmMaxHistory + 4
+	for i := 1; i <= over; i++ {
+		rel := supersededRelease(i)
+		rel.Namespace = "dc-inst"
+		if i == over {
+			rel.Info.Status = release.StatusDeployed
+		}
+		if err := store.Create(rel); err != nil {
+			t.Fatalf("seeding revision %d: %v", i, err)
+		}
+	}
+	if got, _ := store.History(helmReleaseName); len(got) != over {
+		t.Fatalf("seeded %d revisions, store holds %d — the unbounded store is the premise here", over, len(got))
+	}
+
+	cfg := &action.Configuration{
+		Releases:     store,
+		KubeClient:   &kubefake.PrintingKubeClient{Out: io.Discard},
+		Capabilities: chartutil.DefaultCapabilities,
+		Log:          func(string, ...interface{}) {},
+	}
+
+	upg := newHelmUpgrade(cfg, "dc-inst")
+	upg.Wait = false // no cluster to wait on; the bound is what is under test
+	if _, err := upg.RunWithContext(context.Background(), helmReleaseName, minimalChart(), map[string]interface{}{}); err != nil {
+		t.Fatalf("upgrade failed before it could exercise the bound: %v", err)
+	}
+
+	h, err := store.History(helmReleaseName)
+	if err != nil {
+		t.Fatalf("reading history: %v", err)
+	}
+	if len(h) != helmMaxHistory {
+		t.Fatalf("after an upgrade the store holds %d revisions, want %d — the bound did not "+
+			"reach the storage, so nothing is trimming this instance's history", len(h), helmMaxHistory)
+	}
+}
+
+// minimalChart is the smallest chart an upgrade will accept: a name, a version, and
+// one rendered object. Nothing about the chart is under test here.
+func minimalChart() *chart.Chart {
+	return &chart.Chart{
+		Metadata: &chart.Metadata{APIVersion: chart.APIVersionV2, Name: "dc", Version: "0.0.1"},
+		Templates: []*chart.File{{
+			Name: "templates/cm.yaml",
+			Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dc-probe\n"),
+		}},
 	}
 }

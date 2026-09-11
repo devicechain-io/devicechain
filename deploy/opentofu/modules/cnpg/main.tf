@@ -331,6 +331,7 @@ locals {
 }
 
 resource "helm_release" "cnpg" {
+  max_history      = local.helm_max_history
   name             = "cnpg"
   namespace        = var.namespace
   create_namespace = true
@@ -400,7 +401,8 @@ resource "helm_release" "cnpg" {
 }
 
 resource "helm_release" "barman_plugin" {
-  count = var.enable_backup_plugin ? 1 : 0
+  count       = var.enable_backup_plugin ? 1 : 0
+  max_history = local.helm_max_history
 
   name       = "plugin-barman-cloud"
   namespace  = var.namespace
