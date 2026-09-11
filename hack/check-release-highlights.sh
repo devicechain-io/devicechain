@@ -5,6 +5,7 @@
 # Is .github/release-highlights.json valid for the tag being released?
 #
 #   hack/check-release-highlights.sh <tag> [highlights.json]
+#   hack/check-release-highlights.sh --publish-safety [highlights.json]
 #   hack/check-release-highlights.sh --self-test
 #
 # The highlights are the one part of the published release manifest a machine cannot
@@ -37,6 +38,23 @@
 # a release notes header with an empty title line rather than into an error. The cap is a
 # character count and nothing more — a guard can tell a phrase from a paragraph, and cannot
 # tell a good phrase from a bad one. That part is a human's job and the file says so.
+#
+# 🔴 NO ADR REFERENCES IN `theme` OR `highlights[]`. Both are PUBLISHED — verbatim into the
+# GitHub release body and into devicechain.io/releases.json — and ADRs live in a private
+# repo, so a citation there is a dead reference dressed as a source for every reader who
+# gets it. hack/check-docs-adr-refs.sh draws that line for the docs site, npm, Artifact Hub
+# and nuget; this file is the same line on a surface that guard was never pointed at, and
+# its header names this one so the inventory stays readable from either end. `_comment` is
+# exempt and is the reason the rule lives here rather than in a `grep -r` over the file:
+# the block is maintainer prose, it is not published, and it cites ADRs on purpose.
+#
+# WHY THIS RULE HAS A SECOND ENTRY POINT. Everything else here is answerable only against a
+# TAG, so the guard proper runs in the release workflow and on PRs only as --self-test. The
+# ADR rule needs no tag, and catching a citation when the highlights are WRITTEN beats
+# catching it when they are RELEASED, so `--publish-safety` runs the published-text rules
+# alone and CI calls it on every PR. It is the same function in both paths, deliberately:
+# two guards that must agree are one guard with two callers, which is the lesson the header
+# above already paid for once.
 set -euo pipefail
 
 # The width of a git commit subject. A title that does not fit in one is a sentence, and a
@@ -44,6 +62,28 @@ set -euo pipefail
 THEME_MAX_CHARS=72
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Prints one `field: text` line per published field citing an ADR; empty output passes.
+#
+# The match is jq's, case-insensitive, on a word boundary: `adr-080` in a hastily lowercased
+# sentence is the same dead citation as `ADR-080`, while `\b` keeps a word that merely ENDS
+# in those letters from tripping it. Only .theme and .highlights[] are read — ._comment is
+# maintainer prose that never leaves the repo.
+#
+# 🔴 IT FAILS CLOSED. jq's own failure is REPORTED rather than swallowed: `2>/dev/null ||
+# true` around a scan turns a typo'd program into a clean bill of health, which is the one
+# outcome a guard must never produce. A jq error prints a line here, and any line at all is
+# a finding to every caller.
+adr_refs() { # <highlights.json>
+  jq -r '
+      [{field: "theme", text: (.theme // "")}]
+    + ((.highlights // []) | to_entries
+       | map({field: ("highlights[" + (.key | tostring) + "]"), text: .value}))
+    | .[]
+    | select(.text | test("\\bADR-"; "i"))
+    | .field + ": " + .text
+  ' "$1" || echo "could not read $1 for ADR references"
+}
 
 # Prints one line per problem; empty output is the passing case.
 check() {
@@ -93,7 +133,28 @@ check() {
     echo "$hl has a .theme of $len characters (cap $THEME_MAX_CHARS): '$theme'"
     return 0
   fi
+
+  # Joined onto one line: this ends up in a ::error:: annotation, and a multi-line one is
+  # rendered as its first line plus silence.
+  local adr
+  adr="$(adr_refs "$hl" | paste -sd'; ' -)"
+  if [ -n "$adr" ]; then
+    echo "$hl cites an ADR in text that is published: $adr"
+    return 0
+  fi
 }
+
+if [ "${1:-}" = "--publish-safety" ]; then
+  HL="${2:-$ROOT/.github/release-highlights.json}"
+  [ -f "$HL" ] || { echo "::error::highlights file not found: $HL" >&2; exit 1; }
+  refs="$(adr_refs "$HL" | paste -sd'; ' -)"
+  if [ -n "$refs" ]; then
+    echo "::error::$HL cites an ADR in text that is published to the release notes and to devicechain.io: $refs. Say the thing itself, or link to a public page." >&2
+    exit 1
+  fi
+  echo "ok: nothing published from $(basename "$HL") cites an ADR"
+  exit 0
+fi
 
 if [ "${1:-}" = "--self-test" ]; then
   echo "==> Self-test: the guard must accept a candidate and still reject a stale file"
@@ -158,8 +219,42 @@ if [ "${1:-}" = "--self-test" ]; then
   write v0.11.0 '["a"]' "${at_cap}x"
   expect "a theme one character past the cap"              v0.11.0      fail
 
+  # The published-text rule. An ADR citation in either published field is refused; the same
+  # citation in _comment is not, and that pair is the whole rule — a guard that rejected
+  # both would make the maintainer prose unwritable, and one that rejected neither would be
+  # a grep that never fires.
+  write v0.11.0 '["a"]' 'named by ADR-080'
+  expect "an ADR reference in the theme"                   v0.11.0      fail
+
+  write v0.11.0 '["fine","see ADR-025 for why"]'
+  expect "an ADR reference in a highlight"                 v0.11.0      fail
+
+  write v0.11.0 '["fine","see adr-025 for why"]'
+  expect "a lowercased ADR reference in a highlight"       v0.11.0      fail
+
+  printf '{"_comment":["Secured at the broker (ADR-025)."],"version":"v0.11.0","breaking":false,"highlights":["a"],"theme":"a theme"}\n' > "$hl"
+  expect "an ADR reference in _comment, which is NOT published" v0.11.0 ok
+
+  # The word-boundary half of the pattern: a word that merely ends in those letters is not
+  # a citation, and a guard that says it is gets switched off by whoever hits it first.
+  write v0.11.0 '["the quadr-encoder is supported"]'
+  expect "a word ending in adr- is not a citation"         v0.11.0      ok
+
   rm -f "$hl"
   expect "a missing file"                                  v0.11.0      fail
+
+  # The second entry point, exercised as a PROCESS rather than as a function: CI calls it
+  # this way, and an entry point that parses its arguments wrongly fails open by printing
+  # `ok` on a file it never read.
+  printf '{"version":"v0.11.0","breaking":false,"highlights":["clean"],"theme":"a theme"}\n' > "$hl"
+  if ! "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
+    echo "  FAIL: --publish-safety rejected a clean file" >&2; exit 1
+  fi
+  printf '{"version":"v0.11.0","breaking":false,"highlights":["clean"],"theme":"named by ADR-080"}\n' > "$hl"
+  if "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
+    echo "  FAIL: --publish-safety accepted a published ADR citation" >&2; exit 1
+  fi
+  echo "  ok: --publish-safety accepts a clean file and rejects a cited one"
 
   echo "==> Self-test passed"
   exit 0
