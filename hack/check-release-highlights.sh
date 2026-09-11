@@ -106,6 +106,24 @@ check() {
     return 0
   fi
 
+  # SHAPE BEFORE CONTENT. `highlights` is published as a JSON array of strings under
+  # schemaVersion 1, and every rule below assumes that: `length` answers for an object and
+  # for a string, so an object of highlights counts as 1 and sails past the emptiness check
+  # into the manifest, and a non-string element makes the ADR scan fail with a message that
+  # names the wrong problem. Asked here, once, it gets its own diagnosis instead.
+  local shape
+  shape="$(jq -r '
+      if (.highlights | type) != "array" then
+        "has .highlights of type " + (.highlights | type) + ", not an array"
+      elif ((.highlights | map(type != "string") | any)) then
+        "has a non-string entry in .highlights"
+      else empty end
+    ' "$hl" || echo "could not be read as JSON")"
+  if [ -n "$shape" ]; then
+    echo "$hl $shape"
+    return 0
+  fi
+
   # A file carrying the right version and no content is the same forgotten-update
   # failure wearing a different hat.
   local count
@@ -128,6 +146,17 @@ check() {
     echo "$hl has no .theme — the one phrase that names $tag"
     return 0
   fi
+  # A theme is ONE LINE OF TEXT, and the two ways it stops being that are both invisible in
+  # the file. A newline renders its tail as a body paragraph under the heading rather than as
+  # part of the title; three zero-width spaces render as the blank heading the emptiness
+  # check above exists to prevent, because `\s` trims NBSP but not ZWSP and `length` counts
+  # them as three perfectly good characters. \p{Cc} is the first (measured: it matches \n,
+  # \r and \t) and \p{Cf} the second (U+200B, U+200D). This also refuses an emoji joined
+  # with ZWJ, which is intended — a release title is text.
+  if jq -e '(.theme // "") | test("\\p{Cc}|\\p{Cf}")' "$hl" >/dev/null 2>&1; then
+    echo "$hl has a .theme containing a control or invisible character; a theme is one line of plain text"
+    return 0
+  fi
   len="$(jq -r '(.theme // "") | gsub("^\\s+|\\s+$";"") | length' "$hl" 2>/dev/null || echo 0)"
   if [ "$len" -gt "$THEME_MAX_CHARS" ]; then
     echo "$hl has a .theme of $len characters (cap $THEME_MAX_CHARS): '$theme'"
@@ -137,7 +166,7 @@ check() {
   # Joined onto one line: this ends up in a ::error:: annotation, and a multi-line one is
   # rendered as its first line plus silence.
   local adr
-  adr="$(adr_refs "$hl" | paste -sd'; ' -)"
+  adr="$(adr_refs "$hl" | paste -sd';' -)"
   if [ -n "$adr" ]; then
     echo "$hl cites an ADR in text that is published: $adr"
     return 0
@@ -147,7 +176,7 @@ check() {
 if [ "${1:-}" = "--publish-safety" ]; then
   HL="${2:-$ROOT/.github/release-highlights.json}"
   [ -f "$HL" ] || { echo "::error::highlights file not found: $HL" >&2; exit 1; }
-  refs="$(adr_refs "$HL" | paste -sd'; ' -)"
+  refs="$(adr_refs "$HL" | paste -sd';' -)"
   if [ -n "$refs" ]; then
     echo "::error::$HL cites an ADR in text that is published to the release notes and to devicechain.io: $refs. Say the thing itself, or link to a public page." >&2
     exit 1
@@ -240,12 +269,55 @@ if [ "${1:-}" = "--self-test" ]; then
   write v0.11.0 '["the quadr-encoder is supported"]'
   expect "a word ending in adr- is not a citation"         v0.11.0      ok
 
+  # Shape. An object of highlights has a `length` of 1, so without this it clears the
+  # emptiness check and is published as an object under a schema that promises an array.
+  printf '{"version":"v0.11.0","breaking":false,"highlights":{"a":"clean"},"theme":"a theme"}\n' > "$hl"
+  expect "highlights as an object, not an array"           v0.11.0      fail
+  printf '{"version":"v0.11.0","breaking":false,"highlights":["ok",7],"theme":"a theme"}\n' > "$hl"
+  expect "a non-string entry in highlights"                v0.11.0      fail
+
+  # One line of plain text. Both of these are invisible in the file and visible only in the
+  # rendered heading: the newline's tail becomes a paragraph, the zero-width spaces become
+  # the blank title the emptiness rule exists to prevent.
+  write v0.11.0 '["a"]' 'line one\nline two'
+  expect "a theme containing a newline"                    v0.11.0      fail
+  write v0.11.0 '["a"]' 'a\tb'
+  expect "a theme containing a tab"                        v0.11.0      fail
+  write v0.11.0 '["a"]' 'a\rb'
+  expect "a theme containing a carriage return"            v0.11.0      fail
+  printf '{"version":"v0.11.0","breaking":false,"highlights":["a"],"theme":"\\u200b\\u200b\\u200b"}\n' > "$hl"
+  expect "a theme of three zero-width spaces"              v0.11.0      fail
+  # THE COUNTERWEIGHT. The characters a real theme is made of must survive the rule, or it
+  # gets relaxed by the first person who writes one with an em dash in it.
+  write v0.11.0 '["a"]' 'devices must name the dispatch they are answering'
+  expect "the theme this release actually ships"           v0.11.0      ok
+  write v0.11.0 '["a"]' 'an em — dash and デバイス'
+  expect "an em dash and non-Latin text"                   v0.11.0      ok
+
   rm -f "$hl"
   expect "a missing file"                                  v0.11.0      fail
 
+  # 🔴 THE SCAN MUST FAIL CLOSED, and this is the only place that can prove it. adr_refs
+  # reports jq's own failure instead of swallowing it — `2>/dev/null || true` around a scan
+  # turns a broken program into a clean bill of health, which is the one verdict a guard may
+  # never invent. Reverting that one line leaves every other case green, because the shape
+  # rule above now refuses a non-string highlight BEFORE the scan is reached: through
+  # check() the jq-error path is unreachable by construction, which is the right structure
+  # and also the reason the property has to be asserted directly on the function.
+  printf '{ not json at all\n' > "$hl"
+  if [ -z "$(adr_refs "$hl" 2>/dev/null)" ]; then
+    echo "  FAIL: adr_refs reported nothing on a file jq cannot read — errors are being swallowed" >&2; exit 1
+  fi
+  printf '{"version":"v0.11.0","breaking":false,"highlights":[1],"theme":"a theme"}\n' > "$hl"
+  if [ -z "$(adr_refs "$hl" 2>/dev/null)" ]; then
+    echo "  FAIL: adr_refs reported nothing on a highlight it cannot scan as text" >&2; exit 1
+  fi
+  echo "  ok: the scan reports what it could not read instead of passing it"
+
   # The second entry point, exercised as a PROCESS rather than as a function: CI calls it
   # this way, and an entry point that parses its arguments wrongly fails open by printing
-  # `ok` on a file it never read.
+  # `ok` on a file it never read. It runs the scan ALONE — no shape rule stands in front of
+  # it there — so it is also where the fail-closed property is observable end to end.
   printf '{"version":"v0.11.0","breaking":false,"highlights":["clean"],"theme":"a theme"}\n' > "$hl"
   if ! "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
     echo "  FAIL: --publish-safety rejected a clean file" >&2; exit 1
@@ -254,7 +326,15 @@ if [ "${1:-}" = "--self-test" ]; then
   if "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
     echo "  FAIL: --publish-safety accepted a published ADR citation" >&2; exit 1
   fi
-  echo "  ok: --publish-safety accepts a clean file and rejects a cited one"
+  printf '{"version":"v0.11.0","breaking":false,"highlights":[1],"theme":"a theme"}\n' > "$hl"
+  if "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
+    echo "  FAIL: --publish-safety accepted a highlight it could not scan as text" >&2; exit 1
+  fi
+  printf '{ not json at all\n' > "$hl"
+  if "${BASH_SOURCE[0]}" --publish-safety "$hl" >/dev/null 2>&1; then
+    echo "  FAIL: --publish-safety accepted a file jq cannot read" >&2; exit 1
+  fi
+  echo "  ok: --publish-safety accepts a clean file and rejects a cited, an unscannable and an unreadable one"
 
   echo "==> Self-test passed"
   exit 0
