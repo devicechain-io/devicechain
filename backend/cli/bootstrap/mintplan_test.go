@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -296,4 +297,109 @@ func sortedKeys(m map[string]string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// 🔴 EVERY CREDENTIAL THIS RUN MINTS MUST LAND IN A SECRET SOMETHING READS.
+//
+// A password generated and placed nowhere is not a harmless spare: it is a credential
+// the operator believes is protecting something. One shipped that way — the dashboard
+// login was minted whenever monitoring was on and carried by no Secret in the plan —
+// and nothing could see it. The mutation suite tests this package against the model
+// behind it, and the model itself had forgotten the field; every test here enumerated
+// the credentials somebody had remembered.
+//
+// 🔑 SO THIS WALKS THE STRUCT, NOT A LIST. Adding a field to credentialSet without
+// placing it fails here, which a list maintained by hand cannot promise — the whole
+// failure was a list that was out of date and looked complete.
+func TestEveryMintedCredentialIsPlacedSomewhere(t *testing.T) {
+	st := &State{} // everything on: backups and monitoring both default to enabled
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	placed := map[string]bool{}
+	for _, s := range planOwnedSecrets(st, set) {
+		for _, v := range s.Data {
+			placed[v] = true
+		}
+	}
+
+	v := reflect.ValueOf(*set)
+	typ := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		value := v.Field(i).String()
+		if value == "" {
+			// Not minted for this configuration, so there is nothing to place. The
+			// case where that is WRONG — a credential the run needs and did not mint —
+			// is what the per-flag tests above cover.
+			continue
+		}
+		if !placed[value] {
+			t.Errorf("credentialSet.%s was minted and no Secret in the plan carries it: "+
+				"a credential generated on every run and dropped on the floor", typ.Field(i).Name)
+		}
+	}
+}
+
+// ...and the counterweight, because "place everything" is only safe while nothing is
+// placed TWICE under a name a different consumer reads. Two Secrets holding one value
+// is two things to rotate and one of them to forget.
+func TestNoMintedCredentialIsPlacedInTwoSecrets(t *testing.T) {
+	st := &State{}
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	where := map[string][]string{}
+	for _, s := range planOwnedSecrets(st, set) {
+		for k, v := range s.Data {
+			where[v] = append(where[v], s.Namespace+"/"+s.Name+":"+k)
+		}
+	}
+	for _, field := range []string{
+		set.RDBPassword, set.TSDBPassword, set.ObjectStoreUser,
+		set.ObjectStoreSecret, set.GrafanaAdminPassword,
+	} {
+		if field == "" {
+			continue
+		}
+		if len(where[field]) > 1 {
+			t.Errorf("one minted value is carried by %v: rotating it means finding all of them",
+				where[field])
+		}
+	}
+}
+
+// The dashboard credential lands where Grafana's own chart looks for it: its release's
+// namespace, under the key names admin.existingSecret reads. Literals, because those
+// are that chart's contract and nothing here would fail to build if they moved.
+func TestTheDashboardCredentialLandsWhereGrafanaReadsIt(t *testing.T) {
+	st := &State{}
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found *ownedSecret
+	for i, s := range planOwnedSecrets(st, set) {
+		if s.Name == "dc-grafana-admin" {
+			found = &planOwnedSecrets(st, set)[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no dashboard credential Secret is planned, so the minted password goes nowhere")
+	}
+	if found.Namespace != "monitoring" {
+		t.Errorf("it is planned for namespace %q; Grafana reads a Secret in its own release's "+
+			"namespace, so anywhere else is a Secret nothing mounts", found.Namespace)
+	}
+	if found.Data["admin-password"] != set.GrafanaAdminPassword {
+		t.Error("the minted password is not under the key admin.passwordKey reads")
+	}
+	if found.Data["admin-user"] == "" {
+		t.Error("no user is carried, so admin.userKey resolves to nothing")
+	}
 }

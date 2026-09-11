@@ -35,6 +35,20 @@ const (
 	// credential change lands in the Secret and the database keeps the old password,
 	// silently.
 	cnpgReloadLabel = "cnpg.io/reload"
+
+	// The dashboard login. Its Secret lives in the MONITORING namespace, not the
+	// infrastructure one — Grafana is installed by its own release there, and a
+	// Secret a chart reads has to be in the chart's namespace.
+	//
+	// The key names are the Grafana chart's, read through admin.existingSecret with
+	// admin.userKey / admin.passwordKey. They are restated here because they are that
+	// chart's contract and nothing in this repository would fail to build if they
+	// moved.
+	monitoringNamespace = "monitoring"
+	grafanaSecretName   = "dc-grafana-admin"
+	grafanaAdminUser    = "admin"
+	keyGrafanaAdminUser = "admin-user"
+	keyGrafanaAdminPass = "admin-password"
 )
 
 // credentialSet is the entropy one run generates for the credentials that have no
@@ -121,6 +135,29 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 				secretKeyPassword: set.TSDBPassword,
 			},
 		},
+	}
+
+	if monitoringEnabled(st) {
+		// 🔴 THIS WAS MINTED AND PLACED NOWHERE. mintNewCredentials generated a
+		// dashboard password whenever monitoring was on, and no Secret in this plan
+		// ever carried it — a credential produced on every run and dropped on the
+		// floor. Nothing could see it: the mutation suite tests this code against the
+		// model behind it, and the model itself had forgotten the field. What catches
+		// it now is TestEveryMintedCredentialIsPlacedSomewhere, which walks the struct
+		// rather than the cases anybody thought to list.
+		out = append(out, ownedSecret{
+			Name:      grafanaSecretName,
+			Namespace: monitoringNamespace,
+			Type:      corev1.SecretTypeOpaque,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "grafana",
+				"app.kubernetes.io/component": "monitoring",
+			},
+			Data: map[string]string{
+				keyGrafanaAdminUser: grafanaAdminUser,
+				keyGrafanaAdminPass: set.GrafanaAdminPassword,
+			},
+		})
 	}
 
 	if databaseBackupsEnabled(st) {
