@@ -94,7 +94,7 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // meant a two-edit repoint of the binding that `dcctl destroy` reads. The spec
 // object is always present, so a rule written here always runs.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.cluster) ? self.cluster : ”) == (has(oldSelf.cluster) ? oldSelf.cluster : ”)",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
+// +kubebuilder:validation:XValidation:rule="(has(self.cluster) ? self.cluster : '') == (has(oldSelf.cluster) ? oldSelf.cluster : '')",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored) && self.restored)",message="restored cannot be unset: it records that this instance's databases came from an archive, which stays true. An ordinary re-run does not restore anything and must not erase the fact that an earlier one did"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
 type InstanceSpec struct {
