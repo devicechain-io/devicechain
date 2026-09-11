@@ -100,6 +100,15 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return fmt.Errorf("tofu init: %w", err)
 	}
 
+	// 🔴 THE FENCE COMES FIRST, BEFORE ANY OTHER READ OR WRITE. An instance built
+	// before the credentials moved into Secrets dcctl owns still has the resources
+	// that used to hold them in its state, and this configuration no longer declares
+	// them — so the apply below would DELETE them. Everything after this point
+	// assumes it did not fire. Needs state, so it runs after Init.
+	if err := checkNoRetiredInfrastructure(ctx, tf, st.Instance); err != nil {
+		return err
+	}
+
 	// Refuse to shrink a broker cluster that is already carrying replicated data.
 	// Reads the CURRENT state, so it must run after Init and before Apply — this is
 	// the only point where both the applied topology and the requested one are known.
@@ -107,8 +116,29 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
+	vars := infraVars(st)
+
+	// The shared infrastructure namespace, created here and handed to OpenTofu.
+	//
+	// 🔴 IT HAS TO EXIST BEFORE THE APPLY BECAUSE THE CREDENTIALS DO. CloudNativePG
+	// builds the database role from a Secret when it CREATES the Cluster, so a Secret
+	// written after the apply leaves the role on one password and every service on
+	// another — which means dcctl writes those Secrets first, and a Secret cannot be
+	// written into a namespace that is not there. See adoptInfraNamespace for why the
+	// namespace is then IMPORTED rather than switched off in the configuration.
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
+	}
+	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
+		return err
+	}
+	if err := adoptInfraNamespace(ctx, tf, infraNamespace, vars); err != nil {
+		return err
+	}
+
 	opts := make([]tfexec.ApplyOption, 0, 16)
-	for _, v := range infraVars(st) {
+	for _, v := range vars {
 		opts = append(opts, tfexec.Var(v))
 	}
 	if err := tf.Apply(ctx, opts...); err != nil {
