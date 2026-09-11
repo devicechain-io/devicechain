@@ -16,10 +16,34 @@ spec:
     singular: instance
   scope: Cluster
   versions:
-  - name: v1beta1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provider
+      name: Provider
+      type: string
+    - jsonPath: .spec.cluster
+      name: Cluster
+      type: string
+    - jsonPath: .spec.profile
+      name: Profile
+      type: string
+    - jsonPath: .spec.imageVersion
+      name: Version
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta1
     schema:
       openAPIV3Schema:
-        description: Instance is the Schema for the instances API
+        description: |-
+          Instance is the declaration of a DeviceChain instance.
+
+          Cluster-scoped, and that is load-bearing rather than incidental. The instance
+          namespace does not exist when this object is created — creating it is part of
+          the bootstrap this object describes — so a namespaced CR would have nowhere to
+          live at the one moment it is needed. Cluster scope also makes the instance id
+          unique cluster-wide, which is what lets the object serve as a claim two
+          operators race for rather than as a record each of them keeps.
         properties:
           apiVersion:
             description: |-
@@ -39,49 +63,232 @@ spec:
           metadata:
             type: object
           spec:
-            description: InstanceSpec defines the desired state of Instance
+            description: |-
+              Spec is required. Without this an Instance carrying no spec at all is valid,
+              because the required fields INSIDE the spec are only checked once a spec
+              exists — so the object that declares nothing would pass every rule below.
             properties:
-              configId:
-                description: Id of the instance configuration resource used to load
-                  config.
-                type: string
-              configuration:
-                description: Instance configuration information.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              description:
-                description: Human-readable description displayed for instance.
-                type: string
-              enabledFunctionalAreas:
+              cluster:
                 description: |-
-                  EnabledFunctionalAreas is an explicit set of functional areas to deploy,
-                  as an alternative to a named Profile (ADR-022 decision 2). The set is
-                  rejected if it omits a required core area or an enabled area's hard
-                  dependency.
+                  Cluster is the provider's name for the cluster holding this instance. Empty
+                  is a real value: an instance bootstrapped into a cluster dcctl did not create
+                  has no provider-side cluster name, and inventing one would make destroy
+                  confident about a cluster nobody named. Immutable, enforced at the spec level
+                  so that removing it is refused too.
+                type: string
+              cnpg:
+                description: |-
+                  CNPG reports whether this instance installs the CloudNativePG operator and
+                  the backup plugin, as opposed to using ones the cluster already runs.
+
+                  It is recorded because leaving it out does not make the declaration safer, it
+                  makes it wrong: Helm cannot adopt objects it did not create, so a second
+                  operator who re-runs without knowing this fails the infrastructure apply with
+                  an ownership error on a cluster that was fine.
+                type: boolean
+              compact:
+                description: Compact applies the small-footprint sizing preset.
+                type: boolean
+              extraFunctionalAreas:
+                description: |-
+                  ExtraFunctionalAreas are areas deployed on TOP of the profile.
+
+                  This records the operator's request rather than the set it expanded to, and
+                  the difference matters on a re-run. A profile's membership is a property of
+                  the release: "full" is contractually exhaustive, so it gains an area whenever
+                  the platform does. Freezing the expansion would make a later dcctl deploy the
+                  OLD contents of a profile from this declaration while deploying the new ones
+                  from the equivalent command line — two paths to the same instance that no
+                  longer agree. What was actually deployed is an observation, and belongs in
+                  the status.
                 items:
                   type: string
                 type: array
-              name:
-                description: Human-readable name displayed for instance.
+              grafanaSSO:
+                description: |-
+                  GrafanaSSO reports whether Grafana's login is wired to DeviceChain SSO.
+
+                  Recorded for the same reason and with a sharper edge: this seeds an OAuth
+                  client into the user-management config and turns the integration on in the
+                  infrastructure apply, so a re-run without it does not merely skip the feature
+                  — it removes both halves from a live instance.
+                type: boolean
+              ha:
+                description: HA applies the replicated messaging topology.
+                type: boolean
+              host:
+                description: |-
+                  Host is the hostname the instance ingress is exposed on, resolved rather than
+                  copied from the flag: an omitted host would leave the next reader to
+                  re-derive a default that may have moved between releases.
                 type: string
+              imageRegistry:
+                description: ImageRegistry is where this instance's images are pulled
+                  from.
+                type: string
+              imageVersion:
+                description: ImageVersion is the tag they are pulled at.
+                type: string
+              managed:
+                description: |-
+                  Managed reports whether the cluster itself is dcctl's to delete, as opposed
+                  to one it was pointed at. Immutable, and required rather than optional: this
+                  decides whether destroy may remove the CLUSTER, so an absent value must not
+                  be able to mean anything.
+                type: boolean
+                x-kubernetes-validations:
+                - message: 'managed is immutable: it decides whether destroy may delete
+                    the cluster, and flipping it turns a scoped teardown into a cluster
+                    deletion'
+                  rule: self == oldSelf
+              monitoring:
+                description: |-
+                  Monitoring reports whether the observability stack is part of this instance.
+
+                  Stated positively, like CNPG and TLS below, rather than as the --no-monitoring
+                  flag it comes from. A command line has an implicit default and can afford a
+                  negative; a declaration is read by someone asking what this instance IS, and
+                  making them invert a negative to learn that Prometheus is installed puts a
+                  step in front of the answer.
+                type: boolean
               profile:
                 description: |-
-                  Profile names a curated set of functional areas to deploy (e.g.
-                  "default", "full", "telemetry", "ingest-only") — ADR-022 decision 2. Mutually
-                  exclusive with EnabledFunctionalAreas; an empty profile with no explicit
-                  set resolves to the "default" profile: the standard system. "full"
-                  additionally ships the areas that reach outside the instance (AI inference,
-                  outbound connectors, MCP).
+                  Profile names a curated set of functional areas ("default", "full",
+                  "telemetry", "ingest-only"). Empty means the default profile.
                 type: string
+              provider:
+                description: |-
+                  Provider is the infrastructure provider that resolved this instance's
+                  cluster. Immutable: an instance cannot move between providers in place.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: 'provider is immutable: it identifies the kind of cluster
+                    this instance was bootstrapped into'
+                  rule: self == oldSelf
+              restored:
+                description: |-
+                  Restored reports that this instance's databases were recovered from an
+                  archive rather than created empty. A fact about the instance, never a path:
+                  that a restore happened belongs to anyone reading this, while WHERE the
+                  archive was is one operator's command line.
+
+                  Write-once. An ordinary re-run restores nothing and must not erase it.
+                type: boolean
+              restoredAt:
+                description: RestoredAt is when the restore that produced this instance
+                  completed.
+                format: date-time
+                type: string
+              tls:
+                description: |-
+                  TLS reports whether the ingress serves HTTPS. This describes the INGRESS and
+                  nothing else — the broker's own TLS is configured separately and is on by
+                  default regardless of this value.
+                type: boolean
             required:
-            - configId
-            - configuration
-            - description
-            - name
+            - managed
+            - provider
             type: object
+            x-kubernetes-validations:
+            - message: 'cluster is immutable: it is half of the binding between this
+                instance and the cluster it lives in, and rewriting it (including
+                by removing or adding it) would point destroy at a different cluster'
+              rule: '(has(self.cluster) ? self.cluster : '''') == (has(oldSelf.cluster)
+                ? oldSelf.cluster : '''')'
+            - message: 'restored cannot be unset: it records that this instance''s
+                databases came from an archive, which stays true. An ordinary re-run
+                does not restore anything and must not erase the fact that an earlier
+                one did'
+              rule: '!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored)
+                && self.restored)'
+            - message: restoredAt is set on an instance that says it was not restored
+              rule: '!(has(self.restoredAt) && !(has(self.restored) && self.restored))'
           status:
-            description: InstanceStatus defines the observed state of Instance
+            description: |-
+              InstanceStatus is the OBSERVED state.
+
+              Nothing here is an input: if dcctl needs a value to reproduce a bootstrap it
+              belongs in the spec.
+            properties:
+              conditions:
+                description: |-
+                  Conditions report what the operator can see of the instance's workloads.
+
+                  Nothing writes these yet; the reconciler that will is a later slice. When it
+                  does, absence must be reported with a reason rather than as health: a
+                  resource whose CRD is not installed, one not created yet, and one that is
+                  failing are three different answers, and collapsing any of them into "not
+                  Ready" throws away the part a human can act on.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the spec generation this status was computed from.
+                  Without it a reader cannot tell a status that reflects the current spec from
+                  one left over from the previous, and "stale but plausible" is the failure a
+                  status exists to prevent.
+                format: int64
+                type: integer
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

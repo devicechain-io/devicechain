@@ -273,6 +273,43 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      # 🔴 THE OPERATOR'S CRD CARRIES CEL RULES, AND CEL IS ENFORCED BY AN API
+      # SERVER — so testing it needs one. envtest supplies a real apiserver+etcd
+      # pair as binaries, no cluster involved, and the suite takes about 25
+      # seconds.
+      #
+      # This is installed rather than made optional. The suite FAILS when the
+      # binaries are absent instead of skipping, and that is deliberate: the
+      # rules it covers are what stand between a hand-edited Instance and a
+      # `dcctl destroy` pointed at the wrong cluster, and a silent skip would
+      # make every CI run green while checking none of them. A structural check
+      # of the generated manifest was tried first and is what let a bypassable
+      # rule through — it could see that a rule existed, not that it fired.
+      #
+      # Only the module that has such a suite pays for it.
+      - name: envtest binaries
+        if: matrix.module == 'backend/k8s'
+        working-directory: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          # The version comes from the Makefile, which is where `make test` reads it
+          # too. Repeating it here would be two numbers that must agree, and the way
+          # that fails is the local run and CI silently exercising different API
+          # servers.
+          version="$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            echo "::error::could not read ENVTEST_K8S_VERSION from backend/k8s/Makefile"
+            exit 1
+          fi
+          make envtest
+          assets="$(bin/setup-envtest use "$version" -p path)"
+          if [ ! -x "$assets/kube-apiserver" ] || [ ! -x "$assets/etcd" ]; then
+            echo "::error::setup-envtest reported $assets but it holds no kube-apiserver/etcd; the CEL suite would fail for the wrong reason"
+            exit 1
+          fi
+          echo "envtest $version at $assets"
+          echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
+
       # The workspace sum must already contain every hash this module's build
       # needs. It is checked HERE, right after the build, because the build is
       # what reveals the gap: a `go` command in workspace mode silently APPENDS
