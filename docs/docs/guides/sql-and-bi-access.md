@@ -68,7 +68,21 @@ kubectl create secret generic analytics-acme-credentials \
   --type kubernetes.io/basic-auth \
   --from-literal=username=analytics_acme \
   --from-literal=password="$(openssl rand -base64 24)"
+
+kubectl label secret analytics-acme-credentials \
+  --namespace dc-system cnpg.io/reload=true
 ```
+
+:::warning The label is what makes rotation work
+Without `cnpg.io/reload`, the database still picks the password up when the role is first
+created — but later **changes** to the Secret are not noticed promptly. The label is what asks
+the database operator to watch the Secret for updates, and it is required for the rotation step
+below to do anything within a predictable time.
+
+Two details that catch people out: the label's *presence* is what counts, so any value works;
+and the `username` in the Secret must match the role name **exactly**, with no trailing newline
+— a mismatch is reported only as a password error, while quietly stalling other reconciliation.
+:::
 
 **2. Declare the role in your deployment variables**, with a connection limit:
 
@@ -84,7 +98,11 @@ timescale_analytics_readers = [
 
 Apply. The role appears, joins the reader group, and can connect. Nothing needs restarting.
 
-To rotate the password, change it in the Secret; to revoke access, remove the entry and apply.
+To rotate the password, change it in the Secret — the database is reconciled to match, with no
+restart. To revoke access, remove the entry and apply.
+
+If you created the Secret before the labelling step above was documented, add the label now;
+until you do, a password change may sit unapplied for an unpredictable time.
 
 ## Position is a separate grant
 
