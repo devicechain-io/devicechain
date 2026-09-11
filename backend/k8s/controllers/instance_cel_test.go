@@ -166,6 +166,29 @@ func TestTheAPIServerRefusesToRepointTheClusterBinding(t *testing.T) {
 		}
 	})
 
+	// 🔴 THE QUADRANT THE REWRITE COULD HAVE SILENTLY CHANGED, AND NOTHING COVERED.
+	// The rule was rewritten to avoid a string literal (gofmt mangles one in a doc
+	// comment; see the marker's own comment). The old form compared two ternaries
+	// defaulting to an empty string, so it treated an ABSENT cluster and an EXPLICIT
+	// EMPTY ONE as equal. The new form distinguishes them — which is stricter, and
+	// deliberate, but it is a behaviour change that no test would have noticed.
+	//
+	// What must NOT change is that an adopted instance, which records no cluster at
+	// all, can still be re-run: both sides absent has to be accepted, or every
+	// --kube-context bootstrap breaks on its second run. That is the case this pins.
+	t.Run("an adopted instance with no cluster can be re-run", func(t *testing.T) {
+		c := withAPIServer(t)
+		inst := newInstance("adopted-rerun", func(i *dcv1beta1.Instance) { i.Spec.Cluster = "" })
+		if err := c.Create(context.Background(), inst); err != nil {
+			t.Fatalf("creating an adopted instance: %v", err)
+		}
+		inst.Spec.Profile = "full"
+		if err := c.Update(context.Background(), inst); err != nil {
+			t.Fatalf("an adopted instance could not be re-run with no cluster on either side, "+
+				"which would break every --kube-context bootstrap on its second run: %v", err)
+		}
+	})
+
 	// ...and the same rule from the other side: an adopted instance records an
 	// empty cluster honestly, and that emptiness must not become a free slot.
 	t.Run("an adopted instance cannot be given a cluster later", func(t *testing.T) {

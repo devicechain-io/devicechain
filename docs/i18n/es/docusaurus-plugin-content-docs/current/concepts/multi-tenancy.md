@@ -10,7 +10,7 @@ DeviceChain ejecuta un **único conjunto compartido de microservicios por instan
 
 Un recurso personalizado de Kubernetes modela la plataforma misma:
 
-- **`DeviceChainInstance`** (con alcance de clúster) — uno por instalación. Representa la plataforma.
+- **`Instance`** (con alcance de clúster) — uno por instalación. Representa la plataforma.
 
 Los inquilinos **no** son recursos de Kubernetes. Un inquilino es un **registro de base de datos** del plano de control — una entrada de registro más configuración por inquilino — creado bajo demanda a través de la API de administración de la instancia y la consola `/admin`. Los inquilinos comparten los servicios de la instancia y **no** obtienen sus propios pods. Una instancia recién creada **no tiene inquilinos**: solo siembra un superusuario, quien crea el primer inquilino desde la consola de administración.
 

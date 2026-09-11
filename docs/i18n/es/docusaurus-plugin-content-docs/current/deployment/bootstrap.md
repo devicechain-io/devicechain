@@ -46,37 +46,69 @@ datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de h
 instancia que parece perfectamente sana y no tiene ningún dato.
 :::
 
-1. **Instalar el núcleo (core)** — renderiza el operador (CRDs + RBAC +
-   controlador) y lo aplica directamente con la API de Kubernetes. Va primero
-   porque la definición de una instancia debe existir en el clúster antes de que
-   nada pueda describirle una. En la ruta de desarrollo `--build`, el registro
-   local se prepara justo antes de este paso, ya que la imagen del propio operador
-   es una de las que esa ruta construye.
-2. **Renderizar la configuración** — resuelve el id de la instancia, el namespace,
-   el perfil y todas las credenciales generadas: el material de autenticación del
-   bróker (la contraseña de servicio compartida y la clave del emisor del callout),
-   el secreto de autenticación entre servicios y la **clave raíz del almacén de
-   secretos**. Todas se acuñan en la primera instalación y **se reutilizan tal cual
-   cuando la instancia ya existe**: el pipeline le pregunta al clúster qué está
-   ejecutando la instancia antes de generar nada, y se detiene en vez de suponer si
-   no puede determinarlo. También registra las credenciales del bróker en la máquina
-   desde la que lo ejecutas, antes de configurar el bróker con ellas, de modo que una
-   ejecución interrumpida a mitad de camino se retome con solo volver a ejecutarla.
-   Además, la clave raíz se deposita en un archivo cifrado que tú conservas; consulta
+Los pasos de abajo son los que la ejecución va imprimiendo (`[3/10] Install core
+components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
+
+1. **Asegurar el registro local** (*Ensure local registry*) — solo en la ruta de
+   desarrollo `--build`: aprovisiona un registro local y compila todas las imágenes en
+   él. En la ruta de imágenes publicadas no hace nada y lo indica. Va primero porque el
+   operador que se instala dos pasos después nombra una imagen, y en la ruta `--build`
+   este es el paso que la produce.
+2. **Reclamar el clúster** (*Claim the cluster*) — crea el namespace del operador y toma
+   el **bloqueo del clúster**, antes de aplicar nada. Mientras está tomado, un segundo
+   `dcctl bootstrap` contra el mismo clúster se rechaza en lugar de aplicarse
+   silenciosamente por encima de este. Consulta [El bloqueo del clúster](./cluster-lock.md)
+   —esa página también explica qué hacer cuando resulta que el clúster está reclamado por
+   otra persona.
+3. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
+   operador (CRDs + RBAC + controlador) y lo aplica directamente con la API de
+   Kubernetes. Va por delante de la aplicación de infraestructura porque la definición de
+   una instancia debe existir en el clúster antes de que nada pueda describirle una —y
+   describir una es justamente el paso siguiente.
+4. **Declarar la instancia** (*Declare the instance*) — escribe la **declaración** de la
+   instancia en el clúster: el proveedor y el clúster al que pertenece, el perfil, la
+   versión de imagen y si sus bases de datos se están recuperando desde un archivo. Acto
+   seguido se vuelve a leer, y todos los pasos siguientes trabajan con lo que se leyó y no
+   con los flags que lo produjeron —de modo que el registro de lo que es esta instancia
+   está en el clúster, no en tu portátil. Consulta
+   [la declaración de la instancia](./kubernetes-operator.md#instance-declaration).
+5. **Renderizar la configuración** (*Render configuration*) — resuelve el id de la
+   instancia, el namespace, el perfil y todas las credenciales generadas: el material de
+   autenticación del bróker (la contraseña de servicio compartida y la clave del emisor
+   del callout), el secreto de autenticación entre servicios y la **clave raíz del
+   almacén de secretos**. Todas se acuñan en la primera instalación y **se reutilizan tal
+   cual cuando la instancia ya existe**: el pipeline le pregunta al clúster qué está
+   ejecutando la instancia antes de generar nada, y se detiene en vez de suponer si no
+   puede determinarlo. También registra las credenciales del bróker en la máquina desde la
+   que lo ejecutas, antes de configurar el bróker con ellas, de modo que una ejecución
+   interrumpida a mitad de camino se retome con solo volver a ejecutarla. Además, la clave
+   raíz se deposita en un archivo cifrado que tú conservas; consulta
    [Recuperación ante desastres](./disaster-recovery.md).
-3. **Aplicar la infraestructura** — ejecuta `tofu apply` sobre la configuración de
-   OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
-   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud,
-   y el almacén de objetos al que ese plugin archiva)
-   vía [terraform-exec](https://github.com/hashicorp/terraform-exec).
-   El estado se guarda en `~/.devicechain/<instance>/infra`, de modo que las
-   ejecuciones posteriores son incrementales.
-4. **Instalar la instancia** — despliega el chart de Helm vía el SDK de Helm para
-   Go, bloqueando hasta que las cargas de trabajo estén listas.
-5. **Sembrar (seed) e informar** — la credencial de superusuario se siembra
-   automáticamente mediante el servicio de user-management en el primer arranque;
-   el comando la imprime al final (junto con el namespace y los punteros de
-   acceso).
+6. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
+   configuración de OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
+   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud, y el
+   almacén de objetos al que ese plugin archiva) vía
+   [terraform-exec](https://github.com/hashicorp/terraform-exec). El estado se guarda en
+   `~/.devicechain/<instance>/infra`, de modo que las ejecuciones posteriores son
+   incrementales.
+7. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — despliega el chart de
+   Helm vía el SDK de Helm para Go, bloqueando hasta que las cargas de trabajo estén
+   listas.
+8. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
+   de superusuario la siembra el servicio user-management en el primer arranque; este paso
+   fija los valores que imprimirá el informe final.
+9. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
+   área habilitada hasta que se declare disponible, como puerta de confirmación explícita
+   en lugar de confiar en la espera del propio paso de Helm.
+10. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
+    credencial de superusuario y cómo llegar a la instancia.
+
+:::tip `Ctrl+C` detiene una ejecución de forma limpia
+Una ejecución interrumpida detiene la herramienta de infraestructura con elegancia —termina
+lo que está haciendo y escribe su estado— y devuelve el bloqueo del clúster, así que basta
+con volver a ejecutarla. Un **segundo** `Ctrl+C` sale de inmediato y renuncia a ambas cosas.
+Consulta [Interrumpir una ejecución](./cluster-lock.md#interrupt).
+:::
 
 Dado que los artefactos incrustados son los *mismos* que distribuye la
 plataforma, una instancia arrancada de este modo ejercita el despliegue real —no
@@ -158,7 +190,7 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 | `--compact` | Preajuste de huella pequeña —ver más abajo. |
 | `--ha` | Alta disponibilidad de mensajería —ver más abajo. Requiere al menos **3 nodos planificables**. |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera el apply de infraestructura falla. |
-| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster ni toma el bloqueo del clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo; lo que sí informa es si otro operador está reteniendo el clúster. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
 
 ### `--compact`

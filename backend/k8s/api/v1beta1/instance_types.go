@@ -98,6 +98,14 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // (This paragraph cannot show you the characters. Writing them here would make
 // gofmt rewrite THIS sentence too, which is how the behaviour was finally found.)
 //
+// 🔴 The has()-only form is not merely a restatement: it is STRICTER in one
+// quadrant. The literal form defaulted both sides to an empty string, so it read
+// an absent cluster and an explicit empty one as equal; this form distinguishes
+// them, and refuses a move between the two. That is the better answer — an
+// instance either records a cluster or does not — but it is a behaviour change
+// unreachable through dcctl (the field is omitempty) and reachable through
+// kubectl, so it is pinned by a test rather than left to be rediscovered.
+//
 // This already happened once and was "fixed" by hand-editing the generated YAML,
 // which left the marker and the artifact disagreeing until the next `make
 // manifests`. Writing the rule in terms of `has()` alone removes the construct

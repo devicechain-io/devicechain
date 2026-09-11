@@ -333,7 +333,16 @@ jobs:
           # hand-written types, and including the whole directory would let an
           # ordinary source edit report itself as generated drift — a gate that
           # cries wolf is one somebody eventually stops reading.
-          if ! git diff --exit-code -- config/crd/bases config/rbac 'api/**/zz_generated*'; then
+          #
+          # 🔴 `git status --porcelain`, not `git diff`. A plain diff compares
+          # against the index and therefore says nothing about UNTRACKED files, so
+          # a brand-new CRD for a brand-new kind — the case where forgetting to
+          # commit generated output is most likely — would sail through a gate that
+          # exists to catch exactly that. Porcelain reports both modified and
+          # untracked paths.
+          drift="$(git status --porcelain -- config/crd/bases config/rbac 'api/**/zz_generated*')"
+          if [ -n "$drift" ]; then
+            echo "$drift"
             echo "::error::the committed CRDs/RBAC/deepcopy do not match what the source generates; run 'make manifests generate' in backend/k8s and commit the result"
             exit 1
           fi
