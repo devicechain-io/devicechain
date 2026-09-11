@@ -165,8 +165,20 @@ indefinidamente y sin ningún error que se lo indique.
 
 `dcctl upgrade` no toca nada más. No ejecuta la actualización de Helm, no aplica la pila de
 infraestructura y **no genera, lee ni rota ninguna credencial**, por lo que es seguro en una
-instancia en funcionamiento. Úselo en lugar de volver a ejecutar `dcctl bootstrap`, que sí rota
-todas las credenciales generadas.
+instancia en funcionamiento.
+
+Volver a ejecutar `dcctl bootstrap` también es seguro para las credenciales, y esta página
+afirmaba lo contrario. Una reejecución **reutiliza** lo que la instancia ya tiene: lee la
+configuración de la instancia en funcionamiento y conserva la clave raíz, las contraseñas del
+broker, la semilla del emisor y el secreto de autenticación entre servicios, en lugar de
+generar otros nuevos. La única excepción es el secreto de cliente del inicio de sesión único,
+que se regenera deliberadamente en cada ejecución y cuyas dos mitades se actualizan juntas.
+
+:::warning Una reejecución no sirve para rotar credenciales
+Como las reutiliza, no rota nada salvo el secreto de cliente del inicio de sesión único. Si
+necesita cambiar una credencial, volver a ejecutar el bootstrap no lo hará — y para varias de
+ellas hoy no existe un procedimiento admitido.
+:::
 
 Pase la misma versión a ambos pasos. Ejecute `dcctl upgrade` con `--dry-run` primero si quiere
 ver exactamente qué objetos movería.

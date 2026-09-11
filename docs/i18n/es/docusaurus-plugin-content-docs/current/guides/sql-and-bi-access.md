@@ -74,7 +74,22 @@ kubectl create secret generic analytics-acme-credentials \
   --type kubernetes.io/basic-auth \
   --from-literal=username=analytics_acme \
   --from-literal=password="$(openssl rand -base64 24)"
+
+kubectl label secret analytics-acme-credentials \
+  --namespace dc-system cnpg.io/reload=true
 ```
+
+:::warning La etiqueta es lo que hace que la rotación funcione
+Sin `cnpg.io/reload`, la base de datos sí toma la contraseña cuando el rol se crea por primera
+vez, pero los **cambios** posteriores en el Secret no se detectan con prontitud. La etiqueta es
+lo que pide al operador de la base de datos que vigile el Secret, y es necesaria para que el
+paso de rotación de más abajo surta efecto en un tiempo previsible.
+
+Dos detalles que suelen pasar desapercibidos: lo que cuenta es la *presencia* de la etiqueta, de
+modo que cualquier valor sirve; y el `username` del Secret debe coincidir **exactamente** con el
+nombre del rol, sin salto de línea final — una discrepancia se comunica solo como un error de
+contraseña, mientras detiene en silencio otras reconciliaciones.
+:::
 
 **2. Declare el rol en las variables de su despliegue**, con un límite de conexiones:
 
@@ -90,8 +105,12 @@ timescale_analytics_readers = [
 
 Aplique. El rol aparece, se une al grupo de lectores y puede conectarse. No hay que reiniciar nada.
 
-Para rotar la contraseña, cámbiela en el Secret; para revocar el acceso, elimine la entrada y
-aplique.
+Para rotar la contraseña, cámbiela en el Secret — la base de datos se reconcilia para coincidir,
+sin reinicios. Para revocar el acceso, elimine la entrada y aplique.
+
+Si creó el Secret antes de que se documentara el paso de etiquetado anterior, añada la etiqueta
+ahora; hasta entonces, un cambio de contraseña puede quedar sin aplicar durante un tiempo
+impredecible.
 
 ## La posición es una concesión aparte {#la-posicion-es-una-concesion-aparte}
 

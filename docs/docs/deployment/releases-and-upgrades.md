@@ -160,8 +160,19 @@ the controller it was first bootstrapped with — indefinitely, and with no erro
 
 `dcctl upgrade` touches nothing else. It does not run the Helm upgrade, does not apply the
 infrastructure stack, and **does not generate, read or rotate any credential**, so it is safe
-on a live instance. Use it rather than re-running `dcctl bootstrap`, which *does* rotate every
-generated credential.
+on a live instance.
+
+Re-running `dcctl bootstrap` is also safe for credentials, and this page used to say otherwise.
+A re-run **reuses** what the instance already holds: it reads the running instance's
+configuration and keeps the existing root key, broker passwords, callout seed and service-auth
+secret rather than minting new ones. The one exception is the single sign-on client secret,
+which is deliberately re-minted on every run and has both of its halves updated together.
+
+:::warning A re-run is not a way to rotate credentials
+Because a re-run reuses them, it does not rotate anything except the single sign-on client
+secret. If you need to change a credential, a re-run will not do it — and for several of them
+there is no supported procedure today.
+:::
 
 Pass the same version to both steps. Run `dcctl upgrade` with `--dry-run` first if you want to
 see exactly which objects it would move.
