@@ -313,6 +313,15 @@ func instanceConfigSecret(instance string, doc []byte) ownedSecret {
 // rebuild, which for this object costs them their data to solve a bookkeeping
 // problem.
 //
+// 🔑 AND IT IS STILL REACHED, WHICH IS WORTH SAYING BECAUSE IT NEARLY WAS NOT.
+// checkNoRetiredInfrastructure refuses every instance dcctl built before the
+// credentials moved — so if that were the only population with a chart-written
+// Secret, this function would be unreachable and should be deleted. It is not: an
+// instance installed with plain `helm install dc deploy/helm/devicechain`, which is
+// what the published documentation tells an operator to run, has no OpenTofu state
+// for the fence to key on and arrives here with exactly the Secret below. See the
+// fence for the full answer, and the two tests that keep it honest.
+//
 // 🔑 WHAT MAKES IT AN IDENTIFICATION RATHER THAN A GUESS: the Secret is claimed only
 // when Kubernetes' own record says it belongs to the release being upgraded — Helm
 // stamps app.kubernetes.io/managed-by and the two meta.helm.sh annotations on

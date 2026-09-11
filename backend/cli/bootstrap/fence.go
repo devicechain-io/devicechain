@@ -58,6 +58,32 @@ var retiredStateAddresses = []string{
 // unreadable state as "nothing retired here" is precisely the reading that lets the
 // apply through to delete the credentials.
 //
+// 🔴 WHAT THIS FENCE DOES TO adoptChartWrittenInstanceConfig — ANSWERED, NOT LEFT
+// TO BE NOTICED.
+//
+// The takeover exists so an operator whose CHART wrote the instance configuration
+// Secret is not forced to rebuild. This fence refuses instances built before the
+// credentials moved. If those were one population, the takeover would be code
+// nothing can run, and the right change would be to DELETE it rather than explain
+// it — the shape this project has shipped before and gone looking for since.
+//
+// They are two populations, and the difference is what this fence keys on:
+//
+//   - AN INSTANCE dcctl BUILT before the cutover has the retired resources in its
+//     OpenTofu state, so it is refused here and never reaches the takeover. The
+//     takeover could not help it anyway — its credentials are still OpenTofu's.
+//   - AN INSTANCE INSTALLED WITH PLAIN HELM has no OpenTofu state at all, so
+//     nothing here fires, and it arrives at the Helm step with a chart-written
+//     Secret that is exactly what the takeover claims. That is not a hypothetical
+//     population: `helm install dc deploy/helm/devicechain` is what the published
+//     deployment documentation tells an operator to run, and `dc` in namespace
+//     `default` is precisely what the takeover matches on.
+//
+// So the takeover stays until plain Helm is withdrawn, and goes in that change.
+// TestTheChartWrittenTakeoverIsStillReachablePastTheFence holds the first half;
+// TestTheTakeoverGoesWhenPlainHelmDoes fails in front of whoever removes the
+// documented install path, which is the person who needs to be told.
+//
 // Recreating is the remedy because there is no in-place one that is honest. The
 // database passwords, the object-store credentials and the broker's certificate
 // authority would each have to be taken over from resources OpenTofu still believes
