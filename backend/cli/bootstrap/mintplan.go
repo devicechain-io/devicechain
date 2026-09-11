@@ -4,7 +4,11 @@
 package bootstrap
 
 import (
+	"context"
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Names and keys the consumers of these Secrets already expect. They are restated
@@ -179,6 +183,109 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 	return out
 }
 
+// resolveCredentials settles every credential this run needs: REUSED where the
+// instance already has one and a fresh value would be destructive, MINTED otherwise.
+//
+// 🔴 REUSE IS NOT UNIFORM, AND TREATING IT AS ONE RULE IS HOW THE BROKER'S
+// CERTIFICATE EXPIRES. Two of these credentials cannot be re-minted under a running
+// instance without breaking it, and the rest can. The split is stated here, once,
+// rather than being a property of whichever call site was written last:
+//
+//   - THE DATABASE PASSWORDS ARE REUSED, ALWAYS. CloudNativePG sets the owner role's
+//     password when it CREATES the Cluster and never again — the role is declared
+//     under `managed.roles` with no `passwordSecret`, so nothing reconciles it. A
+//     fresh value would reach every service and none of the two databases.
+//   - THE OBJECT-STORE CREDENTIALS ARE REUSED. Re-minting them is recoverable, but
+//     not cheaply: the store reads its root credentials at start-up while the backup
+//     archiver is handed them through a different object on a different schedule, so
+//     a new value opens a window in which the archiver cannot authenticate and the
+//     first visible symptom is that WAL stopped being shipped.
+//   - THE DASHBOARD PASSWORD IS MINTED EVERY RUN, deliberately. Both halves are
+//     written by the same run, so the cost is a rollout-length window of failing
+//     logins — the same trade the Grafana SSO client secret already makes, and named
+//     the same way in the operations document rather than quietly differing from it.
+//
+// 🔴 WHAT IS DELIBERATELY NOT HERE: an expiry-aware renewal for the broker's leaf
+// certificate. Reuse keeps a value; renewal replaces one on a clock, and the two
+// answer opposite questions — a leaf reused forever expires a year after bootstrap
+// with nothing to re-issue it. That belongs to the verb that evolves a live instance,
+// not to the one that creates it, and building half of it here would make the gap
+// look closed.
+func resolveCredentials(
+	ctx context.Context,
+	typed kubernetes.Interface,
+	st *State,
+	live liveArchiveState,
+) (*credentialSet, error) {
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		return nil, err
+	}
+
+	// A dry run deploys nothing, so it has nothing to preserve and mints throwaway
+	// values purely so the rendered plan is complete — the same reasoning, and the
+	// same asymmetry, as the deployed-instance lookup in stepRenderConfig.
+	if st.DryRun {
+		return set, nil
+	}
+
+	for _, c := range []struct {
+		into    *string
+		ref     mintedCredentialRef
+		cluster string
+		exists  bool
+	}{
+		{&set.RDBPassword, mintedCredentialRef{
+			infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword,
+		}, rdbClusterName, live.Rdb.Exists},
+		{&set.TSDBPassword, mintedCredentialRef{
+			infraNamespace, tsdbClusterName + "-app-credentials", secretKeyPassword,
+		}, tsdbClusterName, live.Tsdb.Exists},
+	} {
+		reused, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID, c.ref)
+		if err != nil {
+			return nil, err
+		}
+		if err := refuseUnrecoverableDatabaseCredential(c.exists, reused, c.cluster, c.ref.Name); err != nil {
+			return nil, err
+		}
+		if reused != "" {
+			*c.into = reused
+		}
+	}
+
+	if databaseBackupsEnabled(st) {
+		name := objectStoreName + "-credentials"
+		user, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+			mintedCredentialRef{infraNamespace, name, keyMinioUser})
+		if err != nil {
+			return nil, err
+		}
+		pass, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+			mintedCredentialRef{infraNamespace, name, keyMinioPassword})
+		if err != nil {
+			return nil, err
+		}
+		// 🔴 BOTH HALVES OR NEITHER. These are one identity, and reusing the access
+		// key while minting a new secret key produces a credential that has never
+		// existed — which authenticates against nothing, on a run that reports
+		// success. An object store holding one half and not the other is malformed,
+		// and malformed is not absent.
+		switch {
+		case user != "" && pass != "":
+			set.ObjectStoreUser, set.ObjectStoreSecret = user, pass
+		case user != "" || pass != "":
+			return nil, fmt.Errorf("Secret %s/%s holds only one half of the object store's "+
+				"root credential (%s=%t, %s=%t), so the identity it is running under cannot be "+
+				"recovered. Minting a replacement would leave the archiver presenting a "+
+				"credential the store has never been told about",
+				infraNamespace, name, keyMinioUser, user != "", keyMinioPassword, pass != "")
+		}
+	}
+
+	return set, nil
+}
+
 // mintNewCredentials generates the entropy for everything in credentialSet.
 //
 // 🔴 EVERY FIELD HERE REPLACES A LITERAL COMMITTED TO THIS REPOSITORY. Until this
@@ -186,6 +293,10 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 // login are the same value on every installation anyone has ever built. They are
 // generated together, before anything is applied, so there is no ordering in which
 // some of them are real and the rest are the default.
+//
+// Called only through resolveCredentials, which decides which of these values a live
+// instance keeps. Kept separate so the entropy budget and the reuse policy are two
+// readable decisions rather than one function doing both.
 func mintNewCredentials(st *State) (*credentialSet, error) {
 	var set credentialSet
 	var err error
