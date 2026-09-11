@@ -6,7 +6,9 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -527,8 +529,7 @@ func verifyPostgresState(
 	}
 	defer stop()
 
-	dsn := fmt.Sprintf("postgres://%s:%s@127.0.0.1:%d/%s?sslmode=disable",
-		user, pass, local, database)
+	dsn := localPostgresURL(user, pass, local, database)
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("connecting to the database as %q: %w", user, err)
@@ -921,4 +922,32 @@ func classifyJob(s jobState, settled bool) (check, reason string) {
 			"and errors rather than one that has stopped"
 	}
 	return "", ""
+}
+
+// localPostgresURL builds the port-forwarded DSN this check connects with.
+//
+// 🔴 IT USED TO BE A Sprintf, AND EVERY BYTE OF THE CREDENTIAL WAS SYNTAX. A password
+// holding `@`, `/`, `?`, `#` or `%` lands in the URL unescaped, where it terminates
+// the userinfo or opens the path or query — so this check reports an authentication
+// failure against a database that is working perfectly, and reports it during
+// bootstrap, about the credential the run has just set.
+//
+// Nothing had ever hit it because the value handed over is a constant with no such
+// byte in it, which is the only reason it survived. The platform was never affected:
+// core/rdb builds both DSN forms through net/url and libpq quoting for exactly this
+// reason, and says so. This was dcctl inventing a fault and attributing it to the
+// database.
+//
+// url.UserPassword percent-encodes on String() and pgx percent-decodes, so the round
+// trip is lossless for every byte a password may hold. The database name goes through
+// Path for the same reason — not a credential, but equally able to become syntax.
+func localPostgresURL(user, pass string, port int, database string) string {
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, pass),
+		Host:     net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		Path:     "/" + database,
+		RawQuery: url.Values{"sslmode": []string{"disable"}}.Encode(),
+	}
+	return u.String()
 }
