@@ -225,6 +225,18 @@ func AcquireClaim(ctx context.Context, client kubernetes.Interface, ns, instance
 	if err == nil {
 		return newClaim(client, ns, instance, holder), nil
 	}
+	if apierrors.IsForbidden(err) {
+		// 🔴 SURFACE THE API SERVER'S OWN SENTENCE, UNWRAPPED. dcctl acts as the
+		// person running it, and on a cluster somebody else administers that person
+		// may simply not hold `create leases` here. Wrapping that in "could not take
+		// the cluster lock" turns a precise, actionable message — which verb, which
+		// resource, which namespace, which user — into one that reads like an
+		// outage. This is invisible on a local cluster, where the operator is
+		// cluster-admin, and is exactly the case an adopted cluster produces.
+		return nil, fmt.Errorf("this account cannot take the cluster lock: %w.\n"+
+			"  dcctl needs get/create/update/delete on leases.coordination.k8s.io in namespace %q, "+
+			"and get/create/update on instances.core.devicechain.io cluster-wide", err, ns)
+	}
 	if !apierrors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("taking the cluster lock: %w", err)
 	}
