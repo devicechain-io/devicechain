@@ -74,7 +74,8 @@ type ClusterBinding struct {
 	//
 	// 🔴 IT IS NOT "dcctl created it", AND THE DIFFERENCE IS DELIBERATE. EnsureCluster
 	// REUSES an existing `kind-<instance>` cluster when it finds one, and
-	// deploy/local/up.sh:104 creates exactly that cluster itself before bootstrap runs.
+	// A kind cluster created from deploy/local/kind-cluster.yaml is exactly that cluster,
+	// and it exists before bootstrap runs.
 	// A literal created-by-dcctl rule would therefore stop `dcctl destroy` deleting the
 	// cluster in the primary local flow — a regression in the one path that works
 	// correctly today. So Managed means "this is the kind-<instance> cluster dcctl names

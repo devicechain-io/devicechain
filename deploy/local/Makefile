@@ -6,7 +6,17 @@
 
 HERE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: help preflight up down purge images
+# 🔴 THERE IS NO `up` TARGET, AND ITS ABSENCE IS DELIBERATE. Bring-up is
+# `dcctl bootstrap local <instance>` -- one tool, one implementation of the rules.
+# This file used to call deploy/local/up.sh, which applied the infrastructure tree
+# directly; once dcctl became the only thing that mints an instance's credentials,
+# that script could only produce an instance which comes up healthy and
+# authenticates nothing. A make target forwarding to dcctl would just be a second
+# name for it, which is the overlap this removal was for.
+#
+# The targets left here are the ones dcctl does NOT own: the cluster itself, the
+# host diagnosis, and the image registry.
+.PHONY: help preflight down purge images
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -14,9 +24,6 @@ help: ## Show this help
 
 preflight: ## Diagnose the host before bring-up
 	@"$(HERE)preflight.sh"
-
-up: ## Create cluster + registry + LB, apply infra, install core + chart, seed
-	@"$(HERE)up.sh"
 
 down: ## Tear down the cluster + cloud-provider-kind (keeps the registry)
 	@"$(HERE)down.sh"

@@ -6,7 +6,7 @@
 #
 # Decoupled from bring-up on purpose: dcctl bootstrap's image model is
 # "pull by reference from the registry, never side-load" (ADR-032 §image-model),
-# so populating the registry is a separate, upstream step. up.sh calls this
+# so populating the registry is a separate, upstream step. `make images` calls this
 # before the Helm install; CI/release publishes to ghcr the same way.
 #
 # Uses ko (the repo's image tool — services use local 'replace' directives that
@@ -53,7 +53,7 @@ PLATFORM=${PLATFORM:-linux/amd64}
 # (bootstrap.dockerBuildNetwork). Local-development is the scope, per the paragraph
 # above: release.yml builds the same Dockerfile through docker/build-push-action on
 # a GitHub runner and reads nothing here, which is why "all three" is not "all four".
-# dcctl's was added late -- it passed no --network at all, so `up.sh BUILD_IMAGES=1`
+# dcctl's was added late -- it passed no --network at all, so the shell bring-up
 # worked on the host below while `dcctl bootstrap --dev` died in `npm ci`. If you
 # change what this defaults to, change it in the Go too, or that split comes back;
 # a test in backend/cli/bootstrap reads THIS FILE to check the two still agree.

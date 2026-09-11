@@ -208,7 +208,7 @@ kind_network="kind"
 # behaviour change, and lets a cache satisfy the pull by content.
 #
 # dcctl and deploy/local start this SAME container, so both pin the same reference
-# (backend/cli/bootstrap/steps.go, deploy/local/up.sh). Whichever runs first is the
+# (backend/cli/bootstrap/steps.go). Whichever runs first is the
 # one that decides what is running; they must not disagree.
 #
 # hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
@@ -1866,7 +1866,7 @@ cmd_down() {
   fi
   rm -rf "${HOME:?}/.devicechain/$instance"
   # The registry container is deliberately LEFT RUNNING. It is the same
-  # kind-registry that dcctl's --build path and deploy/local/up.sh use, so
+  # kind-registry that dcctl's --build path uses, so
   # removing it here would break a developer's own cluster to tidy up after this
   # one. Its images are the cost: `docker rm -f kind-registry` reclaims them.
   note "$registry_container is left running — it is shared with dcctl and deploy/local."

@@ -49,10 +49,10 @@ const (
 	// build with no commit here to show for it, pulled anonymously and therefore
 	// subject to that registry's rate limits and outages.
 	//
-	// This is the SAME container hack/upgrade-rig.sh and deploy/local/up.sh start,
-	// and all three only create it when it is not already running — so whichever
-	// runs first decides what the other two reuse, and a pin only one of them
-	// carries is a pin the other two can defeat. Keep the three in step.
+	// This is the SAME container hack/upgrade-rig.sh starts, and both only create it
+	// when it is not already running — so whichever runs first decides what the other
+	// reuses, and a pin only one of them carries is a pin the other can defeat. Keep
+	// the two in step.
 	//
 	// hack/check-image-pins.sh enforces the shape for the two shell sites; this
 	// one is pinned by TestLocalRegistryImageIsDigestPinned, because teaching a
@@ -710,9 +710,10 @@ func buildFrontend(ctx context.Context, root string, st *State) error {
 //
 // dcctl's --build path was doing the same docker build with no --network at all,
 // so the two developer paths diverged on the one host where the difference decides
-// whether a bootstrap completes: `deploy/local/up.sh BUILD_IMAGES=1` worked and
-// `dcctl bootstrap --dev` — the zero-config path a newcomer is steered to — died in
-// `npm ci`. Whatever build-images.sh needs, this needs, for the same reason.
+// whether a bootstrap completes: the shell bring-up worked and `dcctl bootstrap
+// --dev` — the zero-config path a newcomer is steered to — died in `npm ci`. That
+// shell path is gone and build-images.sh remains, so the rule is unchanged:
+// whatever build-images.sh needs, this needs, for the same reason.
 //
 // The value is validated before the first image is built rather than at the point
 // of use, because the frontend is built LAST: an unusable value discovered here
@@ -728,8 +729,13 @@ func buildFrontend(ctx context.Context, root string, st *State) error {
 // (measured). Refusing it anyway is the deliberate call — docker 23+ builds with
 // BuildKit unless it is switched off, so accepting a value that works only on an
 // opted-out builder would trade a clear message now for an obscure failure later.
-// A legacy-builder user who genuinely wants it still has `up.sh`, which passes the
-// value straight through.
+//
+// 🔴 THAT REASON NOW STANDS ALONE. It used to be softened by an escape hatch — a
+// legacy-builder user who genuinely wanted `bridge` still had deploy/local/up.sh,
+// which passed the value straight through. That script is gone, so refusing here
+// refuses outright. The refusal is kept anyway: it was never the hatch that made
+// it right, and a value that works only on an opted-out builder is still a clear
+// message now against an obscure failure later.
 func dockerBuildNetwork() (string, error) {
 	network := os.Getenv(dockerBuildNetEnv)
 	if network == "" {
