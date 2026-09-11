@@ -22,9 +22,35 @@ import (
 //
 // 🔑 THE ADDRESSES ARE LITERALS, AND THEY HAVE TO BE. They name resources that no
 // longer exist in this tree, so there is nothing to derive them from and nothing that
-// will fail to compile if one is wrong. A missing entry is a silent hole in the fence
-// — which is why the list is checked against the state of a REAL pre-cutover instance
-// in the migration note rather than against this file.
+// will fail to compile if one is wrong. A missing entry is a silent hole in the fence,
+// and it is a hole that fails SILENTLY in the one direction that matters: the run
+// proceeds and the apply deletes the credential.
+//
+// ✅ VERIFIED 2026-09-11, and the method is repeatable without a cluster. Check the
+// list against what the PRE-CUTOVER configuration would create, not against this
+// file and not against memory:
+//
+//	git archive <commit-before-the-cutover> deploy/opentofu | tar -x -C /tmp/pre
+//	cd /tmp/pre/deploy/opentofu && terraform init -backend=false
+//	terraform plan -refresh=false -var kubeconfig_context=<any> -out=p.bin
+//	terraform show -json p.bin | jq -r '.resource_changes[].address'
+//
+// A plan against an EMPTY state enumerates every address the old tree would have
+// put in a real instance's state, which is exactly what this list has to cover — and
+// it does so without standing anything up, so it can be re-run by anyone.
+//
+// Run over five variable combinations, because the count-indexed forms are the ones
+// a single plan would miss: defaults, --ha, nats_enable_tls=false, enable_cnpg=false,
+// and backup_destination=external. All nine below matched character for character,
+// `[0]` suffixes included, and no variant produced a tenth. Two incidental findings
+// worth keeping: enable_cnpg=false still creates BOTH database credential Secrets
+// (that flag means "an operator is already here", not "this platform has no
+// database"), and nats_enable_tls=false drops all five tls_* resources rather than
+// renaming them.
+//
+// 🔑 The external destination's `kubernetes_secret_v1.backup_credentials[0]` shows up
+// in that enumeration and is deliberately NOT below — see the note at the end of this
+// list.
 var retiredStateAddresses = []string{
 	// The database credentials. CloudNativePG reads these when it creates a Cluster;
 	// dcctl writes them now, before the apply, so the role and the services are built
@@ -42,6 +68,11 @@ var retiredStateAddresses = []string{
 	"module.nats.tls_cert_request.server[0]",
 	"module.nats.tls_locally_signed_cert.server[0]",
 	"module.nats.kubernetes_secret_v1.nats_tls[0]",
+	// 🔴 DELIBERATELY ABSENT: `kubernetes_secret_v1.backup_credentials[0]`, the root's
+	// Secret for an EXTERNAL backup destination. It holds credentials to somebody
+	// else's object store, which are SUPPLIED rather than minted, so this build has
+	// not taken it over and an apply that still manages it is doing the right thing.
+	// Fencing it would refuse instances that have nothing wrong with them.
 }
 
 // checkNoRetiredInfrastructure refuses to act on an instance built before the
