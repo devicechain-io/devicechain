@@ -567,11 +567,27 @@ spec:
     carried, so the TimescaleDB extension arrives WITH the data instead of being
     re-declared over it.
 
-    🔴 NOTHING ASSERTS THIS. It is inherited from how physical recovery works,
-    not measured, and an earlier version of this comment claimed the restore
-    drill checked it -- the drill contains no such check and did not then. Read
-    it as a belief until hack/dr-rig.sh queries a hypertable after a recovery
-    and finds the extension and the data both present.
+    ✅ MEASURED 2026-09-11, and it had become load-bearing by then. While
+    OpenTofu wrote that Secret from a variable whose default never moved between
+    applies, a recovery that did NOT reset the password was survivable: the old
+    value and the new one were the same value. dcctl mints it per instance now,
+    so a rebuild mints a password the restored pg_authid has never held -- and if
+    the operator did not update the role from this Secret, every service would
+    fail to authenticate against a Cluster reporting itself healthy.
+
+    hack/dr-rig.sh settles it. The restored instance is built on a fresh cluster
+    with no prior Secret to reuse, so it mints a NEW password; the archive it
+    recovers was written under the ORIGINAL one. The recovered instance's API
+    routed and served, which is only possible if this Secret is what the role
+    ended up holding. The event half passed in the same run -- timescaledb loaded
+    from shared_preload_libraries, all six event tables back as hypertables, a
+    compressed chunk and a materialized continuous aggregate both intact -- and
+    both negative controls held: under a different root key the secret row was
+    PRESENT and did not decrypt, and an unrestored event store reported its
+    telemetry absent rather than empty.
+
+    An earlier version of this comment claimed the drill checked it when the
+    drill contained no such check. It does now.
     */}}
     recovery:
       # Must match an externalClusters entry by name. See the block below for
