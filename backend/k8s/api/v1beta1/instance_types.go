@@ -87,6 +87,22 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // that is unsafe to publish and needed for convergence is a design problem to
 // solve elsewhere, not a field to add quietly.
 //
+// 🔴 THE CLUSTER RULE CONTAINS NO STRING LITERAL, AND THAT IS NOT AN AESTHETIC
+// CHOICE EITHER. The natural way to write it compares two ternaries that default
+// to an empty string — and Go's doc-comment formatting rewrites a PAIR OF ASCII
+// APOSTROPHES into a single U+201D right double quotation mark. That is gofmt,
+// applied deterministically to every marker on this declaration, so the CEL
+// expression the API server receives is one it refuses to parse and the CRD does
+// not install at all.
+//
+// (This paragraph cannot show you the characters. Writing them here would make
+// gofmt rewrite THIS sentence too, which is how the behaviour was finally found.)
+//
+// This already happened once and was "fixed" by hand-editing the generated YAML,
+// which left the marker and the artifact disagreeing until the next `make
+// manifests`. Writing the rule in terms of `has()` alone removes the construct
+// gofmt reaches for, so the fix cannot be undone by running a formatter.
+//
 // Three CEL rules live at the SPEC level rather than on the fields they govern,
 // and that is not a style choice. A transition rule on a field is only evaluated
 // when the field is present on BOTH sides, so `self == oldSelf` on an optional
@@ -94,7 +110,7 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // meant a two-edit repoint of the binding that `dcctl destroy` reads. The spec
 // object is always present, so a rule written here always runs.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.cluster) ? self.cluster : '') == (has(oldSelf.cluster) ? oldSelf.cluster : '')",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
+// +kubebuilder:validation:XValidation:rule="has(self.cluster) == has(oldSelf.cluster) && (!has(self.cluster) || self.cluster == oldSelf.cluster)",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored) && self.restored)",message="restored cannot be unset: it records that this instance's databases came from an archive, which stays true. An ordinary re-run does not restore anything and must not erase the fact that an earlier one did"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
 type InstanceSpec struct {
