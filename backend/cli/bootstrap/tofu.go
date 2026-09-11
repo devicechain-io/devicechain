@@ -79,10 +79,21 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// into the SIGKILL that loses the state file.
 	//
 	// The cost of the larger value is that an interrupt during a genuinely stuck
-	// apply does not return the terminal promptly. That is the right trade — and
-	// it is not a trap, because a second interrupt exits immediately (see
-	// cmd.Execute), which is the escape hatch for someone who has decided that
-	// waiting for a clean stop is no longer worth it.
+	// apply does not return the terminal promptly. That is the right trade only
+	// BECAUSE a second interrupt exits immediately — and that is a property
+	// cmd.Execute has to arrange deliberately, not one signal.NotifyContext
+	// provides. An earlier version of this comment cited it as a given; it was
+	// wrong, and this number is exactly what made that mistake expensive rather
+	// than cosmetic. If that escape hatch is ever removed, this budget must shrink
+	// with it.
+	//
+	// 🔴 A SECOND CONSEQUENCE, WITH NO INTERRUPT INVOLVED. WaitDelay also bounds
+	// how long Wait blocks for the child's stdout/stderr pipes to close after it
+	// exits, and terraform-exec reads through pipes. A provider plugin that
+	// outlives tofu holding the inherited pipe therefore hangs dcctl for this
+	// budget rather than the default minute. The same escape hatch applies, and
+	// the trade is the same one: a rare long hang is preferable to routinely
+	// killing an apply that was about to write its state.
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {

@@ -28,6 +28,12 @@ import (
 // a fixed string here is honest.
 const testClaimNS = "dc-system"
 
+// testKubeContext is threaded through every call that takes one. Its VALUE is
+// load-bearing in exactly one place — the stale refusal interpolates it into the
+// `dcctl instances reclaim` suggestion, which is the whole reason the parameter
+// exists — so it is a recognisable string rather than an empty one.
+const testKubeContext = "kind-devicechain"
+
 // 🔴 THE FAKE CLIENTSET ASSIGNS NO resourceVersion AND ENFORCES NO PRECONDITION,
 // and every test below is written knowing it. Create and Update leave the field
 // exactly as the caller wrote it, a stale Update succeeds rather than conflicting,
@@ -131,13 +137,13 @@ func releaseOnCleanup(t *testing.T, c *Claim) {
 func TestASecondRunIsRefusedRatherThanQueued(t *testing.T) {
 	cs := fake.NewClientset()
 
-	first, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+	first, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 	if err != nil {
 		t.Fatalf("the first run could not take a free lock: %v", err)
 	}
 	releaseOnCleanup(t, first)
 
-	second, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+	second, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 	if err == nil {
 		t.Fatalf("a second run took the lock as well; both would now be applying to one cluster")
 	}
@@ -189,7 +195,7 @@ func TestAForbiddenCreateSaysWhatAccessIsMissing(t *testing.T) {
 			claimLeaseName, errors.New("this account cannot create leases in this namespace"))
 	})
 
-	c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+	c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 	if err == nil {
 		t.Fatalf("a refused create produced a claim: %+v", c)
 	}
@@ -223,7 +229,7 @@ func TestTheRefusalReportsStalenessWithoutAssertingTheHolderIsDead(t *testing.T)
 	ancient := time.Now().Add(-2 * time.Hour)
 	cs := fake.NewClientset(heldLease(testClaimNS, other, "prod", ancient, "100"))
 
-	_, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+	_, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 	var held *ClaimHeldError
 	if !errors.As(err, &held) {
 		t.Fatalf("a claimed cluster did not refuse with a *ClaimHeldError: %T: %v", err, err)
@@ -256,6 +262,15 @@ func TestTheRefusalReportsStalenessWithoutAssertingTheHolderIsDead(t *testing.T)
 	// the clock is the reason the evidence is not a verdict.
 	if !strings.Contains(stale, "clock") {
 		t.Errorf("the stale refusal does not say the judgement depends on a clock:\n%s", stale)
+	}
+	// 🔴 AND IT NAMES THE CONTEXT, which is the whole reason the parameter exists.
+	// The operator being refused is usually the one on the OTHER machine: they have
+	// no local record of this instance, so a `dcctl instances reclaim` with no
+	// --kube-context is a command that will not run where they are about to type it.
+	// Nothing else in the suite would notice the value being dropped.
+	if !strings.Contains(stale, "--kube-context "+testKubeContext) {
+		t.Errorf("the stale refusal suggests a reclaim the refused operator cannot run — it does "+
+			"not name the kube context:\n%s", stale)
 	}
 	for _, verdict := range []string{"is dead", "has died", "has crashed", "is no longer running", "has exited"} {
 		if strings.Contains(stale, verdict) {
@@ -544,13 +559,27 @@ func TestARunThatCannotRenewForAFullLeaseDurationDeclaresItselfLost(t *testing.T
 			c := testClaim(cs, testClaimNS, ours)
 			broken.Store(true)
 
-			// Transient: the run is still within its lease duration, so it holds.
+			// 🔴 THE LAST TICK THAT MUST STILL HOLD, and this is the side the ratio
+			// is actually about. A renewal fires every claimRenewInterval, so the
+			// final attempt before the deadline lands a full interval short of it —
+			// five missed ticks, not zero. A test that leaves lastHeld at "now"
+			// measures microseconds and passes against ANY threshold, which is how
+			// `since > claimRenewInterval` and `since > claimLeaseDuration/2` both
+			// survived: each of them fences a healthy run on its FIRST missed
+			// renewal, which is exactly the misreading of a slow API server that the
+			// 6:1 ratio exists to prevent.
+			c.mu.Lock()
+			c.lastHeld = time.Now().Add(-(claimLeaseDuration - claimRenewInterval))
+			c.mu.Unlock()
+
 			if err := c.renewOnce(); err != nil {
-				t.Fatalf("one failed call fenced a run that renewed seconds ago: %v", err)
+				t.Fatalf("a run %s short of its lease duration fenced itself; every renewal "+
+					"between now and the deadline is one the ratio promises is survivable: %v",
+					claimRenewInterval, err)
 			}
 			if c.Lost() {
-				t.Fatal("a run that missed a single renewal declared itself lost; on a busy API " +
-					"server that aborts bootstraps for nothing")
+				t.Fatal("a run that missed five renewals in a row declared itself lost while it " +
+					"still holds the lock; on a busy API server that aborts bootstraps for nothing")
 			}
 
 			// Sustained: past a full lease duration with nothing renewed, a
@@ -594,7 +623,7 @@ func TestReleaseNeverDeletesALeaseItNoLongerHolds(t *testing.T) {
 
 	t.Run("a reclaimed lock is left where it is", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -618,7 +647,7 @@ func TestReleaseNeverDeletesALeaseItNoLongerHolds(t *testing.T) {
 	// a typed confirmation to answer a question this process already knew.
 	t.Run("a lock this run still holds is deleted", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -634,7 +663,7 @@ func TestReleaseNeverDeletesALeaseItNoLongerHolds(t *testing.T) {
 	// refactor away; it must not panic on the closed channel.
 	t.Run("releasing twice is safe", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -656,7 +685,7 @@ func TestCheckHeldAsksTheApiServerRatherThanReadingAFlag(t *testing.T) {
 
 	t.Run("a live holder change is detected without waiting for a renewal", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -683,7 +712,7 @@ func TestCheckHeldAsksTheApiServerRatherThanReadingAFlag(t *testing.T) {
 
 	t.Run("a deleted lock is a loss", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -699,30 +728,63 @@ func TestCheckHeldAsksTheApiServerRatherThanReadingAFlag(t *testing.T) {
 
 	// 🔴 THE OTHER DIRECTION, and it is the one that decides whether this fence is
 	// usable at all. One failed GET must not abort a bootstrap: the fence falls back
-	// to what the renewal loop knows, which cannot mask a genuine loss because a run
-	// that has not renewed for a full lease duration has already fenced itself.
+	// to what the renewal loop knows.
+	//
+	// Both halves below drive the FALLBACK LINE, which is not the same as driving
+	// CheckHeld with a loss recorded: a claim that is already lost returns at the
+	// cached check on the first line and never reaches the GET at all. The earlier
+	// version of this test did exactly that, which left `return c.cachedLoss()`
+	// unexercised — a mutant replacing it with `return nil` survived.
 	t.Run("a transient API error does not report loss while the claim is fresh", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
 		releaseOnCleanup(t, c)
 
-		broken := breakVerb(cs, "get")
-		broken.Store(true)
+		gets := &atomic.Int32{}
+		cs.PrependReactor("get", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+			gets.Add(1)
+			return true, nil, apierrors.NewInternalError(errors.New("the API server is not answering"))
+		})
+
 		if err := c.CheckHeld(t.Context()); err != nil {
 			t.Fatalf("one unanswered read aborted a run that holds its lock: %v", err)
 		}
+		// Without this the assertion above is satisfied by a CheckHeld that never
+		// asked anything, which is the mutant this whole test exists to catch.
+		if gets.Load() == 0 {
+			t.Fatal("the fence never reached the API server, so the fallback it is supposed to be " +
+				"exercising was not reached either")
+		}
+	})
 
-		// ...but a fresh claim is what makes that safe, so the stale case must still
-		// report the loss the renewal loop recorded.
-		c.mu.Lock()
-		c.lastHeld = time.Now().Add(-claimLeaseDuration - time.Second)
-		c.mu.Unlock()
-		c.setLost(fmt.Errorf("%w: this run has not renewed the cluster lock", ErrClaimLost))
-		if err := c.CheckHeld(t.Context()); !errors.Is(err, ErrClaimLost) {
+	// ...and the same line must still report a loss the renewal loop has already
+	// found. This is the one interleaving where the fallback's answer is not nil:
+	// the claim was healthy when the fence was entered and was fenced while the GET
+	// was in flight. It cannot mask a genuine loss, and this is what says so.
+	t.Run("a transient API error still reports a loss found while the read was in flight", func(t *testing.T) {
+		cs := fake.NewClientset()
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releaseOnCleanup(t, c)
+
+		cs.PrependReactor("get", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+			// The renewal goroutine's discovery, landing while this read fails.
+			c.setLost(fmt.Errorf("%w: it is now held by %s", ErrClaimLost, theirs))
+			return true, nil, apierrors.NewInternalError(errors.New("the API server is not answering"))
+		})
+
+		err = c.CheckHeld(t.Context())
+		if !errors.Is(err, ErrClaimLost) {
 			t.Fatalf("a fenced run passed the boundary check because the API was unreachable: %v", err)
+		}
+		if !strings.Contains(err.Error(), theirs) {
+			t.Errorf("the fallback answered with something other than what the renewal loop "+
+				"recorded: %v", err)
 		}
 	})
 }
@@ -748,7 +810,7 @@ func TestReclaimRefusesWhenThereIsNothingToReclaim(t *testing.T) {
 	cs := fake.NewClientset()
 	sleep, calls := reclaimWindow(nil)
 
-	c, err := reclaim(t.Context(), cs, testClaimNS, sleep)
+	c, err := reclaim(t.Context(), cs, testClaimNS, testKubeContext, sleep)
 	if err == nil {
 		t.Fatalf("reclaiming an unclaimed cluster produced a claim: %+v", c)
 	}
@@ -794,7 +856,7 @@ func TestReclaimRefusesALiveHolder(t *testing.T) {
 		}
 	})
 
-	c, err := reclaim(t.Context(), cs, testClaimNS, sleep)
+	c, err := reclaim(t.Context(), cs, testClaimNS, testKubeContext, sleep)
 	if err == nil {
 		t.Fatalf("a live holder's lock was stolen: %+v", c)
 	}
@@ -854,7 +916,7 @@ func TestReclaimTakesAnAbandonedLock(t *testing.T) {
 			cs := fake.NewClientset(l)
 			sleep, calls := reclaimWindow(nil)
 
-			c, err := reclaim(t.Context(), cs, testClaimNS, sleep)
+			c, err := reclaim(t.Context(), cs, testClaimNS, testKubeContext, sleep)
 			if err != nil {
 				t.Fatalf("an untouched lock could not be reclaimed: %v", err)
 			}
@@ -892,7 +954,7 @@ func TestReclaimTakesAnAbandonedLock(t *testing.T) {
 			if c.instance != "prod" {
 				t.Errorf("the new claim is working on instance %q", c.instance)
 			}
-			_, err = AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+			_, err = AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 			var held *ClaimHeldError
 			if !errors.As(err, &held) {
 				t.Fatalf("a third run was not refused by the reclaimed lock: %v", err)
@@ -932,7 +994,7 @@ func TestReclaimTreatsAConflictAsThePreviousHolderBeingAlive(t *testing.T) {
 		})
 		sleep, _ := reclaimWindow(nil)
 
-		c, err := reclaim(t.Context(), cs, testClaimNS, sleep)
+		c, err := reclaim(t.Context(), cs, testClaimNS, testKubeContext, sleep)
 		if err == nil {
 			t.Fatalf("a steal the API server refused was reported as a success: %+v", c)
 		}
@@ -964,7 +1026,7 @@ func TestReclaimTreatsAConflictAsThePreviousHolderBeingAlive(t *testing.T) {
 		broken.Store(true)
 		sleep, _ := reclaimWindow(nil)
 
-		c, err := reclaim(t.Context(), cs, testClaimNS, sleep)
+		c, err := reclaim(t.Context(), cs, testClaimNS, testKubeContext, sleep)
 		if err == nil {
 			t.Fatalf("a failed steal was reported as a success: %+v", c)
 		}
@@ -987,7 +1049,7 @@ func TestAnInterruptedReclaimLeavesTheHolderAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if c, err := Reclaim(ctx, cs, testClaimNS); err == nil {
+	if c, err := Reclaim(ctx, cs, testClaimNS, testKubeContext); err == nil {
 		t.Fatalf("a reclaim that never completed its window took the lock anyway: %+v", c)
 	}
 	cur, err := getLease(t, cs, testClaimNS)
@@ -1028,7 +1090,7 @@ func TestThePipelineFenceStopsBeforeTheNextStep(t *testing.T) {
 
 	t.Run("a claim already lost stops the pipeline before its first step", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1054,7 +1116,7 @@ func TestThePipelineFenceStopsBeforeTheNextStep(t *testing.T) {
 
 	t.Run("a claim lost mid-run stops at the next boundary", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1083,7 +1145,7 @@ func TestThePipelineFenceStopsBeforeTheNextStep(t *testing.T) {
 	// pipeline that refuses to run anything at all.
 	t.Run("a healthy claim runs every step", func(t *testing.T) {
 		cs := fake.NewClientset()
-		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod")
+		c, err := AcquireClaim(t.Context(), cs, testClaimNS, "prod", testKubeContext)
 		if err != nil {
 			t.Fatal(err)
 		}

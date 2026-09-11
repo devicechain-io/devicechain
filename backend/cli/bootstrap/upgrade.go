@@ -337,7 +337,7 @@ func beginUpgradeClaim(ctx context.Context, kubeContext, instance string) *Claim
 		fmt.Println(color.YellowString("warning: could not take the cluster lock before upgrading (%v); continuing", err))
 		return nil
 	}
-	claim, err := AcquireClaim(ctx, typed, ns, instance)
+	claim, err := AcquireClaim(ctx, typed, ns, instance, kubeContext)
 	if err != nil {
 		fmt.Println(color.YellowString("warning: %v", err))
 		fmt.Println(color.YellowString("  continuing with the upgrade anyway — but if that run is live, this will fight it"))

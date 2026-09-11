@@ -163,7 +163,11 @@ func operatorNamespace(manifests []byte) (string, error) {
 type ClaimHeldError struct {
 	Instance string
 	Holder   string
-	Renewed  time.Time
+	// KubeContext is named in the refusal because the operator being refused is
+	// often the one on the OTHER machine, who has no local record of this instance
+	// and therefore needs to pass it explicitly to every verb that acts on it.
+	KubeContext string
+	Renewed     time.Time
 	// LooksStale is the cheap, skew-dependent read, used only to choose which
 	// sentence to print.
 	LooksStale bool
@@ -182,8 +186,9 @@ func (e *ClaimHeldError) Error() string {
 		return fmt.Sprintf(
 			"%s is claimed by %s, which last renewed %s — by this machine's clock that looks stale, "+
 				"but a clock that disagrees looks the same. If that process is genuinely gone, "+
-				"take the claim with `dcctl instances reclaim`, which checks properly before it steals",
-			what, e.Holder, ago)
+				"take the claim with `dcctl instances reclaim --kube-context %s`, which checks properly "+
+				"before it steals",
+			what, e.Holder, ago, e.KubeContext)
 	}
 	return fmt.Sprintf(
 		"%s is being worked on by %s, which renewed %s; wait for it to finish rather than "+
@@ -201,7 +206,7 @@ func (e *ClaimHeldError) Error() string {
 // on an inference about a process on a machine we cannot see is exactly the
 // outcome a claim exists to prevent — two appliers, one cluster, neither aware of
 // the other. Reclaim is a separate, explicit act with a stronger test.
-func AcquireClaim(ctx context.Context, client kubernetes.Interface, ns, instance string) (*Claim, error) {
+func AcquireClaim(ctx context.Context, client kubernetes.Interface, ns, instance, kubeContext string) (*Claim, error) {
 	holder, err := newHolderIdentity()
 	if err != nil {
 		return nil, err
@@ -250,14 +255,15 @@ func AcquireClaim(ctx context.Context, client kubernetes.Interface, ns, instance
 		}
 		return nil, fmt.Errorf("reading the cluster lock: %w", gerr)
 	}
-	return nil, heldError(existing)
+	return nil, heldError(existing, kubeContext)
 }
 
-func heldError(l *coordinationv1.Lease) *ClaimHeldError {
+func heldError(l *coordinationv1.Lease, kubeContext string) *ClaimHeldError {
 	e := &ClaimHeldError{
-		Holder:     ptrString(l.Spec.HolderIdentity),
-		Instance:   l.Annotations[annotationClaimInstance],
-		LooksStale: looksStale(l, time.Now()),
+		KubeContext: kubeContext,
+		Holder:      ptrString(l.Spec.HolderIdentity),
+		Instance:    l.Annotations[annotationClaimInstance],
+		LooksStale:  looksStale(l, time.Now()),
 	}
 	if l.Spec.RenewTime != nil {
 		e.Renewed = l.Spec.RenewTime.Time
@@ -518,6 +524,16 @@ func (c *Claim) Release(ctx context.Context) {
 	c.stopOnce.Do(func() { close(c.stop) })
 	<-c.done
 
+	// 🔴 DETACHED FROM THE CALLER'S CANCELLATION, AND DONE HERE SO EVERY CALLER
+	// GETS IT. Ctrl+C is the case where giving the lock back matters most, and it
+	// is also the case where the caller's context is already dead — so a Release
+	// that inherited it would fail its first Get and return having deleted
+	// nothing, stranding the lock for a full lease duration plus a typed
+	// confirmation to recover from a keystroke. Two of the three call sites passed
+	// the run context and would have done exactly that.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
 	leases := c.client.CoordinationV1().Leases(c.ns)
 	cur, err := leases.Get(ctx, claimLeaseName, metav1.GetOptions{})
 	if err != nil || ptrString(cur.Spec.HolderIdentity) != c.holder {
@@ -538,8 +554,8 @@ func (c *Claim) Release(ctx context.Context) {
 // resourceVersion from the confirming read, so a holder that wakes up and renews
 // between the confirmation and the steal wins — the reclaim fails with a Conflict
 // instead of silently overwriting a live claim.
-func Reclaim(ctx context.Context, client kubernetes.Interface, ns string) (*Claim, error) {
-	return reclaim(ctx, client, ns, sleepCtx)
+func Reclaim(ctx context.Context, client kubernetes.Interface, ns, kubeContext string) (*Claim, error) {
+	return reclaim(ctx, client, ns, kubeContext, sleepCtx)
 }
 
 // reclaim is Reclaim with its wait injected.
@@ -553,7 +569,7 @@ func Reclaim(ctx context.Context, client kubernetes.Interface, ns string) (*Clai
 //
 // A parameter rather than a package var: a var is mutable global state that one
 // test can leave pointing somewhere the next test does not expect.
-func reclaim(ctx context.Context, client kubernetes.Interface, ns string, sleep func(context.Context, time.Duration) error) (*Claim, error) {
+func reclaim(ctx context.Context, client kubernetes.Interface, ns, kubeContext string, sleep func(context.Context, time.Duration) error) (*Claim, error) {
 	abandoned, existing, err := confirmAbandoned(ctx, client, ns, sleep)
 	if err != nil {
 		return nil, fmt.Errorf("checking the cluster lock: %w", err)
@@ -562,7 +578,7 @@ func reclaim(ctx context.Context, client kubernetes.Interface, ns string, sleep 
 		return nil, errors.New("this cluster is not claimed; there is nothing to reclaim")
 	}
 	if !abandoned {
-		return nil, heldError(existing)
+		return nil, heldError(existing, kubeContext)
 	}
 
 	holder, err := newHolderIdentity()
@@ -592,8 +608,14 @@ func reclaim(ctx context.Context, client kubernetes.Interface, ns string, sleep 
 	return newClaim(client, ns, instance, holder), nil
 }
 
-// PeekClaim reports the current lock without taking it, for `instances list` and
-// for the reclaim command's confirmation prompt. A nil Lease means the lock is free.
+// PeekClaim reports the current lock without taking it — used by the reclaim
+// command's confirmation prompt and by the dry-run report. A nil Lease means the
+// lock is free.
+//
+// (An earlier version of this comment also named `instances list`, which does not
+// call it: that command reads only the local records on this machine and never
+// contacts a cluster. Naming a caller that does not exist is how a reader concludes
+// a surface is covered when it is not.)
 func PeekClaim(ctx context.Context, client kubernetes.Interface, ns string) (*coordinationv1.Lease, error) {
 	l, err := client.CoordinationV1().Leases(ns).Get(ctx, claimLeaseName, metav1.GetOptions{})
 	if err != nil {

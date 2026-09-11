@@ -234,8 +234,9 @@ var GreenUnderline = color.New(color.Underline, color.FgHiGreen).SprintFunc()
 func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
+		{Name: "Claim the cluster", Run: stepClaimCluster},
 		{Name: "Install core components", Run: stepInstallCore},
-		{Name: "Claim and declare the instance", Run: stepClaimAndDeclare},
+		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},
 		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install instance (Helm)", Run: stepHelmInstall},

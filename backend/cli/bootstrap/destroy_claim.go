@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/fatih/color"
 
@@ -39,7 +40,7 @@ func beginDestroy(ctx context.Context, kubeContext, instance string) *Claim {
 			"warning: could not reach the cluster to take the lock before destroying (%v); continuing", err))
 		return nil
 	}
-	claim, err := AcquireClaim(ctx, typed, ns, instance)
+	claim, err := AcquireClaim(ctx, typed, ns, instance, kubeContext)
 	if err != nil {
 		fmt.Println(color.YellowString("warning: %v", err))
 		fmt.Println(color.YellowString("  continuing with the destroy anyway — but if that run is live, this will fight it"))
@@ -64,13 +65,37 @@ func beginDestroy(ctx context.Context, kubeContext, instance string) *Claim {
 // It runs only when the cluster survives the destroy. When the cluster itself is
 // being deleted the declaration goes with it, and reaching into a cluster that is
 // mid-teardown to tidy one object is a way to fail at the last step for no gain.
-func endDestroy(ctx context.Context, claim *Claim, kubeContext, instance string, clusterSurvives bool) {
-	if clusterSurvives {
+func endDestroy(ctx context.Context, claim *Claim, kubeContext, instance string, clusterSurvives bool, failed *error) {
+	// 🔴 A FAILED DESTROY MUST NOT DELETE THE DECLARATION, and the first version of
+	// this function did exactly that. It ran as an unconditional defer, so a destroy
+	// that died at the Helm uninstall stripped the finalizer and removed the CR
+	// while every workload was still running — manufacturing the orphaned instance
+	// with no declaration that the finalizer was added to prevent, from inside the
+	// change that added it.
+	//
+	// The declaration is only removed when the destroy actually finished. Otherwise
+	// it stays, still reading Destroying, which is true and is what a resumed
+	// destroy needs to find.
+	// Detached for the same reason Claim.Release is: an interrupted destroy still
+	// has to clear the finalizer it set, and the caller's context is dead by then.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	// 🔴 A NIL OUTCOME POINTER MEANS "NOT TOLD", AND NOT-TOLD MUST NOT MEAN SUCCESS.
+	// The first version read `failed == nil || *failed == nil`, so a caller that
+	// passed nothing got the DELETING branch — the exact direction this function
+	// exists to prevent, reachable by omission rather than by decision. Requiring
+	// the pointer makes the safe answer the default.
+	if clusterSurvives && failed != nil && *failed == nil {
 		if _, err := ReleaseInstanceDeclaration(ctx, kubeContext, instance); err != nil {
 			fmt.Println(color.YellowString(
 				"warning: the instance was destroyed but its declaration could not be removed (%v).\n"+
 					"  Remove it with `dcctl instances release %s`, which destroys nothing.", err, instance))
 		}
+	} else if clusterSurvives {
+		fmt.Println(color.YellowString(
+			"the declaration for %q was left in place because this destroy did not finish.\n"+
+				"  It still records which cluster the instance lives in, which is what a re-run needs.", instance))
 	}
 	if claim != nil {
 		claim.Release(ctx)

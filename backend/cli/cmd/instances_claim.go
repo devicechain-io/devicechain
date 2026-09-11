@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
+
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -101,39 +103,13 @@ func runReclaim(ctx context.Context, out io.Writer, in io.Reader, kubeContext st
 		return nil
 	}
 
-	holder := ""
-	if lease.Spec.HolderIdentity != nil {
-		holder = *lease.Spec.HolderIdentity
-	}
-	fmt.Fprintf(out, "  held by:   %s\n", color.HiYellowString(holder))
-	if inst := lease.Annotations["core.devicechain.io/instance"]; inst != "" {
-		fmt.Fprintf(out, "  instance:  %s\n", inst)
-	}
-	if lease.Spec.RenewTime != nil {
-		fmt.Fprintf(out, "  renewed:   %s ago\n", time.Since(lease.Spec.RenewTime.Time).Round(time.Second))
-	}
-
-	// 🔴 THE HOLDER IS TYPED BACK, NOT CONFIRMED WITH A KEYSTROKE, and the two are
-	// not interchangeable. A y/N prompt adds ceremony and no information: the
-	// answer is the same whether or not the operator read the line above it. This
-	// command's one real risk is an operator taking a lock from a process that is
-	// alive, and the only defence against that is making them look at whose it is.
-	//
-	// There is deliberately no --yes. An unattended reclaim is exactly the thing
-	// that must not exist, because the judgement it needs — "I know that process
-	// is gone" — is not a judgement a flag can carry.
-	fmt.Fprintf(out, "\nType the holder identity above to take the lock, or anything else to abort:\n> ")
-	answer, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !strings.HasSuffix(answer, "\n") && answer == "" {
-		return fmt.Errorf("reading confirmation: %w", err)
-	}
-	if strings.TrimSpace(answer) != holder {
-		return fmt.Errorf("that does not match the holder identity; the lock was left alone")
+	if _, err := confirmHolder(out, in, lease); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(out, "\nchecking whether the holder is still renewing (this takes about %s)...\n",
 		bootstrap.ClaimLeaseDuration())
-	claim, err := bootstrap.Reclaim(ctx, typed, ns)
+	claim, err := bootstrap.Reclaim(ctx, typed, ns, kubeContext)
 	if err != nil {
 		return err
 	}
@@ -182,4 +158,52 @@ func runRelease(ctx context.Context, out io.Writer, in io.Reader, kubeContext, i
 	}
 	fmt.Fprintln(out, color.HiGreenString("the declaration was removed; the instance itself is untouched"))
 	return nil
+}
+
+// confirmHolder prints who holds the lock and requires their identity to be typed
+// back, returning it on success.
+//
+// Extracted from runReclaim so it can be tested: everything around it needs a live
+// cluster, and this is the part with the decisions in it. The refusal of an empty
+// holder is one of them, and an untestable refusal is one that gets deleted.
+func confirmHolder(out io.Writer, in io.Reader, lease *coordinationv1.Lease) (string, error) {
+	holder := ""
+	if lease.Spec.HolderIdentity != nil {
+		holder = *lease.Spec.HolderIdentity
+	}
+	if holder == "" {
+		// 🔴 An empty holder would make the typed confirmation a bare Enter, which
+		// turns the one deliberate piece of friction in this command into none at
+		// all. A Lease with no holder is not something dcctl writes, so refuse
+		// rather than invent a ceremony around it.
+		return "", fmt.Errorf("the cluster lock names no holder, so there is nothing to confirm against; " +
+			"inspect it with `kubectl get lease -n dc-k8s-system dcctl -o yaml` before removing it by hand")
+	}
+
+	fmt.Fprintf(out, "  held by:   %s\n", color.HiYellowString(holder))
+	if inst := lease.Annotations["core.devicechain.io/instance"]; inst != "" {
+		fmt.Fprintf(out, "  instance:  %s\n", inst)
+	}
+	if lease.Spec.RenewTime != nil {
+		fmt.Fprintf(out, "  renewed:   %s ago\n", time.Since(lease.Spec.RenewTime.Time).Round(time.Second))
+	}
+
+	// 🔴 THE HOLDER IS TYPED BACK, NOT CONFIRMED WITH A KEYSTROKE, and the two are
+	// not interchangeable. A y/N prompt adds ceremony and no information: the answer
+	// is the same whether or not the operator read the line above it. This command's
+	// one real risk is taking a lock from a process that is alive, and the only
+	// defence against that is making them look at whose it is.
+	//
+	// There is deliberately no --yes. An unattended reclaim is exactly the thing
+	// that must not exist, because the judgement it needs — "I know that process is
+	// gone" — is not one a flag can carry.
+	fmt.Fprintf(out, "\nType the holder identity above to take the lock, or anything else to abort:\n> ")
+	answer, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && answer == "" {
+		return "", fmt.Errorf("reading confirmation: %w", err)
+	}
+	if strings.TrimSpace(answer) != holder {
+		return "", fmt.Errorf("that does not match the holder identity; the lock was left alone")
+	}
+	return holder, nil
 }

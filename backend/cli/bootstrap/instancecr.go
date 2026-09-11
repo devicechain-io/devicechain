@@ -237,17 +237,42 @@ func instanceToUnstructured(inst *dcv1beta1.Instance) (*unstructured.Unstructure
 // with a compare-and-swap, and a heartbeat) are a separate concern and land with
 // them. What is here is the declaration itself.
 func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
-	if err := ValidateInstanceSpec(spec); err != nil {
-		return err
-	}
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to record the instance declaration: %w", err)
 	}
+	return writeInstanceCR(ctx, dyn, id, spec, dcctlVersion)
+}
 
+// writeInstanceCR is WriteInstanceCR with the client supplied.
+//
+// Split for the same reason ReadInstanceCR/readInstanceCR is, two functions up:
+// the refusals this function makes — a declaration that is terminating, and one
+// whose phase says a destroy did not finish — are the part worth testing, and
+// they were unreachable while the only entry point built its own client from a
+// kubeconfig. A branch that needs a live cluster to reach is a branch that goes
+// untested.
+func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
+	if err := ValidateInstanceSpec(spec); err != nil {
+		return err
+	}
 	existing, err := readInstanceCR(ctx, dyn, id)
 	if err != nil {
 		return err
+	}
+	if existing != nil && existing.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
+		// 🔴 THIS IS THE READER THE PHASE ANNOTATION EXISTS FOR. Writing it and
+		// never consulting it would make it the thing this slice criticises
+		// elsewhere: recorded correctly, connected to nothing.
+		//
+		// A declaration reading Destroying means a destroy started and did not
+		// finish, so the cluster holds some part of an instance and no longer holds
+		// the rest. Bootstrapping over that produces a half-old, half-new instance
+		// whose failures are attributed to the new run.
+		return fmt.Errorf("instance %q was part-way through being destroyed and the destroy did not finish; "+
+			"the cluster still holds some of it. Finish the teardown with `dcctl destroy %s` and bootstrap "+
+			"afterwards, or, if you are certain nothing of it remains, drop the declaration with "+
+			"`dcctl instances release %s`", id, id, id)
 	}
 	if existing != nil && existing.DeletionTimestamp != nil {
 		// 🔴 A TERMINATING DECLARATION IS NOT ADOPTABLE, and saying so is more

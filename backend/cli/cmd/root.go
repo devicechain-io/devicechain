@@ -65,12 +65,19 @@ Command line interface for interacting with DeviceChain components`),
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 //
 // 🔴 THE SIGNAL HANDLING IS NOT HOUSEKEEPING — WITHOUT IT, CTRL+C CORRUPTS AN
-// APPLY. dcctl runs `tofu` through terraform-exec, which starts the child in its
-// own process group with Pdeathsig set to SIGKILL. That combination means the
-// terminal's SIGINT never reaches tofu: it goes to dcctl, dcctl has no handler
-// and dies, and the kernel then SIGKILLs tofu — which is the one way to stop an
+// APPLY ON LINUX. terraform-exec starts the child in its own process group with
+// Pdeathsig set to SIGKILL, and it does so ONLY on Linux (cmd_linux.go; the
+// cmd_default.go build for every other platform sets neither). That combination
+// means the terminal's SIGINT never reaches tofu: it goes to dcctl, dcctl has no
+// handler and dies, and the kernel then SIGKILLs tofu — the one way to stop an
 // apply that guarantees it cannot write its state file, leaving every resource
 // created since the last write untracked.
+//
+// The platform restriction is worth stating rather than glossing, because dcctl
+// ships darwin builds and the reasoning does not carry over: there, tofu shares
+// dcctl's process group and already receives the terminal's interrupt directly.
+// The handler below is still correct on that platform — it is what returns the
+// cluster lock — but the corruption it prevents is a Linux one.
 //
 // Cancelling the context instead produces the opposite outcome. terraform-exec
 // sets cmd.Cancel to send os.Interrupt, so tofu gets its graceful-stop signal,
@@ -81,12 +88,32 @@ Command line interface for interacting with DeviceChain components`),
 // bootstrap would strand the lock until another operator waited out a full lease
 // duration and reclaimed it by hand.
 //
-// A SECOND SIGNAL EXITS IMMEDIATELY, which NotifyContext gives us by restoring
-// the default disposition after the first. Someone who has decided they want out
-// now must not be made to argue with a cleanup path.
+// 🔴 THE SECOND SIGNAL NEEDS THE GOROUTINE BELOW, AND ASSUMING OTHERWISE WAS A
+// REAL TRAP RATHER THAN A DOCUMENTATION SLIP. signal.NotifyContext does NOT
+// restore the default disposition when the context is cancelled — it keeps the
+// handler registered until stop() is called, and stop() here is deferred until
+// the command returns. So every later Ctrl+C is swallowed, silently. That was
+// measured, not assumed: a program with this exact shape survived three SIGINTs.
+//
+// It matters because the graceful stop is allowed to take a long time on purpose
+// (see tofuGracefulStopBudget), and that budget was justified BY the escape
+// hatch. Without one, an operator interrupting a stuck apply is pinned for twenty
+// minutes with nothing to do but `kill -9` from another terminal — which trips
+// Pdeathsig and SIGKILLs tofu, losing exactly the state file this whole
+// arrangement exists to protect. The false claim did not merely describe the
+// wrong behaviour; it was the argument for the number that made it harmful.
+//
+// Calling stop() once the context is cancelled restores the default disposition,
+// so the second signal terminates the process the way an impatient operator
+// expects. Someone who has decided they want out now must not be made to argue
+// with a cleanup path.
 func Execute() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)

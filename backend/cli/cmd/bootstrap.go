@@ -548,7 +548,11 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	if !st.Claim.Lost() {
+	// 🔴 Asked, not remembered. The cached flag is refreshed by a 10s ticker and the
+	// last fenced step boundary is several minutes back — "Wait for readiness" runs
+	// without one — so a reclaim landing in that gap would leave this run stamping
+	// Ready or Failed on a declaration the reclaimer now owns.
+	if st.Claim.CheckHeld(cleanup) == nil {
 		phase := dcv1beta1.PhaseReady
 		if runErr != nil {
 			phase = dcv1beta1.PhaseFailed

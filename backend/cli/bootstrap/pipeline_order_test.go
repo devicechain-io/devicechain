@@ -41,9 +41,36 @@ func stepIndex(t *testing.T, want func(context.Context, *State) error) int {
 // to ask which edge they broke.
 func TestPipelineOrderInvariants(t *testing.T) {
 	registry := stepIndex(t, stepLocalRegistry)
+	claim := stepIndex(t, stepClaimCluster)
 	core := stepIndex(t, stepInstallCore)
+	declare := stepIndex(t, stepDeclareInstance)
 	render := stepIndex(t, stepRenderConfig)
 	infra := stepIndex(t, stepInfraApply)
+
+	// 🔴 The lock is taken BEFORE the operator install, and this edge is the whole
+	// reason the claim is its own step. stepInstallCore server-side-applies the
+	// CRDs, the RBAC and the operator Deployment — cluster-scoped objects, at this
+	// run's version, and the ones `dcctl upgrade` takes the lock to apply. With the
+	// claim after it, a second bootstrap on its way to being refused would first
+	// have written its operator version over a cluster the first was mid-apply on:
+	// the lock would exclude the runs while letting the writes through.
+	if claim >= core {
+		t.Errorf("stepClaimCluster runs at %d and stepInstallCore at %d: a refused bootstrap "+
+			"would still have applied its own operator version over a live one", claim, core)
+	}
+	// The Instance CRD has to exist before anything declares an instance, and the
+	// CRD arrives with the operator overlay. This is why claiming and declaring are
+	// two steps with the install between them rather than one step doing both.
+	if core >= declare {
+		t.Errorf("stepInstallCore runs at %d and stepDeclareInstance at %d: the Instance CRD "+
+			"would not exist when the declaration is written", core, declare)
+	}
+	// The declaration is read back and feeds the state the rest of the pipeline
+	// runs on, so it has to be written before the first step that consumes it.
+	if declare >= render {
+		t.Errorf("stepDeclareInstance runs at %d and stepRenderConfig at %d: the configuration "+
+			"would be rendered from flags that the declaration had not yet confirmed", declare, render)
+	}
 
 	// The operator Deployment names an image that, on the --build path, does not
 	// exist until stepLocalRegistry has pushed it.
@@ -51,13 +78,13 @@ func TestPipelineOrderInvariants(t *testing.T) {
 		t.Errorf("stepLocalRegistry runs at %d and stepInstallCore at %d: a --build bootstrap "+
 			"would install the operator against an image nothing has pushed yet", registry, core)
 	}
-	// The Instance CRD has to exist before anything declares an instance. Nothing
-	// in dcctl writes an Instance CR YET — the claim step is a later slice — so
-	// this edge is pinned ahead of the code that needs it, deliberately: it is
-	// cheap now and it is the whole reason the operator install moved.
+	// Kept as a coarser backstop to the two edges above, which now carry the real
+	// reasoning. (It used to say nothing in dcctl wrote an Instance CR yet. That
+	// stopped being true when the declaration was wired in, and a stale comment on
+	// a passing test is how the next reader learns the wrong invariant.)
 	if core >= render {
 		t.Errorf("stepInstallCore runs at %d and stepRenderConfig at %d: the Instance CRD would "+
-			"not exist when the instance is claimed", core, render)
+			"not exist when the instance is declared", core, render)
 	}
 	// Unchanged from before ADR-080, and pinned separately in broker_record_test.go
 	// with the incident it comes from. Repeated here so a future reorder that
