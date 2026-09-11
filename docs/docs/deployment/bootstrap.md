@@ -87,9 +87,12 @@ components`), so a failure names a step you can find here:
 8. **Seed admin credential** — the superuser credential is seeded by the
    user-management service on first start; this step settles the values the final report
    prints.
-9. **Wait for readiness** — poll each enabled area's Deployment until it reports
-   available, as an explicit confirmation gate rather than trusting the Helm step's own
-   wait.
+9. **Wait for readiness** — poll each enabled area's Deployment until it has finished
+   rolling onto the configuration this run produced, as an explicit confirmation gate
+   rather than trusting the Helm step's own wait. Having replicas available is not
+   enough: on a re-run that is already true of the pods being replaced, so the step also
+   waits for the new template to be observed, for every replica to be recreated on it,
+   and for no old replica to still be running.
 10. **Report access info** — print the namespace, the superuser credential, and how to
     reach the instance.
 

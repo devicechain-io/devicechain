@@ -44,6 +44,7 @@ variable "chart_version" {
 }
 
 resource "helm_release" "cert_manager" {
+  max_history      = local.helm_max_history
   name             = var.release_name
   namespace        = var.namespace
   create_namespace = true

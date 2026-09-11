@@ -427,6 +427,7 @@ locals {
 }
 
 resource "helm_release" "kube_prometheus_stack" {
+  max_history      = local.helm_max_history
   name             = var.release_name
   namespace        = var.namespace
   create_namespace = true

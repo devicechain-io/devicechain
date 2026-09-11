@@ -919,6 +919,8 @@ resource "kubernetes_config_map_v1" "nats_ca" {
 }
 
 resource "helm_release" "nats" {
+  max_history = local.helm_max_history
+
   name       = var.release_name
   namespace  = var.namespace
   repository = "https://nats-io.github.io/k8s/helm/charts/"

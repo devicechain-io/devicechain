@@ -578,6 +578,8 @@ locals {
 }
 
 resource "helm_release" "cluster" {
+  max_history = local.helm_max_history
+
   name      = var.name
   namespace = var.namespace
   chart     = "${path.module}/chart"

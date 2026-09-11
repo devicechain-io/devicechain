@@ -270,3 +270,30 @@ func TestCurrentOperatorImagesReportsWhatIsRunning(t *testing.T) {
 		t.Fatal("an unreadable target should be absent, not reported")
 	}
 }
+
+// The operator acts on this message during a stalled upgrade, so it has to name the
+// Deployment and its counts rather than only the fact that something is pending.
+func TestTheRolloutTimeoutNamesTheDeploymentAndItsCounts(t *testing.T) {
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "dc-k8s-controller-manager",
+			Namespace:  "dc-k8s-system",
+			Generation: 4,
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(3)},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 4, UpdatedReplicas: 1, Replicas: 3, AvailableReplicas: 3,
+		},
+	})
+	err := waitForRollout(context.Background(), client,
+		[]deploymentRef{{namespace: "dc-k8s-system", name: "dc-k8s-controller-manager"}},
+		20*time.Millisecond)
+	if err == nil {
+		t.Fatal("reported the rollout complete while one replica was updated of three")
+	}
+	for _, want := range []string{"dc-k8s-system/dc-k8s-controller-manager", "1/3 updated", "3 available"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("timeout message does not mention %q:\n%s", want, err)
+		}
+	}
+}

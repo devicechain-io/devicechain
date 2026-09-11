@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // defaultProfile is used when the user does not specify one: the standard system —
@@ -850,45 +851,102 @@ func stepSeedAdmin(ctx context.Context, st *State) error {
 	return nil
 }
 
-// stepWaitReady waits for every per-instance workload to report ready. The Helm
-// step already blocks on readiness; this is an explicit confirmation gate.
+// stepWaitReady blocks until every area's Deployment has rolled onto the template
+// this run rendered. The Helm step already blocks on readiness; this is an explicit
+// confirmation gate.
+//
+// 🔴 IT USED TO ASK `AvailableReplicas >= want`, WHICH IS NOT A ROLLOUT CHECK. On a
+// re-bootstrap that condition is satisfied by the pods already running — the ones
+// the new configuration is replacing — so the step returned while the rollout had
+// not started, and the run reported an instance ready on credentials and config it
+// was still in the middle of changing. On a first install it happened to be
+// harmless, because there are no old pods for it to be true of, and that is exactly
+// why it survived: the path that exercises it most is the path it cannot fail on.
+//
+// deploymentRolledOut is the check `dcctl upgrade` already used, shared rather than
+// restated. The list is re-read each pass so a Deployment that appears late is still
+// waited for, and `total > 0` keeps an empty namespace from reporting success — an
+// absence answering a question about health.
 func stepWaitReady(ctx context.Context, st *State) error {
 	doing("waiting for areas to become ready")
 	if st.DryRun {
 		fmt.Println()
-		wouldDo("poll each area's deployment until available")
+		wouldDo("poll each area's deployment until it has rolled over")
 		return nil
 	}
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
 		return fail("building kube clients", err)
 	}
-	ns := st.Values["namespace"]
-	deadline := time.Now().Add(5 * time.Minute)
+	return waitForAreas(ctx, typed, st.Values["namespace"], areaReadyTimeout, areaReadyPollInterval)
+}
+
+const (
+	areaReadyTimeout      = 5 * time.Minute
+	areaReadyPollInterval = 3 * time.Second
+)
+
+// waitForAreas carries the body of stepWaitReady, separated from it so the
+// predicate this gate applies can be exercised without a cluster. That separation
+// is the point rather than a tidying: the naive check this replaced lived here for
+// as long as it did because nothing could reach it, and a fix to an untested gate
+// leaves the next reader no way to tell which check is in force.
+func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, timeout, poll time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for {
 		deps, err := typed.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return fail("listing deployments", err)
 		}
 		ready, total := 0, len(deps.Items)
-		for _, d := range deps.Items {
+		var pending []string
+		for i := range deps.Items {
+			d := &deps.Items[i]
+			if deploymentRolledOut(d) {
+				ready++
+				continue
+			}
 			want := int32(1)
 			if d.Spec.Replicas != nil {
 				want = *d.Spec.Replicas
 			}
-			if d.Status.AvailableReplicas >= want {
-				ready++
-			}
+			pending = append(pending, fmt.Sprintf("%s (%d/%d updated, %d available)",
+				d.Name, d.Status.UpdatedReplicas, want, d.Status.AvailableReplicas))
 		}
 		if total > 0 && ready == total {
 			fmt.Println(color.GreenString("done (%d/%d ready).", ready, total))
 			return nil
 		}
-		if time.Now().After(deadline) {
+		// ONE deadline decision, asked as "how much time is left". Asking it twice —
+		// once as a comparison and once as a subtraction — gives two answers that
+		// disagree at the boundary, and the branch that disagreement produced was a
+		// re-list with no sleep in front of it: a spin, reachable only in the instant
+		// the two forms differ, which is exactly the kind nobody finds by reading.
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			fmt.Println(color.RedString("timed out (%d/%d ready).", ready, total))
-			return fmt.Errorf("not all areas became ready in namespace %q (%d/%d)", ns, ready, total)
+			if total == 0 {
+				return fmt.Errorf("no area workloads exist in namespace %q after %s: "+
+					"the chart install rendered nothing to wait for", ns, timeout)
+			}
+			// Name what did not converge. The counts alone send the operator back to
+			// kubectl to work out which area stalled and on which of the four
+			// conditions — and this gate can now actually fail, so that is a question
+			// it has to answer rather than one it can leave open.
+			return fmt.Errorf("not all areas became ready in namespace %q within %s (%d/%d): %s",
+				ns, timeout, ready, total, strings.Join(pending, ", "))
 		}
-		time.Sleep(3 * time.Second)
+		// A local, so the caller's interval is not narrowed permanently by one short
+		// final wait.
+		wait := poll
+		if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
 	}
 }
 

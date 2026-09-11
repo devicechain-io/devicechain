@@ -1810,6 +1810,19 @@ jobs:
       - name: tofu validate
         run: tofu validate
 
+      # The provider's max_history default is 0, which keeps every revision of every
+      # release forever. That is not a setting anyone chose, so a release added
+      # without one is the expected mistake rather than an unusual one. The self-test
+      # runs first: a check that has not been shown to refuse anything cannot
+      # distinguish "nothing to report" from "never looked".
+      - name: helm releases bound their history (self-test)
+        working-directory: ${{ github.workspace }}
+        run: hack/check-helm-release-history.sh --self-test
+
+      - name: helm releases bound their history
+        working-directory: ${{ github.workspace }}
+        run: hack/check-helm-release-history.sh
+
       # `tofu validate` evaluates variables at their DEFAULTS and never runs a
       # validation block, so an inverted or misdirected condition passes every step
       # above. This supplies real values and asserts what is refused and — the
