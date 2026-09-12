@@ -435,7 +435,10 @@ jobs:
           esac
           echo "DC_UPGRADE_MODE=$mode" >> "$GITHUB_ENV"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "Drill for baseline ${DC_BASELINE_TAG}: $mode"
+          # `:-` because the script runs under `set -u`, and the derive step above is
+          # the only thing that sets this. If that ever stops being true, the wrong
+          # failure to get is an unbound-variable abort on the reporting line.
+          echo "Drill for baseline ${DC_BASELINE_TAG:-<unset>}: $mode"
 
       # -------------------------------------------------------------------
       # The drill, one phase per step.

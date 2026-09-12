@@ -238,6 +238,15 @@ A value this rig cannot compare against a baseline would silently pick a drill."
 upgrade_mode() {
   local ceiling lowest
   ceiling="$(recreate_ceiling)"
+  # 🔴 AN EMPTY CEILING IS A POLICY THAT COULD NOT BE READ, NOT A POLICY THAT SAYS
+  # NOTHING. `fail` inside `$(...)` exits the SUBSHELL, so its refusal reaches the log
+  # but this function keeps going with an empty string — and every caller that asks this
+  # question inside a condition has errexit suppressed, so nothing else would stop it
+  # either. Without this line the run continues and picks a drill from a parse that
+  # refused.
+  [[ -n "$ceiling" ]] || fail "the baseline policy could not be read (the refusal is above),
+so no drill can be selected. Refusing rather than choosing one from a value that was
+never parsed."
   [[ "$ceiling" != none ]] || { printf 'data'; return; }
   [[ -n "$baseline_tag" ]] || fail "upgrade_mode was asked before the baseline was resolved;
 without a baseline there is nothing to compare the policy's ceiling against."
@@ -982,7 +991,12 @@ cmd_upgrade() {
   # rather than running and failing. The failure would be real but it would be
   # attributed to the release under test, and the log would read like a defect in
   # `dcctl upgrade` instead of the decision hack/upgrade-baseline-policy records.
-  [[ "$(upgrade_mode)" == data ]] || fail "this release does not upgrade onto $baseline_tag
+  # Captured rather than asked inline: errexit is suppressed for a command substitution
+  # inside `[[ ]]`, so a refusal in upgrade_mode would be reduced to an empty string and
+  # compared, which is the one reading that must never pick a path.
+  local drill
+  drill="$(upgrade_mode)"
+  [[ "$drill" == data ]] || fail "this release does not upgrade onto $baseline_tag
 (hack/upgrade-baseline-policy declares every baseline at or below $(recreate_ceiling)
 recreate-only), so performing the upgrade here would fail for a reason the policy
 already states. Run 'recreate' instead — it drills the refusal an operator on
@@ -1092,7 +1106,9 @@ cmd_recreate() {
   # FALSIFIABLE RATHER THAN MERELY DECLARED. This drill requires a refusal; run it
   # against a baseline that upgrades cleanly and it fails, loudly, naming the policy
   # line that sent it here. That is the check on the file.
-  [[ "$(upgrade_mode)" == recreate ]] || fail "hack/upgrade-baseline-policy does not declare
+  local drill
+  drill="$(upgrade_mode)"
+  [[ "$drill" == recreate ]] || fail "hack/upgrade-baseline-policy does not declare
 $baseline_tag recreate-only (its ceiling is $(recreate_ceiling)), so this baseline is
 expected to upgrade and the refusal this drill requires would be a defect. Run 'upgrade'."
 
@@ -2391,7 +2407,8 @@ all)
   # recreate and `cmd_recreate` fails if it says data, so a dispatch that picked the
   # wrong drill cannot quietly run it.
   resolve_baseline_tag
-  if [[ "$(upgrade_mode)" == recreate ]]; then
+  dispatch_drill="$(upgrade_mode)"
+  if [[ "$dispatch_drill" == recreate ]]; then
     cmd_recreate
     # The recreate drill's "nothing was damaged" claim rests on verify, so verify's
     # ability to fail has to be shown here as well. Its controls are irreversible,
