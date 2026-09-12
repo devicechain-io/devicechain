@@ -80,6 +80,11 @@ lock is keyed by.
 The lock stops two `dcctl` processes from applying at once. It does not make a cluster
 safe to host two DeviceChain instances — today a cluster holds one, and that remains
 true whether or not anyone is holding the lock.
+
+That boundary is held by a different check, one step later: the bootstrap asks the
+cluster whether it already holds a *different* instance and refuses if it does, whatever
+the lock says. See [One instance per
+cluster](./bootstrap.md#what-it-does).
 :::
 
 The lock is a Kubernetes `Lease` named `dcctl`, in the namespace the DeviceChain

@@ -83,6 +83,11 @@ qué instancia está trabajando el titular, pero no es la clave del bloqueo.
 El bloqueo impide que dos procesos `dcctl` apliquen a la vez. No hace que un clúster sea
 apto para alojar dos instancias de DeviceChain: hoy un clúster aloja una, y eso sigue
 siendo cierto haya o no alguien reteniendo el bloqueo.
+
+De ese límite se encarga una comprobación distinta, un paso más tarde: el arranque
+inicial pregunta al clúster si ya aloja una instancia *distinta* y se niega si es así,
+diga lo que diga el bloqueo. Consulta [Una instancia por
+clúster](./bootstrap.md#what-it-does).
 :::
 
 El bloqueo es un `Lease` de Kubernetes llamado `dcctl`, en el namespace donde el operador
