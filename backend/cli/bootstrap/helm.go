@@ -70,6 +70,17 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
+	// WHAT THE RELEASE ALREADY HOLDS, when this run is moving an instance rather than
+	// building one. Read before the values are computed, because some of what it
+	// carries is an INPUT to that computation — see carryForwardFromRelease.
+	var previous map[string]interface{}
+	if st.Evolving {
+		if previous, err = previousReleaseValues(actionConfig); err != nil {
+			return err
+		}
+		carryForwardFromRelease(st, previous)
+	}
+
 	// 🔴 TWO VALUE MAPS, AND THE DIFFERENCE BETWEEN THEM IS THE SLICE. The authoring
 	// values carry the instance's credentials inside instance.config; the install
 	// values carry the NAME of a Secret dcctl wrote instead. Helm records the values
@@ -84,6 +95,12 @@ func helmInstall(ctx context.Context, st *State) error {
 	vals, err := installValuesFor(authoring, st.Instance, doc)
 	if err != nil {
 		return err
+	}
+	// Before the check below rather than after it, so what is validated is what is
+	// installed. A carried block that the chart refuses should fail here, named, and
+	// not ten minutes later as a rollout that never became ready.
+	if st.Evolving {
+		carryReleaseValues(vals, previous)
 	}
 
 	// Check the instance config the chart is about to be handed BEFORE handing it to
@@ -145,6 +162,35 @@ func helmInstall(ctx context.Context, st *State) error {
 
 	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, helmReleaseName, ch, vals)
 	return err
+}
+
+// previousReleaseValues returns the values the release is currently installed with,
+// or nil when there is no release yet.
+//
+// 🔴 THE USER-SUPPLIED VALUES, NOT THE COMPUTED ONES. action.GetValues with AllValues
+// left off returns what was passed IN, which is the only half an upgrade may carry
+// forward: the computed half is the chart's own defaults merged underneath, and
+// carrying those would pin this instance to the defaults of the chart version it was
+// installed with — freezing exactly the thing an upgrade exists to move.
+//
+// 🔑 AND THEY HOLD NO CREDENTIALS, which is what makes reading them safe. The
+// instance's secrets were taken out of the release values when dcctl became the
+// document's author — installValuesFor strips instance.config and leaves a NAME. This
+// reads the map that change created.
+func previousReleaseValues(cfg *action.Configuration) (map[string]interface{}, error) {
+	vals, err := action.NewGetValues(cfg).Run(helmReleaseName)
+	if err == driver.ErrReleaseNotFound {
+		// Not an error here. An instance whose release is gone but whose declaration
+		// and configuration document survive is a real state — a release uninstalled
+		// by hand — and the install branch below rebuilds it. There is simply nothing
+		// to carry.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the values instance's release is currently installed "+
+			"with, which this upgrade has to carry forward: %w", err)
+	}
+	return vals, nil
 }
 
 // newHelmUpgrade builds the upgrade action every re-run of the chart goes through.

@@ -26,29 +26,38 @@ type UpgradeOptions struct {
 	Options
 }
 
-// Upgrade moves the cluster-scoped operator install — namespace, CRDs, RBAC and
-// the controller Deployment — onto a target version.
+// Upgrade moves a live instance onto a release: the cluster-scoped operator
+// install, the configuration document its services read, and the Helm release
+// that runs them.
 //
-// 🔴 THIS EXISTS BECAUSE THE DOCUMENTED UPGRADE CANNOT REACH THE OPERATOR. A
-// release is one version across the service images, the chart, the operator and
-// dcctl, and docs/docs/deployment/releases-and-upgrades.md says so. But the
-// documented procedure is `helm upgrade`, and the operator is not in the chart:
-// stepInstallCore applies it from manifests embedded in this binary, and before
-// this command existed nothing moved it afterwards. An operator who followed the
-// documentation exactly ended up with new services, an indefinitely old
-// controller, and a promise that said otherwise.
+// 🔴 BOOTSTRAP CREATES, UPGRADE EVOLVES, AND THAT SPLIT IS THE POINT. They are not
+// two spellings of one pipeline. A bootstrap composes an instance out of its
+// arguments and mints every credential in it, because none of them exists yet. An
+// upgrade composes a VERSION CHANGE over an instance that already exists, so it
+// reads every credential back and mints none — a database owner's password was set
+// when the Cluster was created and is reconciled by nothing afterwards, and
+// generating a replacement is not an update but a break that reports success.
 //
-// Re-running `bootstrap` was not the answer and must not become the workaround:
-// it rotates every generated credential. The whole point of a separate verb is
-// that it can be run on a live instance with nothing else at stake.
+// 🔴 IT OWNS THE DOCUMENT BECAUSE NOTHING ELSE CAN ANY MORE. `templates/
+// instance-config.yaml` renders the configuration document only `if not
+// .Values.instance.existingSecret`, so from the moment dcctl became that Secret's
+// author, `helm upgrade` — the documented way to move an instance — could move the
+// pods and could no longer move the configuration they mount. A release that added
+// a configuration field would have had no writer at all, silently: the pods keep
+// reading the document they were bootstrapped with.
 //
-// What this deliberately does NOT do:
+// What it deliberately does NOT do:
 //
-//   - It does not touch the Helm release. `helm upgrade` moves the services and
-//     is documented; duplicating it here would give two commands that both claim
-//     to upgrade an instance and disagree about what that means.
-//   - It does not generate, read or rotate a single credential.
-//   - It does not run the infrastructure apply.
+//   - It does not run the infrastructure apply. Two of that apply's inputs cannot
+//     be recovered from the cluster — the endpoint and bucket names of an operator's
+//     own backup destination, and the Grafana SSO client secret's cleartext — so an
+//     upgrade that ran it would either demand them again every time or reconfigure
+//     the instance without them. The apply joins this verb when the chart becomes an
+//     OpenTofu release and the state lives in the cluster.
+//   - It does not change an instance's shape. Profile, topology and areas come from
+//     the declaration, not from flags here: this verb moves a version, and changing
+//     what an instance IS is a different question with different answers (raising
+//     replicas does not re-replicate streams that were created at one).
 //
 // The whole rendered stream is applied, not just the Deployment's image. CRDs are
 // in it, and they are the half with a trap: the API server prunes fields a
@@ -104,6 +113,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 		for _, t := range targets {
 			wouldDo(fmt.Sprintf("apply CRDs/RBAC and set %s/%s to %s", t.namespace, t.name, image))
 		}
+		wouldDo("recompose the instance configuration document from this release's chart, " +
+			"keeping every credential the instance is running on")
+		wouldDo("upgrade the instance's Helm release")
 		return nil
 	}
 
@@ -146,7 +158,42 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	}
 	done()
 
-	fmt.Println(color.HiGreenString("\nOperator upgraded."))
+	// THE SERVICES, AND THE DOCUMENT THEY READ.
+	//
+	// 🔴 THIS IS THE HALF `helm upgrade` CANNOT DO ANY MORE, AND IT IS WHY THIS
+	// COMMAND GREW. Once the release points at a Secret dcctl owns, the chart stops
+	// rendering the instance configuration document — `templates/instance-config.yaml`
+	// is wrapped in `if not .Values.instance.existingSecret`. So the documented
+	// upgrade could still move the pods and could no longer move the configuration
+	// they mount, and a release that ADDED a configuration field would have no writer
+	// at all. Nothing would error: the pods would keep reading the document they were
+	// bootstrapped with.
+	//
+	// It runs AFTER the operator on purpose. The CRDs move with the operator, and a
+	// service rolled onto a new version ahead of the schema it writes is the ordering
+	// that fails; the reverse is a controller that briefly knows about a field
+	// nothing is sending yet.
+	doing("recomposing the instance configuration from this release")
+	st, err := hydrateUpgradeState(ctx, typed, provider, binding, opts)
+	if err != nil {
+		return fail("reading what this instance is running on", err)
+	}
+	st.Evolving = true
+	done()
+
+	if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
+		return helmInstall(ctx, st)
+	}); err != nil {
+		return err
+	}
+
+	doing("waiting for the services to roll over")
+	if err := waitForAreas(ctx, typed, st.Instance, areaReadyTimeout, areaReadyPollInterval); err != nil {
+		return fail("waiting for the services", err)
+	}
+	done()
+
+	fmt.Println(color.HiGreenString("\nInstance upgraded."))
 	for _, t := range targets {
 		was := before[t.String()]
 		switch {
@@ -160,12 +207,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 				color.YellowString(was), color.GreenString(image))
 		}
 	}
-	// Named because this command is half of a procedure and the other half is the
-	// one that moves the data path. An operator who runs only this has upgraded a
-	// controller and nothing else.
+	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
+		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
+	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
+	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
+	// stating is the one an operator would otherwise have to take on trust — that a
+	// version change did not quietly become a credential change.
 	fmt.Println(color.WhiteString(
-		"\nThis moved the operator only. The services are upgraded by `helm upgrade` — see\n" +
-			"docs/docs/deployment/releases-and-upgrades.md for the full procedure."))
+		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
+			"it mints nothing, so nothing here rotated."))
 	return nil
 }
 

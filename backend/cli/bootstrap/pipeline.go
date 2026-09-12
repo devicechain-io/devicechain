@@ -150,6 +150,23 @@ type State struct {
 	// and written by the infrastructure step, which is the only ordering in which
 	// CloudNativePG builds the database role from the same value the services get.
 	Credentials *credentialSet
+	// Evolving says this State describes an instance that already exists and is
+	// being moved, rather than one being built.
+	//
+	// 🔴 IT IS NOT A DRY-RUN-SHAPED CONVENIENCE FLAG. It selects between the two
+	// answers to one question — what happens to a value this run has no opinion
+	// about — and the two verbs need OPPOSITE answers. A bootstrap composes the
+	// whole instance from its arguments, so a value it did not produce is a value
+	// the operator removed: `--lwm2m-identities` left off a re-run is DOCUMENTED to
+	// withdraw the provisioned credentials. An upgrade composes a version change, so
+	// the same silence means "I was not asked about that", and withdrawing on it
+	// would delete every device's PSK on an ordinary version bump.
+	//
+	// So this is read only where that question is actually asked — see
+	// carryForwardFromRelease and carryReleaseValues — and never as a general
+	// "am I an upgrade?" switch. Somewhere that wants to branch on the verb for any
+	// other reason wants a different field, or more likely a different function.
+	Evolving bool
 	// BackupDestination is an off-site archive the operator already owns, read from
 	// --backup-credentials-file. Nil means the in-cluster object store.
 	BackupDestination *BackupDestination
