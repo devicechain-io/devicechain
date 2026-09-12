@@ -14,6 +14,8 @@ var (
 	upgradeRegistry    string
 	upgradeVersion     string
 	upgradeDryRun      bool
+	upgradeEscrowFile  string
+	upgradeEscrowPass  string
 )
 
 // upgradeCmd moves a live instance onto a release's version. It began as the half of
@@ -65,6 +67,8 @@ recorded. Use it to move versions, not to reconfigure.
 				ImageRegistry: upgradeRegistry,
 				ImageVersion:  upgradeVersion,
 			},
+			EscrowFile:           upgradeEscrowFile,
+			EscrowPassphraseFile: upgradeEscrowPass,
 		}
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
@@ -76,6 +80,8 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull from (default: "+bootstrap.DefaultImageRegistry+")")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to (default: this dcctl's pinned version)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
+	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
+	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 
 	rootCmd.AddCommand(upgradeCmd)
 }

@@ -18,12 +18,23 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// UpgradeOptions drives an operator upgrade. It reuses Options for the instance,
-// kube-context and image-source fields; the rest of Options (profile, HA, TLS,
-// escrow, the whole bring-up surface) is deliberately not consulted here — see
-// Upgrade for why this command touches nothing but the operator.
+// UpgradeOptions drives an instance upgrade. It reuses Options for the instance,
+// kube-context and image-source fields; the rest of Options — profile, HA, TLS, the
+// whole bring-up surface — is deliberately not consulted, because an upgrade takes
+// an instance's SHAPE from its declaration rather than from flags. See Upgrade.
 type UpgradeOptions struct {
 	Options
+	// EscrowFile and EscrowPassphraseFile locate the instance's root-key escrow, so
+	// an upgrade can check it still protects the key the instance is running on — and
+	// write one where there is none.
+	//
+	// 🔴 THEY ARE HERE BECAUSE THE RE-RUN THAT USED TO DO THIS IS GONE. An instance
+	// built with --no-escrow could gain an escrow by being bootstrapped again, and
+	// every re-run checked an existing one. Bootstrap refuses to run against a live
+	// instance now, so without these there is no supported way to give a running
+	// instance a second copy of its root key. See reconcileUpgradeEscrow.
+	EscrowFile           string
+	EscrowPassphraseFile string
 }
 
 // Upgrade moves a live instance onto a release: the cluster-scoped operator
@@ -234,6 +245,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
 	// stating is the one an operator would otherwise have to take on trust — that a
 	// version change did not quietly become a credential change.
+	reconcileUpgradeEscrow(st, st.Values["secretsRootKey"], opts)
 	fmt.Println(color.WhiteString(
 		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
 			"it mints nothing, so nothing here rotated."))
