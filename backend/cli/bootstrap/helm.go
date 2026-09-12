@@ -492,16 +492,23 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 	return err
 }
 
-// uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
+// foreignReleaseError is the refusal below, as a value the CALLER can recognise.
 //
-// Separated from helmUninstall so the policy can be exercised without a cluster — the
-// same reason rebuildRefusalReason is separate from its step. A guard whose refusal has
-// only ever been produced by hand on a kind cluster is a guard the next edit removes.
-func uninstallRefusalReason(owner, instance string) error {
-	if owner == instance {
-		return nil
-	}
-	return fmt.Errorf(
+// 🔴 A TYPE RATHER THAN A MESSAGE, BECAUSE ONE CALLER HAS TO ACT ON THIS PARTICULAR
+// REFUSAL AND ON NO OTHER. destroyInstanceOnly answers it by asking whether the instance
+// it was told to destroy has anything in this cluster at all, and that question ends in
+// removing local state — see resolveForeignRelease. A caller that recognised the refusal
+// by matching words in its message would start clearing state the day the wording
+// changed, or the day some unrelated failure happened to contain them. The shape is
+// ErrForeignSecret's, for the same reason.
+type foreignReleaseError struct {
+	// Owner is the instance the installed release belongs to; Instance is the one the
+	// operator named. They are never equal here — an equal pair is not a refusal.
+	Owner, Instance string
+}
+
+func (e *foreignReleaseError) Error() string {
+	return fmt.Sprintf(
 		"the DeviceChain release in this cluster belongs to instance %q, not %q, so uninstalling "+
 			"it would destroy an instance this command did not name. A cluster holds one release "+
 			"(%q in namespace %q) and its name carries no instance, so this is checked rather "+
@@ -510,7 +517,25 @@ func uninstallRefusalReason(owner, instance string) error {
 			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
 			"  `dcctl instances list` shows what dcctl believes it has.",
-		owner, instance, helmReleaseName, helmReleaseNamespace, owner, instance)
+		e.Owner, e.Instance, helmReleaseName, helmReleaseNamespace, e.Owner, e.Instance)
+}
+
+// uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
+//
+// Separated from helmUninstall so the policy can be exercised without a cluster — the
+// same reason rebuildRefusalReason is separate from its step. A guard whose refusal has
+// only ever been produced by hand on a kind cluster is a guard the next edit removes.
+//
+// 🔴 IT RETURNS error, NOT *foreignReleaseError, AND THAT IS NOT A STYLE CHOICE. A
+// function returning the concrete pointer hands its caller a TYPED NIL, which is not
+// nil — so `if err := uninstallRefusalReason(...); err != nil` would refuse every
+// uninstall, including the instance's own, and the negative control below is what would
+// catch it.
+func uninstallRefusalReason(owner, instance string) error {
+	if owner == instance {
+		return nil
+	}
+	return &foreignReleaseError{Owner: owner, Instance: instance}
 }
 
 // releaseInstance reports which instance the installed release belongs to.

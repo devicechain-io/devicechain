@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -86,13 +87,22 @@ func endDestroy(ctx context.Context, claim *Claim, kubeContext, instance string,
 	// passed nothing got the DELETING branch — the exact direction this function
 	// exists to prevent, reachable by omission rather than by decision. Requiring
 	// the pointer makes the safe answer the default.
-	if clusterSurvives && failed != nil && *failed == nil {
+	switch {
+	// 🔴 A THIRD OUTCOME, AND BOTH MESSAGES BELOW ARE FALSE OF IT. When a destroy meets
+	// the foreign-release refusal and establishes that the instance it named has NOTHING
+	// in this cluster, there is no declaration to release — that absence is the very
+	// thing that was established — and nothing was left behind either. The first branch
+	// would warn that the declaration "could not be removed", naming a command that
+	// would also fail; the second would report a destroy that did not finish, when it
+	// finished. Saying nothing is the only true answer.
+	case failed != nil && errors.Is(*failed, errInstanceNotInCluster):
+	case clusterSurvives && failed != nil && *failed == nil:
 		if _, err := ReleaseInstanceDeclaration(ctx, kubeContext, instance); err != nil {
 			fmt.Println(color.YellowString(
 				"warning: the instance was destroyed but its declaration could not be removed (%v).\n"+
 					"  Remove it with `dcctl instances release %s`, which destroys nothing.", err, instance))
 		}
-	} else if clusterSurvives {
+	case clusterSurvives:
 		fmt.Println(color.YellowString(
 			"the declaration for %q was left in place because this destroy did not finish.\n"+
 				"  It still records which cluster the instance lives in, which is what a re-run needs.", instance))
