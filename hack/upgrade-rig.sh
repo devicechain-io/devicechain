@@ -70,21 +70,30 @@
 #
 # WHY THE UPGRADE IS RUN THE DOCUMENTED WAY
 #
-# The v0.11.0 drill found that the upgrade command the documentation gave could
-# not work: Helm reuses a release's stored values only when an upgrade passes NONE
-# of its own, so the single `--set image.tag=…` that IS the upgrade silently threw
-# away everything bootstrap had generated — the root key, the cross-service auth
-# secret, the NATS credential. The procedure was rewritten around
-# `helm get values`, and this rig runs THAT, so the documented procedure and the
-# tested one cannot drift apart.
+# The documented upgrade is ONE command, `dcctl upgrade`, and this rig runs that
+# — so the documented procedure and the tested one cannot drift apart.
+#
+# 🔴 THEY DID DRIFT, WHICH IS WHY THIS PARAGRAPH NAMES THE MECHANISM RATHER THAN
+# ASSERTING THE PROPERTY. This rig ran `helm get values` + `helm upgrade` for the
+# services and `dcctl upgrade` for the operator, for one release after the docs
+# stopped describing that — while three comments in this file said running it
+# here was what kept the two identical. A gate that asserts it is in sync is
+# worse than one that says nothing, because the assertion tells the next reader
+# not to check. What makes the claim true is that the ONLY upgrade action below
+# is the command the documentation gives; there is no second path to drift from.
+#
+# The history is worth keeping, because it is why the procedure has moved twice.
+# The v0.11.0 drill found that the documented command could not work: Helm reuses
+# a release's stored values only when an upgrade passes NONE of its own, so the
+# single `--set image.tag=…` that IS the upgrade silently threw away everything
+# bootstrap had generated — the root key, the cross-service auth secret, the NATS
+# credential. That produced the `helm get values` procedure. Then dcctl became the
+# author of the instance configuration document, which took the document out of
+# the chart's manifest and left `helm upgrade` unable to move it; `dcctl upgrade`
+# grew to cover the whole procedure, and the two-step form was withdrawn.
 #
 # WHAT A GREEN RUN DOES NOT MEAN, and these matter:
 #
-#   - The operator is NOT upgraded. `helm upgrade` deploys the chart, and the
-#     controller (backend/k8s) is installed by dcctl outside it — so this drill
-#     leaves the baseline release's operator reconciling the new release's
-#     services, which is exactly what an operator following the documented
-#     procedure gets. If that is wrong, it is wrong in the docs too.
 #   - Nothing here is upgraded UNDER LOAD. No device is connected, no telemetry
 #     flows, nothing is in flight when the rollout happens. Zero-downtime is a
 #     separate claim and this is not evidence for it.
@@ -256,7 +265,6 @@ apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
 sweep_receipt="$work/receipt-coverage.json"
 pf_log="$work/port-forward.log"
-values_file="$work/values.yaml"
 # What the upgrade moved TO — registry on line 1, tag on line 2. Written by
 # `upgrade` and read by `operator`, so the operator check measures against the
 # version this run actually deployed rather than against one it assumes.
@@ -351,14 +359,21 @@ DC_BASELINE_TAG to the release being upgraded FROM."
     # half of the rule the baseline half already follows — the baseline is installed
     # by its OWN dcctl, carrying its OWN chart, for exactly this reason.
     #
-    # `helm upgrade` here deploys the WORKING TREE's chart. Point that at some other
-    # release's images and the new chart renders instance config those older binaries
-    # have never seen; typed configuration is fail-closed, so they reject it and
-    # crash-loop. That is not an upgrade — it is a combination no operator has ever
-    # run, failing for a reason that has nothing to do with the release.
+    # The upgrade below runs the WORKING TREE's dcctl, which carries the working
+    # tree's chart embedded in it. Point that at some other release's images and the
+    # new chart renders instance config those older binaries have never seen; typed
+    # configuration is fail-closed, so they reject it and crash-loop. That is not an
+    # upgrade — it is a combination no operator has ever run, failing for a reason
+    # that has nothing to do with the release.
+    #
+    # 🔴 THE CHART STILL HAS TO BE COMPARED FROM THE TREE, THOUGH DCCTL NOW CARRIES
+    # IT. The chart is no longer read off disk at upgrade time, so it is tempting to
+    # think the tree comparison stopped applying. It did not: `build_target_dcctl`
+    # builds from this tree, so the embedded chart IS the tree's chart, and the
+    # mismatch this guard refuses is reachable by exactly the same route.
     #
     # MEASURED, not theorised: a run pairing HEAD's chart with v0.11.0's images spent
-    # the full 20-minute `helm --wait` before dying on a crash-looping
+    # the full 20-minute rollout wait before dying on a crash-looping
     # device-management. Twenty minutes to learn what a tree hash answers instantly.
     #
     # 🔴 An unreachable tag is REFUSED, not skipped. Waving the comparison through
@@ -401,12 +416,14 @@ release pipeline does), or drill the build path instead."
   esac
 }
 
-# The values file carries the instance root key and every generated credential.
-# It exists only for the seconds between `helm get values` and `helm upgrade`, and
-# it is removed however the run ends — including on a failed upgrade, where the
-# temptation to leave it "for debugging" is exactly how a root key ends up in a
-# home directory for a year.
-trap 'rm -f "$values_file"' EXIT
+# 🔴 NO CREDENTIAL REACHES THE DISK IN THIS RIG ANY MORE, AND THAT IS A PROPERTY
+# TO KEEP RATHER THAN A CLEANUP TO MAINTAIN. The two-step procedure wrote the
+# release's values — the instance root key among them — to $work/values.yaml for
+# the seconds between `helm get values` and `helm upgrade`, and needed an EXIT
+# trap so that a run dying mid-upgrade did not leave a root key in a home
+# directory for a year. `dcctl upgrade` reads what it needs from the cluster and
+# writes none of it out, so the file, its umask, and the trap are all gone. Do not
+# reintroduce a values file here without reintroducing the trap with it.
 
 # ---------------------------------------------------------------------------
 # building
@@ -683,8 +700,8 @@ create_cluster() {
 # and reads as an answer), and treating 404 as a RETRY, because ingress-nginx
 # serves its default backend until the route is admitted.
 #
-# It matters twice as much here as in a bring-up rig: after `helm upgrade` the old
-# pods are still terminating, and a verify that raced the rollout would read the
+# It matters twice as much here as in a bring-up rig: when the upgrade returns the
+# old pods are still terminating, and a verify that raced the rollout would read the
 # OLD version and report a pass that means nothing.
 wait_for_api() {
   local area="$1" url code waited=0
@@ -799,10 +816,10 @@ cmd_upgrade() {
     say "upgrading to the PUBLISHED images $target_registry/*:$target_tag"
     note "nothing is built here — these are the bytes an operator installs"
     # 🔴 The in-cluster pull is ANONYMOUS. Every one of this tag's ghcr packages
-    # has to be public or the rollout dies in ImagePullBackOff — which `helm
-    # --wait` reports as a plain timeout, indistinguishable from a workload that
-    # crash-looped on the new config. Named here because the release that adds a
-    # NEW service module pushes it private by default, and this is where that
+    # has to be public or the rollout dies in ImagePullBackOff — which the upgrade's
+    # rollout wait reports as a plain timeout, indistinguishable from a workload
+    # that crash-looped on the new config. Named here because the release that adds
+    # a NEW service module pushes it private by default, and this is where that
     # first shows up.
     note "the pull is anonymous — every package for $target_tag must be public"
   else
@@ -813,56 +830,11 @@ cmd_upgrade() {
   fi
   printf '%s\n%s\n' "$target_registry" "$target_tag" >"$target_file"
 
-  # THE DOCUMENTED PROCEDURE. docs/deployment/releases-and-upgrades tells an
-  # operator to write the release's values out and pass them back with -f, because
-  # Helm reuses stored values ONLY when an upgrade passes none of its own — and the
-  # one `--set` that changes the version is enough to throw away everything
-  # bootstrap generated. Running it here is what keeps the documented procedure and
-  # the tested one from drifting apart.
-  say "carrying the release's values forward"
-  rm -f "$values_file"
-  (
-    umask 077
-    helm --kube-context "$kube_context" get values dc -n default -o yaml >"$values_file"
-  )
-  # `helm get values` prints "null" for a release with none, and an empty or null
-  # file passed with -f would render the chart from its DEFAULTS — the exact
-  # failure the procedure exists to prevent, arrived at by a different road. The
-  # root key is checked by name because it is the value whose loss the chart
-  # refuses to render without, and therefore the one this file exists to carry.
-  [[ -s "$values_file" ]] || fail "helm get values wrote nothing; there is no release 'dc' to upgrade"
-  grep -q 'rootKey' "$values_file" ||
-    fail "the values carried forward hold no instance root key. Upgrading with these
-would render the chart from its defaults and lose every generated credential —
-which is the exact failure this procedure exists to prevent."
-
-  say "helm upgrade → the working tree's chart and images"
-  helm --kube-context "$kube_context" upgrade dc "$repo_root/deploy/helm/devicechain" \
-    -n default -f "$values_file" \
-    --set image.registry="$target_registry" --set image.tag="$target_tag" \
-    --wait --timeout 20m ||
-    fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
-running the documented procedure would see exactly this. Read helm's output above —
-a render error names the value the new chart requires and the old release does not
-carry; a wait timeout means a workload never became ready, and its logs will say
-whether it was the migration or the config."
-
-  # Deleted HERE, not left to the EXIT trap. The trap is the backstop for a run
-  # that dies mid-upgrade; on the happy path `all` continues into verify and
-  # control, and leaving the root key on disk for the rest of a drill is not what
-  # "it exists for the seconds between two commands" describes.
-  rm -f "$values_file"
-
-  # The upgrade's exit status is not evidence that the API is serving again:
-  # --wait returns when the workloads report Ready, and the ingress still has to
-  # pick the new pods up as healthy upstreams.
-  wait_for_every_api
-
-  # THE SECOND HALF OF THE DOCUMENTED PROCEDURE. `helm upgrade` cannot reach the
-  # operator — it is not in the chart — so an upgrade that stops at the line above
-  # leaves the cluster on the controller it was bootstrapped with. That was a real
-  # release defect, found by this drill; `dcctl upgrade` is the fix and running it
-  # here is what keeps the documented procedure and the tested one identical.
+  # THE DOCUMENTED PROCEDURE, AND ALL OF IT. One command moves the operator, the
+  # instance configuration document and the release together. There is deliberately
+  # no second upgrade action in this function: the previous two-step form is what
+  # let the rig and the documentation drift, and a single call cannot drift from
+  # itself.
   #
   # 🔴 IT IS RUN HERE, NOT IN `cmd_operator`. The operator check must MEASURE, and
   # a check that performed the upgrade it then asserts would pass unconditionally
@@ -870,17 +842,23 @@ whether it was the migration or the config."
   # by. Keeping the action in `upgrade` and the assertion in `operator` is what
   # makes the assertion capable of failing.
   build_target_dcctl
-  say "dcctl upgrade → moving the operator (CRDs + RBAC + controller) to $target_tag"
+  say "dcctl upgrade → operator, instance configuration and services to $target_tag"
   "$target_dcctl" upgrade local "$instance" \
     --kube-context "$kube_context" \
     --registry "$target_registry" --version "$target_tag" ||
-    fail "\`dcctl upgrade\` FAILED. The services are now on $target_tag and the operator
-is not, which is the exact state this drill exists to refuse. An operator running
-the documented procedure would be here too. Read the output above: an image that
-cannot be pulled leaves the controller crash-looping on the new tag, while an
-apply error names the object the cluster refused."
+    fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
+running the documented procedure would see exactly this. Read the output above — it
+names the phase it stopped in. A render error names the value this release's chart
+requires and the composition did not supply; a rollout timeout means a workload never
+became ready, and its logs will say whether it was the migration or the config; an
+image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag."
 
-  say "UPGRADED — $target_registry/*:$target_tag is serving, from the release's own values"
+  # The upgrade's exit status is not evidence that the API is serving again: it
+  # returns when the workloads report Ready, and the ingress still has to pick the
+  # new pods up as healthy upstreams.
+  wait_for_every_api
+
+  say "UPGRADED — $target_registry/*:$target_tag is serving, from the instance's own credentials"
 }
 
 # ---------------------------------------------------------------------------
@@ -1439,15 +1417,16 @@ in either direction."
 }
 
 # ---------------------------------------------------------------------------
-# operator — the half of the release `helm upgrade` cannot reach
+# operator — the half of the release that is not in the chart
 # ---------------------------------------------------------------------------
 #
 # docs/docs/deployment/releases-and-upgrades.md tells an operator that one version
 # covers "each service image, the operator, the Helm chart, and dcctl", and that
-# there is "no per-service version skew to reason about". The documented upgrade
-# is a `helm upgrade` — and the operator is NOT IN THE CHART. dcctl applies it
-# from its own embedded manifests (backend/cli/bootstrap/steps.go renders
-# backend/k8s's overlay), so nothing Helm does can move it.
+# there is "no per-service version skew to reason about". The operator is NOT IN
+# THE CHART — dcctl applies it from its own embedded manifests
+# (backend/cli/bootstrap/steps.go renders backend/k8s's overlay) — so it is the
+# half of that promise most able to be quietly left behind, which is what this
+# phase measures.
 #
 # 🔴 THIS PHASE WAS BUILT KNOWING IT WOULD FAIL, AND THAT IS WHY THE FIX EXISTS.
 # When it was written there was no way to move the operator at all, and no other
@@ -1461,7 +1440,7 @@ in either direction."
 # rendering it, so `helm upgrade` can no longer move it either; `dcctl upgrade`
 # now moves the operator, the document and the release together, reading every
 # credential the instance is running on rather than minting any. `cmd_upgrade`
-# still drives both halves, and this phase measures the result.
+# drives that one command, and this phase measures its result.
 #
 # It still carries its own exit code, and the reason has outlived the finding: a
 # workflow reading `exit 20` knows the release has a version-skew defect, as

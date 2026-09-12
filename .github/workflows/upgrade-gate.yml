@@ -27,13 +27,18 @@
 # operator actually installs. (The in-cluster pull is anonymous, so that tag's ghcr
 # packages must be public; a private one surfaces here as a helm --wait timeout.)
 #
-# 🔴 THE `operator` STEP IS EXPECTED TO FAIL UNTIL THE OPERATOR GAP IS CLOSED.
-# It is not a flake and it is not this workflow being wrong. The documented upgrade
-# is a `helm upgrade`, the operator is not in the chart, and no dcctl subcommand
-# moves it — while the documentation promises one version covering the services,
-# the operator, the chart and the CLI together with no skew to reason about. The
-# drill exits 3 for exactly this and nothing else, so the summary can name the
-# finding rather than reporting "the drill failed". See the step's own comment.
+# 🔴 THE `operator` STEP IS NO LONGER EXPECTED TO FAIL, AND THIS PARAGRAPH USED TO
+# SAY THE OPPOSITE. The gap it described was real: the documented upgrade was a
+# `helm upgrade`, the operator is not in the chart, and for a while no dcctl
+# subcommand moved it, so the step was red by design. `dcctl upgrade` closed that
+# — it moves the operator, the instance configuration document and the release
+# together — and the drill now runs exactly that one command.
+#
+# 🔴 SO A RED HERE IS A REGRESSION, NOT THE KNOWN GAP, AND THE DISTINCTION IS THE
+# WHOLE VALUE OF THIS STEP. While the text above still said "expected", a genuine
+# failure to move the operator would have been read as the documented condition and
+# waved through. The drill exits 3 for this finding and nothing else, so the summary
+# can name it rather than reporting "the drill failed". See the step's own comment.
 #
 # Tools beyond the runner defaults (docker, kubectl, helm, git, curl are
 # preinstalled): kind and tofu always; ko + a frontend docker build on the --build
@@ -461,18 +466,18 @@ jobs:
       - name: Negative controls -- break the instance three ways, require the right check to notice
         run: hack/upgrade-rig.sh control
 
-      # 🔴 EXPECTED RED, AND NOT A FLAKE. The documented upgrade is a
-      # `helm upgrade`; the operator is applied by dcctl from its own embedded
-      # manifests and is not in the chart; no dcctl subcommand moves it afterwards
-      # and re-running bootstrap rotates every generated credential. Meanwhile
-      # docs/docs/deployment/releases-and-upgrades.md promises one version covering
-      # the services, the operator, the chart and the CLI, with no per-service skew
-      # to reason about. An operator following the documentation exactly ends up
-      # with new services and an old controller.
+      # 🔴 THIS MUST BE GREEN NOW, AND IT WAS RED BY DESIGN FOR A RELEASE. The
+      # operator is applied by dcctl from its own embedded manifests and is not in
+      # the chart, so while the documented upgrade was a `helm upgrade` nothing moved
+      # it — and docs/docs/deployment/releases-and-upgrades.md promised one version
+      # covering the services, the operator, the chart and the CLI with no skew. An
+      # operator following the documentation exactly ended up with new services and
+      # an old controller. This step said so out loud on the release path rather than
+      # leaving it as a comment in the rig, and `dcctl upgrade` is what that produced.
       #
-      # This step exists to say that out loud on the release path rather than leave
-      # it as a comment in the rig. It stays red until the chart takes the operator,
-      # or dcctl grows an upgrade path, or the documentation stops making the claim.
+      # The upgrade step above now runs that single command, which moves all three
+      # together. So a red here means the fix did not hold — read it as a defect in
+      # this release, not as the condition this step was born describing.
       #
       # Exit 3 means THIS finding and only this finding; anything else from the step
       # is the check failing to run, which the rig reports separately and never
@@ -508,13 +513,16 @@ jobs:
               printf 'Every seeded row survived: the data half of this drill passed. What failed is\n'
               printf 'the operator check, and it is a **finding about the release**, not a broken rig.\n\n'
               printf 'The operator is not in the chart -- dcctl applies it from its own embedded\n'
-              printf 'manifests, so no **helm upgrade** can move it. **dcctl upgrade** is what does,\n'
-              printf 'and it moves the instance configuration document and the release with it.\n'
-              printf 'Meanwhile the deployment documentation promises one version covering the\n'
-              printf 'services, the operator, the chart and the CLI together, with no per-service\n'
-              printf 'skew to reason about.\n\n'
-              printf 'Closing it means the chart takes the operator, or dcctl grows an upgrade path,\n'
-              printf 'or the documentation stops making the claim. The step log names the images.\n'
+              printf 'manifests. **dcctl upgrade** is what moves it, together with the instance\n'
+              printf 'configuration document and the release, and the upgrade step above ran exactly\n'
+              printf 'that one command. Meanwhile the deployment documentation promises one version\n'
+              printf 'covering the services, the operator, the chart and the CLI together, with no\n'
+              printf 'per-service skew to reason about.\n\n'
+              printf 'Read this as a **regression**, not as a known gap -- the gap this check was\n'
+              printf 'born describing is closed. Either the operator image for this tag was never\n'
+              printf 'published or is not public and the new pod is stuck pulling, or the upgrade\n'
+              printf 'applied a Deployment other than the one measured. The step log names the\n'
+              printf 'images.\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
