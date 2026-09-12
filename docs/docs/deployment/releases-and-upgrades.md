@@ -24,7 +24,7 @@ anything else.
 
 :::caution Crossing v0.12.0 needs a few changes first
 `v0.12.0` upgrades in place, but it changes the topic a device answers a command on, moves
-one permission, and changes several things whose shape stayed the same. A `helm upgrade`
+one permission, and changes several things whose shape stayed the same. The upgrade
 will report success either way. Read
 [v0.12.0 — an upgrade that changes contracts](#v0120-upgrade) before you start.
 
@@ -39,8 +39,9 @@ Every release is a single semantic-version git tag (`vX.Y.Z`). That one version 
 `dcctl` CLI are all published at the same version. There is no per-service version skew to
 reason about: a deployment is one coherent number.
 
-Keeping it that way takes two commands rather than one, because the operator is not part of
-the chart — see [Zero-downtime upgrades](#zero-downtime-upgrades) for the procedure.
+One command moves all of it together — the operator is not part of the chart, so something
+outside the chart has to be the thing that moves both. See
+[Zero-downtime upgrades](#zero-downtime-upgrades) for the procedure.
 
 - **Stable releases** are `vX.Y.Z` (e.g. `v1.2.0`). The `:latest` tag tracks the most
   recent stable release.
@@ -128,17 +129,16 @@ The chart is also listed on
 [Artifact Hub](https://artifacthub.io/packages/helm/devicechain/devicechain), which
 shows every published version alongside its default values and rendered templates.
 
-## Zero-downtime upgrades {#zero-downtime-upgrades}
+### Upgrading a chart-only install {#chart-only-upgrade}
 
-Upgrading to a new version is **two commands**, and the chart and services are built to roll
-customers forward without dropping traffic. Three releases so far are exceptions, all
-documented below: the durable-ingest cutover, which is still an ordinary upgrade but has a
-visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be upgraded into at all**.
-Check the release notes for the version you are moving to before running them:
+An instance installed with `helm install` rather than `dcctl bootstrap` is upgraded with
+`helm upgrade`, and it keeps a trap the `dcctl` path does not have.
+
+`dcctl upgrade` does not apply to it. That command reads an instance's declaration and its
+configuration document back out of the cluster, and a chart-only install has neither; it
+also installs no operator, so there is no second half for anything to move.
 
 ```bash
-# 1. The services. Carry the current release's values forward, then change only
-#    the version. This file contains your instance's secrets — delete it when done.
 helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
@@ -146,58 +146,133 @@ helm upgrade dc deploy/helm/devicechain \
   -f dc-values.yaml \
   --set image.tag=<new-version>
 
-rm dc-values.yaml
-
-# 2. The operator. Not part of the chart, so `helm upgrade` cannot move it.
-dcctl upgrade local devicechain --version <new-version>
+rm dc-values.yaml   # this file holds your instance's secrets
 ```
 
-:::warning Both steps, every time — the second one is not optional
-The operator (its CRDs, RBAC and controller) is **not installed by the Helm chart**. `dcctl`
-applies it from manifests embedded in the binary, so `helm upgrade` has no way to reach it,
-and an upgrade that stops after step 1 leaves your instance running the new services against
-the controller it was first bootstrapped with — indefinitely, and with no error to tell you.
-
-`dcctl upgrade` touches nothing else. It does not run the Helm upgrade, does not apply the
-infrastructure stack, and **does not generate, read or rotate any credential**, so it is safe
-on a live instance.
-
-Re-running `dcctl bootstrap` is also safe for credentials, and this page used to say otherwise.
-A re-run **reuses** what the instance already holds: it reads the running instance's
-configuration and keeps the existing root key, broker passwords, callout seed and service-auth
-secret rather than minting new ones. The one exception is the single sign-on client secret,
-which is deliberately re-minted on every run and has both of its halves updated together.
-
-:::warning A re-run is not a way to rotate credentials
-Because a re-run reuses them, it does not rotate anything except the single sign-on client
-secret. If you need to change a credential, a re-run will not do it — and for several of them
-there is no supported procedure today.
-:::
-
-Pass the same version to both steps. Run `dcctl upgrade` with `--dry-run` first if you want to
-see exactly which objects it would move.
-:::
-
 :::warning Carry the values forward — `--set image.tag=…` on its own will not work
-Your instance's values are not all typed by hand. `dcctl bootstrap` generates several and
-stores them in the release — among them the instance root key, the cross-service auth secret,
-the NATS service credential and callout issuer seed, and the broker's CA.
+Helm's rule is the trap. An upgrade that passes **no** values at all reuses the ones already
+in the release. But the moment you pass *any* value — including the single `--set` that
+changes the version, which is the whole point of an upgrade — Helm starts from the chart's
+defaults instead, and everything you set at install time is gone. That includes the instance
+root key, without which the stored secrets of a running instance cannot be read.
 
-Helm's rule is the trap here. An upgrade that passes **no** values at all reuses the ones
-already in the release. But the moment you pass *any* value — including the single `--set`
-that changes the version, which is the whole point of an upgrade — Helm starts from the
-chart's defaults instead, and everything `dcctl bootstrap` generated is gone.
-
-Nothing is corrupted when that happens, because the chart refuses to render without the root
+Nothing is corrupted when it happens, because the chart refuses to render without the root
 key:
 
 ```
 Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
-The fix is the `helm get values` step above. `--reuse-values` also works, but it silently
-keeps stale entries when the chart's own defaults move between versions, so prefer writing the
-values out and passing them with `-f`, where you can see them.
+`--reuse-values` also works, but it silently keeps stale entries when the chart's own
+defaults move between versions, so prefer writing the values out and passing them with `-f`,
+where you can see them.
+:::
+
+## Zero-downtime upgrades {#zero-downtime-upgrades}
+
+Upgrading an instance you bootstrapped is **one command**, and the chart and services are
+built to roll customers forward without dropping traffic. Three releases so far are
+exceptions, all documented below: the durable-ingest cutover, which is still an ordinary
+upgrade but has a visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be upgraded
+into at all**. Check the release notes for the version you are moving to before running it:
+
+```bash
+dcctl upgrade local devicechain --version <new-version>
+```
+
+A release is one version across the service images, the chart, the operator and `dcctl`, and
+that command moves all of them together, in the order they have to move in:
+
+1. **the operator** — its namespace, CRDs, RBAC and controller, applied from manifests
+   embedded in `dcctl`. It is not part of the Helm chart, so nothing inside the chart can
+   reach it. The whole rendered stream is applied rather than just the controller's image,
+   because the CRDs are in it: a schema left at the version the instance was bootstrapped at
+   silently discards any field a later release added;
+2. **the configuration document** every service reads its credentials and endpoints from,
+   recomposed from this release's chart and written by `dcctl`, which owns it;
+3. **the Helm release** that runs the services, which rolls them onto the new images and
+   waits for each area to finish.
+
+Run it with `--dry-run` first if you want to see what it would move. It takes the target
+cluster from the instance's own record rather than guessing, and says which.
+
+:::tip It reads every credential and mints none
+`dcctl upgrade` keeps what the instance is running on: the database owner passwords, the
+broker's authority and logins, the cross-service secret, the secret-store root key, and the
+single sign-on client secret. A version change cannot become a credential change.
+
+This is verified rather than asserted. An upgrade of a running instance was checked by
+comparing a digest of every one of those credentials before and after, and the only thing
+that had changed was the image tag — on every service, the console and the operator.
+:::
+
+:::warning An upgrade is not a way to rotate credentials
+Because it keeps them by design, it rotates nothing. If you need to change a credential, an
+upgrade will not do it — and for several of them there is no supported procedure today.
+:::
+
+:::note It moves a version, not an instance's shape
+The profile, the topology and the enabled functional areas come from the instance's own
+declaration — what `dcctl bootstrap` recorded in the cluster — not from flags typed here.
+Changing what an instance *is* is a different question with different answers: raising the
+replica count, for one, does not re-replicate messaging streams that were created at the old
+one.
+
+Two things are deliberately outside this command as well. It does not run the infrastructure
+apply, because two of that apply's inputs cannot be recovered from the cluster — the endpoint
+and bucket names of an off-site backup destination, and the single sign-on client secret's
+cleartext. And it does not touch the databases beyond letting the services run their own
+migrations.
+:::
+
+### What else an upgrade checks {#upgrade-checks}
+
+Two things ride along with it, because a version bump is the thing that reliably happens to a
+live instance and a calendar is not.
+
+**The broker's certificate.** The messaging broker serves a certificate valid for a year,
+issued by an authority `dcctl` mints at bootstrap and keeps in the cluster. An upgrade
+re-issues that certificate when it is inside its last 30 days, or when it no longer covers
+every name the brokers dial each other by — which is what scaling an instance up does to a
+certificate that is otherwise still comfortably in date. The re-issue is under the **same**
+authority, so nothing has to re-trust anything, and the broker is restarted so that it
+actually serves the new certificate rather than holding the old one until something unrelated
+rolls it. Outside those conditions the check runs and does nothing.
+
+An instance bootstrapped before `dcctl` kept that authority cannot have its certificate
+re-issued in place. The upgrade says so and continues rather than failing; recreating the
+instance is what mints a fresh authority and certificate.
+
+**The root-key escrow.** Every upgrade checks that the escrow artifact for this instance
+still protects the key the instance is actually running on. That check needs **no
+passphrase** — the artifact records a fingerprint of the key it protects, so matching it
+against the running one opens nothing.
+
+| What it finds | What it does |
+|---|---|
+| The artifact protects the running key | Says so, and leaves it alone |
+| The artifact protects a **different** key | Warns loudly. It most often belongs to an earlier instance of the same name, and restoring from it would recover a cluster that cannot read its own secrets |
+| There is no artifact | Writes one, if you passed `--escrow-passphrase-file` (or set `DCCTL_ESCROW_PASSPHRASE`). Otherwise it warns that the only copy of the root key is inside the cluster |
+
+This is how an instance first created with `--no-escrow` gains an escrow later. None of these
+outcomes fails the upgrade: an escrow problem is about a future disaster and the upgrade in
+front of it is about the running instance, and an operator who cannot upgrade will work around
+the check rather than fix it.
+
+:::note This used to be two commands, one of them a `helm upgrade`
+The procedure was: write the current release's values to a file with `helm get values`, pass
+them back with `-f` alongside the new image tag, delete the file because it held your secrets,
+and then run `dcctl upgrade` a second time for the operator.
+
+That dance existed only because the Helm release was where the instance's generated
+credentials lived, and Helm starts from the chart's defaults the moment you pass it any value
+at all — so an upgrade that did not carry them forward by hand lost them. `dcctl` owns the
+configuration document now, the release no longer holds those credentials, and the step that
+told you to write your secrets to a file simply goes.
+
+It also closes a gap the two-command form had: an upgrade that stopped after the `helm` half
+left the new services running against the controller the instance was first bootstrapped
+with — indefinitely, and with no error to say so.
 :::
 
 What makes the rollout safe:
@@ -232,7 +307,7 @@ area with more than one replica, so node drains can't evict every replica at onc
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
 
-`v0.9.0` is the **first** of the two releases that cannot be reached with `helm upgrade`
+`v0.9.0` is the **first** of the two releases that cannot be reached by upgrading in place
 (the other is [`v0.10.0`](#v0100-event-key)).
 
 Before it, each service's schema was built by a chain of migrations applied in order. `v0.9.0`
@@ -274,7 +349,7 @@ before upgrading rather than assuming from the version number.
 
 ### The v0.10.0 event key change {#v0100-event-key}
 
-`v0.10.0` is the second release that **cannot be reached with `helm upgrade`**, for a
+`v0.10.0` is the second release that **cannot be reached by upgrading in place**, for a
 different reason from the squash.
 
 An event was identified by the combination of its tenant, device, type and timestamp. That
@@ -315,7 +390,7 @@ Two changes to how the API reports time come with it, and neither needs any acti
 
 ### v0.11.0 — a normal upgrade again {#v0110-upgrade}
 
-`v0.11.0` is the first release since `v0.8.5` that can be reached with `helm upgrade`. Its
+`v0.11.0` is the first release since `v0.8.5` that can be reached in place. Its
 schema change **adds** three migrations rather than replacing a baseline, so an existing
 `v0.10.0` database is carried forward with its rows intact instead of having to be recreated.
 
@@ -357,13 +432,13 @@ Four limits, stated plainly:
 
 ### v0.12.0 — an upgrade that changes contracts {#v0120-upgrade}
 
-`v0.12.0` is reachable with `helm upgrade`. Its schema change **adds** migrations rather
+`v0.12.0` is reachable in place. Its schema change **adds** migrations rather
 than replacing a baseline, so an existing `v0.11.0` database is carried forward with its
 rows intact, and this was measured on a running instance rather than reasoned about.
 
 What it does change is **contracts** — the MQTT topic a device answers a command on, a
 handful of GraphQL operations, and the meaning of several things whose shape did not
-change at all. None of that is visible in a `helm upgrade` that reports success, so read
+change at all. None of that is visible in an upgrade that reports success, so read
 this section before you run it.
 
 #### Do these before you upgrade
@@ -456,7 +531,7 @@ are now refused outright. Send `"17"`.
 services are handed now has the coordinate for any functional area this deployment did not
 enable removed from it. On a deployment without `ai-inference` — which is every profile
 except `full` — that changes the document's bytes and therefore the checksum annotation
-that rolls pods, so the `helm upgrade` restarts every service rather than only the ones
+that rolls pods, so the upgrade restarts every service rather than only the ones
 whose image moved. It is a normal rolling update and needs nothing from you; it is here so
 that a full roll does not read as a symptom.
 
@@ -645,7 +720,7 @@ knowing about before the symptom reaches a screen.
 #### Bootstrap and the CLI
 
 These reach an instance through `dcctl bootstrap` and the infrastructure apply rather than
-through `helm upgrade`, so none of them lands during the upgrade above. They are here because
+through the release, so none of them lands during the upgrade above. They are here because
 each is a change in what goes wrong.
 
 **A broker configuration change now restarts the broker.** `nats-server` cannot hot-reload its
@@ -717,7 +792,7 @@ service pod as benign, this is the release where the underlying failure starts r
 
 ### v0.12.1 — a patch, nothing to do {#v0121-upgrade}
 
-`v0.12.1` is a plain `helm upgrade` from `v0.12.0`. It adds no migration, so the database is
+`v0.12.1` is an ordinary in-place upgrade from `v0.12.0`. It adds no migration, so the database is
 untouched, and it changes no API, topic, permission or configuration key — everything the
 v0.12.0 section above describes is still exactly what you are running.
 
@@ -735,7 +810,7 @@ Two fixes are worth knowing about:
 
 ### v0.13.0 — geofence limits become part of your plan {#v0130-upgrade}
 
-`v0.13.0` is a plain `helm upgrade`, and it changes no topic, permission or configuration key.
+`v0.13.0` is an ordinary in-place upgrade, and it changes no topic, permission or configuration key.
 
 It does change the database, additively: it creates one table for geofence shapes, adds three
 nullable columns to the tenant record, and rewrites stored geofence history into the new form
@@ -782,7 +857,7 @@ refused.
 
 ### v0.14.0 — the packages you build against {#v0140-upgrade}
 
-`v0.14.0` is a plain `helm upgrade` from `v0.13.x`. It adds no migration, so the database is
+`v0.14.0` is an ordinary in-place upgrade from `v0.13.x`. It adds no migration, so the database is
 untouched, and it changes no API, topic, permission or configuration key. **If you only run the
 platform, there is nothing to do.**
 
@@ -837,7 +912,7 @@ caveat above continues to apply to them and only to them.
 
 ### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
 
-`v0.15.0` is a plain `helm upgrade` from `v0.14.x`. The new migrations run themselves as the
+`v0.15.0` is an ordinary in-place upgrade from `v0.14.x`. The new migrations run themselves as the
 services start, there is nothing to recreate, and no data needs moving by hand.
 
 The breaking changes are in the **API** and in **outbound network access**, not in the upgrade
@@ -956,7 +1031,7 @@ your own code sends update mutations through them, though, that code is yours to
 
 ### v0.16.0 — devices must name the dispatch they are answering {#v0160-upgrade}
 
-`v0.16.0` is a plain `helm upgrade` from `v0.15.x`. One new migration runs itself as
+`v0.16.0` is an ordinary in-place upgrade from `v0.15.x`. One new migration runs itself as
 `command-delivery` starts — it adds a column with a default, backfills existing rows in the same
 statement, and needs nothing from you.
 
@@ -1133,7 +1208,7 @@ device telemetry: instead of subscribing to the broker as an MQTT client, it con
 durable capture stream that the broker writes to before it acknowledges the device. This
 is what stops telemetry being lost when `event-sources` is down.
 
-Crossing that release once is a normal `helm upgrade` — but expect a **brief window of
+Crossing that release once is an ordinary in-place upgrade — but expect a **brief window of
 duplicated telemetry**, and plan for it:
 
 - During the rollout the outgoing pod is still ingesting over MQTT while the incoming pod

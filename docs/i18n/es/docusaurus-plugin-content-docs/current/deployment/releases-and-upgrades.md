@@ -26,7 +26,7 @@ de hacer nada más.
 :::caution Cruzar la v0.12.0 requiere algunos cambios previos
 La `v0.12.0` se actualiza en el sitio, pero cambia el tema en el que un dispositivo responde
 a un comando, mueve un permiso y cambia varias cosas cuya forma se mantuvo igual. Un
-`helm upgrade` informará éxito en cualquier caso. Lea
+La actualización informará éxito en cualquier caso. Lea
 [v0.12.0: una actualización que cambia contratos](#v0120-upgrade) antes de empezar.
 
 Esto se aplica a **cualquier** actualización que cruce la `v0.12.0`, no solo a la que se
@@ -40,9 +40,9 @@ Cada versión es una única etiqueta git de versión semántica (`vX.Y.Z`). Ese 
 `dcctl` se publican todos con la misma versión. No hay desfase de versión por servicio
 del que preocuparse: un despliegue es un único número coherente.
 
-Mantenerlo así requiere dos comandos en lugar de uno, porque el operador no forma parte del
-chart: consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
-procedimiento.
+Un solo comando mueve todo ello a la vez: el operador no forma parte del chart, así que algo
+externo al chart tiene que ser lo que mueva ambas cosas. Consulte
+[Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el procedimiento.
 
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
   versión estable más reciente.
@@ -131,18 +131,17 @@ El chart también está publicado en
 [Artifact Hub](https://artifacthub.io/packages/helm/devicechain/devicechain), que muestra
 cada versión publicada junto con sus valores predeterminados y sus plantillas renderizadas.
 
-## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
+### Actualizar una instalación hecha solo con el chart {#chart-only-upgrade}
 
-Actualizar a una nueva versión son **dos comandos**, y el chart y los servicios están diseñados
-para hacer avanzar a los clientes sin perder tráfico. Hasta ahora hay tres versiones que son
-excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que sigue siendo
-una actualización corriente pero tiene un efecto secundario visible, y la **`v0.9.0` y la
-`v0.10.0`, a las que no se puede actualizar en absoluto**. Consulte las notas de la versión a la
-que va a migrar antes de ejecutarlos:
+Una instancia instalada con `helm install` en lugar de `dcctl bootstrap` se actualiza con
+`helm upgrade`, y conserva una trampa que la ruta de `dcctl` no tiene.
+
+`dcctl upgrade` no se aplica a ella. Ese comando vuelve a leer del clúster la declaración de
+una instancia y su documento de configuración, y una instalación hecha solo con el chart no
+tiene ninguno de los dos; tampoco instala ningún operador, así que no hay una segunda mitad
+que mover.
 
 ```bash
-# 1. Los servicios. Traslade los valores de la versión actual y cambie únicamente
-#    la versión. Este archivo contiene los secretos de su instancia: elimínelo al terminar.
 helm get values dc -n default -o yaml > dc-values.yaml
 
 helm upgrade dc deploy/helm/devicechain \
@@ -150,50 +149,16 @@ helm upgrade dc deploy/helm/devicechain \
   -f dc-values.yaml \
   --set image.tag=<new-version>
 
-rm dc-values.yaml
-
-# 2. El operador. No forma parte del chart, así que `helm upgrade` no puede moverlo.
-dcctl upgrade local devicechain --version <new-version>
+rm dc-values.yaml   # este archivo contiene los secretos de su instancia
 ```
 
-:::warning Ambos pasos, siempre: el segundo no es opcional
-El operador (sus CRD, su RBAC y su controlador) **no lo instala el chart de Helm**. `dcctl` lo
-aplica a partir de manifiestos incrustados en el propio binario, de modo que `helm upgrade` no
-tiene forma de alcanzarlo, y una actualización que se detenga tras el paso 1 deja su instancia
-ejecutando los servicios nuevos contra el controlador con el que se arrancó por primera vez:
-indefinidamente y sin ningún error que se lo indique.
-
-`dcctl upgrade` no toca nada más. No ejecuta la actualización de Helm, no aplica la pila de
-infraestructura y **no genera, lee ni rota ninguna credencial**, por lo que es seguro en una
-instancia en funcionamiento.
-
-Volver a ejecutar `dcctl bootstrap` también es seguro para las credenciales, y esta página
-afirmaba lo contrario. Una reejecución **reutiliza** lo que la instancia ya tiene: lee la
-configuración de la instancia en funcionamiento y conserva la clave raíz, las contraseñas del
-broker, la semilla del emisor y el secreto de autenticación entre servicios, en lugar de
-generar otros nuevos. La única excepción es el secreto de cliente del inicio de sesión único,
-que se regenera deliberadamente en cada ejecución y cuyas dos mitades se actualizan juntas.
-
-:::warning Una reejecución no sirve para rotar credenciales
-Como las reutiliza, no rota nada salvo el secreto de cliente del inicio de sesión único. Si
-necesita cambiar una credencial, volver a ejecutar el bootstrap no lo hará — y para varias de
-ellas hoy no existe un procedimiento admitido.
-:::
-
-Pase la misma versión a ambos pasos. Ejecute `dcctl upgrade` con `--dry-run` primero si quiere
-ver exactamente qué objetos movería.
-:::
-
 :::warning Traslade los valores: `--set image.tag=…` por sí solo no funcionará
-No todos los valores de su instancia se escriben a mano. `dcctl bootstrap` genera varios y los
-guarda en la versión desplegada; entre ellos, la clave raíz de la instancia, el secreto de
-autenticación entre servicios, la credencial de servicio de NATS y la semilla del emisor de
-callout, y la CA del bróker.
-
-La regla de Helm es la trampa. Una actualización que **no** pasa ningún valor reutiliza los que ya
-están en la versión desplegada. Pero en cuanto pasa *cualquier* valor —incluido el único `--set`
-que cambia la versión, que es justamente el objetivo de una actualización— Helm parte de los
-valores predeterminados del chart y todo lo que generó `dcctl bootstrap` desaparece.
+La regla de Helm es la trampa. Una actualización que **no** pasa ningún valor reutiliza los que
+ya están en la versión desplegada. Pero en cuanto pasa *cualquier* valor —incluido el único
+`--set` que cambia la versión, que es justamente el objetivo de una actualización— Helm parte
+de los valores predeterminados del chart y todo lo que usted fijó al instalar desaparece. Eso
+incluye la clave raíz de la instancia, sin la cual los secretos almacenados de una instancia en
+funcionamiento no se pueden leer.
 
 Cuando eso ocurre no se corrompe nada, porque el chart se niega a renderizar sin la clave raíz:
 
@@ -201,9 +166,126 @@ Cuando eso ocurre no se corrompe nada, porque el chart se niega a renderizar sin
 Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
-La solución es el paso `helm get values` de arriba. `--reuse-values` también funciona, pero conserva
-en silencio entradas obsoletas cuando los valores predeterminados del chart cambian entre versiones,
-así que es preferible volcar los valores y pasarlos con `-f`, donde puede verlos.
+`--reuse-values` también funciona, pero conserva en silencio entradas obsoletas cuando los
+valores predeterminados del chart cambian entre versiones, así que es preferible volcar los
+valores y pasarlos con `-f`, donde puede verlos.
+:::
+
+## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
+
+Actualizar una instancia que usted arrancó con el bootstrap es **un solo comando**, y el chart
+y los servicios están diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta
+ahora hay tres versiones que son excepciones, todas documentadas más abajo: la transición a la
+ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
+visible, y la **`v0.9.0` y la `v0.10.0`, a las que no se puede actualizar en absoluto**.
+Consulte las notas de la versión a la que va a migrar antes de ejecutarlo:
+
+```bash
+dcctl upgrade local devicechain --version <new-version>
+```
+
+Una versión de DeviceChain es un único número que abarca las imágenes de los servicios, el
+chart, el operador y `dcctl`, y ese comando los mueve todos juntos, en el orden en que tienen
+que moverse:
+
+1. **el operador** — su namespace, sus CRD, su RBAC y su controlador, aplicados a partir de
+   manifiestos incrustados en `dcctl`. No forma parte del chart de Helm, así que nada dentro
+   del chart puede alcanzarlo. Se aplica el flujo renderizado completo y no solo la imagen del
+   controlador, porque los CRD van en él: un esquema que se quedara en la versión con la que se
+   arrancó la instancia descartaría en silencio cualquier campo que añadiera una versión
+   posterior;
+2. **el documento de configuración** del que cada servicio lee sus credenciales y sus
+   endpoints, recompuesto a partir del chart de esta versión y escrito por `dcctl`, que es su
+   dueño;
+3. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
+   imágenes nuevas y espera a que cada área termine.
+
+Ejecútelo con `--dry-run` primero si quiere ver qué movería. Toma el clúster de destino del
+propio registro de la instancia en lugar de adivinarlo, y dice cuál es.
+
+:::tip Lee todas las credenciales y no acuña ninguna
+`dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
+propietarias de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
+entre servicios, la clave raíz del almacén de secretos y el secreto de cliente del inicio de
+sesión único. Un cambio de versión no puede convertirse en un cambio de credenciales.
+
+Esto está verificado, no solo afirmado. Se comprobó la actualización de una instancia en
+funcionamiento comparando un resumen criptográfico (digest) de cada una de esas credenciales
+antes y después, y lo único que había cambiado era la etiqueta de imagen: en todos los
+servicios, en la consola y en el operador.
+:::
+
+:::warning Una actualización no sirve para rotar credenciales
+Como las conserva por diseño, no rota nada. Si necesita cambiar una credencial, una
+actualización no lo hará — y para varias de ellas hoy no existe un procedimiento admitido.
+:::
+
+:::note Mueve una versión, no la forma de una instancia
+El perfil, la topología y las áreas funcionales habilitadas provienen de la propia declaración
+de la instancia —lo que `dcctl bootstrap` registró en el clúster—, no de flags escritos aquí.
+Cambiar lo que una instancia *es* es una pregunta distinta con respuestas distintas: subir el
+número de réplicas, por ejemplo, no vuelve a replicar los streams de mensajería que se crearon
+con el número anterior.
+
+Otras dos cosas quedan deliberadamente fuera de este comando. No ejecuta la aplicación de
+infraestructura, porque dos de las entradas de esa aplicación no se pueden recuperar del
+clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, y el texto
+claro del secreto de cliente del inicio de sesión único. Y no toca las bases de datos más allá
+de dejar que los servicios ejecuten sus propias migraciones.
+:::
+
+### Qué más comprueba una actualización {#upgrade-checks}
+
+Dos cosas viajan con ella, porque un cambio de versión es lo que le ocurre de forma fiable a
+una instancia en funcionamiento, y un calendario no.
+
+**El certificado del bróker.** El bróker de mensajería sirve un certificado válido durante un
+año, emitido por una autoridad que `dcctl` acuña en el arranque inicial y conserva en el
+clúster. Una actualización vuelve a emitir ese certificado cuando está dentro de sus últimos 30
+días, o cuando ya no cubre todos los nombres por los que los bróker se llaman entre sí —que es
+lo que le hace escalar una instancia a un certificado que, por lo demás, sigue holgadamente en
+vigor. La reemisión se hace bajo la **misma** autoridad, así que nada tiene que volver a
+confiar en nada, y el bróker se reinicia para que sirva de verdad el certificado nuevo en lugar
+de conservar el antiguo hasta que algo ajeno lo reinicie. Fuera de esas condiciones la
+comprobación se ejecuta y no hace nada.
+
+Una instancia arrancada antes de que `dcctl` conservara esa autoridad no puede tener su
+certificado reemitido en sitio. La actualización lo indica y continúa en lugar de fallar;
+recrear la instancia es lo que acuña una autoridad y un certificado nuevos.
+
+**El depósito (escrow) de la clave raíz.** Cada actualización comprueba que el artefacto de
+depósito de esta instancia siga protegiendo la clave sobre la que la instancia está realmente
+funcionando. Esa comprobación **no necesita contraseña**: el artefacto registra una huella de
+la clave que protege, así que compararla con la que está en uso no abre nada.
+
+| Qué encuentra | Qué hace |
+|---|---|
+| El artefacto protege la clave en uso | Lo indica y lo deja intacto |
+| El artefacto protege una clave **distinta** | Avisa con claridad. Lo más habitual es que pertenezca a una instancia anterior con el mismo nombre, y restaurar desde él recuperaría un clúster incapaz de leer sus propios secretos |
+| No hay artefacto | Escribe uno, si usted pasó `--escrow-passphrase-file` (o fijó `DCCTL_ESCROW_PASSPHRASE`). Si no, avisa de que la única copia de la clave raíz está dentro del clúster |
+
+Así es como una instancia creada al principio con `--no-escrow` obtiene un depósito más tarde.
+Ninguno de esos desenlaces hace fallar la actualización: un problema de depósito trata de un
+desastre futuro y la actualización que tiene delante trata de la instancia en funcionamiento, y
+un operador que no puede actualizar rodeará la comprobación en lugar de arreglarla.
+
+:::note Esto solían ser dos comandos, y uno de ellos era un `helm upgrade`
+El procedimiento era: volcar a un archivo los valores de la versión desplegada actual con `helm
+get values`, volver a pasarlos con `-f` junto a la nueva etiqueta de imagen, borrar el archivo
+porque contenía sus secretos, y después ejecutar `dcctl upgrade` una segunda vez para el
+operador.
+
+Ese baile existía únicamente porque la versión desplegada de Helm era donde vivían las
+credenciales generadas de la instancia, y Helm parte de los valores predeterminados del chart
+en cuanto se le pasa cualquier valor —de modo que una actualización que no las trasladara a
+mano las perdía. Ahora `dcctl` es el dueño del documento de configuración, la versión desplegada
+ya no contiene esas credenciales, y el paso que le decía que escribiera sus secretos en un
+archivo simplemente desaparece.
+
+También cierra un hueco que tenía la forma de dos comandos: una actualización que se detenía
+tras la mitad de `helm` dejaba los servicios nuevos ejecutándose contra el controlador con el
+que se arrancó la instancia por primera vez, indefinidamente y sin ningún error que lo
+indicara.
 :::
 
 Lo que hace que el despliegue sea seguro:
@@ -237,7 +319,7 @@ Configúrelo globalmente con `--set replicas=2`, o por área bajo
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
 
-La `v0.9.0` es la **primera** de las dos versiones a las que no se puede llegar con `helm upgrade`
+La `v0.9.0` es la **primera** de las dos versiones a las que no se puede llegar actualizando en sitio
 (la otra es la [`v0.10.0`](#v0100-event-key)).
 
 Antes de ella, el esquema de cada servicio se construía mediante una cadena de migraciones aplicadas en orden.
@@ -279,7 +361,7 @@ del número de versión.
 
 ### El cambio de clave de eventos de la v0.10.0 {#v0100-event-key}
 
-La `v0.10.0` es la segunda versión a la que **no se puede llegar con `helm upgrade`**, por un motivo
+La `v0.10.0` es la segunda versión a la que **no se puede llegar actualizando en sitio**, por un motivo
 distinto al de la compactación.
 
 Un evento se identificaba por la combinación de su inquilino, dispositivo, tipo y marca de tiempo.
@@ -321,7 +403,7 @@ La acompañan dos cambios en cómo la API informa del tiempo, y ninguno requiere
 
 ### v0.11.0: de nuevo una actualización normal {#v0110-upgrade}
 
-La `v0.11.0` es la primera versión desde la `v0.8.5` a la que se puede llegar con `helm upgrade`.
+La `v0.11.0` es la primera versión desde la `v0.8.5` a la que se puede llegar en sitio.
 Su cambio de esquema **añade** tres migraciones en lugar de reemplazar una línea base, por lo que
 una base de datos `v0.10.0` existente se traslada con sus filas intactas en vez de tener que
 recrearse.
@@ -366,14 +448,14 @@ Cuatro límites, indicados con claridad:
 
 ### v0.12.0: una actualización que cambia contratos {#v0120-upgrade}
 
-Se puede llegar a la `v0.12.0` con `helm upgrade`. Su cambio de esquema **añade**
+Se puede llegar a la `v0.12.0` en sitio. Su cambio de esquema **añade**
 migraciones en lugar de reemplazar una línea base, así que una base de datos `v0.11.0`
 existente se conserva con sus filas intactas, y esto se midió sobre una instancia en
 ejecución en lugar de razonarse.
 
 Lo que sí cambia son los **contratos**: el tema MQTT en el que un dispositivo responde a un
 comando, unas cuantas operaciones GraphQL y el significado de varias cosas cuya forma no
-cambió en absoluto. Nada de eso se ve en un `helm upgrade` que informa éxito, así que lea
+cambió en absoluto. Nada de eso se ve en una actualización que informa éxito, así que lea
 esta sección antes de ejecutarlo.
 
 #### Haga esto antes de actualizar
@@ -473,7 +555,7 @@ configuración de instancia que se entrega a los servicios tiene ahora eliminada
 de cualquier área funcional que este despliegue no habilitó. En un despliegue sin
 `ai-inference` — es decir, todos los perfiles salvo `full` — eso cambia los bytes del documento
 y por tanto la anotación de suma de verificación que reinicia los pods, así que el
-`helm upgrade` reinicia todos los servicios y no solo aquellos cuya imagen se movió. Es una
+la actualización reinicia todos los servicios y no solo aquellos cuya imagen se movió. Es una
 actualización progresiva normal y no requiere nada de usted; figura aquí para que un reinicio
 completo no se lea como un síntoma.
 
@@ -681,7 +763,7 @@ respuesta parcial, algo que conviene saber antes de que el síntoma llegue a una
 #### Arranque inicial y la CLI
 
 Estos llegan a una instancia a través de `dcctl bootstrap` y de la aplicación de la
-infraestructura, no de `helm upgrade`, así que ninguno se materializa durante la actualización
+infraestructura, no de la versión desplegada, así que ninguno se materializa durante la actualización
 descrita arriba. Figuran aquí porque cada uno es un cambio en lo que sale mal.
 
 **Un cambio en la configuración del bróker reinicia ahora el bróker.** `nats-server` no puede
@@ -762,7 +844,7 @@ subyacente empieza a llegarle.
 
 ### v0.12.1: un parche, nada que hacer {#v0121-upgrade}
 
-La `v0.12.1` es un `helm upgrade` sencillo desde la `v0.12.0`. No añade ninguna migración, por
+La `v0.12.1` es una actualización en sitio corriente desde la `v0.12.0`. No añade ninguna migración, por
 lo que la base de datos queda intacta, y no cambia ninguna API, tema, permiso ni clave de
 configuración: todo lo que describe la sección de la v0.12.0 anterior sigue siendo exactamente
 lo que usted está ejecutando.
@@ -783,7 +865,7 @@ Vale la pena conocer dos correcciones:
 
 ### v0.13.0 — los límites de geocercas pasan a formar parte de su plan {#v0130-upgrade}
 
-`v0.13.0` es un `helm upgrade` normal, y no cambia ningún tema, permiso ni clave de
+`v0.13.0` es una actualización en sitio corriente, y no cambia ningún tema, permiso ni clave de
 configuración.
 
 Sí cambia la base de datos, de forma aditiva: crea una tabla para las formas de las geocercas,
@@ -834,7 +916,7 @@ nombran tanto el número como el ajuste que hay que subir, y una métrica
 
 ### v0.14.0 — los paquetes contra los que compila {#v0140-upgrade}
 
-`v0.14.0` es un `helm upgrade` normal desde `v0.13.x`. No añade ninguna migración, así que la base
+`v0.14.0` es una actualización en sitio corriente desde `v0.13.x`. No añade ninguna migración, así que la base
 de datos queda intacta, y no cambia ninguna API, tema, permiso ni clave de configuración. **Si
 solo ejecuta la plataforma, no hay nada que hacer.**
 
@@ -892,7 +974,7 @@ derivación antigua, así que la advertencia anterior sigue aplicando a ellas y 
 
 ### v0.15.0 — las actualizaciones dejan de borrar lo que no envió {#v0150-upgrade}
 
-`v0.15.0` es una actualización `helm upgrade` normal desde `v0.14.x`. Las migraciones nuevas se
+`v0.15.0` es una actualización en sitio corriente desde `v0.14.x`. Las migraciones nuevas se
 ejecutan solas al arrancar los servicios, no hay nada que recrear y ningún dato debe moverse a
 mano.
 
@@ -1017,7 +1099,7 @@ tendrá que regenerarlo usted.
 
 ### v0.16.0 — los dispositivos deben nombrar el despacho que responden {#v0160-upgrade}
 
-`v0.16.0` es una actualización `helm upgrade` normal desde `v0.15.x`. Una migración nueva se
+`v0.16.0` es una actualización en sitio corriente desde `v0.15.x`. Una migración nueva se
 ejecuta sola al arrancar `command-delivery`: añade una columna con un valor por defecto, rellena
 las filas existentes en la misma sentencia y no requiere nada de usted.
 
@@ -1205,7 +1287,7 @@ la telemetría de dispositivos: en lugar de suscribirse al broker como cliente M
 flujo de captura duradero que el broker escribe antes de confirmar la recepción al dispositivo. Esto
 es lo que evita que se pierda telemetría cuando `event-sources` está caído.
 
-Cruzar esa versión una vez es un `helm upgrade` normal, pero espere una **breve ventana de
+Cruzar esa versión una vez es una actualización en sitio corriente, pero espere una **breve ventana de
 telemetría duplicada** y planifique para ello:
 
 - Durante el despliegue, el pod saliente sigue ingiriendo por MQTT mientras el pod

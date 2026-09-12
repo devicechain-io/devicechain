@@ -57,8 +57,11 @@ helm install dc deploy/helm/devicechain \
 ```
 
 See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and the
-upgrade procedure — which is `helm upgrade` for the services **plus** `dcctl upgrade` for the
-operator, since the operator is not part of the chart.
+upgrade procedure. For an instance you bootstrapped it is a single `dcctl upgrade`, which
+moves the operator, the configuration document and the release together — the operator is not
+part of the chart, so something outside the chart has to move both. For an instance driven
+from the chart alone it is `helm upgrade`, with your values
+[carried forward by hand](./releases-and-upgrades.md#chart-only-upgrade).
 
 `user-management` and `device-management` are the required core; `event-management`, `device-state`, and `command-delivery` are independently optional. The chart **fails the render** if a selection omits a required core service or an enabled service's hard dependency — so a broken topology is caught at install time, not after pods crash-loop. Values are validated against the chart's `values.schema.json` at apply time.
 

@@ -173,9 +173,13 @@ Dos cosas que este comando no le permitirá hacer:
   Rehidrataría todas las filas y acuñaría una clave raíz *nueva*, dejando todos los
   secretos almacenados ilegibles para siempre: una pérdida que ningún paso posterior
   puede deshacer.
-- **Recuperar sobre una instancia en uso.** La opción solo surte efecto cuando se
-  *crea* el clúster de base de datos. Volver a ejecutarla contra una instancia que ya
-  existe no hace absolutamente nada, en lugar de funcionar a medias.
+- **Recuperar sobre una instancia en uso.** Una recuperación es una de las pocas cosas
+  que sí pueden ejecutarse contra una instancia que ya existe: la recuperación es
+  justamente la situación en la que una ejecución se interrumpe y hay que reintentarla,
+  y una guarda más precisa lo hace seguro al permitirlo solo cuando el artefacto de
+  depósito lleva la clave sobre la que la instancia ya está funcionando. Pero la opción
+  en sí solo surte efecto cuando se *crea* el clúster de base de datos, así que
+  apuntarla a una instancia en uso no mueve ningún dato, en lugar de funcionar a medias.
 
 La instancia recuperada empieza de inmediato a archivar bajo una ruta **nueva**, propia,
 de modo que no puede sobrescribir el archivo histórico del que acaba de nacer. El
@@ -298,47 +302,65 @@ periódicamente; una comprobación de huella es un detector de humo, no un simul
 incendio.
 :::
 
-## Volver a ejecutar bootstrap sobre una instancia en uso
+## Las credenciales y los dos comandos que las tocan
 
-`dcctl bootstrap` es idempotente, y volver a ejecutarlo sobre una instancia existente
-**reutiliza todas las credenciales que esa instancia ya está usando** en lugar de
-acuñar nuevas. Eso abarca la clave raíz del almacén de secretos, la contraseña de
-servicio de NATS, la clave del emisor del callout y el secreto de autenticación entre
-servicios. Si no puede determinar si la instancia existe, se detiene en vez de suponer:
-acuñar sería la respuesta destructiva.
-
-El bróker es un caso especial, porque se configura varios pasos antes que la instancia
-en sí. Un bootstrap que falle en ese intervalo deja un bróker en funcionamiento que
-ninguna ejecución posterior podría reconocer solo a partir del clúster: allí únicamente
-quedan una clave pública y dos hashes de contraseña, y ninguno de ellos puede
-convertirse de vuelta en las credenciales que necesitan los servicios. Por eso las
-credenciales del bróker también se registran en la máquina desde la que ejecutas
-`dcctl`, en `~/.devicechain/<instancia>/`, antes de configurar el bróker con ellas; y
-una nueva ejecución las reutiliza desde ahí cuando todavía no hay una instancia a la
-que preguntar. El archivo solo es legible por ti, y `dcctl destroy` lo elimina junto
-con el resto del estado local de la instancia.
-
-Por qué importa difiere según la credencial. Reescribir la clave raíz vuelve
+`dcctl bootstrap` **acuña** todas las credenciales que tiene una instancia, y lo hace
+porque ninguna de ellas existe todavía. Por eso se niega a ejecutarse contra una
+instancia que ya está viva: no hay ningún orden en el que entregarle credenciales
+nuevas a una instancia en funcionamiento sea seguro. Reescribir la clave raíz vuelve
 permanentemente ilegible todo secreto almacenado. Reescribir las credenciales del
 bróker es recuperable pero disruptivo: el bróker y los servicios se actualizan por
 mecanismos distintos y en momentos distintos, así que unas credenciales nuevas abren
 una ventana en la que un lado rechaza al otro, y los pods que arrancan dentro de ella
 no llegan a conectarse al bróker.
 
-:::note Una excepción
-El secreto de cliente OAuth de Grafana (`--grafana-sso`) se sigue reacuñando en cada
-ejecución, porque su texto en claro vive en la configuración de Grafana y no en la
-configuración de la instancia. Ambas mitades se reescriben en la misma ejecución, así
-que el efecto es una breve ventana de inicios de sesión fallidos en Grafana durante el
-despliegue.
-:::
+`dcctl upgrade` es el comando que actúa sobre una instancia viva, y **no acuña nada**.
+Vuelve a leer la clave raíz del almacén de secretos, la autoridad y los inicios de
+sesión del bróker, las contraseñas propietarias de las bases de datos, el secreto de
+autenticación entre servicios y el secreto de cliente del inicio de sesión único, y
+conserva todos ellos. Un cambio de versión no puede convertirse en un cambio de
+credenciales.
 
-En una nueva ejecución también reconcilia el depósito:
+### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
+
+La negativa se basa en el **documento de configuración** de la instancia, que se
+escribe cerca del final de la ejecución. Todo lo que se quede antes de eso es una
+instancia a medio construir y no una instancia viva, y volver a ejecutar el bootstrap
+es la manera admitida de terminarla.
+
+El bróker es la razón por la que esa ventana tiene que quedar abierta. Se configura
+varios pasos antes que la instancia en sí, y un bootstrap que falle en ese intervalo
+deja un bróker en funcionamiento que ninguna ejecución posterior podría reconocer solo
+a partir del clúster: allí únicamente quedan una clave pública y dos hashes de
+contraseña, y ninguno de ellos puede convertirse de vuelta en las credenciales que
+necesitan los servicios. Por eso las credenciales del bróker también se registran en la
+máquina desde la que ejecutas `dcctl`, en `~/.devicechain/<instancia>/`, antes de
+configurar el bróker con ellas; y una ejecución posterior las reutiliza desde ahí
+cuando todavía no hay una instancia a la que preguntar. El archivo solo es legible por
+ti, y `dcctl destroy` lo elimina junto con el resto del estado local de la instancia.
+
+### El depósito se reconcilia en cada actualización {#escrow-reconcile}
+
+Comprobar un depósito **no necesita frase de contraseña**. El artefacto registra una
+huella de la clave que protege, así que compararla con la clave sobre la que la
+instancia está funcionando no abre nada —y por eso `dcctl upgrade` lo hace cada vez,
+sin pedirte nada:
 
 - el artefacto coincide con la clave en uso → confirmado, se deja intacto;
-- el artefacto **no** coincide → la ejecución se detiene y lo señala como huérfano;
-- no hay artefacto → se escribe uno, de modo que una instancia creada inicialmente con
-  `--no-escrow` puede obtener un depósito más tarde.
+- el artefacto **no** coincide → se avisa con claridad y se nombra lo que muy
+  probablemente es: un depósito que pertenece a una instancia anterior con el mismo
+  nombre. Restaurar desde él recuperaría un clúster incapaz de leer sus propios
+  secretos;
+- no hay artefacto → se escribe uno, si pasaste `--escrow-passphrase-file` (o fijaste
+  `DCCTL_ESCROW_PASSPHRASE`). Así es como una instancia creada inicialmente con
+  `--no-escrow` obtiene un depósito más tarde. Si no hay ninguna frase de contraseña
+  disponible avisa en su lugar, y no la pide por teclado: una actualización se ejecuta
+  desatendida y, a estas alturas, ya ha movido la instancia.
+
+Ninguno de esos desenlaces hace fallar la actualización. Un problema de depósito trata
+de un desastre futuro y la actualización que tiene delante trata de la instancia en
+funcionamiento —y un operador que no puede actualizar rodeará la comprobación en lugar
+de arreglarla.
 
 ## Después de `dcctl destroy` {#after-destroy}
 
