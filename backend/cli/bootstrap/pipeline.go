@@ -275,6 +275,12 @@ func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
 		{Name: "Claim the cluster", Run: stepClaimCluster},
+		// AFTER the lock and BEFORE anything is applied. After, because the answer
+		// is read from the cluster and a concurrent bootstrap is exactly what would
+		// make it stale between the read and the act. Before, because every step
+		// below this one writes something to a cluster that may already be running
+		// the instance they would be writing over.
+		{Name: "Refuse a rebuild", Run: stepRefuseRebuild},
 		{Name: "Install core components", Run: stepInstallCore},
 		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},

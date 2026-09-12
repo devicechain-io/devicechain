@@ -128,7 +128,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 // `managed` is the sharpest: flipping it false-to-true turns a scoped teardown
 // into a cluster deletion.
 //
-// Everything else is expected to change. That is what a re-run is for.
+// Everything else is expected to change. That is what `dcctl upgrade` is for —
+// bootstrap no longer re-writes a declaration at all, because it refuses to run
+// against an instance that already has one.
 func ValidateInstanceSpecChange(existing, desired dcv1beta1.InstanceSpec) error {
 	for _, f := range []struct {
 		name        string

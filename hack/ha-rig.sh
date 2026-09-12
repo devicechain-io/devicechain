@@ -203,6 +203,29 @@ create_cluster() {
   kind create cluster --name "$name" --config "$config" --wait 120s
 }
 
+# require_no_instance refuses to bootstrap over an instance that is already there.
+#
+# `dcctl bootstrap` BUILDS an instance and refuses to run against one that already
+# exists -- it mints every credential, and handing a running instance new ones is
+# not an update. This rig's create_cluster deliberately reuses an existing kind
+# cluster, so `up` twice without `down` in between reaches that refusal.
+#
+# It is caught here rather than left to dcctl for the reason dr-rig catches it: the
+# rig knows what the operator meant, and can say `down` first. dcctl can only say
+# that an instance exists.
+require_no_instance() {
+  local cluster="$1" inst="$2" ctx="$3"
+  if kubectl --context "$ctx" get ns "$inst" >/dev/null 2>&1; then
+    fail "cluster $cluster is already running instance $inst.
+
+'dcctl bootstrap' creates an instance and will refuse to run against one that is
+already there, because it mints every credential an instance has.
+
+Run 'hack/ha-rig.sh down' first to tear this rig down, or use 'dcctl upgrade' if
+you meant to move the existing instance onto a new build."
+  fi
+}
+
 cmd_up() {
   need kind; need kubectl; need docker; need openssl
   build_dcctl
@@ -222,6 +245,7 @@ cmd_up() {
   # --lwm2m-identities deploys a credentialed lease holder so CHECK A2 has a fence
   # substrate to assert on at all. See ensure_lease_identities.
   ensure_lease_identities
+  require_no_instance "$ha_cluster" "$instance" "kind-$ha_cluster"
   say "bootstrapping --ha"
   "$dcctl" bootstrap local "$instance" --ha --yes --no-escrow \
     --kube-context "kind-$ha_cluster" --host localhost --no-tls \
@@ -322,6 +346,7 @@ cmd_control() {
   # claim. That is the difference between an assertion and a decoration.
   say "bootstrapping the negative control (no --ha, single node)"
   ensure_lease_identities
+  require_no_instance "$control_cluster" "$control_instance" "kind-$control_cluster"
   "$dcctl" bootstrap local "$control_instance" --yes --compact --no-escrow \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \
     --lwm2m-identities "$lease_identities_file" \

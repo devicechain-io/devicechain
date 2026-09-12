@@ -1450,13 +1450,18 @@ in either direction."
 # backend/k8s's overlay), so nothing Helm does can move it.
 #
 # 🔴 THIS PHASE WAS BUILT KNOWING IT WOULD FAIL, AND THAT IS WHY THE FIX EXISTS.
-# When it was written there was no way to move the operator at all: re-running
-# bootstrap rotates every generated credential, and no other subcommand touched
-# it. So an operator following the documentation to the letter ended up with new
-# services, the old controller, and a promise that said otherwise. The gate said
-# so out loud instead of a comment recording it as a known limitation — and
-# `dcctl upgrade` is what that produced. `cmd_upgrade` now runs it as the second
-# half of the documented procedure, and this phase measures the result.
+# When it was written there was no way to move the operator at all, and no other
+# subcommand touched it — so an operator following the documentation to the letter
+# ended up with new services, the old controller, and a promise that said
+# otherwise. The gate said so out loud instead of recording it as a known
+# limitation, and `dcctl upgrade` is what that produced.
+#
+# That verb has since grown into the whole procedure rather than the missing half
+# of one. Once dcctl owns the instance configuration document the chart stops
+# rendering it, so `helm upgrade` can no longer move it either; `dcctl upgrade`
+# now moves the operator, the document and the release together, reading every
+# credential the instance is running on rather than minting any. `cmd_upgrade`
+# still drives both halves, and this phase measures the result.
 #
 # It still carries its own exit code, and the reason has outlived the finding: a
 # workflow reading `exit 20` knows the release has a version-skew defect, as
