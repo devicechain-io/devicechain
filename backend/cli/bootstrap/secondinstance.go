@@ -15,9 +15,9 @@ import (
 // 🔴 ONE INSTANCE PER CLUSTER IS THE BOUNDARY, AND UNTIL NOW IT WAS AN ACCIDENT (ADR-080).
 // Nothing in dcctl decided it. What actually stopped a second instance was
 // writeOwnedSecret refusing to overwrite a Secret stamped with another instance's name
-// — at step 7 of 12, after the operator had been reinstalled at this run's version, the
-// declaration written and the infrastructure namespace adopted into a second OpenTofu
-// state. The operator met it as:
+// — inside the infrastructure apply, two thirds of the way through the run, after the
+// operator had been reinstalled at this run's version, the declaration written and the
+// infrastructure namespace adopted into a second OpenTofu state. The operator met it as:
 //
 //	refusing to write Secret dc-system/dc-rdb-app-credentials: it belongs to instance "a", not "b"
 //

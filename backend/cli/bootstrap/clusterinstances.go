@@ -60,17 +60,22 @@ type instanceSource struct {
 // firstAnsweringSource walks the sources in order and returns the first that names
 // anything, or the first that cannot answer.
 //
-// 🔴 THE ORDER IS EARLIEST DURABLE ARTIFACT FIRST, AND THAT IS THE WHOLE POINT OF
-// COMPOSING THEM. A bootstrap writes its declaration at step 5, its credentials at
-// step 7 and its Helm release at step 8, so a run that DIES BETWEEN 5 AND 7 leaves a
+// 🔴 THE DECLARATION LEADS BECAUSE IT IS THE EARLIEST ARTIFACT, AND THAT IS THE WHOLE
+// POINT OF COMPOSING THEM RATHER THAN READING ONE. A bootstrap writes its declaration in
+// the declare step, its credentials in the infrastructure apply and its Helm release in
+// the Helm install — in that order — so a run that dies between the first two leaves a
 // cluster holding a declaration and no release. Keyed on the release alone this reader
 // would call that cluster empty and let a differently-named instance walk into it,
-// leaving the half-built case riding the foreign-Secret refusal — which is the guard
-// this check exists to replace.
+// leaving the half-built case riding the foreign-Secret refusal, which is the guard this
+// check exists to replace.
 //
-// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet (no CRD on
-// a virgin cluster, no release before step 8) must not stop the walk, or every first
-// bootstrap would read the first source's silence as the whole cluster's.
+// The two behind it are in the order an operator would look, not a strict write order;
+// either of them being present disqualifies the cluster on its own, so nothing turns on
+// which is asked second.
+//
+// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet — no CRD on
+// a virgin cluster, no release until the Helm step — must not stop the walk, or every
+// first bootstrap would read the first source's silence as the whole cluster's.
 func firstAnsweringSource(sources []instanceSource) (clusterInstances, error) {
 	for _, s := range sources {
 		ids, err := s.read()

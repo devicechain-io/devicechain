@@ -87,8 +87,8 @@ func TestAClusterThatWillNotSayWhatItHoldsIsNotReadAsEmpty(t *testing.T) {
 	}
 }
 
-// The declarations are the FIRST source for a reason: they are written at step 5, two
-// steps before the credentials and three before the release. This is the half-built
+// The declarations are the FIRST source for a reason: they are written by the declare
+// step, ahead of both the minted credentials and the release. This is the half-built
 // cluster a release-keyed reader would have called empty.
 func TestEveryDeclaredInstanceIsNamed(t *testing.T) {
 	dyn := declarationClient(
@@ -207,10 +207,10 @@ func source(what string, ids []string, err error, consulted *bool) instanceSourc
 }
 
 // 🔴 THE HALF-BUILT CLUSTER, AND IT IS WHY THIS READER IS COMPOSITE RATHER THAN THE HELM
-// RELEASE. A bootstrap writes its declaration at step 5 and its release at step 8, so a
-// run that dies between them leaves a cluster holding a declaration and NO release. Keyed
-// on the release alone that cluster reads as empty, and a differently-named instance
-// walks in.
+// RELEASE. A bootstrap writes its declaration in the declare step and its release in the
+// Helm install, so a run that dies between them leaves a cluster holding a declaration
+// and NO release. Keyed on the release alone that cluster reads as empty, and a
+// differently-named instance walks in.
 func TestTheEarliestArtifactAnswersEvenWhenTheLaterOnesAreMissing(t *testing.T) {
 	var declaredSeen, releaseSeen, secretsSeen bool
 	held, err := firstAnsweringSource([]instanceSource{

@@ -15,9 +15,9 @@ import (
 //
 // 🔴 WHAT IT REPLACES IS AN ACCIDENT. Nothing in dcctl decided one instance per cluster.
 // What actually stopped a second one was writeOwnedSecret declining to overwrite a Secret
-// stamped with another instance's name — at step 7 of 12, after the operator had been
-// reinstalled at this run's version and the infrastructure namespace adopted into a
-// second OpenTofu state — and it said so as a sentence about a Secret.
+// stamped with another instance's name — inside the infrastructure apply, after the
+// operator had been reinstalled at this run's version and the infrastructure namespace
+// adopted into a second OpenTofu state — and it said so as a sentence about a Secret.
 //
 // So no test below is satisfied by "the bootstrap failed". Each asserts either WHICH
 // refusal fired and what it told the operator, or that a run which must still work was
