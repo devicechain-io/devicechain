@@ -63,13 +63,22 @@ func TestInstanceSpecIsAClosedList(t *testing.T) {
 	}
 }
 
-// 🔴 AND THE SECOND HALF OF THAT RULE HAS ITS OWN TEST, because a closed list
-// makes it easy to check only the first. Every flag that changes what gets
-// deployed must be recorded, and the first version of this schema missed three:
-// --no-cnpg, --grafana-sso and the operator's --enable-area intent. Nothing about
-// the leak test below would have noticed, because they are omissions rather than
-// additions.
-func TestEveryDeploymentAlteringFlagIsRecorded(t *testing.T) {
+// 🔴 THIS TEST CHECKS THAT THE RECORDED FLAGS ARRIVE CORRECTLY. IT DOES NOT, AND
+// CANNOT, CHECK THAT EVERY FLAG IS RECORDED — and it used to claim it did.
+//
+// It was named for the second half of the declaration's rule ("is anything MISSING
+// that a second operator needs?") and written as a hand-listed set of eight flags
+// against a command that registers twenty-eight. A list assembled from memory
+// detects a field that BROKE and never one that was never added, which is the
+// failure the rule exists to prevent — and three unrecorded flags accumulated
+// underneath it while it stayed green. The coverage half now lives in
+// cmd/declaration_coverage_test.go, which enumerates cobra's own flag registry and
+// fails on anything unclassified.
+//
+// What is left here is worth keeping and is a different property: that each flag it
+// names lands in the right FIELD, with the right polarity. The default side below
+// is the half that catches an inverted boolean, which no coverage check would see.
+func TestTheRecordedFlagsArriveInTheRightFields(t *testing.T) {
 	// A State with every deployment-altering flag set AWAY from its default.
 	st := &State{
 		Instance:      "prod",
