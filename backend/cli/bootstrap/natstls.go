@@ -122,13 +122,40 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 		return nil, fmt.Errorf("re-reading the certificate authority just created: %w", err)
 	}
 
+	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, releaseName, namespace, replicas, now)
+	if err != nil {
+		return nil, err
+	}
+
+	return &natsTLSMaterial{
+		CACertPEM:   encodePEM("CERTIFICATE", caDER),
+		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
+		LeafCertPEM: leafCertPEM,
+		LeafKeyPEM:  leafKeyPEM,
+	}, nil
+}
+
+// issueNATSLeaf signs one server certificate under an authority.
+//
+// 🔴 SEPARATED SO RENEWAL AND MINTING CANNOT ISSUE DIFFERENT CERTIFICATES. A renewal
+// that restated this template from memory is how a leaf comes back missing its client
+// role, or a name — and both failures are invisible until they are not: the client
+// role only matters above one replica, and a missing name only matters to whichever
+// peer dials by it. Two issuers that must agree are one issuer with two callers.
+func issueNATSLeaf(
+	caCert *x509.Certificate,
+	caKey *rsa.PrivateKey,
+	releaseName, namespace string,
+	replicas int,
+	now time.Time,
+) (certPEM, keyPEM string, err error) {
 	leafKey, err := rsa.GenerateKey(rand.Reader, natsTLSKeyBits)
 	if err != nil {
-		return nil, fmt.Errorf("generating the broker server key: %w", err)
+		return "", "", fmt.Errorf("generating the broker server key: %w", err)
 	}
 	leafSerial, err := certSerial()
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: leafSerial,
@@ -153,15 +180,12 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {
-		return nil, fmt.Errorf("signing the broker server certificate: %w", err)
+		return "", "", fmt.Errorf("signing the broker server certificate: %w", err)
 	}
 
-	return &natsTLSMaterial{
-		CACertPEM:   encodePEM("CERTIFICATE", caDER),
-		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
-		LeafCertPEM: encodePEM("CERTIFICATE", leafDER),
-		LeafKeyPEM:  encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(leafKey)),
-	}, nil
+	return encodePEM("CERTIFICATE", leafDER),
+		encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(leafKey)),
+		nil
 }
 
 // certClockSkewAllowance backdates the start of validity.

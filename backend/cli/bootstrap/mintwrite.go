@@ -49,7 +49,14 @@ func writeMintedSecrets(ctx context.Context, typed kubernetes.Interface, st *Sta
 
 	secrets := planOwnedSecrets(st, st.Credentials)
 	if st.NATSTLS != nil {
-		secrets = append(secrets, natsTLSSecret(natsReleaseName, st.NATSTLS))
+		// Two objects, and which key goes in which is the security boundary. The
+		// broker gets its leaf and the CA certificate; the authority's private key
+		// goes somewhere the broker does not mount, so that only the thing which
+		// re-issues certificates can read it. See natsAuthoritySecret for why it is
+		// kept at all.
+		secrets = append(secrets,
+			natsTLSSecret(natsReleaseName, st.NATSTLS),
+			natsAuthoritySecret(natsReleaseName, st.NATSTLS))
 	}
 
 	for _, spec := range secrets {

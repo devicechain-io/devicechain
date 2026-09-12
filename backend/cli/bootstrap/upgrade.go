@@ -181,6 +181,26 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	st.Evolving = true
 	done()
 
+	// THE CERTIFICATE, BEFORE THE SERVICES ROLL.
+	//
+	// 🔴 PERIODIC MAINTENANCE BELONGS TO THE VERB THAT RUNS PERIODICALLY, AND THIS IS
+	// THE ONLY ONE THERE IS. The broker's leaf is good for a year; the infrastructure
+	// module that used to re-issue it inside its last thirty days was retired with the
+	// credentials it also held, and nothing replaced that. An instance nobody upgrades
+	// still expires, but an instance nobody upgrades is one nothing else was going to
+	// help either — what this closes is the case where an operator does everything
+	// they were told to and the broker stops accepting connections anyway, on the
+	// anniversary of a bootstrap.
+	//
+	// Ahead of the release on purpose: the renewal restarts the broker, and doing that
+	// while the services are mid-roll means two disruptions overlapping instead of
+	// one finishing before the other starts.
+	doing("checking the broker's certificate")
+	if err := renewBrokerCertificate(ctx, typed, st); err != nil {
+		return fail("renewing the broker's certificate", err)
+	}
+	done()
+
 	if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
 		return helmInstall(ctx, st)
 	}); err != nil {
