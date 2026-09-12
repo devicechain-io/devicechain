@@ -107,15 +107,27 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 		return clusterInstances{}, fmt.Errorf("reaching the Helm release records in this cluster, "+
 			"to ask which instance they belong to: %w", err)
 	}
+	// 🔴 THE ORDER IS THE ORDER A BOOTSTRAP WRITES THESE, EARLIEST FIRST, AND THAT IS THE
+	// WHOLE POINT OF HAVING THREE. A run that dies part-way leaves a prefix of them: the
+	// declaration lands in the declare step, the minted credentials in the infrastructure
+	// step after it, the release in the Helm step after that. Asking in write order means
+	// the half-built cluster is answered by whatever it actually got to, and the earlier
+	// the source the more runs it covers.
+	//
+	// An earlier draft asked the release before the credentials. It had no correctness
+	// hole — each source disqualifies the cluster on its own — but it answered a cluster
+	// holding credentials and an unattributable release with "I cannot tell", where the
+	// credentials could have named the holder. Failing closed is safe; naming the instance
+	// is useful, and there is no reason to give up the second to keep the first.
 	return firstAnsweringSource([]instanceSource{
 		{"the instance declarations in this cluster", func() ([]string, error) {
 			return declaredInstances(ctx, dyn)
 		}},
-		{fmt.Sprintf("the %q Helm release", helmReleaseName), func() ([]string, error) {
-			return releasedInstances(helmCfg)
-		}},
 		{fmt.Sprintf("the credentials dcctl minted in %s", infraNamespace), func() ([]string, error) {
 			return ownedSecretInstances(ctx, typed)
+		}},
+		{fmt.Sprintf("the %q Helm release", helmReleaseName), func() ([]string, error) {
+			return releasedInstances(helmCfg)
 		}},
 	})
 }
