@@ -103,7 +103,7 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	defer func() { endDestroy(ctx, claim, kubeContext, opts.Instance, true, &err) }()
 
 	doing("uninstalling instance release (Helm)")
-	if err := helmUninstall(ctx, kubeContext); err != nil {
+	if err := helmUninstall(ctx, kubeContext, opts.Instance); err != nil {
 		return fail("uninstalling release", err)
 	}
 	done()
