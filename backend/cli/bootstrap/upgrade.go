@@ -15,6 +15,7 @@ import (
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -35,6 +36,12 @@ type UpgradeOptions struct {
 	// instance a second copy of its root key. See reconcileUpgradeEscrow.
 	EscrowFile           string
 	EscrowPassphraseFile string
+
+	// DcctlVersion is the build running this upgrade, recorded on the declaration
+	// it updates. The bootstrap path sets the same field directly on State because
+	// its command layer builds one; this verb's State is built inside
+	// hydrateUpgradeState, so it arrives here instead.
+	DcctlVersion string
 }
 
 // Upgrade moves a live instance onto a release: the cluster-scoped operator
@@ -123,6 +130,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(image))
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+
+	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
+	// ARE DELIBERATE. See recordUpgradedVersion.
+	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
+		return err
+	}
 
 	manifests, err := dck8s.RenderOperator(image)
 	if err != nil {
@@ -296,6 +309,76 @@ func resolveUpgradeImageSource(st *State) (ImageSource, error) {
 				"yourself", version)
 	}
 	return img, nil
+}
+
+// recordUpgradedVersion writes the version this upgrade is moving to back into the
+// instance's declaration.
+//
+// 🔴 THE DECLARATION ONLY EVER RECORDED WHAT BOOTSTRAP WAS TOLD, AND THAT IS A
+// SILENT ROLLBACK. WriteInstanceCR had exactly one caller — the bootstrap claim step
+// — so `dcctl upgrade --version v1.3.0` moved every image and left the CR saying
+// v1.2.0. Since applyUpgradeDeclaration takes the declaration as the DEFAULT and the
+// flags as an override, the next flagless `dcctl upgrade` then read v1.2.0 and rolled
+// every service AND the operator backwards, reporting success and correctly reporting
+// that nothing had rotated. A version change that succeeds at moving an instance the
+// wrong way is the worst shape this arc has found, and this is the second instance of
+// it in the same verb.
+//
+// 🔴 IT IS WRITTEN BEFORE THE MOVE, NOT AFTER, AND THE ORDERING IS NOT A DETAIL.
+// InstanceSpec is documented as the DESIRED state; the version an operator asked for
+// becomes desired the moment they ask, so recording it afterwards would be filing an
+// observation in a field that means intent. The failure modes decide it too, because
+// both orderings have one and they are not equal:
+//
+//   - written FIRST, an upgrade that dies half-way leaves a declaration naming the
+//     new version over a half-moved instance — and a flagless re-run reads it and
+//     FINISHES the job. That is the resumable direction, and §5.1l measured a
+//     half-failed upgrade being completed by exactly such a re-run.
+//   - written LAST, the same failure leaves the old version declared over a half-moved
+//     instance, and the flagless re-run rolls the moved half BACK. That is the defect
+//     this function exists to remove, merely narrowed.
+//
+// It writes only the image source. Everything else in the declaration is the
+// instance's SHAPE, which this verb does not change (see Upgrade), and
+// WriteInstanceCR refuses a move of the immutable fields anyway — so a spec rebuilt
+// from anything but the live one would turn a flag typo into a refusal about the
+// cluster binding.
+// It takes the dynamic client rather than a kube context for the reason
+// writeInstanceCR is split from WriteInstanceCR one file over: the refusals here —
+// a declaration that vanished mid-run, a spec whose immutable half moved — are the
+// part worth testing, and a branch that needs a live cluster to reach is a branch
+// that goes untested. Upgrade already holds the client.
+func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance string, st *State) error {
+	if st.DryRun {
+		wouldDo(fmt.Sprintf("record %s:%s in the instance declaration",
+			st.ImageRegistry, st.ImageVersion))
+		return nil
+	}
+
+	inst, err := readInstanceCR(ctx, dyn, instance)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		// hydrateUpgradeState already refused a missing declaration, so reaching
+		// here means it was deleted between that read and this one. Saying so beats
+		// a nil dereference, and beats recreating a declaration somebody just removed.
+		return fmt.Errorf(
+			"the declaration for instance %q disappeared while this upgrade was starting, "+
+				"so the version it is moving to cannot be recorded. Nothing has been applied; "+
+				"re-run to start from a clean read", instance)
+	}
+
+	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion {
+		// Already says what this run is about to do. Writing anyway would bump the
+		// provenance annotations on every no-op re-apply, which makes
+		// `last-applied-at` useless for the question it exists to answer.
+		return nil
+	}
+
+	spec := inst.Spec
+	spec.ImageRegistry, spec.ImageVersion = st.ImageRegistry, st.ImageVersion
+	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion)
 }
 
 // deploymentRef names one Deployment in the rendered stream.

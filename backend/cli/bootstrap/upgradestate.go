@@ -42,12 +42,13 @@ func hydrateUpgradeState(
 	opts UpgradeOptions,
 ) (*State, error) {
 	st := &State{
-		Instance:    opts.Instance,
-		KubeContext: binding.KubeContext,
-		Binding:     binding,
-		Provider:    provider.Name(),
-		DryRun:      opts.DryRun,
-		Values:      map[string]string{},
+		Instance:     opts.Instance,
+		KubeContext:  binding.KubeContext,
+		Binding:      binding,
+		Provider:     provider.Name(),
+		DryRun:       opts.DryRun,
+		DcctlVersion: opts.DcctlVersion,
+		Values:       map[string]string{},
 	}
 
 	// 1. THE DECLARATION.

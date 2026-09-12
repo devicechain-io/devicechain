@@ -69,6 +69,7 @@ recorded. Use it to move versions, not to reconfigure.
 			},
 			EscrowFile:           upgradeEscrowFile,
 			EscrowPassphraseFile: upgradeEscrowPass,
+			DcctlVersion:         Version,
 		}
 		return bootstrap.Upgrade(cmd.Context(), provider, opts)
 	},
