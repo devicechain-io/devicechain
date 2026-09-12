@@ -90,16 +90,39 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	announceBinding(binding, source, opts.Instance)
 	kubeContext := binding.KubeContext
 
-	registry, version, err := resolveOperatorImageSource(opts.Options)
+	dyn, disco, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return fmt.Errorf("building kube clients: %w", err)
+	}
+
+	// READ THE INSTANCE BEFORE DECIDING ANYTHING, INCLUDING UNDER --dry-run.
+	//
+	// 🔴 THE IMAGE SOURCE IS WHY THIS MOVED UP, AND THE BUG IT FIXES IS A SPLIT
+	// UPGRADE. The operator's image used to be resolved from the flags alone, with
+	// dcctl's published defaults filling the gaps, while the SERVICES took theirs
+	// from the declaration. So `dcctl upgrade --version v1.3.0` against an instance
+	// built from a local registry moved the controller to a ghcr.io image and the
+	// services to a local one — two halves of a release that is defined as one
+	// version across the images, the chart, the operator and this CLI.
+	//
+	// Reading first makes the declaration the DEFAULT for both halves and the flags
+	// an override of both, so they cannot diverge. A dry run reads too: there is
+	// nothing to rehearse about an instance without looking at it, and everything
+	// here is a read.
+	st, err := hydrateUpgradeState(ctx, typed, provider, binding, opts)
 	if err != nil {
 		return err
 	}
-	image := fmt.Sprintf("%s/%s:%s", registry, operatorImageName, version)
+	st.Evolving = true
+
+	image := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
 
 	fmt.Println(GreenUnderline(fmt.Sprintf(
-		"\nUpgrade the operator for instance %q on provider %q", opts.Instance, provider.Name())))
+		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(image))
+	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
+		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 
 	manifests, err := dck8s.RenderOperator(image)
 	if err != nil {
@@ -128,11 +151,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 			"keeping every credential the instance is running on")
 		wouldDo("upgrade the instance's Helm release")
 		return nil
-	}
-
-	dyn, disco, typed, err := kubeClients(kubeContext)
-	if err != nil {
-		return fmt.Errorf("building kube clients: %w", err)
 	}
 
 	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO, AND FORGETTING IT WOULD HAVE LEFT A
@@ -184,14 +202,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	// service rolled onto a new version ahead of the schema it writes is the ordering
 	// that fails; the reverse is a controller that briefly knows about a field
 	// nothing is sending yet.
-	doing("recomposing the instance configuration from this release")
-	st, err := hydrateUpgradeState(ctx, typed, provider, binding, opts)
-	if err != nil {
-		return fail("reading what this instance is running on", err)
-	}
-	st.Evolving = true
-	done()
-
 	// THE CERTIFICATE, BEFORE THE SERVICES ROLL.
 	//
 	// 🔴 PERIODIC MAINTENANCE BELONGS TO THE VERB THAT RUNS PERIODICALLY, AND THIS IS
@@ -238,8 +248,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 				color.YellowString(was), color.GreenString(image))
 		}
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
-		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
 	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
 	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
@@ -252,41 +260,42 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	return nil
 }
 
-// resolveOperatorImageSource settles the registry and tag the operator image is
-// pulled from, applying exactly the rules bootstrap applies to the services so
-// the two cannot drift into naming different things by default.
+// resolveUpgradeImageSource settles the ONE image source both halves of this upgrade
+// use: the declaration's, unless a flag overrode it.
 //
-// 🔴 THE UNPUBLISHED-VERSION REFUSAL IS THE LOAD-BEARING PART. A locally built
-// dcctl carries DefaultImageVersion "dev", which names no image in any registry;
-// deploying it manifests as an ImagePullBackOff on a controller nobody is
-// watching, leaving the cluster on the old operator while this command reported
-// success. Refusing here is the difference between a failed upgrade and a silent
-// one.
+// 🔴 IT IS ONE SOURCE BECAUSE A SPLIT ONE IS A SPLIT RELEASE. The operator's image was
+// resolved from the flags alone, with dcctl's published defaults filling the gaps,
+// while the services took theirs from the declaration — so an upgrade could move the
+// controller to a published image and the services to a locally built one. A release
+// is defined as one version across the images, the chart, the operator and this CLI.
 //
-// 🔴 IT DELEGATES RATHER THAN REPEATING. This function and ResolveImageSource
-// applied the same rules from two bodies, and they had already drifted: the
-// empty-version check documented below existed only here, so the bootstrap path
-// accepted a broken ldflags stamp that this path refused. Two resolvers that must
-// agree are one resolver with two callers. What stays here is the MESSAGE, which
-// is genuinely different — an upgrade names the release it is upgrading TO.
-func resolveOperatorImageSource(opts Options) (registry, version string, err error) {
-	// upgrade never builds from source: it deploys a published operator image, or
-	// one the caller names with --registry/--version.
-	img, rerr := ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, false)
-	if rerr != nil {
-		// fmt.Errorf, not fail(): fail() prints a red "failed." meant to close out
-		// an in-flight doing() line, and nothing has been started yet here. It
-		// rendered a bare "failed." above the message with no step to attach to.
-		version = opts.ImageVersion
+// 🔴 THE UNPUBLISHED-VERSION REFUSAL IS THE LOAD-BEARING PART. A locally built dcctl
+// carries DefaultImageVersion "dev", which names no image in any registry; deploying
+// it manifests as an ImagePullBackOff on a controller nobody is watching, leaving the
+// cluster on the old operator while this command reported success. Refusing here is
+// the difference between a failed upgrade and a silent one.
+//
+// 🔴 IT DELEGATES RATHER THAN REPEATING. This and ResolveImageSource applied the same
+// rules from two bodies once, and they had already drifted. Two resolvers that must
+// agree are one resolver with two callers. What stays here is the MESSAGE, which is
+// genuinely different — an upgrade names the release it is upgrading TO.
+//
+// fmt.Errorf, not fail(): fail() prints a red "failed." meant to close out an
+// in-flight doing() line, and nothing has been started when this runs.
+func resolveUpgradeImageSource(st *State) (ImageSource, error) {
+	img, err := ResolveImageSource(st.ImageRegistry, st.ImageVersion, false)
+	if err != nil {
+		version := st.ImageVersion
 		if version == "" {
 			version = DefaultImageVersion
 		}
-		return "", "", fmt.Errorf(
-			"resolving the operator image: this dcctl build has no pinned image version "+
+		return ImageSource{}, fmt.Errorf(
+			"resolving the images to upgrade to: this dcctl build has no pinned image version "+
 				"(%q names no published image); pass --version <tag> to name the release you are "+
-				"upgrading to, or --registry/--version together to point at images you built yourself", version)
+				"upgrading to, or --registry/--version together to point at images you built "+
+				"yourself", version)
 	}
-	return img.Registry, img.Version, nil
+	return img, nil
 }
 
 // deploymentRef names one Deployment in the rendered stream.

@@ -26,7 +26,7 @@ import (
 // operator can read.
 func TestResolveOperatorImageSourceRefusesAnUnpublishedVersion(t *testing.T) {
 	for _, version := range []string{"dev", "0.0.1-dev.20260716T155833Z"} {
-		if _, _, err := resolveOperatorImageSource(Options{ImageVersion: version}); err == nil {
+		if _, err := resolveUpgradeImageSource(&State{ImageVersion: version}); err == nil {
 			t.Fatalf("version %q was accepted; it names no published image", version)
 		}
 	}
@@ -47,7 +47,8 @@ func TestResolveOperatorImageSourceDefaultsToThePublishedRegistry(t *testing.T) 
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			reg, ver, err := resolveOperatorImageSource(tc.opts)
+			img, err := resolveUpgradeImageSource(&State{ImageRegistry: tc.opts.ImageRegistry, ImageVersion: tc.opts.ImageVersion})
+			reg, ver := img.Registry, img.Version
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -71,7 +72,8 @@ func TestResolveOperatorImageSourceAppliesTheBuildsPinnedVersion(t *testing.T) {
 	t.Cleanup(func() { DefaultImageVersion = saved })
 
 	DefaultImageVersion = "v1.2.3"
-	reg, ver, err := resolveOperatorImageSource(Options{})
+	img, err := resolveUpgradeImageSource(&State{})
+	reg, ver := img.Registry, img.Version
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestResolveOperatorImageSourceRefusesAnEmptyVersion(t *testing.T) {
 	t.Cleanup(func() { DefaultImageVersion = saved })
 
 	DefaultImageVersion = ""
-	if _, _, err := resolveOperatorImageSource(Options{}); err == nil {
+	if _, err := resolveUpgradeImageSource(&State{}); err == nil {
 		t.Fatal("an empty version was accepted; it renders an untagged image reference")
 	}
 }

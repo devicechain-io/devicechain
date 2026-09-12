@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-microservice/config"
 	"k8s.io/client-go/kubernetes"
 )
@@ -65,36 +66,8 @@ func hydrateUpgradeState(
 				"list` shows what is declared where",
 			opts.Instance, binding.KubeContext)
 	}
-	applyDeclaration(st, inst.Spec)
-	st.GrafanaSSO = inst.Spec.GrafanaSSO
-	st.InstanceUID = string(inst.GetUID())
-	if st.InstanceUID == "" {
-		// The same refusal the bootstrap path makes, for the same reason: every
-		// Secret this run touches is matched on the declaration's UID, and an empty
-		// one matches a Secret written with no UID at all.
-		return nil, fmt.Errorf(
-			"the declaration for instance %q carries no UID, so the Secrets this upgrade has "+
-				"to read cannot be matched to it", opts.Instance)
-	}
-
-	// 🔴 RE-DERIVED, NOT COPIED. The declaration records the area DELTA — what
-	// --enable-area asked for on top of the profile — and applyDeclaration writes
-	// only that. A State carrying the extras with EnabledAreas empty makes helmValues
-	// emit `profile` and drop every extra area, so an upgrade would quietly undeploy
-	// exactly the areas an operator added on purpose.
-	if st.EnabledAreas, err = ResolveEnabledAreas(st.Profile, st.EnableAreas); err != nil {
-		return nil, fmt.Errorf("the declaration for instance %q names an area set this dcctl "+
-			"cannot deploy: %w", opts.Instance, err)
-	}
-
-	// The image source. The declaration records what the instance is running; the
-	// flags say what it is moving to, and an absent flag means "stay".
-	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
-	if opts.ImageRegistry != "" {
-		st.ImageRegistry = opts.ImageRegistry
-	}
-	if opts.ImageVersion != "" {
-		st.ImageVersion = opts.ImageVersion
+	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
+		return nil, err
 	}
 
 	// 2. THE CONFIG DOCUMENT.
@@ -123,6 +96,66 @@ func hydrateUpgradeState(
 	return st, nil
 }
 
+// applyUpgradeDeclaration settles everything an upgrade takes from the declaration,
+// separated from the cluster reads around it so the assembly can be exercised without
+// one — which is what lets a test render the chart from these values and let the
+// chart's own schema judge them. The defect that prompted the split was a value this
+// path simply never set.
+func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
+	applyDeclaration(st, inst.Spec)
+	st.GrafanaSSO = inst.Spec.GrafanaSSO
+	st.InstanceUID = string(inst.GetUID())
+	if st.InstanceUID == "" {
+		// The same refusal the bootstrap path makes, for the same reason: every
+		// Secret this run touches is matched on the declaration's UID, and an empty
+		// one matches a Secret written with no UID at all.
+		return fmt.Errorf(
+			"the declaration for instance %q carries no UID, so the Secrets this upgrade has "+
+				"to read cannot be matched to it", opts.Instance)
+	}
+
+	// 🔴 RE-DERIVED, NOT COPIED. The declaration records the area DELTA — what
+	// --enable-area asked for on top of the profile — and applyDeclaration writes
+	// only that. A State carrying the extras with EnabledAreas empty makes helmValues
+	// emit `profile` and drop every extra area, so an upgrade would quietly undeploy
+	// exactly the areas an operator added on purpose.
+	areas, err := ResolveEnabledAreas(st.Profile, st.EnableAreas)
+	if err != nil {
+		return fmt.Errorf("the declaration for instance %q names an area set this dcctl "+
+			"cannot deploy: %w", opts.Instance, err)
+	}
+	st.EnabledAreas = areas
+
+	// The image source. The declaration records what the instance is running; the
+	// flags say what it is moving to, and an absent flag means "stay".
+	//
+	// 🔴 SETTLED HERE, ONCE, FOR BOTH HALVES OF THE UPGRADE. The operator's image used
+	// to be resolved separately from the flags alone, so an instance built from a local
+	// registry could have its controller moved to a published image and its services
+	// left on the local one — two halves of what is defined as ONE version across the
+	// images, the chart, the operator and this CLI.
+	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	if opts.ImageRegistry != "" {
+		st.ImageRegistry = opts.ImageRegistry
+	}
+	if opts.ImageVersion != "" {
+		st.ImageVersion = opts.ImageVersion
+	}
+	img, err := resolveUpgradeImageSource(st)
+	if err != nil {
+		return err
+	}
+	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+
+	// The values the chart is rendered from that are DERIVED from the declaration
+	// rather than read out of it. See ingressHostFor: the chart's schema requires a
+	// non-empty host, so an upgrade that left this unset did not render a slightly
+	// different instance — it failed to render at all, several minutes in, with a
+	// schema error naming a value the operator never typed.
+	st.Values["ingressHost"] = ingressHostFor(st)
+	return nil
+}
+
 // applyDeployedInfrastructure threads the credentials the running services hold back
 // into the values the document is recomposed from.
 //
@@ -147,4 +180,20 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	st.Values["natsSysPassword"] = nats.Auth.SysPassword
 	st.Values["serviceAuthSecret"] = deployed.Infrastructure.ServiceAuth.Secret
 	st.Values["secretsRootKey"] = deployed.Infrastructure.Secrets.RootKey
+}
+
+// ingressHostFor settles the host an instance is exposed on.
+//
+// 🔴 ONE RESOLVER, TWO CALLERS, AND THE SECOND ONE IS WHY IT EXISTS. Bootstrap
+// defaulted this inline, and when `dcctl upgrade` began composing the same values it
+// simply did not set the key — so the chart got an empty host, and its schema
+// rejected the render outright. That failure is not the bad part: the bad part is
+// that it was reachable at all, because the question "which values does the
+// composition need?" was answered from memory on one path and from the flag on the
+// other. A value with one home cannot be forgotten by the path that did not write it.
+func ingressHostFor(st *State) string {
+	if st.IngressHost == "" {
+		return DefaultIngressHost
+	}
+	return st.IngressHost
 }
