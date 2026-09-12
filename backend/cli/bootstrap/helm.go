@@ -19,8 +19,24 @@ import (
 	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
-// helmReleaseName is the per-instance chart release name.
-const helmReleaseName = "dc"
+// helmReleaseName and helmReleaseNamespace address the one DeviceChain chart release
+// a cluster holds.
+//
+// 🔴 NEITHER CARRIES THE INSTANCE, AND THE NAME USED TO CLAIM OTHERWISE. This constant
+// was commented "the per-instance chart release name", which it is not: it is a package
+// constant, installed into a constant namespace, so a cluster has exactly one
+// DeviceChain release no matter how many instances are declared. Everything that has to
+// tell one instance's objects from another's must therefore do so by some OTHER means —
+// see releaseInstance, which reads the id back out of the release's own values.
+//
+// They are hoisted here because install and uninstall MUST agree on both, and they used
+// to declare the namespace separately, one local const each. Two literals that must be
+// equal and are written down twice are the same shape of defect as a name that does not
+// carry what it claims to.
+const (
+	helmReleaseName      = "dc"
+	helmReleaseNamespace = "default"
+)
 
 // helmTimeout bounds how long an install/upgrade waits for the rendered
 // workloads to become ready.
@@ -58,9 +74,9 @@ func helmInstall(ctx context.Context, st *State) error {
 		return fmt.Errorf("loading embedded chart: %w", err)
 	}
 
-	// The release record lives in the "default" namespace (matching the manual
-	// recipe); the chart templates place workloads in dc-<instance> themselves.
-	const releaseNamespace = "default"
+	// The release record lives in helmReleaseNamespace (matching the manual recipe);
+	// the chart templates place workloads in the instance's own namespace themselves.
+	releaseNamespace := helmReleaseNamespace
 
 	settings := cli.New()
 	settings.KubeContext = st.KubeContext
@@ -420,28 +436,143 @@ func helmValues(st *State) map[string]interface{} {
 	return vals
 }
 
-// helmUninstall removes the per-instance chart release, deleting every resource
+// helmUninstall removes the named instance's chart release, deleting every resource
 // the chart created (workloads, services, ingress, and the instance namespace).
 // A missing release is treated as success so destroy is idempotent.
-func helmUninstall(ctx context.Context, kubeContext string) error {
-	const releaseNamespace = "default"
-
+//
+// 🔴 IT TAKES THE INSTANCE BECAUSE THE RELEASE NAME DOES NOT CARRY ONE, AND THIS
+// FUNCTION DESTROYS DATA. Without the check below it uninstalls WHICHEVER release it
+// finds — and because templates/namespace.yaml renders the instance namespace INSIDE
+// the release, that uninstall cascade-deletes the namespace and everything in it.
+//
+// Measured on a live cluster, 2026-09-12: `dcctl destroy local b --keep-cluster`, for
+// an instance "b" that had never been installed, removed instance "a" in its entirety
+// — namespace, all ten deployments, the release — and closed with
+// `Instance "b" uninstalled; cluster kind-a left running.`
+//
+// 🔴 AND THE WAY IN IS THE DOCUMENTED RECOVERY ACTION, WHICH IS WHY A GUARD AND NOT A
+// DOC NOTE. A second bootstrap into a cluster that already holds an instance is
+// correctly refused — writeOwnedSecret, at the infrastructure step, before anything is
+// applied — but it writes ~/.devicechain/<instance>/instance.json BEFORE it fails, and
+// that is the binding this command reads. So the operator does the right thing, is
+// told no, cleans up the failed attempt, and loses the healthy instance.
+//
+// No multi-instance work is needed to reach it: any instance record pointing at a
+// cluster running a differently-named instance will do, which is exactly what both
+// validation rigs produce by passing --kube-context.
+func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 	settings := cli.New()
 	settings.KubeContext = kubeContext
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(settings.RESTClientGetter(), releaseNamespace, "secret",
+	if err := actionConfig.Init(settings.RESTClientGetter(), helmReleaseNamespace, "secret",
 		func(string, ...interface{}) {}); err != nil {
+		return err
+	}
+
+	owner, present, err := releaseInstance(actionConfig)
+	if err != nil {
+		return err
+	}
+	if !present {
+		// Nothing installed. Idempotent success, as before: a destroy re-run, or an
+		// instance whose release was removed by hand, is not a failure.
+		return nil
+	}
+	if err := uninstallRefusalReason(owner, instance); err != nil {
 		return err
 	}
 
 	un := action.NewUninstall(actionConfig)
 	un.Wait = true
 	un.Timeout = helmTimeout
-	_, err := un.Run(helmReleaseName)
+	_, err = un.Run(helmReleaseName)
 	if err != nil && strings.Contains(err.Error(), "not found") {
 		return nil
 	}
 	return err
+}
+
+// uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
+//
+// Separated from helmUninstall so the policy can be exercised without a cluster — the
+// same reason rebuildRefusalReason is separate from its step. A guard whose refusal has
+// only ever been produced by hand on a kind cluster is a guard the next edit removes.
+func uninstallRefusalReason(owner, instance string) error {
+	if owner == instance {
+		return nil
+	}
+	return fmt.Errorf(
+		"the DeviceChain release in this cluster belongs to instance %q, not %q, so uninstalling "+
+			"it would destroy an instance this command did not name. A cluster holds one release "+
+			"(%q in namespace %q) and its name carries no instance, so this is checked rather "+
+			"than assumed.\n\n"+
+			"  To remove the instance that is actually installed here:\n"+
+			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
+			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
+			"  `dcctl instances list` shows what dcctl believes it has.",
+		owner, instance, helmReleaseName, helmReleaseNamespace, owner, instance)
+}
+
+// releaseInstance reports which instance the installed release belongs to.
+//
+// Three answers rather than two, for the same reason reuseMintedCredential has three:
+// "there is no release" and "there is a release I cannot attribute" call for OPPOSITE
+// handling, and collapsing them into an empty string makes the second read as the
+// first — which is the branch that deletes.
+//
+//   - (_, false, nil) — no release here. The caller returns success.
+//   - (id, true, nil) — a release, and this is whose it is.
+//   - (_, _, err)     — a release that could not be attributed. The caller must NOT
+//     uninstall it. "We could not tell" never resolves to the destructive answer, the
+//     same rule clusterArchivePath and reuseMintedCredential are written to.
+func releaseInstance(cfg *action.Configuration) (string, bool, error) {
+	get := action.NewGetValues(cfg)
+	// 🔴 THE COMPUTED VALUES, NOT THE SUPPLIED ONES — the opposite of what
+	// previousReleaseValues wants, deliberately. That function reads the supplied half
+	// because an upgrade may only carry forward what was passed IN. The question here
+	// is which namespace the release actually RENDERED into, and instance.id has a
+	// chart default ("devicechain", deploy/helm/devicechain/values.yaml). A release
+	// installed by a plain `helm install` — still a documented path — therefore
+	// supplies no id at all while deploying into a real namespace, and reading the
+	// supplied half would attribute it to nobody and take the destructive branch.
+	get.AllValues = true
+	vals, err := get.Run(helmReleaseName)
+	if err == driver.ErrReleaseNotFound {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reading the values of the release in this cluster, to check which "+
+			"instance it belongs to before uninstalling it: %w", err)
+	}
+	return instanceIDFromValues(vals)
+}
+
+// instanceIDFromValues digs instance.id out of a rendered value map.
+//
+// Split from the Helm call so every way it can be wrong is exercisable without a
+// cluster, and because the failure that matters is a SHAPE change. If the chart ever
+// moves or renames this key, a version returning "" would make every release
+// unattributable — and depending on which way the caller read that, either refuse every
+// destroy or guard none. It errors, so the caller cannot read a missing key as an
+// answer.
+func instanceIDFromValues(vals map[string]interface{}) (string, bool, error) {
+	unattributable := func() (string, bool, error) {
+		return "", false, fmt.Errorf(
+			"the DeviceChain release in this cluster does not say which instance it belongs to "+
+				"(no instance.id in its values), so it cannot be told from another instance's. "+
+				"Refusing to uninstall it rather than guess — inspect it with "+
+				"`helm get values %s -n %s`",
+			helmReleaseName, helmReleaseNamespace)
+	}
+	inst, ok := vals["instance"].(map[string]interface{})
+	if !ok {
+		return unattributable()
+	}
+	id, ok := inst["id"].(string)
+	if !ok || id == "" {
+		return unattributable()
+	}
+	return id, true, nil
 }
 
 // loadEmbeddedChart materializes the embedded chart files into an in-memory
