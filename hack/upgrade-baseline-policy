@@ -1,0 +1,43 @@
+# THE ONE FACT THE UPGRADE DRILL CANNOT DERIVE: which baselines this release
+# refuses to upgrade FROM.
+#
+# Read by hack/upgrade-rig.sh and, through it, by the upgrade-gate workflow. It
+# decides WHICH drill runs — not whether one runs.
+#
+#   recreate-at-or-below: none      every baseline is upgradeable; the DATA drill
+#                                   runs (seed on the old release, upgrade, read
+#                                   every row back)
+#   recreate-at-or-below: vX.Y.Z    a baseline at or below vX.Y.Z cannot be
+#                                   upgraded onto this release; the RECREATE drill
+#                                   runs instead (the upgrade must REFUSE, say to
+#                                   destroy and bootstrap, and damage nothing)
+#
+# 🔴 DECLARED, NOT INFERRED, AND CHECKED BY THE DRILL IT SELECTS. A rule guessed
+# from the tree ("does the baseline's pipeline have a declare step?") answers a
+# question nobody wrote down, and it would answer it differently for the next
+# reason a baseline stops being upgradeable. So the claim is written here — and
+# then the drill this line selects is the one that can falsify it:
+#
+#   • Claim a baseline is recreate-only when it actually upgrades cleanly, and the
+#     recreate drill fails: it requires `dcctl upgrade` to REFUSE, and a successful
+#     upgrade is not a refusal.
+#   • Claim it is upgradeable when it is not, and the data drill fails: the upgrade
+#     it performs is the thing that cannot work.
+#
+# Neither mistake is quiet, and neither produces a green gate that drilled nothing.
+#
+# 🔴 IT NAMES ONLY TAGS THAT EXIST, WHICH IS WHY IT IS WRITTEN AS A CEILING RATHER
+# THAN A FLOOR. "the oldest release we can upgrade from" would have to name the
+# release being cut — a version with no tag yet — and it would need bumping by hand
+# every release, which is exactly the shape the baseline derivation was rewritten to
+# get rid of. A ceiling over releases that have already shipped needs no edit when a
+# release changes nothing; it moves only when a release breaks upgradeability, which
+# is a decision somebody makes rather than a chore somebody forgets.
+#
+# WHY v0.16.0 IS HERE. `dcctl upgrade` reads an instance's DECLARATION to learn what
+# that instance is. v0.16.0's bootstrap wrote none — its pipeline has no declare step
+# — so an instance built by it has nothing for the upgrade to read, and there is no
+# honest way to synthesize one after the fact: what that instance was configured with
+# was never recorded in a form this release can read. Before v1.0.0 the answer to
+# that is `dcctl destroy` and `dcctl bootstrap`, not a compatibility shim.
+recreate-at-or-below: v0.16.0

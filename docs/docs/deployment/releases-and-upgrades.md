@@ -9,17 +9,19 @@ DeviceChain ships as a set of prebuilt, versioned container images plus a Helm c
 You do **not** need to build anything to run it — pull a released version, install the
 chart, and upgrade in place with zero downtime.
 
-:::warning v0.9.0 and v0.10.0 cannot be upgraded into
-Two releases so far require recreating the instance rather than upgrading it:
+:::warning Some versions cannot be upgraded into
+Three points in the history require recreating the instance rather than upgrading it:
 
 - **`v0.9.0`** replaced every service's migration chain with a single frozen baseline, so a
   `v0.8.x` database meets it and fails on `already exists`. See
   [The v0.9.0 baseline squash](#v090-baseline-squash).
 - **`v0.10.0`** changed the primary key of the event tables to fix a defect that was
   silently discarding telemetry. See [The v0.10.0 event key change](#v0100-event-key).
+- **anything built by `v0.16.0` or earlier**, which recorded no declaration of what the
+  instance is — the record an upgrade now reads to know what to deploy. See
+  [Instances built by v0.16.0 and earlier](#pre-declaration-recreate).
 
-If you are on either earlier version, read the matching section below before you do
-anything else.
+If you are on any of them, read the matching section below before you do anything else.
 :::
 
 :::caution Crossing v0.12.0 needs a few changes first
@@ -69,7 +71,11 @@ Concretely, before v1.0.0 you should expect that a release may:
 - **alter database schema** in ways that a downgrade will not undo
 - **replace the migration baseline outright**, which removes the upgrade path entirely rather
   than merely making it one-way. When that happens the release notes say so at the top, and
-  the only route forward is to recreate the instance. `v0.9.0` and `v0.10.0` are such releases
+  the only route forward is to recreate the instance. `v0.9.0` and `v0.10.0` are such
+  releases
+- **stop being upgradeable onto from an older instance** for a reason that is not the schema
+  at all — the release after `v0.16.0` reads a record of what an instance is that earlier
+  releases never wrote, and refuses rather than guessing one
 
 The "upgrade in place with zero downtime" property above describes the *mechanics* of a
 rolling upgrade. It is not a promise that your existing API calls keep the same meaning
@@ -171,10 +177,11 @@ where you can see them.
 ## Zero-downtime upgrades {#zero-downtime-upgrades}
 
 Upgrading an instance you bootstrapped is **one command**, and the chart and services are
-built to roll customers forward without dropping traffic. Three releases so far are
-exceptions, all documented below: the durable-ingest cutover, which is still an ordinary
-upgrade but has a visible side effect, and **`v0.9.0` and `v0.10.0`, which cannot be upgraded
-into at all**. Check the release notes for the version you are moving to before running it:
+built to roll customers forward without dropping traffic. Four exceptions are documented
+below: the durable-ingest cutover, which is still an ordinary upgrade but has a visible side
+effect, and **`v0.9.0`, `v0.10.0` and any instance built by `v0.16.0` or earlier, which
+cannot be upgraded into at all**. Check the release notes for the version you are moving to
+before running it:
 
 ```bash
 dcctl upgrade local devicechain --version <new-version>
@@ -1200,6 +1207,53 @@ have no source changes in this release. One thing to know if you install `@devic
 yourself: its **`maplibre-gl` peer range moves from `^6.6.0` to `^6.7.0`**. If you pin maplibre-gl
 at 6.6.x you will see an unmet-peer warning, or an install failure under a package manager that
 enforces peers strictly. Nothing else about the packages changed.
+
+### Instances built by v0.16.0 and earlier {#pre-declaration-recreate}
+
+An instance bootstrapped by **`v0.16.0`, or by any release before it, cannot be upgraded onto
+the release that follows `v0.16.0`**. `dcctl upgrade` refuses rather than trying.
+
+`dcctl bootstrap` now records a **declaration** — a cluster-scoped object saying what the
+instance *is*: its profile, its topology, how it is exposed, and which functional areas it
+runs. `dcctl upgrade` reads that declaration to know what to deploy, which is what lets one
+command move a version without being told an instance's shape all over again. Releases up to
+and including `v0.16.0` wrote no such record, so there is nothing for the upgrade to read.
+
+It says so, rather than treating your instance as a name that does not exist:
+
+```
+instance "devicechain" IS in this cluster — the "dc" Helm release names it — and it carries
+no declaration, so it was built by a release older than the one that began recording them.
+```
+
+There is no compatibility shim, and before `v1.0.0` there will not be one. What the older
+instance was configured with was never written down in a form this release can read, so a
+declaration invented after the fact would be a guess applied over a live instance.
+
+**To move onto this release, recreate the instance:**
+
+```bash
+# Export anything you need first — this discards the databases.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+:::caution Export first — recreation discards your data
+The [destroy guard](#data-durability) protects the databases from an ordinary `helm`
+operation, not from a deliberate `dcctl destroy`. If the instance holds telemetry, device
+definitions or dashboards you care about, dump them before you start.
+:::
+
+:::tip The refused upgrade changes nothing
+`dcctl upgrade` reads the instance before it writes anything, so the refusal lands before the
+first change: the Helm release stays on the revision it was on, the operator keeps running
+the image it was running, and every row is where it was. Running it to see what it says costs
+nothing. Both halves of that — the refusal, and the instance being untouched afterwards — are
+exercised against a real cluster on every release.
+:::
+
+Once you are on a release that records a declaration, ordinary in-place upgrades resume.
+`dcctl instances list` shows what is declared, and in which cluster.
 
 ### The one-time durable-ingest cutover
 

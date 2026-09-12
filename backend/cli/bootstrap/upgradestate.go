@@ -52,20 +52,30 @@ func hydrateUpgradeState(
 	}
 
 	// 1. THE DECLARATION.
-	inst, err := ReadInstanceCR(ctx, binding.KubeContext, opts.Instance)
+	//
+	// 🔑 THROUGH THE SEAM step_claim.go ALREADY DECLARES, not through ReadInstanceCR
+	// directly. What this read selects is WHICH refusal an operator gets, and every
+	// other part of that decision is exercisable without a cluster — so reading around
+	// the seam would leave the wiring between the read and the refusal the one piece no
+	// test could reach. A second seam over the same function was the alternative, and
+	// two indirections for one call are how the two ends up stubbed in a test while the
+	// other keeps calling the cluster.
+	inst, err := readInstanceDeclaration(ctx, binding.KubeContext, opts.Instance)
 	if err != nil {
 		return nil, err
 	}
 	if inst == nil {
 		// 🔴 NOT "SO BOOTSTRAP IT". An upgrade is asked for by an operator who
-		// believes they have an instance, and the useful answer says which of the two
-		// things went wrong — wrong name, or wrong cluster — rather than offering to
-		// build something.
-		return nil, fmt.Errorf(
-			"there is no instance %q declared in this cluster, so there is nothing to upgrade. "+
-				"Check the name, and check that %q is the cluster you mean — `dcctl instances "+
-				"list` shows what is declared where",
-			opts.Instance, binding.KubeContext)
+		// believes they have an instance, and the useful answer says which of the
+		// things went wrong rather than offering to build something.
+		//
+		// 🔴 AND "NO DECLARATION" IS NOT ONE SITUATION. It is a name nobody installed,
+		// or it is an instance that is running right here and was built before dcctl
+		// recorded declarations — the second reachable by every operator on the
+		// previous release, and given the first one's advice ("check the name") it is
+		// advice they cannot act on, about a name that is correct. See
+		// undeclaredInstanceRefusal.
+		return nil, refuseUndeclaredInstance(ctx, provider.Name(), binding.KubeContext, opts.Instance)
 	}
 	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
 		return nil, err

@@ -38,6 +38,21 @@ type clusterInstances struct {
 	Source string
 }
 
+// holds reports whether this cluster's answer names the given instance.
+//
+// The complement of othersThan, and separate from it because the two questions have
+// different callers and different consequences: othersThan asks "is anything ELSE here"
+// so a bootstrap can refuse, and this asks "is THIS one here" so an upgrade can tell an
+// instance that predates declarations from a name nobody ever installed.
+func (c clusterInstances) holds(instance string) bool {
+	for _, id := range c.IDs {
+		if id == instance {
+			return true
+		}
+	}
+	return false
+}
+
 // othersThan returns the held ids that are not the instance this run names.
 func (c clusterInstances) othersThan(instance string) []string {
 	var out []string

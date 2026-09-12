@@ -9,8 +9,8 @@ DeviceChain se distribuye como un conjunto de imágenes de contenedor precompila
 más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue una versión publicada,
 instale el chart y actualice in situ sin tiempo de inactividad.
 
-:::warning No se puede actualizar a la v0.9.0 ni a la v0.10.0
-Hasta ahora, dos versiones exigen recrear la instancia en lugar de actualizarla:
+:::warning Hay versiones a las que no se puede actualizar
+Hasta ahora, tres puntos de la historia exigen recrear la instancia en lugar de actualizarla:
 
 - La **`v0.9.0`** reemplazó la cadena de migraciones de cada servicio por una única línea base
   congelada, por lo que una base de datos `v0.8.x` falla con `already exists` al encontrarla.
@@ -18,9 +18,12 @@ Hasta ahora, dos versiones exigen recrear la instancia en lugar de actualizarla:
 - La **`v0.10.0`** cambió la clave primaria de las tablas de eventos para corregir un defecto que
   descartaba telemetría de forma silenciosa. Consulte
   [El cambio de clave de eventos de la v0.10.0](#v0100-event-key).
+- **Cualquier instancia creada por la `v0.16.0` o una versión anterior**, que no registró
+  ninguna declaración de lo que es la instancia: el registro que una actualización lee ahora
+  para saber qué desplegar. Consulte
+  [Instancias creadas por la v0.16.0 y anteriores](#pre-declaration-recreate).
 
-Si está en cualquiera de las versiones anteriores, lea la sección correspondiente más abajo antes
-de hacer nada más.
+Si está en cualquiera de ellos, lea la sección correspondiente más abajo antes de hacer nada más.
 :::
 
 :::caution Cruzar la v0.12.0 requiere algunos cambios previos
@@ -72,6 +75,10 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
 - **reemplazar por completo la línea base de migraciones**, lo que elimina por entero la ruta de
   actualización en lugar de limitarse a hacerla unidireccional. Cuando eso ocurre, las notas de la versión lo
   indican al principio, y la única vía es recrear la instancia. La `v0.9.0` y la `v0.10.0` son versiones de este tipo
+- **dejar de admitir la actualización desde una instancia más antigua** por un motivo que no
+  tiene nada que ver con el esquema: la versión posterior a la `v0.16.0` lee un registro de lo
+  que es una instancia que las versiones anteriores nunca escribieron, y se niega en lugar de
+  inventárselo
 
 La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
@@ -174,11 +181,12 @@ valores y pasarlos con `-f`, donde puede verlos.
 ## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
 
 Actualizar una instancia que usted arrancó con el bootstrap es **un solo comando**, y el chart
-y los servicios están diseñados para hacer avanzar a los clientes sin perder tráfico. Hasta
-ahora hay tres versiones que son excepciones, todas documentadas más abajo: la transición a la
-ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
-visible, y la **`v0.9.0` y la `v0.10.0`, a las que no se puede actualizar en absoluto**.
-Consulte las notas de la versión a la que va a migrar antes de ejecutarlo:
+y los servicios están diseñados para hacer avanzar a los clientes sin perder tráfico. Hay
+cuatro excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que
+sigue siendo una actualización corriente pero tiene un efecto secundario visible, y la
+**`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una versión anterior,
+a las que no se puede actualizar en absoluto**. Consulte las notas de la versión a la que va a
+migrar antes de ejecutarlo:
 
 ```bash
 dcctl upgrade local devicechain --version <new-version>
@@ -1279,6 +1287,57 @@ tienen cambios de código en esta versión. Una cosa que conviene saber si insta
 a `^6.7.0`**. Si fija maplibre-gl en 6.6.x verá un aviso de dependencia par no satisfecha, o un
 fallo de instalación con un gestor de paquetes que las exija estrictamente. Nada más cambió en los
 paquetes.
+
+### Instancias creadas por la v0.16.0 y anteriores {#pre-declaration-recreate}
+
+Una instancia arrancada por la **`v0.16.0`, o por cualquier versión anterior, no se puede
+actualizar a la versión posterior a la `v0.16.0`**. `dcctl upgrade` se niega en lugar de
+intentarlo.
+
+`dcctl bootstrap` registra ahora una **declaración**: un objeto con ámbito de clúster que dice
+lo que la instancia *es* — su perfil, su topología, cómo está expuesta y qué áreas funcionales
+ejecuta. `dcctl upgrade` lee esa declaración para saber qué desplegar, que es lo que permite
+que un solo comando mueva una versión sin tener que indicarle de nuevo la forma de la
+instancia. Las versiones hasta la `v0.16.0` incluida no escribieron ese registro, así que no
+hay nada que la actualización pueda leer.
+
+Y lo dice, en lugar de tratar su instancia como un nombre que no existe:
+
+```
+instance "devicechain" IS in this cluster — the "dc" Helm release names it — and it carries
+no declaration, so it was built by a release older than the one that began recording them.
+```
+
+No hay capa de compatibilidad, y antes de la `v1.0.0` no la habrá. Aquello con lo que se
+configuró la instancia antigua nunca se escribió en una forma que esta versión pueda leer, de
+modo que una declaración inventada a posteriori sería una conjetura aplicada sobre una
+instancia en funcionamiento.
+
+**Para migrar a esta versión, recree la instancia:**
+
+```bash
+# Exporte antes lo que necesite: esto descarta las bases de datos.
+dcctl destroy local devicechain
+dcctl bootstrap local devicechain
+```
+
+:::caution Exporte primero: recrear descarta sus datos
+La [protección de destrucción](#data-durability) protege las bases de datos frente a una
+operación corriente de `helm`, no frente a un `dcctl destroy` deliberado. Si la instancia
+contiene telemetría, definiciones de dispositivos o paneles que le importan, vuélquelos antes
+de empezar.
+:::
+
+:::tip La actualización rechazada no cambia nada
+`dcctl upgrade` lee la instancia antes de escribir nada, así que el rechazo ocurre antes del
+primer cambio: la versión de Helm se queda en la revisión en la que estaba, el operador sigue
+ejecutando la imagen que ejecutaba y todas las filas siguen donde estaban. Ejecutarlo para ver
+qué dice no cuesta nada. Ambas mitades —el rechazo y que la instancia quede intacta después—
+se comprueban contra un clúster real en cada versión.
+:::
+
+Una vez que esté en una versión que registra una declaración, las actualizaciones in situ
+corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en qué clúster.
 
 ### La transición única a la ingesta duradera
 

@@ -24,6 +24,9 @@
 # version, upgrade the way the documentation tells an operator to, and read them
 # back through the real API on the NEW one.
 #
+#   hack/upgrade-rig.sh mode      which drill this baseline earns — `data` or
+#                                 `recreate`. Reads hack/upgrade-baseline-policy;
+#                                 needs no cluster
 #   hack/upgrade-rig.sh up        cluster + registry, build the baseline release's
 #                                 own dcctl from its tag, install THAT version, and
 #                                 seed one of every entity it can express
@@ -31,6 +34,10 @@
 #                                 release's values forward, and run the upgrade
 #                                 exactly as docs/deployment/releases-and-upgrades
 #                                 says to run it
+#   hack/upgrade-rig.sh recreate  THE OTHER DRILL, for a baseline this release does
+#                                 not upgrade onto: the same command must REFUSE,
+#                                 say to destroy and bootstrap, and damage nothing
+#   hack/upgrade-rig.sh ranwhat   which drill actually ran — refuses when NEITHER did
 #   hack/upgrade-rig.sh verify    every seeded row must read back UNCHANGED
 #   hack/upgrade-rig.sh tablesweep  every tenant-scoped table must hold a seeded row,
 #                                   or say why it is legitimately empty
@@ -40,12 +47,34 @@
 #   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break the instance three
 #                                 different ways and require the right check to
 #                                 notice each, with the exact exit code for it
-#   hack/upgrade-rig.sh all       up + upgrade + verify + readsweep + tablesweep + control
+#   hack/upgrade-rig.sh all       up, then whichever drill `mode` names
 #   hack/upgrade-rig.sh down      delete the cluster and the rig's state
 #
 # `all` is the one worth running. `verify` on its own reports a pass from a check
 # whose ability to FAIL has not been demonstrated in this session — which is the
 # thing every rig in this directory exists to argue against.
+#
+# TWO DRILLS, ONE GATE, AND THE SECOND IS NOT A SKIP
+#
+# 🔴 A RELEASE MAY DELIBERATELY NOT UPGRADE ONTO ITS PREDECESSOR, and when it does
+# the data drill above cannot run — there is no upgrade to perform, so there is no
+# "did the rows survive it" to ask. The tempting answer is to skip the gate for that
+# release, and it is the wrong one twice over: it makes a REQUIRED check report a
+# green it did not earn, and it leaves the thing an operator on the old version will
+# actually hit measured by nothing.
+#
+# So there is a second drill rather than a skip. Its claim is the one that release
+# makes: THE UNSUPPORTED UPGRADE REFUSES CLEANLY, SAYS TO RECREATE, AND DAMAGES
+# NOTHING. It runs the same `dcctl upgrade` against the same seeded baseline, and
+# requires the refusal to be the pre-declaration one BY ITS REASON — then requires
+# the instance to still serve, still hold every seeded row, and still be on the same
+# Helm revision and the same operator image it was on a minute earlier. Its verify
+# then gets the same negative controls the data drill's does, because a verify whose
+# ability to fail has not been shown certifies nothing in either drill.
+#
+# Which one runs is DECLARED in hack/upgrade-baseline-policy and never inferred; see
+# that file for why, and for how each drill falsifies a wrong declaration. `ranwhat`
+# is the check that neither was quietly skipped.
 #
 # WHY THE BASELINE BUILDS ITS OWN dcctl
 #
@@ -146,6 +175,84 @@ newest_stable_tag() {
   git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V | tail -1
 }
 
+# ---------------------------------------------------------------------------
+# which drill this baseline earns
+# ---------------------------------------------------------------------------
+#
+# The declaration lives in a file rather than in this script so it reads as a
+# statement about the RELEASE rather than as a knob in a test harness — the release
+# notes say the same thing, and the two should be checkable against each other by
+# eye. hack/upgrade-baseline-policy carries the reasoning.
+
+baseline_policy_file="${DC_UPGRADE_POLICY:-$repo_root/hack/upgrade-baseline-policy}"
+
+# recreate_ceiling prints the newest baseline this release refuses to upgrade FROM,
+# or `none`.
+#
+# 🔴 IT REFUSES EVERYTHING IT CANNOT READ, and that is the whole discipline of the
+# file. A missing key, a second key, a value that is not a version — each of them
+# would otherwise resolve to some default, and every default here picks a drill. A
+# rig that picks a drill from a file it could not parse is a rig reporting on itself.
+# It reads $baseline_policy_file rather than taking a path, so there is ONE variable
+# naming the file and the self-test exercises the real function by pointing that
+# variable at a fixture — not a parameter only the self-test ever passes.
+recreate_ceiling() {
+  local file="$baseline_policy_file" line value count
+  [[ -f "$file" ]] || fail "the baseline policy file $file does not exist, so this rig cannot
+tell which drill this baseline earns. It refuses rather than assuming every baseline is
+upgradeable: that assumption picks the DATA drill, which on a release that does not
+upgrade onto its predecessor fails for a reason nobody can act on."
+
+  # Comments and blank lines out, then exactly one declaration or nothing is decided.
+  count="$(grep -c '^[[:space:]]*recreate-at-or-below:' "$file" || true)"
+  [[ "$count" == "1" ]] || fail "the baseline policy file $file carries $count
+'recreate-at-or-below:' lines; exactly one is a decision and any other number is a file
+somebody edited without reading. Refusing to pick one."
+
+  line="$(grep '^[[:space:]]*recreate-at-or-below:' "$file")"
+  value="${line#*:}"
+  # Strip surrounding whitespace without a subshell, and without sed's habit of
+  # succeeding on input it did not match.
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  case "$value" in
+  none) ;;
+  v[0-9]*.[0-9]*.[0-9]*)
+    [[ "$value" != *[[:space:]]* ]] || fail "the baseline policy names '$value', which is not a
+single version. Refusing to guess which half was meant."
+    ;;
+  *) fail "the baseline policy names '$value', which is neither 'none' nor a vX.Y.Z release.
+A value this rig cannot compare against a baseline would silently pick a drill." ;;
+  esac
+  printf '%s' "$value"
+}
+
+# upgrade_mode prints `data` or `recreate` for the resolved baseline.
+#
+# The comparison is `sort -V`, the same ordering the baseline derivation uses, so a
+# ceiling and a baseline are ranked the way a human ranks releases. Equality is
+# settled BEFORE the sort: `sort -V | head -1` over two identical strings prints that
+# string, which reads as "the baseline is lower" and would be right by accident here
+# and wrong the day somebody rewrote the comparison.
+upgrade_mode() {
+  local ceiling lowest
+  ceiling="$(recreate_ceiling)"
+  [[ "$ceiling" != none ]] || { printf 'data'; return; }
+  [[ -n "$baseline_tag" ]] || fail "upgrade_mode was asked before the baseline was resolved;
+without a baseline there is nothing to compare the policy's ceiling against."
+  if [[ "$baseline_tag" == "$ceiling" ]]; then
+    printf 'recreate'
+    return
+  fi
+  lowest="$(printf '%s\n%s\n' "$baseline_tag" "$ceiling" | sort -V | head -1)"
+  if [[ "$lowest" == "$baseline_tag" ]]; then
+    printf 'recreate'
+  else
+    printf 'data'
+  fi
+}
+
 # ⚠️ NOT resolved at assignment. `need_all` has not run yet, and a shallow or
 # tag-less clone would otherwise make this empty at load time — turning every
 # later use into a confusing blank rather than a refusal that says what is wrong.
@@ -182,6 +289,14 @@ pf_pid=""
 
 cluster="devicechain-upgrade"
 kube_context="kind-$cluster"
+
+# The Helm release dcctl installs, and where its record lives. Both are constants in
+# dcctl (helmReleaseName / helmReleaseNamespace in backend/cli/bootstrap/helm.go) and
+# both are repeated here for the same reason `published_registry` is: this rig is
+# asking whether the release MOVED, and reading the name out of the thing under test
+# would follow it wherever it went and still call the answer unchanged.
+helm_release="dc"
+helm_namespace="default"
 kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
 
 # The instance name is NOT "default", for the reason the HA rig gives: dcctl keeps
@@ -269,6 +384,20 @@ pf_log="$work/port-forward.log"
 # `upgrade` and read by `operator`, so the operator check measures against the
 # version this run actually deployed rather than against one it assumes.
 target_file="$work/upgrade-target"
+# WHICH DRILL ACTUALLY RAN — `<mode> <baseline>`, written by the phase that IS the
+# drill and read by `ranwhat`.
+#
+# 🔴 IT EXISTS BECAUSE THE FAILURE THIS SPLIT INTRODUCES IS A GATE THAT RUNS NEITHER
+# DRILL AND REPORTS GREEN. Two conditional paths means two conditions, and two
+# conditions that are both false is a job whose every expensive step was skipped and
+# whose result is success. Asking afterwards "which one ran" is the only question that
+# distinguishes that from a drill.
+#
+# 🔴 AND A STALE MARKER READS EXACTLY LIKE A FRESH ONE, so `up` removes it before it
+# installs anything. $work survives between runs on a developer's box on purpose
+# (the extracted baseline tree is expensive), which is precisely how a marker from
+# last week would certify today's run.
+ran_file="$work/drill-ran"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
@@ -746,6 +875,8 @@ cmd_up() {
   need_all
   mkdir -p "$work"
   chmod 700 "$work"
+  # The marker from a previous session must not certify this one. See ran_file.
+  rm -f "$ran_file"
   build_apiprobe
   extract_baseline
   build_baseline_dcctl
@@ -800,20 +931,32 @@ be written to."
 # upgrade — the documented procedure, verbatim in shape
 # ---------------------------------------------------------------------------
 
-cmd_upgrade() {
-  need_all
-  [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
-  build_apiprobe
+# target_registry/target_tag are settled by resolve_upgrade_target and read by both
+# drills. Globals rather than locals because the two callers need the same two values
+# and a function can only print one string.
+target_registry=""
+target_tag=""
 
-  # Where the upgrade is moving TO. The two modes and why the per-run tag is
-  # load-bearing on one of them and unnecessary on the other are documented at
-  # `upgrade_images` above; this is only the plumbing.
+# resolve_upgrade_target settles — and on the build path PRODUCES — the images the
+# upgrade command will be pointed at.
+#
+# 🔴 SHARED BY BOTH DRILLS ON PURPOSE, INCLUDING THE IMAGE BUILD THE RECREATE DRILL
+# NEVER DEPLOYS. It is tempting to skip the build there: the refusal lands on the
+# upgrade's first read, so nothing is ever pulled, and forty minutes of ko would buy
+# a tag nobody resolves. It is skipped anyway ONLY in the sense that it costs the
+# same as the data drill — because the claim being measured is "the command an
+# operator runs refuses and damages nothing", and an operator's command names images
+# that exist. Pointing it at a tag that was never built gives the refusal a second
+# reason to be right, and a check with two reasons to pass has none.
+resolve_upgrade_target() {
+  # The two modes and why the per-run tag is load-bearing on one of them and
+  # unnecessary on the other are documented at `upgrade_images` above; this is only
+  # the plumbing.
   validate_upgrade_mode
-  local target_registry target_tag
   if [[ "$upgrade_images" == pull ]]; then
     target_registry="$published_registry"
     target_tag="$upgrade_tag"
-    say "upgrading to the PUBLISHED images $target_registry/*:$target_tag"
+    say "target: the PUBLISHED images $target_registry/*:$target_tag"
     note "nothing is built here — these are the bytes an operator installs"
     # 🔴 The in-cluster pull is ANONYMOUS. Every one of this tag's ghcr packages
     # has to be public or the rollout dies in ImagePullBackOff — which the upgrade's
@@ -828,6 +971,24 @@ cmd_upgrade() {
     say "building the working tree's images → $target_registry (tag $target_tag)"
     REGISTRY="$target_registry" TAG="$target_tag" "$repo_root/deploy/local/build-images.sh"
   fi
+}
+
+cmd_upgrade() {
+  need_all
+  [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  build_apiprobe
+
+  # 🔴 THE DATA DRILL REFUSES TO RUN ON A BASELINE THE RELEASE DOES NOT UPGRADE ONTO,
+  # rather than running and failing. The failure would be real but it would be
+  # attributed to the release under test, and the log would read like a defect in
+  # `dcctl upgrade` instead of the decision hack/upgrade-baseline-policy records.
+  [[ "$(upgrade_mode)" == data ]] || fail "this release does not upgrade onto $baseline_tag
+(hack/upgrade-baseline-policy declares every baseline at or below $(recreate_ceiling)
+recreate-only), so performing the upgrade here would fail for a reason the policy
+already states. Run 'recreate' instead — it drills the refusal an operator on
+$baseline_tag will actually meet."
+
+  resolve_upgrade_target
   printf '%s\n%s\n' "$target_registry" "$target_tag" >"$target_file"
 
   # THE DOCUMENTED PROCEDURE, AND ALL OF IT. One command moves the operator, the
@@ -858,7 +1019,215 @@ image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag
   # new pods up as healthy upstreams.
   wait_for_every_api
 
+  record_drill_ran data
   say "UPGRADED — $target_registry/*:$target_tag is serving, from the instance's own credentials"
+}
+
+# ---------------------------------------------------------------------------
+# recreate — the OTHER drill, for a baseline this release does not upgrade onto
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: the unsupported upgrade REFUSES, for the right reason, says to destroy
+# and bootstrap, and leaves the instance exactly as it found it.
+#
+# 🔴 THIS IS THE DRILL, NOT A SKIP, AND THE DIFFERENCE IS WHAT AN OPERATOR MEETS. The
+# alternative on offer was to stand the gate down for a release that does not upgrade
+# onto its predecessor. That would leave the one thing every operator on the old
+# version is about to do — type `dcctl upgrade` — measured by nothing, on the release
+# where it is guaranteed to fail. The refusal is a product surface: it is the sentence
+# that tells them what to do instead, and if it says the wrong thing, or if the command
+# gets far enough to move the operator before it stops, they find out on their own
+# cluster.
+#
+# 🔴 EVERY ASSERTION HERE IS A PAIR — THE REFUSAL, AND THE INSTANCE AFTERWARDS. A
+# refusal on its own is satisfied by a command that fails for any reason at all,
+# including one that fails HALF WAY THROUGH having already applied this release's
+# operator over the live one. So the drill measures the refusal's REASON, and then
+# measures the instance: still serving, still holding every seeded row, still on the
+# same Helm revision, still running the same operator image.
+
+# helm_revision prints the deployed revision of the instance's release, or refuses.
+#
+# The number is evidence about whether anything touched the release, so an
+# unreadable one is INCONCLUSIVE and must not read as "unchanged". `helm list`
+# rather than `helm status`: a release that is not there at all yields an empty
+# selection rather than a non-zero exit, which the emptiness check below catches and
+# names, where `helm status`'s error would have to be parsed.
+helm_revision() {
+  local out
+  out="$(helm --kube-context "$kube_context" list -n "$helm_namespace" -o json)" ||
+    fail "could not list the Helm releases in namespace $helm_namespace; the drill cannot
+say whether the refused upgrade moved the release, which is not the same as saying it
+did not."
+  printf '%s' "$out" | jq -r --arg n "$helm_release" 'first(.[] | select(.name == $n) | .revision) // empty'
+}
+
+# operator_images prints `<deployment> <image>` per line for the operator's namespace,
+# and refuses an empty answer for the reason cmd_operator does: `kubectl get` over a
+# namespace that is not there exits 0 and prints nothing, so "no change" and "could
+# not look" would be the same string.
+operator_images() {
+  local ns out
+  ns="$(operator_namespace)"
+  [[ -n "$ns" ]] || fail "backend/k8s/config/default/kustomization.yaml declares no namespace,
+so this drill cannot tell whether the refused upgrade moved the operator."
+  # shellcheck disable=SC2016  # $n is a GO TEMPLATE variable; shell must not expand it
+  out="$(kubectl --context "$kube_context" -n "$ns" get deployments \
+    -o go-template='{{range .items}}{{$n := .metadata.name}}{{range .spec.template.spec.containers}}{{$n}} {{.image}}{{"\n"}}{{end}}{{end}}')" ||
+    fail "could not read the deployments in $ns, so this drill cannot say whether the
+refused upgrade moved the operator."
+  [[ -n "$out" ]] || fail "no deployment at all in namespace $ns, so there is no operator to
+measure and 'unchanged' would mean 'could not look'. Either the namespace moved or the
+baseline never installed one; neither is evidence about the refusal."
+  printf '%s' "$out"
+}
+
+cmd_recreate() {
+  need_all
+  [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  build_apiprobe
+  load_exit_codes
+
+  # 🔴 THE MIRROR OF cmd_upgrade'S GUARD, AND IT IS WHAT MAKES THE DECLARED POLICY
+  # FALSIFIABLE RATHER THAN MERELY DECLARED. This drill requires a refusal; run it
+  # against a baseline that upgrades cleanly and it fails, loudly, naming the policy
+  # line that sent it here. That is the check on the file.
+  [[ "$(upgrade_mode)" == recreate ]] || fail "hack/upgrade-baseline-policy does not declare
+$baseline_tag recreate-only (its ceiling is $(recreate_ceiling)), so this baseline is
+expected to upgrade and the refusal this drill requires would be a defect. Run 'upgrade'."
+
+  say "THE RECREATE DRILL — $baseline_tag is not upgradeable onto this release; does the
+refusal an operator meets say so, and does it damage anything?"
+
+  resolve_upgrade_target
+  build_target_dcctl
+
+  # Read BEFORE the command, so "unchanged" is a comparison rather than an assumption.
+  local revision_before images_before
+  revision_before="$(helm_revision)"
+  [[ -n "$revision_before" ]] || fail "there is no $helm_release release in namespace
+$helm_namespace, so the baseline is not installed and there is nothing for a refused
+upgrade to damage. Run 'up' first."
+  images_before="$(operator_images)"
+  note "before: Helm revision $revision_before"
+
+  say "dcctl upgrade — the command an operator on $baseline_tag types, which must REFUSE"
+  local out rc=0
+  # 2>&1 into a variable: the refusal is the measurement, and a message that went only
+  # to the terminal is a measurement the drill cannot make. It is echoed afterwards so
+  # the log still carries it.
+  out="$("$target_dcctl" upgrade local "$instance" \
+    --kube-context "$kube_context" \
+    --registry "$target_registry" --version "$target_tag" 2>&1)" || rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+
+  if [[ $rc -eq 0 ]]; then
+    fail "THE UPGRADE SUCCEEDED, and this release is declared not to upgrade onto
+$baseline_tag. One of the two is wrong and both readings are findings: either
+hack/upgrade-baseline-policy names a ceiling that is no longer true — in which case
+delete the line or lower it, and this baseline goes back to the DATA drill — or an
+upgrade that cannot work reported success, which is the worse of the two."
+  fi
+
+  # 🔴 ASSERT THE REASON, NOT THAT THERE IS ONE. Every failure of this command exits
+  # non-zero: an unreachable cluster, a missing kubeconfig, a chart that will not
+  # render. A drill satisfied by "it failed" would hold just as well against a release
+  # that had lost the refusal entirely and was merely failing to connect.
+  local want
+  for want in \
+    "DOES NOT UPGRADE ONTO ITS PREDECESSOR" \
+    "dcctl destroy" \
+    "dcctl bootstrap"; do
+    [[ "$out" == *"$want"* ]] ||
+      fail "the upgrade was refused, but NOT with the refusal this drill is about: its
+message does not contain '$want'. A refusal for another reason is not a control — it
+would hold just as well against a build where the pre-declaration refusal has stopped
+working, and it leaves an operator on $baseline_tag without the one sentence that
+tells them what to do instead."
+  done
+
+  # 🔴 AND IT MUST NOT HAVE TAKEN THE TYPO BRANCH. The instance is right there; being
+  # told to check the name is the defect this drill's Go half was written to fix, and
+  # the two messages are otherwise both "a refusal".
+  [[ "$out" != *"Check the name"* ]] ||
+    fail "the refusal told the operator to check the name, for an instance that is
+installed in this cluster. That is the reading this release replaced: the name is
+correct, the cluster is correct, and the advice cannot be acted on."
+  say "REFUSED, FOR THE RIGHT REASON — and it named destroy + bootstrap as the way through"
+
+  # --- and now: did it damage anything? -------------------------------------
+  say "THE OTHER HALF — the instance must be exactly as it was a minute ago"
+
+  local revision_after images_after
+  revision_after="$(helm_revision)"
+  [[ "$revision_after" == "$revision_before" ]] ||
+    fail "the refused upgrade MOVED THE HELM RELEASE: revision $revision_before before,
+$revision_after after. A refusal that has already rolled the services is not a refusal;
+an operator who typed this would have a half-upgraded instance and a message telling
+them nothing happened."
+  images_after="$(operator_images)"
+  [[ "$images_after" == "$images_before" ]] ||
+    fail "the refused upgrade MOVED THE OPERATOR:
+  before: $images_before
+  after:  $images_after
+`dcctl upgrade` applies the operator overlay early, so a refusal that lands after that
+leaves this release's controller reconciling the previous release's instance — which
+is precisely the version skew the drill's operator phase exists to refuse."
+  note "unchanged: Helm revision $revision_after, operator $images_after"
+
+  # The API is asked LAST of the three, because it is the slowest and the other two
+  # localise a failure better. A refusal that rolled nothing cannot have taken the
+  # instance down, so this is the claim's floor rather than its point.
+  wait_for_every_api
+
+  local rc2=0
+  run_verify || rc2=$?
+  if [[ $rc2 -eq $APIPROBE_EXIT_SETUP ]]; then
+    fail "THE DAMAGE CHECK COULD NOT RUN, and this says NOTHING either way (apiprobe exit
+$rc2 = SETUP). The refusal was measured; whether the instance is intact was not."
+  fi
+  [[ $rc2 -eq 0 ]] ||
+    fail "rows written on $baseline_tag did NOT survive a REFUSED upgrade (apiprobe exit
+$rc2). Nothing was supposed to happen at all: the command stopped before its first
+write. Read apiprobe's output above — $APIPROBE_EXIT_MISSING is a row gone,
+$APIPROBE_EXIT_MISMATCH a field rewritten, $APIPROBE_EXIT_SHAPE a query the schema no
+longer accepts."
+
+  record_drill_ran recreate
+  say "RECREATE DRILL PASSED — the unsupported upgrade refused with the recreate
+instruction, moved neither the release nor the operator, and left every seeded row
+exactly as it was."
+}
+
+# ---------------------------------------------------------------------------
+# which drill ran
+# ---------------------------------------------------------------------------
+
+record_drill_ran() {
+  printf '%s %s\n' "$1" "$baseline_tag" >"$ran_file"
+}
+
+# cmd_ranwhat refuses a run in which NEITHER drill happened.
+#
+# 🔴 THE FAILURE IT EXISTS FOR IS A GREEN THAT DRILLED NOTHING. Two conditional paths
+# in the workflow means two conditions, and both being false skips every expensive
+# step and reports success — the same shape as `scope` producing no usable answer,
+# which the gate job already refuses to pass on. This is that refusal for the drill.
+cmd_ranwhat() {
+  resolve_baseline_tag
+  local want ran
+  want="$(upgrade_mode)"
+  [[ -s "$ran_file" ]] || fail "NEITHER DRILL RAN. This run's baseline is $baseline_tag and
+hack/upgrade-baseline-policy selects the '$want' drill for it, but no phase recorded
+having performed one. A gate that reports success without drilling is the failure this
+whole rig exists to prevent — read the steps above for which were skipped and why."
+  ran="$(cat "$ran_file")"
+  [[ "$ran" == "$want $baseline_tag" ]] || fail "THE DRILL THAT RAN IS NOT THE ONE THIS RUN
+SELECTED. Recorded: '$ran'. Selected: '$want $baseline_tag'. Either a marker from an
+earlier session survived into this one — 'up' removes it, so this run did not start
+there — or the phase that ran disagreed with hack/upgrade-baseline-policy. Neither is a
+result."
+  say "DRILLED: the '$want' drill ran against baseline $baseline_tag"
 }
 
 # ---------------------------------------------------------------------------
@@ -1391,6 +1760,29 @@ what it claims — or verify is broken. Neither conclusion is about the read swe
   say "AND VERIFY STILL PASSES over the same damage — which is the claim: the sweep sees
 what a round trip of one's own writes structurally cannot."
 
+  cmd_control_verify
+}
+
+# cmd_control_verify is the pair of controls that belong to VERIFY, separated from the
+# read sweep's so the recreate drill can run them.
+#
+# 🔴 THE RECREATE DRILL NEEDS THESE AND CANNOT HAVE THE SWEEP'S. Its "damaged nothing"
+# claim rests entirely on verify, so a verify whose ability to fail has not been shown
+# in this session certifies nothing there either — it would report the same green over
+# an instance the refused upgrade had emptied. The read-sweep control cannot come with
+# them: it runs readsweep against the WORKING TREE's schemas, and on the recreate path
+# the instance is still the BASELINE, so every door this release added would be a
+# finding. Splitting is what lets the recreate drill take the half that applies.
+#
+# The two are still ordered, and the order is still load-bearing — see cmd_control.
+cmd_control_verify() {
+  # Repeated rather than assumed: cmd_control has already run these, and the recreate
+  # path invokes this as its own process where nothing has.
+  need_all
+  [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  build_apiprobe
+  load_exit_codes
+
   say "CONTROL 2 — deleting a seeded row, so verify has something to MISS"
   # `tamper` proves the damage landed before this script draws any conclusion from
   # it: a delete that was silently refused leaves the row where it was, and a
@@ -1830,7 +2222,122 @@ commit-ish without the chart, or this check has quietly stopped checking."
 
   upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
 
+  selftest_policy
+
   say "SELF-TEST PASSED"
+}
+
+# selftest_policy covers the file that decides WHICH DRILL RUNS.
+#
+# 🔴 IT IS THE HIGHEST-CONSEQUENCE STRING IN THIS RIG AND NO CLUSTER STEP READS IT
+# TWICE. A parse that silently answered `none` for an unreadable file would send every
+# release down the data drill; one that answered `recreate` for everything would stand
+# the data drill down permanently and report green. Both are a gate that cannot fail,
+# which is why every case below asserts the REASON a refusal fired rather than that one
+# did.
+selftest_policy() {
+  say "the baseline policy"
+
+  local fixture saved_policy="$baseline_policy_file" saved_baseline="$baseline_tag" rc out
+  fixture="$(mktemp)"
+  baseline_policy_file="$fixture"
+
+  # expect_policy <expected-value-or-empty> <message-fragment-when-refusing> <label>
+  # An empty first argument means the read must REFUSE, and the second says with which
+  # sentence — the same rule expect_mode follows, for the same reason: every refusal
+  # here exits 1, so "it failed" holds against a check that fired somewhere else.
+  expect_policy() {
+    local want="$1" why="$2" label="$3"
+    rc=0
+    out="$( ( recreate_ceiling ) 2>&1 )" || rc=$?
+    if [[ -n "$want" ]]; then
+      [[ "$rc" -eq 0 ]] ||
+        fail "SELF-TEST FAILED ($label): the policy was refused where it should be read.
+$out"
+      [[ "$out" == "$want" ]] ||
+        fail "SELF-TEST FAILED ($label): the policy read as '$out', wanted '$want'"
+      note "$label"
+      return
+    fi
+    [[ "$rc" -ne 0 ]] ||
+      fail "SELF-TEST FAILED ($label): the policy was ACCEPTED and read as '$out'. A value
+this rig cannot compare picks a drill silently."
+    [[ "$out" == *"$why"* ]] ||
+      fail "SELF-TEST FAILED ($label): it refused, but for the WRONG REASON — the message
+does not mention '$why'. It said:
+$out"
+    note "$label"
+  }
+
+  printf 'recreate-at-or-below: v0.16.0\n' >"$fixture"
+  expect_policy "v0.16.0" "" "a declared ceiling is read"
+  printf '# a comment naming recreate-at-or-below: v9.9.9 must not be read as one\nrecreate-at-or-below:   v0.16.0   \n' >"$fixture"
+  expect_policy "v0.16.0" "" "surrounding whitespace is trimmed"
+  printf 'recreate-at-or-below: none\n' >"$fixture"
+  expect_policy "none" "" "'none' is a value, not an absence"
+  : >"$fixture"
+  expect_policy "" "exactly one is a decision" "a file declaring nothing is refused"
+  printf 'recreate-at-or-below: v0.16.0\nrecreate-at-or-below: v0.11.0\n' >"$fixture"
+  expect_policy "" "exactly one is a decision" "two declarations are refused rather than one picked"
+  printf 'recreate-at-or-below: latest\n' >"$fixture"
+  expect_policy "" "neither 'none' nor a vX.Y.Z" "a value that is not a release is refused"
+  printf 'recreate-at-or-below:\n' >"$fixture"
+  expect_policy "" "neither 'none' nor a vX.Y.Z" "an empty value is refused"
+  rm -f "$fixture"
+  baseline_policy_file="$repo_root/no-such-policy-file"
+  expect_policy "" "does not exist" "a missing policy file is refused, not defaulted"
+
+  # --- the comparison -------------------------------------------------------
+  # 🔴 THE BOUNDARY IS INCLUSIVE, AND OFF BY ONE IN EITHER DIRECTION IS A SILENT
+  # WRONG DRILL. The ceiling release itself is recreate-only; the one above it is the
+  # first that must upgrade. Both neighbours are asked, so a `<` written where `<=`
+  # was meant cannot pass.
+  fixture="$(mktemp)"
+  baseline_policy_file="$fixture"
+  printf 'recreate-at-or-below: v0.16.0\n' >"$fixture"
+  expect_drill() {
+    local tag="$1" want="$2"
+    baseline_tag="$tag"
+    local got
+    got="$(upgrade_mode)"
+    [[ "$got" == "$want" ]] ||
+      fail "SELF-TEST FAILED: baseline $tag under a v0.16.0 ceiling selects the '$got'
+drill, wanted '$want'. The wrong drill does not merely fail — the data drill on an
+unupgradeable baseline reports a defect in the release, and the recreate drill on an
+upgradeable one reports a missing refusal."
+    note "baseline $tag → $want"
+  }
+  expect_drill v0.15.2 recreate
+  expect_drill v0.16.0 recreate
+  expect_drill v0.16.1 data
+  expect_drill v0.17.0 data
+  expect_drill v1.0.0 data
+  # And `none` must move every one of them, or the escape hatch is not one.
+  printf 'recreate-at-or-below: none\n' >"$fixture"
+  expect_drill v0.15.2 data
+  expect_drill v0.16.0 data
+  rm -f "$fixture"
+
+  baseline_policy_file="$saved_policy"
+  baseline_tag="$saved_baseline"
+
+  # --- and the REAL file, which is what CI will read ------------------------
+  # 🔴 A POLICY NAMING A TAG THIS REPOSITORY DOES NOT HAVE WOULD COMPARE PERFECTLY AND
+  # MEAN NOTHING. `sort -V` ranks any two strings, so a typo'd ceiling silently
+  # reclassifies every baseline below it. The ceiling has to be a release that exists.
+  local ceiling
+  ceiling="$(recreate_ceiling)"
+  if [[ "$ceiling" != none ]]; then
+    git -C "$repo_root" rev-parse --verify "$ceiling^{commit}" >/dev/null 2>&1 ||
+      fail "SELF-TEST FAILED: hack/upgrade-baseline-policy names '$ceiling', which is not a
+tag in this repository. Version ordering will happily compare a typo against every real
+tag and answer confidently — so a ceiling that does not exist reclassifies baselines
+rather than failing. (A shallow clone shows the same symptom; this check needs history.)"
+    note "the declared ceiling $ceiling is a real release"
+  else
+    note "the policy declares no recreate-only baselines"
+  fi
+  note "this tree's baseline $baseline_tag selects the '$(upgrade_mode)' drill"
 }
 
 # ---------------------------------------------------------------------------
@@ -1858,22 +2365,58 @@ cmd_down() {
 }
 
 case "${1:-all}" in
+mode)
+  # Printed bare, with no banner, because the workflow reads it. Everything this
+  # command can say that is not `data` or `recreate` is said on stderr by a `fail`.
+  resolve_baseline_tag
+  upgrade_mode
+  printf '\n'
+  ;;
 up) cmd_up ;;
 upgrade) cmd_upgrade ;;
+recreate) cmd_recreate ;;
+ranwhat) cmd_ranwhat ;;
 verify) cmd_verify ;;
 readsweep) cmd_readsweep ;;
 tablesweep) cmd_tablesweep ;;
 control) cmd_control ;;
+controlverify) cmd_control_verify ;;
 operator) cmd_operator ;;
 selftest) selftest ;;
 down) cmd_down ;;
 all)
   cmd_up
+  # 🔴 THE BRANCH IS ON THE DECLARED POLICY, AND THE PHASES BELOW REFUSE THE WRONG
+  # SIDE OF IT RATHER THAN TRUSTING THIS LINE. `cmd_upgrade` fails if the policy says
+  # recreate and `cmd_recreate` fails if it says data, so a dispatch that picked the
+  # wrong drill cannot quietly run it.
+  resolve_baseline_tag
+  if [[ "$(upgrade_mode)" == recreate ]]; then
+    cmd_recreate
+    # The recreate drill's "nothing was damaged" claim rests on verify, so verify's
+    # ability to fail has to be shown here as well. Its controls are irreversible,
+    # which is why they come last.
+    cmd_control_verify
+    cmd_ranwhat
+    say "RECREATE-ONLY, AND THAT IS THE CLAIM THIS RELEASE MAKES: an instance built by
+$baseline_tag cannot be upgraded onto this release, and the command an operator types
+refuses, tells them to destroy and bootstrap, and leaves the instance exactly as it
+was — same Helm revision, same operator image, every seeded row unchanged. verify was
+then shown to FAIL against a deleted row and a rewritten field, so its pass above is a
+measurement rather than an assumption.
+
+WHAT THIS DOES NOT SAY: nothing about data surviving an upgrade, because no upgrade
+happened. That claim resumes for the first baseline above
+$(recreate_ceiling), and hack/upgrade-baseline-policy is where the boundary is
+written down."
+    exit 0
+  fi
   cmd_upgrade
   cmd_verify
   cmd_readsweep
   cmd_tablesweep
   cmd_control
+  cmd_ranwhat
   say "DATA SURVIVED: rows written through the API on $baseline_tag were read back
 unchanged after the documented upgrade, every door the served schemas expose still
 answered, and each check was then shown to FAIL — with the right code — against
@@ -1897,5 +2440,5 @@ and event history belongs to the DR drill, not this one."
   cmd_operator
   say "UPGRADE DRILL COMPLETE — data survived AND the operator is in step."
   ;;
-*) fail "unknown command ${1}; try up | upgrade | verify | readsweep | tablesweep | control | operator | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | all | selftest | down" ;;
 esac

@@ -93,6 +93,12 @@ GATE_PATHS=(
   'backend/cli/bootstrap/**'
   'backend/cli/cmd/upgrade.go'
   'hack/upgrade-rig.sh'
+  # The file that decides WHICH drill runs. A change here does not alter what an
+  # instance holds — it alters what the gate measures, which is the one edit the gate
+  # must never be able to make unwatched: moving the recreate ceiling up stands the
+  # data drill down for a release, and moving it down stands the refusal drill down.
+  # Same reasoning as the entry below it, one level out.
+  'hack/upgrade-baseline-policy'
   'hack/check-upgrade-gate-paths.sh'
   'deploy/helm/**'
   '.github/workflows/upgrade-gate.yml'
