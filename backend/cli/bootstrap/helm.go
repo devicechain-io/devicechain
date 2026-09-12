@@ -461,11 +461,8 @@ func helmValues(st *State) map[string]interface{} {
 // cluster running a differently-named instance will do, which is exactly what both
 // validation rigs produce by passing --kube-context.
 func helmUninstall(ctx context.Context, kubeContext, instance string) error {
-	settings := cli.New()
-	settings.KubeContext = kubeContext
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(settings.RESTClientGetter(), helmReleaseNamespace, "secret",
-		func(string, ...interface{}) {}); err != nil {
+	actionConfig, err := helmActionConfig(kubeContext)
+	if err != nil {
 		return err
 	}
 
@@ -511,6 +508,25 @@ func uninstallRefusalReason(owner, instance string) error {
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
 			"  `dcctl instances list` shows what dcctl believes it has.",
 		owner, instance, helmReleaseName, helmReleaseNamespace, owner, instance)
+}
+
+// helmActionConfig reaches the release records a cluster holds.
+//
+// One definition rather than one per caller, for the same reason helmReleaseName and
+// helmReleaseNamespace are hoisted above: every reader of the release has to look in
+// the same namespace as the writer, and a namespace written down once per call site is
+// a namespace that eventually disagrees with itself. The logger is discarded because
+// Helm's storage driver narrates every read at info level, which would interleave with
+// dcctl's own step output.
+func helmActionConfig(kubeContext string) (*action.Configuration, error) {
+	settings := cli.New()
+	settings.KubeContext = kubeContext
+	cfg := new(action.Configuration)
+	if err := cfg.Init(settings.RESTClientGetter(), helmReleaseNamespace, "secret",
+		func(string, ...interface{}) {}); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // releaseInstance reports which instance the installed release belongs to.

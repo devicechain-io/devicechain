@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -444,6 +445,14 @@ var bootstrapCmd = &cobra.Command{
 		// A failure to record is a WARNING, not a stop. The cluster is already up; making
 		// a bookkeeping error abort a bring-up would trade a recoverable annoyance
 		// (destroy falls back to the guess, loudly) for a broken install.
+		//
+		// 🔴 AND THERE IS EXACTLY ONE FAILURE THE REASONING ABOVE DOES NOT COVER, so what
+		// was here first is captured before it is replaced. The refusal of a SECOND
+		// instance can only fire on a cluster this run did not create, so the record it
+		// is about to write describes nothing — and nothing else can clear it, because a
+		// `dcctl destroy` refusal returns before removeInstanceState. See PriorLocalState
+		// for why this restores rather than deletes.
+		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
 				Instance:     opts.Instance,
@@ -491,9 +500,42 @@ var bootstrapCmd = &cobra.Command{
 		}
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
+		unwindLocalRecordOnSecondInstance(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
+}
+
+// unwindLocalRecordOnSecondInstance puts the local record back after the one refusal
+// that makes it describe nothing.
+//
+// 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
+// cluster that may be half-built and MUST keep its record, which is the whole reason the
+// record is written before the pipeline. This one cannot: a cluster already holding
+// another instance is one EnsureCluster adopted, never one it created, so there is
+// nothing for the record to name. Widening this to "any error" would restore the orphan
+// the record exists to prevent.
+//
+// It reports and moves on. The refusal is what the operator is about to read, and
+// failing differently because the cleanup failed would replace a message they can act on
+// with one they cannot.
+func unwindLocalRecordOnSecondInstance(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+	var refusal *bootstrap.ErrSecondInstance
+	if opts.DryRun || !errors.As(runErr, &refusal) {
+		return
+	}
+	removed, err := prior.Restore()
+	if err != nil {
+		fmt.Println(color.YellowString(
+			"warning: could not undo the local record this run wrote for %q (%v).\n"+
+				"  `dcctl instances list` will show it even though nothing was installed; "+
+				"remove ~/.devicechain/%s by hand.", opts.Instance, err, opts.Instance))
+		return
+	}
+	if removed {
+		fmt.Println(color.WhiteString(
+			"Nothing was installed, so the local record for %q has been removed again.", opts.Instance))
+	}
 }
 
 func init() {
