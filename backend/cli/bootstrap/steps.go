@@ -528,11 +528,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// (localhost/127.0.0.1) needs no /etc/hosts edit. TLS is on unless --no-tls,
 	// which serves plain HTTP — a self-signed cert adds friction with no benefit
 	// on localhost.
-	host := st.IngressHost
-	if host == "" {
-		host = DefaultIngressHost
-	}
-	st.Values["ingressHost"] = host
+	st.Values["ingressHost"] = ingressHostFor(st)
 	scheme := "https"
 	if st.NoTLS {
 		scheme = "http"
@@ -1031,11 +1027,31 @@ func stepReport(ctx context.Context, st *State) error {
 				color.GreenString("%s  (sign in with DeviceChain SSO — operators/superusers only)", u.RootURL))
 			fmt.Printf("           %s\n", color.YellowString("cross-tenant metrics are operator-tier only; the native admin login stays available as break-glass"))
 		} else {
+			// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
+			// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
+			// and offered `monitoring_grafana_admin_password` as the way to change it
+			// — a shared literal, and an infrastructure variable that has since been
+			// retired. Both were true when the dashboard's password was the same value
+			// on every installation anyone had ever built. Neither survived that
+			// change, and nothing failed: the report simply kept saying it, so an
+			// operator following it was told the wrong password and pointed at a knob
+			// that no longer exists. Measured on a live instance, by comparing the
+			// digest of the stored credential against the digest of the old literal.
+			//
+			// It now says where the password IS rather than what it is, which is also
+			// the only form that stays true when it is rotated.
 			ns := st.Values["grafanaNamespace"]
 			fmt.Printf("  %s %s\n",
 				color.WhiteString("Grafana:"),
-				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
-			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
+				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
+			fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+				"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
+				grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
+			fmt.Printf("           %s\n", color.GreenString(
+				"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
+				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
+			fmt.Printf("           %s\n", color.YellowString(
+				"or wire it to DeviceChain SSO with --grafana-sso (ADR-047)"))
 		}
 	}
 	// Database backups, printed here for exactly the reason the escrow line below
