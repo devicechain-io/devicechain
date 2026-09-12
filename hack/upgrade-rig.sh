@@ -1182,11 +1182,16 @@ $revision_after after. A refusal that has already rolled the services is not a r
 an operator who typed this would have a half-upgraded instance and a message telling
 them nothing happened."
   images_after="$(operator_images)"
+  # 🔴 THE BACKTICKS BELOW ARE ESCAPED AND HAVE TO BE. Inside a double-quoted shell
+  # string a backtick is COMMAND SUBSTITUTION, so an unescaped `dcctl upgrade` in a
+  # failure message is a rig that RUNS the command it is describing at the moment it
+  # tries to report on it. shellcheck does not catch this at the threshold this repo
+  # gates on (SC2006 is `style`), and it was written unescaped here first.
   [[ "$images_after" == "$images_before" ]] ||
     fail "the refused upgrade MOVED THE OPERATOR:
   before: $images_before
   after:  $images_after
-`dcctl upgrade` applies the operator overlay early, so a refusal that lands after that
+\`dcctl upgrade\` applies the operator overlay early, so a refusal that lands after that
 leaves this release's controller reconciling the previous release's instance — which
 is precisely the version skew the drill's operator phase exists to refuse."
   note "unchanged: Helm revision $revision_after, operator $images_after"
