@@ -236,14 +236,36 @@ func TestDestroyRemovesTheReleaseUnderBothNames(t *testing.T) {
 // break the very destroy that clears a stale local record pointing at another instance's
 // cluster.
 func TestWhoseReleaseItIsDecidesDifferentlyUnderEachName(t *testing.T) {
-	t.Run("a legacy release owned by another instance is left alone", func(t *testing.T) {
+	t.Run("a legacy release owned by another instance is left alone and REPORTED", func(t *testing.T) {
 		survivors, err := uninstalls(t, "alpha", deviceChainRelease("dc", "bravo"))
-		if err != nil {
-			t.Fatalf("destroying a stale record refused instead of clearing it: %v", err)
-		}
 		if len(survivors) != 1 || survivors[0] != "dc" {
 			t.Fatalf("survivors %v — another instance's release was uninstalled by a destroy "+
 				"that did not name it", survivors)
+		}
+		// 🔴 SURVIVING IS HALF THE CLAIM. Leaving the release alone and then closing with
+		// `Instance "alpha" uninstalled` is the defect this command has been fixed for
+		// twice (#862, #1065): the operator is told their destroy worked when the cluster
+		// was never touched. The refusal is what routes destroyInstanceOnly into
+		// resolveForeignRelease, which checks the footprint, clears the stale record and
+		// says what actually happened.
+		var foreign *foreignReleaseError
+		if !errors.As(err, &foreign) {
+			t.Fatalf("a destroy that found only another instance's release returned %v; "+
+				"without the refusal the caller reports a successful uninstall over a no-op", err)
+		}
+		if foreign.Owner != "bravo" || foreign.Release != "dc" {
+			t.Fatalf("the refusal names owner %q release %q; the operator needs both to know "+
+				"what is actually here", foreign.Owner, foreign.Release)
+		}
+	})
+
+	// 🔴 THE NEGATIVE CONTROL FOR THE REFUSAL ABOVE, AND IT IS WHAT KEEPS DESTROY
+	// IDEMPOTENT. A cluster holding NOTHING must stay silent success — a re-run, or an
+	// instance whose release was removed by hand, is not a foreign release.
+	t.Run("an empty cluster is still success", func(t *testing.T) {
+		if _, err := uninstalls(t, "alpha"); err != nil {
+			t.Fatalf("destroying into an empty cluster failed: %v — a destroy re-run would "+
+				"never be able to finish", err)
 		}
 	})
 
@@ -261,4 +283,46 @@ func TestWhoseReleaseItIsDecidesDifferentlyUnderEachName(t *testing.T) {
 				foreign.Release)
 		}
 	})
+}
+
+// 🔴 AN INSTANCE INSTALLED UNDER THE OLD NAME CANNOT BE MOVED ONTO THIS RELEASE, AND THE
+// SENTENCE IT GETS MATTERS. Without this refusal the run takes the install branch — its
+// release is absent under the new name — and Helm rejects it with a message about
+// `meta.helm.sh/release-name` annotations, which is true, unactionable, and arrives after
+// the declaration and the operator have already moved.
+//
+// 🔑 THE CARVE-OUTS ARE WHY THIS IS NOT DEAD CODE BEHIND stepRefuseRebuild. That step
+// exempts a restore and --allow-legacy-db-removal, and both are re-runs against exactly
+// the instance this case is about.
+func TestAnInstanceUnderTheOldReleaseNameIsRefusedWithTheRecreateRecipe(t *testing.T) {
+	cfg, _ := inMemoryHelm(t, deviceChainRelease("dc", "alpha"))
+	var legacy *ErrLegacyNamedRelease
+	if err := refuseLegacyNamedRelease(cfg, "alpha"); !errors.As(err, &legacy) {
+		t.Fatalf("an instance installed as the pre-rename release was not refused (%v); the "+
+			"run would reach Helm and fail on ownership metadata instead", err)
+	}
+	if !strings.Contains(legacy.Error(), "dcctl destroy") {
+		t.Error("the refusal does not name the supported path, which is the only thing an " +
+			"operator can act on")
+	}
+
+	// 🔴 THREE NEGATIVE CONTROLS, AND THE LAST IS THE ONE THAT WOULD HURT. A guard that
+	// fired on a fresh cluster would refuse the first bootstrap of every instance.
+	for name, tc := range map[string]struct {
+		rels     []*release.Release
+		instance string
+	}{
+		"an instance already on this release's naming": {
+			[]*release.Release{deviceChainRelease("dc-alpha", "alpha")}, "alpha"},
+		"a pre-rename release belonging to somebody else": {
+			[]*release.Release{deviceChainRelease("dc", "bravo")}, "alpha"},
+		"a cluster with no DeviceChain release at all": {nil, "alpha"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := inMemoryHelm(t, tc.rels...)
+			if err := refuseLegacyNamedRelease(cfg, tc.instance); err != nil {
+				t.Fatalf("refused a run it should have let through: %v", err)
+			}
+		})
+	}
 }

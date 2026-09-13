@@ -21,7 +21,7 @@ import (
 // the wreckage of the first. Pending and uninstalling states are live for the same
 // reason. Uninstalled records are the one genuine absence: they survive only with
 // --keep-history, and what they describe is gone.
-const liveReleaseStates = action.ListAll &^ action.ListUninstalled
+const liveReleaseStates = (action.ListAll | action.ListUnknown) &^ action.ListUninstalled
 
 // deviceChainReleases names every DeviceChain release this cluster holds, with the
 // instance each belongs to.
@@ -46,12 +46,41 @@ const liveReleaseStates = action.ListAll &^ action.ListUninstalled
 // written by the chart itself. A cluster's other Helm releases are not ours to reason
 // about, and inferring ownership from a "dc-" prefix would claim some of them.
 func deviceChainReleases(cfg *action.Configuration) ([]string, error) {
-	names, err := deviceChainReleaseNames(cfg)
+	held, err := deviceChainReleaseHoldings(cfg)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	var ids []string
+	for _, h := range held {
+		if !seen[h.Instance] {
+			seen[h.Instance] = true
+			ids = append(ids, h.Instance)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// heldRelease is one DeviceChain release and the instance it says it belongs to.
+//
+// 🔑 THE NAME IS CARRIED ALONGSIDE THE ID BECAUSE A REFUSAL HAS TO NAME AN OBJECT. Telling
+// an operator "this cluster belongs to another instance" without saying which release said
+// so leaves them nothing to go and look at, and foreignReleaseRefusal's message is the one
+// place that matters most — it is what a mistyped `dcctl destroy` prints.
+type heldRelease struct {
+	Name     string
+	Instance string
+}
+
+// deviceChainReleaseHoldings names every DeviceChain release in this cluster with the
+// instance it belongs to, in release-name order.
+func deviceChainReleaseHoldings(cfg *action.Configuration) ([]heldRelease, error) {
+	names, err := deviceChainReleaseNames(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var held []heldRelease
 	for _, name := range names {
 		// 🔴 THE SAME ATTRIBUTION READER THE UNINSTALL USES, DELIBERATELY. Two ways of
 		// deciding which instance a release belongs to could disagree, and the pair that
@@ -68,13 +97,9 @@ func deviceChainReleases(cfg *action.Configuration) ([]string, error) {
 			// attribute, and nothing to refuse over.
 			continue
 		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
+		held = append(held, heldRelease{Name: name, Instance: id})
 	}
-	sort.Strings(ids)
-	return ids, nil
+	return held, nil
 }
 
 // deviceChainReleaseNames lists the releases in helmReleaseNamespace that were installed
@@ -86,7 +111,10 @@ func deviceChainReleases(cfg *action.Configuration) ([]string, error) {
 // cluster would reliably produce.
 func deviceChainReleaseNames(cfg *action.Configuration) ([]string, error) {
 	list := action.NewList(cfg)
-	list.All = true
+	// 🔑 StateMask IS SET DIRECTLY, AND List.All IS DELIBERATELY NOT. Run() never reads
+	// All — only SetStateMask() does, which the `helm` CLI calls and Run does not — so
+	// setting it would read as widening the search while changing nothing. Limit and
+	// Offset are zero here, which is already unbounded.
 	list.StateMask = liveReleaseStates
 	rels, err := list.Run()
 	if err != nil {

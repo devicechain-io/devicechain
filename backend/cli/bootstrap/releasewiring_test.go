@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -64,8 +65,9 @@ func TestTheClusterReaderAsksEverySourceInWriteOrder(t *testing.T) {
 // what can be checked without one is that the name it reaches for is the derived one.
 func TestOnlyTheSweepMayMentionTheLegacyReleaseName(t *testing.T) {
 	allowed := map[string]bool{
-		"helmReleaseNameFor":     true, // builds the new name out of the old prefix
-		"uninstallLegacyRelease": true, // the one reader of releases installed before the rename
+		"helmReleaseNameFor":       true, // builds the new name out of the old prefix
+		"uninstallLegacyRelease":   true, // the sweep: the one remover of a pre-rename release
+		"refuseLegacyNamedRelease": true, // the refusal that stops installing beside one
 	}
 	for fn, names := range identifiersByFunction(t) {
 		if allowed[fn] {
@@ -73,9 +75,27 @@ func TestOnlyTheSweepMayMentionTheLegacyReleaseName(t *testing.T) {
 		}
 		for _, n := range names {
 			if n == "legacyHelmReleaseName" {
-				t.Errorf("%s reaches for legacyHelmReleaseName. Only the sweep may: everything "+
-					"else addressing a release by that name is an instance installing, reading "+
-					"or removing the one release a whole cluster used to share", fn)
+				t.Errorf("%s reaches for legacyHelmReleaseName. Only the sweep and its refusal "+
+					"may: everything else addressing a release by that name is an instance "+
+					"installing, reading or removing the one release a whole cluster used to "+
+					"share", fn)
+			}
+		}
+		// 🔴 THE CONSTANT IS NOT THE ONLY WAY TO SPELL IT. A function writing the literal
+		// "dc" satisfies the check above while being the same defect, which is exactly how
+		// a gate keyed on an identifier gets walked around.
+		//
+		// 🔑 THE EXACT NAME ONLY, NOT THE "dc-" PREFIX, AND THAT IS A CORRECTION RATHER
+		// THAN A WEAKENING. A prefix rule fires on backupCredentialsSecret's "dc-backup"
+		// and on every other dc-prefixed Secret, ConfigMap and service host in this
+		// package — none of which is a release name. A gate that cries wolf on correct
+		// code is one the next person deletes, and what it was written to stop is the
+		// single bare name every pre-v0.17.0 cluster shared.
+		for _, lit := range stringLiteralsIn(t, fn) {
+			if lit == legacyHelmReleaseName {
+				t.Errorf("%s writes the release name %q as a literal. Release names come from "+
+					"helmReleaseNameFor so that one edit moves every reader and writer together",
+					fn, lit)
 			}
 		}
 	}
@@ -86,6 +106,15 @@ func TestOnlyTheSweepMayMentionTheLegacyReleaseName(t *testing.T) {
 	if got := callsWithin(t, "helmInstall", "helmReleaseNameFor"); len(got) == 0 {
 		t.Fatal("helmInstall no longer derives its release name from helmReleaseNameFor, so " +
 			"what it installs under is not the name every reader of this cluster looks for")
+	}
+
+	// 🔴 AND THE REFUSAL HAS TO BE CALLED. refuseLegacyNamedRelease is correct whether or
+	// not anything invokes it, and its call site sits behind a live Helm connection — the
+	// same shape as the two mutants that survived this package's first mutation round.
+	if got := callsWithin(t, "helmInstall", "refuseLegacyNamedRelease"); len(got) == 0 {
+		t.Fatal("helmInstall no longer asks whether this instance is installed under the " +
+			"pre-rename release name, so such a run reaches Helm and fails on ownership " +
+			"metadata after the declaration and the operator have already moved")
 	}
 }
 
@@ -149,23 +178,75 @@ func callsWithin(t *testing.T, fn string, of ...string) []string {
 	return found
 }
 
-// identifiersByFunction maps each top-level function to the identifiers its body mentions.
+// stringLiteralsIn returns the unquoted string literals in a top-level function's body.
+func stringLiteralsIn(t *testing.T, fn string) []string {
+	t.Helper()
+	_, files := packageFiles(t)
+	var out []string
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Name.Name != fn || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if v, err := strconv.Unquote(lit.Value); err == nil {
+						out = append(out, v)
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// identifiersByFunction maps each top-level declaration to the identifiers it mentions.
+//
+// 🔑 PACKAGE-LEVEL DECLARATIONS ARE WALKED TOO, AND LEAVING THEM OUT WAS A HOLE. A gate
+// that only visits function bodies cannot see `var legacyName = legacyHelmReleaseName`,
+// after which every function in the package may spell the old name through an alias the
+// gate has no opinion about. They are keyed under a name that cannot collide with a
+// function's, so the allow-list above cannot accidentally exempt one.
 func identifiersByFunction(t *testing.T) map[string][]string {
 	t.Helper()
 	_, files := packageFiles(t)
 	out := map[string][]string{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok {
-					out[fd.Name.Name] = append(out[fd.Name.Name], id.Name)
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
 				}
-				return true
-			})
+				ast.Inspect(d.Body, func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok {
+						out[d.Name.Name] = append(out[d.Name.Name], id.Name)
+					}
+					return true
+				})
+			case *ast.GenDecl:
+				// The declaration of the constant itself is not a use of it.
+				if d.Tok == token.CONST {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, v := range vs.Values {
+						ast.Inspect(v, func(n ast.Node) bool {
+							if id, ok := n.(*ast.Ident); ok {
+								out["package-level declaration"] = append(
+									out["package-level declaration"], id.Name)
+							}
+							return true
+						})
+					}
+				}
+			}
 		}
 	}
 	return out
