@@ -63,6 +63,34 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tofu_dir="$repo_root/deploy/opentofu"
 
+# EVERY root's .tf files, not just tofu_dir's — and the difference is the whole
+# reason this is a list rather than a glob.
+#
+# The coverage check at the bottom is what makes this suite mean anything: it
+# refuses to pass while any variable carrying a validation block went unexercised.
+# It read "$tofu_dir"/*.tf, which was the entire repo's OpenTofu surface for as long
+# as there was one root. Add a second, and the blocks in it are not reported as
+# uncovered — they are not SEEN, so the suite still prints "all N exercised" and the
+# number just happens to be smaller. That is the silently-smaller-coverage-set shape
+# this script's own parser cross-check exists to refuse one level down; it would be
+# indefensible to guard the parser against it and leave the file list open to it.
+#
+# Roots come from hack/tofu-roots.sh, which fails rather than returning an empty
+# list. The console assertions still run in tofu_dir — a variable in another root
+# cannot be evaluated from here, and the right outcome for one is precisely the
+# "never exercised" failure below, naming it.
+mapfile -t tofu_roots < <(cd "$repo_root" && bash hack/tofu-roots.sh | sed "s#^#$repo_root/#")
+root_tf_files=()
+for _root in "${tofu_roots[@]}"; do
+  for _f in "$_root"/*.tf; do
+    [ -e "$_f" ] && root_tf_files+=("$_f")
+  done
+done
+if [ ${#root_tf_files[@]} -eq 0 ]; then
+  echo "FAIL: found no root .tf files across ${#tofu_roots[@]} discovered root(s)" >&2
+  exit 1
+fi
+
 TF="${TF:-}"
 if [[ -z "$TF" ]]; then
   if command -v tofu >/dev/null 2>&1; then
@@ -883,10 +911,10 @@ fi
 # number of `validation {` blocks in the same files, and a mismatch is a failure
 # naming the parser rather than a quietly smaller coverage set.
 guarded="$(awk '/^variable "/ { v = $2; gsub(/"/, "", v) } /^[[:space:]]*validation[[:space:]]*\{/ { if (v != "") print v }' \
-  "$tofu_dir"/*.tf | sort -u)"
+  "${root_tf_files[@]}" | sort -u)"
 attributed="$(awk '/^variable "/ { v = $2 } /^[[:space:]]*validation[[:space:]]*\{/ { if (v != "") n++ } END { print n + 0 }' \
-  "$tofu_dir"/*.tf)"
-declared="$(grep -hcE '^[[:space:]]*validation[[:space:]]*\{' "$tofu_dir"/*.tf | paste -sd+ | bc)"
+  "${root_tf_files[@]}")"
+declared="$(grep -hcE '^[[:space:]]*validation[[:space:]]*\{' "${root_tf_files[@]}" | paste -sd+ | bc)"
 if [[ -z "$guarded" ]]; then
   # The control's own control: a parser that matches nothing reports full coverage.
   echo "FAIL  found no validation blocks in the root .tf files — the coverage check below" \

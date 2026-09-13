@@ -65,9 +65,53 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 tofu_root=deploy/opentofu
-main=$tofu_root/main.tf
-root_vars=$tofu_root/variables.tf
+
+# EVERY root's main.tf and variables.tf, not one of each.
+#
+# 🔴 THIS GATE FAILS GREEN, WHICH IS WHY THE FILE LIST MATTERS MORE HERE THAN THE
+# LOGIC. It hardcoded $tofu_root/main.tf and $tofu_root/variables.tf by NAME. The
+# prerequisite charts — ingress-nginx, cert-manager, CNPG, kube-prometheus-stack —
+# are exactly the ones a cluster-prerequisite root would own, so the first thing a
+# root split does is move their pins out of the two files this check reads. It
+# would then scan a main.tf that instantiates none of them, find nothing to
+# object to, and print "all N third-party charts are pinned" with N quietly
+# smaller. Nothing goes red. Nothing says the set shrank.
+#
+# Roots come from hack/tofu-roots.sh, which refuses an empty list.
+mapfile -t root_dirs < <(bash "$(dirname "$0")/tofu-roots.sh")
+root_mains=()
+root_var_files=()
+for _root in "${root_dirs[@]}"; do
+	[ -e "$_root/main.tf" ] && root_mains+=("$_root/main.tf")
+	[ -e "$_root/variables.tf" ] && root_var_files+=("$_root/variables.tf")
+done
+if [ ${#root_mains[@]} -eq 0 ] || [ ${#root_var_files[@]} -eq 0 ]; then
+	echo "FAIL: discovered ${#root_dirs[@]} OpenTofu root(s) but found no main.tf/variables.tf among them" >&2
+	exit 1
+fi
+# Human-readable renderings for the failure messages, so a diagnostic still names
+# a real path when there is more than one root.
+mains_desc="$(printf '%s, ' "${root_mains[@]}")"; mains_desc=${mains_desc%, }
+vars_desc="$(printf '%s, ' "${root_var_files[@]}")"; vars_desc=${vars_desc%, }
 rc=0
+
+# root_pin_for <variable> — the exact pinned default for a root variable, looked up
+# across every root's variables.tf. Prints "<file>\t<pin>" on a hit. A variable
+# defined in two roots with DIFFERENT pins is itself a failure: the two roots would
+# install different chart versions under one name.
+root_pin_for() {
+	local want="$1" f pin hit_file="" hit_pin=""
+	for f in "${root_var_files[@]}"; do
+		pin=$(pinned_default "$f" "$want")
+		[ -n "$pin" ] || continue
+		if [ -n "$hit_pin" ] && [ "$hit_pin" != "$pin" ]; then
+			fail "variable $want is pinned in more than one root and they disagree:
+      $hit_file pins $hit_pin, $f pins $pin. One name must mean one chart version."
+		fi
+		[ -n "$hit_pin" ] || { hit_pin=$pin; hit_file=$f; }
+	done
+	[ -n "$hit_pin" ] && printf '%s\t%s\n' "$hit_file" "$hit_pin"
+}
 
 fail() {
 	echo "FAIL: $1" >&2
@@ -172,7 +216,7 @@ while IFS=$'\t' read -r dir release ver; do
 		case "$rvar" in
 		var.*) ;;
 		*)
-			fail "$main passes $mvar=$rvar to modules/$dir.
+			fail "$mains_desc passes $mvar=$rvar to modules/$dir.
       An explicit argument BEATS the module's pinned default, so this — not the
       module — is the value that installs. It must be a root variable this check can
       follow, never a literal."
@@ -180,23 +224,31 @@ while IFS=$'\t' read -r dir release ver; do
 			;;
 		esac
 		rvar=${rvar#var.}
-		root_pin=$(pinned_default "$root_vars" "$rvar")
+		root_hit=$(root_pin_for "$rvar")
+		root_pin=${root_hit#*$'\t'}
+		root_pin_file=${root_hit%%$'\t'*}
+		[ -n "$root_hit" ] || { root_pin=""; root_pin_file=$vars_desc; }
 		if [ -z "$root_pin" ]; then
-			fail "$root_vars: variable $rvar has no exact pinned default.
+			fail "$root_pin_file: variable $rvar has no exact pinned default.
       This is the WEAKER-looking pin and the one that actually decides: the root
       passes it to modules/$dir explicitly, and an explicit argument beats a module
       default."
 		elif [ -n "$module_pin" ] && [ "$module_pin" != "$root_pin" ]; then
 			fail "the two pins for $mvar disagree: $module_file pins $module_pin but
-      $root_vars pins $root_pin via $rvar. The root's value installs, so the
+      $root_pin_file pins $root_pin via $rvar. The root's value installs, so the
       module's comments would be describing a chart nobody deploys."
 		fi
 		[ "$rc" -eq 0 ] && echo "  $dir/$release <- $rvar = $root_pin"
 	done <<<"$(
-		uncomment <"$main" | awk -v dir="./modules/$dir" -v mvar="$mvar" '
+		cat "${root_mains[@]}" | uncomment | awk -v dir="modules/$dir" -v mvar="$mvar" '
 			/^module "/                        { insrc = 1; src = "" }
 			insrc && /^[[:space:]]*source[[:space:]]*=/ { src = $3; gsub(/"/, "", src) }
-			insrc && $1 == mvar && $2 == "="   { if (src == dir) print $3 }
+			# Match the source by SUFFIX. A second root reaches the shared modules
+			# tree by a different relative path ("../modules/x", not "./modules/x"),
+			# and an exact compare would silently stop matching — which reads as
+			# "this root instantiates nothing", the same green-over-nothing this
+			# file list was widened to prevent.
+			insrc && $1 == mvar && $2 == "="   { if (src ~ ("(^|/)" dir "$")) print $3 }
 			/^}/                               { insrc = 0 }
 		'
 	)"
