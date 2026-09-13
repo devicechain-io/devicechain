@@ -193,7 +193,7 @@ func (d *doctor) checkKubeContexts() {
 		d.warn("no current-context set", "select one with: kubectl config use-context <name>")
 	}
 	if len(names) == 0 {
-		d.warn("no contexts found in kubeconfig", "create a local cluster (e.g. deploy/local/up.sh) or add a context")
+		d.warn("no contexts found in kubeconfig", "create a local cluster (kind create cluster --config deploy/local/kind-cluster.yaml) or add a context")
 		return
 	}
 	for _, name := range names {

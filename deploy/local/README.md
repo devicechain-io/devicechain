@@ -22,10 +22,10 @@ get captured here as we find them.
 
 ```bash
 cd deploy/local
-./preflight.sh          # check the host is ready (prints fixes for anything missing)
-make up                 # create cluster + registry + LB, apply infra, install core + chart
+dcctl preflight local   # check the host is ready (prints fixes for anything missing)
+dcctl bootstrap local <instance>   # cluster, infra, core, chart, credentials, seed
 # ... test ...
-make down               # tear it all down
+dcctl destroy <instance>           # deletes the cluster too (--keep-cluster to keep it)
 ```
 
 The cluster is named **`devicechain`**, so its kube-context is
@@ -53,10 +53,11 @@ Tooling (the [preflight](#preflight) script checks all of these):
 
 ## Host baseline (WSL2 and Linux)
 
-These are the environment tweaks the stack needs. `preflight.sh` verifies each
+These are the environment tweaks the stack needs. `dcctl preflight` verifies each
 one and prints the fix if it's missing. **When we discover new requirements, add
-them here and as a check in `preflight.sh`** — that's the whole point of this
-directory.
+them here and as a check in `dcctl preflight`** (the host checks live in
+[`backend/cli/cmd/preflight_linux.go`](../../backend/cli/cmd/preflight_linux.go))
+— that's the whole point of writing them down.
 
 ### 1. Run Docker natively, not via Docker Desktop
 
@@ -119,37 +120,47 @@ a larger drive or `wsl --manage <distro> --resize <size>`.
 
 ---
 
-## What `make up` does
+## What the bring-up does
 
-`up.sh` runs the end-to-end bring-up. Today it performs the steps directly; the
-`dcctl bootstrap local` pipeline is being implemented to automate exactly this
-sequence (ADR-032), at which point the middle of the script collapses to a single
-`dcctl bootstrap local <instance>` call.
+**`dcctl bootstrap local <instance>` is the bring-up, and it is the only one.**
+There used to be a second: `up.sh`, which performed the same steps directly as
+shell. It was removed once dcctl became the thing that mints an instance's
+credentials — a script applying the infrastructure tree on its own could only
+produce an instance that comes up healthy and authenticates nothing, because the
+databases, the object store, the broker's certificate authority and the dashboard
+login are all written by dcctl BEFORE the apply now (ADR-080). Two tools meant two
+implementations of those rules, which is how one shared default credential came to
+open every instance in the first place.
 
-1. **Preflight** — fail fast if the host baseline isn't met.
-2. **Create the kind cluster** from [`kind-cluster.yaml`](kind-cluster.yaml)
-   (single control-plane node by default).
-3. **`cloud-provider-kind`** in the background, so `type: LoadBalancer` services
-   (ingress-nginx, NATS MQTT device ingress) get real IPs.
-4. **(developer path only)** With `BUILD_IMAGES=1`: start a local registry at
-   `localhost:5000`, wire it into the cluster's containerd, and build+push images.
-   End users skip this and pull published images.
-5. **OpenTofu apply** of [`deploy/opentofu`](../opentofu) — NATS, Postgres,
-   TimescaleDB, ingress-nginx, cert-manager — targeting `kind-devicechain`.
-6. **Install core** — CRDs + operator (`backend/k8s` `make install deploy`).
-   Note `dcctl bootstrap` does this BEFORE the OpenTofu apply rather than after,
-   so that the Instance CRD exists before anything declares an instance (ADR-080);
-   this script has no such requirement and keeps the simpler order.
-7. **Install the instance chart** — `helm install` of
-   [`deploy/helm/devicechain`](../helm/devicechain) at the resolved registry/version.
-8. **Seed** an admin credential / example data via `dcctl`.
+What remains here is the part dcctl does not own: the **cluster** itself, the
+**host diagnosis**, and the **image registry**.
 
-`make down` deletes the cluster and the background `cloud-provider-kind` process
-(and the registry with `make purge`).
+1. **Preflight** — `dcctl preflight local`. Fails fast if the host
+   baseline isn't met.
+2. **The kind cluster** — `dcctl bootstrap local` creates one from the embedded
+   copy of [`kind-cluster.yaml`](kind-cluster.yaml) (single control-plane node by
+   default) if there is none, and `dcctl destroy` deletes it again.
+3. **`dcctl bootstrap local <instance>`** — everything else, in the order ADR-080
+   settled: CRDs and the operator FIRST, so the definition of an instance exists
+   before anything declares one; then the credentials, minted and written; then the
+   infrastructure apply; then the chart; then the seed.
+
+`cloud-provider-kind` is **optional and nothing here starts it**. The default
+bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no
+`type: LoadBalancer` service has to resolve. Run it yourself only if you want real
+LoadBalancer IPs — and then stop it yourself (`pkill -x cloud-provider-kind`).
+
+`dcctl destroy <instance>` deletes the cluster along with the instance. Two things
+survive it deliberately, both one-liners if you want them gone:
+
+```bash
+docker rm -f kind-registry          # the local image registry (kept as a warm cache)
+pkill -x cloud-provider-kind        # only if you started it
+```
 
 ### Images — published by default, build is a developer opt-in
 
-**By default `make up` deploys published images** from
+**By default `dcctl bootstrap local` deploys published images** from
 `ghcr.io/devicechain-io/<area>:<VERSION>` — no source build, no local registry.
 This mirrors what an end user gets (most users won't even have the source).
 
@@ -157,25 +168,26 @@ This mirrors what an end user gets (most users won't even have the source).
 prereleases excluded. Pin a different one explicitly:
 
 ```bash
-make up                  # published images at the newest release tag
-VERSION=v1.4.0 make up    # published images at a specific release
+dcctl bootstrap local dev                    # published images at the newest release tag
+dcctl bootstrap local dev --version v1.4.0   # published images at a specific release
 ```
 
 Note the leading `v`: the release pipeline tags images with the git tag verbatim,
 so `ghcr.io/devicechain-io/device-management:v1.4.0` exists and `:1.4.0` does not.
 If no release tag is reachable — a tarball export, a shallow clone, a fork with no
-releases — `make up` refuses rather than guessing a version that would
+releases — `dcctl bootstrap` refuses rather than guessing a version that would
 `ImagePullBackOff` several minutes later.
 
 **Developers** who are changing service code build from source instead:
 
 ```bash
-BUILD_IMAGES=1 make up  # ko-build all images → local registry → deploy those
-make images             # just build & push (no cluster changes)
+dcctl bootstrap local dev --build  # ko-build all images → local registry → deploy those
+./build-images.sh                  # just build & push (no cluster changes)
 ```
 
-`BUILD_IMAGES=1` flips the registry to `localhost:5000` (tag `dev`), starts the
-local registry, and runs [`build-images.sh`](build-images.sh). That script uses
+`--build` flips the registry to `localhost:5000` (tag `dev`), starts the local
+registry, and builds the same images [`build-images.sh`](build-images.sh) does.
+That script uses
 **`ko`** (the repo's image tool — services use local `replace` directives that
 Dockerfiles can't resolve, so CI builds with ko too) with `--bare`, so each image
 is named exactly what the Helm chart pulls: `{REGISTRY}/{area}:{TAG}` for services
@@ -208,7 +220,7 @@ Use `bounce.sh` when you need to validate the actual served artifact.
 ## Reaching the UI / API
 
 - **From WSL2:** hit the ingress-nginx LoadBalancer IP that `cloud-provider-kind`
-  assigns (printed at the end of `up.sh`), or `localhost` via the node port
+  assigns (printed at the end of the bootstrap), or `localhost` via the node port
   mappings in `kind-cluster.yaml`.
 - **From the Windows browser:** with `networkingMode=mirrored`, `localhost` is
   shared — the node port mappings (80/443) are reachable directly.
@@ -220,20 +232,21 @@ Use `bounce.sh` when you need to validate the actual served artifact.
 Single control-plane is the default (least overhead — every node is a full
 kubelet/containerd container). To exercise PodDisruptionBudgets / anti-affinity,
 uncomment the `worker` nodes in [`kind-cluster.yaml`](kind-cluster.yaml) and
-re-run `make up`.
+re-run `dcctl bootstrap local <instance>`.
 
 ---
 
 ## Troubleshooting / discovered tweaks
 
-Append new findings here (and as checks in `preflight.sh`) so the baseline stays
-current.
+Append new findings here (and as checks in `dcctl preflight`) so the baseline
+stays current.
 
 - **`LoadBalancer` service stuck `<pending>`** — `cloud-provider-kind` isn't
-  running. `make up` starts it; check `pgrep -a cloud-provider-kind`.
+  running, and nothing starts it for you. The default bootstrap needs no
+  LoadBalancer at all; start it by hand only if you want one.
 - **`too many open files` / controllers crashlooping** — inotify limits (step 2).
 - **Image `ErrImagePull` from `localhost:5000`** — the registry container isn't
-  connected to the kind network, or images weren't pushed. Re-run `make up`
+  connected to the kind network, or images weren't pushed. Re-run the bootstrap
   (idempotent) and confirm `docker ps | grep kind-registry`.
 - **DB pod `Pending` on PVC** — disk headroom (step 4), or PV data accidentally
   pointed at a 9p mount.

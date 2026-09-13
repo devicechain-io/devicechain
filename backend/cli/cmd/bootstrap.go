@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -18,33 +19,34 @@ import (
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext     string
-	bootstrapProfile         string
-	bootstrapDryRun          bool
-	bootstrapAssumeYes       bool
-	bootstrapSkipPreflight   bool
-	bootstrapRegistry        string
-	bootstrapVersion         string
-	bootstrapBuild           bool
-	bootstrapHost            string
-	bootstrapNoTLS           bool
-	bootstrapNoMonitoring    bool
-	bootstrapNoCNPG          bool
-	bootstrapAllowLegacyDb   bool
-	bootstrapGrafanaSSO      bool
-	bootstrapDev             bool
-	bootstrapCompact         bool
-	bootstrapHA              bool
-	bootstrapEnableAreas     []string
-	bootstrapLwm2mIdentities string
-	bootstrapEscrowFile      string
-	bootstrapEscrowPassFile  string
-	bootstrapNoEscrow        bool
-	bootstrapRestoreRootKey  string
-	bootstrapRestoreRdbFrom  string
-	bootstrapRestoreRdbAt    string
-	bootstrapRestoreTsdbFrom string
-	bootstrapRestoreTsdbAt   string
+	bootstrapKubeContext       string
+	bootstrapProfile           string
+	bootstrapDryRun            bool
+	bootstrapAssumeYes         bool
+	bootstrapSkipPreflight     bool
+	bootstrapRegistry          string
+	bootstrapVersion           string
+	bootstrapBuild             bool
+	bootstrapHost              string
+	bootstrapNoTLS             bool
+	bootstrapNoMonitoring      bool
+	bootstrapNoCNPG            bool
+	bootstrapAllowLegacyDb     bool
+	bootstrapGrafanaSSO        bool
+	bootstrapDev               bool
+	bootstrapCompact           bool
+	bootstrapHA                bool
+	bootstrapEnableAreas       []string
+	bootstrapLwm2mIdentities   string
+	bootstrapBackupCredentials string
+	bootstrapEscrowFile        string
+	bootstrapEscrowPassFile    string
+	bootstrapNoEscrow          bool
+	bootstrapRestoreRootKey    string
+	bootstrapRestoreRdbFrom    string
+	bootstrapRestoreRdbAt      string
+	bootstrapRestoreTsdbFrom   string
+	bootstrapRestoreTsdbAt     string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -292,6 +294,29 @@ var bootstrapCmd = &cobra.Command{
 			return fmt.Errorf("--lwm2m-identities: %w", err)
 		}
 
+		// Parse + validate --backup-credentials-file up front, for a sharper version of
+		// the same reason: a bad object-store credential does not crash anything. WAL
+		// archiving simply stops, the databases stay healthy, and the first symptom is
+		// an archive-lag alert — or a restore that finds no base backup.
+		backupDestination, err := bootstrap.ParseBackupDestination(bootstrapBackupCredentials)
+		if err != nil {
+			return fmt.Errorf("--backup-credentials-file: %w", err)
+		}
+		// 🔴 AN OFF-SITE ARCHIVE IS MEANINGLESS WITHOUT THE BACKUPS IT ARCHIVES. The
+		// flags that switch the backup subsystem off do so as a CONSEQUENCE of other
+		// choices (--no-cnpg removes the operator the plugin extends; --compact --no-tls
+		// drops the cert-manager the plugin needs for its own Issuer), so an operator
+		// can reach this combination without ever having asked for it — and the silent
+		// outcome is a destination that is configured, believed, and never written to.
+		if backupDestination.Configured() &&
+			!bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS) {
+			return fmt.Errorf("--backup-credentials-file names an off-site archive, but this " +
+				"combination of flags leaves the instance with no database backups to send there " +
+				"(--no-cnpg removes the operator the backup plugin extends; --compact with " +
+				"--no-tls drops the cert-manager it needs). Drop the flag, or drop whichever of " +
+				"those turned backups off")
+		}
+
 		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
 		// and the report label see the same clean set. A stray `--enable-area " "` then
 		// correctly takes the untouched-profile path instead of silently switching to an
@@ -420,6 +445,14 @@ var bootstrapCmd = &cobra.Command{
 		// A failure to record is a WARNING, not a stop. The cluster is already up; making
 		// a bookkeeping error abort a bring-up would trade a recoverable annoyance
 		// (destroy falls back to the guess, loudly) for a broken install.
+		//
+		// 🔴 AND THERE IS EXACTLY ONE FAILURE THE REASONING ABOVE DOES NOT COVER, so what
+		// was here first is captured before it is replaced. The refusal of a SECOND
+		// instance can only fire on a cluster this run did not create, so the record it
+		// is about to write describes nothing — and nothing else can clear it, because a
+		// `dcctl destroy` refusal returns before removeInstanceState. See PriorLocalState
+		// for why this restores rather than deletes.
+		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
 				Instance:     opts.Instance,
@@ -460,15 +493,49 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          opts.EnableAreas,
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
+			BackupDestination:    backupDestination,
 			Escrow:               escrowPlan,
 			Restore:              restorePlan,
 			Values:               map[string]string{},
 		}
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
+		unwindLocalRecordOnSecondInstance(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
+}
+
+// unwindLocalRecordOnSecondInstance puts the local record back after the one refusal
+// that makes it describe nothing.
+//
+// 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
+// cluster that may be half-built and MUST keep its record, which is the whole reason the
+// record is written before the pipeline. This one cannot: a cluster already holding
+// another instance is one EnsureCluster adopted, never one it created, so there is
+// nothing for the record to name. Widening this to "any error" would restore the orphan
+// the record exists to prevent.
+//
+// It reports and moves on. The refusal is what the operator is about to read, and
+// failing differently because the cleanup failed would replace a message they can act on
+// with one they cannot.
+func unwindLocalRecordOnSecondInstance(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+	var refusal *bootstrap.ErrSecondInstance
+	if opts.DryRun || !errors.As(runErr, &refusal) {
+		return
+	}
+	removed, err := prior.Restore()
+	if err != nil {
+		fmt.Println(color.YellowString(
+			"warning: could not undo the local record this run wrote for %q (%v).\n"+
+				"  `dcctl instances list` will show it even though nothing was installed; "+
+				"remove ~/.devicechain/%s by hand.", opts.Instance, err, opts.Instance))
+		return
+	}
+	if removed {
+		fmt.Println(color.WhiteString(
+			"Nothing was installed, so the local record for %q has been removed again.", opts.Instance))
+	}
 }
 
 func init() {
@@ -489,6 +556,7 @@ func init() {
 			"HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying "+
 			"with it set destroys those StatefulSets and brings up empty databases on the same "+
 			"hostnames. Dump first, or use it deliberately to discard a local instance")
+	bootstrapCmd.Flags().StringVar(&bootstrapBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the instance provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. The credentials are written to a Secret before the apply and never reach the infrastructure state — keep the file readable only by you")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
 	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")

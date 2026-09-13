@@ -86,15 +86,77 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	vals := helmValues(st)
+	// WHAT THE RELEASE ALREADY HOLDS, when this run is moving an instance rather than
+	// building one. Read before the values are computed, because some of what it
+	// carries is an INPUT to that computation — see carryForwardFromRelease.
+	var previous map[string]interface{}
+	if st.Evolving {
+		if previous, err = previousReleaseValues(actionConfig); err != nil {
+			return err
+		}
+		carryForwardFromRelease(st, previous)
+	}
 
-	// Check the instance config the chart is about to render BEFORE handing it to
+	// 🔴 TWO VALUE MAPS, AND THE DIFFERENCE BETWEEN THEM IS THE SLICE. The authoring
+	// values carry the instance's credentials inside instance.config; the install
+	// values carry the NAME of a Secret dcctl wrote instead. Helm records the values
+	// of every revision it keeps, so anything that stays in this map stays readable
+	// for as long as that revision does — which is what makes rotating a credential
+	// something other than retracting it.
+	authoring := helmValues(st)
+	doc, err := composeInstanceConfig(ctx, ch, authoring)
+	if err != nil {
+		return err
+	}
+	vals, err := installValuesFor(authoring, st.Instance, doc)
+	if err != nil {
+		return err
+	}
+	// Before the check below rather than after it, so what is validated is what is
+	// installed. A carried block that the chart refuses should fail here, named, and
+	// not ten minutes later as a rollout that never became ready.
+	if st.Evolving {
+		carryReleaseValues(vals, previous)
+	}
+
+	// Check the instance config the chart is about to be handed BEFORE handing it to
 	// the cluster. Everything below waits on workload readiness, so a config a
 	// service refuses to load does not surface as a config error at all — it
 	// surfaces as a ten-minute wait that ends in a generic timeout, with the actual
 	// reason only in the logs of pods that are already gone. Rendering costs
 	// milliseconds and turns that into a sentence.
-	if err := validateRenderedInstanceConfig(ctx, ch, vals, nil); err != nil {
+	//
+	// 🔑 IT IS NOW THE AUTHORED PATH, which is the one it was written for. The
+	// document is passed in because the chart no longer renders one: with nothing
+	// supplied here this returns "no instance configuration document was produced",
+	// and the strict load that turns an unloadable config into a sentence would
+	// simply not run. Handing it the exact bytes about to be written also makes this
+	// a check on the COMPOSITION — a document the chart transformed one way and
+	// dcctl wrote another is refused here rather than mounted.
+	if err := validateRenderedInstanceConfig(ctx, ch, vals, doc); err != nil {
+		return err
+	}
+
+	// The namespace, then the document, then the release. The pods mount the Secret
+	// at container start, so it has to be there before the workloads Helm waits on;
+	// and the namespace has to be there before the Secret. See
+	// ensureNamespaceForRelease for why creating it here does not move its ownership.
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to write the instance configuration: %w", err)
+	}
+	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseName, releaseNamespace); err != nil {
+		return err
+	}
+	// On an instance built before dcctl owned this document, the Secret is there and
+	// the chart wrote it — so the writer below would refuse it as somebody else's.
+	// See adoptChartWrittenInstanceConfig for why that is a takeover and not a guess.
+	if err := adoptChartWrittenInstanceConfig(ctx, typed, st.Instance, st.InstanceUID,
+		helmReleaseName, releaseNamespace); err != nil {
+		return err
+	}
+	if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID,
+		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
 	}
 
@@ -116,6 +178,35 @@ func helmInstall(ctx context.Context, st *State) error {
 
 	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, helmReleaseName, ch, vals)
 	return err
+}
+
+// previousReleaseValues returns the values the release is currently installed with,
+// or nil when there is no release yet.
+//
+// 🔴 THE USER-SUPPLIED VALUES, NOT THE COMPUTED ONES. action.GetValues with AllValues
+// left off returns what was passed IN, which is the only half an upgrade may carry
+// forward: the computed half is the chart's own defaults merged underneath, and
+// carrying those would pin this instance to the defaults of the chart version it was
+// installed with — freezing exactly the thing an upgrade exists to move.
+//
+// 🔑 AND THEY HOLD NO CREDENTIALS, which is what makes reading them safe. The
+// instance's secrets were taken out of the release values when dcctl became the
+// document's author — installValuesFor strips instance.config and leaves a NAME. This
+// reads the map that change created.
+func previousReleaseValues(cfg *action.Configuration) (map[string]interface{}, error) {
+	vals, err := action.NewGetValues(cfg).Run(helmReleaseName)
+	if err == driver.ErrReleaseNotFound {
+		// Not an error here. An instance whose release is gone but whose declaration
+		// and configuration document survive is a real state — a release uninstalled
+		// by hand — and the install branch below rebuilds it. There is simply nothing
+		// to carry.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the values instance's release is currently installed "+
+			"with, which this upgrade has to carry forward: %w", err)
+	}
+	return vals, nil
 }
 
 // newHelmUpgrade builds the upgrade action every re-run of the chart goes through.
@@ -202,8 +293,40 @@ func helmValues(st *State) map[string]interface{} {
 		infraVals["secrets"] = map[string]interface{}{"rootKey": rootKey}
 	}
 	instanceVals := map[string]interface{}{"id": st.Instance}
+	configVals := map[string]interface{}{}
 	if len(infraVals) > 0 {
-		instanceVals["config"] = map[string]interface{}{"infrastructure": infraVals}
+		configVals["infrastructure"] = infraVals
+	}
+	// THE DATABASE PASSWORDS THE SERVICES CONNECT WITH.
+	//
+	// 🔴 UNTIL THIS LINE THEY CAME FROM THE CHART'S OWN DEFAULTS — the literal
+	// `password: devicechain` in values.yaml, identical on every instance anyone has
+	// ever built, and identical to the OpenTofu variable default that created the
+	// role. Stating them here is what makes the value an instance's own.
+	//
+	// 🔑 IT IS THE SAME VALUE THAT WENT INTO THE CREDENTIALS SECRET, by construction:
+	// both come from the one credentialSet this run settled. That is the entire
+	// reason the credentials are resolved in one place before anything is applied —
+	// the role and the connection string cannot be given different passwords if
+	// there is only one to give.
+	if creds := st.Credentials; creds != nil {
+		configVals["persistence"] = map[string]interface{}{
+			"rdb": map[string]interface{}{
+				"configuration": map[string]interface{}{
+					"username": dbRoleUsername,
+					"password": creds.RDBPassword,
+				},
+			},
+			"tsdb": map[string]interface{}{
+				"configuration": map[string]interface{}{
+					"username": dbRoleUsername,
+					"password": creds.TSDBPassword,
+				},
+			},
+		}
+	}
+	if len(configVals) > 0 {
+		instanceVals["config"] = configVals
 	}
 
 	vals := map[string]interface{}{
@@ -338,11 +461,8 @@ func helmValues(st *State) map[string]interface{} {
 // cluster running a differently-named instance will do, which is exactly what both
 // validation rigs produce by passing --kube-context.
 func helmUninstall(ctx context.Context, kubeContext, instance string) error {
-	settings := cli.New()
-	settings.KubeContext = kubeContext
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(settings.RESTClientGetter(), helmReleaseNamespace, "secret",
-		func(string, ...interface{}) {}); err != nil {
+	actionConfig, err := helmActionConfig(kubeContext)
+	if err != nil {
 		return err
 	}
 
@@ -369,16 +489,23 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 	return err
 }
 
-// uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
+// foreignReleaseError is the refusal below, as a value the CALLER can recognise.
 //
-// Separated from helmUninstall so the policy can be exercised without a cluster — the
-// same reason rebuildRefusalReason is separate from its step. A guard whose refusal has
-// only ever been produced by hand on a kind cluster is a guard the next edit removes.
-func uninstallRefusalReason(owner, instance string) error {
-	if owner == instance {
-		return nil
-	}
-	return fmt.Errorf(
+// 🔴 A TYPE RATHER THAN A MESSAGE, BECAUSE ONE CALLER HAS TO ACT ON THIS PARTICULAR
+// REFUSAL AND ON NO OTHER. destroyInstanceOnly answers it by asking whether the instance
+// it was told to destroy has anything in this cluster at all, and that question ends in
+// removing local state — see resolveForeignRelease. A caller that recognised the refusal
+// by matching words in its message would start clearing state the day the wording
+// changed, or the day some unrelated failure happened to contain them. The shape is
+// ErrForeignSecret's, for the same reason.
+type foreignReleaseError struct {
+	// Owner is the instance the installed release belongs to; Instance is the one the
+	// operator named. They are never equal here — an equal pair is not a refusal.
+	Owner, Instance string
+}
+
+func (e *foreignReleaseError) Error() string {
+	return fmt.Sprintf(
 		"the DeviceChain release in this cluster belongs to instance %q, not %q, so uninstalling "+
 			"it would destroy an instance this command did not name. A cluster holds one release "+
 			"(%q in namespace %q) and its name carries no instance, so this is checked rather "+
@@ -387,7 +514,44 @@ func uninstallRefusalReason(owner, instance string) error {
 			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
 			"  `dcctl instances list` shows what dcctl believes it has.",
-		owner, instance, helmReleaseName, helmReleaseNamespace, owner, instance)
+		e.Owner, e.Instance, helmReleaseName, helmReleaseNamespace, e.Owner, e.Instance)
+}
+
+// uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
+//
+// Separated from helmUninstall so the policy can be exercised without a cluster — the
+// same reason rebuildRefusalReason is separate from its step. A guard whose refusal has
+// only ever been produced by hand on a kind cluster is a guard the next edit removes.
+//
+// 🔴 IT RETURNS error, NOT *foreignReleaseError, AND THAT IS NOT A STYLE CHOICE. A
+// function returning the concrete pointer hands its caller a TYPED NIL, which is not
+// nil — so `if err := uninstallRefusalReason(...); err != nil` would refuse every
+// uninstall, including the instance's own, and the negative control below is what would
+// catch it.
+func uninstallRefusalReason(owner, instance string) error {
+	if owner == instance {
+		return nil
+	}
+	return &foreignReleaseError{Owner: owner, Instance: instance}
+}
+
+// helmActionConfig reaches the release records a cluster holds.
+//
+// One definition rather than one per caller, for the same reason helmReleaseName and
+// helmReleaseNamespace are hoisted above: every reader of the release has to look in
+// the same namespace as the writer, and a namespace written down once per call site is
+// a namespace that eventually disagrees with itself. The logger is discarded because
+// Helm's storage driver narrates every read at info level, which would interleave with
+// dcctl's own step output.
+func helmActionConfig(kubeContext string) (*action.Configuration, error) {
+	settings := cli.New()
+	settings.KubeContext = kubeContext
+	cfg := new(action.Configuration)
+	if err := cfg.Init(settings.RESTClientGetter(), helmReleaseNamespace, "secret",
+		func(string, ...interface{}) {}); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // releaseInstance reports which instance the installed release belongs to.

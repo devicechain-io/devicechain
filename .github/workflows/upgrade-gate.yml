@@ -19,6 +19,17 @@
 # its real API, upgrades the way the documentation tells an operator to, and reads
 # every row back. `hack/upgrade-rig.sh` is the drill; this file is the runner.
 #
+# 🔴 THERE ARE TWO DRILLS AND NO SKIP, and the second one exists because a release
+# may deliberately not upgrade onto its predecessor. On such a release the paragraph
+# above describes something that cannot happen — so what runs instead is a drill of
+# the claim that release DOES make: the unsupported upgrade refuses, for the right
+# reason, tells the operator to destroy and bootstrap, and damages nothing. That is
+# precisely what every operator on the old version is about to hit, so it deserves
+# measuring rather than waving through. Which drill runs is DECLARED in
+# hack/upgrade-baseline-policy; the drill it selects is what falsifies a wrong
+# declaration; and `ranwhat` at the end of the job refuses a run in which NEITHER
+# happened. See the "Which drill" step.
+#
 # 🔴 IT RUNS `pull` ON THE RELEASE PATH, AND THAT IS THE POINT. The rig's default
 # builds the working tree's images, which is right for a developer and wrong for a
 # release: a source build of the same commit is not the same bytes, was not
@@ -27,13 +38,18 @@
 # operator actually installs. (The in-cluster pull is anonymous, so that tag's ghcr
 # packages must be public; a private one surfaces here as a helm --wait timeout.)
 #
-# 🔴 THE `operator` STEP IS EXPECTED TO FAIL UNTIL THE OPERATOR GAP IS CLOSED.
-# It is not a flake and it is not this workflow being wrong. The documented upgrade
-# is a `helm upgrade`, the operator is not in the chart, and no dcctl subcommand
-# moves it — while the documentation promises one version covering the services,
-# the operator, the chart and the CLI together with no skew to reason about. The
-# drill exits 3 for exactly this and nothing else, so the summary can name the
-# finding rather than reporting "the drill failed". See the step's own comment.
+# 🔴 THE `operator` STEP IS NO LONGER EXPECTED TO FAIL, AND THIS PARAGRAPH USED TO
+# SAY THE OPPOSITE. The gap it described was real: the documented upgrade was a
+# `helm upgrade`, the operator is not in the chart, and for a while no dcctl
+# subcommand moved it, so the step was red by design. `dcctl upgrade` closed that
+# — it moves the operator, the instance configuration document and the release
+# together — and the drill now runs exactly that one command.
+#
+# 🔴 SO A RED HERE IS A REGRESSION, NOT THE KNOWN GAP, AND THE DISTINCTION IS THE
+# WHOLE VALUE OF THIS STEP. While the text above still said "expected", a genuine
+# failure to move the operator would have been read as the documented condition and
+# waved through. The drill exits 3 for this finding and nothing else, so the summary
+# can name it rather than reporting "the drill failed". See the step's own comment.
 #
 # Tools beyond the runner defaults (docker, kubectl, helm, git, curl are
 # preinstalled): kind and tofu always; ko + a frontend docker build on the --build
@@ -376,12 +392,64 @@ jobs:
         run: hack/upgrade-rig.sh selftest
 
       # -------------------------------------------------------------------
+      # WHICH DRILL? And why there are two rather than a skip.
+      # -------------------------------------------------------------------
+      # 🔴 A RELEASE MAY DELIBERATELY NOT UPGRADE ONTO ITS PREDECESSOR. When it does,
+      # the data drill below cannot run -- there is no upgrade to perform, so there is
+      # no "did the rows survive it" to ask -- and the obvious answer is to stand this
+      # gate down for that release. That answer is wrong twice: it makes a REQUIRED
+      # check report a green nothing earned, which is the shape this whole file argues
+      # against; and it leaves the thing every operator on the old version is about to
+      # do -- type `dcctl upgrade` -- measured by nothing, on the one release where it
+      # is guaranteed to fail.
+      #
+      # So the other case is a DRILL, not a skip. It requires the unsupported upgrade
+      # to refuse for the right reason, to name destroy + bootstrap as the way through,
+      # and to leave the instance on the same Helm revision, the same operator image
+      # and every seeded row -- then it runs verify's own negative controls, because a
+      # verify that has not been shown to fail certifies nothing there either.
+      #
+      # 🔴 THE CHOICE IS DECLARED IN hack/upgrade-baseline-policy AND NEVER INFERRED,
+      # and the drill it selects is what checks it: the recreate drill fails if the
+      # upgrade SUCCEEDS, and the data drill fails if it cannot. A wrong declaration is
+      # loud in both directions. Read that file for the reasoning.
+      #
+      # 🔴 AND `ranwhat` AT THE END IS NOT DECORATION. Two conditional paths means two
+      # conditions, and two false conditions is a job whose every expensive step was
+      # skipped and whose result is success. That is the same failure the `upgrade-gate`
+      # job below refuses to pass on when `scope` gives no usable answer, and it gets
+      # the same treatment here.
+      - name: Which drill does this baseline earn?
+        id: drillmode
+        run: |
+          set -euo pipefail
+          mode="$(hack/upgrade-rig.sh mode)"
+          case "$mode" in
+            data|recreate) ;;
+            *)
+              echo "::error::the rig resolved the drill mode to '$mode', which is neither"
+              echo "'data' nor 'recreate'. Every step below is conditional on it, so an"
+              echo "unusable answer would skip the whole drill and report success."
+              exit 1
+              ;;
+          esac
+          echo "DC_UPGRADE_MODE=$mode" >> "$GITHUB_ENV"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          # `:-` because the script runs under `set -u`, and the derive step above is
+          # the only thing that sets this. If that ever stops being true, the wrong
+          # failure to get is an unbound-variable abort on the reporting line.
+          echo "Drill for baseline ${DC_BASELINE_TAG:-<unset>}: $mode"
+
+      # -------------------------------------------------------------------
       # The drill, one phase per step.
       # -------------------------------------------------------------------
       # Split rather than `all` in one step so a red is attributable from the step
       # NAME alone. It also makes the operator step -- the one expected to fail --
       # structurally separate from every other failure, instead of a code the
       # summary has to parse out of a shared log.
+      #
+      # `up` is COMMON to both drills: both need the baseline installed and seeded,
+      # because both measure what happens to those rows.
       - name: Install the baseline and seed one of every entity
         run: hack/upgrade-rig.sh up
 
@@ -418,10 +486,15 @@ jobs:
             | (cd backend/core && go run ./egress/internal/policyranges -policies) \
             | kubectl --context kind-devicechain-upgrade apply --dry-run=server -f -
 
+      # -------------------------------------------------------------------
+      # DRILL A -- the data drill. The baseline is upgradeable onto this release.
+      # -------------------------------------------------------------------
       - name: Upgrade, the way the documentation says to
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh upgrade
 
       - name: THE DRILL -- every seeded row must read back unchanged
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh verify
 
       # The wider, shallower question, and the one verify structurally cannot ask.
@@ -432,6 +505,7 @@ jobs:
       # is how the geofence archive's missing backfill passed this drill once
       # already.
       - name: THE READ SWEEP -- every served door must still answer
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh readsweep
 
       # Is "one of every entity" true? apiprobe's coverage table is a CLAIM, and
@@ -449,6 +523,7 @@ jobs:
       # verify and the sweep have already passed, which is what makes this a finding
       # about the drill's reach rather than about the instance's data.
       - name: THE TABLE SWEEP -- one of every entity, counted rather than claimed
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh tablesweep
 
       # The check on the checks. A verify whose ability to FAIL has not been shown
@@ -459,27 +534,73 @@ jobs:
       # same damage. Without that second half the two checks might be seeing the
       # same thing.
       - name: Negative controls -- break the instance three ways, require the right check to notice
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh control
 
-      # 🔴 EXPECTED RED, AND NOT A FLAKE. The documented upgrade is a
-      # `helm upgrade`; the operator is applied by dcctl from its own embedded
-      # manifests and is not in the chart; no dcctl subcommand moves it afterwards
-      # and re-running bootstrap rotates every generated credential. Meanwhile
-      # docs/docs/deployment/releases-and-upgrades.md promises one version covering
-      # the services, the operator, the chart and the CLI, with no per-service skew
-      # to reason about. An operator following the documentation exactly ends up
-      # with new services and an old controller.
+      # 🔴 THIS MUST BE GREEN NOW, AND IT WAS RED BY DESIGN FOR A RELEASE. The
+      # operator is applied by dcctl from its own embedded manifests and is not in
+      # the chart, so while the documented upgrade was a `helm upgrade` nothing moved
+      # it — and docs/docs/deployment/releases-and-upgrades.md promised one version
+      # covering the services, the operator, the chart and the CLI with no skew. An
+      # operator following the documentation exactly ended up with new services and
+      # an old controller. This step said so out loud on the release path rather than
+      # leaving it as a comment in the rig, and `dcctl upgrade` is what that produced.
       #
-      # This step exists to say that out loud on the release path rather than leave
-      # it as a comment in the rig. It stays red until the chart takes the operator,
-      # or dcctl grows an upgrade path, or the documentation stops making the claim.
+      # The upgrade step above now runs that single command, which moves all three
+      # together. So a red here means the fix did not hold — read it as a defect in
+      # this release, not as the condition this step was born describing.
       #
       # Exit 3 means THIS finding and only this finding; anything else from the step
       # is the check failing to run, which the rig reports separately and never
       # folds into the finding.
       - name: The operator must be running the version the services were upgraded to
         id: operator
+        if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh operator
+
+      # -------------------------------------------------------------------
+      # DRILL B -- the recreate drill. This release does not upgrade onto the
+      # baseline, so what is measured is the refusal an operator will actually meet.
+      # -------------------------------------------------------------------
+      # It asserts a PAIR, and the second half is what makes the first worth having: a
+      # refusal on its own is satisfied by a command that fails for any reason at all,
+      # including one that fails after it has already applied this release's operator
+      # over the live one. So the drill measures the refusal's REASON -- the
+      # pre-declaration message, naming destroy and bootstrap -- and then measures the
+      # instance: same Helm revision, same operator image, every seeded row unchanged,
+      # and the API still serving.
+      #
+      # There is no operator step here on purpose. Nothing was upgraded, so asking
+      # whether the operator moved TO the new version would be asking for the defect
+      # this drill exists to prove did not happen -- and the drill already asserts that
+      # its image is exactly what it was.
+      - name: THE RECREATE DRILL -- the unsupported upgrade must refuse and damage nothing
+        if: env.DC_UPGRADE_MODE == 'recreate'
+        run: hack/upgrade-rig.sh recreate
+
+      # 🔴 THE CHECK ON THE CHECK, AND WITHOUT IT THE DRILL ABOVE IS HALF A RESULT. Its
+      # "damaged nothing" half is verify reporting a pass, and a verify whose ability to
+      # FAIL has not been demonstrated in this session would report exactly that green
+      # against an instance the refused upgrade had emptied. These are the same two
+      # controls the data drill runs -- a deleted row must read MISSING and a rewritten
+      # field must read MISMATCH -- minus the read-sweep control, which cannot run here:
+      # the sweep builds its documents from the WORKING TREE's schemas and the instance
+      # is still the baseline, so every door this release added would be a finding.
+      - name: Negative controls -- verify must be shown to fail before its pass means anything
+        if: env.DC_UPGRADE_MODE == 'recreate'
+        run: hack/upgrade-rig.sh controlverify
+
+      # -------------------------------------------------------------------
+      # Did a drill actually happen?
+      # -------------------------------------------------------------------
+      # 🔴 UNCONDITIONAL, WHICH IS THE ENTIRE POINT. Every step above is gated on
+      # DC_UPGRADE_MODE, and a mode that matched neither branch would skip all of them
+      # and leave this job GREEN having drilled nothing -- the gate-that-cannot-fail
+      # shape, reached here by the same route the `upgrade-gate` job refuses when
+      # `scope` gives no usable answer. The rig records which drill it performed, and
+      # this asks: was one performed, and was it the one this baseline selected?
+      - name: EXACTLY ONE DRILL RAN, and it was the one this baseline selected
+        run: hack/upgrade-rig.sh ranwhat
 
       # -------------------------------------------------------------------
       # Reporting.
@@ -492,29 +613,50 @@ jobs:
           # reports what the run actually did rather than what was asked for.
           TARGET: ${{ env.DC_UPGRADE_IMAGES == 'pull' && env.DC_UPGRADE_TAG || 'the working tree (built from source)' }}
           OPERATOR_OUTCOME: ${{ steps.operator.outcome }}
+          # Which drill this run performed. Empty when the resolve step itself did not
+          # get that far, which is why the table prints a placeholder rather than
+          # leaving the row blank -- a blank reads as "data drill, nothing to report".
+          MODE: ${{ steps.drillmode.outputs.mode }}
         run: |
           {
             printf '## Upgrade drill\n\n'
             printf '| | |\n|---|---|\n'
-            printf '| upgraded from | %s |\n' "$BASELINE"
-            printf '| upgraded to | %s |\n' "$TARGET"
-            printf '| operator check | %s |\n\n' "${OPERATOR_OUTCOME:-not reached}"
+            printf '| baseline | %s |\n' "$BASELINE"
+            printf '| drill | %s |\n' "${MODE:-not resolved}"
             # No backticks in this prose, deliberately: a backtick inside a shell
             # string is command substitution, and the spellings that make it safe
             # (escapes, a quoted heredoc that must then sit at column 0 inside a
             # YAML block scalar) are each a way to break this file for a code font.
+            if [ "$MODE" = "recreate" ]; then
+              printf '\n### This release does not upgrade onto %s\n\n' "$BASELINE"
+              printf 'So the data drill did not run, and this is NOT a skip. What ran instead is the\n'
+              printf 'drill for the claim this release actually makes: the unsupported upgrade must\n'
+              printf 'REFUSE, for the pre-declaration reason rather than merely fail; it must name\n'
+              printf 'destroy and bootstrap as the way through; and it must leave the instance on the\n'
+              printf 'same Helm revision, the same operator image and every seeded row it had. Verify\n'
+              printf 'was then shown to fail against a deleted row and a rewritten field, so its pass\n'
+              printf 'is a measurement rather than an assumption.\n\n'
+              printf 'Nothing here says anything about data surviving an upgrade, because no upgrade\n'
+              printf 'happened. The boundary is declared in hack/upgrade-baseline-policy.\n'
+            else
+              printf '| upgraded to | %s |\n' "$TARGET"
+              printf '| operator check | %s |\n\n' "${OPERATOR_OUTCOME:-not reached}"
+            fi
             if [ "$OPERATOR_OUTCOME" = "failure" ]; then
               printf '### The operator was not upgraded\n\n'
               printf 'Every seeded row survived: the data half of this drill passed. What failed is\n'
               printf 'the operator check, and it is a **finding about the release**, not a broken rig.\n\n'
-              printf 'The documented upgrade is a plain **helm upgrade**, and the operator is not in\n'
-              printf 'the chart -- dcctl applies it from its own embedded manifests during bootstrap,\n'
-              printf 'no subcommand moves it afterwards, and re-running bootstrap rotates every\n'
-              printf 'generated credential. Meanwhile the deployment documentation promises one\n'
-              printf 'version covering the services, the operator, the chart and the CLI together,\n'
-              printf 'with no per-service skew to reason about.\n\n'
-              printf 'Closing it means the chart takes the operator, or dcctl grows an upgrade path,\n'
-              printf 'or the documentation stops making the claim. The step log names the images.\n'
+              printf 'The operator is not in the chart -- dcctl applies it from its own embedded\n'
+              printf 'manifests. **dcctl upgrade** is what moves it, together with the instance\n'
+              printf 'configuration document and the release, and the upgrade step above ran exactly\n'
+              printf 'that one command. Meanwhile the deployment documentation promises one version\n'
+              printf 'covering the services, the operator, the chart and the CLI together, with no\n'
+              printf 'per-service skew to reason about.\n\n'
+              printf 'Read this as a **regression**, not as a known gap -- the gap this check was\n'
+              printf 'born describing is closed. Either the operator image for this tag was never\n'
+              printf 'published or is not public and the new pod is stuck pulling, or the upgrade\n'
+              printf 'applied a Deployment other than the one measured. The step log names the\n'
+              printf 'images.\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

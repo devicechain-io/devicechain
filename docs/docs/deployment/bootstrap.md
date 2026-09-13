@@ -29,71 +29,138 @@ none is running — it asks first, unless you pass `--yes`. The `gcp` provider i
 planned follow-up.
 :::
 
-## What it does
+## What it does {#what-it-does}
 
-The bootstrap runs as an ordered, **idempotent** pipeline — re-running it converges
-to the same state and tells you which step failed if one does:
+The bootstrap runs as an ordered pipeline that **builds** an instance, and tells you
+which step failed if one does.
+
+It is a create verb. Every credential the instance has is minted here — the database
+passwords, the broker's authority and logins, the cross-service secret, the secret-store
+root key — because none of them exists yet. Point it at an instance that is already
+running and it stops at step 3 — before the operator, the infrastructure or the chart are
+touched — and names the command that does move a live instance: `dcctl upgrade`, covered in
+[Releases & Upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+
+A run that *failed* partway through is a different case, and re-running it is still how
+you repair it. What step 3 refuses is a **live** instance, which it recognises by the
+configuration document written in step 9 — so everything short of that is a half-built
+instance, and running the bootstrap again is the supported way to finish it.
 
 :::warning One-time exception: instances created before the database moved to CloudNativePG
 The relational database changed from a StatefulSet to a CloudNativePG cluster, and there is
 no in-place upgrade — a StatefulSet's data directory cannot be adopted by the operator. On an
-instance created before that change, re-running the bootstrap **refuses** rather than
-converging, and tells you how to dump the data or discard it deliberately. That refusal is
-the point: without it the old database would be removed and a new, empty one would take over
-the same hostname, leaving an instance that looks perfectly healthy and has no data in it.
+instance created before that change, the bootstrap **refuses** and tells you how to dump the
+data or discard it deliberately. That refusal is the point: without it the old database would
+be removed and a new, empty one would take over the same hostname, leaving an instance that
+looks perfectly healthy and has no data in it.
+
+This is the one documented reason to run `dcctl bootstrap` against an instance that is
+already live, so `--allow-legacy-db-removal` is carved out of the refusal in step 3 as well
+as this one. Nothing else is.
 :::
 
-The steps below are the ones the run prints as it goes (`[3/10] Install core
+**One instance per cluster.** `dcctl` installs one DeviceChain instance into a cluster,
+and step 4 is what says so. Almost everything a bootstrap applies is a cluster-wide
+singleton — the operator's own Deployment, the Helm release, and the infrastructure
+releases behind the ingress controller, cert-manager and the CloudNativePG operator — so
+a second instance does not sit beside the first one. It installs this run's operator over
+the one already running, adopts the shared infrastructure into a second OpenTofu state,
+and mints database, broker and root-key credentials over the ones the instance that is
+there is authenticating with. Step 4 asks the cluster what it already holds and stops
+before any of that, naming the instance it found and the artifact it read that from.
+There are three things to do instead:
+
+- **Move the instance that is there onto a new version** — `dcctl upgrade` is the verb for
+  an instance that already exists, and it mints nothing.
+- **Build this one in a cluster of its own** — bootstrap it into a new local cluster, or
+  point it at a different one with `--kube-context`.
+- **Replace what is there with this one** — `dcctl destroy` the instance that is holding
+  the cluster, then bootstrap again. That takes its data with it.
+
+The refusal prints all three as commands, with your own instance and provider names
+filled in, so it can be acted on without coming back here.
+
+It is not the step 3 refusal and the two do not overlap. That one recognises *this*
+instance and stops a rebuild of it; this one asks whether anything **else** is here, so a
+re-run aimed at the instance that is already there keeps meeting the message written for
+it. A cluster that cannot say what it holds is an error rather than an empty cluster.
+And because this refusal can only fire against a cluster `dcctl` did not create, it is
+the one bootstrap failure that leaves nothing behind at all: the local record the run
+wrote before it started is put back the way it was, so `dcctl instances list` does not
+grow an entry for an instance that was never installed.
+
+The steps below are the ones the run prints as it goes (`[5/12] Install core
 components`), so a failure names a step you can find here:
 
 1. **Ensure local registry** — the developer `--build` path only: provision a local
    registry and build every image into it. On the published-image path it does nothing
-   and says so. It goes first because the operator installed two steps later names an
+   and says so. It goes first because the operator installed four steps later names an
    image, and on the `--build` path this is the step that produces it.
 2. **Claim the cluster** — create the operator's namespace and take the **cluster
    lock**, before anything is applied. While it is held, a second `dcctl bootstrap`
    against the same cluster is refused rather than quietly applying over this one. See
    [The Cluster Lock](./cluster-lock.md) — that page also covers what to do when the
    cluster turns out to be claimed by somebody else.
-3. **Install core components** — render the operator (CRDs + RBAC + controller) and
+3. **Refuse a rebuild** — ask the cluster whether this instance is already live, and stop
+   if it is. Its position is deliberate on both sides: *after* the lock, because a
+   concurrent bootstrap is exactly what would make the answer stale between reading it and
+   acting on it, and *before* anything of the instance is applied, because every step below
+   this one writes to a cluster that may already be running the instance it would be writing
+   over.
+   A dry run says what a real run would refuse rather than hiding it.
+4. **Refuse a second instance** — ask the cluster whether it is already holding a
+   *different* instance, and stop if it is. It is the other half of the same edge as the
+   step above, asking the opposite question: not "is this instance already here" but "is
+   anything else here". The two read different artifacts and cannot both fire — one keys
+   on finding this instance, the other on finding another. This one takes the first
+   answer it gets from the instance declarations in the cluster, then the credentials
+   `dcctl` minted into `dc-system`, then the Helm release, asked in that order because it
+   is the order a bootstrap writes them: a run that died partway through is answered by
+   whatever it did get to. A dry run says what a real run would refuse, and says so even
+   when it could not reach the cluster to ask. See **One instance per cluster** above.
+5. **Install core components** — render the operator (CRDs + RBAC + controller) and
    apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
    because the definition of an instance has to exist in the cluster before anything can
    describe one to it — and describing one is the very next step.
-4. **Declare the instance** — write the instance's **declaration** into the cluster: the
+6. **Declare the instance** — write the instance's **declaration** into the cluster: the
    provider and cluster it belongs to, the profile, the image version, whether its
    databases are being recovered from an archive. It is then read back, and every step
    below works from what came back rather than from the flags that produced it — so the
    cluster, not your laptop, is the record of what this instance is. See [the instance
    declaration](./kubernetes-operator.md#instance-declaration).
-5. **Render configuration** — resolve the instance id, namespace, profile, and every
-   generated credential: the broker-auth material (the shared service password and
-   the callout issuer key), the cross-service auth secret, and the **secret-store
-   root key**. All of them are minted on a first install and **reused as-is when the
-   instance already exists** — the pipeline asks the cluster what the instance is
-   running before it generates anything, and stops rather than guessing if it cannot
-   tell. It also records the broker's credentials on the machine you run it from,
-   before the broker is configured with them, so that a run interrupted partway
-   through can be resumed by simply running it again. The root key is additionally
-   escrowed to an encrypted file you keep; see
-   [Disaster Recovery](./disaster-recovery.md).
-6. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
+7. **Render configuration** — resolve the instance id, namespace, profile, and every
+   generated credential: the broker-auth material (the shared service password and the
+   callout issuer key), the certificate authority that signs the broker's own TLS
+   certificate, the cross-service auth secret, and the **secret-store root key**. All of
+   them are minted here, because step 3 has established there is no live instance to take
+   them from. Finishing a half-built instance is the exception: there the step reads back
+   what an earlier run already put in the cluster rather than generating a second set. It
+   also records the broker's credentials on the machine you run it from, before the broker
+   is configured with them, so that a run interrupted partway through can be resumed by
+   simply running it again — the broker is configured before the instance is, and its
+   credentials cannot be recovered from the cluster once they are in it. The root key is additionally escrowed to an encrypted file you keep;
+   see [Disaster Recovery](./disaster-recovery.md).
+8. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
    PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
    operator and its Barman Cloud backup plugin, and the object store the backup
    plugin archives to) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
    `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
-7. **Install instance (Helm)** — deploy the Helm chart via the Helm Go SDK, blocking
-   until the workloads are ready.
-8. **Seed admin credential** — the superuser credential is seeded by the
-   user-management service on first start; this step settles the values the final report
-   prints.
-9. **Wait for readiness** — poll each enabled area's Deployment until it has finished
-   rolling onto the configuration this run produced, as an explicit confirmation gate
-   rather than trusting the Helm step's own wait. Having replicas available is not
-   enough: on a re-run that is already true of the pods being replaced, so the step also
-   waits for the new template to be observed, for every replica to be recreated on it,
-   and for no old replica to still be running.
-10. **Report access info** — print the namespace, the superuser credential, and how to
+9. **Install instance (Helm)** — write the instance's **configuration document** — the one
+   every service reads its credentials and endpoints from — and then deploy the Helm chart
+   via the Helm Go SDK, blocking until the workloads are ready. That document is what makes
+   the instance live, and what step 3 looks for on any later run.
+10. **Seed admin credential** — the superuser credential is seeded by the
+    user-management service on first start; this step settles the values the final report
+    prints.
+11. **Wait for readiness** — poll each enabled area's Deployment until it has finished
+    rolling onto the configuration this run produced, as an explicit confirmation gate
+    rather than trusting the Helm step's own wait. Having replicas available is not
+    enough: where pods are being replaced that is already true of the ones on their way
+    out, so the step also waits for the new template to be observed, for every replica to
+    be recreated on it, and for no old replica to still be running. `dcctl upgrade` uses
+    the same gate for the same reason.
+12. **Report access info** — print the namespace, the superuser credential, and how to
     reach the instance.
 
 :::tip `Ctrl+C` stops a run cleanly
@@ -101,6 +168,10 @@ An interrupted run stops the infrastructure tool gracefully — it finishes what
 doing and writes its state — and hands the cluster lock back, so re-running is all that
 is needed. A **second** `Ctrl+C` exits immediately and gives up both of those. See
 [Interrupting a run](./cluster-lock.md#interrupt).
+
+If the run had already reached step 9, the instance exists and the bootstrap will refuse
+the next time you run it. That is not a dead end — the instance is built, and
+`dcctl upgrade` is how you move it from there.
 :::
 
 Because the embedded artifacts are the *same* ones the platform ships, a
@@ -182,7 +253,7 @@ pipeline, chart, and operator are identical.
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
 | `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |
-| `--no-escrow` | Do **not** escrow the root key. For throwaway instances only; implied by `--dev`. |
+| `--no-escrow` | Do **not** escrow the root key. For throwaway instances only; implied by `--dev`. An instance created this way can be given an escrow later — see [the escrow reconcile](./disaster-recovery.md#escrow-reconcile). |
 | `--restore-root-key <path>` | Disaster recovery: seed this instance's root key from an escrow artifact instead of minting one. |
 
 ### The root-key escrow {#escrow}
@@ -214,6 +285,11 @@ it by then. [Disaster
 Recovery](./disaster-recovery.md) explains the whole procedure; read it before you
 need it.
 :::
+
+An instance that has no escrow — one created with `--no-escrow`, or with `--dev` — can be
+given one later without being rebuilt: `dcctl upgrade` writes the missing artifact when you
+pass it a passphrase, and checks an existing one every time it runs. See
+[the escrow reconcile](./disaster-recovery.md#escrow-reconcile).
 
 ### `--compact`
 

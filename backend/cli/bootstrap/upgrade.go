@@ -15,40 +15,67 @@ import (
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
-// UpgradeOptions drives an operator upgrade. It reuses Options for the instance,
-// kube-context and image-source fields; the rest of Options (profile, HA, TLS,
-// escrow, the whole bring-up surface) is deliberately not consulted here — see
-// Upgrade for why this command touches nothing but the operator.
+// UpgradeOptions drives an instance upgrade. It reuses Options for the instance,
+// kube-context and image-source fields; the rest of Options — profile, HA, TLS, the
+// whole bring-up surface — is deliberately not consulted, because an upgrade takes
+// an instance's SHAPE from its declaration rather than from flags. See Upgrade.
 type UpgradeOptions struct {
 	Options
+	// EscrowFile and EscrowPassphraseFile locate the instance's root-key escrow, so
+	// an upgrade can check it still protects the key the instance is running on — and
+	// write one where there is none.
+	//
+	// 🔴 THEY ARE HERE BECAUSE THE RE-RUN THAT USED TO DO THIS IS GONE. An instance
+	// built with --no-escrow could gain an escrow by being bootstrapped again, and
+	// every re-run checked an existing one. Bootstrap refuses to run against a live
+	// instance now, so without these there is no supported way to give a running
+	// instance a second copy of its root key. See reconcileUpgradeEscrow.
+	EscrowFile           string
+	EscrowPassphraseFile string
+
+	// DcctlVersion is the build running this upgrade, recorded on the declaration
+	// it updates. The bootstrap path sets the same field directly on State because
+	// its command layer builds one; this verb's State is built inside
+	// hydrateUpgradeState, so it arrives here instead.
+	DcctlVersion string
 }
 
-// Upgrade moves the cluster-scoped operator install — namespace, CRDs, RBAC and
-// the controller Deployment — onto a target version.
+// Upgrade moves a live instance onto a release: the cluster-scoped operator
+// install, the configuration document its services read, and the Helm release
+// that runs them.
 //
-// 🔴 THIS EXISTS BECAUSE THE DOCUMENTED UPGRADE CANNOT REACH THE OPERATOR. A
-// release is one version across the service images, the chart, the operator and
-// dcctl, and docs/docs/deployment/releases-and-upgrades.md says so. But the
-// documented procedure is `helm upgrade`, and the operator is not in the chart:
-// stepInstallCore applies it from manifests embedded in this binary, and before
-// this command existed nothing moved it afterwards. An operator who followed the
-// documentation exactly ended up with new services, an indefinitely old
-// controller, and a promise that said otherwise.
+// 🔴 BOOTSTRAP CREATES, UPGRADE EVOLVES, AND THAT SPLIT IS THE POINT. They are not
+// two spellings of one pipeline. A bootstrap composes an instance out of its
+// arguments and mints every credential in it, because none of them exists yet. An
+// upgrade composes a VERSION CHANGE over an instance that already exists, so it
+// reads every credential back and mints none — a database owner's password was set
+// when the Cluster was created and is reconciled by nothing afterwards, and
+// generating a replacement is not an update but a break that reports success.
 //
-// Re-running `bootstrap` was not the answer and must not become the workaround:
-// it rotates every generated credential. The whole point of a separate verb is
-// that it can be run on a live instance with nothing else at stake.
+// 🔴 IT OWNS THE DOCUMENT BECAUSE NOTHING ELSE CAN ANY MORE. `templates/
+// instance-config.yaml` renders the configuration document only `if not
+// .Values.instance.existingSecret`, so from the moment dcctl became that Secret's
+// author, `helm upgrade` — the documented way to move an instance — could move the
+// pods and could no longer move the configuration they mount. A release that added
+// a configuration field would have had no writer at all, silently: the pods keep
+// reading the document they were bootstrapped with.
 //
-// What this deliberately does NOT do:
+// What it deliberately does NOT do:
 //
-//   - It does not touch the Helm release. `helm upgrade` moves the services and
-//     is documented; duplicating it here would give two commands that both claim
-//     to upgrade an instance and disagree about what that means.
-//   - It does not generate, read or rotate a single credential.
-//   - It does not run the infrastructure apply.
+//   - It does not run the infrastructure apply. Two of that apply's inputs cannot
+//     be recovered from the cluster — the endpoint and bucket names of an operator's
+//     own backup destination, and the Grafana SSO client secret's cleartext — so an
+//     upgrade that ran it would either demand them again every time or reconfigure
+//     the instance without them. The apply joins this verb when the chart becomes an
+//     OpenTofu release and the state lives in the cluster.
+//   - It does not change an instance's shape. Profile, topology and areas come from
+//     the declaration, not from flags here: this verb moves a version, and changing
+//     what an instance IS is a different question with different answers (raising
+//     replicas does not re-replicate streams that were created at one).
 //
 // The whole rendered stream is applied, not just the Deployment's image. CRDs are
 // in it, and they are the half with a trap: the API server prunes fields a
@@ -70,16 +97,45 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	announceBinding(binding, source, opts.Instance)
 	kubeContext := binding.KubeContext
 
-	registry, version, err := resolveOperatorImageSource(opts.Options)
+	dyn, disco, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return fmt.Errorf("building kube clients: %w", err)
+	}
+
+	// READ THE INSTANCE BEFORE DECIDING ANYTHING, INCLUDING UNDER --dry-run.
+	//
+	// 🔴 THE IMAGE SOURCE IS WHY THIS MOVED UP, AND THE BUG IT FIXES IS A SPLIT
+	// UPGRADE. The operator's image used to be resolved from the flags alone, with
+	// dcctl's published defaults filling the gaps, while the SERVICES took theirs
+	// from the declaration. So `dcctl upgrade --version v1.3.0` against an instance
+	// built from a local registry moved the controller to a ghcr.io image and the
+	// services to a local one — two halves of a release that is defined as one
+	// version across the images, the chart, the operator and this CLI.
+	//
+	// Reading first makes the declaration the DEFAULT for both halves and the flags
+	// an override of both, so they cannot diverge. A dry run reads too: there is
+	// nothing to rehearse about an instance without looking at it, and everything
+	// here is a read.
+	st, err := hydrateUpgradeState(ctx, typed, provider, binding, opts)
 	if err != nil {
 		return err
 	}
-	image := fmt.Sprintf("%s/%s:%s", registry, operatorImageName, version)
+	st.Evolving = true
+
+	image := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
 
 	fmt.Println(GreenUnderline(fmt.Sprintf(
-		"\nUpgrade the operator for instance %q on provider %q", opts.Instance, provider.Name())))
+		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(image))
+	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
+		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+
+	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
+	// ARE DELIBERATE. See recordUpgradedVersion.
+	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
+		return err
+	}
 
 	manifests, err := dck8s.RenderOperator(image)
 	if err != nil {
@@ -104,12 +160,10 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 		for _, t := range targets {
 			wouldDo(fmt.Sprintf("apply CRDs/RBAC and set %s/%s to %s", t.namespace, t.name, image))
 		}
+		wouldDo("recompose the instance configuration document from this release's chart, " +
+			"keeping every credential the instance is running on")
+		wouldDo("upgrade the instance's Helm release")
 		return nil
-	}
-
-	dyn, disco, typed, err := kubeClients(kubeContext)
-	if err != nil {
-		return fmt.Errorf("building kube clients: %w", err)
 	}
 
 	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO, AND FORGETTING IT WOULD HAVE LEFT A
@@ -146,7 +200,54 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	}
 	done()
 
-	fmt.Println(color.HiGreenString("\nOperator upgraded."))
+	// THE SERVICES, AND THE DOCUMENT THEY READ.
+	//
+	// 🔴 THIS IS THE HALF `helm upgrade` CANNOT DO ANY MORE, AND IT IS WHY THIS
+	// COMMAND GREW. Once the release points at a Secret dcctl owns, the chart stops
+	// rendering the instance configuration document — `templates/instance-config.yaml`
+	// is wrapped in `if not .Values.instance.existingSecret`. So the documented
+	// upgrade could still move the pods and could no longer move the configuration
+	// they mount, and a release that ADDED a configuration field would have no writer
+	// at all. Nothing would error: the pods would keep reading the document they were
+	// bootstrapped with.
+	//
+	// It runs AFTER the operator on purpose. The CRDs move with the operator, and a
+	// service rolled onto a new version ahead of the schema it writes is the ordering
+	// that fails; the reverse is a controller that briefly knows about a field
+	// nothing is sending yet.
+	// THE CERTIFICATE, BEFORE THE SERVICES ROLL.
+	//
+	// 🔴 PERIODIC MAINTENANCE BELONGS TO THE VERB THAT RUNS PERIODICALLY, AND THIS IS
+	// THE ONLY ONE THERE IS. The broker's leaf is good for a year; the infrastructure
+	// module that used to re-issue it inside its last thirty days was retired with the
+	// credentials it also held, and nothing replaced that. An instance nobody upgrades
+	// still expires, but an instance nobody upgrades is one nothing else was going to
+	// help either — what this closes is the case where an operator does everything
+	// they were told to and the broker stops accepting connections anyway, on the
+	// anniversary of a bootstrap.
+	//
+	// Ahead of the release on purpose: the renewal restarts the broker, and doing that
+	// while the services are mid-roll means two disruptions overlapping instead of
+	// one finishing before the other starts.
+	doing("checking the broker's certificate")
+	if err := renewBrokerCertificate(ctx, typed, st); err != nil {
+		return fail("renewing the broker's certificate", err)
+	}
+	done()
+
+	if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
+		return helmInstall(ctx, st)
+	}); err != nil {
+		return err
+	}
+
+	doing("waiting for the services to roll over")
+	if err := waitForAreas(ctx, typed, st.Instance, areaReadyTimeout, areaReadyPollInterval); err != nil {
+		return fail("waiting for the services", err)
+	}
+	done()
+
+	fmt.Println(color.HiGreenString("\nInstance upgraded."))
 	for _, t := range targets {
 		was := before[t.String()]
 		switch {
@@ -160,50 +261,124 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 				color.YellowString(was), color.GreenString(image))
 		}
 	}
-	// Named because this command is half of a procedure and the other half is the
-	// one that moves the data path. An operator who runs only this has upgraded a
-	// controller and nothing else.
+	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
+	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
+	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
+	// stating is the one an operator would otherwise have to take on trust — that a
+	// version change did not quietly become a credential change.
+	reconcileUpgradeEscrow(st, st.Values["secretsRootKey"], opts)
 	fmt.Println(color.WhiteString(
-		"\nThis moved the operator only. The services are upgraded by `helm upgrade` — see\n" +
-			"docs/docs/deployment/releases-and-upgrades.md for the full procedure."))
+		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
+			"it mints nothing, so nothing here rotated."))
 	return nil
 }
 
-// resolveOperatorImageSource settles the registry and tag the operator image is
-// pulled from, applying exactly the rules bootstrap applies to the services so
-// the two cannot drift into naming different things by default.
+// resolveUpgradeImageSource settles the ONE image source both halves of this upgrade
+// use: the declaration's, unless a flag overrode it.
 //
-// 🔴 THE UNPUBLISHED-VERSION REFUSAL IS THE LOAD-BEARING PART. A locally built
-// dcctl carries DefaultImageVersion "dev", which names no image in any registry;
-// deploying it manifests as an ImagePullBackOff on a controller nobody is
-// watching, leaving the cluster on the old operator while this command reported
-// success. Refusing here is the difference between a failed upgrade and a silent
-// one.
+// 🔴 IT IS ONE SOURCE BECAUSE A SPLIT ONE IS A SPLIT RELEASE. The operator's image was
+// resolved from the flags alone, with dcctl's published defaults filling the gaps,
+// while the services took theirs from the declaration — so an upgrade could move the
+// controller to a published image and the services to a locally built one. A release
+// is defined as one version across the images, the chart, the operator and this CLI.
 //
-// 🔴 IT DELEGATES RATHER THAN REPEATING. This function and ResolveImageSource
-// applied the same rules from two bodies, and they had already drifted: the
-// empty-version check documented below existed only here, so the bootstrap path
-// accepted a broken ldflags stamp that this path refused. Two resolvers that must
-// agree are one resolver with two callers. What stays here is the MESSAGE, which
-// is genuinely different — an upgrade names the release it is upgrading TO.
-func resolveOperatorImageSource(opts Options) (registry, version string, err error) {
-	// upgrade never builds from source: it deploys a published operator image, or
-	// one the caller names with --registry/--version.
-	img, rerr := ResolveImageSource(opts.ImageRegistry, opts.ImageVersion, false)
-	if rerr != nil {
-		// fmt.Errorf, not fail(): fail() prints a red "failed." meant to close out
-		// an in-flight doing() line, and nothing has been started yet here. It
-		// rendered a bare "failed." above the message with no step to attach to.
-		version = opts.ImageVersion
+// 🔴 THE UNPUBLISHED-VERSION REFUSAL IS THE LOAD-BEARING PART. A locally built dcctl
+// carries DefaultImageVersion "dev", which names no image in any registry; deploying
+// it manifests as an ImagePullBackOff on a controller nobody is watching, leaving the
+// cluster on the old operator while this command reported success. Refusing here is
+// the difference between a failed upgrade and a silent one.
+//
+// 🔴 IT DELEGATES RATHER THAN REPEATING. This and ResolveImageSource applied the same
+// rules from two bodies once, and they had already drifted. Two resolvers that must
+// agree are one resolver with two callers. What stays here is the MESSAGE, which is
+// genuinely different — an upgrade names the release it is upgrading TO.
+//
+// fmt.Errorf, not fail(): fail() prints a red "failed." meant to close out an
+// in-flight doing() line, and nothing has been started when this runs.
+func resolveUpgradeImageSource(st *State) (ImageSource, error) {
+	img, err := ResolveImageSource(st.ImageRegistry, st.ImageVersion, false)
+	if err != nil {
+		version := st.ImageVersion
 		if version == "" {
 			version = DefaultImageVersion
 		}
-		return "", "", fmt.Errorf(
-			"resolving the operator image: this dcctl build has no pinned image version "+
+		return ImageSource{}, fmt.Errorf(
+			"resolving the images to upgrade to: this dcctl build has no pinned image version "+
 				"(%q names no published image); pass --version <tag> to name the release you are "+
-				"upgrading to, or --registry/--version together to point at images you built yourself", version)
+				"upgrading to, or --registry/--version together to point at images you built "+
+				"yourself", version)
 	}
-	return img.Registry, img.Version, nil
+	return img, nil
+}
+
+// recordUpgradedVersion writes the version this upgrade is moving to back into the
+// instance's declaration.
+//
+// 🔴 THE DECLARATION ONLY EVER RECORDED WHAT BOOTSTRAP WAS TOLD, AND THAT IS A
+// SILENT ROLLBACK. WriteInstanceCR had exactly one caller — the bootstrap claim step
+// — so `dcctl upgrade --version v1.3.0` moved every image and left the CR saying
+// v1.2.0. Since applyUpgradeDeclaration takes the declaration as the DEFAULT and the
+// flags as an override, the next flagless `dcctl upgrade` then read v1.2.0 and rolled
+// every service AND the operator backwards, reporting success and correctly reporting
+// that nothing had rotated. A version change that succeeds at moving an instance the
+// wrong way is the worst shape this arc has found, and this is the second instance of
+// it in the same verb.
+//
+// 🔴 IT IS WRITTEN BEFORE THE MOVE, NOT AFTER, AND THE ORDERING IS NOT A DETAIL.
+// InstanceSpec is documented as the DESIRED state; the version an operator asked for
+// becomes desired the moment they ask, so recording it afterwards would be filing an
+// observation in a field that means intent. The failure modes decide it too, because
+// both orderings have one and they are not equal:
+//
+//   - written FIRST, an upgrade that dies half-way leaves a declaration naming the
+//     new version over a half-moved instance — and a flagless re-run reads it and
+//     FINISHES the job. That is the resumable direction, and §5.1l measured a
+//     half-failed upgrade being completed by exactly such a re-run.
+//   - written LAST, the same failure leaves the old version declared over a half-moved
+//     instance, and the flagless re-run rolls the moved half BACK. That is the defect
+//     this function exists to remove, merely narrowed.
+//
+// It writes only the image source. Everything else in the declaration is the
+// instance's SHAPE, which this verb does not change (see Upgrade), and
+// WriteInstanceCR refuses a move of the immutable fields anyway — so a spec rebuilt
+// from anything but the live one would turn a flag typo into a refusal about the
+// cluster binding.
+// It takes the dynamic client rather than a kube context for the reason
+// writeInstanceCR is split from WriteInstanceCR one file over: the refusals here —
+// a declaration that vanished mid-run, a spec whose immutable half moved — are the
+// part worth testing, and a branch that needs a live cluster to reach is a branch
+// that goes untested. Upgrade already holds the client.
+func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance string, st *State) error {
+	if st.DryRun {
+		wouldDo(fmt.Sprintf("record %s:%s in the instance declaration",
+			st.ImageRegistry, st.ImageVersion))
+		return nil
+	}
+
+	inst, err := readInstanceCR(ctx, dyn, instance)
+	if err != nil {
+		return err
+	}
+	if inst == nil {
+		// hydrateUpgradeState already refused a missing declaration, so reaching
+		// here means it was deleted between that read and this one. Saying so beats
+		// a nil dereference, and beats recreating a declaration somebody just removed.
+		return fmt.Errorf(
+			"the declaration for instance %q disappeared while this upgrade was starting, "+
+				"so the version it is moving to cannot be recorded. Nothing has been applied; "+
+				"re-run to start from a clean read", instance)
+	}
+
+	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion {
+		// Already says what this run is about to do. Writing anyway would bump the
+		// provenance annotations on every no-op re-apply, which makes
+		// `last-applied-at` useless for the question it exists to answer.
+		return nil
+	}
+
+	spec := inst.Spec
+	spec.ImageRegistry, spec.ImageVersion = st.ImageRegistry, st.ImageVersion
+	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion)
 }
 
 // deploymentRef names one Deployment in the rendered stream.

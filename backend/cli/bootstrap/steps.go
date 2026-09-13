@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,10 +50,10 @@ const (
 	// build with no commit here to show for it, pulled anonymously and therefore
 	// subject to that registry's rate limits and outages.
 	//
-	// This is the SAME container hack/upgrade-rig.sh and deploy/local/up.sh start,
-	// and all three only create it when it is not already running — so whichever
-	// runs first decides what the other two reuse, and a pin only one of them
-	// carries is a pin the other two can defeat. Keep the three in step.
+	// This is the SAME container hack/upgrade-rig.sh starts, and both only create it
+	// when it is not already running — so whichever runs first decides what the other
+	// reuses, and a pin only one of them carries is a pin the other can defeat. Keep
+	// the two in step.
 	//
 	// hack/check-image-pins.sh enforces the shape for the two shell sites; this
 	// one is pinned by TestLocalRegistryImageIsDigestPinned, because teaching a
@@ -170,6 +171,36 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		notes = append(notes, fmt.Sprintf(
 			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
 	}
+	// SETTLE EVERY CREDENTIAL THIS RUN NEEDS, BEFORE ANYTHING IS APPLIED.
+	//
+	// 🔴 THE ORDER IS THE WHOLE POINT, AND IT IS NOT THE OBVIOUS ONE. These values
+	// used to be OpenTofu's: the two databases got theirs from a variable whose
+	// default was a literal in this repository, and the broker's authority was an
+	// OUTPUT of the apply that the Helm step consumed afterwards. CloudNativePG
+	// builds the owner role when it CREATES the Cluster, so a credential settled
+	// after the apply is one the role never hears about — and a CA that only exists
+	// after the apply cannot be in the document the apply's own release mounts.
+	// Settling here reverses both arrows: the apply RECEIVES these, and the private
+	// half of the authority never reaches its state at all.
+	//
+	// resolveCredentials decides which of them a live instance keeps; see the reuse
+	// policy there for why that answer differs per credential.
+	st.Credentials, err = settleCredentials(ctx, st, live)
+	if err != nil {
+		return fail("settling this instance's credentials", err)
+	}
+
+	// The broker's authority and leaf. Minted on every run for now: reuse would keep
+	// a certificate, and what a live instance actually needs is RENEWAL — a leaf
+	// kept forever expires a year after bootstrap with nothing to re-issue it. That
+	// belongs to the verb that evolves an instance rather than the one that creates
+	// it, and the two answer opposite questions.
+	st.NATSTLS, err = mintNATSTLS(natsReleaseName, infraNamespace, haFor(st.HA).ServerReplicas, time.Now().UTC())
+	if err != nil {
+		return fail("minting the broker's certificate authority", err)
+	}
+	st.Values["natsCA"] = st.NATSTLS.CACertPEM
+
 	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
 	st.Values["backupServerNameRdb"] = paths.Rdb
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
@@ -497,11 +528,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// (localhost/127.0.0.1) needs no /etc/hosts edit. TLS is on unless --no-tls,
 	// which serves plain HTTP — a self-signed cert adds friction with no benefit
 	// on localhost.
-	host := st.IngressHost
-	if host == "" {
-		host = DefaultIngressHost
-	}
-	st.Values["ingressHost"] = host
+	st.Values["ingressHost"] = ingressHostFor(st)
 	scheme := "https"
 	if st.NoTLS {
 		scheme = "http"
@@ -680,9 +707,10 @@ func buildFrontend(ctx context.Context, root string, st *State) error {
 //
 // dcctl's --build path was doing the same docker build with no --network at all,
 // so the two developer paths diverged on the one host where the difference decides
-// whether a bootstrap completes: `deploy/local/up.sh BUILD_IMAGES=1` worked and
-// `dcctl bootstrap --dev` — the zero-config path a newcomer is steered to — died in
-// `npm ci`. Whatever build-images.sh needs, this needs, for the same reason.
+// whether a bootstrap completes: the shell bring-up worked and `dcctl bootstrap
+// --dev` — the zero-config path a newcomer is steered to — died in `npm ci`. That
+// shell path is gone and build-images.sh remains, so the rule is unchanged:
+// whatever build-images.sh needs, this needs, for the same reason.
 //
 // The value is validated before the first image is built rather than at the point
 // of use, because the frontend is built LAST: an unusable value discovered here
@@ -698,8 +726,13 @@ func buildFrontend(ctx context.Context, root string, st *State) error {
 // (measured). Refusing it anyway is the deliberate call — docker 23+ builds with
 // BuildKit unless it is switched off, so accepting a value that works only on an
 // opted-out builder would trade a clear message now for an obscure failure later.
-// A legacy-builder user who genuinely wants it still has `up.sh`, which passes the
-// value straight through.
+//
+// 🔴 THAT REASON NOW STANDS ALONE. It used to be softened by an escape hatch — a
+// legacy-builder user who genuinely wanted `bridge` still had deploy/local/up.sh,
+// which passed the value straight through. That script is gone, so refusing here
+// refuses outright. The refusal is kept anyway: it was never the hatch that made
+// it right, and a value that works only on an opted-out builder is still a clear
+// message now against an obscure failure later.
 func dockerBuildNetwork() (string, error) {
 	network := os.Getenv(dockerBuildNetEnv)
 	if network == "" {
@@ -814,7 +847,9 @@ func stepHelmInstall(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing("installing instance chart (Helm)")
 		fmt.Println()
-		wouldDo("helm upgrade --install the devicechain chart into namespace " + st.Values["namespace"])
+		wouldDo("write the instance configuration to Secret " +
+			instanceConfigSecretName(st.Instance) + " in namespace " + st.Values["namespace"] +
+			", then helm upgrade --install the devicechain chart pointing at it")
 		return nil
 	}
 	return runStreamed("installing instance chart (Helm)", "instance chart",
@@ -992,11 +1027,31 @@ func stepReport(ctx context.Context, st *State) error {
 				color.GreenString("%s  (sign in with DeviceChain SSO — operators/superusers only)", u.RootURL))
 			fmt.Printf("           %s\n", color.YellowString("cross-tenant metrics are operator-tier only; the native admin login stays available as break-glass"))
 		} else {
+			// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
+			// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
+			// and offered `monitoring_grafana_admin_password` as the way to change it
+			// — a shared literal, and an infrastructure variable that has since been
+			// retired. Both were true when the dashboard's password was the same value
+			// on every installation anyone had ever built. Neither survived that
+			// change, and nothing failed: the report simply kept saying it, so an
+			// operator following it was told the wrong password and pointed at a knob
+			// that no longer exists. Measured on a live instance, by comparing the
+			// digest of the stored credential against the digest of the old literal.
+			//
+			// It now says where the password IS rather than what it is, which is also
+			// the only form that stays true when it is rotated.
 			ns := st.Values["grafanaNamespace"]
 			fmt.Printf("  %s %s\n",
 				color.WhiteString("Grafana:"),
-				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/  (admin / devicechain)", ns, svc))
-			fmt.Printf("           %s\n", color.YellowString("dev-grade default password — override monitoring_grafana_admin_password, or enable SSO with --grafana-sso (ADR-047)"))
+				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
+			fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+				"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
+				grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
+			fmt.Printf("           %s\n", color.GreenString(
+				"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
+				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
+			fmt.Printf("           %s\n", color.YellowString(
+				"or wire it to DeviceChain SSO with --grafana-sso (ADR-047)"))
 		}
 	}
 	// Database backups, printed here for exactly the reason the escrow line below
@@ -1011,6 +1066,22 @@ func stepReport(ctx context.Context, st *State) error {
 	//
 	// Before this existed, the only surfaces stating it were the OpenTofu README
 	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
+	// 🔴 A DRY RUN HAS NO OUTPUTS TO READ, AND READING THEIR ABSENCE AS "NO BACKUPS"
+	// MAKES THE REHEARSAL SAY THE OPPOSITE OF WHAT THE REAL RUN DOES. The two values
+	// below are read back from the apply, deliberately — reality rather than our own
+	// request. A dry run never applies, so both are empty and every rehearsal printed
+	// "Backups: NONE", including one that had just been handed an off-site
+	// destination. Same rule, and the same fix, as the archive-path read above.
+	//
+	// Predicted from what THIS RUN decided, not from a default: the flags settle
+	// whether backups exist at all, and --backup-credentials-file settles whether
+	// they leave the cluster.
+	if st.DryRun {
+		if databaseBackupsEnabled(st) {
+			st.Values[databaseBackupsKey] = "true"
+			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(backupsAreExternal(st))
+		}
+	}
 	switch {
 	case st.Values[databaseBackupsKey] != "true":
 		fmt.Printf("  %s %s\n",
@@ -1027,7 +1098,7 @@ func stepReport(ctx context.Context, st *State) error {
 		fmt.Printf("           %s\n",
 			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
 		fmt.Printf("           %s\n",
-			color.YellowString("failure domain and are lost with it. Set backup_destination=\"external\" for off-site."))
+			color.YellowString("failure domain and are lost with it. Pass --backup-credentials-file for off-site."))
 	}
 	// The archive path each store OWNS — which is the INPUT to the next restore.
 	//

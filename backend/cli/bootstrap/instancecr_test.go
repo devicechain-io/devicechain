@@ -63,13 +63,22 @@ func TestInstanceSpecIsAClosedList(t *testing.T) {
 	}
 }
 
-// 🔴 AND THE SECOND HALF OF THAT RULE HAS ITS OWN TEST, because a closed list
-// makes it easy to check only the first. Every flag that changes what gets
-// deployed must be recorded, and the first version of this schema missed three:
-// --no-cnpg, --grafana-sso and the operator's --enable-area intent. Nothing about
-// the leak test below would have noticed, because they are omissions rather than
-// additions.
-func TestEveryDeploymentAlteringFlagIsRecorded(t *testing.T) {
+// 🔴 THIS TEST CHECKS THAT THE RECORDED FLAGS ARRIVE CORRECTLY. IT DOES NOT, AND
+// CANNOT, CHECK THAT EVERY FLAG IS RECORDED — and it used to claim it did.
+//
+// It was named for the second half of the declaration's rule ("is anything MISSING
+// that a second operator needs?") and written as a hand-listed set of eight flags
+// against a command that registers twenty-eight. A list assembled from memory
+// detects a field that BROKE and never one that was never added, which is the
+// failure the rule exists to prevent — and three unrecorded flags accumulated
+// underneath it while it stayed green. The coverage half now lives in
+// cmd/declaration_coverage_test.go, which enumerates cobra's own flag registry and
+// fails on anything unclassified.
+//
+// What is left here is worth keeping and is a different property: that each flag it
+// names lands in the right FIELD, with the right polarity. The default side below
+// is the half that catches an inverted boolean, which no coverage check would see.
+func TestTheRecordedFlagsArriveInTheRightFields(t *testing.T) {
 	// A State with every deployment-altering flag set AWAY from its default.
 	st := &State{
 		Instance:      "prod",
@@ -231,10 +240,12 @@ func TestTheClusterBindingCannotBeRewrittenByARerun(t *testing.T) {
 		})
 	}
 
-	// 🔴 THE COUNTERWEIGHT MATTERS MORE THAN USUAL HERE. A re-run that changes
-	// nothing else is the NORMAL case — it is what `dcctl bootstrap` does every
-	// time — so a guard that refused an ordinary re-run would break the supported
-	// path entirely while looking careful.
+	// 🔴 THE COUNTERWEIGHT MATTERS MORE THAN USUAL HERE, and what it protects has
+	// MOVED. It used to be the ordinary bootstrap re-run; bootstrap is a create verb
+	// now and refuses that outright. What re-writes a declaration today is
+	// `dcctl upgrade`, which re-states the shape it read back so the record follows
+	// the release — so a guard that refused an unchanged binding would break the only
+	// path left, while looking careful.
 	t.Run("everything else may change", func(t *testing.T) {
 		desired := existing
 		desired.Profile = "full"
@@ -243,7 +254,7 @@ func TestTheClusterBindingCannotBeRewrittenByARerun(t *testing.T) {
 		desired.Host = "dc.example.com"
 		desired.Monitoring = true
 		if err := ValidateInstanceSpecChange(existing, desired); err != nil {
-			t.Errorf("an ordinary re-run was refused: %v", err)
+			t.Errorf("an ordinary upgrade was refused: %v", err)
 		}
 	})
 }

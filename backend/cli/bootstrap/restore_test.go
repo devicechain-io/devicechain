@@ -503,6 +503,7 @@ func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 	hashesBefore := reflect.ValueOf(lookupDeployedBrokerHashes).Pointer()
 	recordReadBefore := reflect.ValueOf(readDeployedBrokerRecord).Pointer()
 	recordStoreBefore := reflect.ValueOf(storeBrokerRecord).Pointer()
+	credentialsBefore := reflect.ValueOf(settleCredentials).Pointer()
 	withDeployedInstance(t, nil, nil)
 	if reflect.ValueOf(readLiveArchiveState).Pointer() == archiveBefore {
 		t.Fatal("withDeployedInstance no longer stubs readLiveArchiveState, so every test that " +
@@ -538,6 +539,17 @@ func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 			"stepRenderConfig now WRITES a credential record into ~/.devicechain/<instance> on " +
 			"the machine running the suite. Restore the withBrokerRecord call in " +
 			"withDeployedInstance.")
+	}
+	// 🔴 THE SIXTH FAILS LOUDLY RATHER THAN QUIETLY, AND IS STILL WORTH PINNING.
+	// Settling the credentials builds a kube client, so an unstubbed one does not
+	// read the wrong cluster — it fails to find any, which at least cannot be
+	// mistaken for an answer. It is here because the NEXT person to add a read may
+	// not be so lucky, and because a helper that covers five of six reads teaches
+	// that the helper is the place to look.
+	if reflect.ValueOf(settleCredentials).Pointer() == credentialsBefore {
+		t.Fatal("withDeployedInstance no longer stubs settleCredentials, so every test driving " +
+			"stepRenderConfig now needs a reachable cluster to settle this instance's " +
+			"credentials. Restore the withSettledCredentials call in withDeployedInstance.")
 	}
 }
 

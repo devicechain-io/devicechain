@@ -64,8 +64,19 @@ WORKFLOW=".github/workflows/upgrade-gate.yml"
 #   - `model_*.go`, because a stored shape can move with NO migration at all — that is
 #     3 of the 25, and it is the class the geofence-archive defect belonged to;
 #   - apiprobe and the rig, so a change to the instrument is measured by the instrument;
-#   - the chart, because the documented upgrade IS a `helm upgrade`, and a chart change
-#     is what broke that procedure in v0.11.0;
+#   - the chart, because it renders what an instance runs, and a chart change is what
+#     broke the upgrade procedure in v0.11.0;
+#   - 🔴 THE UPGRADE VERB ITSELF, which this list did not cover for one whole release.
+#     The documented upgrade used to be a `helm upgrade`, so watching the chart watched
+#     the procedure. It is now `dcctl upgrade`, which composes the release's values,
+#     reads back every credential the instance runs on, writes the instance
+#     configuration document, re-issues the broker's certificate and reconciles the
+#     root-key escrow — and NONE of that lives in the chart. Measured, not assumed: the
+#     release that built all of it changed only files under `backend/cli/bootstrap/`,
+#     and this decider answered `run=false` for that changeset. The drill that exists
+#     to validate upgrades did not watch the code that performs one.
+#     🔑 The general shape, and it is this project's most expensive: a gate keeps
+#     watching where the risk USED to be. When a procedure moves, move its gate.
 #   - THIS FILE, because it now decides whether the drill runs at all. A change to the
 #     decider that quietly narrowed the decision would otherwise be the one change the
 #     drill never sees.
@@ -79,7 +90,15 @@ GATE_PATHS=(
   'backend/services/*/graphql/**'
   'backend/services/*/model/model_*.go'
   'backend/tools/apiprobe/**'
+  'backend/cli/bootstrap/**'
+  'backend/cli/cmd/upgrade.go'
   'hack/upgrade-rig.sh'
+  # The file that decides WHICH drill runs. A change here does not alter what an
+  # instance holds — it alters what the gate measures, which is the one edit the gate
+  # must never be able to make unwatched: moving the recreate ceiling up stands the
+  # data drill down for a release, and moving it down stands the refusal drill down.
+  # Same reasoning as the entry below it, one level out.
+  'hack/upgrade-baseline-policy'
   'hack/check-upgrade-gate-paths.sh'
   'deploy/helm/**'
   '.github/workflows/upgrade-gate.yml'

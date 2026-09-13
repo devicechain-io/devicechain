@@ -1018,7 +1018,16 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 					"port":           5432,
 					"maxConnections": 5,
 					"username":       "devicechain",
-					"password":       "devicechain",
+					// 🔴 NO DEFAULT PASSWORD, AND THE EMPTINESS IS THE POINT. This
+					// used to be the literal "devicechain" — the same value here, in
+					// the chart's values and in the infrastructure variable that
+					// created the role, which made it one working credential for
+					// every instance anyone has ever built the supported way. dcctl
+					// mints a per-instance password and threads it into the
+					// configuration it writes; anything else has to supply one.
+					// Empty fails at connect, which is loud; a shared default
+					// succeeds, which is not.
+					"password": "",
 				},
 			},
 			Tsdb: DatastoreConfiguration{
@@ -1035,7 +1044,8 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 					// timescale_username in deploy/opentofu/variables.tf.
 					"maxConnections": 5,
 					"username":       "devicechain",
-					"password":       "devicechain",
+					// Empty for the same reason as the relational store's above.
+					"password": "",
 				},
 			},
 		},

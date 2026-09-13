@@ -34,7 +34,8 @@ var helmChart embed.FS
 // kindClusterConfig is the kind cluster topology the local provider creates: a
 // control-plane node labelled ingress-ready with host-port mappings (80/443 for
 // ingress, 1883 for MQTT) plus the localhost:5000 registry mirror. Shared with
-// deploy/local/up.sh so the two bring-up paths never diverge.
+// dcctl, which is the only bring-up path -- deploy/local/up.sh applied this tree
+// directly and was withdrawn once the credentials moved into dcctl.
 //
 //go:embed local/kind-cluster.yaml
 var kindClusterConfig []byte

@@ -51,10 +51,16 @@ SEVERITY="${SHELLCHECK_SEVERITY:-info}"
 #   SC1091  "not following sourced file" — shellcheck checks each script in
 #           isolation and cannot resolve a path computed at runtime. Nothing is
 #           wrong with the source line; the checker simply cannot see the target.
-#   SC2015  "A && B || C is not if-then-else" — the reporting idiom in
-#           deploy/local/preflight.sh is `[ cond ] && pass "..." || warn "..."`,
-#           and `pass` is a bare printf that cannot fail, so C never runs when A
-#           is true. A genuine footgun in general, not reachable here.
+#   SC2015  "A && B || C is not if-then-else" — the reporting idiom these guards
+#           are built on is `[ cond ] && pass "..." || warn "..."` (see
+#           hack/check-ko-base-pin.sh), and `pass` is a bare printf that cannot
+#           fail, so C never runs when A is true. A genuine footgun in general,
+#           not reachable here.
+#
+#           🔴 This used to cite deploy/local/preflight.sh, which has since been
+#           withdrawn -- dcctl preflight covers it. Re-measured on removal rather
+#           than assumed: dropping SC2015 still reports ten hits across two live
+#           scripts, so the exclusion stays and now names one of them.
 #   SC1003  "want to escape a single quote?" — a literal backslash in the case
 #           pattern of a glob-to-regex escaper, which is exactly what is meant.
 EXCLUDE="${SHELLCHECK_EXCLUDE:-SC2016,SC1091,SC2015,SC1003}"

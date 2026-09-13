@@ -30,29 +30,77 @@ el clúster de kind por ti si no hay ninguno en marcha —te pregunta antes, sal
 pases `--yes`. El proveedor `gcp` es una mejora planificada.
 :::
 
-## Qué hace
+## Qué hace {#what-it-does}
 
-El arranque inicial se ejecuta como una canalización (pipeline) ordenada e
-**idempotente** —volver a ejecutarlo converge al mismo estado y te indica qué paso
-falló si alguno lo hace:
+El arranque inicial se ejecuta como una canalización (pipeline) ordenada que **construye**
+una instancia, y te indica qué paso falló si alguno lo hace.
+
+Es un verbo de creación. Todas las credenciales de la instancia se acuñan aquí —las
+contraseñas de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
+entre servicios, la clave raíz del almacén de secretos— porque ninguna de ellas existe
+todavía. Apúntalo a una instancia que ya esté en marcha y se detiene en el paso 3 —antes de
+tocar el operador, la infraestructura o el chart— y nombra el comando que sí mueve una
+instancia viva: `dcctl upgrade`, descrito en
+[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+
+Una ejecución que *falló* a mitad de camino es otro caso distinto, y volver a ejecutarla sigue
+siendo la forma de repararla. Lo que el paso 3 rechaza es una instancia **viva**, que reconoce
+por el documento de configuración que se escribe en el paso 9 —de modo que todo lo que se
+quede antes de eso es una instancia a medio construir, y volver a ejecutar el arranque inicial
+es la manera admitida de terminarla.
 
 :::warning Excepción única: instancias creadas antes de que la base de datos pasara a CloudNativePG
 La base de datos relacional pasó de ser un StatefulSet a un clúster de CloudNativePG, y no
 existe una actualización en sitio: el directorio de datos de un StatefulSet no puede ser
-adoptado por el operador. En una instancia creada antes de ese cambio, volver a ejecutar el
-arranque inicial **se niega** en lugar de converger, y te indica cómo volcar los datos o
-descartarlos deliberadamente. Esa negativa es justamente el objetivo: sin ella la base de
-datos antigua se eliminaría y una nueva, vacía, ocuparía el mismo nombre de host, dejando una
-instancia que parece perfectamente sana y no tiene ningún dato.
+adoptado por el operador. En una instancia creada antes de ese cambio, el arranque inicial
+**se niega** y te indica cómo volcar los datos o descartarlos deliberadamente. Esa negativa es
+justamente el objetivo: sin ella la base de datos antigua se eliminaría y una nueva, vacía,
+ocuparía el mismo nombre de host, dejando una instancia que parece perfectamente sana y no
+tiene ningún dato.
+
+Esta es la única razón documentada para ejecutar `dcctl bootstrap` contra una instancia que ya
+está viva, así que `--allow-legacy-db-removal` queda exceptuado tanto de la negativa del paso
+3 como de esta. Nada más lo está.
 :::
 
-Los pasos de abajo son los que la ejecución va imprimiendo (`[3/10] Install core
+**Una instancia por clúster.** `dcctl` instala una sola instancia de DeviceChain en un
+clúster, y el paso 4 es lo que lo establece. Casi todo lo que aplica un arranque inicial
+es un singleton de ámbito de clúster —el propio Deployment del operador, el release de
+Helm y los releases de infraestructura que hay detrás del controlador de ingress,
+cert-manager y el operador CloudNativePG—, así que una segunda instancia no se coloca al
+lado de la primera. Instala el operador de esta ejecución por encima del que ya está en
+marcha, adopta la infraestructura compartida en un segundo estado de OpenTofu y acuña
+credenciales de base de datos, de bróker y de clave raíz por encima de aquellas con las
+que se está autenticando la instancia que ya está ahí. El paso 4 pregunta al clúster qué
+aloja ya y se detiene antes de todo eso, nombrando la instancia que encontró y el
+artefacto del que lo leyó. Hay tres cosas que hacer en su lugar:
+
+- **Mover a una versión nueva la instancia que ya está ahí** —`dcctl upgrade` es el verbo
+  para una instancia que ya existe, y no acuña nada.
+- **Construir esta en un clúster propio** —arráncala en un clúster local nuevo, o apúntala
+  a otro distinto con `--kube-context`.
+- **Sustituir lo que hay por esta** —ejecuta `dcctl destroy` sobre la instancia que ocupa
+  el clúster y vuelve a arrancar. Eso se lleva sus datos por delante.
+
+La negativa imprime las tres como comandos, con tus propios nombres de instancia y de
+proveedor ya puestos, de modo que se puede actuar sobre ella sin volver aquí.
+
+No es la negativa del paso 3 y las dos no se solapan. Aquella reconoce *esta* instancia y
+detiene su reconstrucción; esta pregunta si hay algo **más** aquí, así que una nueva
+ejecución dirigida a la instancia que ya está ahí sigue encontrando el mensaje escrito
+para ella. Un clúster que no puede decir qué aloja es un error, no un clúster vacío. Y
+como esta negativa solo puede dispararse contra un clúster que `dcctl` no creó, es el
+único fallo del arranque inicial que no deja nada detrás: el registro local que la
+ejecución escribió antes de empezar se deja tal como estaba, de modo que `dcctl instances
+list` no gana una entrada para una instancia que nunca se instaló.
+
+Los pasos de abajo son los que la ejecución va imprimiendo (`[5/12] Install core
 components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
 
 1. **Asegurar el registro local** (*Ensure local registry*) — solo en la ruta de
    desarrollo `--build`: aprovisiona un registro local y compila todas las imágenes en
    él. En la ruta de imágenes publicadas no hace nada y lo indica. Va primero porque el
-   operador que se instala dos pasos después nombra una imagen, y en la ruta `--build`
+   operador que se instala cuatro pasos después nombra una imagen, y en la ruta `--build`
    este es el paso que la produce.
 2. **Reclamar el clúster** (*Claim the cluster*) — crea el namespace del operador y toma
    el **bloqueo del clúster**, antes de aplicar nada. Mientras está tomado, un segundo
@@ -60,51 +108,75 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    silenciosamente por encima de este. Consulta [El bloqueo del clúster](./cluster-lock.md)
    —esa página también explica qué hacer cuando resulta que el clúster está reclamado por
    otra persona.
-3. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
+3. **Rechazar una reconstrucción** (*Refuse a rebuild*) — pregunta al clúster si esta
+   instancia ya está viva y se detiene si lo está. Su posición es deliberada por ambos lados:
+   *después* del bloqueo, porque un arranque inicial concurrente es justamente lo que dejaría
+   obsoleta la respuesta entre leerla y actuar sobre ella, y *antes* de que se aplique nada de
+   la instancia, porque todos los pasos que vienen debajo escriben en un clúster que puede
+   estar ejecutando ya la instancia sobre la que escribirían. Una ejecución en seco dice qué
+   rechazaría una ejecución real, en lugar de ocultarlo.
+4. **Rechazar una segunda instancia** (*Refuse a second instance*) — pregunta al clúster
+   si ya aloja una instancia *distinta* y se detiene si es así. Es la otra mitad del mismo
+   borde que el paso anterior, y hace la pregunta opuesta: no «¿está ya aquí esta
+   instancia?» sino «¿hay algo más aquí?». Las dos leen artefactos distintos y no pueden
+   dispararse a la vez: una se basa en encontrar esta instancia, la otra en encontrar otra.
+   Esta toma la primera respuesta que obtiene de las declaraciones de instancia del
+   clúster, luego de las credenciales que `dcctl` acuñó en `dc-system`, y luego del release
+   de Helm, preguntadas en ese orden porque es el orden en que las escribe un arranque
+   inicial: así, una ejecución que murió a mitad de camino queda respondida por lo que sí
+   llegó a dejar. Una ejecución en seco dice qué rechazaría una ejecución real, y lo dice
+   incluso cuando no pudo llegar al clúster para preguntárselo. Consulta **Una instancia
+   por clúster** más arriba.
+5. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
    operador (CRDs + RBAC + controlador) y lo aplica directamente con la API de
    Kubernetes. Va por delante de la aplicación de infraestructura porque la definición de
    una instancia debe existir en el clúster antes de que nada pueda describirle una —y
    describir una es justamente el paso siguiente.
-4. **Declarar la instancia** (*Declare the instance*) — escribe la **declaración** de la
+6. **Declarar la instancia** (*Declare the instance*) — escribe la **declaración** de la
    instancia en el clúster: el proveedor y el clúster al que pertenece, el perfil, la
    versión de imagen y si sus bases de datos se están recuperando desde un archivo. Acto
    seguido se vuelve a leer, y todos los pasos siguientes trabajan con lo que se leyó y no
    con los flags que lo produjeron —de modo que el registro de lo que es esta instancia
    está en el clúster, no en tu portátil. Consulta
    [la declaración de la instancia](./kubernetes-operator.md#instance-declaration).
-5. **Renderizar la configuración** (*Render configuration*) — resuelve el id de la
+7. **Renderizar la configuración** (*Render configuration*) — resuelve el id de la
    instancia, el namespace, el perfil y todas las credenciales generadas: el material de
    autenticación del bróker (la contraseña de servicio compartida y la clave del emisor
-   del callout), el secreto de autenticación entre servicios y la **clave raíz del
-   almacén de secretos**. Todas se acuñan en la primera instalación y **se reutilizan tal
-   cual cuando la instancia ya existe**: el pipeline le pregunta al clúster qué está
-   ejecutando la instancia antes de generar nada, y se detiene en vez de suponer si no
-   puede determinarlo. También registra las credenciales del bróker en la máquina desde la
+   del callout), la autoridad certificadora que firma el propio certificado TLS del bróker,
+   el secreto de autenticación entre servicios y la **clave raíz del almacén de secretos**.
+   Todas se acuñan aquí, porque el paso 3 ha establecido que no hay ninguna instancia viva de
+   la que tomarlas. Terminar una instancia a medio construir es la excepción: ahí el paso
+   vuelve a leer lo que una ejecución anterior ya dejó en el clúster en lugar de generar un
+   segundo juego. También registra las credenciales del bróker en la máquina desde la
    que lo ejecutas, antes de configurar el bróker con ellas, de modo que una ejecución
-   interrumpida a mitad de camino se retome con solo volver a ejecutarla. Además, la clave
-   raíz se deposita en un archivo cifrado que tú conservas; consulta
-   [Recuperación ante desastres](./disaster-recovery.md).
-6. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
+   interrumpida a mitad de camino se retome con solo volver a ejecutarla —el bróker se
+   configura antes que la instancia, y sus credenciales ya no se pueden recuperar del clúster
+   una vez están en él. Además, la clave raíz se deposita en un archivo cifrado que tú
+   conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
+8. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
    configuración de OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
    cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud, y el
    almacén de objetos al que ese plugin archiva) vía
    [terraform-exec](https://github.com/hashicorp/terraform-exec). El estado se guarda en
    `~/.devicechain/<instance>/infra`, de modo que las ejecuciones posteriores son
    incrementales.
-7. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — despliega el chart de
-   Helm vía el SDK de Helm para Go, bloqueando hasta que las cargas de trabajo estén
-   listas.
-8. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
-   de superusuario la siembra el servicio user-management en el primer arranque; este paso
-   fija los valores que imprimirá el informe final.
-9. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
-   área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
-   producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en
-   la espera del propio paso de Helm. Que haya réplicas disponibles no basta: en una
-   reejecución eso ya es cierto de los pods a los que sustituye, así que el paso espera
-   además a que se observe la nueva plantilla, a que todas las réplicas se hayan recreado
-   sobre ella y a que no quede ninguna réplica antigua en ejecución.
-10. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
+9. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
+   configuración** de la instancia —del que cada servicio lee sus credenciales y sus
+   endpoints— y después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando
+   hasta que las cargas de trabajo estén listas. Ese documento es lo que hace que la instancia
+   esté viva, y lo que el paso 3 busca en cualquier ejecución posterior.
+10. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
+    de superusuario la siembra el servicio user-management en el primer arranque; este paso
+    fija los valores que imprimirá el informe final.
+11. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
+    área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
+    producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en
+    la espera del propio paso de Helm. Que haya réplicas disponibles no basta: cuando se
+    están sustituyendo pods eso ya es cierto de los que están de salida, así que el paso
+    espera además a que se observe la nueva plantilla, a que todas las réplicas se hayan
+    recreado sobre ella y a que no quede ninguna réplica antigua en ejecución. `dcctl
+    upgrade` usa la misma puerta por la misma razón.
+12. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
     credencial de superusuario y cómo llegar a la instancia.
 
 :::tip `Ctrl+C` detiene una ejecución de forma limpia
@@ -112,6 +184,10 @@ Una ejecución interrumpida detiene la herramienta de infraestructura con elegan
 lo que está haciendo y escribe su estado— y devuelve el bloqueo del clúster, así que basta
 con volver a ejecutarla. Un **segundo** `Ctrl+C` sale de inmediato y renuncia a ambas cosas.
 Consulta [Interrumpir una ejecución](./cluster-lock.md#interrupt).
+
+Si la ejecución ya había llegado al paso 9, la instancia existe y el arranque inicial se
+negará la próxima vez que lo ejecutes. Eso no es un callejón sin salida: la instancia está
+construida, y `dcctl upgrade` es como se mueve a partir de ahí.
 :::
 
 Dado que los artefactos incrustados son los *mismos* que distribuye la

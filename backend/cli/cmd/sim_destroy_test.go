@@ -306,8 +306,7 @@ func dcctlInvocations(line string) [][]string {
 // SCOPE, stated exactly. This covers dcctl invocations in the lines
 // simCreateNextSteps returns. It does NOT cover the `dc-simulator --handshake …`
 // line printed just above them (a different binary, with its own stdlib flag set),
-// the suggestions embedded in error strings elsewhere in the CLI, or the ones in
-// deploy/local/up.sh.
+// or the suggestions embedded in error strings elsewhere in the CLI.
 func TestSimCreateNextStepsNameRealCommandsAndFlags(t *testing.T) {
 	lines := simCreateNextSteps("wl")
 	problems, reached := checkSuggestedCommands(lines)

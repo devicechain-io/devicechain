@@ -107,11 +107,10 @@ variable "slim" {
   default     = false
 }
 
-variable "grafana_admin_password" {
-  description = "Grafana admin password — the break-glass native login that stays available alongside OAuth SSO. Sensitive."
+variable "grafana_admin_secret" {
+  description = "Name of the Secret in this module's namespace holding the Grafana break-glass admin login, under keys admin-user / admin-password. Written by dcctl before the apply -- this module is told where to look, never what the value is, so no dashboard credential reaches the infrastructure state."
   type        = string
-  default     = "devicechain"
-  sensitive   = true
+  default     = "dc-grafana-admin"
 }
 
 # --- Grafana SSO (ADR-047): OAuth against user-management, operator-tier only ------
@@ -298,9 +297,20 @@ locals {
 
   grafana_values = merge({
     # Native admin login stays available as break-glass alongside OAuth SSO.
-    adminPassword = var.grafana_admin_password
-    service       = { type = "ClusterIP" }
-    resources     = { requests = { cpu = "50m", memory = "150Mi" } }
+    #
+    # 🔴 THE PASSWORD IS NOT HERE ANY MORE, AND ITS ABSENCE IS THE FEATURE. It used
+    # to be `adminPassword = var.grafana_admin_password`, whose default was a literal
+    # in this repository -- so the break-glass login for the dashboard that sees
+    # every tenant's metrics was the same value on every instance ever built from it,
+    # and it was in the state file. dcctl writes the Secret named below before the
+    # apply; this chart is told where to look rather than what the value is.
+    admin = {
+      existingSecret = var.grafana_admin_secret
+      userKey        = "admin-user"
+      passwordKey    = "admin-password"
+    }
+    service   = { type = "ClusterIP" }
+    resources = { requests = { cpu = "50m", memory = "150Mi" } }
     sidecar = {
       dashboards = {
         enabled = true

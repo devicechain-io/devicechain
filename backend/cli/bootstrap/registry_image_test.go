@@ -16,7 +16,7 @@ import (
 //
 // hack/check-image-pins.sh enforces this for every tracked shell script, and the
 // two other places that start this same container are shell (hack/upgrade-rig.sh,
-// deploy/local/up.sh). This one is Go, so it gets its guard here rather than by
+// deploy/local/build-images.sh). This one is Go, so it gets its guard here rather than by
 // teaching a shell tokenizer to read Go.
 //
 // WHY IT MATTERS HERE AND NOT ONLY IN THE RIG: all three sites only create the

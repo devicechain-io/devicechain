@@ -165,9 +165,12 @@ Two things this command will not let you do:
 - **Recover data without the key.** `--restore-rdb-from` on its own is refused. It
   would rehydrate every row and mint a *fresh* root key, leaving every stored secret
   permanently unreadable — a loss no later step can undo.
-- **Recover into a live instance.** The flag only takes effect when the database
-  cluster is *created*. Re-running it against an instance that already exists does
-  nothing at all, rather than half-working.
+- **Recover into a live instance.** A restore is one of the few things allowed to run
+  against an instance that already exists — recovery is exactly the situation a run gets
+  interrupted in and has to be retried, and a sharper guard makes that safe by permitting
+  it only when the escrow artifact carries the key the instance is already running on. But
+  the flag itself only takes effect when the database cluster is *created*, so aiming one
+  at a live instance moves no data at all, rather than half-working.
 
 The recovered instance immediately begins archiving under a **new** archive path of
 its own, so it cannot write over the archive it was just born from. The bootstrap
@@ -285,44 +288,54 @@ It proves the artifact names the right key. It does not prove the artifact still
 fingerprint check is a smoke alarm, not a fire drill.
 :::
 
-## Re-running bootstrap on a live instance
+## Credentials, and the two commands that touch them
 
-`dcctl bootstrap` is idempotent, and re-running it against an existing instance
-**reuses every credential that instance is already running** rather than minting new
-ones. That covers the secret-store root key, the NATS service password, the callout
-issuer key and the cross-service auth secret. If it cannot determine whether the
-instance exists, it stops rather than guessing — minting would be the destructive
-answer.
+`dcctl bootstrap` **mints** every credential an instance has, and it does so because none of
+them exists yet. That is why it refuses to run against an instance that is already live: there
+is no ordering in which handing a running instance new credentials is safe. Rewriting the root
+key makes every stored secret permanently unreadable. Rewriting the broker credentials is
+recoverable but disruptive — the broker and the services are updated by different mechanisms
+on different schedules, so fresh credentials open a window in which one side rejects the
+other, and pods that start inside it fail to reach the broker at all.
 
-The broker is a special case, because it is configured several steps before the
-instance itself is. A bootstrap that fails in between leaves a running broker that no
-later run could recognise from the cluster alone: it holds only a public key and two
-password hashes, and none of those can be turned back into the credentials the
-services need. So the broker's credentials are also recorded on the machine you run
-`dcctl` from, under `~/.devicechain/<instance>/`, before the broker is configured with
-them — and a re-run reuses them from there when there is no instance yet to ask. The
-file is readable only by you, and `dcctl destroy` removes it with the rest of the
-instance's local state.
+`dcctl upgrade` is the command that acts on a live instance, and it **mints nothing**. It
+reads back the secret-store root key, the broker's authority and logins, the database owner
+passwords, the cross-service auth secret and the single sign-on client secret, and keeps every
+one of them. A version change cannot become a credential change.
 
-Why it matters differs by credential. Rewriting the root key makes every stored secret
-permanently unreadable. Rewriting the broker credentials is recoverable but disruptive:
-the broker and the services are updated by different mechanisms on different schedules,
-so fresh credentials open a window in which one side rejects the other, and pods that
-start inside it fail to reach the broker at all.
+### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 
-:::note One exception
-The Grafana OAuth client secret (`--grafana-sso`) is still re-minted on every run,
-because its cleartext lives in Grafana's own configuration rather than in the instance
-config. Both halves are rewritten by the same run, so the effect is a brief window of
-failing Grafana logins during the rollout.
-:::
+The refusal is keyed on the instance's **configuration document**, which is written near the
+end of the run. Anything short of that is a half-built instance rather than a live one, and
+running the bootstrap again is the supported way to finish it.
 
-On a re-run it also reconciles the escrow:
+The broker is why that window has to stay open. It is configured several steps before the
+instance itself is, and a bootstrap that fails in between leaves a running broker that no
+later run could recognise from the cluster alone: it holds only a public key and two password
+hashes, and none of those can be turned back into the credentials the services need. So the
+broker's credentials are also recorded on the machine you run `dcctl` from, under
+`~/.devicechain/<instance>/`, before the broker is configured with them — and a later run
+reuses them from there when there is no instance yet to ask. The file is readable only by you,
+and `dcctl destroy` removes it with the rest of the instance's local state.
+
+### The escrow is reconciled on every upgrade {#escrow-reconcile}
+
+Checking an escrow needs **no passphrase**. The artifact records a fingerprint of the key it
+protects, so matching it against the key the instance is running opens nothing — which is why
+`dcctl upgrade` does it every time, without asking you for anything:
 
 - artifact matches the running key → confirmed, left untouched;
-- artifact does **not** match → the run stops and names it as an orphan;
-- no artifact → one is written, so an instance first created with `--no-escrow` can
-  gain an escrow later.
+- artifact does **not** match → warned about loudly, and named for what it most likely is: an
+  escrow belonging to an earlier instance of the same name. Restoring from it would recover a
+  cluster that cannot read its own secrets;
+- no artifact → one is written, if you passed `--escrow-passphrase-file` (or set
+  `DCCTL_ESCROW_PASSPHRASE`). This is how an instance first created with `--no-escrow` gains
+  an escrow later. With no passphrase available it warns instead, and does not prompt: an
+  upgrade runs unattended, and by this point it has already moved the instance.
+
+None of those outcomes fails the upgrade. An escrow problem is about a future disaster and the
+upgrade in front of it is about the running instance — and an operator who cannot upgrade will
+work around the check rather than fix it.
 
 ## After `dcctl destroy` {#after-destroy}
 

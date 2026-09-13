@@ -135,7 +135,7 @@ func (localProvider) DestroyCluster(ctx context.Context, binding ClusterBinding,
 }
 
 // createKindCluster creates a kind cluster from the embedded topology (the same
-// config deploy/local/up.sh uses). kind streams its own progress.
+// config in deploy/local/kind-cluster.yaml). kind streams its own progress.
 func createKindCluster(ctx context.Context, name string) error {
 	if _, err := exec.LookPath("kind"); err != nil {
 		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")

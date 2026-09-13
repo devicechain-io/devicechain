@@ -131,11 +131,6 @@ variable "username" {
   type = string
 }
 
-variable "password" {
-  type      = string
-  sensitive = true
-}
-
 variable "storage" {
   type    = string
   default = "8Gi"
@@ -384,8 +379,22 @@ locals {
   # The credentials Secret, in the shape CNPG's bootstrap expects
   # (kubernetes.io/basic-auth with username/password). Left unset, CNPG mints a
   # password of its own -- and the DSN every service ships would then be unable
-  # to log in. So the caller's configured credentials are preserved by handing
-  # CNPG a Secret rather than by reading one back.
+  # to log in. So the Secret is named here and handed to CNPG's bootstrap below.
+  #
+  # 🔴 THIS MODULE NO LONGER CREATES IT. dcctl writes it before the apply, and the
+  # reason it has to is CNPG's own: the owner role's password is set when the
+  # Cluster is CREATED and never again -- the role is declared under managed.roles
+  # with no passwordSecret, so nothing reconciles it. A Secret this module created
+  # would put that password in the infrastructure state, and every instance built
+  # from this repository shared the variable default it came from.
+  #
+  # 🔴 AND THE ORDERING EDGE WENT WITH IT. There used to be an explicit
+  # `depends_on = [kubernetes_secret_v1.app]`, because the values below name the
+  # Secret as a STRING and a string carries no dependency. Nothing here replaces
+  # it: the guarantee is now dcctl's, which writes every credential between
+  # creating the namespace and running this apply, and fails the run if it cannot.
+  # A `data` source would restore the check and defeat the point -- a data source
+  # stores what it reads, which puts the password back in the state file.
   credentials_secret = "${var.name}-app-credentials"
 
   # 🔴 ONE DEFINITION, READ BY BOTH THE CHART VALUES AND synchronous_enforced.
@@ -416,27 +425,6 @@ locals {
   backup_server_name = var.backup == null ? null : var.backup.server_name
 }
 
-resource "kubernetes_secret_v1" "app" {
-  metadata {
-    name      = local.credentials_secret
-    namespace = var.namespace
-    labels = {
-      "app.kubernetes.io/name"       = var.name
-      "app.kubernetes.io/component"  = "database"
-      "app.kubernetes.io/managed-by" = "opentofu"
-      # CNPG watches Secrets carrying this label. Without it the operator does
-      # not reload on a credential change.
-      "cnpg.io/reload" = "true"
-    }
-  }
-
-  type = "kubernetes.io/basic-auth"
-
-  data = {
-    username = var.username
-    password = var.password
-  }
-}
 
 locals {
   # 🔴 THE VALUES LIVE IN A LOCAL, NOT INLINE IN THE RESOURCE, so the outputs can
@@ -583,11 +571,6 @@ resource "helm_release" "cluster" {
   name      = var.name
   namespace = var.namespace
   chart     = "${path.module}/chart"
-
-  # The Secret must exist before initdb reads it. This is an explicit edge
-  # rather than an inferred one: the values below reference the Secret by NAME
-  # (a string), and a string carries no dependency.
-  depends_on = [kubernetes_secret_v1.app]
 
   # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
   #

@@ -48,7 +48,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 
 	doing(fmt.Sprintf("declaring instance %q", st.Instance))
-	if err := WriteInstanceCR(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion); err != nil {
+	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion); err != nil {
 		return err
 	}
 	done()
@@ -58,7 +58,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// applies defaults, CEL rules and the immutability checks on the way in, so
 	// what lands is not necessarily what was sent. Reading it is what makes the
 	// object the source of truth rather than a log of it.
-	inst, err := ReadInstanceCR(ctx, st.KubeContext, st.Instance)
+	inst, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 	if err != nil {
 		return err
 	}
@@ -71,9 +71,35 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {
 		return fmt.Errorf("the declaration read back from the cluster is not usable: %w", err)
 	}
+	// 🔴 THE UID IS TAKEN FROM THE READ-BACK, AND ONLY THE READ-BACK CAN SUPPLY IT.
+	// It is assigned by the API server when the object is created, so the spec this
+	// step sent does not carry one. Every Secret dcctl mints is stamped with it to
+	// separate this instance from a previous one that had the same name, and the
+	// writer refuses to mint without it — so an empty value here is a bootstrap that
+	// stops at the first Secret rather than one that adopts a dead generation's
+	// credentials.
+	st.InstanceUID = string(inst.UID)
+	if st.InstanceUID == "" {
+		return fmt.Errorf("the declaration for instance %q came back from the cluster with no UID, "+
+			"so a Secret left behind by a previous instance of the same name could not be told "+
+			"from this one's", st.Instance)
+	}
 	applyDeclaration(st, inst.Spec)
 	return nil
 }
+
+// The two cluster calls this step makes, as seams.
+//
+// Both build their own client from the kube context, which is right for a step that
+// runs against a real cluster and wrong for testing the step itself — and what this
+// step does with what comes BACK is now load-bearing in a way it was not: the
+// declaration's UID is what separates this instance from a previous one of the same
+// name, and every minted Secret is stamped with it. A step whose only test is "the
+// functions it calls are correct" cannot see that value being dropped on the floor.
+var (
+	writeInstanceDeclaration = WriteInstanceCR
+	readInstanceDeclaration  = ReadInstanceCR
+)
 
 // reportExistingClaim prints who holds the cluster lock, without taking it.
 func reportExistingClaim(ctx context.Context, st *State) error {

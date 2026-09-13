@@ -134,6 +134,46 @@ type State struct {
 	// bootstrapped with --kube-context.
 	Binding  ClusterBinding
 	Provider string
+	// InstanceUID is the declaration's own UID, read back from the cluster by the
+	// declare step.
+	//
+	// 🔴 IT IS WHAT TELLS THIS INSTANCE FROM THE ONE THAT HAD ITS NAME BEFORE.
+	// Every Secret dcctl mints is stamped with it, and names are reused: an instance
+	// destroyed and rebuilt under the same name gets a new declaration and a new
+	// UID, so a Secret left behind by a destroy that died halfway is recognisable as
+	// a dead generation rather than adopted as this run's own. Empty in tests and in
+	// pipelines assembled by anything but the bootstrap command, where writing a
+	// minted Secret is refused rather than done without an owner.
+	InstanceUID string
+	// Credentials are the values this run settled — minted where the instance is
+	// new, read back where it is already running on one. Settled by the render step
+	// and written by the infrastructure step, which is the only ordering in which
+	// CloudNativePG builds the database role from the same value the services get.
+	Credentials *credentialSet
+	// Evolving says this State describes an instance that already exists and is
+	// being moved, rather than one being built.
+	//
+	// 🔴 IT IS NOT A DRY-RUN-SHAPED CONVENIENCE FLAG. It selects between the two
+	// answers to one question — what happens to a value this run has no opinion
+	// about — and the two verbs need OPPOSITE answers. A bootstrap composes the
+	// whole instance from its arguments, so a value it did not produce is a value
+	// the operator removed: `--lwm2m-identities` left off a re-run is DOCUMENTED to
+	// withdraw the provisioned credentials. An upgrade composes a version change, so
+	// the same silence means "I was not asked about that", and withdrawing on it
+	// would delete every device's PSK on an ordinary version bump.
+	//
+	// So this is read only where that question is actually asked — see
+	// carryForwardFromRelease and carryReleaseValues — and never as a general
+	// "am I an upgrade?" switch. Somewhere that wants to branch on the verb for any
+	// other reason wants a different field, or more likely a different function.
+	Evolving bool
+	// BackupDestination is an off-site archive the operator already owns, read from
+	// --backup-credentials-file. Nil means the in-cluster object store.
+	BackupDestination *BackupDestination
+	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
+	// than during the apply so the private half never reaches the infrastructure
+	// state. Only the public CA is passed to OpenTofu.
+	NATSTLS *natsTLSMaterial
 	// OperatorNamespace is where the operator overlay puts itself, read from the
 	// rendered manifests rather than assumed. The cluster lock lives here too, so
 	// this is set before the claim step runs.
@@ -235,6 +275,19 @@ func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
 		{Name: "Claim the cluster", Run: stepClaimCluster},
+		// AFTER the lock and BEFORE anything is applied. After, because the answer
+		// is read from the cluster and a concurrent bootstrap is exactly what would
+		// make it stale between the read and the act. Before, because every step
+		// below this one writes something to a cluster that may already be running
+		// the instance they would be writing over.
+		{Name: "Refuse a rebuild", Run: stepRefuseRebuild},
+		// The second half of the same edge, and it asks the OPPOSITE question: not "is
+		// this instance already here" but "is anything ELSE here". Both edges matter
+		// for the same reason as above, and this one sits after the rebuild check so a
+		// re-run of the instance that IS here keeps meeting the message written for
+		// it. They cannot both fire: one keys on finding this instance, the other on
+		// finding another.
+		{Name: "Refuse a second instance", Run: stepRefuseSecondInstance},
 		{Name: "Install core components", Run: stepInstallCore},
 		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},

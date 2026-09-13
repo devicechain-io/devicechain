@@ -37,9 +37,10 @@ type DestroyOptions struct {
 // leaving the cluster, infra and operator in place so a re-bootstrap is quick.
 func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error {
 	if opts.KeepCluster {
-		// An operator declining a prompt is not a failed command — swallow the sentinel
-		// here so `--keep-cluster` still exits 0 when the answer is no, as it always has.
-		if err := destroyInstanceOnly(ctx, opts); err != nil && !errors.Is(err, errDestroyAborted) {
+		// An operator declining a prompt is not a failed command, and neither is a
+		// record removed for an instance that was never installed — so `--keep-cluster`
+		// still exits 0 for both, as it always has for the first.
+		if err := destroyInstanceOnly(ctx, opts); err != nil && !destroyNeedsNoFurtherWork(err) {
 			return err
 		}
 		return nil
@@ -104,7 +105,22 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext, opts.Instance); err != nil {
-		return fail("uninstalling release", err)
+		return uninstallOutcome(err, func() error {
+			return resolveForeignRelease(ctx, kubeContext, opts, err)
+		})
+	}
+	// 🔴 AND THE NAMESPACE, WHICH THE UNINSTALL DOES NOT ALWAYS REACH. dcctl writes the
+	// instance configuration Secret — the root key with it — before Helm installs
+	// anything, so a run that died in between leaves a namespace with no release to
+	// uninstall, and the uninstall above reports that as success. See
+	// removeInstanceNamespace for why the leftover makes this very command the remedy
+	// that does not work.
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return fail("connecting to the cluster to remove the instance namespace", err)
+	}
+	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
+		return fail("removing the instance namespace", err)
 	}
 	done()
 
@@ -201,8 +217,14 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 		// for both, so declining the confirmation still fell through to removeInstanceState
 		// — deleting the tfstate of an instance the operator had just said to leave alone,
 		// and closing with a line that said it was uninstalled.
+		// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. Both outcomes
+		// are already fully handled by the time they get here — the aborted one did
+		// nothing on purpose, and the nothing-here one already removed the local state
+		// and already said what happened. Falling through would remove the state a
+		// second time and then print "Instance %q uninstalled" over a cluster nothing
+		// touched, which is the sentence this command has been fixed for twice.
 		if err := destroyInstanceOnly(ctx, keepOpts); err != nil {
-			if errors.Is(err, errDestroyAborted) {
+			if destroyNeedsNoFurtherWork(err) {
 				return nil
 			}
 			return err

@@ -20,6 +20,7 @@ module "nats" {
   cluster_replicas         = var.nats_cluster_replicas
   enable_prom_exporter     = var.nats_prom_exporter
   enable_tls               = var.nats_enable_tls
+  ca_cert_pem              = var.nats_ca_cert_pem
   reject_qos2_publish      = var.nats_mqtt_reject_qos2_publish
   enable_auth              = var.nats_enable_auth
   callout_issuer_public    = var.nats_callout_issuer_public
@@ -112,7 +113,11 @@ locals {
       access_key = module.object_store[0].access_key_id_key
       secret_key = module.object_store[0].secret_access_key_key
       } : {
-      secret     = kubernetes_secret_v1.backup_credentials[0].metadata[0].name
+      # Written by dcctl from --backup-credentials-file, before this apply. Named
+      # here as a STRING because that is all this tree needs -- and because reading
+      # it back with a data source would put the supplied credential into state,
+      # which is the whole thing moving it out was for.
+      secret     = var.backup_credentials_secret
       access_key = "ACCESS_KEY_ID"
       secret_key = "SECRET_ACCESS_KEY"
     }
@@ -261,30 +266,21 @@ resource "terraform_data" "cutover_guard" {
 # The credentials the ObjectStore resources present to the endpoint.
 #
 # For the in-cluster destination this is the object-store module's own Secret,
-# reused rather than copied — MinIO's root credentials and the credentials the
+# reused rather than copied -- MinIO's root credentials and the credentials the
 # archiver presents ARE the same credentials, and two Secrets holding one value
-# is two things to rotate and one of them to forget. For an external destination
-# there is no module, so the root writes one.
-resource "kubernetes_secret_v1" "backup_credentials" {
-  count = local.backups_on && var.backup_destination == "external" ? 1 : 0
-
-  metadata {
-    name      = "dc-backup-credentials"
-    namespace = var.namespace
-    labels = {
-      "app.kubernetes.io/name"       = "dc-backup"
-      "app.kubernetes.io/component"  = "database-backup"
-      "app.kubernetes.io/managed-by" = "opentofu"
-    }
-  }
-
-  data = {
-    ACCESS_KEY_ID     = var.backup_access_key
-    SECRET_ACCESS_KEY = var.backup_secret_key
-  }
-
-  depends_on = [module.namespace]
-}
+# is two things to rotate and one of them to forget.
+#
+# 🔴 FOR AN EXTERNAL DESTINATION THIS MODULE NO LONGER WRITES ONE. The credentials
+# belong to somebody else's object store: they are SUPPLIED, not minted, and putting
+# a supplied secret into a variable puts it in the state file just as surely as a
+# generated one. dcctl reads them from --backup-credentials-file and writes
+# `dc-backup-credentials` before this apply; the name below is all this tree needs.
+#
+# That also removed the last credential this configuration declared. The variables
+# that carried them (backup_access_key / backup_secret_key) are gone with the
+# resource, and hack/dr-rig.sh -- the only thing that ever set them -- moved to the
+# file in the same change, because a validation rig that cannot run is worse than
+# one that fails.
 
 # The in-cluster object store. Only for backup_destination = "in-cluster"; an
 # external destination provisions nothing here.
@@ -292,10 +288,13 @@ module "object_store" {
   source = "./modules/object-store"
   count  = local.backups_on && var.backup_destination == "in-cluster" ? 1 : 0
 
-  namespace     = var.namespace
-  buckets       = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
-  access_key    = var.backup_access_key
-  secret_key    = var.backup_secret_key
+  namespace = var.namespace
+  buckets   = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
+  # 🔴 NO CREDENTIALS PASSED. dcctl mints the store's root credentials per instance
+  # and writes them into the Secret this module names, before this apply -- so the
+  # variables that used to carry them here provision nothing. They still serve the
+  # EXTERNAL destination above, where the credentials belong to somebody else's
+  # object store and are supplied rather than minted.
   storage       = var.backup_object_store_storage
   storage_class = var.backup_object_store_storage_class
 
@@ -543,7 +542,6 @@ module "cnpg_rdb" {
   image              = var.postgres_image
   database           = var.postgres_database
   username           = var.postgres_username
-  password           = var.postgres_password
   storage            = var.postgres_storage
   storage_class      = var.postgres_storage_class
 
@@ -683,7 +681,6 @@ module "cnpg_tsdb" {
   image              = var.timescale_image
   database           = var.timescale_database
   username           = var.timescale_username
-  password           = var.timescale_password
   storage            = var.timescale_storage
   storage_class      = var.timescale_storage_class
 
@@ -897,11 +894,11 @@ module "monitoring" {
   # kube-state-metrics (ADR-020 A1.5). Read from enable_cnpg rather than offered as
   # a preference: with no CNPG CRDs there is nothing to watch, and the alerts that
   # consume these series would load, select nothing and never fire.
-  cnpg_cluster_metrics   = var.enable_cnpg
-  grafana_admin_password = var.monitoring_grafana_admin_password
-  prometheus_retention   = var.monitoring_prometheus_retention
-  prometheus_storage     = var.monitoring_prometheus_storage
-  storage_class          = var.monitoring_storage_class
+  cnpg_cluster_metrics = var.enable_cnpg
+
+  prometheus_retention = var.monitoring_prometheus_retention
+  prometheus_storage   = var.monitoring_prometheus_storage
+  storage_class        = var.monitoring_storage_class
 
   # Grafana SSO (ADR-047): operator-tier-only OAuth against user-management + the
   # /grafana ingress. Off unless the bring-up mints a client secret and supplies URLs.

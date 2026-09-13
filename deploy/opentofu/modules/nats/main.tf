@@ -203,6 +203,12 @@ variable "enable_tls" {
   default     = true
 }
 
+variable "ca_cert_pem" {
+  description = "PEM-encoded certificate of the authority that signed the broker's server certificate. Minted by dcctl, which also writes the TLS Secret the chart mounts -- only this PUBLIC half crosses into the infrastructure state. Empty when TLS is off."
+  type        = string
+  default     = ""
+}
+
 variable "enable_auth" {
   description = "Enable broker authentication (ADR-025): an APP account with a shared service login + an auth_callout that delegates device connects to device-management. Requires callout_issuer_public + service_password_bcrypt (minted out-of-band, since nkeys aren't a TF primitive), with the plaintext password threaded into the services' instance config."
   type        = bool
@@ -814,97 +820,30 @@ locals {
 # re-trusting a new root, and gives each node of an HA cluster its own leaf from
 # the shared CA (ADR-020).
 
-resource "tls_private_key" "ca" {
-  count     = var.enable_tls ? 1 : 0
-  algorithm = "RSA"
-  rsa_bits  = 2048
-}
+# 🔴 THE CERTIFICATE AUTHORITY IS NOT CREATED HERE ANY MORE, AND THE PRIVATE KEY IS
+# THE REASON. This module used to hold `tls_private_key.ca` -- which put the key that
+# signs every broker certificate into the infrastructure state IN CLEARTEXT, in a file
+# on the operator's machine and in every copy of it. That is the one confirmed
+# disclosure the credential cutover exists to close.
+#
+# dcctl mints the authority and the leaf now and writes the TLS Secret the chart
+# mounts (config.*.tls.secretName -> local.tls_secret_name) before this apply runs.
+# What crosses into this module is `ca_cert_pem`: the PUBLIC half, which anyone may
+# hold, and which the CA-only ConfigMap below and the ca_pem output both serve.
+#
+# 🔑 THAT ALSO REVERSED AN ARROW. The CA used to be an OUTPUT the bring-up read after
+# the apply, which meant the instance configuration document could not be composed
+# until the apply had finished. It is an INPUT now, so the document is complete before
+# anything is applied.
+#
+# 🔴 WHAT THIS MODULE LOST WITH THEM IS RENEWAL. `tls_locally_signed_cert` carried
+# `early_renewal_hours = 720`, so every apply re-issued the leaf inside its last 30
+# days. Nothing here replaces that, and dcctl does not yet either -- the leaf is
+# re-minted on each run, which covers a re-run and does NOT cover an instance nobody
+# re-runs. Renewal belongs to the verb that evolves a live instance; until that lands,
+# this is a known gap rather than a solved problem, and cert-manager taking over leaf
+# issuance is what closes it.
 
-resource "tls_self_signed_cert" "ca" {
-  count           = var.enable_tls ? 1 : 0
-  private_key_pem = tls_private_key.ca[0].private_key_pem
-
-  is_ca_certificate     = true
-  validity_period_hours = 87600 # 10 years — the CA is long-lived; the leaf rotates.
-  early_renewal_hours   = 720
-
-  subject {
-    common_name  = "DeviceChain NATS CA"
-    organization = "The DeviceChain Authors"
-  }
-
-  allowed_uses = [
-    "cert_signing",
-    "crl_signing",
-    "digital_signature",
-  ]
-}
-
-resource "tls_private_key" "server" {
-  count     = var.enable_tls ? 1 : 0
-  algorithm = "RSA"
-  rsa_bits  = 2048
-}
-
-resource "tls_cert_request" "server" {
-  count           = var.enable_tls ? 1 : 0
-  private_key_pem = tls_private_key.server[0].private_key_pem
-
-  subject {
-    common_name  = "${var.release_name}.${var.namespace}"
-    organization = "The DeviceChain Authors"
-  }
-
-  dns_names = local.server_dns_names
-}
-
-resource "tls_locally_signed_cert" "server" {
-  count              = var.enable_tls ? 1 : 0
-  cert_request_pem   = tls_cert_request.server[0].cert_request_pem
-  ca_private_key_pem = tls_private_key.ca[0].private_key_pem
-  ca_cert_pem        = tls_self_signed_cert.ca[0].cert_pem
-
-  validity_period_hours = 8760 # 1 year — re-issued on apply as it nears expiry.
-  early_renewal_hours   = 720
-
-  # client_auth as well as server_auth, because this ONE leaf plays both roles.
-  # On the client and MQTT listeners the server presents it as a server; on the
-  # 6222 route listener, with verify on, each server also presents it as a CLIENT
-  # to its peers. Without the clientAuth EKU that handshake is rejected and the
-  # cluster silently never forms — routes retry, JetStream never gets a meta
-  # leader, and the symptom looks like a broken cluster rather than a bad cert.
-  allowed_uses = [
-    "server_auth",
-    "client_auth",
-    "digital_signature",
-    "key_encipherment",
-  ]
-}
-
-# The chart mounts this Secret into the server pods (config.*.tls.secretName). It
-# carries the leaf + its key; the leaf cert bundles the CA so a client that only
-# trusts the CA still gets a full chain.
-resource "kubernetes_secret_v1" "nats_tls" {
-  count = var.enable_tls ? 1 : 0
-
-  metadata {
-    name      = local.tls_secret_name
-    namespace = var.namespace
-  }
-
-  type = "kubernetes.io/tls"
-
-  data = {
-    "tls.crt" = "${tls_locally_signed_cert.server[0].cert_pem}${tls_self_signed_cert.ca[0].cert_pem}"
-    "tls.key" = tls_private_key.server[0].private_key_pem
-    "ca.crt"  = tls_self_signed_cert.ca[0].cert_pem
-  }
-}
-
-# CA-only ConfigMap for the chart's tlsCA reference (nats-box contexts + the CA in
-# every tls block). Deliberately a ConfigMap holding ONLY the public CA — pointing
-# tlsCA at the server Secret would mount the private key into the nats-box debug
-# pod, which has no need for it.
 resource "kubernetes_config_map_v1" "nats_ca" {
   count = var.enable_tls ? 1 : 0
 
@@ -914,7 +853,7 @@ resource "kubernetes_config_map_v1" "nats_ca" {
   }
 
   data = {
-    "ca.crt" = tls_self_signed_cert.ca[0].cert_pem
+    "ca.crt" = var.ca_cert_pem
   }
 }
 
@@ -955,10 +894,16 @@ resource "helm_release" "nats" {
   # This is a ceiling, not a delay: helm returns as soon as the release is ready.
   timeout = 900
 
-  # The server pods mount the TLS material at startup; create it first so the STS
-  # is not stuck ContainerCreating on a missing secret (helm wait would time out).
+  # The server pods mount the CA ConfigMap at startup; create it first so the STS
+  # is not stuck ContainerCreating on a missing one (helm wait would time out).
+  #
+  # 🔴 THE TLS SECRET USED TO BE IN THIS LIST AND NO LONGER CAN BE -- dcctl writes it
+  # before this apply, so there is no resource here to depend ON. The ordering it
+  # guaranteed is now dcctl's: it writes every credential between creating the
+  # namespace and running this apply, and fails the run rather than applying without
+  # them. A `data` source would restore the edge and reintroduce exactly what moving
+  # the material out was for, because a data source stores what it reads.
   depends_on = [
-    kubernetes_secret_v1.nats_tls,
     kubernetes_config_map_v1.nats_ca,
   ]
 
@@ -1056,7 +1001,7 @@ output "service" {
 
 output "ca_pem" {
   description = "PEM-encoded CA that signed the NATS server cert. Empty when TLS is off. Threaded into each service's instance config so clients verify the broker (ADR-025)."
-  value       = var.enable_tls ? tls_self_signed_cert.ca[0].cert_pem : ""
+  value       = var.enable_tls ? var.ca_cert_pem : ""
 }
 
 # The resolved HA topology, as data.
