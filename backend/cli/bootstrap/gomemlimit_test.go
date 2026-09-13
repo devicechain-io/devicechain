@@ -66,7 +66,7 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 	}
 
 	inst := action.NewInstall(&action.Configuration{})
-	inst.ReleaseName = helmReleaseName
+	inst.ReleaseName = "dc-gomemlimit"
 	inst.Namespace = "default"
 	inst.DryRun = true
 	inst.ClientOnly = true
@@ -357,7 +357,7 @@ func TestSchemaRejectsAGoMemLimitPercentThatWouldOOMKill(t *testing.T) {
 	}
 	for _, pct := range []int{100, 150} {
 		inst := action.NewInstall(&action.Configuration{})
-		inst.ReleaseName = helmReleaseName
+		inst.ReleaseName = "dc-gomemlimit"
 		inst.Namespace = "default"
 		inst.DryRun = true
 		inst.ClientOnly = true

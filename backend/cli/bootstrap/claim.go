@@ -40,7 +40,7 @@ import (
 // 🔴 WHY THE LOCK IS PER-CLUSTER AND NOT PER-INSTANCE, WHICH IS THE PART THAT IS
 // EASY TO GET WRONG. The obvious design gives each instance its own Lease, and it
 // locks the wrong thing. Almost everything a bootstrap touches is a cluster
-// singleton: the Helm release is the constant helmReleaseName in the literal
+// singleton: the Helm release is helmReleaseNameFor(instance) in the literal
 // "default" namespace, the infrastructure root installs fixed-name releases into
 // dc-system / cnpg-system / cert-manager, and the operator Deployment is applied
 // cluster-wide. Two runs holding two different per-instance Leases are both
