@@ -174,7 +174,7 @@ func TestAClusterThatCannotBeReadKeepsTheRecord(t *testing.T) {
 // clearing local state the day the wording changed, or the day an unrelated error
 // happened to contain the same words.
 func TestTheForeignReleaseRefusalIsRecognisableByTypeAndCarriesBothNames(t *testing.T) {
-	err := uninstallRefusalReason("a", "b")
+	err := uninstallRefusalReason("a", "b", "dc-b")
 	var foreign *foreignReleaseError
 	if !errors.As(err, &foreign) {
 		t.Fatalf("the refusal is not recognisable to its caller (%T), so `dcctl destroy` cannot "+
@@ -192,7 +192,7 @@ func TestTheForeignReleaseRefusalIsRecognisableByTypeAndCarriesBothNames(t *test
 // clear — which is the entire defect. This asserts the call HAPPENS.
 func TestTheForeignReleaseRefusalIsHandedToTheThingThatResolvesIt(t *testing.T) {
 	resolved := false
-	out := uninstallOutcome(uninstallRefusalReason("a", "b"), func() error {
+	out := uninstallOutcome(uninstallRefusalReason("a", "b", "dc-b"), func() error {
 		resolved = true
 		return errInstanceNotInCluster
 	})
@@ -244,7 +244,7 @@ func TestOnlyAnOutcomeCountsAsNoFurtherWorkAndAFailureNeverDoes(t *testing.T) {
 	}
 	for name, err := range map[string]error{
 		"a real uninstall failure":          errors.New("timed out waiting for the release to be deleted"),
-		"a foreign release nobody resolved": uninstallRefusalReason("a", "b"),
+		"a foreign release nobody resolved": uninstallRefusalReason("a", "b", "dc-b"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if destroyNeedsNoFurtherWork(err) {
@@ -257,7 +257,7 @@ func TestOnlyAnOutcomeCountsAsNoFurtherWorkAndAFailureNeverDoes(t *testing.T) {
 // The line printed before the record is removed names the instance that is actually
 // installed, because that is what the operator has to go and look at.
 func TestTheOwnerIsReadBackOutOfTheRefusalForTheMessage(t *testing.T) {
-	if got := foreignOwner(uninstallRefusalReason("production", "staging"), "fallback"); got != "production" {
+	if got := foreignOwner(uninstallRefusalReason("production", "staging", "dc-staging"), "fallback"); got != "production" {
 		t.Fatalf("got %q, want %q", got, "production")
 	}
 	if got := foreignOwner(errors.New("something else"), "fallback"); got != "fallback" {

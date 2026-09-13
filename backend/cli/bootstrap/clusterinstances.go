@@ -141,7 +141,7 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 		{fmt.Sprintf("the credentials dcctl minted in %s", infraNamespace), func() ([]string, error) {
 			return ownedSecretInstances(ctx, typed)
 		}},
-		{fmt.Sprintf("the %q Helm release", helmReleaseName), func() ([]string, error) {
+		{"the DeviceChain Helm releases in this cluster", func() ([]string, error) {
 			return releasedInstances(helmCfg)
 		}},
 	})
@@ -188,23 +188,15 @@ func declaredInstances(ctx context.Context, dyn dynamic.Interface) ([]string, er
 	return ids, nil
 }
 
-// releasedInstances asks the installed Helm release whose it is, in the list shape the
-// other sources answer in.
+// releasedInstances asks the DeviceChain releases in this cluster whose they are.
 //
-// It is releaseInstance's three answers unchanged: no release is an empty list, an
-// attributable one is a list of one, and one that does not say which instance it
-// belongs to is an ERROR. The third is why this is not written as "return the id and
-// let the caller decide" — an unattributable release collapsed into an empty string
-// reads as an empty cluster at every call site.
+// 🔴 IT ASKS ALL OF THEM NOW, WHERE IT USED TO ASK ONE BY NAME. Release names became
+// instance-derived, so the name can no longer be guessed by a run that does not already
+// know the answer — see deviceChainReleases. The three answers are unchanged: no release
+// is an empty list, attributable ones are their instance ids, and one that does not say
+// which instance it belongs to is an ERROR rather than an absence.
 func releasedInstances(cfg *action.Configuration) ([]string, error) {
-	id, present, err := releaseInstance(cfg)
-	if err != nil {
-		return nil, err
-	}
-	if !present {
-		return nil, nil
-	}
-	return []string{id}, nil
+	return deviceChainReleases(cfg)
 }
 
 // ownedSecretInstances reads the ownership stamps off the Secrets dcctl minted into the

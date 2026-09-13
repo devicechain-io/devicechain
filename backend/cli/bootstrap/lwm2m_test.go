@@ -161,7 +161,7 @@ func renderDocs(t *testing.T, vals map[string]interface{}) []map[string]interfac
 		t.Fatalf("loading embedded chart: %v", err)
 	}
 	inst := action.NewInstall(&action.Configuration{})
-	inst.ReleaseName = helmReleaseName
+	inst.ReleaseName = "dc-lwm2m"
 	inst.Namespace = "default"
 	inst.DryRun = true
 	inst.ClientOnly = true

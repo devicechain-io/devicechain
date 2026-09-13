@@ -19,7 +19,7 @@ import (
 
 func supersededRelease(version int) *release.Release {
 	return &release.Release{
-		Name:    helmReleaseName,
+		Name:    "dc-history",
 		Version: version,
 		Info:    &release.Info{Status: release.StatusSuperseded},
 		Config:  map[string]interface{}{"revision": version},
@@ -37,7 +37,7 @@ func storeRevisions(t *testing.T, maxHistory, n int) int {
 			t.Fatalf("creating revision %d: %v", i, err)
 		}
 	}
-	h, err := s.History(helmReleaseName)
+	h, err := s.History("dc-history")
 	if err != nil {
 		t.Fatalf("reading history: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestAChartUpgradeActuallyTrimsTheStoredHistory(t *testing.T) {
 			t.Fatalf("seeding revision %d: %v", i, err)
 		}
 	}
-	if got, _ := store.History(helmReleaseName); len(got) != over {
+	if got, _ := store.History("dc-history"); len(got) != over {
 		t.Fatalf("seeded %d revisions, store holds %d — the unbounded store is the premise here", over, len(got))
 	}
 
@@ -119,11 +119,11 @@ func TestAChartUpgradeActuallyTrimsTheStoredHistory(t *testing.T) {
 
 	upg := newHelmUpgrade(cfg, "dc-inst")
 	upg.Wait = false // no cluster to wait on; the bound is what is under test
-	if _, err := upg.RunWithContext(context.Background(), helmReleaseName, minimalChart(), map[string]interface{}{}); err != nil {
+	if _, err := upg.RunWithContext(context.Background(), "dc-history", minimalChart(), map[string]interface{}{}); err != nil {
 		t.Fatalf("upgrade failed before it could exercise the bound: %v", err)
 	}
 
-	h, err := store.History(helmReleaseName)
+	h, err := store.History("dc-history")
 	if err != nil {
 		t.Fatalf("reading history: %v", err)
 	}
