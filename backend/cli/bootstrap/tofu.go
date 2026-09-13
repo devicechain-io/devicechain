@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -69,6 +70,9 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// state, but the retired-infrastructure fence immediately after it does — and a
 	// fence reading an empty state concludes there is nothing to fence.
 	if err := relocateRootState(workdir, rootdir); err != nil {
+		return err
+	}
+	if err := removeSupersededRootConfig(workdir); err != nil {
 		return err
 	}
 
@@ -741,6 +745,50 @@ func relocateRootState(workdir, rootdir string) error {
 		}
 		if err := os.Rename(from, to); err != nil {
 			return fmt.Errorf("moving %s to %s: %w", from, to, err)
+		}
+	}
+	return nil
+}
+
+// removeSupersededRootConfig deletes the .tf files an earlier dcctl left at the
+// top of an instance's working directory.
+//
+// 🔴 EXTRACTION ONLY EVER WRITES. extractFS recreates the embedded tree over
+// whatever is already in the directory and deletes nothing, which is right for a
+// refresh and wrong across a LAYOUT change: the roots moved into their own
+// directories, so the .tf files an older binary wrote at the top are no longer
+// overwritten by anything. They just stay.
+//
+// 🔴 AND WHAT THEY LEAVE BEHIND IS A LOADED GUN, not clutter. relocateRootState
+// has just moved the state down into the root directory, so that top-level
+// directory now holds a COMPLETE, STALE configuration describing an entire
+// DeviceChain infrastructure — with NO state beside it. A `tofu plan` run there
+// reads an empty state and an intact configuration, and answers that it will
+// CREATE all of it: a second broker, two more database Clusters, another object
+// store, against the cluster the instance is already running on. Nothing about
+// that output looks like a mistake.
+//
+// It is not a hypothetical invocation either. That directory is where hand-runs
+// were documented, and an operator debugging an instance goes to the directory
+// they know. MEASURED against a real instance's ~/.devicechain/<instance>/infra
+// during the layout change: after extract + relocate, five stale .tf files
+// remained at the top with the state gone from under them.
+//
+// Removing only *.tf, and only at the top level, is deliberate: the new tree puts
+// nothing there, so anything matching is by definition superseded. A stale
+// .terraform cache and lock file may remain and are inert — with no configuration
+// to load, tofu in that directory fails cleanly instead of planning something.
+func removeSupersededRootConfig(workdir string) error {
+	entries, err := os.ReadDir(workdir)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", workdir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(workdir, e.Name())); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing superseded %s: %w", e.Name(), err)
 		}
 	}
 	return nil

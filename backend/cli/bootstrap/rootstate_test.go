@@ -4,10 +4,13 @@
 package bootstrap
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-deploy"
 )
 
 // The relocation these tests cover has no other coverage anywhere, and that is
@@ -147,5 +150,103 @@ func TestABackupAloneStillMoves(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootdir, "terraform.tfstate.backup")); err != nil {
 		t.Errorf("the backup was left behind when the primary state was absent: %v", err)
+	}
+}
+
+// TestTheSupersededRootConfigIsRemoved covers the other half of the layout
+// change, and it is the half a temporary directory could not have shown me.
+//
+// Found against a COPY of a real ~/.devicechain/<instance>/infra: after extract +
+// relocate, five .tf files written by an older dcctl were still sitting at the top
+// with the state gone from under them. extractFS only writes, so nothing
+// overwrites a file the new tree no longer places there.
+func TestTheSupersededRootConfigIsRemoved(t *testing.T) {
+	workdir := t.TempDir()
+	rootdir := filepath.Join(workdir, "instance")
+
+	// What an older dcctl left: a whole root configuration at the top.
+	for _, name := range []string{"main.tf", "variables.tf", "outputs.tf", "providers.tf", "versions.tf"} {
+		writeState(t, workdir, name, "# from an older dcctl\n")
+	}
+	// What must survive: the new tree, and the local artifacts beside it.
+	writeState(t, rootdir, "main.tf", "# current\n")
+	writeState(t, rootdir, "terraform.tfstate", `{"serial":7}`)
+	writeState(t, filepath.Join(workdir, "modules", "nats"), "main.tf", "# module\n")
+	writeState(t, workdir, ".terraform.lock.hcl", "provider hashes\n")
+
+	if err := removeSupersededRootConfig(workdir); err != nil {
+		t.Fatalf("removing superseded config: %v", err)
+	}
+
+	for _, name := range []string{"main.tf", "variables.tf", "outputs.tf", "providers.tf", "versions.tf"} {
+		if _, err := os.Stat(filepath.Join(workdir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived at the top of the working directory. With the state moved out from "+
+				"under it, a tofu plan there reads an empty state against an intact configuration and "+
+				"answers that it will CREATE an entire second infrastructure", name)
+		}
+	}
+	// 🔴 The blast radius must stop at top-level .tf. Everything below is the
+	// configuration actually in use, and the lock file is not ours to delete.
+	for _, p := range []string{
+		filepath.Join(rootdir, "main.tf"),
+		filepath.Join(rootdir, "terraform.tfstate"),
+		filepath.Join(workdir, "modules", "nats", "main.tf"),
+		filepath.Join(workdir, ".terraform.lock.hcl"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed and must not have been: %v", p, err)
+		}
+	}
+}
+
+// TestAFreshInstanceHasNoSupersededConfig is the negative control for the above:
+// without it, a cleanup that deleted nothing at all would still look correct on
+// the survivor assertions.
+func TestAFreshInstanceHasNoSupersededConfig(t *testing.T) {
+	workdir := t.TempDir()
+	writeState(t, filepath.Join(workdir, "instance"), "main.tf", "# current\n")
+
+	if err := removeSupersededRootConfig(workdir); err != nil {
+		t.Fatalf("a first bootstrap must not be an error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "instance", "main.tf")); err != nil {
+		t.Errorf("the current configuration was removed on a fresh install: %v", err)
+	}
+}
+
+// TestTheEmbeddedTreePlacesNoConfigAtTheTop pins the invariant the cleanup rests
+// on, which is otherwise only true by inspection.
+//
+// removeSupersededRootConfig deletes every top-level .tf on the reasoning that the
+// embedded tree puts nothing there, so anything it finds is left over. That
+// reasoning is a property of the go:embed directives in another module, and if one
+// ever placed a .tf at the top of the tree the cleanup would delete a file the very
+// same run had just written — after the apply had been configured to read it.
+//
+// Nothing else in either module would notice, which is why this asserts it here
+// rather than trusting the pattern to stay as it is.
+func TestTheEmbeddedTreePlacesNoConfigAtTheTop(t *testing.T) {
+	entries, err := fs.ReadDir(assets.OpenTofu(), ".")
+	if err != nil {
+		t.Fatalf("reading the embedded tree: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("the embedded tree is empty, so this assertion cannot fail")
+	}
+	roots := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			roots++
+			continue
+		}
+		if strings.HasSuffix(e.Name(), ".tf") {
+			t.Errorf("the embedded tree places %q at its TOP LEVEL. removeSupersededRootConfig "+
+				"deletes every top-level .tf as superseded, so this file would be written by "+
+				"extractFS and then deleted in the same run — either embed it inside a root "+
+				"directory, or narrow the cleanup", e.Name())
+		}
+	}
+	if roots == 0 {
+		t.Error("the embedded tree contains no directories at all, so there is no root to apply")
 	}
 }
