@@ -18,7 +18,7 @@ import (
 // printed a success line.
 
 func TestUninstallRefusesAReleaseBelongingToAnotherInstance(t *testing.T) {
-	err := uninstallRefusalReason("a", "b")
+	err := uninstallRefusalReason("a", "b", "dc-release")
 	if err == nil {
 		t.Fatal("destroying instance \"b\" against a cluster running instance \"a\" was allowed; " +
 			"this is the live data-loss path and it must refuse")
@@ -29,7 +29,7 @@ func TestUninstallRefusesAReleaseBelongingToAnotherInstance(t *testing.T) {
 // everything would pass the test above while making `dcctl destroy` useless — and the
 // only way anyone would find out is by running it on a real instance.
 func TestUninstallProceedsForTheInstanceThatOwnsTheRelease(t *testing.T) {
-	if err := uninstallRefusalReason("a", "a"); err != nil {
+	if err := uninstallRefusalReason("a", "a", "dc-release"); err != nil {
 		t.Fatalf("destroying instance %q against the cluster running it was refused: %v", "a", err)
 	}
 }
@@ -39,7 +39,7 @@ func TestUninstallProceedsForTheInstanceThatOwnsTheRelease(t *testing.T) {
 // their own they cannot tell whether they mistyped. Asserting the REASON rather than
 // that there is one — a refusal can be killed by the wrong test.
 func TestTheRefusalNamesBothTheOwnerAndTheInstanceAsked(t *testing.T) {
-	err := uninstallRefusalReason("production", "staging")
+	err := uninstallRefusalReason("production", "staging", "dc-release")
 	if err == nil {
 		t.Fatal("expected a refusal")
 	}
@@ -53,7 +53,7 @@ func TestTheRefusalNamesBothTheOwnerAndTheInstanceAsked(t *testing.T) {
 func TestTheInstanceIsReadFromTheReleaseValues(t *testing.T) {
 	id, present, err := instanceIDFromValues(map[string]interface{}{
 		"instance": map[string]interface{}{"id": "a", "createNamespace": true},
-	})
+	}, "dc-release")
 	if err != nil {
 		t.Fatalf("a well-formed value map was not readable: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestAnUnattributableReleaseIsRefusedRatherThanGuessed(t *testing.T) {
 		"nil values":         nil,
 	} {
 		t.Run(name, func(t *testing.T) {
-			id, present, err := instanceIDFromValues(vals)
+			id, present, err := instanceIDFromValues(vals, "dc-release")
 			if err == nil {
 				t.Fatalf("an unattributable release was accepted as instance %q (present=%v); "+
 					"the caller would then decide whether to delete it from a value this "+
@@ -97,11 +97,11 @@ func TestAnUnattributableReleaseIsRefusedRatherThanGuessed(t *testing.T) {
 func TestAChartDefaultedInstanceIsStillAttributable(t *testing.T) {
 	id, present, err := instanceIDFromValues(map[string]interface{}{
 		"instance": map[string]interface{}{"id": "devicechain"},
-	})
+	}, "dc-release")
 	if err != nil || !present || id != "devicechain" {
 		t.Fatalf("got (%q, %v, %v), want (\"devicechain\", true, nil)", id, present, err)
 	}
-	if err := uninstallRefusalReason(id, "somethingelse"); err == nil {
+	if err := uninstallRefusalReason(id, "somethingelse", "dc-release"); err == nil {
 		t.Fatal("a chart-defaulted release was not protected from a destroy naming another instance")
 	}
 }

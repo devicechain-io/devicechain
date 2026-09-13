@@ -299,13 +299,25 @@ pf_pid=""
 cluster="devicechain-upgrade"
 kube_context="kind-$cluster"
 
-# The Helm release dcctl installs, and where its record lives. Both are constants in
-# dcctl (helmReleaseName / helmReleaseNamespace in backend/cli/bootstrap/helm.go) and
-# both are repeated here for the same reason `published_registry` is: this rig is
-# asking whether the release MOVED, and reading the name out of the thing under test
-# would follow it wherever it went and still call the answer unchanged.
-helm_release="dc"
+# Where dcctl keeps its release records, and the chart every DeviceChain release is
+# installed from.
+#
+# 🔴 THE CHART, NOT THE RELEASE NAME, AND THE NAME IS WHY. dcctl used to install every
+# instance under one constant name, which this rig duplicated as a literal — deliberately,
+# because reading the name out of the thing under test would follow it wherever it went
+# and still call the answer unchanged. That duplication stopped working when the name
+# became instance-derived: the baseline installs under whichever convention the BASELINE
+# had, and a literal here can only be right for one of them. It would have failed toward
+# the worst possible reading — "the baseline is not installed, run 'up' first" — on a
+# cluster where `up` had just succeeded.
+#
+# The chart name is the independence this rig actually wanted. It is written by the chart
+# rather than chosen by dcctl, it is the same under both conventions, and it lets the
+# fingerprint below see something a single named lookup structurally could not: a SECOND
+# release appearing beside the first, which is exactly what an upgrade that mistook itself
+# for an install would leave behind.
 helm_namespace="default"
+helm_chart_prefix="devicechain-"
 kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
 
 # The instance name is NOT "default", for the reason the HA rig gives: dcctl keeps
@@ -1060,20 +1072,33 @@ image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag
 # measures the instance: still serving, still holding every seeded row, still on the
 # same Helm revision, still running the same operator image.
 
-# helm_revision prints the deployed revision of the instance's release, or refuses.
+# helm_fingerprint prints `<name> <revision> <status>` for every DeviceChain release in
+# the cluster, sorted — what is installed here, as one comparable string.
 #
-# The number is evidence about whether anything touched the release, so an
-# unreadable one is INCONCLUSIVE and must not read as "unchanged". `helm list`
-# rather than `helm status`: a release that is not there at all yields an empty
-# selection rather than a non-zero exit, which the emptiness check below catches and
-# names, where `helm status`'s error would have to be parsed.
-helm_revision() {
+# 🔑 A SET, NOT A NUMBER, AND THAT IS A WIDER CLAIM THAN THE ONE IT REPLACED. A revision
+# read off a single named release answers "was this release upgraded in place"; it cannot
+# see a release APPEARING. Once release names carry the instance, an upgrade that fails to
+# find its release takes the install branch and stands up a parallel set of workloads
+# beside the running ones — the release it was supposed to move is untouched, its revision
+# is unchanged, and the old check would have reported no damage while the cluster held two
+# instances. Comparing the whole set catches both.
+#
+# The answer is evidence about whether anything touched the releases, so an unreadable one
+# is INCONCLUSIVE and must not read as "unchanged" — see the emptiness checks at both ends
+# of the comparison. `helm list` rather than `helm status`: a release that is not there at
+# all yields an empty selection rather than a non-zero exit, which those checks catch and
+# name, where `helm status`'s error would have to be parsed. `--all` because a release left
+# FAILED or PENDING by a half-run upgrade still has objects in the cluster, and a drill
+# that only looked at healthy ones would call that damage invisible.
+helm_fingerprint() {
   local out
-  out="$(helm --kube-context "$kube_context" list -n "$helm_namespace" -o json)" ||
+  out="$(helm --kube-context "$kube_context" list -n "$helm_namespace" --all -o json)" ||
     fail "could not list the Helm releases in namespace $helm_namespace; the drill cannot
 say whether the refused upgrade moved the release, which is not the same as saying it
 did not."
-  printf '%s' "$out" | jq -r --arg n "$helm_release" 'first(.[] | select(.name == $n) | .revision) // empty'
+  printf '%s' "$out" |
+    jq -r --arg p "$helm_chart_prefix" \
+      '[.[] | select(.chart | startswith($p)) | "\(.name) \(.revision) \(.status)"] | sort | .[]'
 }
 
 # operator_images prints `<deployment> <image>` per line for the operator's namespace,
@@ -1119,13 +1144,13 @@ refusal an operator meets say so, and does it damage anything?"
   build_target_dcctl
 
   # Read BEFORE the command, so "unchanged" is a comparison rather than an assumption.
-  local revision_before images_before
-  revision_before="$(helm_revision)"
-  [[ -n "$revision_before" ]] || fail "there is no $helm_release release in namespace
-$helm_namespace, so the baseline is not installed and there is nothing for a refused
-upgrade to damage. Run 'up' first."
+  local releases_before images_before
+  releases_before="$(helm_fingerprint)"
+  [[ -n "$releases_before" ]] || fail "there is no release from a chart named
+$helm_chart_prefix* in namespace $helm_namespace, so the baseline is not installed and
+there is nothing for a refused upgrade to damage. Run 'up' first."
   images_before="$(operator_images)"
-  note "before: Helm revision $revision_before"
+  note "before: $(printf '%s' "$releases_before" | tr '\n' ';')"
 
   say "dcctl upgrade — the command an operator on $baseline_tag types, which must REFUSE"
   local out rc=0
@@ -1174,13 +1199,25 @@ correct, the cluster is correct, and the advice cannot be acted on."
   # --- and now: did it damage anything? -------------------------------------
   say "THE OTHER HALF — the instance must be exactly as it was a minute ago"
 
-  local revision_after images_after
-  revision_after="$(helm_revision)"
-  [[ "$revision_after" == "$revision_before" ]] ||
-    fail "the refused upgrade MOVED THE HELM RELEASE: revision $revision_before before,
-$revision_after after. A refusal that has already rolled the services is not a refusal;
-an operator who typed this would have a half-upgraded instance and a message telling
-them nothing happened."
+  local releases_after images_after
+  releases_after="$(helm_fingerprint)"
+  # 🔴 EMPTINESS IS CHECKED AT BOTH ENDS, AND THE SECOND ONE IS NOT REDUNDANT. Two empty
+  # strings compare EQUAL, so a fingerprint that could not be read after the command would
+  # match a fingerprint that could not be read before it and the comparison below would
+  # report "unchanged" — a gate that passes precisely when it has learned nothing. The
+  # check above proves the baseline WAS installed; this one proves the answer after is an
+  # observation rather than a silence.
+  [[ -n "$releases_after" ]] || fail "no release from a chart named $helm_chart_prefix* is
+in namespace $helm_namespace any more. The baseline was there a moment ago, so either the
+refused upgrade removed it or this drill can no longer see it — and neither is a refusal
+that damaged nothing."
+  [[ "$releases_after" == "$releases_before" ]] ||
+    fail "the refused upgrade MOVED THE HELM RELEASES.
+before: $releases_before
+after:  $releases_after
+A refusal that has already rolled the services, or installed a second release beside the
+one that was here, is not a refusal; an operator who typed this would have a damaged
+instance and a message telling them nothing happened."
   images_after="$(operator_images)"
   # 🔴 THE BACKTICKS BELOW ARE ESCAPED AND HAVE TO BE. Inside a double-quoted shell
   # string a backtick is COMMAND SUBSTITUTION, so an unescaped `dcctl upgrade` in a
@@ -1194,7 +1231,7 @@ them nothing happened."
 \`dcctl upgrade\` applies the operator overlay early, so a refusal that lands after that
 leaves this release's controller reconciling the previous release's instance — which
 is precisely the version skew the drill's operator phase exists to refuse."
-  note "unchanged: Helm revision $revision_after, operator $images_after"
+  note "unchanged: $(printf '%s' "$releases_after" | tr '\n' ';'), operator $images_after"
 
   # The API is asked LAST of the three, because it is the slowest and the other two
   # localise a failure better. A refusal that rolled nothing cannot have taken the

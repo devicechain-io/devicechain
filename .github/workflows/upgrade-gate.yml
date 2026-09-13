@@ -668,7 +668,19 @@ jobs:
           ctx=kind-devicechain-upgrade
           echo "::group::pods"; kubectl --context "$ctx" get pods -A -o wide || true; echo "::endgroup::"
           echo "::group::deployments in dc-k8s-system"; kubectl --context "$ctx" -n dc-k8s-system get deploy -o wide || true; echo "::endgroup::"
-          echo "::group::helm history"; helm --kube-context "$ctx" history dc -n default || true; echo "::endgroup::"
+          # Every DeviceChain release, whatever it is called. Release names carry the
+          # instance now, and both conventions can be present at once on a cluster the
+          # drill bootstrapped from an older baseline — so a fixed name here prints
+          # "release: not found" into a collapsed group, swallowed by `|| true`, on the
+          # one run where the history is the thing worth having.
+          echo "::group::helm releases"
+          helm --kube-context "$ctx" list -n default --all || true
+          for rel in $(helm --kube-context "$ctx" list -n default --all -o json 2>/dev/null \
+                         | jq -r '.[] | select(.chart | startswith("devicechain-")) | .name'); do
+            echo "--- history: $rel"
+            helm --kube-context "$ctx" history "$rel" -n default || true
+          done
+          echo "::endgroup::"
           echo "::group::not-ready pods"
           kubectl --context "$ctx" get pods -A --field-selector=status.phase!=Running -o yaml || true
           echo "::endgroup::"

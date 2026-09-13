@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
+
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"helm.sh/helm/v3/pkg/action"
@@ -19,24 +21,60 @@ import (
 	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
-// helmReleaseName and helmReleaseNamespace address the one DeviceChain chart release
-// a cluster holds.
+// helmChartName is the name the embedded chart declares, and the only way a release in
+// this cluster can be recognised as one of ours.
 //
-// 🔴 NEITHER CARRIES THE INSTANCE, AND THE NAME USED TO CLAIM OTHERWISE. This constant
-// was commented "the per-instance chart release name", which it is not: it is a package
-// constant, installed into a constant namespace, so a cluster has exactly one
-// DeviceChain release no matter how many instances are declared. Everything that has to
-// tell one instance's objects from another's must therefore do so by some OTHER means —
-// see releaseInstance, which reads the id back out of the release's own values.
+// 🔴 THE RECOGNITION KEY, NOW THAT THE RELEASE NAME IS NOT ONE. While every DeviceChain
+// release was called "dc" the name answered both questions at once — is this ours, and
+// whose is it. An instance-derived name answers neither on its own: "dc-a" is a string
+// anybody may install, and a cluster's other releases are not ours to reason about. So
+// the chart's own metadata says which releases to look at, and the values inside them
+// say which instance each belongs to.
+const helmChartName = "devicechain"
+
+// legacyHelmReleaseName is the single constant name every release before v0.17.0 was
+// installed under.
 //
-// They are hoisted here because install and uninstall MUST agree on both, and they used
-// to declare the namespace separately, one local const each. Two literals that must be
-// equal and are written down twice are the same shape of defect as a name that does not
-// carry what it claims to.
-const (
-	helmReleaseName      = "dc"
-	helmReleaseNamespace = "default"
-)
+// 🔴 IT EXISTS TO BE FOUND, NOT TO BE WRITTEN. Nothing installs under this name any
+// more. It is read in two places — the cluster reader, so a legacy instance still
+// answers "this cluster is taken", and destroy, so the recreate the upgrade refusal
+// PRESCRIBES actually removes what is here. Without the second, `dcctl destroy` on a
+// pre-v0.17.0 instance finds no release under the new name, reports success, and leaves
+// the release record behind.
+//
+// 🔑 PRE-GA, AND DELETED AT GA. An instance may be recreated before v1.0.0 and may not
+// after, so the oldest release any supported instance can have been built by rises to
+// v1.0.0 and this stops being reachable. See hack/upgrade-baseline-policy.
+const legacyHelmReleaseName = "dc"
+
+// helmReleaseNamespace is where the release RECORD lives — not where the workloads go.
+//
+// 🔴 IT IS STILL A CONSTANT, AND THAT IS DELIBERATE RATHER THAN UNFINISHED. Moving the
+// record into the instance's own namespace would mean Helm uninstalling a release whose
+// record lives in the namespace that uninstall is deleting, and whether that is safe is
+// a live-cluster question nobody has asked yet. The NAME is the half that has to move
+// for two instances to coexist; the record's home does not, because a release name is
+// unique per namespace and the names are now distinct.
+const helmReleaseNamespace = "default"
+
+// helmReleaseNameFor is the release name this instance's chart is installed under.
+//
+// 🔴 THE NAME CARRIES THE INSTANCE NOW, AND IT USED TO CLAIM TO WITHOUT DOING IT. This
+// was the package constant "dc", commented "the per-instance chart release name", which
+// it was not: one constant name in one constant namespace means a cluster has exactly
+// one DeviceChain release however many instances are declared. Everything that had to
+// tell one instance's release from another's did so by reading instance.id back out of
+// the values — a correct workaround for a name that carried nothing.
+//
+// 🔑 THE ATTRIBUTION READ DOES NOT GO AWAY, AND EXPECTING IT TO WOULD BE THE DEFECT.
+// A name is a label this binary chose; the values are what the release actually
+// RENDERED with. A release named "dc-a" whose values say instance.id is "b" is a
+// contradiction, and the only safe reading of it is to refuse — see
+// uninstallRefusalReason, which is now a consistency check between the two rather than
+// the sole source of truth it was.
+func helmReleaseNameFor(instance string) string {
+	return legacyHelmReleaseName + "-" + instance
+}
 
 // helmTimeout bounds how long an install/upgrade waits for the rendered
 // workloads to become ready.
@@ -59,7 +97,7 @@ const helmTimeout = 10 * time.Minute
 // to the bound on the next write rather than only capping growth from now on, so one
 // upgrade collapses a long history.
 //
-// Ten matches the `helm` command, so `helm history dc` shows an operator what they
+// Ten matches the `helm` command, so `helm history` shows an operator what they
 // would expect from a chart installed any other way. Nothing in dcctl reads the
 // history for anything but an existence check (hist.Max = 1, below), so the number
 // is chosen for that familiarity rather than for a rollback depth we rely on.
@@ -76,7 +114,10 @@ func helmInstall(ctx context.Context, st *State) error {
 
 	// The release record lives in helmReleaseNamespace (matching the manual recipe);
 	// the chart templates place workloads in the instance's own namespace themselves.
+	// The NAME carries the instance, so two instances in one cluster are two releases
+	// rather than one overwriting the other — see helmReleaseNameFor.
 	releaseNamespace := helmReleaseNamespace
+	releaseName := helmReleaseNameFor(st.Instance)
 
 	settings := cli.New()
 	settings.KubeContext = st.KubeContext
@@ -91,7 +132,7 @@ func helmInstall(ctx context.Context, st *State) error {
 	// carries is an INPUT to that computation — see carryForwardFromRelease.
 	var previous map[string]interface{}
 	if st.Evolving {
-		if previous, err = previousReleaseValues(actionConfig); err != nil {
+		if previous, err = previousReleaseValues(actionConfig, releaseName); err != nil {
 			return err
 		}
 		carryForwardFromRelease(st, previous)
@@ -137,6 +178,29 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
+	// 🔴 AN INSTANCE BUILT UNDER THE OLD RELEASE NAME CANNOT BE MOVED ONTO THIS ONE, AND
+	// HELM'S OWN REFUSAL IS THE WRONG SENTENCE FOR IT. Without this, a run that reaches
+	// here against such an instance takes the INSTALL branch below — its release is
+	// absent under the new name — and Helm rejects it with `Namespace "x" exists and
+	// cannot be imported: key "meta.helm.sh/release-name" must equal "dc-x": current
+	// value is "dc"`. True, unactionable, and it arrives after the declaration and the
+	// operator have already been moved.
+	//
+	// 🔑 AFTER THE OFFLINE CONFIG GATE, BEFORE THE FIRST WRITE, AND BOTH HALVES ARE
+	// PINNED BY TESTS. validateRenderedInstanceConfig's entire value is that it answers
+	// without a cluster, so nothing that reads one may precede it — putting this above it
+	// broke TestHelmInstallChecksTheConfigBeforeTouchingTheCluster, which is what that
+	// test is for. Everything below this line writes.
+	//
+	// 🔑 IT IS NOT DEAD CODE BEHIND stepRefuseRebuild, WHICH IS WHAT AN EARLIER READING OF
+	// THIS ASSUMED. That step refuses a re-run against a live instance — but it EXEMPTS a
+	// restore and --allow-legacy-db-removal, and both of those are re-runs against exactly
+	// the instance this case is about. `dcctl upgrade` reaches here too, on an instance
+	// declared by an unreleased build that still installed under the old name.
+	if err := refuseLegacyNamedRelease(actionConfig, st.Instance); err != nil {
+		return err
+	}
+
 	// The namespace, then the document, then the release. The pods mount the Secret
 	// at container start, so it has to be there before the workloads Helm waits on;
 	// and the namespace has to be there before the Secret. See
@@ -145,14 +209,14 @@ func helmInstall(ctx context.Context, st *State) error {
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to write the instance configuration: %w", err)
 	}
-	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseName, releaseNamespace); err != nil {
+	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, releaseName, releaseNamespace); err != nil {
 		return err
 	}
 	// On an instance built before dcctl owned this document, the Secret is there and
 	// the chart wrote it — so the writer below would refuse it as somebody else's.
 	// See adoptChartWrittenInstanceConfig for why that is a takeover and not a guess.
 	if err := adoptChartWrittenInstanceConfig(ctx, typed, st.Instance, st.InstanceUID,
-		helmReleaseName, releaseNamespace); err != nil {
+		releaseName, releaseNamespace); err != nil {
 		return err
 	}
 	if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID,
@@ -164,9 +228,9 @@ func helmInstall(ctx context.Context, st *State) error {
 	// idempotent.
 	hist := action.NewHistory(actionConfig)
 	hist.Max = 1
-	if _, err := hist.Run(helmReleaseName); err == driver.ErrReleaseNotFound {
+	if _, err := hist.Run(releaseName); err == driver.ErrReleaseNotFound {
 		inst := action.NewInstall(actionConfig)
-		inst.ReleaseName = helmReleaseName
+		inst.ReleaseName = releaseName
 		inst.Namespace = releaseNamespace
 		inst.Wait = true
 		inst.Timeout = helmTimeout
@@ -176,7 +240,7 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 
-	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, helmReleaseName, ch, vals)
+	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
 	return err
 }
 
@@ -193,8 +257,8 @@ func helmInstall(ctx context.Context, st *State) error {
 // instance's secrets were taken out of the release values when dcctl became the
 // document's author — installValuesFor strips instance.config and leaves a NAME. This
 // reads the map that change created.
-func previousReleaseValues(cfg *action.Configuration) (map[string]interface{}, error) {
-	vals, err := action.NewGetValues(cfg).Run(helmReleaseName)
+func previousReleaseValues(cfg *action.Configuration, releaseName string) (map[string]interface{}, error) {
+	vals, err := action.NewGetValues(cfg).Run(releaseName)
 	if err == driver.ErrReleaseNotFound {
 		// Not an error here. An instance whose release is gone but whose declaration
 		// and configuration document survive is a real state — a release uninstalled
@@ -440,53 +504,157 @@ func helmValues(st *State) map[string]interface{} {
 // the chart created (workloads, services, ingress, and the instance namespace).
 // A missing release is treated as success so destroy is idempotent.
 //
-// 🔴 IT TAKES THE INSTANCE BECAUSE THE RELEASE NAME DOES NOT CARRY ONE, AND THIS
-// FUNCTION DESTROYS DATA. Without the check below it uninstalls WHICHEVER release it
-// finds — and because templates/namespace.yaml renders the instance namespace INSIDE
-// the release, that uninstall cascade-deletes the namespace and everything in it.
+// 🔴 IT STILL CHECKS WHOSE THE RELEASE IS, AND THE INSTANCE-DERIVED NAME IS NOT A
+// SUBSTITUTE FOR THAT. This function destroys data, and templates/namespace.yaml renders
+// the instance namespace INSIDE the release, so an uninstall cascade-deletes the
+// namespace and everything in it. The name is now evidence and no longer merely a
+// label — but it is evidence THIS binary wrote, and a release named "dc-a" whose values
+// say instance.id is "b" is a contradiction rather than a permission.
 //
-// Measured on a live cluster, 2026-09-12: `dcctl destroy local b --keep-cluster`, for
-// an instance "b" that had never been installed, removed instance "a" in its entirety
-// — namespace, all ten deployments, the release — and closed with
-// `Instance "b" uninstalled; cluster kind-a left running.`
+// Measured on a live cluster, 2026-09-12, back when one constant name served every
+// instance: `dcctl destroy local b --keep-cluster`, for an instance "b" that had never
+// been installed, removed instance "a" in its entirety — namespace, all ten deployments,
+// the release — and closed with `Instance "b" uninstalled; cluster kind-a left running.`
+// The rename makes that particular lookup impossible; the check below is what makes the
+// claim true rather than merely likely.
 //
-// 🔴 AND THE WAY IN IS THE DOCUMENTED RECOVERY ACTION, WHICH IS WHY A GUARD AND NOT A
-// DOC NOTE. A second bootstrap into a cluster that already holds an instance is
-// correctly refused — writeOwnedSecret, at the infrastructure step, before anything is
-// applied — but it writes ~/.devicechain/<instance>/instance.json BEFORE it fails, and
-// that is the binding this command reads. So the operator does the right thing, is
-// told no, cleans up the failed attempt, and loses the healthy instance.
-//
-// No multi-instance work is needed to reach it: any instance record pointing at a
-// cluster running a differently-named instance will do, which is exactly what both
-// validation rigs produce by passing --kube-context.
+// 🔴 AND IT SWEEPS THE LEGACY RELEASE, WHICH IS THE HALF THE RENAME WOULD OTHERWISE
+// BREAK. Every release before v0.17.0 installed under one constant name, and `dcctl
+// upgrade` refuses those instances and PRESCRIBES destroy-then-bootstrap. A destroy that
+// looked only under the new name would find nothing, take the idempotent-success branch,
+// and report success having left the release record behind — turning the one remedy this
+// release offers into a remedy that half-works. See uninstallLegacyRelease.
 func helmUninstall(ctx context.Context, kubeContext, instance string) error {
-	actionConfig, err := helmActionConfig(kubeContext)
+	actionConfig, err := helmActionConfigFor(kubeContext)
 	if err != nil {
 		return err
 	}
-
-	owner, present, err := releaseInstance(actionConfig)
+	removed, err := uninstallRelease(ctx, actionConfig, helmReleaseNameFor(instance), instance)
 	if err != nil {
 		return err
+	}
+	sweptLegacy, err := uninstallLegacyRelease(ctx, actionConfig, instance)
+	if err != nil {
+		return err
+	}
+	if removed || sweptLegacy {
+		return nil
+	}
+	return foreignReleaseRefusal(actionConfig, instance)
+}
+
+// foreignReleaseRefusal answers "nothing of this instance was here" by asking what IS.
+//
+// 🔴 WITHOUT IT THE RENAME SILENTLY UNDOES #862 AND #1065. Those fixes turned a destroy
+// that found somebody else's release into a refusal, which destroyInstanceOnly routes
+// through uninstallOutcome to resolveForeignRelease: that checks the named instance has
+// no footprint here, removes its stale local record, and closes with a line saying the
+// installed instance was LEFT ALONE. Naming releases after instances removes the
+// COLLISION those fixes were about — a destroy can no longer find another instance's
+// release under the name it asked for — but it also removes the SIGNAL, because a release
+// that is simply not found is the idempotent-success branch. The result was `dcctl destroy
+// local <typo>` printing `Instance "<typo>" uninstalled` over a cluster it had not touched,
+// which is the exact sentence resolveForeignRelease exists to prevent.
+//
+// 🔑 AN EMPTY CLUSTER IS STILL SUCCESS, AND THAT IS WHAT KEEPS DESTROY IDEMPOTENT. Only a
+// cluster holding a DIFFERENT instance earns the refusal; a cluster holding nothing is a
+// re-run, or an instance whose release was removed by hand, and those must stay quiet.
+func foreignReleaseRefusal(cfg *action.Configuration, instance string) error {
+	held, err := deviceChainReleaseHoldings(cfg)
+	if err != nil {
+		return err
+	}
+	for _, h := range held {
+		if h.Instance != instance {
+			return &foreignReleaseError{Owner: h.Instance, Instance: instance, Release: h.Name}
+		}
+	}
+	return nil
+}
+
+// helmActionConfigFor is the seam this command's tests reach through, for the same
+// reason readClusterInstances and lookupDeployedInstance are indirected.
+//
+// 🔴 WITHOUT IT THE ONLY THING UNDER TEST IS THE HELPERS, NOT THE WIRING. Both refusals
+// below and the legacy sweep are correct functions that this command has to actually
+// CALL, and a call sitting behind a live Helm connection is one no unit test reaches — so
+// a change that dropped the sweep would break nothing, and the guard would still pass its
+// own test while `dcctl destroy` quietly stopped removing pre-v0.17.0 releases. Helm's
+// storage has an in-memory driver, so swapping this makes the whole path exercisable
+// against real action.List, action.NewGetValues and action.NewUninstall.
+var helmActionConfigFor = helmActionConfig
+
+// uninstallRelease removes one named release, after confirming it belongs to the
+// instance this command was told to destroy, and reports whether it removed anything.
+//
+// 🔑 THE BOOL IS WHAT LETS THE CALLER TELL "DONE" FROM "NOTHING HERE". Both are a nil
+// error — an absent release is idempotent success — and collapsing them is how a destroy
+// ends up reporting that it uninstalled a cluster it never touched. See
+// foreignReleaseRefusal.
+func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseName, instance string) (bool, error) {
+	owner, present, err := releaseInstanceNamed(cfg, releaseName)
+	if err != nil {
+		return false, err
 	}
 	if !present {
 		// Nothing installed. Idempotent success, as before: a destroy re-run, or an
 		// instance whose release was removed by hand, is not a failure.
-		return nil
+		return false, nil
 	}
-	if err := uninstallRefusalReason(owner, instance); err != nil {
-		return err
+	if err := uninstallRefusalReason(owner, instance, releaseName); err != nil {
+		return false, err
 	}
 
-	un := action.NewUninstall(actionConfig)
+	un := action.NewUninstall(cfg)
 	un.Wait = true
 	un.Timeout = helmTimeout
-	_, err = un.Run(helmReleaseName)
+	_, err = un.Run(releaseName)
 	if err != nil && strings.Contains(err.Error(), "not found") {
-		return nil
+		// Gone between the read and the delete. Nothing was removed BY THIS CALL, and
+		// saying otherwise would suppress the foreign-release question above.
+		return false, nil
 	}
-	return err
+	return err == nil, err
+}
+
+// uninstallLegacyRelease removes the pre-v0.17.0 constant-named release when it belongs
+// to the instance being destroyed, and leaves it alone when it does not.
+//
+// 🔴 A FOREIGN OWNER IS SKIPPED HERE AND REFUSED ONE FUNCTION UP, AND THE ASYMMETRY IS
+// ABOUT WHICH QUESTION EACH NAME ANSWERS. Under the instance-derived name, a release
+// called "dc-a" that says it belongs to "b" is a CONTRADICTION — two attributions this
+// binary controls disagreeing — and the only safe reading of a contradiction is to stop
+// immediately. The legacy name carries no instance at all, so a legacy release owned by
+// somebody else is not a contradiction; it is the ordinary fact that this cluster belongs
+// to another instance, and that is a question about the whole cluster rather than about
+// this one release.
+//
+// 🔴 SKIPPING IT IS NOT THE END OF THE MATTER, AND AN EARLIER VERSION OF THIS COMMENT
+// CLAIMED IT WAS. It argued that refusing here "would fail the very destroy that exists
+// to clear a stale local record", which has the caller exactly backwards: the refusal is
+// the MECHANISM by which such a record is cleared. destroyInstanceOnly routes a
+// foreignReleaseError through uninstallOutcome to resolveForeignRelease, which proves the
+// named instance has no footprint here, removes its record, and returns a success the
+// caller recognises. Skipping and saying nothing cleared the record too — on one path,
+// without the footprint check, and under a closing line that claimed an uninstall. So the
+// cluster-wide question is asked once, after both names have been tried, in
+// foreignReleaseRefusal.
+//
+// 🔑 AN UNATTRIBUTABLE LEGACY RELEASE STILL FAILS CLOSED. releaseInstanceNamed's third
+// answer is an error, and it stays an error here: "there is a DeviceChain release and I
+// cannot tell whose" must never resolve to the branch that deletes it.
+func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, instance string) (bool, error) {
+	owner, present, err := releaseInstanceNamed(cfg, legacyHelmReleaseName)
+	if err != nil {
+		return false, err
+	}
+	if !present || owner != instance {
+		return false, nil
+	}
+	fmt.Println(color.YellowString(
+		"  Instance %q was built by a release that installed under the name %q; removing that "+
+			"release too.", instance, legacyHelmReleaseName))
+	return uninstallRelease(ctx, cfg, legacyHelmReleaseName, instance)
 }
 
 // foreignReleaseError is the refusal below, as a value the CALLER can recognise.
@@ -502,19 +670,25 @@ type foreignReleaseError struct {
 	// Owner is the instance the installed release belongs to; Instance is the one the
 	// operator named. They are never equal here — an equal pair is not a refusal.
 	Owner, Instance string
+	// Release is the release whose values disagree with the instance, so the message
+	// names the object an operator can go and look at.
+	Release string
 }
 
 func (e *foreignReleaseError) Error() string {
 	return fmt.Sprintf(
-		"the DeviceChain release in this cluster belongs to instance %q, not %q, so uninstalling "+
-			"it would destroy an instance this command did not name. A cluster holds one release "+
-			"(%q in namespace %q) and its name carries no instance, so this is checked rather "+
-			"than assumed.\n\n"+
+		"the Helm release %q in this cluster says it belongs to instance %q, not %q, so "+
+			"uninstalling it would destroy an instance this command did not name. dcctl installs "+
+			"each instance under a release named after it, so a release whose NAME and whose "+
+			"instance.id disagree has been renamed, re-used, or installed by hand — which is "+
+			"exactly when guessing is worst.\n\n"+
 			"  To remove the instance that is actually installed here:\n"+
 			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
+			"  Inspect the release itself with:\n"+
+			"      helm get values %s -n %s\n\n"+
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
 			"  `dcctl instances list` shows what dcctl believes it has.",
-		e.Owner, e.Instance, helmReleaseName, helmReleaseNamespace, e.Owner, e.Instance)
+		e.Release, e.Owner, e.Instance, e.Owner, e.Release, helmReleaseNamespace, e.Instance)
 }
 
 // uninstallRefusalReason returns the refusal, or nil when this uninstall may proceed.
@@ -528,17 +702,17 @@ func (e *foreignReleaseError) Error() string {
 // nil — so `if err := uninstallRefusalReason(...); err != nil` would refuse every
 // uninstall, including the instance's own, and the negative control below is what would
 // catch it.
-func uninstallRefusalReason(owner, instance string) error {
+func uninstallRefusalReason(owner, instance, releaseName string) error {
 	if owner == instance {
 		return nil
 	}
-	return &foreignReleaseError{Owner: owner, Instance: instance}
+	return &foreignReleaseError{Owner: owner, Instance: instance, Release: releaseName}
 }
 
 // helmActionConfig reaches the release records a cluster holds.
 //
-// One definition rather than one per caller, for the same reason helmReleaseName and
-// helmReleaseNamespace are hoisted above: every reader of the release has to look in
+// One definition rather than one per caller, for the same reason helmReleaseNameFor and
+// helmReleaseNamespace live together above: every reader of the release has to look in
 // the same namespace as the writer, and a namespace written down once per call site is
 // a namespace that eventually disagrees with itself. The logger is discarded because
 // Helm's storage driver narrates every read at info level, which would interleave with
@@ -554,7 +728,7 @@ func helmActionConfig(kubeContext string) (*action.Configuration, error) {
 	return cfg, nil
 }
 
-// releaseInstance reports which instance the installed release belongs to.
+// releaseInstanceNamed reports which instance the named release belongs to.
 //
 // Three answers rather than two, for the same reason reuseMintedCredential has three:
 // "there is no release" and "there is a release I cannot attribute" call for OPPOSITE
@@ -566,7 +740,7 @@ func helmActionConfig(kubeContext string) (*action.Configuration, error) {
 //   - (_, _, err)     — a release that could not be attributed. The caller must NOT
 //     uninstall it. "We could not tell" never resolves to the destructive answer, the
 //     same rule clusterArchivePath and reuseMintedCredential are written to.
-func releaseInstance(cfg *action.Configuration) (string, bool, error) {
+func releaseInstanceNamed(cfg *action.Configuration, releaseName string) (string, bool, error) {
 	get := action.NewGetValues(cfg)
 	// 🔴 THE COMPUTED VALUES, NOT THE SUPPLIED ONES — the opposite of what
 	// previousReleaseValues wants, deliberately. That function reads the supplied half
@@ -577,15 +751,15 @@ func releaseInstance(cfg *action.Configuration) (string, bool, error) {
 	// supplies no id at all while deploying into a real namespace, and reading the
 	// supplied half would attribute it to nobody and take the destructive branch.
 	get.AllValues = true
-	vals, err := get.Run(helmReleaseName)
+	vals, err := get.Run(releaseName)
 	if err == driver.ErrReleaseNotFound {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("reading the values of the release in this cluster, to check which "+
-			"instance it belongs to before uninstalling it: %w", err)
+		return "", false, fmt.Errorf("reading the values of release %q in this cluster, to check which "+
+			"instance it belongs to before uninstalling it: %w", releaseName, err)
 	}
-	return instanceIDFromValues(vals)
+	return instanceIDFromValues(vals, releaseName)
 }
 
 // instanceIDFromValues digs instance.id out of a rendered value map.
@@ -596,14 +770,14 @@ func releaseInstance(cfg *action.Configuration) (string, bool, error) {
 // unattributable — and depending on which way the caller read that, either refuse every
 // destroy or guard none. It errors, so the caller cannot read a missing key as an
 // answer.
-func instanceIDFromValues(vals map[string]interface{}) (string, bool, error) {
+func instanceIDFromValues(vals map[string]interface{}, releaseName string) (string, bool, error) {
 	unattributable := func() (string, bool, error) {
 		return "", false, fmt.Errorf(
-			"the DeviceChain release in this cluster does not say which instance it belongs to "+
+			"the Helm release %q in this cluster does not say which instance it belongs to "+
 				"(no instance.id in its values), so it cannot be told from another instance's. "+
 				"Refusing to uninstall it rather than guess — inspect it with "+
 				"`helm get values %s -n %s`",
-			helmReleaseName, helmReleaseNamespace)
+			releaseName, releaseName, helmReleaseNamespace)
 	}
 	inst, ok := vals["instance"].(map[string]interface{})
 	if !ok {
@@ -640,4 +814,54 @@ func loadEmbeddedChart() (*chart.Chart, error) {
 		return nil, err
 	}
 	return loader.LoadFiles(files)
+}
+
+// refuseLegacyNamedRelease stops a run that would install beside a release this instance
+// already owns under the pre-v0.17.0 name.
+//
+// Separated from helmInstall so the policy is exercisable without a cluster, and written
+// to return nil in every case but the one it names: a cluster with no legacy release, or
+// one whose legacy release belongs to somebody else, is not this function's business —
+// the first is the ordinary case and the second is answered by the second-instance
+// boundary long before this step.
+func refuseLegacyNamedRelease(cfg *action.Configuration, instance string) error {
+	if _, present, err := releaseInstanceNamed(cfg, helmReleaseNameFor(instance)); err != nil {
+		return err
+	} else if present {
+		// Already on this release's convention. Nothing to refuse; the upgrade path below
+		// moves it.
+		return nil
+	}
+	owner, present, err := releaseInstanceNamed(cfg, legacyHelmReleaseName)
+	if err != nil {
+		return err
+	}
+	if !present || owner != instance {
+		return nil
+	}
+	return &ErrLegacyNamedRelease{Instance: instance, Release: legacyHelmReleaseName}
+}
+
+// ErrLegacyNamedRelease is the refusal, as a type so the drill can assert it is THIS one
+// rather than merely that the command failed.
+type ErrLegacyNamedRelease struct {
+	// Instance is the instance whose release predates the per-instance naming.
+	Instance string
+	// Release is the name it is installed under.
+	Release string
+}
+
+func (e *ErrLegacyNamedRelease) Error() string {
+	return fmt.Sprintf(
+		"instance %q is installed as the Helm release %q, which is the single name every "+
+			"release before v0.17.0 shared. This release installs each instance under a release "+
+			"named after it, and the two cannot be reconciled in place: Helm will not adopt "+
+			"objects that belong to another release, so continuing would stand a second set of "+
+			"workloads beside the ones that are running.\n\n"+
+			"  The supported path is to destroy the instance and build it again:\n\n"+
+			"      dcctl destroy <provider> %s --keep-cluster\n"+
+			"      dcctl bootstrap <provider> %s\n\n"+
+			"That takes %q's data with it. Before v1.0.0 an instance may be recreated; this is "+
+			"one of the changes that requires it.",
+		e.Instance, e.Release, e.Instance, e.Instance, e.Instance)
 }

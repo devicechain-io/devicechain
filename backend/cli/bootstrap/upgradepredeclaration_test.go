@@ -246,7 +246,11 @@ func TestARecipeWithNoProviderReadsAsAPlaceholder(t *testing.T) {
 	if !strings.Contains(err.Error(), "dcctl destroy <provider> upgrig") {
 		t.Errorf("a refusal with no provider printed a command with a hole in it: %v", err)
 	}
-	if !strings.Contains(err.Error(), "this cluster names it") {
+	// The sentence reads "named by <source>" because every source label is a plural noun
+	// phrase ("the instance declarations in this cluster", "the credentials dcctl minted
+	// in dc-system", "the DeviceChain Helm releases in this cluster") and "<source> names
+	// it" agreed with none of them. The fallback has to fit the same frame.
+	if !strings.Contains(err.Error(), "named by what is in this cluster") {
 		t.Errorf("a refusal with no source did not fall back to naming the cluster: %v", err)
 	}
 }

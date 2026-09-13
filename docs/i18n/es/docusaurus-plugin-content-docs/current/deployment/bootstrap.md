@@ -65,11 +65,12 @@ está viva, así que `--allow-legacy-db-removal` queda exceptuado tanto de la ne
 
 **Una instancia por clúster.** `dcctl` instala una sola instancia de DeviceChain en un
 clúster, y el paso 4 es lo que lo establece. Casi todo lo que aplica un arranque inicial
-es un singleton de ámbito de clúster —el propio Deployment del operador, el release de
-Helm y los releases de infraestructura que hay detrás del controlador de ingress,
-cert-manager y el operador CloudNativePG—, así que una segunda instancia no se coloca al
-lado de la primera. Instala el operador de esta ejecución por encima del que ya está en
-marcha, adopta la infraestructura compartida en un segundo estado de OpenTofu y acuña
+es un singleton de ámbito de clúster —el propio Deployment del operador y los releases de
+infraestructura que hay detrás del controlador de ingress, cert-manager y el operador
+CloudNativePG—, así que una segunda instancia no se coloca al lado de la primera. Su
+propio release de Helm lleva el nombre de la instancia y no colisionaría; todo lo que
+rodea a ese release sí. Instala el operador de esta ejecución por encima del que ya está
+en marcha, adopta la infraestructura compartida en un segundo estado de OpenTofu y acuña
 credenciales de base de datos, de bróker y de clave raíz por encima de aquellas con las
 que se está autenticando la instancia que ya está ahí. El paso 4 pregunta al clúster qué
 aloja ya y se detiene antes de todo eso, nombrando la instancia que encontró y el
@@ -121,10 +122,10 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    instancia?» sino «¿hay algo más aquí?». Las dos leen artefactos distintos y no pueden
    dispararse a la vez: una se basa en encontrar esta instancia, la otra en encontrar otra.
    Esta toma la primera respuesta que obtiene de las declaraciones de instancia del
-   clúster, luego de las credenciales que `dcctl` acuñó en `dc-system`, y luego del release
-   de Helm, preguntadas en ese orden porque es el orden en que las escribe un arranque
-   inicial: así, una ejecución que murió a mitad de camino queda respondida por lo que sí
-   llegó a dejar. Una ejecución en seco dice qué rechazaría una ejecución real, y lo dice
+   clúster, luego de las credenciales que `dcctl` acuñó en `dc-system`, y luego de los
+   releases de Helm de DeviceChain que aloja el clúster, preguntados en ese orden porque es
+   el orden en que los escribe un arranque inicial: así, una ejecución que murió a mitad de
+   camino queda respondida por lo que sí llegó a dejar. Una ejecución en seco dice qué rechazaría una ejecución real, y lo dice
    incluso cuando no pudo llegar al clúster para preguntárselo. Consulta **Una instancia
    por clúster** más arriba.
 5. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el

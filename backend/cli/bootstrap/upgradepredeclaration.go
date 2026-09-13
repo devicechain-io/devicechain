@@ -85,12 +85,16 @@ func (e *ErrPreDeclarationInstance) Error() string {
 		// as a hole.
 		provider = "<provider>"
 	}
+	// 🔑 EVERY SOURCE LABEL IS A PLURAL NOUN PHRASE — "the instance declarations in this
+	// cluster", "the credentials dcctl minted in dc-system", "the DeviceChain Helm
+	// releases in this cluster" — so the sentence is built around "named by %s" rather
+	// than "%s names it", which did not agree with any of the three.
 	source := e.Source
 	if source == "" {
-		source = "this cluster"
+		source = "what is in this cluster"
 	}
 	return fmt.Sprintf(
-		"instance %q IS in this cluster — %s names it — and it carries no declaration, so it "+
+		"instance %q IS in this cluster — named by %s — and it carries no declaration, so it "+
 			"was built by a release older than the one that began recording them. `dcctl "+
 			"upgrade` reads an instance's declaration to learn what that instance IS — its "+
 			"profile, topology, exposure and functional areas — and there is nothing here to "+

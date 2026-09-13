@@ -64,7 +64,16 @@ func renderedInstanceConfigSecretName(ch *chart.Chart, vals map[string]interface
 // CRDs exist.
 func renderChartClientSide(ctx context.Context, ch *chart.Chart, vals map[string]interface{}) (string, error) {
 	inst := action.NewInstall(&action.Configuration{})
-	inst.ReleaseName = helmReleaseName
+	// 🔑 A PLACEHOLDER, AND SAFE ONLY BECAUSE THE CHART READS NOTHING FROM IT. No
+	// template in deploy/helm/devicechain references .Release.Name or .Release.Namespace
+	// — every resource name, label, selector and namespace is derived from
+	// .Values.instance.id — so what is rendered here is identical to what the real
+	// install renders under the instance's own release name. If a template ever DOES
+	// reach for the release, this render stops matching the one that is installed, and
+	// validateRenderedInstanceConfig's whole claim (that it checks the bytes about to be
+	// written) goes with it. Hence a name that reads as a placeholder rather than one
+	// that reads as the truth.
+	inst.ReleaseName = "render"
 	inst.Namespace = "default"
 	inst.DryRun = true
 	inst.ClientOnly = true

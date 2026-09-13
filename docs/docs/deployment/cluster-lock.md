@@ -69,12 +69,14 @@ running" is part of the answer to "what would this do".
 ## What the lock actually covers {#scope}
 
 **One lock per cluster — not one per instance.** Almost everything a bootstrap touches
-is a cluster-wide singleton: the Helm release, the infrastructure releases that install
-the ingress controller, cert-manager and the CloudNativePG operator, and the DeviceChain
-operator's own Deployment. Two runs working on two *different* instances would still
-overwrite each other's copies of all of it. The instance id is recorded on the lock so
-the refusal can tell you which instance the holder is working on, but it is not what the
-lock is keyed by.
+is a cluster-wide singleton: the infrastructure releases that install the ingress
+controller, cert-manager and the CloudNativePG operator, and the DeviceChain operator's
+own Deployment. The instance's own Helm release is the one exception — it is named after
+the instance, so `alpha` installs as `dc-alpha` — but everything standing around it is
+still shared, so two runs working on two *different* instances would overwrite each
+other's copies of all of that. The instance id is recorded on the lock so the refusal can
+tell you which instance the holder is working on, but it is not what the lock is keyed
+by.
 
 :::caution This enforces "one run at a time", not "one instance per cluster"
 The lock stops two `dcctl` processes from applying at once. It does not make a cluster

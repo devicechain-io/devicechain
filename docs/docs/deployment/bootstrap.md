@@ -61,13 +61,14 @@ as this one. Nothing else is.
 
 **One instance per cluster.** `dcctl` installs one DeviceChain instance into a cluster,
 and step 4 is what says so. Almost everything a bootstrap applies is a cluster-wide
-singleton — the operator's own Deployment, the Helm release, and the infrastructure
-releases behind the ingress controller, cert-manager and the CloudNativePG operator — so
-a second instance does not sit beside the first one. It installs this run's operator over
-the one already running, adopts the shared infrastructure into a second OpenTofu state,
-and mints database, broker and root-key credentials over the ones the instance that is
-there is authenticating with. Step 4 asks the cluster what it already holds and stops
-before any of that, naming the instance it found and the artifact it read that from.
+singleton — the operator's own Deployment and the infrastructure releases behind the
+ingress controller, cert-manager and the CloudNativePG operator — so a second instance
+does not sit beside the first one. Its own Helm release is named after the instance and
+would not collide; everything around that release would. It installs this run's operator
+over the one already running, adopts the shared infrastructure into a second OpenTofu
+state, and mints database, broker and root-key credentials over the ones the instance
+that is there is authenticating with. Step 4 asks the cluster what it already holds and
+stops before any of that, naming the instance it found and the artifact it read that from.
 There are three things to do instead:
 
 - **Move the instance that is there onto a new version** — `dcctl upgrade` is the verb for
@@ -114,10 +115,11 @@ components`), so a failure names a step you can find here:
    anything else here". The two read different artifacts and cannot both fire — one keys
    on finding this instance, the other on finding another. This one takes the first
    answer it gets from the instance declarations in the cluster, then the credentials
-   `dcctl` minted into `dc-system`, then the Helm release, asked in that order because it
-   is the order a bootstrap writes them: a run that died partway through is answered by
-   whatever it did get to. A dry run says what a real run would refuse, and says so even
-   when it could not reach the cluster to ask. See **One instance per cluster** above.
+   `dcctl` minted into `dc-system`, then the DeviceChain Helm releases the cluster holds,
+   asked in that order because it is the order a bootstrap writes them: a run that died
+   partway through is answered by whatever it did get to. A dry run says what a real run
+   would refuse, and says so even when it could not reach the cluster to ask. See **One
+   instance per cluster** above.
 5. **Install core components** — render the operator (CRDs + RBAC + controller) and
    apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
    because the definition of an instance has to exist in the cluster before anything can
