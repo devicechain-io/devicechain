@@ -72,10 +72,12 @@ ejecutando» forma parte de la respuesta a «qué haría esto».
 ## Qué cubre realmente el bloqueo {#scope}
 
 **Un bloqueo por clúster, no uno por instancia.** Casi todo lo que toca un arranque
-inicial es un singleton de ámbito de clúster: el release de Helm, los releases de
-infraestructura que instalan el controlador de ingress, cert-manager y el operador
-CloudNativePG, y el propio Deployment del operador de DeviceChain. Dos ejecuciones
-trabajando sobre dos instancias *distintas* seguirían sobrescribiéndose mutuamente todo
+inicial es un singleton de ámbito de clúster: los releases de infraestructura que instalan
+el controlador de ingress, cert-manager y el operador CloudNativePG, y el propio
+Deployment del operador de DeviceChain. El release de Helm de la propia instancia es la
+única excepción —lleva el nombre de la instancia, así que `alpha` se instala como
+`dc-alpha`—, pero todo lo que lo rodea sigue siendo compartido, de modo que dos
+ejecuciones trabajando sobre dos instancias *distintas* se sobrescribirían mutuamente todo
 eso. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
 qué instancia está trabajando el titular, pero no es la clave del bloqueo.
 

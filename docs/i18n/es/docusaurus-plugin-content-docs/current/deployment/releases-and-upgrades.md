@@ -148,6 +148,11 @@ una instancia y su documento de configuración, y una instalación hecha solo co
 tiene ninguno de los dos; tampoco instala ningún operador, así que no hay una segunda mitad
 que mover.
 
+El release de abajo se llama `dc` porque ese es el nombre que eligió el `helm install` de más
+arriba. Una instancia instalada con `dcctl bootstrap` lleva un release con el nombre de la
+instancia —`devicechain` se instala como `dc-devicechain`—, así que cualquier comando `helm`
+dirigido a una de esas necesita ese nombre en su lugar.
+
 ```bash
 helm get values dc -n default -o yaml > dc-values.yaml
 
@@ -1304,8 +1309,9 @@ hay nada que la actualización pueda leer.
 Y lo dice, en lugar de tratar su instancia como un nombre que no existe:
 
 ```
-instance "devicechain" IS in this cluster — the "dc" Helm release names it — and it carries
-no declaration, so it was built by a release older than the one that began recording them.
+instance "devicechain" IS in this cluster — the DeviceChain Helm releases in this cluster
+name it — and it carries no declaration, so it was built by a release older than the one
+that began recording them.
 ```
 
 No hay capa de compatibilidad, y antes de la `v1.0.0` no la habrá. Aquello con lo que se

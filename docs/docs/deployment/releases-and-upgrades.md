@@ -144,6 +144,11 @@ An instance installed with `helm install` rather than `dcctl bootstrap` is upgra
 configuration document back out of the cluster, and a chart-only install has neither; it
 also installs no operator, so there is no second half for anything to move.
 
+The release name below is `dc` because that is the name the `helm install` above chose. An
+instance installed by `dcctl bootstrap` carries a release named after the instance —
+`devicechain` installs as `dc-devicechain` — so any `helm` command aimed at one of those
+needs that name instead.
+
 ```bash
 helm get values dc -n default -o yaml > dc-values.yaml
 
@@ -1222,8 +1227,9 @@ and including `v0.16.0` wrote no such record, so there is nothing for the upgrad
 It says so, rather than treating your instance as a name that does not exist:
 
 ```
-instance "devicechain" IS in this cluster — the "dc" Helm release names it — and it carries
-no declaration, so it was built by a release older than the one that began recording them.
+instance "devicechain" IS in this cluster — the DeviceChain Helm releases in this cluster
+name it — and it carries no declaration, so it was built by a release older than the one
+that began recording them.
 ```
 
 There is no compatibility shim, and before `v1.0.0` there will not be one. What the older
