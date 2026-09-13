@@ -1309,8 +1309,8 @@ hay nada que la actualización pueda leer.
 Y lo dice, en lugar de tratar su instancia como un nombre que no existe:
 
 ```
-instance "devicechain" IS in this cluster — the DeviceChain Helm releases in this cluster
-name it — and it carries no declaration, so it was built by a release older than the one
+instance "devicechain" IS in this cluster — named by the DeviceChain Helm releases in this
+cluster — and it carries no declaration, so it was built by a release older than the one
 that began recording them.
 ```
 

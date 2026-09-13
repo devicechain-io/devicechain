@@ -115,10 +115,30 @@ func (r InstanceRecord) Binding() ClusterBinding {
 //
 // Deliberately strict rather than clever: these are directory names on one machine, and
 // nothing is lost by requiring them to look like identifiers.
+// maxInstanceNameLen is how long an instance name may be before its Helm release name
+// stops being one.
+//
+// 🔴 DERIVED, NOT CHOSEN. Helm caps a release name at 53 characters
+// (chartutil.ValidateReleaseName), and this instance's release is helmReleaseNameFor(name)
+// — the three-character prefix plus the name. Before release names carried the instance
+// the cap did not apply to the name at all, so a long one worked; now it fails inside the
+// Helm step, after the declaration, the infrastructure and the credentials have all been
+// written. A number this far from the code that enforces it drifts silently, so
+// TestTheInstanceNameCeilingIsTheOneHelmActuallyEnforces pins both ends against the real
+// validator rather than against this constant.
+const maxInstanceNameLen = 50
+
 func ValidateInstanceName(instance string) error {
 	switch {
 	case instance == "":
 		return fmt.Errorf("instance name is empty")
+	case len(instance) > maxInstanceNameLen:
+		return fmt.Errorf(
+			"instance name %q is %d characters; the most that fits is %d, because this "+
+				"instance's Helm release is named after it and Helm caps a release name at 53. "+
+				"Refusing here rather than in the Helm step, which runs after the declaration, "+
+				"the infrastructure and every credential have already been written",
+			instance, len(instance), maxInstanceNameLen)
 	case instance == escrowDirName:
 		return fmt.Errorf(
 			"instance name %q collides with the root-key escrow directory under ~/.devicechain; choose another name",

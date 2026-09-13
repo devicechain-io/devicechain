@@ -1227,8 +1227,8 @@ and including `v0.16.0` wrote no such record, so there is nothing for the upgrad
 It says so, rather than treating your instance as a name that does not exist:
 
 ```
-instance "devicechain" IS in this cluster — the DeviceChain Helm releases in this cluster
-name it — and it carries no declaration, so it was built by a release older than the one
+instance "devicechain" IS in this cluster — named by the DeviceChain Helm releases in this
+cluster — and it carries no declaration, so it was built by a release older than the one
 that began recording them.
 ```
 

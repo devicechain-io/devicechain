@@ -334,3 +334,28 @@ func TestAnInstanceUnderTheOldReleaseNameIsRefusedWithTheRecreateRecipe(t *testi
 		})
 	}
 }
+
+// 🔴 THE CEILING IS PINNED AGAINST HELM, NOT AGAINST OUR OWN CONSTANT. maxInstanceNameLen
+// is derived from a number that lives in another module, and a constant asserted against
+// itself agrees forever while the library moves. Both ends are checked: the longest name
+// we accept must produce a release name Helm accepts, and one character more must produce
+// one it rejects — the second is what stops the ceiling being quietly conservative and
+// then quietly wrong.
+func TestTheInstanceNameCeilingIsTheOneHelmActuallyEnforces(t *testing.T) {
+	atLimit := strings.Repeat("a", maxInstanceNameLen)
+	if err := chartutil.ValidateReleaseName(helmReleaseNameFor(atLimit)); err != nil {
+		t.Fatalf("a name at our ceiling produces a release name Helm refuses (%v), so the "+
+			"bootstrap would fail in the Helm step for a name we accepted", err)
+	}
+	if err := chartutil.ValidateReleaseName(helmReleaseNameFor(atLimit + "a")); err == nil {
+		t.Fatal("one character past our ceiling still produces a release name Helm accepts, " +
+			"so the refusal is stricter than anything requires and rejects usable names")
+	}
+	if err := ValidateInstanceName(atLimit); err != nil {
+		t.Fatalf("the validator refuses a name at its own ceiling: %v", err)
+	}
+	if err := ValidateInstanceName(atLimit + "a"); err == nil {
+		t.Fatal("the validator accepts a name whose release name Helm will refuse, which is " +
+			"the failure this ceiling exists to move earlier")
+	}
+}
