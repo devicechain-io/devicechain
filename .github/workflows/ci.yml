@@ -1804,11 +1804,26 @@ jobs:
       - name: tofu fmt
         run: tofu fmt -check -recursive
 
-      - name: tofu init
-        run: tofu init -backend=false
-
-      - name: tofu validate
-        run: tofu validate
+      # 🔴 EVERY ROOT, NOT THE ONE THIS JOB HAPPENS TO SIT IN. `tofu validate` acts
+      # on a single directory, and this job's working-directory is deploy/opentofu.
+      # For as long as there was one root those were the same thing. A second root —
+      # the cluster-prerequisite one — would be neither init'd nor validated here,
+      # and nothing would say so: this step would keep passing, on the other root.
+      # Broken HCL in the new one would then first surface on a user's machine.
+      #
+      # `tofu fmt -check -recursive` above already descends, so only these two
+      # needed widening. hack/tofu-roots.sh refuses to return an empty list, so a
+      # discovery that breaks fails the job rather than validating nothing.
+      - name: tofu init and validate every root
+        working-directory: .
+        run: |
+          set -euo pipefail
+          hack/tofu-roots.sh | sed 's/^/  discovered root: /'
+          hack/tofu-roots.sh | while IFS= read -r root; do
+            echo "::group::$root"
+            ( cd "$root" && tofu init -backend=false && tofu validate )
+            echo "::endgroup::"
+          done
 
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added

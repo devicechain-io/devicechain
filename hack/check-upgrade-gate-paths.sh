@@ -101,6 +101,20 @@ GATE_PATHS=(
   'hack/upgrade-baseline-policy'
   'hack/check-upgrade-gate-paths.sh'
   'deploy/helm/**'
+  # The OpenTofu roots, which were missing and are the one half of an instance's
+  # shape the drill cannot reconstruct from anything else. The gate watched
+  # deploy/helm/** and backend/cli/bootstrap/** — the chart and the code — while the
+  # infrastructure those two are applied ON TOP OF could change unwatched. A PR
+  # touching only the roots answered run=false, and the drill never appeared.
+  #
+  # It matters most exactly when the roots are being split, because the hazard there
+  # is an apply against state written by an older binary, and the drill is the only
+  # thing in CI that puts an old instance in front of a new one.
+  'deploy/opentofu/**'
+  # The root DISCOVERY every tofu gate now iterates over. A change here silently
+  # changes which roots four separate gates cover, so it is the same
+  # watch-the-watcher entry as hack/upgrade-baseline-policy above.
+  'hack/tofu-roots.sh'
   '.github/workflows/upgrade-gate.yml'
 )
 
