@@ -502,7 +502,7 @@ func helmValues(st *State) map[string]interface{} {
 // and report success having left the release record behind — turning the one remedy this
 // release offers into a remedy that half-works. See uninstallLegacyRelease.
 func helmUninstall(ctx context.Context, kubeContext, instance string) error {
-	actionConfig, err := helmActionConfig(kubeContext)
+	actionConfig, err := helmActionConfigFor(kubeContext)
 	if err != nil {
 		return err
 	}
@@ -511,6 +511,18 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 	}
 	return uninstallLegacyRelease(ctx, actionConfig, instance)
 }
+
+// helmActionConfigFor is the seam this command's tests reach through, for the same
+// reason readClusterInstances and lookupDeployedInstance are indirected.
+//
+// 🔴 WITHOUT IT THE ONLY THING UNDER TEST IS THE HELPERS, NOT THE WIRING. Both refusals
+// below and the legacy sweep are correct functions that this command has to actually
+// CALL, and a call sitting behind a live Helm connection is one no unit test reaches — so
+// a change that dropped the sweep would break nothing, and the guard would still pass its
+// own test while `dcctl destroy` quietly stopped removing pre-v0.17.0 releases. Helm's
+// storage has an in-memory driver, so swapping this makes the whole path exercisable
+// against real action.List, action.NewGetValues and action.NewUninstall.
+var helmActionConfigFor = helmActionConfig
 
 // uninstallRelease removes one named release, after confirming it belongs to the
 // instance this command was told to destroy.
