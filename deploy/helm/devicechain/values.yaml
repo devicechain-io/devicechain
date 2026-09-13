@@ -388,7 +388,7 @@ instance:
           # POSTGRES_USER *is* the superuser. Under CloudNativePG the application
           # role is separate and `postgres` is reserved for the operator, so this
           # is now an unprivileged owner like the relational store's. It must stay
-          # in step with timescale_username in deploy/opentofu/variables.tf and
+          # in step with timescale_username in deploy/opentofu/instance/variables.tf and
           # with the compiled-in default in backend/core/config/instance.go.
           username: devicechain
           # Empty for the same reason as the relational store's above.

@@ -167,7 +167,7 @@ func TestTheDefaultBootstrapKeepsDatabaseBackupsOn(t *testing.T) {
 // `enable_backup_plugin = false` in the module call turns every install's backups
 // off while leaving enable_database_backups=true and every assertion above green.
 func TestTheBackupFlagIsActuallyWiredToThePlugin(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofu(), "main.tf")
+	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
 	if err != nil {
 		t.Fatalf("reading the embedded main.tf: %v", err)
 	}
@@ -226,7 +226,7 @@ func effectiveInfraVar(t *testing.T, st *State, name string) string {
 func tofuVariableDefault(t *testing.T, name string) string {
 	t.Helper()
 
-	body, err := fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	body, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 	if err != nil {
 		t.Fatalf("reading the embedded variables.tf: %v", err)
 	}

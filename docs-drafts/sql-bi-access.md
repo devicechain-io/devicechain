@@ -24,7 +24,7 @@ kubectl create secret  ─────────────▶ CNPG managed r
   (kubernetes.io/basic-auth)            analytics_<tenant>
                                         LOGIN, CONNECTION LIMIT n,
 timescale_analytics_readers ────────▶   IN ROLE analytics_reader
-  (deploy/opentofu/variables.tf)              │
+  (deploy/opentofu/instance/variables.tf)     │
                                               │        migration 20260904000000
                                               │        ├─ CREATE SCHEMA analytics
                                               │        ├─ analytics.reader_tenant()
@@ -153,7 +153,7 @@ with no `connectionLimit` (PostgreSQL's `-1` is unlimited, and it is also what a
 renders as) and a set of roles whose limits plus the platform's reservation exceed
 `max_connections` less the superuser reserve. The event store's reservation defaults to 40 — one
 pool of 20, doubled for a RollingUpdate.
-[`deploy/opentofu/variables.tf`, `timescale_analytics_reserved_connections`]
+[`deploy/opentofu/instance/variables.tf`, `timescale_analytics_reserved_connections`]
 
 Both refusals are exercised by name in `hack/check-cnpg-chart-schema.sh`, whose coverage control
 requires every `fail` in the templates to have been tripped by a case.

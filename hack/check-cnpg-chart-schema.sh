@@ -41,7 +41,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart="$repo_root/deploy/opentofu/modules/cnpg-cluster/chart"
-variables="$repo_root/deploy/opentofu/variables.tf"
+variables="$repo_root/deploy/opentofu/instance/variables.tf"
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }

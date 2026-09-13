@@ -39,10 +39,18 @@ func TestNoSecretsEmbedded(t *testing.T) {
 	}
 }
 
-// TestOpenTofuComplete checks the infra root and a module are present.
+// TestOpenTofuComplete checks the instance root and a module are present.
+//
+// The paths are ROOT-QUALIFIED deliberately. These were bare "main.tf" and
+// "variables.tf", which passed on a substring — so they would have kept passing
+// against any layout that happened to contain a file by that name anywhere,
+// including one where the root had moved and only a module's main.tf remained.
 func TestOpenTofuComplete(t *testing.T) {
 	files := strings.Join(collect(t, OpenTofu()), " ")
-	for _, want := range []string{"main.tf", "variables.tf", "modules/nats/main.tf", "modules/cnpg-cluster/main.tf"} {
+	for _, want := range []string{
+		"instance/main.tf", "instance/variables.tf",
+		"modules/nats/main.tf", "modules/cnpg-cluster/main.tf",
+	} {
 		if !strings.Contains(files, want) {
 			t.Errorf("OpenTofu assets missing %q", want)
 		}

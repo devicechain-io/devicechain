@@ -64,7 +64,7 @@ managed database. That case is the provider's own capacity alerting, and nothing
 this chart substitutes for it.
 
 🔴 THE PVC NAMES ARE A CONTRACT WITH deploy/opentofu. `dc-rdb` and `dc-tsdb` are the
-Cluster object names set in deploy/opentofu/main.tf (modules "cnpg_rdb" and
+Cluster object names set in deploy/opentofu/instance/main.tf (modules "cnpg_rdb" and
 "cnpg_tsdb"); CloudNativePG names each instance's PGDATA claim after its pod, and
 appends `-wal` for the separate WAL volume that appears when *_wal_storage is set.
 So the claims are dc-rdb-1, dc-tsdb-1, dc-rdb-1-wal, … — verified against a running

@@ -55,7 +55,8 @@ backend/
     drdrill/                  the ADR-028 restore drill's measuring instrument — seeds a secret
                               through the real API, then proves it still decrypts after a
                               restore into a cluster rebuilt from a root-key escrow artifact
-deploy/                       Helm chart (deploy/helm) + OpenTofu modules (deploy/opentofu)
+deploy/                       Helm chart (deploy/helm) + OpenTofu (deploy/opentofu: one
+                              directory per ROOT, over a shared modules/ tree)
 frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn/ui, client-preset codegen):
                               apps/console (authoring — canvas editor, versioning, synthetic preview, slot
                               authoring, export) + apps/dashboard (the /dash app — a VIEWER-ONLY reference
@@ -200,7 +201,13 @@ helm template deploy/helm/devicechain \
   --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >/dev/null
 
 # opentofu
-cd deploy/opentofu && tofu fmt -check -recursive && tofu init -backend=false && tofu validate
+# fmt covers the whole tree; init and validate act on ONE directory each, so they
+# run per root. hack/tofu-roots.sh is the same discovery CI uses, and it fails
+# rather than returning an empty list -- so this cannot quietly validate nothing.
+(cd deploy/opentofu && tofu fmt -check -recursive)
+for root in $(hack/tofu-roots.sh); do
+  ( cd "$root" && tofu init -backend=false && tofu validate ) || break
+done
 ```
 
 ## Conventions

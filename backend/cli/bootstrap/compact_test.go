@@ -319,7 +319,7 @@ var compactVolumeDecisions = map[string]string{
 // Every volume the infrastructure provisions must have a compact decision, and
 // every volume marked as sized must actually be passed by the apply.
 func TestCompactSizesEveryGrowingVolume(t *testing.T) {
-	raw, err := fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	raw, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 	if err != nil {
 		t.Fatalf("reading embedded variables.tf: %v", err)
 	}

@@ -47,6 +47,10 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err != nil {
 		return err
 	}
+	// The tree extracted below holds every root plus the shared modules, and a root
+	// reaches those as "../modules/<x>". So tofu runs one level down, in the root's
+	// own directory, and the state it keeps lives there with it.
+	rootdir := filepath.Join(workdir, assets.InstanceRootDir)
 	// Deferred, and registered the moment the directory exists, because a FAILED
 	// apply writes state too — a partial apply is exactly the run that leaves
 	// resource attributes on disk, and the path that returns early is the one a
@@ -54,15 +58,21 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// nothing else went wrong; the apply's own error is always the better one to
 	// hand back.
 	defer func() {
-		if herr := hardenStateFiles(workdir); herr != nil && err == nil {
+		if herr := hardenStateFiles(rootdir); herr != nil && err == nil {
 			err = herr
 		}
 	}()
 	if err := extractFS(assets.OpenTofu(), workdir); err != nil {
 		return fmt.Errorf("extracting infrastructure config: %w", err)
 	}
+	// 🔴 BEFORE ANY tofu CALL, AND THE ORDER IS NOT COSMETIC. Init does not read
+	// state, but the retired-infrastructure fence immediately after it does — and a
+	// fence reading an empty state concludes there is nothing to fence.
+	if err := relocateRootState(workdir, rootdir); err != nil {
+		return err
+	}
 
-	tf, err := tfexec.NewTerraform(workdir, tofuBin)
+	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
 		return err
 	}
@@ -655,11 +665,82 @@ func instanceStateDir(instance, sub string) (string, error) {
 //
 // Missing files are not an error. A dry run never produces a state file, and
 // there is no backup until the second apply.
-func hardenStateFiles(workdir string) error {
-	for _, name := range []string{"terraform.tfstate", "terraform.tfstate.backup"} {
-		p := filepath.Join(workdir, name)
+func hardenStateFiles(rootdir string) error {
+	for _, name := range stateFileNames {
+		p := filepath.Join(rootdir, name)
 		if err := os.Chmod(p, stateFileMode); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("restricting permissions on %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// stateFileNames are the files OpenTofu's local backend keeps beside a root. The
+// backup appears only from the second apply onward.
+var stateFileNames = []string{"terraform.tfstate", "terraform.tfstate.backup"}
+
+// relocateRootState moves an instance's existing state down into the root
+// directory tofu now runs in.
+//
+// # WHY THIS EXISTS, AND WHY IT IS A MOVE RATHER THAN A REFUSAL
+//
+// The configuration used to be a single root of .tf files at the top of the
+// extracted tree, so tofu ran in the working directory and the local backend kept
+// terraform.tfstate there. Roots are now peers under a shared modules tree, so
+// tofu runs one level down — and state beside the old location would simply not be
+// found. An empty state is not an error to OpenTofu: it is a fresh install, and
+// the apply would set about CREATING an instance's entire infrastructure on top of
+// the infrastructure already running.
+//
+// 🔑 THE DISTINCTION THAT DECIDES MOVE-VS-REFUSE IS WHETHER THE STATE'S CONTENT IS
+// STILL TRUE. Here nothing about what the state DESCRIBES has changed — the same
+// resources, the same addresses, the same root, one directory further down. That is
+// a path change, and a path change is repairable without an operator. When the roots
+// are actually SPLIT, the content stops being true — addresses leave this root's
+// configuration for another's — and no rename repairs that; per the tier-1 spec
+// that case is refused outright, the way the retired-infrastructure fence refuses.
+// Relocating here does not soften that; it removes a failure that has nothing to do
+// with it.
+//
+// 🔴 REFUSE WHEN BOTH EXIST rather than choosing. Two state files for one root is
+// not a situation this code can reason about — it means an interrupted move, or two
+// binaries disagreeing about where state lives — and picking either one risks an
+// apply against a state that does not describe the running instance. The operator
+// can see both files and decide; this function cannot.
+//
+// Nothing is moved for a fresh instance, and the second run finds nothing left to
+// move, so this is a one-time repair that then costs a stat.
+//
+// The provider cache and lock file are deliberately NOT moved: `tofu init` rebuilds
+// both in the new root, and a stale .terraform beside the old path is inert.
+func relocateRootState(workdir, rootdir string) error {
+	for _, name := range stateFileNames {
+		from := filepath.Join(workdir, name)
+		to := filepath.Join(rootdir, name)
+
+		if _, err := os.Stat(from); err != nil {
+			if os.IsNotExist(err) {
+				continue // fresh instance, or already moved
+			}
+			return fmt.Errorf("reading %s: %w", from, err)
+		}
+		if _, err := os.Stat(to); err == nil {
+			return fmt.Errorf(
+				"instance %q has two %s files and this build cannot tell which describes the "+
+					"running infrastructure: one at %s, where earlier builds kept it, and one at %s, "+
+					"where this build keeps it. Applying against the wrong one would rebuild "+
+					"infrastructure that already exists. Compare them and delete the stale one — the "+
+					"live one is whichever a `tofu show` describes as the instance you are running",
+				filepath.Base(workdir), name, from, to)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("reading %s: %w", to, err)
+		}
+
+		if err := os.MkdirAll(rootdir, stateDirMode); err != nil {
+			return fmt.Errorf("creating %s: %w", rootdir, err)
+		}
+		if err := os.Rename(from, to); err != nil {
+			return fmt.Errorf("moving %s to %s: %w", from, to, err)
 		}
 	}
 	return nil

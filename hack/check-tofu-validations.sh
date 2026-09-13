@@ -61,7 +61,16 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tofu_dir="$repo_root/deploy/opentofu"
+# The directory the console assertions are evaluated in. They name variables that
+# belong to the INSTANCE root specifically, so this is that root and not a
+# discovered list: `tofu console` evaluates one configuration, and an assertion
+# about var.nats_mqtt_node_port has no meaning in a root that does not declare it.
+#
+# A second root is not therefore unguarded. root_tf_files below spans EVERY root,
+# so a validation block in one this script cannot evaluate is reported as never
+# exercised, by name — which is the correct outcome and is what makes adding a root
+# a decision rather than a silent narrowing.
+tofu_dir="$repo_root/deploy/opentofu/instance"
 
 # EVERY root's .tf files, not just tofu_dir's — and the difference is the whole
 # reason this is a list rather than a glob.

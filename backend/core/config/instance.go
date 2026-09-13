@@ -1041,7 +1041,7 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 					// was "postgres" while the store was a StatefulSet built from
 					// the stock image, whose POSTGRES_USER is the superuser.
 					// Keep in step with deploy/helm/devicechain/values.yaml and
-					// timescale_username in deploy/opentofu/variables.tf.
+					// timescale_username in deploy/opentofu/instance/variables.tf.
 					"maxConnections": 5,
 					"username":       "devicechain",
 					// Empty for the same reason as the relational store's above.
