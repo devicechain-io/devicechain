@@ -312,8 +312,16 @@ func TestAnInstanceUnderTheOldReleaseNameIsRefusedWithTheRecreateRecipe(t *testi
 		rels     []*release.Release
 		instance string
 	}{
+		// 🔴 BOTH RELEASES, NOT JUST THE NEW ONE, AND THE DIFFERENCE IS THE WHOLE TEST.
+		// A fixture holding only "dc-alpha" passes whether or not the early return for an
+		// already-migrated instance exists, because the legacy lookup behind it then finds
+		// nothing either — a control that cannot detect the thing it names moving. Cutting
+		// that early return survived this test until the fixture held both.
 		"an instance already on this release's naming": {
-			[]*release.Release{deviceChainRelease("dc-alpha", "alpha")}, "alpha"},
+			[]*release.Release{
+				deviceChainRelease("dc-alpha", "alpha"),
+				deviceChainRelease("dc", "alpha"),
+			}, "alpha"},
 		"a pre-rename release belonging to somebody else": {
 			[]*release.Release{deviceChainRelease("dc", "bravo")}, "alpha"},
 		"a cluster with no DeviceChain release at all": {nil, "alpha"},
