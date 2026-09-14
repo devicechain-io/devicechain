@@ -72,7 +72,7 @@ func stepRefuseSecondInstance(ctx context.Context, st *State) error {
 // ErrSecondInstance is the refusal, as a type rather than a bare error.
 //
 // 🔴 THE COMMAND LAYER HAS TO RECOGNISE THIS ONE SPECIFICALLY, which is the whole
-// reason it is a type. `dcctl bootstrap` writes ~/.devicechain/<instance>/instance.json
+// reason it is a type. `dcctl bootstrap` writes ~/.devicechain/instances/<instance>/instance.json
 // BEFORE the pipeline runs and deliberately keeps it on any failure — a bootstrap that
 // died half-way has still created a cluster, and a record that was never written is an
 // orphan nothing can destroy. This refusal is the one failure where that reasoning does

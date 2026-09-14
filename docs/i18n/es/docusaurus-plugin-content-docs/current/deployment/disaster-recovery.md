@@ -104,7 +104,7 @@ pierde y el comando exacto de recuperación, sin necesidad de esta página.
 Dos propiedades conviene conocer:
 
 - **No se guarda junto a la instancia.** Deliberadamente *no* vive en
-  `~/.devicechain/<instancia>/`, porque [`dcctl destroy`](#after-destroy) elimina ese
+  `~/.devicechain/instances/<instancia>/`, porque [`dcctl destroy`](#after-destroy) elimina ese
   directorio. `dcctl` rechaza una ruta `--escrow-file` que esté dentro de él.
 - **Lleva una huella de la clave en claro.** Eso es lo que permite responder «¿sigue
   siendo este el depósito correcto?» *sin* la frase de contraseña; véase
@@ -334,7 +334,7 @@ deja un bróker en funcionamiento que ninguna ejecución posterior podría recon
 a partir del clúster: allí únicamente quedan una clave pública y dos hashes de
 contraseña, y ninguno de ellos puede convertirse de vuelta en las credenciales que
 necesitan los servicios. Por eso las credenciales del bróker también se registran en la
-máquina desde la que ejecutas `dcctl`, en `~/.devicechain/<instancia>/`, antes de
+máquina desde la que ejecutas `dcctl`, en `~/.devicechain/instances/<instancia>/`, antes de
 configurar el bróker con ellas; y una ejecución posterior las reutiliza desde ahí
 cuando todavía no hay una instancia a la que preguntar. El archivo solo es legible por
 ti, y `dcctl destroy` lo elimina junto con el resto del estado local de la instancia.

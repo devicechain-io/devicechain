@@ -109,7 +109,7 @@ func destroyEveryInstance(ctx context.Context) error {
 		return err
 	}
 	if len(known) == 0 {
-		fmt.Println(color.WhiteString("No DeviceChain instances on this machine (nothing under ~/.devicechain)."))
+		fmt.Println(color.WhiteString("No DeviceChain instances on this machine (nothing under ~/.devicechain/instances)."))
 		return nil
 	}
 

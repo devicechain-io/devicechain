@@ -35,7 +35,7 @@ func refusedHome(t *testing.T, instance string) (home string, prior bootstrap.Pr
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".devicechain", instance)); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".devicechain", "instances", instance)); err != nil {
 		t.Fatalf("the fixture never wrote the record this test is about: %v", err)
 	}
 	return home, prior
@@ -43,7 +43,7 @@ func refusedHome(t *testing.T, instance string) (home string, prior bootstrap.Pr
 
 func recordDirExists(t *testing.T, home, instance string) bool {
 	t.Helper()
-	_, err := os.Stat(filepath.Join(home, ".devicechain", instance))
+	_, err := os.Stat(filepath.Join(home, ".devicechain", "instances", instance))
 	return err == nil
 }
 

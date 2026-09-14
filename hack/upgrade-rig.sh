@@ -450,6 +450,26 @@ fail_code() {
 
 fail() { fail_code 1 "$@"; }
 
+# remove_instance_state deletes an instance's local state from BOTH layouts.
+#
+# 🔴 BOTH, AND THAT IS NOT BELT-AND-BRACES. Instances now live under
+# ~/.devicechain/instances/<name>; a dcctl predating that wrote ~/.devicechain/<name>,
+# and this rig runs both — it installs a BASELINE RELEASE and upgrades to the branch
+# build. Removing only one location leaves the other behind, and a leftover state
+# directory is precisely what makes the NEXT run's bootstrap incremental over
+# infrastructure that no longer exists.
+#
+# The name is checked before it is interpolated: ${HOME:?} guards the home directory
+# and says nothing about the instance, so an empty or path-shaped name would expand
+# to the whole tree.
+remove_instance_state() {
+  local name="${1:-}"
+  case "$name" in
+    "" | . | .. | */* | *\\*) fail "refusing to remove state for instance name '$name'" ;;
+  esac
+  rm -rf "${HOME:?}/.devicechain/instances/$name" "${HOME:?}/.devicechain/$name"
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
 # ko_required — will this run shell out to a builder?
 #
@@ -2440,7 +2460,7 @@ cmd_down() {
     say "removing the rig's working directory $work"
     rm -rf "${work:?}"
   fi
-  rm -rf "${HOME:?}/.devicechain/$instance"
+  remove_instance_state "$instance"
   # The registry container is deliberately LEFT RUNNING. It is the same
   # kind-registry that dcctl's --build path uses, so
   # removing it here would break a developer's own cluster to tidy up after this

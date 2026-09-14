@@ -41,14 +41,14 @@ import (
 // local-disk-only: there is no backend block anywhere, so a re-run from a different machine
 // already collides on every resource. A cluster Secret would be MORE portable than the state
 // it accompanies, which is a promise the rest of the command cannot keep. The one realistic
-// cross-machine recipe — copying ~/.devicechain/<instance>/ wholesale — carries this record
+// cross-machine recipe — copying ~/.devicechain/instances/<instance>/ wholesale — carries this record
 // with it.
 //
 // The directory's threat model is unchanged by this file: the tfstate next to it already
 // holds the broker's TLS private key and the database superuser password in cleartext, and
 // both are 0700/0600 with an explicit chmod walk for trees an older dcctl created.
 
-// brokerRecordFile is the record's name inside ~/.devicechain/<instance>/.
+// brokerRecordFile is the record's name inside ~/.devicechain/instances/<instance>/.
 //
 // 🔴 IT MUST NOT MATCH looksLikeEscrow. A full `dcctl destroy` removes the instance
 // directory but SPARES anything whose name contains ".escrow", "rootkey" or "root-key" —
@@ -81,7 +81,7 @@ type brokerRecord struct {
 
 // brokerRecordPathFor resolves the record's path. A seam so tests never touch a real
 // instance's directory: every credential test runs with Instance "prod", and on a
-// maintainer's machine ~/.devicechain/prod holds live state.
+// maintainer's machine ~/.devicechain/instances/prod holds live state.
 var brokerRecordPathFor = func(instance string) (string, error) {
 	root, err := instanceRoot(instance)
 	if err != nil {

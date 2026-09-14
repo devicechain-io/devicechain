@@ -159,7 +159,7 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud, y el
    almacén de objetos al que ese plugin archiva) vía
    [terraform-exec](https://github.com/hashicorp/terraform-exec). El estado se guarda en
-   `~/.devicechain/<instance>/infra`, de modo que las ejecuciones posteriores son
+   `~/.devicechain/instances/<instance>/infra`, de modo que las ejecuciones posteriores son
    incrementales.
 9. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
    configuración** de la instancia —del que cada servicio lee sus credenciales y sus

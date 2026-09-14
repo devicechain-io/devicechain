@@ -127,7 +127,7 @@ func TestInstanceRecordRoundTrips(t *testing.T) {
 // that tightening is ever dropped.
 func TestInstanceRecordIsPrivateEvenInAPreExistingLooseTree(t *testing.T) {
 	home := fakeHome(t)
-	loose := filepath.Join(home, ".devicechain", "inst")
+	loose := filepath.Join(home, ".devicechain", "instances", "inst")
 	if err := os.MkdirAll(loose, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -181,8 +181,8 @@ func TestReadInstanceRecordReportsAMissingOneAsAState(t *testing.T) {
 func TestReadInstanceRecordRefusesAMismatchedName(t *testing.T) {
 	home := fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "one", Provider: "local", Cluster: "one", KubeContext: "kind-one", Managed: true})
-	src := filepath.Join(home, ".devicechain", "one", instanceRecordFile)
-	dstDir := filepath.Join(home, ".devicechain", "two")
+	src := filepath.Join(home, ".devicechain", "instances", "one", instanceRecordFile)
+	dstDir := filepath.Join(home, ".devicechain", "instances", "two")
 	if err := os.MkdirAll(dstDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -200,23 +200,24 @@ func TestReadInstanceRecordRefusesAMismatchedName(t *testing.T) {
 	}
 }
 
-// TestListInstancesSkipsEveryReservedSiblingAndSortsByName creates a directory for
-// EVERY name in the registry, not for the one this test was originally written
-// against. That is the difference that matters: the earlier version named the escrow
-// directory alone, so when ~/.devicechain/sims appeared it passed while `dcctl
-// instances list` reported the simulator record directory as an instance and
-// `destroy --all` cleared it.
-func TestListInstancesSkipsEveryReservedSiblingAndSortsByName(t *testing.T) {
+// TestListInstancesSeesOnlyWhatIsUnderInstancesAndSortsByName replaces a test that
+// had to enumerate a list of names to skip. Nesting removed the list: siblings are
+// peers of instances/, not of its contents, so nothing inside it needs excluding.
+//
+// The siblings are still CREATED here. Not because ListInstances has to skip them —
+// it never sees them — but because a reader who deletes them would not notice this
+// test still passing, and they are the reason the directory exists.
+func TestListInstancesSeesOnlyWhatIsUnderInstancesAndSortsByName(t *testing.T) {
 	home := fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "zeta", Provider: "local", Cluster: "zeta", KubeContext: "kind-zeta", Managed: true})
 	writeRecord(t, InstanceRecord{Instance: "alpha", Provider: "local", Cluster: "cluster-a", KubeContext: "kind-cluster-a", Managed: false})
 	// An instance directory with no record — the pre-record state D4 must keep visible.
-	if err := os.MkdirAll(filepath.Join(home, ".devicechain", "legacy"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".devicechain", "instances", "legacy"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	siblings := dcdir.ReservedNames()
+	siblings := dcdir.MemberNames()
 	if len(siblings) == 0 {
-		t.Fatal("the registry is empty, so this test asserts nothing")
+		t.Fatal("the inventory is empty, so this test asserts nothing")
 	}
 	for _, name := range siblings {
 		if err := os.MkdirAll(filepath.Join(home, ".devicechain", name), 0o700); err != nil {
@@ -234,7 +235,7 @@ func TestListInstancesSkipsEveryReservedSiblingAndSortsByName(t *testing.T) {
 	}
 	want := []string{"alpha", "legacy", "zeta"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
-		t.Fatalf("got %v, want %v (every reserved sibling %v must be skipped; order must be stable)",
+		t.Fatalf("got %v, want %v (siblings %v live beside instances/, never in it; order must be stable)",
 			names, want, siblings)
 	}
 	for _, k := range got {
@@ -415,7 +416,7 @@ func TestDestroyClearsLocalStateOnBothPaths(t *testing.T) {
 				}
 			})
 
-			rec := filepath.Join(home, ".devicechain", "inst", instanceRecordFile)
+			rec := filepath.Join(home, ".devicechain", "instances", "inst", instanceRecordFile)
 			if _, err := os.Stat(rec); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("the record survived a destroy (%v) — a rebuild would inherit it", err)
 			}
@@ -470,7 +471,7 @@ func TestDestroyClosingMessageMatchesWhatActuallyHappened(t *testing.T) {
 
 // 🔴 --dry-run must destroy nothing. The first cut put the adopted branch above the
 // dry-run guard, so `--dry-run` on any instance bootstrapped with --kube-context deleted
-// ~/.devicechain/<instance> — tfstate and all — under a flag that promises the opposite.
+// ~/.devicechain/instances/<instance> — tfstate and all — under a flag that promises the opposite.
 func TestDryRunDestroysNothingOnEveryPath(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -497,7 +498,7 @@ func TestDryRunDestroysNothingOnEveryPath(t *testing.T) {
 			if len(p.deleted) != 0 {
 				t.Errorf("--dry-run deleted a cluster: %+v", p.deleted)
 			}
-			if _, err := os.Stat(filepath.Join(home, ".devicechain", "inst", instanceRecordFile)); err != nil {
+			if _, err := os.Stat(filepath.Join(home, ".devicechain", "instances", "inst", instanceRecordFile)); err != nil {
 				t.Fatalf("--dry-run removed the instance's local state: %v", err)
 			}
 		})
@@ -520,7 +521,7 @@ func TestDestroyStopsWhenItCannotTellWhetherTheClusterExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failed existence check was treated as an answer")
 	}
-	if _, statErr := os.Stat(filepath.Join(home, ".devicechain", "inst", instanceRecordFile)); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(home, ".devicechain", "instances", "inst", instanceRecordFile)); statErr != nil {
 		t.Fatalf("local state was removed despite not knowing whether the cluster exists: %v", statErr)
 	}
 	if len(p.deleted) != 0 {
@@ -542,7 +543,7 @@ func TestAnUnreadableRecordRefusesRatherThanGuessing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := fakeHome(t)
-			dir := filepath.Join(home, ".devicechain", "harig")
+			dir := filepath.Join(home, ".devicechain", "instances", "harig")
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -599,7 +600,7 @@ func TestDecliningTheConfirmationChangesNothing(t *testing.T) {
 	if destroyErr != nil {
 		t.Errorf("declining is not a command failure: %v", destroyErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(home, ".devicechain", "harig", instanceRecordFile)); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(home, ".devicechain", "instances", "harig", instanceRecordFile)); statErr != nil {
 		t.Fatalf("declining still removed the instance's local state: %v", statErr)
 	}
 	if strings.Contains(out, "uninstalled;") {
@@ -623,7 +624,7 @@ func TestAnUnnamedAdoptedBindingIsNeverDeclaredGone(t *testing.T) {
 	if p.existsCalls != 0 {
 		t.Errorf("consulted ClusterExists for a binding with no cluster name (%d calls)", p.existsCalls)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".devicechain", "inst", instanceRecordFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".devicechain", "instances", "inst", instanceRecordFile)); err != nil {
 		t.Fatalf("cleared the state of an instance whose cluster it could not name: %v", err)
 	}
 }
@@ -638,7 +639,7 @@ func TestListInstancesReadsOnlyTheRecord(t *testing.T) {
 
 	// A neighbour holding something that must never be read, made UNREADABLE so that any
 	// attempt to open it fails loudly rather than succeeding quietly.
-	secret := filepath.Join(home, ".devicechain", "inst", "terraform.tfstate")
+	secret := filepath.Join(home, ".devicechain", "instances", "inst", "terraform.tfstate")
 	if err := os.WriteFile(secret, []byte(`{"password":"hunter2"}`), 0o000); err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +668,7 @@ func TestWriteInstanceRecordLeavesNoPartialFileBehind(t *testing.T) {
 	writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
 	writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c2", KubeContext: "kind-c2", Managed: true})
 
-	entries, err := os.ReadDir(filepath.Join(home, ".devicechain", "inst"))
+	entries, err := os.ReadDir(filepath.Join(home, ".devicechain", "instances", "inst"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,32 +686,35 @@ func TestWriteInstanceRecordLeavesNoPartialFileBehind(t *testing.T) {
 	}
 }
 
-// TestEveryReservedSiblingIsRefusedAsAnInstanceName is the other half of the
-// registry contract. ListInstances skipping a name and ValidateInstanceName
-// refusing it are two different protections, and a sibling in one but not the other
-// is still broken: skipped-but-acceptable means an operator can bootstrap an
-// instance on top of the directory and then never see it listed.
+// TestAnInstanceMayBeNamedAfterASibling is the inverse of the test it replaces, and
+// the inversion is the point of nesting.
 //
-// Driven from the registry rather than from a list here, because a list here is
-// exactly what fell behind — TestAnInstanceNamedEscrowIsRefused names one sibling,
-// was correct on the day it was written, and said nothing when a second appeared.
-func TestEveryReservedSiblingIsRefusedAsAnInstanceName(t *testing.T) {
-	names := dcdir.ReservedNames()
+// While instances sat directly under ~/.devicechain, a name matching a sibling had
+// to be REFUSED — in two hand-written lists that had to agree and did not, which is
+// how the simulator record directory came to be enumerated as an instance. An
+// instance now lives under instances/, so the two namespaces never meet and there is
+// nothing left to refuse. Keeping the refusal would be a guard whose reason is gone.
+func TestAnInstanceMayBeNamedAfterASibling(t *testing.T) {
+	fakeHome(t)
+
+	names := dcdir.MemberNames()
 	if len(names) == 0 {
-		t.Fatal("the registry is empty, so this test asserts nothing")
+		t.Fatal("the inventory is empty, so this test asserts nothing")
 	}
 	for _, name := range names {
-		err := ValidateInstanceName(name)
-		if err == nil {
-			t.Errorf("ValidateInstanceName(%q) accepted a reserved sibling", name)
-			continue
+		if err := ValidateInstanceName(name); err != nil {
+			t.Errorf("ValidateInstanceName(%q) still refuses a sibling name: %v", name, err)
 		}
-		// The refusal has to say what the name collides with. An operator who picked
-		// it does not know the directory exists, and "choose another name" without a
-		// reason reads as an arbitrary restriction.
-		what, _ := dcdir.Reserved(name)
-		if !strings.Contains(err.Error(), what) {
-			t.Errorf("ValidateInstanceName(%q) refused without naming %q: %v", name, what, err)
+		root, err := instanceRoot(name)
+		if err != nil {
+			t.Fatalf("instanceRoot(%q): %v", name, err)
+		}
+		sibling, err := dcdir.Sibling(name)
+		if err != nil {
+			t.Fatalf("Sibling(%q): %v", name, err)
+		}
+		if root == sibling {
+			t.Errorf("instance %q and the sibling of the same name are both %q", name, root)
 		}
 	}
 }

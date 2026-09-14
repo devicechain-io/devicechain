@@ -142,7 +142,7 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 	// 🔴 THE DRY-RUN GUARD SITS ABOVE EVERY BRANCH, AND IT MUST. An earlier version of
 	// this function put the adopted branch first and the guard after it, so
 	// `--dry-run` on any instance bootstrapped with --kube-context fell into the adopted
-	// path and REMOVED ~/.devicechain/<instance> — tfstate and all — under a flag whose
+	// path and REMOVED ~/.devicechain/instances/<instance> — tfstate and all — under a flag whose
 	// entire promise is "print what would happen without destroying anything". A flag
 	// that destroys is worse than no flag.
 	if opts.DryRun {
@@ -301,7 +301,7 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 //
 // Extracted so the ADOPTED path can reach it too. That path uninstalls the instance and
 // leaves somebody else's cluster running — but the OpenTofu state, the instance record
-// and everything else under ~/.devicechain/<instance> describe an instance that no
+// and everything else under ~/.devicechain/instances/<instance> describe an instance that no
 // longer exists, and leaving them behind is how nine orphaned state directories
 // accumulated on one machine with nothing able to report them.
 func removeInstanceState(opts DestroyOptions) error {

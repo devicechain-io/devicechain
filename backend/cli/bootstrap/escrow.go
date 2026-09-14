@@ -180,7 +180,7 @@ var (
 	// readDeployedBrokerRecord / storeBrokerRecord are the local bridge across the
 	// step-3/step-5 gap — see broker_record.go for why it exists and why it is a file.
 	// Indirected for the same reason as the two above and one more: every credential test
-	// runs with Instance "prod", so an unstubbed read would resolve ~/.devicechain/prod on
+	// runs with Instance "prod", so an unstubbed read would resolve ~/.devicechain/instances/prod on
 	// a maintainer's machine and silently consult a REAL instance's credentials.
 	readDeployedBrokerRecord = readBrokerRecord
 	storeBrokerRecord        = writeBrokerRecord
@@ -198,7 +198,7 @@ var (
 // DefaultEscrowPath returns where an instance's artifact is written by default:
 // ~/.devicechain/escrow/<instance>-rootkey.escrow.
 //
-// Deliberately NOT ~/.devicechain/<instance>/, which is where every other piece of
+// Deliberately NOT ~/.devicechain/instances/<instance>/, which is where every other piece of
 // per-instance state lives, because `dcctl destroy` removes that directory whole.
 // An escrow file there would be deleted by the command whose entire premise is that
 // the cluster is expendable — taking with it the only thing that could still make
@@ -337,7 +337,8 @@ func mustDefaultEscrowPath(instance string) string {
 }
 
 // pathIsWithin reports whether path is dir or lives beneath it. Both are cleaned
-// and made absolute first, so "~/.devicechain/inst/../escrow" is judged on where it
+// and made absolute first, so "~/.devicechain/instances/inst/../../escrow" is judged
+// on where it
 // actually lands rather than on how it was spelled.
 func pathIsWithin(path, dir string) (bool, error) {
 	absPath, err := filepath.Abs(path)
