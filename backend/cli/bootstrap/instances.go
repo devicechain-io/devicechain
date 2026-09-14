@@ -85,23 +85,46 @@ type ClusterBinding struct {
 	// dcctl somewhere BY NAME with --kube-context. That is the rig case, and the case
 	// that was actually broken.
 	Managed bool
+	// ClusterUID is the cluster's identity — the kube-system namespace UID, read by
+	// ClusterUID(). EMPTY where it was never read: a guessed binding knows nothing, and
+	// an instance bootstrapped before this field existed recorded nothing.
+	//
+	// 🔴 EMPTY AND DIFFERENT ARE NOT THE SAME ANSWER, and a consumer that collapses them
+	// repeats the defect this whole type was introduced to fix. "No UID recorded" is the
+	// pre-record state, where the honest move is to degrade loudly; "recorded, and it
+	// does not match the cluster in front of us" is knowledge that this is a DIFFERENT
+	// cluster wearing the same name. The first is BindingGuessed's shape, the second is
+	// BindingUnreadable's, and they were collapsed once before.
+	ClusterUID string
 }
 
 // InstanceRecord is what is persisted. Every field is an identifier, a flag or a
 // timestamp; see the security note above before adding one.
 type InstanceRecord struct {
-	Instance     string    `json:"instance"`
-	Provider     string    `json:"provider"`
-	Cluster      string    `json:"cluster,omitempty"`
-	KubeContext  string    `json:"kubeContext"`
-	Managed      bool      `json:"managed"`
+	Instance    string `json:"instance"`
+	Provider    string `json:"provider"`
+	Cluster     string `json:"cluster,omitempty"`
+	KubeContext string `json:"kubeContext"`
+	Managed     bool   `json:"managed"`
+	// ClusterUID is the cluster's identity; see ClusterBinding.ClusterUID. It clears the
+	// closed list above because a namespace UID IS an identifier — assigned by the API
+	// server, readable by anyone who can read the cluster, and a credential in no sense.
+	// Being printed with the rest of the record is the test that list is really about.
+	// Omitted when empty, so an instance from before this existed reads as silent rather
+	// than as a cluster whose identity is the empty string.
+	ClusterUID   string    `json:"clusterUid,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	DcctlVersion string    `json:"dcctlVersion,omitempty"`
 }
 
 // Binding returns the record's cluster half.
 func (r InstanceRecord) Binding() ClusterBinding {
-	return ClusterBinding{Cluster: r.Cluster, KubeContext: r.KubeContext, Managed: r.Managed}
+	return ClusterBinding{
+		Cluster:     r.Cluster,
+		KubeContext: r.KubeContext,
+		Managed:     r.Managed,
+		ClusterUID:  r.ClusterUID,
+	}
 }
 
 // maxInstanceNameLen is how long an instance name may be before its Helm release name
@@ -197,7 +220,7 @@ func WriteInstanceRecord(rec InstanceRecord) error {
 	if err != nil {
 		return err
 	}
-	return writeRecordFile(dir, append(b, '\n'))
+	return writeRecordFile(dir, instanceRecordFile, append(b, '\n'))
 }
 
 // writeRecordFile puts the record's bytes in place.
@@ -213,10 +236,13 @@ func WriteInstanceRecord(rec InstanceRecord) error {
 //
 // Split out because PriorLocalState.Restore puts a record BACK, and a rollback written
 // the non-atomic way would reintroduce the torn-write failure on the one path whose
-// whole job is leaving the disk in a state somebody can trust.
-func writeRecordFile(dir string, contents []byte) error {
-	path := filepath.Join(dir, instanceRecordFile)
-	tmp, err := os.CreateTemp(dir, instanceRecordFile+".*.tmp")
+// whole job is leaving the disk in a state somebody can trust. The cluster record in
+// cluster_identity.go is written through it too — every local record dcctl keeps is one
+// a half-write turns into a refusal, and a refusal is what sends a caller back to
+// guessing.
+func writeRecordFile(dir, name string, contents []byte) error {
+	path := filepath.Join(dir, name)
+	tmp, err := os.CreateTemp(dir, name+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -323,7 +349,7 @@ func (p PriorLocalState) Restore() (removed bool, err error) {
 			// instance whose state is gone would invent the phantom this removes.
 			return false, nil
 		}
-		return false, writeRecordFile(dir, p.record)
+		return false, writeRecordFile(dir, instanceRecordFile, p.record)
 	}
 
 	if p.dirExisted {

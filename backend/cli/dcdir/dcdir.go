@@ -8,6 +8,7 @@
 //
 //	~/.devicechain/
 //	  instances/<name>/   infra/  instance.json  broker-credentials.json
+//	  clusters/<uid>/     cluster.json
 //	  escrow/             <instance>-rootkey.escrow
 //	  sims/               <name>.json
 //
@@ -45,6 +46,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // DirName is the configuration directory's name under the operator's home. It is
@@ -64,6 +66,18 @@ const (
 	// path is published in the deployment docs, so it stays where it is.
 	Escrow = "escrow"
 
+	// Clusters holds one directory per cluster dcctl has installed prerequisites on.
+	//
+	// 🔴 IT IS KEYED ON THE CLUSTER'S IDENTITY, NEVER ON A NAME. A kind cluster
+	// deleted and recreated wears the same context name — `kind delete cluster` then
+	// `kind create cluster` produces byte-identical `kind-<name>` — while being a
+	// different cluster holding none of the resources the old state describes.
+	// Measured, not assumed: two rounds on one name gave kube-system UIDs
+	// 163e7f17-… and 446b60a1-…, each stable while its cluster lived. So the
+	// directory under here is named by the UID, and the context name is recorded
+	// INSIDE it for a human to read.
+	Clusters = "clusters"
+
 	// Sims holds `dcctl sim` records, one JSON file per simulator.
 	Sims = "sims"
 )
@@ -72,6 +86,7 @@ const (
 // what it holds, for messages and for the tests that keep this list honest.
 var members = map[string]string{
 	Instances: "the per-instance state directories",
+	Clusters:  "the per-cluster prerequisite state directories",
 	Escrow:    "the root-key escrow directory",
 	Sims:      "the simulator record directory",
 }
@@ -138,4 +153,33 @@ func Instance(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, name), nil
+}
+
+// Cluster returns ~/.devicechain/clusters/<uid>, without creating it.
+//
+// 🔴 UNLIKE Instance, THIS ONE VALIDATES, AND THE ASYMMETRY IS THE POINT. An instance
+// name is an operator's word that may already be on disk from an older dcctl, so
+// refusing one here would disarm the cleanup paths that have to remain able to remove
+// whatever is there. A cluster UID is not a word anybody chose: it is read back from
+// the API server, and every value this cannot build a path from — empty above all —
+// means the READ failed rather than that an unusual cluster was found. An empty uid
+// resolves to the clusters directory itself, which is every cluster's state rather
+// than one cluster's, and the caller that would then remove it is a caller acting on
+// a failure it did not notice.
+func Cluster(uid string) (string, error) {
+	switch {
+	case uid == "":
+		return "", fmt.Errorf(
+			"cluster identity is empty, so there is no per-cluster directory to name; " +
+				"this means reading the cluster's identity failed, not that the cluster has none")
+	case uid == "." || uid == "..":
+		return "", fmt.Errorf("cluster identity %q is not a usable directory name", uid)
+	case strings.ContainsAny(uid, `/\`) || strings.Contains(uid, ".."):
+		return "", fmt.Errorf("cluster identity %q may not contain a path separator or \"..\"", uid)
+	}
+	dir, err := Sibling(Clusters)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, uid), nil
 }

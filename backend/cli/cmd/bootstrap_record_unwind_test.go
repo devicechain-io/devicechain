@@ -130,7 +130,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 
 	// Where each of the four calls appears in the command's source. NoPos means "never
 	// called", which is the mutant this exists for.
-	var capture, write, run, unwind token.Pos
+	var capture, write, run, unwind, identify, writeCluster token.Pos
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -149,6 +149,10 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			capture = call.Pos()
 		case "WriteInstanceRecord":
 			write = call.Pos()
+		case "IdentifyCluster":
+			identify = call.Pos()
+		case "WriteClusterRecord":
+			writeCluster = call.Pos()
 		case "Run":
 			// NewDefaultPipeline().Run(...), matched through its receiver rather than by
 			// a name as common as "Run".
@@ -175,10 +179,37 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 				"leaves a record `dcctl instances list` shows and no dcctl path can clear", c.what)
 		}
 	}
+
+	// 🔴 THE IDENTITY READ IS IN THE SAME BOAT AND FOR THE SAME REASON. It happens in the
+	// RunE nothing can execute, so deleting the whole block compiles, passes every test in
+	// this module and changes no output an operator would notice — until something needs
+	// to know which cluster a record belongs to and the answer was never written down.
+	for _, c := range []struct {
+		what string
+		pos  token.Pos
+	}{
+		{"bootstrap.IdentifyCluster", identify},
+		{"bootstrap.WriteClusterRecord", writeCluster},
+	} {
+		if c.pos == token.NoPos {
+			t.Fatalf("the bootstrap command no longer calls %s, so nothing records which "+
+				"cluster this is — and a cluster rebuilt under the same name cannot be told "+
+				"from the one it replaced", c.what)
+		}
+	}
 	if capture > write {
 		t.Errorf("the record is captured at %s, after it is replaced at %s — the rollback "+
 			"would put back what this run itself wrote",
 			fset.Position(capture), fset.Position(write))
+	}
+	// The identity has to be READ before the record that carries it is WRITTEN. Both calls
+	// being present is not enough: with them the other way round the record is written
+	// from a variable that is still empty, which produces exactly the pre-identity record
+	// this is meant to replace — and nothing downstream can tell that apart from an
+	// instance that genuinely predates the field.
+	if identify > write {
+		t.Errorf("the cluster is identified at %s, after the instance record is written at "+
+			"%s — the record would carry no identity", fset.Position(identify), fset.Position(write))
 	}
 	if unwind < run {
 		t.Errorf("the rollback is decided at %s, before the pipeline runs at %s, so it cannot "+

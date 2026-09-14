@@ -134,6 +134,7 @@ func TestAnUnregisteredSiblingIsRefused(t *testing.T) {
 func TestNothingIsInventoriedThatDoesNotExist(t *testing.T) {
 	creators := map[string]string{
 		Instances: "bootstrap/tofu.go creates per-instance state directories there",
+		Clusters:  "bootstrap/cluster_identity.go writes a cluster record there",
 		Escrow:    "bootstrap/escrow.go writes root-key artifacts there",
 		Sims:      "sim/record.go keeps simulator records there",
 	}
@@ -146,6 +147,68 @@ func TestNothingIsInventoriedThatDoesNotExist(t *testing.T) {
 	for name := range creators {
 		if _, ok := Member(name); !ok {
 			t.Errorf("%q is created but not in the inventory", name)
+		}
+	}
+}
+
+// TestAClusterLivesUnderTheClustersDirectory is the instances property one sibling over:
+// a cluster's state is a level below clusters/, so it shares a namespace with no other
+// cluster's and with nothing else under the root.
+func TestAClusterLivesUnderTheClustersDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := Cluster("163e7f17-d87c-42fe-8bc0-e672e35f5ee7")
+	if err != nil {
+		t.Fatalf("Cluster: %v", err)
+	}
+	want := filepath.Join(home, ".devicechain", "clusters", "163e7f17-d87c-42fe-8bc0-e672e35f5ee7")
+	if got != want {
+		t.Fatalf("Cluster = %q, want %q", got, want)
+	}
+}
+
+// TestAnEmptyClusterIdentityIsRefused is the asymmetry with Instance, and it is the whole
+// reason Cluster validates at all.
+//
+// 🔴 THE EMPTY CASE IS THE ONE THAT MATTERS AND IT IS THE ONE THAT LOOKS HARMLESS. A
+// failed identity read hands the empty string onward; without this, filepath.Join folds
+// it away and the path resolves to the clusters directory ITSELF — so a caller that
+// meant to act on one cluster's state acts on every cluster's, having never been told
+// the read failed. The separator cases are the ordinary directory-traversal guard.
+func TestAnEmptyClusterIdentityIsRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	clusters, err := Sibling(Clusters)
+	if err != nil {
+		t.Fatalf("Sibling: %v", err)
+	}
+	for _, uid := range []string{"", ".", "..", "a/b", `a\b`, "../escape", "x/../y"} {
+		got, err := Cluster(uid)
+		if err == nil {
+			t.Errorf("Cluster(%q) = %q, want an error", uid, got)
+			if got == clusters {
+				t.Errorf("  and it resolved to the clusters directory itself, which is every cluster's state")
+			}
+		}
+	}
+}
+
+// TestAValidIdentityIsStillAccepted is the counterweight. A validator that refused
+// everything would pass the test above and break the only caller there is, so the shape
+// the API server actually returns is pinned here — both the UUIDs measured on a real
+// kind rebuild, which is where this key came from.
+func TestAValidIdentityIsStillAccepted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	for _, uid := range []string{
+		"163e7f17-d87c-42fe-8bc0-e672e35f5ee7",
+		"446b60a1-b6f8-4cf0-9e14-ced15bc26170",
+	} {
+		if _, err := Cluster(uid); err != nil {
+			t.Errorf("Cluster(%q): %v", uid, err)
 		}
 	}
 }
