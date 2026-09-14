@@ -132,6 +132,26 @@ say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# remove_instance_state deletes an instance's local state from BOTH layouts.
+#
+# 🔴 BOTH, AND THAT IS NOT BELT-AND-BRACES. Instances now live under
+# ~/.devicechain/instances/<name>; a dcctl predating that wrote ~/.devicechain/<name>,
+# and this rig runs both — it installs a BASELINE RELEASE and upgrades to the branch
+# build. Removing only one location leaves the other behind, and a leftover state
+# directory is precisely what makes the NEXT run's bootstrap incremental over
+# infrastructure that no longer exists.
+#
+# The name is checked before it is interpolated: ${HOME:?} guards the home directory
+# and says nothing about the instance, so an empty or path-shaped name would expand
+# to the whole tree.
+remove_instance_state() {
+  local name="${1:-}"
+  case "$name" in
+    "" | . | .. | */* | *\\*) fail "refusing to remove state for instance name '$name'" ;;
+  esac
+  rm -rf "${HOME:?}/.devicechain/instances/$name" "${HOME:?}/.devicechain/$name"
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
 need_all() {
   local t
@@ -1081,7 +1101,7 @@ so there is nothing holding the archive the restore would read."
   # A real disaster takes it too, and keeping it would make the rebuild a test of
   # `tofu apply` convergence rather than of a runbook an operator can follow on a
   # new laptop.
-  rm -rf "${HOME:?}/.devicechain/$instance"
+  remove_instance_state "$instance"
   note "kept (as an off-site copy would be): the $bucket_rdb archive, $escrow_file, $receipt_file"
 }
 
@@ -1731,7 +1751,7 @@ cmd_down() {
     say "removing the rig's working directory $work"
     rm -rf "${work:?}"
   fi
-  rm -rf "${HOME:?}/.devicechain/$instance"
+  remove_instance_state "$instance"
 }
 
 case "${1:-all}" in

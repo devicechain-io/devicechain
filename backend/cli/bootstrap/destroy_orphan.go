@@ -69,7 +69,7 @@ func uninstallOutcome(err error, resolveForeign func() error) error {
 // 🔴 THIS IS THE HALF OF THE FOREIGN-RELEASE GUARD THAT MAKES IT ACTIONABLE, AND
 // WITHOUT IT THE GUARD IS A TRAP. The refusal (foreignReleaseError) is correct and it
 // stops real data loss — but on its own it also strands the operator: destroyInstanceOnly
-// returns before removeInstanceState, so ~/.devicechain/<instance> survives, every re-run
+// returns before removeInstanceState, so ~/.devicechain/instances/<instance> survives, every re-run
 // of `dcctl destroy` meets the same refusal, and NO dcctl path clears the record.
 // `dcctl instances list` then reports the instance as running. The way in is ordinary: a
 // bootstrap writes its instance record BEFORE the pipeline (cmd/bootstrap.go), so any

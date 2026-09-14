@@ -156,7 +156,7 @@ func TestABackupAloneStillMoves(t *testing.T) {
 // TestTheSupersededRootConfigIsRemoved covers the other half of the layout
 // change, and it is the half a temporary directory could not have shown me.
 //
-// Found against a COPY of a real ~/.devicechain/<instance>/infra: after extract +
+// Found against a COPY of a real ~/.devicechain/instances/<instance>/infra: after extract +
 // relocate, five .tf files written by an older dcctl were still sitting at the top
 // with the state gone from under them. extractFS only writes, so nothing
 // overwrites a file the new tree no longer places there.

@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	// stateDirMode and stateFileMode keep ~/.devicechain/<instance> readable only
+	// stateDirMode and stateFileMode keep ~/.devicechain/instances/<instance> readable only
 	// by its owner. Same values, and the same reasoning, as escrowDirMode /
 	// escrowFileMode next door: the directory holds cleartext secrets, so the
 	// question is not whether anyone WOULD read it but whether they COULD.
@@ -598,7 +598,7 @@ func findTofu() (string, error) {
 	return "", fmt.Errorf("neither 'tofu' nor 'terraform' found on PATH; install OpenTofu (https://opentofu.org) and re-run")
 }
 
-// instanceRoot returns the per-instance state root (~/.devicechain/<instance>)
+// instanceRoot returns the per-instance state root (~/.devicechain/instances/<instance>)
 // without creating it — used by destroy to remove all persisted state for an
 // instance (tofu tfstate and friends).
 func instanceRoot(instance string) (string, error) {
@@ -612,15 +612,11 @@ func instanceRoot(instance string) (string, error) {
 	// So the name is validated where a NEW one enters (cmd/bootstrap.go) and again in
 	// WriteInstanceRecord, and never on the cleanup paths — because whatever is already
 	// on disk has to remain destroyable, including anything created before this existed.
-	root, err := dcdir.Root()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, instance), nil
+	return dcdir.Instance(instance)
 }
 
 // instanceStateDir returns a stable, per-instance directory under the user's
-// home for persistent bootstrap state (e.g. ~/.devicechain/<instance>/<sub>),
+// home for persistent bootstrap state (e.g. ~/.devicechain/instances/<instance>/<sub>),
 // creating it if necessary.
 //
 // 🔴 THE MODE IS THE PROTECTION, and it protects a file this code does not write.
@@ -640,7 +636,15 @@ func instanceStateDir(instance, sub string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(root, instance, sub)
+	instances, err := dcdir.Sibling(dcdir.Instances)
+	if err != nil {
+		return "", err
+	}
+	instanceDir, err := dcdir.Instance(instance)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(instanceDir, sub)
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return "", err
 	}
@@ -650,7 +654,8 @@ func instanceStateDir(instance, sub string) (string, error) {
 	// other instance, so it is worth owning.
 	for _, p := range []string{
 		root,
-		filepath.Join(root, instance),
+		instances,
+		instanceDir,
 		dir,
 	} {
 		if err := os.Chmod(p, stateDirMode); err != nil {
@@ -771,7 +776,7 @@ func relocateRootState(workdir, rootdir string) error {
 //
 // It is not a hypothetical invocation either. That directory is where hand-runs
 // were documented, and an operator debugging an instance goes to the directory
-// they know. MEASURED against a real instance's ~/.devicechain/<instance>/infra
+// they know. MEASURED against a real instance's ~/.devicechain/instances/<instance>/infra
 // during the layout change: after extract + relocate, five stale .tf files
 // remained at the top with the state gone from under them.
 //

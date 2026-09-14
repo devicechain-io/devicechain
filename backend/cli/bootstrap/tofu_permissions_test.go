@@ -10,7 +10,7 @@ import (
 	"testing/fstest"
 )
 
-// ~/.devicechain/<instance>/infra holds terraform.tfstate, and tfstate carries the
+// ~/.devicechain/instances/<instance>/infra holds terraform.tfstate, and tfstate carries the
 // database superuser password and the NATS server's TLS private key in cleartext.
 // These tests pin the permissions on the directory that holds it.
 //
@@ -28,17 +28,20 @@ func TestInstanceStateDirIsOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("instanceStateDir: %v", err)
 	}
-	want := filepath.Join(home, ".devicechain", "prod", "infra")
+	want := filepath.Join(home, ".devicechain", "instances", "prod", "infra")
 	if dir != want {
 		t.Fatalf("instanceStateDir = %q, want %q", dir, want)
 	}
 
-	// Every level, not just the leaf: a 0700 leaf under a 0755 parent is still
-	// private, but the parent holds the escrow artifacts and every other
-	// instance, and this is the only code that creates it.
+	// EVERY level, not just the leaf, and instances/ is named explicitly because it
+	// is the one a reader skips: a 0700 leaf under a 0755 parent is still private,
+	// but instances/ is traversable by anyone who can read it, and what sits beneath
+	// it is every instance's terraform.tfstate — the database superuser password and
+	// the broker's TLS private key, in cleartext.
 	for _, p := range []string{
 		filepath.Join(home, ".devicechain"),
-		filepath.Join(home, ".devicechain", "prod"),
+		filepath.Join(home, ".devicechain", "instances"),
+		filepath.Join(home, ".devicechain", "instances", "prod"),
 		dir,
 	} {
 		fi, err := os.Stat(p)
@@ -56,13 +59,14 @@ func TestInstanceStateDirTightensAnExistingLooseDirectory(t *testing.T) {
 
 	// The layout an older dcctl left behind: every level world-readable and
 	// world-traversable, with a state file already in it.
-	loose := filepath.Join(home, ".devicechain", "prod", "infra")
+	loose := filepath.Join(home, ".devicechain", "instances", "prod", "infra")
 	if err := os.MkdirAll(loose, 0o755); err != nil {
 		t.Fatalf("seeding the old layout: %v", err)
 	}
 	for _, p := range []string{
 		filepath.Join(home, ".devicechain"),
-		filepath.Join(home, ".devicechain", "prod"),
+		filepath.Join(home, ".devicechain", "instances"),
+		filepath.Join(home, ".devicechain", "instances", "prod"),
 		loose,
 	} {
 		if err := os.Chmod(p, 0o755); err != nil {
@@ -80,7 +84,8 @@ func TestInstanceStateDirTightensAnExistingLooseDirectory(t *testing.T) {
 
 	for _, p := range []string{
 		filepath.Join(home, ".devicechain"),
-		filepath.Join(home, ".devicechain", "prod"),
+		filepath.Join(home, ".devicechain", "instances"),
+		filepath.Join(home, ".devicechain", "instances", "prod"),
 		loose,
 	} {
 		fi, err := os.Stat(p)

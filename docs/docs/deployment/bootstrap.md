@@ -147,7 +147,7 @@ components`), so a failure names a step you can find here:
    operator and its Barman Cloud backup plugin, and the object store the backup
    plugin archives to) via
    [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
-   `~/.devicechain/<instance>/infra`, so subsequent runs are incremental.
+   `~/.devicechain/instances/<instance>/infra`, so subsequent runs are incremental.
 9. **Install instance (Helm)** — write the instance's **configuration document** — the one
    every service reads its credentials and endpoints from — and then deploy the Helm chart
    via the Helm Go SDK, blocking until the workloads are ready. That document is what makes

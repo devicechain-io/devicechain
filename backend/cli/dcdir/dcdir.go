@@ -2,34 +2,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package dcdir owns ~/.devicechain: the one spelling of the directory dcctl keeps
-// its local state in, and the registry of the names under it that are NOT instances.
+// its local state in, and the inventory of what dcctl puts directly inside it.
 //
-// # WHY A PACKAGE FOR A STRING
+// # THE LAYOUT, AND WHY INSTANCES ARE NESTED
 //
-// Everything under ~/.devicechain is a per-instance directory named after the
-// instance — except the SIBLINGS, which are named after what they hold. There were
-// two of those and nothing connecting them, which is how the second one broke.
+//	~/.devicechain/
+//	  instances/<name>/   infra/  instance.json  broker-credentials.json
+//	  escrow/             <instance>-rootkey.escrow
+//	  sims/               <name>.json
 //
-// A sibling has to be known in two places that have no reason to know about each
-// other: ValidateInstanceName must REFUSE it, so no instance can be bootstrapped on
-// top of it, and ListInstances must SKIP it, so it is not enumerated as an instance
-// that destroy will then act on. Both lists were written by hand, and `escrow` was
-// in both. `sims` — ~/.devicechain/sims, where dcctl sim keeps its records — was in
-// neither, because the package that creates it does not import the package that
-// enumerates them and nothing asked the question.
+// Instances used to sit directly under the root, as peers of escrow and sims. That
+// made an instance NAME and a directory name the same namespace, so every sibling
+// had to be known in two places that have no reason to know about each other:
+// ValidateInstanceName had to refuse it, and ListInstances had to skip it. Both
+// lists were written by hand, `escrow` was in both, and `sims` was in neither —
+// which meant `dcctl instances list` reported the simulator record directory as an
+// instance, and `dcctl destroy --all` counted it in the confirmation, guessed a
+// cluster from its name and cleared the directory.
 //
-// 🔴 WHAT THAT COST, MEASURED ON A REAL MACHINE RATHER THAN REASONED. `dcctl
-// instances list` reported `sims` as an instance with no record. `dcctl destroy
-// --all` therefore put it in the table, counted it in the confirmation the operator
-// answers, GUESSED its binding (GuessBinding is Managed:true, cluster `sims`), tried
-// to delete a kind cluster of that name, and called removeInstanceState on
-// ~/.devicechain/sims — which is every simulator record on the machine.
+// 🔑 NESTING MAKES THE DISTINCTION THE RESERVATION WAS GUARDING. An instance lives
+// under instances/, so it cannot collide with a sibling whatever it is called, and
+// ListInstances reads one directory in which everything IS an instance. There is no
+// list to fall behind, because there is no list.
 //
-// So the registry below is the single place a sibling is declared, both consumers
-// read it, and neither can fall behind the other. The literal ".devicechain" lives
-// here alone, enforced by TestOnlyThisPackageSpellsTheConfigDirectory, so a new
-// sibling cannot be created anywhere else without going through this file — where
-// the registry is the next thing the author reads.
+// 🔴 AND THERE IS DELIBERATELY NO MIGRATION FROM THE OLD LAYOUT. Moving whatever is
+// not a recognised sibling into instances/ is the obvious thing and it is wrong:
+// this registry knows the directories DCCTL creates, not the ones an operator does,
+// so a hand-made ~/.devicechain/notes would be swallowed by it. Pre-GA, an instance
+// from the old layout is destroyed and re-bootstrapped, which is the convention
+// already in force for schema changes. An operator who runs destroy against one gets
+// the GUESSING warning rather than a silent no-op, because nothing here reads the
+// old location at all.
+//
+// The literal ".devicechain" lives here alone, enforced by
+// TestOnlyThisPackageSpellsTheConfigDirectory, so nothing can be created under the
+// root without going through this file — where the inventory is the next thing the
+// author reads.
 package dcdir
 
 import (
@@ -43,39 +51,42 @@ import (
 // spelled here and nowhere else in non-test code; see the package comment.
 const DirName = ".devicechain"
 
-// The reserved siblings. Each is a directory under ~/.devicechain that holds
-// something other than an instance, so no instance may be named after it.
+// What dcctl puts directly under ~/.devicechain. This is the whole inventory:
+// anything else appearing there was not created by dcctl.
 const (
+	// Instances holds one directory per instance. Nesting them is what stops an
+	// instance name from colliding with a sibling; see the package comment.
+	Instances = "instances"
+
 	// Escrow holds root-key escrow artifacts, one per instance. It is deliberately
 	// NOT inside the per-instance directories, because `dcctl destroy` removes
-	// those whole and an escrow artifact must outlive the cluster it opens.
+	// those whole and an escrow artifact must outlive the cluster it opens. Its
+	// path is published in the deployment docs, so it stays where it is.
 	Escrow = "escrow"
 
 	// Sims holds `dcctl sim` records, one JSON file per simulator.
 	Sims = "sims"
 )
 
-// reserved maps each sibling to a noun phrase naming what it holds. The phrase is
-// used in the refusal an operator sees, so it reads as the end of "instance name
-// %q collides with ___ under ~/.devicechain".
-var reserved = map[string]string{
-	Escrow: "the root-key escrow directory",
-	Sims:   "the simulator record directory",
+// members maps each directory dcctl creates under the root to a noun phrase naming
+// what it holds, for messages and for the tests that keep this list honest.
+var members = map[string]string{
+	Instances: "the per-instance state directories",
+	Escrow:    "the root-key escrow directory",
+	Sims:      "the simulator record directory",
 }
 
-// Reserved reports whether name is a sibling rather than an instance, and if so
-// returns the phrase naming what it holds.
-func Reserved(name string) (string, bool) {
-	what, ok := reserved[name]
+// Member reports whether name is something dcctl creates directly under the root,
+// and if so returns the phrase naming what it holds.
+func Member(name string) (string, bool) {
+	what, ok := members[name]
 	return what, ok
 }
 
-// ReservedNames returns every reserved sibling, sorted. For callers that need to
-// enumerate rather than ask — chiefly the tests that hold the two consumers to
-// this one list.
-func ReservedNames() []string {
-	out := make([]string, 0, len(reserved))
-	for name := range reserved {
+// MemberNames returns the inventory, sorted.
+func MemberNames() []string {
+	out := make([]string, 0, len(members))
+	for name := range members {
 		out = append(out, name)
 	}
 	sort.Strings(out)
@@ -93,23 +104,38 @@ func Root() (string, error) {
 	return filepath.Join(home, DirName), nil
 }
 
-// Sibling returns the path of a reserved sibling, without creating it.
+// Sibling returns the path of one inventory member, without creating it.
 //
-// It REFUSES an unregistered name rather than building the path anyway. That is the
-// whole point of the package: a directory under ~/.devicechain that is not an
-// instance and not in the registry is the defect this exists to prevent, and a
-// helper that cheerfully returns a path for one would reintroduce it while looking
-// like it had been done properly.
+// It REFUSES a name that is not in the inventory rather than building the path
+// anyway. A directory appearing under the root that this package does not know
+// about is the thing the package exists to prevent, and a helper that cheerfully
+// returned a path for one would reintroduce it while looking careful.
 func Sibling(name string) (string, error) {
-	if _, ok := reserved[name]; !ok {
+	if _, ok := members[name]; !ok {
 		return "", fmt.Errorf(
-			"%q is not a registered ~/%s sibling; add it to the registry in dcdir, "+
-				"which is what makes instance-name validation and instance enumeration "+
-				"agree that it is not an instance", name, DirName)
+			"%q is not in dcdir's inventory of what lives under ~/%s; add it there, "+
+				"which is the one place that says what dcctl creates under the root",
+			name, DirName)
 	}
 	root, err := Root()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(root, name), nil
+}
+
+// Instance returns ~/.devicechain/instances/<name>, without creating it and
+// WITHOUT validating the name.
+//
+// 🔴 NOT VALIDATING IS DELIBERATE, and it is a correction carried over from this
+// path's previous home: callers on the cleanup paths read an error here as "no home
+// directory", so rejecting a name in this funnel silently disarms them. Whatever is
+// already on disk has to remain destroyable, including anything an older dcctl
+// created. A NEW name is validated where it enters.
+func Instance(name string) (string, error) {
+	dir, err := Sibling(Instances)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
 }

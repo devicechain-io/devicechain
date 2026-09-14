@@ -36,7 +36,7 @@ import (
 // it instead of guessing.
 //
 // 🔴 SECURITY: IDENTIFIERS ONLY, AND THE LIST IS CLOSED. This file sits in
-// ~/.devicechain/<instance>/, beside OpenTofu state that holds the database superuser
+// ~/.devicechain/instances/<instance>/, beside OpenTofu state that holds the database superuser
 // password and the broker's TLS PRIVATE KEY in cleartext (see instanceStateDir's comment
 // in tofu.go) — so the directory's threat model is already the highest there is, and these
 // identifiers are strictly less sensitive than their neighbours. What is NEW is that
@@ -45,7 +45,7 @@ import (
 // the listing must read this file and nothing else — a display field sourced from the
 // tfstate would be one path away from printing a private key to a terminal.
 
-// instanceRecordFile is the record's name inside ~/.devicechain/<instance>/.
+// instanceRecordFile is the record's name inside ~/.devicechain/instances/<instance>/.
 //
 // 🔴 IT MUST NOT MATCH looksLikeEscrow. A full `dcctl destroy` removes the instance
 // directory but SPARES every name containing ".escrow", "rootkey" or "root-key". A record
@@ -130,15 +130,6 @@ func (r InstanceRecord) Binding() ClusterBinding {
 // validator rather than against this constant.
 const maxInstanceNameLen = 50
 
-// reservedSibling returns the phrase naming what a reserved ~/.devicechain sibling
-// holds, or "" when the name is free for an instance. The registry is in dcdir
-// because the directories are created from two packages that do not import each
-// other; see that package's comment for what went wrong while each kept its own list.
-func reservedSibling(instance string) string {
-	what, _ := dcdir.Reserved(instance)
-	return what
-}
-
 func ValidateInstanceName(instance string) error {
 	switch {
 	case instance == "":
@@ -150,15 +141,6 @@ func ValidateInstanceName(instance string) error {
 				"Refusing here rather than in the Helm step, which runs after the declaration, "+
 				"the infrastructure and every credential have already been written",
 			instance, len(instance), maxInstanceNameLen)
-	case reservedSibling(instance) != "":
-		// Registry-driven rather than a case per name. This used to name the escrow
-		// directory alone, and the second sibling — ~/.devicechain/sims — was added by
-		// a package that had no reason to look at this function, so it was never
-		// refused here and never skipped by ListInstances either. Both now read the
-		// one list, so a third cannot be in one and not the other.
-		return fmt.Errorf(
-			"instance name %q collides with %s under ~/.devicechain; choose another name",
-			instance, reservedSibling(instance))
 	case instance == "." || instance == "..":
 		return fmt.Errorf("instance name %q is not a usable directory name", instance)
 	case strings.ContainsAny(instance, `/\`) || strings.Contains(instance, ".."):
@@ -253,7 +235,7 @@ func writeRecordFile(dir string, contents []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// PriorLocalState is what ~/.devicechain/<instance>/ held before a run wrote its record
+// PriorLocalState is what ~/.devicechain/instances/<instance>/ held before a run wrote its record
 // into it.
 //
 // 🔴 IT EXISTS FOR ONE FAILURE, AND THE REASON IS AN ORDERING NOBODY CAN CHANGE.
@@ -278,7 +260,7 @@ func writeRecordFile(dir string, contents []byte) error {
 // record this build cannot parse survives too.
 type PriorLocalState struct {
 	instance string
-	// dirExisted says whether ~/.devicechain/<instance> was there before the run. When
+	// dirExisted says whether ~/.devicechain/instances/<instance> was there before the run. When
 	// it was not, the whole directory is this run's and goes back with the record.
 	dirExisted bool
 	// record is the record file's contents, or nil when there was no record file.
@@ -409,7 +391,10 @@ type KnownInstance struct {
 // 🔴 IT READS ONLY instance.json. Nothing else in the instance directory is opened, and
 // that is a security property rather than an optimisation — see the file header.
 func ListInstances() ([]KnownInstance, error) {
-	root, err := dcdir.Root()
+	// One directory, in which everything IS an instance. There is no list of names
+	// to skip here any more, because there is nothing beside the instances to skip:
+	// escrow and sims are siblings of this directory, not of its contents.
+	root, err := dcdir.Sibling(dcdir.Instances)
 	if err != nil {
 		return nil, err
 	}
@@ -424,14 +409,6 @@ func ListInstances() ([]KnownInstance, error) {
 	var out []KnownInstance
 	for _, e := range entries {
 		if !e.IsDir() {
-			continue
-		}
-		// The reserved siblings are not instances. Listing one invents an instance
-		// that destroy will then act on: `--all` puts it in the table, counts it in
-		// the confirmation, GUESSES a Managed binding from its name, and clears the
-		// directory. For ~/.devicechain/sims that is every simulator record on the
-		// machine plus an attempt to delete a kind cluster called `sims`.
-		if _, reserved := dcdir.Reserved(e.Name()); reserved {
 			continue
 		}
 		known := KnownInstance{Instance: e.Name()}

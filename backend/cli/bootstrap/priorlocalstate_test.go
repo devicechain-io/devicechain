@@ -13,7 +13,7 @@ import (
 // Tests for the local record a refused second instance must not leave behind.
 //
 // 🔴 THE PHANTOM IS A MEASURED FAILURE, NOT A TIDINESS POINT. `dcctl bootstrap` writes
-// ~/.devicechain/<instance>/instance.json BEFORE the pipeline runs, so a run refused
+// ~/.devicechain/instances/<instance>/instance.json BEFORE the pipeline runs, so a run refused
 // three steps in has already recorded an instance that does not exist — and nothing can
 // clear it, because `dcctl destroy` returns on its own refusal before removeInstanceState.
 // It was cleared by hand the first time this was seen on a live cluster, and a hand-run
@@ -122,7 +122,7 @@ func TestARollbackRestoresTheRecordOfAnInstanceThatAlreadyExisted(t *testing.T) 
 // newer dcctl had written into it.
 func TestARollbackPutsBackARecordItCouldNotParse(t *testing.T) {
 	home := fakeHome(t)
-	dir := filepath.Join(home, ".devicechain", "bravo")
+	dir := filepath.Join(home, ".devicechain", "instances", "bravo")
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestARollbackPutsBackARecordItCouldNotParse(t *testing.T) {
 // goes.
 func TestARollbackLeavesADirectoryItDidNotCreate(t *testing.T) {
 	home := fakeHome(t)
-	dir := filepath.Join(home, ".devicechain", "bravo")
+	dir := filepath.Join(home, ".devicechain", "instances", "bravo")
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestARollbackSparesRootKeyEscrowMaterialAndKeepsTheDirectoryHoldingIt(t *te
 	if err := WriteInstanceRecord(aRecordFor("bravo", "alpha-cluster")); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(home, ".devicechain", "bravo")
+	dir := filepath.Join(home, ".devicechain", "instances", "bravo")
 	artifact := filepath.Join(dir, "bravo.escrow")
 	if err := os.WriteFile(artifact, []byte("sealed"), stateFileMode); err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestAnUnreadableCaptureRestoresNothing(t *testing.T) {
 	if err != nil || removed {
 		t.Fatalf("Restore() = %v, %v on a state that was never captured", removed, err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".devicechain", "bravo", instanceRecordFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".devicechain", "instances", "bravo", instanceRecordFile)); err != nil {
 		t.Errorf("a rollback with nothing to roll back to removed a live record anyway: %v", err)
 	}
 }

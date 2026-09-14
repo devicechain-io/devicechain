@@ -134,7 +134,7 @@ func TestTheRecordIsReplacedWholeAndStaysPrivate(t *testing.T) {
 	if err := writeBrokerRecord("prod", first); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
-	path := filepath.Join(home, ".devicechain", "prod", brokerRecordFile)
+	path := filepath.Join(home, ".devicechain", "instances", "prod", brokerRecordFile)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
