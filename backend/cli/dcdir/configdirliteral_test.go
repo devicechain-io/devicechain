@@ -151,6 +151,13 @@ func TestOnlyThisPackageSpellsTheConfigDirectory(t *testing.T) {
 // The fixture is a real file under testdata/, not a string built here, so it also
 // proves the walk's file selection: it is found by the same extension test and the
 // same parse that the live run uses.
+//
+// The count is 2 and not 3 because that tree holds a NESTED testdata directory with
+// an offender in it, which the walk must skip. That nesting is doing real work: the
+// live run already exempts dcdir, and dcdir's testdata sits inside it, so without a
+// testdata tree somewhere the exemption does not cover, dropping the testdata skip
+// would be undetectable — while other packages in this module do keep testdata of
+// their own, and a fixture there is allowed to spell any path it likes.
 func TestTheConfigDirectoryGuardCanFail(t *testing.T) {
 	planted := filepath.Join("testdata", "unregistered")
 	found, err := findConfigDirLiterals(planted, func(string) bool { return false })
