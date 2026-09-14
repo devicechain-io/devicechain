@@ -104,7 +104,8 @@ func TestInstanceRecordRoundTrips(t *testing.T) {
 	want := InstanceRecord{
 		Instance: "harig", Provider: "local", Cluster: "devicechain-ha",
 		KubeContext: "kind-devicechain-ha", Managed: false,
-		CreatedAt: time.Now().UTC().Truncate(time.Second), DcctlVersion: "test",
+		ClusterUID: "163e7f17-d87c-42fe-8bc0-e672e35f5ee7",
+		CreatedAt:  time.Now().UTC().Truncate(time.Second), DcctlVersion: "test",
 	}
 	writeRecord(t, want)
 
@@ -112,7 +113,12 @@ func TestInstanceRecordRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadInstanceRecord: %v", err)
 	}
-	if got.Cluster != want.Cluster || got.KubeContext != want.KubeContext || got.Managed != want.Managed {
+	// 🔴 NAMED ONE BY ONE, WHICH MEANS A NEW FIELD IS INVISIBLE HERE UNTIL IT IS NAMED.
+	// ClusterUID was added to the record without this line and every assertion still
+	// passed — a comparison that lists what it already knew about cannot notice what the
+	// change made newly true.
+	if got.Cluster != want.Cluster || got.KubeContext != want.KubeContext ||
+		got.Managed != want.Managed || got.ClusterUID != want.ClusterUID {
 		t.Fatalf("round-trip lost the binding: got %+v want %+v", got, want)
 	}
 	if !got.CreatedAt.Equal(want.CreatedAt) {

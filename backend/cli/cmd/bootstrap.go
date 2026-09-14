@@ -452,6 +452,43 @@ var bootstrapCmd = &cobra.Command{
 		// is about to write describes nothing — and nothing else can clear it, because a
 		// `dcctl destroy` refusal returns before removeInstanceState. See PriorLocalState
 		// for why this restores rather than deletes.
+		// The cluster's identity is read HERE, in the same breath as the binding, because
+		// this is the last moment it is guaranteed readable. It lives in the cluster, and
+		// the paths that will need it most — anything clearing local state — run when the
+		// cluster is being deleted or is already gone. `dcctl destroy` deletes the cluster
+		// and THEN clears state, and has a whole branch for a cluster that had vanished
+		// before the command ran. So it is written down while it can be read, exactly as
+		// the cluster NAME is, and for the same reason.
+		//
+		// A failure is a WARNING for the same reason a failed record is: the cluster is up
+		// by now, and refusing to finish a bring-up over a bookkeeping read would trade a
+		// loud degradation for a broken install. What is lost is knowing this cluster from
+		// the next one to wear its name — which is what dcctl had for every cluster until
+		// now, so the degradation is to the status quo rather than below it.
+		var clusterUID string
+		if !opts.DryRun {
+			if uid, err := bootstrap.IdentifyCluster(ctx, binding.KubeContext); err != nil {
+				fmt.Println(color.YellowString(
+					"warning: could not read the identity of cluster %s (%v).\n"+
+						"  Its local state will be recorded without it, so a cluster rebuilt under this\n"+
+						"  name cannot later be told apart from this one.", binding.Describe(), err))
+			} else {
+				clusterUID = uid
+				binding.ClusterUID = uid
+				rec := bootstrap.ClusterRecord{
+					UID:          uid,
+					Cluster:      binding.Cluster,
+					KubeContext:  binding.KubeContext,
+					FirstSeenAt:  time.Now().UTC(),
+					DcctlVersion: Version,
+				}
+				if err := bootstrap.WriteClusterRecord(rec); err != nil {
+					fmt.Println(color.YellowString(
+						"warning: could not record what is known about cluster %s (%v).", binding.Describe(), err))
+				}
+			}
+		}
+
 		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
@@ -460,6 +497,7 @@ var bootstrapCmd = &cobra.Command{
 				Cluster:      binding.Cluster,
 				KubeContext:  binding.KubeContext,
 				Managed:      binding.Managed,
+				ClusterUID:   clusterUID,
 				CreatedAt:    time.Now().UTC(),
 				DcctlVersion: Version,
 			}
