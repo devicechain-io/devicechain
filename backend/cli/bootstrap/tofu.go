@@ -16,6 +16,7 @@ import (
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
@@ -611,11 +612,11 @@ func instanceRoot(instance string) (string, error) {
 	// So the name is validated where a NEW one enters (cmd/bootstrap.go) and again in
 	// WriteInstanceRecord, and never on the cleanup paths — because whatever is already
 	// on disk has to remain destroyable, including anything created before this existed.
-	home, err := os.UserHomeDir()
+	root, err := dcdir.Root()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".devicechain", instance), nil
+	return filepath.Join(root, instance), nil
 }
 
 // instanceStateDir returns a stable, per-instance directory under the user's
@@ -635,11 +636,11 @@ func instanceRoot(instance string) (string, error) {
 // stayed world-readable while the code claimed otherwise. Hence the explicit walk
 // back down over each level.
 func instanceStateDir(instance, sub string) (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := dcdir.Root()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".devicechain", instance, sub)
+	dir := filepath.Join(root, instance, sub)
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return "", err
 	}
@@ -648,8 +649,8 @@ func instanceStateDir(instance, sub string) (string, error) {
 	// still private — but the parent also holds the escrow directory and every
 	// other instance, so it is worth owning.
 	for _, p := range []string{
-		filepath.Join(home, ".devicechain"),
-		filepath.Join(home, ".devicechain", instance),
+		root,
+		filepath.Join(root, instance),
 		dir,
 	} {
 		if err := os.Chmod(p, stateDirMode); err != nil {

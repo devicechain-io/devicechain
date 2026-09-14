@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/devicechain-io/dcctl/dcdir"
 )
 
 // Endpoints mirrors dc-simulator/sim.Endpoints exactly (the handshake wire
@@ -117,12 +119,19 @@ func GeneratePassword() (string, error) {
 }
 
 // stateDir is ~/.devicechain/sims, where sim records live.
+//
+// It goes through dcdir rather than joining the path here, and that is the whole
+// reason dcdir exists: this directory is a SIBLING of the per-instance directories,
+// so `dcctl instances list` must skip it and `dcctl bootstrap` must refuse it as an
+// instance name. Neither of those lives in this package, and while the path was
+// spelled here neither knew about it — so the directory holding every simulator
+// record was enumerated as an instance and destroyed by `dcctl destroy --all`.
 func stateDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := dcdir.Sibling(dcdir.Sims)
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", fmt.Errorf("resolve sim state dir: %w", err)
 	}
-	return filepath.Join(home, ".devicechain", "sims"), nil
+	return dir, nil
 }
 
 // RecordPath is the on-disk path of a sim's record/handshake file.

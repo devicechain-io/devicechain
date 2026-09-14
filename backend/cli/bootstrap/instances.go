@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dcctl/dcdir"
 )
 
 // The instance record: which cluster a DeviceChain instance was bootstrapped into.
@@ -128,6 +130,15 @@ func (r InstanceRecord) Binding() ClusterBinding {
 // validator rather than against this constant.
 const maxInstanceNameLen = 50
 
+// reservedSibling returns the phrase naming what a reserved ~/.devicechain sibling
+// holds, or "" when the name is free for an instance. The registry is in dcdir
+// because the directories are created from two packages that do not import each
+// other; see that package's comment for what went wrong while each kept its own list.
+func reservedSibling(instance string) string {
+	what, _ := dcdir.Reserved(instance)
+	return what
+}
+
 func ValidateInstanceName(instance string) error {
 	switch {
 	case instance == "":
@@ -139,10 +150,15 @@ func ValidateInstanceName(instance string) error {
 				"Refusing here rather than in the Helm step, which runs after the declaration, "+
 				"the infrastructure and every credential have already been written",
 			instance, len(instance), maxInstanceNameLen)
-	case instance == escrowDirName:
+	case reservedSibling(instance) != "":
+		// Registry-driven rather than a case per name. This used to name the escrow
+		// directory alone, and the second sibling — ~/.devicechain/sims — was added by
+		// a package that had no reason to look at this function, so it was never
+		// refused here and never skipped by ListInstances either. Both now read the
+		// one list, so a third cannot be in one and not the other.
 		return fmt.Errorf(
-			"instance name %q collides with the root-key escrow directory under ~/.devicechain; choose another name",
-			instance)
+			"instance name %q collides with %s under ~/.devicechain; choose another name",
+			instance, reservedSibling(instance))
 	case instance == "." || instance == "..":
 		return fmt.Errorf("instance name %q is not a usable directory name", instance)
 	case strings.ContainsAny(instance, `/\`) || strings.Contains(instance, ".."):
@@ -393,11 +409,10 @@ type KnownInstance struct {
 // 🔴 IT READS ONLY instance.json. Nothing else in the instance directory is opened, and
 // that is a security property rather than an optimisation — see the file header.
 func ListInstances() ([]KnownInstance, error) {
-	home, err := os.UserHomeDir()
+	root, err := dcdir.Root()
 	if err != nil {
 		return nil, err
 	}
-	root := filepath.Join(home, ".devicechain")
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -411,9 +426,12 @@ func ListInstances() ([]KnownInstance, error) {
 		if !e.IsDir() {
 			continue
 		}
-		// The escrow directory is a sibling of the instance directories, not one of
-		// them. Listing it as an instance would invent one that cannot be destroyed.
-		if e.Name() == escrowDirName {
+		// The reserved siblings are not instances. Listing one invents an instance
+		// that destroy will then act on: `--all` puts it in the table, counts it in
+		// the confirmation, GUESSES a Managed binding from its name, and clears the
+		// directory. For ~/.devicechain/sims that is every simulator record on the
+		// machine plus an attempt to delete a kind cluster called `sims`.
+		if _, reserved := dcdir.Reserved(e.Name()); reserved {
 			continue
 		}
 		known := KnownInstance{Instance: e.Name()}

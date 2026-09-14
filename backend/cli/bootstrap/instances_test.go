@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dcctl/dcdir"
 )
 
 // Tests for the instance record and the destroy paths it drives.
@@ -198,7 +200,13 @@ func TestReadInstanceRecordRefusesAMismatchedName(t *testing.T) {
 	}
 }
 
-func TestListInstancesSkipsEscrowAndSortsByName(t *testing.T) {
+// TestListInstancesSkipsEveryReservedSiblingAndSortsByName creates a directory for
+// EVERY name in the registry, not for the one this test was originally written
+// against. That is the difference that matters: the earlier version named the escrow
+// directory alone, so when ~/.devicechain/sims appeared it passed while `dcctl
+// instances list` reported the simulator record directory as an instance and
+// `destroy --all` cleared it.
+func TestListInstancesSkipsEveryReservedSiblingAndSortsByName(t *testing.T) {
 	home := fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "zeta", Provider: "local", Cluster: "zeta", KubeContext: "kind-zeta", Managed: true})
 	writeRecord(t, InstanceRecord{Instance: "alpha", Provider: "local", Cluster: "cluster-a", KubeContext: "kind-cluster-a", Managed: false})
@@ -206,9 +214,14 @@ func TestListInstancesSkipsEscrowAndSortsByName(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".devicechain", "legacy"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// The escrow directory is a SIBLING of the instances, not one of them.
-	if err := os.MkdirAll(filepath.Join(home, ".devicechain", escrowDirName), 0o700); err != nil {
-		t.Fatal(err)
+	siblings := dcdir.ReservedNames()
+	if len(siblings) == 0 {
+		t.Fatal("the registry is empty, so this test asserts nothing")
+	}
+	for _, name := range siblings {
+		if err := os.MkdirAll(filepath.Join(home, ".devicechain", name), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	got, err := ListInstances()
@@ -221,7 +234,8 @@ func TestListInstancesSkipsEscrowAndSortsByName(t *testing.T) {
 	}
 	want := []string{"alpha", "legacy", "zeta"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
-		t.Fatalf("got %v, want %v (escrow must be skipped; order must be stable)", names, want)
+		t.Fatalf("got %v, want %v (every reserved sibling %v must be skipped; order must be stable)",
+			names, want, siblings)
 	}
 	for _, k := range got {
 		switch k.Instance {
@@ -668,5 +682,35 @@ func TestWriteInstanceRecordLeavesNoPartialFileBehind(t *testing.T) {
 	}
 	if rec.Cluster != "c2" {
 		t.Errorf("rewrite did not take effect: %+v", rec)
+	}
+}
+
+// TestEveryReservedSiblingIsRefusedAsAnInstanceName is the other half of the
+// registry contract. ListInstances skipping a name and ValidateInstanceName
+// refusing it are two different protections, and a sibling in one but not the other
+// is still broken: skipped-but-acceptable means an operator can bootstrap an
+// instance on top of the directory and then never see it listed.
+//
+// Driven from the registry rather than from a list here, because a list here is
+// exactly what fell behind — TestAnInstanceNamedEscrowIsRefused names one sibling,
+// was correct on the day it was written, and said nothing when a second appeared.
+func TestEveryReservedSiblingIsRefusedAsAnInstanceName(t *testing.T) {
+	names := dcdir.ReservedNames()
+	if len(names) == 0 {
+		t.Fatal("the registry is empty, so this test asserts nothing")
+	}
+	for _, name := range names {
+		err := ValidateInstanceName(name)
+		if err == nil {
+			t.Errorf("ValidateInstanceName(%q) accepted a reserved sibling", name)
+			continue
+		}
+		// The refusal has to say what the name collides with. An operator who picked
+		// it does not know the directory exists, and "choose another name" without a
+		// reason reads as an arbitrary restriction.
+		what, _ := dcdir.Reserved(name)
+		if !strings.Contains(err.Error(), what) {
+			t.Errorf("ValidateInstanceName(%q) refused without naming %q: %v", name, what, err)
+		}
 	}
 }

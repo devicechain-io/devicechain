@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,11 +60,6 @@ const (
 	// shared box gives an attacker unlimited offline guesses at that passphrase.
 	escrowFileMode = 0o600
 	escrowDirMode  = 0o700
-
-	// escrowDirName is the SIBLING of the per-instance directories under
-	// ~/.devicechain, not one of them. Named here because ListInstances has to skip it:
-	// enumerating it as an instance would invent one that no destroy can act on.
-	escrowDirName = "escrow"
 )
 
 // EscrowFlags is the raw operator input, before any of it has been reconciled.
@@ -208,11 +204,11 @@ var (
 // the cluster is expendable — taking with it the only thing that could still make
 // sense of the database backup the operator kept.
 func DefaultEscrowPath(instance string) (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := dcdir.Sibling(dcdir.Escrow)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".devicechain", escrowDirName, instance+"-rootkey"+EscrowFileExt), nil
+	return filepath.Join(dir, instance+"-rootkey"+EscrowFileExt), nil
 }
 
 // ResolveEscrowPlan reconciles the flags into a plan, reading and opening a restore
@@ -337,7 +333,7 @@ func mustDefaultEscrowPath(instance string) string {
 	if p, err := DefaultEscrowPath(instance); err == nil {
 		return p
 	}
-	return filepath.Join(".devicechain", escrowDirName, instance+"-rootkey"+EscrowFileExt)
+	return filepath.Join(dcdir.DirName, dcdir.Escrow, instance+"-rootkey"+EscrowFileExt)
 }
 
 // pathIsWithin reports whether path is dir or lives beneath it. Both are cleaned
