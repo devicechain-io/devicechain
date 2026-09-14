@@ -149,10 +149,10 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 		switch {
 		case !binding.Managed:
 			wouldDo(fmt.Sprintf(
-				"uninstall instance %q and remove ~/.devicechain/%s, LEAVING cluster %q running",
+				"uninstall instance %q and remove ~/.devicechain/instances/%s, LEAVING cluster %q running",
 				opts.Instance, opts.Instance, binding.describe()))
 		default:
-			wouldDo(fmt.Sprintf("delete cluster %q and remove ~/.devicechain/%s", binding.describe(), opts.Instance))
+			wouldDo(fmt.Sprintf("delete cluster %q and remove ~/.devicechain/instances/%s", binding.describe(), opts.Instance))
 		}
 		if opts.PurgeRegistry {
 			wouldDo("remove the shared local image registry container")
@@ -305,7 +305,7 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 // longer exists, and leaving them behind is how nine orphaned state directories
 // accumulated on one machine with nothing able to report them.
 func removeInstanceState(opts DestroyOptions) error {
-	doing(fmt.Sprintf("removing local state (~/.devicechain/%s)", opts.Instance))
+	doing(fmt.Sprintf("removing local state (~/.devicechain/instances/%s)", opts.Instance))
 	var keptEscrow []string
 	var removeErr error
 	if dir, err := instanceRoot(opts.Instance); err == nil {
@@ -353,6 +353,6 @@ func refuseUnreadable(source BindingSource, instance string) error {
 		"instance %q has a cluster record that cannot be read, so which cluster it lives in is unknown.\n"+
 			"  Refusing to fall back to guessing %q from the instance name — that guess would delete whatever cluster\n"+
 			"  happens to carry that name. Either pass --kube-context to say where it is, or remove\n"+
-			"  ~/.devicechain/%s/%s to accept the guess deliberately",
+			"  ~/.devicechain/instances/%s/%s to accept the guess deliberately",
 		instance, instance, instance, instanceRecordFile)
 }

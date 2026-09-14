@@ -59,7 +59,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ha_cluster="devicechain-ha"
 control_cluster="devicechain-ha-control"
 # Instance names, and they are NOT both "default" for a reason that is easy to
-# miss: dcctl keeps OpenTofu state per INSTANCE (~/.devicechain/<instance>/infra),
+# miss: dcctl keeps OpenTofu state per INSTANCE (~/.devicechain/instances/<instance>/infra),
 # not per cluster. Two instances of the same name on two clusters share one state
 # directory, so bootstrapping the control would reconcile the rig cluster's
 # recorded infrastructure against a different cluster entirely. Distinct names

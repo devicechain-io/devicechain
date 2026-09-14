@@ -529,7 +529,7 @@ func unwindLocalRecordOnSecondInstance(opts bootstrap.Options, prior bootstrap.P
 		fmt.Println(color.YellowString(
 			"warning: could not undo the local record this run wrote for %q (%v).\n"+
 				"  `dcctl instances list` will show it even though nothing was installed; "+
-				"remove ~/.devicechain/%s by hand.", opts.Instance, err, opts.Instance))
+				"remove ~/.devicechain/instances/%s by hand.", opts.Instance, err, opts.Instance))
 		return
 	}
 	if removed {

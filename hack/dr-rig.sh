@@ -235,8 +235,8 @@ stores=(rdb tsdb)
 
 # The rig's working directory stands in for OFF-SITE storage: the escrow artifact,
 # the receipt and the object store's credentials all have to survive the
-# destruction of both the cluster and ~/.devicechain/<instance>. It therefore lives
-# outside both, and `disaster` deliberately does not touch it.
+# destruction of both the cluster and ~/.devicechain/instances/<instance>. It
+# therefore lives outside both, and `disaster` deliberately does not touch it.
 work="${DC_DR_WORK:-$HOME/.devicechain-dr-rig}"
 escrow_file="$work/rootkey.escrow"
 decoy_file="$work/decoy.escrow"
@@ -1097,7 +1097,7 @@ so there is nothing holding the archive the restore would read."
 
   say "SIMULATING TOTAL LOSS of the cluster and the local instance state"
   delete_cluster
-  # ~/.devicechain/<instance> holds the OpenTofu state and nothing recoverable.
+  # ~/.devicechain/instances/<instance> holds the OpenTofu state and nothing recoverable.
   # A real disaster takes it too, and keeping it would make the rebuild a test of
   # `tofu apply` convergence rather than of a runbook an operator can follow on a
   # new laptop.

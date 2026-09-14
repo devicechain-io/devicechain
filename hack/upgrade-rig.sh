@@ -321,7 +321,7 @@ helm_chart_prefix="devicechain-"
 kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
 
 # The instance name is NOT "default", for the reason the HA rig gives: dcctl keeps
-# OpenTofu state per INSTANCE (~/.devicechain/<instance>/infra), not per cluster,
+# OpenTofu state per INSTANCE (~/.devicechain/instances/<instance>/infra), not per cluster,
 # so a shared name would reconcile this rig's recorded infrastructure against a
 # developer's own cluster.
 instance="${DC_INSTANCE:-upgrig}"

@@ -11,7 +11,7 @@ import "fmt"
 // Prose names the directory to a human and builds nothing. It belongs in whichever
 // file prints it, not in dcdir.
 func Prose(instance string) string {
-	return fmt.Sprintf("removing local state (~/.devicechain/%s)", instance)
+	return fmt.Sprintf("removing local state (~/.devicechain/instances/%s)", instance)
 }
 
 // Domain is the near-miss that matters: an address containing the same characters

@@ -104,19 +104,6 @@ func (r InstanceRecord) Binding() ClusterBinding {
 	return ClusterBinding{Cluster: r.Cluster, KubeContext: r.KubeContext, Managed: r.Managed}
 }
 
-// ValidateInstanceName rejects names that cannot safely become a directory under
-// ~/.devicechain.
-//
-// 🔴 THERE WAS NO VALIDATION ANYWHERE, and the record widened what that costs. An
-// instance called "escrow" writes its record INTO the escrow directory — where destroy
-// deliberately spares everything, and where ListInstances deliberately does not look — so
-// it would be invisible to `instances list`, skipped by `destroy --all`, and its record
-// would outlive it to be inherited by the next instance of that name. A name containing a
-// separator or ".." escapes the directory altogether, and an empty one resolves to
-// ~/.devicechain itself, which a destroy would then try to remove wholesale.
-//
-// Deliberately strict rather than clever: these are directory names on one machine, and
-// nothing is lost by requiring them to look like identifiers.
 // maxInstanceNameLen is how long an instance name may be before its Helm release name
 // stops being one.
 //
@@ -130,6 +117,25 @@ func (r InstanceRecord) Binding() ClusterBinding {
 // validator rather than against this constant.
 const maxInstanceNameLen = 50
 
+// ValidateInstanceName rejects names that cannot safely become a directory under
+// ~/.devicechain/instances.
+//
+// 🔴 THERE WAS NO VALIDATION ANYWHERE, and what that costs is now smaller than it was
+// but not zero. A name containing a separator or ".." escapes the directory altogether,
+// and an empty one resolves to the instances directory itself, which a destroy would
+// then try to remove wholesale — taking every other instance with it.
+//
+// 🔑 THE COLLISION HALF OF THIS IS GONE, AND THE REASON IS STRUCTURAL RATHER THAN
+// ENFORCED HERE. While instances sat directly under the root, a name like "escrow"
+// aimed an instance at a sibling dcctl owns, so this function had to reserve each
+// sibling by hand and ListInstances had to skip the same names — two lists that
+// disagreed. Nesting under instances/ put instance names in their own namespace, so
+// there is nothing left to reserve. Do not add a reservation case back here; add the
+// directory to dcdir's inventory instead, where it is a sibling of instances/ and
+// cannot collide with anything in it.
+//
+// Deliberately strict rather than clever: these are directory names on one machine, and
+// nothing is lost by requiring them to look like identifiers.
 func ValidateInstanceName(instance string) error {
 	switch {
 	case instance == "":
@@ -171,16 +177,18 @@ func instanceRecordPath(instance string) (string, error) {
 // CORRECT the record, and a record that only ever accumulated would preserve the very
 // staleness this exists to remove.
 func WriteInstanceRecord(rec InstanceRecord) error {
+	// Validating here is defence in depth behind cmd/bootstrap.go's own check. What it
+	// still buys is narrower than it was: a name can no longer aim a record at a sibling
+	// dcctl owns, because instances/ is a level below them — but a name carrying a
+	// separator still escapes the tree, and an empty one still resolves to the instances
+	// directory itself, which is every instance rather than none.
+	if err := ValidateInstanceName(rec.Instance); err != nil {
+		return err
+	}
 	// instanceStateDir does the chmod walk back down every level, which matters for a
 	// tree an older dcctl created at 0755 — MkdirAll leaves an EXISTING directory exactly
 	// as it found it, so relying on the mode constant alone would protect only fresh
 	// installs. "" asks for the instance root itself rather than a subdirectory.
-	// Defence in depth behind cmd/bootstrap.go's check: this is the function that would
-	// place a record inside the escrow directory, where destroy spares it and the listing
-	// never looks.
-	if err := ValidateInstanceName(rec.Instance); err != nil {
-		return err
-	}
 	dir, err := instanceStateDir(rec.Instance, "")
 	if err != nil {
 		return err
@@ -385,8 +393,8 @@ type KnownInstance struct {
 	Err error
 }
 
-// ListInstances enumerates every instance directory under ~/.devicechain, with its record
-// where it has one.
+// ListInstances enumerates every instance directory under ~/.devicechain/instances,
+// with its record where it has one.
 //
 // 🔴 IT READS ONLY instance.json. Nothing else in the instance directory is opened, and
 // that is a security property rather than an optimisation — see the file header.

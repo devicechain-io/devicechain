@@ -43,11 +43,20 @@ type configDirOffender struct {
 // prints it. A guard that also flagged those would be answered by suppressing it,
 // which is how a gate stops being read.
 //
+// 🔴 "IT BUILDS NOTHING" IS A CLAIM ABOUT THE WRITING SIDE, AND PROSE ALSO HAS A
+// READING SIDE. Five operator-facing messages named a path directly under the root
+// after instances moved beneath instances/, two of them telling the operator to
+// remove it by hand. Nothing here was wrong — this guard is about construction — but
+// the exemption left the described layout unchecked by anything, so
+// configdirprose_test.go now owns that half. The two match on different prefixes and
+// so cannot overlap: this one on the path ELEMENT, that one on the "~/" form a human
+// reads.
+//
 // Test files are exempt for a stronger reason than convenience. A test that builds
 // its expected path from dcdir.Root() is derived from the thing it is checking and
 // cannot detect it moving; tofu_permissions_test.go spelling
-// filepath.Join(home, ".devicechain", "prod", "infra") by hand is the independent
-// statement of where state actually lands. Forcing those through the constant would
+// filepath.Join(home, ".devicechain", "instances", "prod", "infra") by hand is the
+// independent statement of where state actually lands. Forcing those through the constant would
 // replace real checks with tautologies.
 func findConfigDirLiterals(root string, exempt func(dir string) bool) ([]configDirOffender, error) {
 	var out []configDirOffender
