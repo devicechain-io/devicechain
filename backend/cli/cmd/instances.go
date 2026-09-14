@@ -94,9 +94,10 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 	// this whole change exists to remove.
 	//
 	// It names instances/ rather than the tree above it, because those are different
-	// claims and only the narrow one is true. An operator carrying a pre-nesting
-	// ~/.devicechain/<name> directory is told exactly where this command looked, instead
-	// of being told the directory they can see in front of them is empty.
+	// claims and only the narrow one is true. An operator carrying an instance directory
+	// from the pre-nesting layout — one sitting directly under the root — is told exactly
+	// where this command looked, instead of being told the directory they can see in
+	// front of them is empty.
 	if len(known) == 0 {
 		fmt.Fprintln(out, color.WhiteString("No DeviceChain instances on this machine (nothing under ~/.devicechain/instances)."))
 		return nil
