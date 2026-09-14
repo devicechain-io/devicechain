@@ -52,6 +52,22 @@ var deliberatelyNotShipped = map[string]string{
 	"terraform.tfvars.example": "a commented template for hand-runs; dcctl passes every var with -var",
 }
 
+// 🔑 BOTH ENTRIES SIT AT THE TREE TOP, AND THAT IS THE RULE RATHER THAN A
+// COINCIDENCE: a ROOT directory holds only what tofu needs, and documentation
+// lives beside the roots instead of inside one.
+//
+// The roots are embedded with `all:`, which takes everything in the directory.
+// That bluntness is deliberate — it is what removes the per-extension glob whose
+// silent miss this whole test exists for — but it means a file placed inside a
+// root SHIPS, with no say in the matter. When terraform.tfvars.example was moved
+// into instance/ during the layout change, it began shipping for the first time,
+// and TestNoSecretsEmbedded caught it by matching "tfvars" on a substring.
+//
+// That check is blunt on purpose and must stay blunt: it cannot tell
+// `.tfvars.example` from `.tfvars`, and the right response is to keep the
+// convenience file out of the root, never to teach a secret-leak test about
+// exceptions.
+
 // neverShipped are paths that must be ABSENT from the embedded set. Two kinds,
 // and they are excluded for different reasons:
 //
@@ -69,9 +85,16 @@ var deliberatelyNotShipped = map[string]string{
 // rather than asserted to exist.
 func neverShipped(rel string) bool {
 	base := path.Base(rel)
+	// 🔑 THE `.terraform` PREFIX COVERS A CLASS, NOT A LIST, and it is a class whose
+	// members appear and vanish DURING a run. This was three exact names until
+	// `.terraform.tfstate.lock.info` — a lock file that exists only while a tofu
+	// command holds the state — turned up mid-test, because a root directory is
+	// where tofu runs and something else was running in it. Enumerating tofu's
+	// scratch files by name would be a list that is wrong whenever the tool adds
+	// one, and wrong in the direction that fails a build for a file nobody ships.
 	return strings.HasPrefix(base, "terraform.tfstate") ||
 		base == "terraform.tfvars" ||
-		base == ".terraform.lock.hcl" ||
+		strings.HasPrefix(base, ".terraform") ||
 		strings.HasPrefix(rel, ".terraform/") ||
 		strings.Contains(rel, "/.terraform/")
 }

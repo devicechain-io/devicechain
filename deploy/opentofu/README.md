@@ -150,7 +150,7 @@ deploys against this infra with no extra wiring.
 ## Usage
 
 ```bash
-cd deploy/opentofu
+cd deploy/opentofu/instance
 cp terraform.tfvars.example terraform.tfvars   # edit: kubeconfig, credentials, pinned versions
 tofu init
 tofu plan

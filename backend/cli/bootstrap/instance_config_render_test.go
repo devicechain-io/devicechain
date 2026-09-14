@@ -257,7 +257,7 @@ func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 func shippedMaxFileStore(t *testing.T) int64 {
 	t.Helper()
 
-	raw, err := fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	raw, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 	if err != nil {
 		t.Fatalf("reading embedded variables.tf: %v", err)
 	}

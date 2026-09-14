@@ -56,7 +56,7 @@ func TestTheDefaultBootstrapGetsARealBackupDestination(t *testing.T) {
 // near-identical blocks produces. The event store is the easier one to lose,
 // because losing it breaks nothing an operator would notice.
 func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofu(), "main.tf")
+	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
 	if err != nil {
 		t.Fatalf("reading the embedded main.tf: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
 // resources for a plugin that was never installed — which does not fail, it just
 // archives to a destination nothing writes to.
 func TestBackupsAreDerivedFromTheOperatorToo(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofu(), "main.tf")
+	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
 	if err != nil {
 		t.Fatalf("reading the embedded main.tf: %v", err)
 	}

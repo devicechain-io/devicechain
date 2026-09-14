@@ -17,7 +17,7 @@ ghcr.io/devicechain-io/postgresql-timescaledb:<pg-minor>-ts<timescale-version>
 >
 > 🔴 The published tag is a **second copy** of what `versions.conf` says. The workflow
 > computes it as `<pg-minor>-ts<timescale-version>-r<revision>`, and
-> `deploy/opentofu/variables.tf` carries the result as a hand-written string, because a
+> `deploy/opentofu/instance/variables.tf` carries the result as a hand-written string, because a
 > Terraform default cannot read a shell file. Bump `versions.conf` without bumping that
 > default and the platform keeps deploying the old tag — successfully, with the new image
 > sitting unused in the registry. `hack/check-tofu-validations.sh` recomputes the tag and

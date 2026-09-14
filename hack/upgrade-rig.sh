@@ -768,18 +768,45 @@ build_target_dcctl() {
 #
 # TF_VAR_* is honoured because dcctl passes no `-var` for these (see infraVars) —
 # an explicit -var would outrank the environment.
+# root_vars_file <tree> -- the instance root's variables.tf inside a checkout,
+# whichever layout that checkout uses.
+#
+# 🔴 THIS FUNCTION EXISTS BECAUSE THE RIG READS TWO TREES AT DIFFERENT AGES. The
+# working tree is HEAD; $baseline_src is an extracted RELEASE TAG, and a baseline
+# old enough predates the split of deploy/opentofu into per-root directories. One
+# hardcoded path is therefore wrong for one of them no matter which path is chosen,
+# and it stays wrong until every supported baseline is newer than the move.
+#
+# 🔴 AND A MISSING FILE MUST NOT BE SILENT. tofu_default on a path that does not
+# exist prints nothing, and nothing is exactly what "the baseline pins no default
+# for this chart" looks like to the caller — which takes the branch that EXPORTS
+# HEAD's pin over it. An unreadable baseline would then install a chart version
+# that baseline never shipped, and the drill would be measuring an upgrade from
+# something that was never released. An absence read as an answer, in the one
+# direction that quietly corrupts the experiment.
+root_vars_file() {
+  local tree="$1" p
+  for p in "$tree/deploy/opentofu/instance/variables.tf" "$tree/deploy/opentofu/variables.tf"; do
+    [[ -f "$p" ]] && { printf '%s\n' "$p"; return 0; }
+  done
+  fail "no root variables.tf under $tree (looked in deploy/opentofu/instance/ and
+deploy/opentofu/). The chart pins cannot be read, and an unreadable file here reads
+as \"this tree pins nothing\" — which would silently install a chart version this
+tree never declared."
+}
+
 pin_baseline_charts() {
   local var pin baseline_default pinned=()
   for var in nats_chart_version ingress_nginx_chart_version cert_manager_chart_version; do
     # The value the WORKING TREE pins, read out of the tree rather than repeated
     # here, so a deliberate bump at HEAD carries into the rig instead of drifting
     # away from it behind a second copy nobody remembers to edit.
-    pin="$(tofu_default "$repo_root/deploy/opentofu/variables.tf" "$var")"
+    pin="$(tofu_default "$(root_vars_file "$repo_root")" "$var")"
     [[ -n "$pin" ]] || fail "the working tree declares no default for $var, so this rig
 cannot pin the baseline's copy of that chart. Either the variable was renamed or the
 pin was removed — hack/check-chart-pins.sh is the authority on the second."
 
-    baseline_default="$(tofu_default "$baseline_src/deploy/opentofu/variables.tf" "$var")"
+    baseline_default="$(tofu_default "$(root_vars_file "$baseline_src")" "$var")"
     if [[ -n "$baseline_default" ]]; then
       note "$baseline_tag pins $var itself ($baseline_default); left alone"
       continue

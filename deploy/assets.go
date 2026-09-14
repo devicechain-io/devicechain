@@ -18,10 +18,42 @@ import (
 	"io/fs"
 )
 
-// opentofu holds the infrastructure root: top-level *.tf plus the modules tree.
-// terraform.tfstate / terraform.tfvars are intentionally excluded.
+// opentofu holds every OpenTofu ROOT plus the modules tree they share. Roots are
+// peers: each is a directory of .tf files tofu is meant to init and apply
+// directly, and each reaches the shared modules as `source = "../modules/<x>"`.
 //
-//go:embed opentofu/*.tf all:opentofu/modules
+// 🔴 A ROOT IS EMBEDDED BY ITS *.tf GLOB, NEVER BY `all:`. MEASURED, not reasoned:
+// `all:opentofu/instance` was written here first and the build failed on
+//
+//	embed opentofu/instance/terraform.tfstate: no such file or directory
+//
+// because a root directory is precisely where tofu RUNS — `tofu init`, the CI
+// validate step, hack/check-tofu-validations.sh — and every one of those leaves
+// terraform.tfstate, .terraform.lock.hcl and a .terraform cache beside the .tf
+// files. go:embed captures what is ON DISK at build time, not what git tracks, so
+// `all:` over a root ships whichever of those happen to exist. tfstate is not a
+// summary of the infrastructure but its values in cleartext, including the database
+// superuser password and the broker's TLS private key.
+//
+// 🔑 The old single-root layout was protected by ACCIDENT: the root sat at the top
+// of the tree and `opentofu/*.tf` picked up its .tf files while leaving the state
+// beside them. Moving the root into its own directory and reaching for `all:` looks
+// like a tidy-up and quietly removes that protection. TestNoSecretsEmbedded is the
+// other half of the net, and it is deliberately blunt enough to catch this.
+//
+// `modules/` keeps `all:` because it holds non-.tf assets a module needs — the
+// cnpg-cluster chart — and nothing ever runs tofu inside a module directory.
+//
+// 🔑 WHAT MAKES A PER-ROOT GLOB SAFE NOW, when the same shape used to be the
+// hazard: `*` does not cross a `/`, so a NEW root directory matches no pattern here
+// and go:embed says nothing — it errors only when a pattern matches NOTHING, and
+// these still match. That silence used to be unbounded. It is now bounded by
+// TestEveryOpenTofuFileOnDiskEitherShipsOrIsNamed, which walks the real tree and
+// fails on any file that did not survive the embed. Adding a root means adding a
+// line here, and forgetting is a test failure rather than a binary shipped without
+// a root it needs.
+//
+//go:embed opentofu/instance/*.tf all:opentofu/modules
 var opentofu embed.FS
 
 // helmChart holds the per-instance chart (Chart.yaml, values, templates). The
@@ -43,12 +75,33 @@ var kindClusterConfig []byte
 // KindClusterConfig returns the embedded kind cluster configuration.
 func KindClusterConfig() []byte { return kindClusterConfig }
 
-// OpenTofu returns the embedded OpenTofu root, rooted so main.tf is at the top
-// level (callers extract this to a working directory for terraform-exec).
+// InstanceRootDir is the subdirectory holding the per-instance root — the one
+// `dcctl bootstrap` applies. Exported because the working directory dcctl runs
+// tofu in is this path under the extracted tree, and a literal repeated at the
+// extraction site and the exec site is a literal that can disagree with itself.
+const InstanceRootDir = "instance"
+
+// OpenTofu returns the whole embedded tree — every root plus the shared modules,
+// with the directory structure intact.
+//
+// 🔴 EXTRACT THIS, NOT A SINGLE ROOT. Roots reach modules as "../modules/<x>", so
+// a root extracted on its own cannot resolve them. Callers write this to a working
+// directory and then run tofu INSIDE the root subdirectory they want.
 func OpenTofu() fs.FS {
 	sub, err := fs.Sub(opentofu, "opentofu")
 	if err != nil {
 		panic(err) // embed paths are compile-time constant; this cannot fail
+	}
+	return sub
+}
+
+// OpenTofuInstance returns the per-instance root alone, rooted so main.tf is at
+// the top level. For READING the root's own files — variables.tf for a default,
+// main.tf for a wiring assertion — never for extraction.
+func OpenTofuInstance() fs.FS {
+	sub, err := fs.Sub(opentofu, "opentofu/"+InstanceRootDir)
+	if err != nil {
+		panic(err)
 	}
 	return sub
 }

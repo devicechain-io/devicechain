@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 module "namespace" {
-  source = "./modules/namespace"
+  source = "../modules/namespace"
 
   name   = var.namespace
   create = var.create_namespace
@@ -10,7 +10,7 @@ module "namespace" {
 
 # NATS: messaging + MQTT ingress + JetStream KV (ADR-003/006/007).
 module "nats" {
-  source = "./modules/nats"
+  source = "../modules/nats"
 
   namespace                = var.namespace
   chart_version            = var.nats_chart_version
@@ -285,7 +285,7 @@ resource "terraform_data" "cutover_guard" {
 # The in-cluster object store. Only for backup_destination = "in-cluster"; an
 # external destination provisions nothing here.
 module "object_store" {
-  source = "./modules/object-store"
+  source = "../modules/object-store"
   count  = local.backups_on && var.backup_destination == "in-cluster" ? 1 : 0
 
   namespace = var.namespace
@@ -534,7 +534,7 @@ resource "terraform_data" "restore_guard" {
 # turn "the operator is already here" into "the platform has no relational
 # database", which is a much larger surprise than the flag advertises.
 module "cnpg_rdb" {
-  source = "./modules/cnpg-cluster"
+  source = "../modules/cnpg-cluster"
 
   namespace          = var.namespace
   name               = "dc-rdb"
@@ -673,7 +673,7 @@ module "cnpg_rdb" {
 # change from replacing a storage tier, and doing both at once would make a
 # failure of either indistinguishable from the other.
 module "cnpg_tsdb" {
-  source = "./modules/cnpg-cluster"
+  source = "../modules/cnpg-cluster"
 
   namespace          = var.namespace
   name               = "dc-tsdb"
@@ -821,7 +821,7 @@ module "cnpg_tsdb" {
 # feature, and one storage shape means HA is an `instances` count rather than a
 # migration.
 module "cnpg" {
-  source = "./modules/cnpg"
+  source = "../modules/cnpg"
   count  = var.enable_cnpg ? 1 : 0
 
   namespace              = var.cnpg_namespace
@@ -859,7 +859,7 @@ module "cnpg" {
 # NGINX ingress controller — the L7 entry point fronting the GraphQL/HTTP surface
 # (ADR-002). The Ingress resource itself is rendered by the Helm chart.
 module "ingress_nginx" {
-  source = "./modules/ingress-nginx"
+  source = "../modules/ingress-nginx"
   count  = var.enable_ingress_nginx ? 1 : 0
 
   namespace     = var.ingress_nginx_namespace
@@ -871,7 +871,7 @@ module "ingress_nginx" {
 # cert-manager — issues/renews the ingress TLS certificates (ADR-002). The Issuer
 # is rendered by the Helm chart once these CRDs exist.
 module "cert_manager" {
-  source = "./modules/cert-manager"
+  source = "../modules/cert-manager"
   count  = var.enable_cert_manager ? 1 : 0
 
   namespace     = var.cert_manager_namespace
@@ -883,7 +883,7 @@ module "cert_manager" {
 # instance chart's metrics.enabled rendering depends on, ahead of the Helm step.
 # Default-on (like Postgres/Timescale); set enable_monitoring=false to skip.
 module "monitoring" {
-  source = "./modules/monitoring"
+  source = "../modules/monitoring"
   count  = var.enable_monitoring ? 1 : 0
 
   namespace     = var.monitoring_namespace

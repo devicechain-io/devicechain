@@ -35,7 +35,7 @@
 #
 # The claim names are CloudNativePG's: it names each instance's PGDATA claim after
 # its pod (`dc-rdb-1`) and appends `-wal` for a separate WAL volume. `dc-rdb` and
-# `dc-tsdb` are the Cluster object names set in deploy/opentofu/main.tf. Verified
+# `dc-tsdb` are the Cluster object names set in deploy/opentofu/instance/main.tf. Verified
 # against a running cluster with `kubectl get pvc -n dc-system`.
 #
 # Run via hack/check-prometheus-rules.sh, which renders the chart first: these

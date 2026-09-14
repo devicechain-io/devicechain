@@ -130,7 +130,7 @@ func embeddedJetStreamStorageDefault() string {
 
 // readEmbeddedTofuVariables reads the shipped root variables.tf out of the binary.
 func readEmbeddedTofuVariables() ([]byte, error) {
-	return fs.ReadFile(assets.OpenTofu(), "variables.tf")
+	return fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 }
 
 // jetStreamStorageDefaultRe finds the `default` immediately following the
