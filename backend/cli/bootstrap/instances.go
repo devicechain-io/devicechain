@@ -177,16 +177,18 @@ func instanceRecordPath(instance string) (string, error) {
 // CORRECT the record, and a record that only ever accumulated would preserve the very
 // staleness this exists to remove.
 func WriteInstanceRecord(rec InstanceRecord) error {
+	// Validating here is defence in depth behind cmd/bootstrap.go's own check. What it
+	// still buys is narrower than it was: a name can no longer aim a record at a sibling
+	// dcctl owns, because instances/ is a level below them — but a name carrying a
+	// separator still escapes the tree, and an empty one still resolves to the instances
+	// directory itself, which is every instance rather than none.
+	if err := ValidateInstanceName(rec.Instance); err != nil {
+		return err
+	}
 	// instanceStateDir does the chmod walk back down every level, which matters for a
 	// tree an older dcctl created at 0755 — MkdirAll leaves an EXISTING directory exactly
 	// as it found it, so relying on the mode constant alone would protect only fresh
 	// installs. "" asks for the instance root itself rather than a subdirectory.
-	// Defence in depth behind cmd/bootstrap.go's check: this is the function that would
-	// place a record inside the escrow directory, where destroy spares it and the listing
-	// never looks.
-	if err := ValidateInstanceName(rec.Instance); err != nil {
-		return err
-	}
 	dir, err := instanceStateDir(rec.Instance, "")
 	if err != nil {
 		return err
