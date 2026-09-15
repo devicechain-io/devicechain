@@ -53,7 +53,7 @@ import (
 // line here, and forgetting is a test failure rather than a binary shipped without
 // a root it needs.
 //
-//go:embed opentofu/instance/*.tf all:opentofu/modules
+//go:embed opentofu/cluster/*.tf opentofu/instance/*.tf all:opentofu/modules
 var opentofu embed.FS
 
 // helmChart holds the per-instance chart (Chart.yaml, values, templates). The
@@ -81,6 +81,13 @@ func KindClusterConfig() []byte { return kindClusterConfig }
 // extraction site and the exec site is a literal that can disagree with itself.
 const InstanceRootDir = "instance"
 
+// ClusterRootDir is the subdirectory holding the cluster-prerequisite root — the
+// one applied once per cluster, before any instance. Exported for the same reason
+// as InstanceRootDir: dcctl runs tofu in this path under the extracted tree, and a
+// literal repeated at the extraction site and the exec site can disagree with
+// itself.
+const ClusterRootDir = "cluster"
+
 // OpenTofu returns the whole embedded tree — every root plus the shared modules,
 // with the directory structure intact.
 //
@@ -100,6 +107,17 @@ func OpenTofu() fs.FS {
 // main.tf for a wiring assertion — never for extraction.
 func OpenTofuInstance() fs.FS {
 	sub, err := fs.Sub(opentofu, "opentofu/"+InstanceRootDir)
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+// OpenTofuCluster returns the cluster-prerequisite root alone, rooted so main.tf is
+// at the top level. Same contract as OpenTofuInstance: for READING, never for
+// extraction, because a root extracted on its own cannot resolve "../modules/<x>".
+func OpenTofuCluster() fs.FS {
+	sub, err := fs.Sub(opentofu, "opentofu/"+ClusterRootDir)
 	if err != nil {
 		panic(err)
 	}

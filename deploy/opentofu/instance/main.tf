@@ -1,12 +1,6 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
-module "namespace" {
-  source = "../modules/namespace"
-
-  name   = var.namespace
-  create = var.create_namespace
-}
 
 # NATS: messaging + MQTT ingress + JetStream KV (ADR-003/006/007).
 module "nats" {
@@ -28,7 +22,13 @@ module "nats" {
   sys_password_bcrypt      = var.nats_sys_password_bcrypt
   mqtt_node_port           = var.nats_mqtt_node_port
 
-  depends_on = [module.namespace]
+  # 🔑 NO depends_on ON THE NAMESPACE, BECAUSE THIS ROOT NO LONGER OWNS IT. The
+  # namespace is a cluster prerequisite now — created by the cluster root, and by
+  # dcctl before either apply, because the credentials these workloads are built
+  # from are Secrets that have to be written into it first. An ordering edge to a
+  # resource in another root is not expressible, and faking one with a data source
+  # would only turn a missing namespace into a slightly earlier error than the
+  # apply already gives.
 }
 
 # 🔴 THE CUTOVER GUARD. Read this before touching anything below it.
@@ -70,17 +70,13 @@ module "nats" {
 locals {
   # Each pre-CloudNativePG StatefulSet this configuration replaces, keyed by the
   # store it belonged to. `dump` is the recovery recipe quoted back at whoever
-  # trips the guard — they differ, because pg_dumpall on the event store would
-  # pull hypertable data nobody wants in a text dump.
+  # trips the guard.
+  #
+  # 🔑 ONE ENTRY, WHERE THE PRE-SPLIT ROOT HAD TWO. The relational store's entry
+  # moved to the cluster root with the store itself; this root replaces only the
+  # event store, so guarding the other one from here would refuse an instance for
+  # the state of a database it no longer owns.
   legacy_db_statefulsets = {
-    rdb = {
-      statefulset = "dc-postgresql"
-      store       = "relational-database"
-      holds       = "tenants, users, devices and relationships"
-      allow       = var.allow_legacy_rdb_removal
-      allow_var   = "allow_legacy_rdb_removal"
-      dump        = "pg_dumpall -U <user> > rdb.sql"
-    }
     tsdb = {
       statefulset = "dc-timescaledb-single"
       store       = "event-database"
@@ -91,65 +87,44 @@ locals {
     }
   }
 
-  # Backups need the plugin, and the plugin is an extension of the operator, so
-  # an install without the operator has no backups no matter what the backup flag
-  # says. Deriving it ONCE here rather than writing the conjunction at each of
-  # the five places that need it is what stops the two halves drifting: a site
-  # that tested only var.enable_database_backups would provision an object store
-  # and two ObjectStore resources for a plugin that is not installed.
-  backups_on = var.enable_database_backups && var.enable_cnpg
+  # 🔴 THIS IS NOT `enable_database_backups && enable_cnpg`, AND THE DIFFERENCE IS
+  # A SILENTLY UNBACKED-UP EVENT STORE.
+  #
+  # Before the split one root both installed the operator and created the stores,
+  # so ANDing the two was right: asking for backups without the plugin that
+  # performs them is a contradiction, and deriving it once stopped the halves
+  # drifting apart.
+  #
+  # After the split the operator belongs to the CLUSTER root, so this root always
+  # runs in the mode `enable_cnpg = false` describes — "the cluster already runs
+  # CNPG". MEASURED: with enable_database_backups = true and enable_cnpg = false
+  # the old conjunction evaluates FALSE, which drops the ObjectStore, the
+  # ScheduledBackup and every archive setting on the Cluster. The operator asks
+  # for backups and gets none, and nothing fails.
+  #
+  # So the flag now means what it says, and the question the conjunction was
+  # really asking — IS THE PLUGIN ACTUALLY HERE? — is asked of the cluster instead,
+  # by backup_prerequisite_guard below. A belief about another root was never
+  # evidence about it.
+  backups_on = var.enable_database_backups
 
-  # Where the archiver actually points, resolved once from the destination. The
-  # in-cluster case reads the module's outputs rather than re-deriving the
-  # Service DNS name and the Secret's key names, so the module stays free to
-  # change either without this file silently disagreeing.
-  backup_endpoint = local.backups_on ? (
-    var.backup_destination == "in-cluster" ? module.object_store[0].endpoint_url : var.backup_endpoint_url
-  ) : ""
-
-  backup_credentials = local.backups_on ? (
-    var.backup_destination == "in-cluster" ? {
-      secret     = module.object_store[0].credentials_secret
-      access_key = module.object_store[0].access_key_id_key
-      secret_key = module.object_store[0].secret_access_key_key
-      } : {
-      # Written by dcctl from --backup-credentials-file, before this apply. Named
-      # here as a STRING because that is all this tree needs -- and because reading
-      # it back with a data source would put the supplied credential into state,
-      # which is the whole thing moving it out was for.
-      secret     = var.backup_credentials_secret
-      access_key = "ACCESS_KEY_ID"
-      secret_key = "SECRET_ACCESS_KEY"
-    }
-  ) : null
-
-  # The two per-store backup configurations. Null when backups are off, which is
-  # what the cnpg-cluster module reads as "this store has no backups" — one
-  # nullable object rather than an `enabled` flag beside five fields that are
-  # meaningless without it.
-  rdb_backup = local.backups_on ? {
-    bucket                = var.backup_bucket_rdb
-    endpoint_url          = local.backup_endpoint
-    credentials_secret    = local.backup_credentials.secret
-    access_key_id_key     = local.backup_credentials.access_key
-    secret_access_key_key = local.backup_credentials.secret_key
-    schedule              = var.backup_schedule
-    retention_policy      = var.backup_retention
-
-    # Threaded from the root so a RESTORE is expressible without editing module
-    # source mid-incident. CloudNativePG refuses to let a recovered cluster
-    # archive back over the path it recovered from, and it refuses by hanging in
-    # `Setting up primary` rather than by failing — so the operator who needs this
-    # is the one least able to go looking for it.
-    server_name = var.backup_server_name_rdb
-  } : null
-
+  # The archive target, SUPPLIED rather than derived. The object store lives in the
+  # cluster root now, so its endpoint and the key names inside its Secret are not
+  # readable from here — they are outputs of that root, threaded through by dcctl
+  # (or by hand, from `tofu output`, for someone applying the two roots directly).
+  #
+  # 🔑 The key names are supplied too, not assumed. They differ by destination —
+  # an in-cluster MinIO names them MINIO_ROOT_USER/MINIO_ROOT_PASSWORD and an
+  # external store ACCESS_KEY_ID/SECRET_ACCESS_KEY — and this root deliberately
+  # does not know which kind it was pointed at. That is the whole benefit of taking
+  # them as values: `backup_destination` is the cluster root's question now, and a
+  # copy of it here could disagree with the store that actually exists.
   tsdb_backup = local.backups_on ? {
     bucket                = var.backup_bucket_tsdb
-    endpoint_url          = local.backup_endpoint
-    credentials_secret    = local.backup_credentials.secret
-    access_key_id_key     = local.backup_credentials.access_key
-    secret_access_key_key = local.backup_credentials.secret_key
+    endpoint_url          = var.backup_endpoint_url
+    credentials_secret    = var.backup_credentials_secret
+    access_key_id_key     = var.backup_access_key_id_key
+    secret_access_key_key = var.backup_secret_access_key_key
     schedule              = var.backup_schedule
     retention_policy      = var.backup_retention
     server_name           = var.backup_server_name_tsdb
@@ -159,35 +134,25 @@ locals {
     # stores different durability settings. This one takes device telemetry at
     # ingest rates, so it generates WAL far faster; an archiver that cannot keep
     # up does not drop segments, it leaves them on the database's own volume
-    # until that volume fills and Postgres stops. The relational store's write
-    # rate is control-plane traffic and does not need it.
+    # until that volume fills and Postgres stops.
     wal_max_parallel = 4
   } : null
 
-  # The two per-store RESTORE configurations (ADR-028, ADR-020 A2.5). Null is a
-  # normal install; non-null recovers that store from the archive instead of
-  # initialising it empty.
+  # The event store's RESTORE configuration (ADR-028, ADR-020 A2.5). Null is a
+  # normal install; non-null recovers from the archive instead of initialising
+  # empty.
   #
-  # 🔴 PER STORE, NEVER ONE SWITCH FOR BOTH. The relational store and the event
-  # store have independent WAL timelines and independent archives, so "restore
-  # the database" is not a single operation and a shared point-in-time target
-  # would be a coincidence rather than a guarantee. They are also genuinely
-  # restored separately in practice: losing the event store to a bad retention
-  # change does not mean the control plane needs rewinding, and rewinding it
-  # anyway would discard every tenant, device and rule created since.
+  # 🔴 PER STORE, NEVER ONE SWITCH FOR BOTH — which the split now enforces
+  # structurally rather than by convention: the relational store's restore is a
+  # different root's variable. The two have independent WAL timelines and
+  # independent archives, so "restore the database" was never one operation, and
+  # losing the event store to a bad retention change does not mean the control
+  # plane needs rewinding.
   #
   # 🔴 A RESTORE ONLY TAKES EFFECT ON A CLUSTER THAT DOES NOT YET EXIST.
-  # `spec.bootstrap` is read when CloudNativePG CREATES the Cluster; setting
-  # these against a live instance is expected to change nothing at all, quietly.
-  # That is not yet measured — hack/dr-rig.sh is what will settle it — so treat
-  # it as the reason this is a rebuild-time lever and not a repair one.
-  rdb_restore = var.restore_rdb_from == "" ? null : {
-    source_server_name = var.restore_rdb_from
-    recovery_target = var.restore_rdb_target_time == "" ? {} : {
-      targetTime = var.restore_rdb_target_time
-    }
-  }
-
+  # `spec.bootstrap` is read when CloudNativePG CREATES the Cluster; setting this
+  # against a live instance is expected to change nothing at all, quietly. That is
+  # why it is a rebuild-time lever and not a repair one.
   tsdb_restore = var.restore_tsdb_from == "" ? null : {
     source_server_name = var.restore_tsdb_from
     recovery_target = var.restore_tsdb_target_time == "" ? {} : {
@@ -253,182 +218,6 @@ resource "terraform_data" "cutover_guard" {
   }
 }
 
-# Database backups — the destination, and the two per-store configurations that
-# point at it (ADR-028, ADR-020 A2.5).
-#
-# 🔑 ONE FLAG DECIDES FOR BOTH STORES. It would be easy to make backups
-# per-store, and it would be a mistake: the state nobody would ever choose on
-# purpose is one store backed up and the other not, and that is exactly what a
-# per-store flag produces the first time someone edits one of two nearly
-# identical blocks. Whether a store HAS backups is a property of the instance;
-# WHERE they go is per-store, and that part genuinely differs (two buckets).
-
-# The credentials the ObjectStore resources present to the endpoint.
-#
-# For the in-cluster destination this is the object-store module's own Secret,
-# reused rather than copied -- MinIO's root credentials and the credentials the
-# archiver presents ARE the same credentials, and two Secrets holding one value
-# is two things to rotate and one of them to forget.
-#
-# 🔴 FOR AN EXTERNAL DESTINATION THIS MODULE NO LONGER WRITES ONE. The credentials
-# belong to somebody else's object store: they are SUPPLIED, not minted, and putting
-# a supplied secret into a variable puts it in the state file just as surely as a
-# generated one. dcctl reads them from --backup-credentials-file and writes
-# `dc-backup-credentials` before this apply; the name below is all this tree needs.
-#
-# That also removed the last credential this configuration declared. The variables
-# that carried them (backup_access_key / backup_secret_key) are gone with the
-# resource, and hack/dr-rig.sh -- the only thing that ever set them -- moved to the
-# file in the same change, because a validation rig that cannot run is worse than
-# one that fails.
-
-# The in-cluster object store. Only for backup_destination = "in-cluster"; an
-# external destination provisions nothing here.
-module "object_store" {
-  source = "../modules/object-store"
-  count  = local.backups_on && var.backup_destination == "in-cluster" ? 1 : 0
-
-  namespace = var.namespace
-  buckets   = [var.backup_bucket_rdb, var.backup_bucket_tsdb]
-  # 🔴 NO CREDENTIALS PASSED. dcctl mints the store's root credentials per instance
-  # and writes them into the Secret this module names, before this apply -- so the
-  # variables that used to carry them here provision nothing. They still serve the
-  # EXTERNAL destination above, where the credentials belong to somebody else's
-  # object store and are supplied rather than minted.
-  storage       = var.backup_object_store_storage
-  storage_class = var.backup_object_store_storage_class
-
-  depends_on = [module.namespace]
-}
-
-# 🔴 THE BACKUPS ARE THE LEAST-PROTECTED THING IN THIS CONFIGURATION, and this
-# guard is what fixes that.
-#
-# The database Clusters carry prevent_destroy because "databases outlive the
-# deployment". Until this existed, the thing that outlives the DATABASE carried
-# nothing: the object store is `count = local.backups_on && in-cluster`, so
-# anything that flips either half drops the count to zero and takes the PVC — and
-# on a default StorageClass with reclaimPolicy Delete, the retention window's
-# worth of backups — with it. No confirmation, no diff anyone would read as
-# destructive.
-#
-# The paths that do it are ordinary, not exotic:
-#   - enable_database_backups = false
-#   - backup_destination flipped to "external"
-#   - `dcctl bootstrap <existing-instance> --compact --no-tls`, which emits
-#     enable_database_backups=false on its own
-#
-# 🔴 AND prevent_destroy ON THE PVC WOULD NOT HELP, which is why this is a
-# precondition in the ROOT instead. Dropping a module's count to zero ORPHANS its
-# resources, and orphans are destroyed without consulting their lifecycle rules —
-# the same trap the legacy-StatefulSet cutover guard above exists for. A guard
-# that only fires while the resource is still in the configuration does not fire
-# on the one operation that removes it.
-data "kubernetes_resources" "object_store_pvc" {
-  api_version    = "v1"
-  kind           = "PersistentVolumeClaim"
-  namespace      = var.namespace
-  field_selector = "metadata.name=dc-object-store-data"
-}
-
-resource "terraform_data" "backup_removal_guard" {
-  # A missing namespace returns ZERO objects rather than erroring, which is what
-  # makes this safe on a fresh install: there is no namespace yet, the guard
-  # passes, and nothing is protected because nothing exists.
-  input = length(data.kubernetes_resources.object_store_pvc.objects)
-
-  lifecycle {
-    precondition {
-      condition = (
-        length(data.kubernetes_resources.object_store_pvc.objects) == 0 ||
-        (local.backups_on && var.backup_destination == "in-cluster") ||
-        var.allow_backup_destination_removal
-      )
-      error_message = <<-EOT
-        This cluster has an in-cluster backup destination holding real backups,
-        and this configuration removes it.
-
-        The object store's PersistentVolumeClaim (dc-object-store-data in
-        ${var.namespace}) is provisioned only while database backups are on AND
-        backup_destination is "in-cluster". This apply satisfies neither, so the
-        claim would be destroyed — and on a StorageClass whose reclaimPolicy is
-        Delete, which is the default nearly everywhere, its contents go with it.
-
-        That is every base backup and every archived WAL segment for BOTH
-        databases: the entire recovery window, for the control plane and the event
-        history alike.
-
-        Terraform's prevent_destroy does not stop this and cannot: dropping the
-        module's count to zero ORPHANS its resources, and orphans are destroyed
-        without consulting their lifecycle rules.
-
-        The usual ways to arrive here, none of which look destructive:
-
-          enable_database_backups = false
-          backup_destination      = "external"
-          dcctl bootstrap <instance> --compact --no-tls   (turns backups off)
-
-        If the backups are already safe elsewhere, or you do not want them:
-
-          allow_backup_destination_removal = true
-
-        Setting it asserts you have handled the backups. Nothing checks that for
-        you, and nothing can — this configuration cannot tell a copied archive
-        from an abandoned one.
-      EOT
-    }
-  }
-}
-
-# 🔴 A PLAN-TIME REFUSAL, not an apply-time one, and not a variable validation.
-#
-# The condition spans two variables, and cross-variable references in a
-# `validation` block need a newer core than this root's `required_version = ">=
-# 1.6"` allows. A precondition on a terraform_data is the portable form and is
-# the shape this root already uses for the legacy-StatefulSet cutover guard.
-#
-# What it refuses is the configuration that CANNOT work and does not say so: an
-# external destination with no endpoint. barman-cloud with an empty endpointURL
-# does not fail to start — it talks to the real AWS S3, where the bucket does not
-# exist and the credentials are a local MinIO's, so every archive attempt fails
-# against a service the operator never intended to contact.
-resource "terraform_data" "backup_destination_guard" {
-  count = local.backups_on ? 1 : 0
-
-  input = var.backup_destination
-
-  lifecycle {
-    precondition {
-      condition     = var.backup_destination != "external" || var.backup_endpoint_url != ""
-      error_message = <<-EOT
-        backup_destination = "external" needs backup_endpoint_url, and it is empty.
-
-        An empty endpoint is not "no endpoint" to barman-cloud — it is the default
-        AWS S3 endpoint. Archiving would be attempted against real AWS with a
-        bucket that does not exist there, and it would fail on every WAL segment
-        without stalling a single write. Nothing would crash and nothing would be
-        backed up.
-
-        Set backup_endpoint_url to your S3-compatible endpoint, or set
-        backup_destination = "in-cluster" to provision one here.
-      EOT
-    }
-
-    precondition {
-      condition     = var.backup_destination != "in-cluster" || var.backup_endpoint_url == ""
-      error_message = <<-EOT
-        backup_endpoint_url is set while backup_destination = "in-cluster".
-
-        The in-cluster endpoint is an output of the object-store module this
-        configuration provisions, so an override here would be silently ignored —
-        leaving a configuration that names one destination and archives to
-        another. Pick one: drop backup_endpoint_url, or set
-        backup_destination = "external".
-      EOT
-    }
-  }
-}
-
 # THE RESTORE GUARD (ADR-028, ADR-020 A2.5).
 #
 # The cnpg-cluster chart refuses these combinations too, and that is not
@@ -444,9 +233,9 @@ resource "terraform_data" "backup_destination_guard" {
 # below is therefore refused with a message that says what to set, not what is
 # wrong.
 resource "terraform_data" "restore_guard" {
-  count = local.rdb_restore == null && local.tsdb_restore == null ? 0 : 1
+  count = local.tsdb_restore == null ? 0 : 1
 
-  input = "${var.restore_rdb_from}|${var.restore_tsdb_from}"
+  input = var.restore_tsdb_from
 
   lifecycle {
     precondition {
@@ -454,13 +243,13 @@ resource "terraform_data" "restore_guard" {
       error_message = <<-EOT
         A restore was requested while database backups are off.
 
-        There is no ObjectStore to read from: enable_database_backups is false,
-        or enable_cnpg is. Nothing would be recovered, and the cluster would come
-        up EMPTY rather than failing — which during a rebuild looks exactly like
-        a restore that found no data to bring back.
+        There is no ObjectStore to read from: enable_database_backups is false.
+        Nothing would be recovered, and the cluster would come up EMPTY rather
+        than failing — which during a rebuild looks exactly like a restore that
+        found no data to bring back.
 
-        Set enable_database_backups = true (and enable_cnpg = true) with the
-        bucket and endpoint the backup was written to.
+        Set enable_database_backups = true, with the bucket and endpoint the
+        backup was written to.
       EOT
     }
 
@@ -470,10 +259,10 @@ resource "terraform_data" "restore_guard" {
     # the pod logging that the archive is not empty. It does not fail the apply
     # and it does not resume without editing the Cluster in place.
     precondition {
-      condition     = local.rdb_restore == null || (var.backup_server_name_rdb != "" && var.backup_server_name_rdb != var.restore_rdb_from)
+      condition     = var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from
       error_message = <<-EOT
-        Restoring the relational store needs backup_server_name_rdb set to a
-        path of its OWN, different from restore_rdb_from.
+        Restoring the event store needs backup_server_name_tsdb set to a path of
+        its OWN, different from restore_tsdb_from.
 
         A recovered cluster keeps archiving. CloudNativePG refuses to archive
         into an archive that already has data in it, so a restored store pointed
@@ -483,182 +272,62 @@ resource "terraform_data" "restore_guard" {
 
         Unset is the same collision: it means "use the cluster's own name".
 
-        Set backup_server_name_rdb to something like "${var.restore_rdb_from}-restored".
-      EOT
-    }
-
-    precondition {
-      condition     = local.tsdb_restore == null || (var.backup_server_name_tsdb != "" && var.backup_server_name_tsdb != var.restore_tsdb_from)
-      error_message = <<-EOT
-        Restoring the event store needs backup_server_name_tsdb set to a path of
-        its OWN, different from restore_tsdb_from. See the relational store's
-        message above — the failure is a database wedged in `Setting up primary`
-        during a restore, not an apply error.
-
         Set backup_server_name_tsdb to something like "${var.restore_tsdb_from}-restored".
-      EOT
-    }
-
-    # The two stores have separate archives under separate buckets, so the same
-    # serverName means two different things and is not a collision. Restoring
-    # one from the OTHER's path is, and it is an easy line to copy wrongly in a
-    # runbook: it would bring the event store back holding the control plane's
-    # data, or the reverse, and the first symptom is services failing on tables
-    # that are not there.
-    precondition {
-      condition     = local.rdb_restore == null || local.tsdb_restore == null || var.backup_bucket_rdb != var.backup_bucket_tsdb
-      error_message = <<-EOT
-        Both stores are being restored and backup_bucket_rdb equals
-        backup_bucket_tsdb.
-
-        Two stores sharing one bucket are not two restore domains, and their
-        serverNames are the only thing keeping their archives apart. Give each
-        store its own bucket.
       EOT
     }
   }
 }
 
-# Relational Postgres — the control-plane RDB (users, devices, relationships, …),
-# as a CloudNativePG Cluster (ADR-020 A2.3).
+# 🔴 THE CROSS-ROOT PRECONDITION, ASKED OF THE CLUSTER RATHER THAN ASSUMED.
 #
-# The Cluster object is `dc-rdb`; clients keep reaching it at `dc-postgresql`,
-# which CNPG creates as a MANAGED alias Service whose selector it maintains. The
-# two names must differ because CNPG reserves `<cluster>-rw`/`-ro`/`-r` for
-# itself. Measured: the alias's selector is byte-identical to `dc-rdb-rw`'s, and
-# it followed a primary failover in 3 seconds.
+# Archiving is performed by the Barman Cloud plugin, which is an extension of the
+# CloudNativePG operator — and after the split both belong to the CLUSTER root.
+# One OpenTofu graph used to order that dependency; two roots cannot, so the
+# instance root is applied against a cluster whose plugin it has no way to
+# require.
 #
-# 🔴 NOT gated on var.enable_cnpg. That flag means "do not INSTALL the operator",
-# and its documented use is a cluster that already runs one — where the CRDs
-# exist and this Cluster is exactly as creatable. Gating the store on it would
-# turn "the operator is already here" into "the platform has no relational
-# database", which is a much larger surprise than the flag advertises.
-module "cnpg_rdb" {
-  source = "../modules/cnpg-cluster"
+# The pre-split answer was `enable_database_backups && enable_cnpg`, a conjunction
+# over this root's OWN variable. That was never evidence about the cluster, and
+# after the split it is actively wrong: this root runs with enable_cnpg false by
+# construction, so the conjunction reads FALSE and silently drops every archive
+# setting.
+#
+# So ask the cluster. The plugin serves ObjectStore objects, so its CRD being
+# established is the plugin being installed — the same "does the thing that must
+# already be here exist?" shape as the cutover guard above, and it fires at PLAN
+# time, before a Cluster is created with archiving it cannot perform.
+data "kubernetes_resources" "barman_plugin_crd" {
+  count = local.backups_on ? 1 : 0
 
-  namespace          = var.namespace
-  name               = "dc-rdb"
-  alias_service_name = "dc-postgresql"
-  image              = var.postgres_image
-  database           = var.postgres_database
-  username           = var.postgres_username
-  storage            = var.postgres_storage
-  storage_class      = var.postgres_storage_class
+  api_version    = "apiextensions.k8s.io/v1"
+  kind           = "CustomResourceDefinition"
+  field_selector = "metadata.name=objectstores.barmancloud.cnpg.io"
+}
 
-  # 3 under --ha, 1 otherwise, unless pinned explicitly. Both halves of the
-  # topology come from ONE value; see the postgres_instances variable for why 2
-  # is refused rather than merely discouraged.
-  instances = var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)
+resource "terraform_data" "backup_prerequisite_guard" {
+  count = local.backups_on ? 1 : 0
 
-  # 🔴 max_connections IS SIZED FROM THE SERVICE POOLS, and leaving it at the
-  # Postgres default of 100 was an ADR-020 A2.7b defect rather than a tuning
-  # preference. Measured on the HA rig.
-  #
-  # Every rdb-backed service opens its own pool, capped by
-  # defaultMaxOpenConnections = 20 (backend/core/rdb/postgres.go); no service
-  # overrides it. There is no pgbouncer, and all of them resolve `dc-postgresql`,
-  # whose selector is byte-identical to `dc-rdb-rw` — so every pool lands on the
-  # SAME primary and they all draw from one budget:
-  #
-  #   default profile  7 services x 20 = 140
-  #   full profile     9 services x 20 = 180   (adds ai-inference, outbound-connectors)
-  #
-  # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
-  # The default profile oversubscribes the primary 1.44x, full 1.86x. Confirmed by
-  # opening connections as the application role until refusal: number 94 failed with
-  # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
-  # attribute`.
-  #
-  # 🔑 WHY NOTHING CAUGHT IT. Pools open LAZILY, so an idle deployment holds a
-  # handful of connections and the rig sits green until real concurrent load
-  # arrives. Worse, the failure is invisible to every alert we have — measured
-  # while holding 98 of 100 slots:
-  #
-  #   - the Cluster still reports Ready=True / "Cluster in healthy state", so
-  #     CNPGClusterNotReady cannot see it;
-  #   - `cnpg_backends_total` and `cnpg_pg_settings_setting` DISAPPEAR, because the
-  #     exporter authenticates as cnpg_metrics_exporter, which is not a superuser
-  #     and is refused by the same reservation. A utilization-ratio alert would go
-  #     ABSENT rather than fire.
-  #
-  # Only the operator's own superuser connections survive, which is exactly why the
-  # Cluster keeps reporting healthy while every application service is locked out.
-  # The detector that does work is `cnpg_collector_up == 0`; see
-  # prometheusrule-database-control-plane.yaml, which alerts on it.
-  #
-  # 🔴 SIZE IT FROM THE ROLLOUT, NOT FROM THE STEADY STATE — this is where the
-  # obvious number is wrong, and 300 (the first value here) was wrong for exactly
-  # this reason.
-  #
-  # `rollingUpdate` ships maxUnavailable:0 / maxSurge:1 (values.yaml), so a new pod
-  # must pass readiness BEFORE the old one is removed. Both hold full pools at once,
-  # and a plain `helm upgrade` therefore roughly DOUBLES the pod count of every
-  # RollingUpdate area. Eight of the nine rdb consumers surge; only event-processing
-  # is Recreate (it is a single writer). And values.yaml recommends `replicas >= 2`
-  # in production, which is the configuration we tell people to run:
-  #
-  #                                    pods                      x20    vs 597
-  #   default, replicas 1, upgrading   6x2 + 1 = 13              260    ok
-  #   full,    replicas 1, upgrading   8x2 + 1 = 17              340    ok
-  #   default, replicas 2, upgrading   6x3 + 1 = 19              380    ok
-  #   full,    replicas 2, upgrading   8x3 + 1 = 25              500    ok
-  #
-  # At 300 the last three of those exceed the budget, so the fix would have been
-  # undone by a routine upgrade of the profile we ship, with the silent
-  # Ready-but-locked-out symptom described above. 600 covers the recommended
-  # production configuration mid-rollout with margin for the operator, the exporter,
-  # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
-  # full profile (8x4 + 1 = 33 pods = 660); re-derive before going there.
-  #
-  # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing
-  # it is applied by CNPG as a rolling in-place restart (~2.5 min on the rig), not a
-  # reload.
-  #
-  # 🔑 THE FOOTPRINT COST IS SMALL, AND IT WAS MEASURED RATHER THAN ASSUMED, because
-  # `--compact` exists for small nodes and the instances request only 256Mi with no
-  # limit. Postgres sizes some shared memory from max_connections, so this is a real
-  # question. `SHOW shared_memory_size`, same rig, same shared_buffers (128MB):
-  #
-  #   max_connections   100 -> 145MB    300 -> 154MB    600 -> 169MB
-  #
-  # 24MB for 500 extra slots. The important part is that max_connections is a
-  # CEILING, not an allocation: a slot nothing connects to costs nothing beyond
-  # that, and the actual number of backends is bounded by the deployed pools
-  # (500 worst case above), not by this value. Raising it does not raise
-  # steady-state memory; it removes a cliff.
-  parameters = {
-    max_connections = "600"
+  input = length(data.kubernetes_resources.barman_plugin_crd[0].objects)
+
+  lifecycle {
+    precondition {
+      condition     = length(data.kubernetes_resources.barman_plugin_crd[0].objects) > 0
+      error_message = <<-EOT
+        Database backups are enabled for this instance, but the Barman Cloud
+        plugin is not installed on this cluster.
+
+        The plugin is what performs WAL archiving and base backups, and it is a
+        cluster prerequisite: it is installed by the cluster root, not by this
+        one. Without it the event store would be created with archive settings
+        nothing acts on — no WAL shipped, no base backup taken, and no error,
+        until a restore is attempted and finds an empty archive.
+
+        Apply the cluster root against this cluster first (dcctl bootstrap does
+        this for you), or set enable_database_backups = false to create an
+        instance that deliberately has no backups.
+      EOT
+    }
   }
-
-  # `required` durability for this store specifically: it holds the audit
-  # journal and the control plane, RPO=0 is the point, and a write stall is a
-  # loud recoverable failure rather than silent loss. The event store takes
-  # `preferred` in A2.4 — that asymmetry is a decision, not an oversight.
-  #
-  # The module turns this off by construction below three instances, so a
-  # non-HA install does not inherit a setting that would wedge it.
-  synchronous     = true
-  data_durability = "required"
-
-  # WAL archiving + a daily base backup to this store's own bucket. Null when
-  # backups are off, which the module reads as "no backups for this store" and
-  # reports through its backup_destination output rather than leaving the caller
-  # to re-derive it from the flags.
-  backup = local.rdb_backup
-
-  # Null on every normal install. Non-null recovers this store from the archive
-  # instead of initialising it, and only takes effect on a Cluster that does not
-  # yet exist — see the restore variables and terraform_data.restore_guard.
-  restore = local.rdb_restore
-
-  # The operator must exist before a Cluster referencing its CRDs is applied.
-  # depends_on on the module (not merely writing it later) is what makes this
-  # ordering rather than hope: the cnpg helm_release waits for its own rollout,
-  # so depending on it is depending on the CRDs being established.
-  #
-  # When enable_cnpg is false this is an empty list and orders nothing — correct,
-  # because that flag asserts the operator is already present.
-  depends_on = [module.namespace, module.cnpg]
 }
 
 # TimescaleDB — the event store's hypertables (ADR-004), as a CloudNativePG
@@ -811,113 +480,9 @@ module "cnpg_tsdb" {
     "timescaledb.telemetry_level" = "off"
   }
 
-  depends_on = [module.namespace, module.cnpg]
-}
-
-# CloudNativePG — the operator that owns both database stores (ADR-020 A2).
-# Installs the operator + CRDs and, when backups are enabled, the Barman Cloud
-# plugin. The Clusters themselves are the two modules above.
-# Installed on non-HA installs too (decision D4) — backup is not an HA
-# feature, and one storage shape means HA is an `instances` count rather than a
-# migration.
-module "cnpg" {
-  source = "../modules/cnpg"
-  count  = var.enable_cnpg ? 1 : 0
-
-  namespace              = var.cnpg_namespace
-  operator_chart_version = var.cnpg_chart_version
-  plugin_chart_version   = var.cnpg_plugin_chart_version
-  enable_backup_plugin   = var.enable_database_backups
-
-  # 🔴 The CNPG control plane follows the instance's HA posture because it is IN
-  # the database failover path, not merely adjacent to it. A single-replica
-  # operator or backup plugin that dies with a node blocks promotion for every
-  # Cluster in the instance until it is rescheduled — measured at 10m50s against
-  # 1m51s when it survived. Replicating the databases and leaving the thing that
-  # promotes them un-replicated is the false-HA shape one level up.
-  ha = var.ha
-
-  # enable_pod_monitor is deliberately NOT passed, so it stays off. It was briefly
-  # wired to var.enable_monitoring; that is wrong twice over — a variable read
-  # orders nothing, so the release races kube-prometheus-stack's CRDs on a fresh
-  # apply, and enable_monitoring=false means "the cluster already HAS the operator",
-  # which is the case where scraping would have worked. See the variable's own docs.
-
-  # The plugin's chart renders an Issuer and two Certificates, so cert-manager's
-  # CRDs must be present AND its webhook serving before this runs. Ordering alone
-  # is not enough when cert-manager is installed in this same apply, which is why
-  # this depends on the module rather than merely being written after it — the
-  # cert-manager helm_release waits for its own rollout (including the chart's
-  # startupapicheck), so depending on it is depending on readiness.
-  #
-  # When enable_cert_manager is false the dependency is an empty list and this
-  # ordering does nothing. That case is handled at the caller: dcctl turns
-  # enable_database_backups off on the one path that drops cert-manager.
-  depends_on = [module.cert_manager]
-}
-
-# NGINX ingress controller — the L7 entry point fronting the GraphQL/HTTP surface
-# (ADR-002). The Ingress resource itself is rendered by the Helm chart.
-module "ingress_nginx" {
-  source = "../modules/ingress-nginx"
-  count  = var.enable_ingress_nginx ? 1 : 0
-
-  namespace     = var.ingress_nginx_namespace
-  chart_version = var.ingress_nginx_chart_version
-  ingress_class = var.ingress_class
-  use_host_port = var.ingress_use_host_port
-}
-
-# cert-manager — issues/renews the ingress TLS certificates (ADR-002). The Issuer
-# is rendered by the Helm chart once these CRDs exist.
-module "cert_manager" {
-  source = "../modules/cert-manager"
-  count  = var.enable_cert_manager ? 1 : 0
-
-  namespace     = var.cert_manager_namespace
-  chart_version = var.cert_manager_chart_version
-}
-
-# Observability — kube-prometheus-stack (Prometheus Operator + Prometheus +
-# Grafana + Alertmanager). Installs the ServiceMonitor/PrometheusRule CRDs the
-# instance chart's metrics.enabled rendering depends on, ahead of the Helm step.
-# Default-on (like Postgres/Timescale); set enable_monitoring=false to skip.
-module "monitoring" {
-  source = "../modules/monitoring"
-  count  = var.enable_monitoring ? 1 : 0
-
-  namespace     = var.monitoring_namespace
-  chart_version = var.monitoring_chart_version
-  slim          = var.monitoring_slim
-
-  # Export the CloudNativePG Clusters' own status conditions through
-  # kube-state-metrics (ADR-020 A1.5). Read from enable_cnpg rather than offered as
-  # a preference: with no CNPG CRDs there is nothing to watch, and the alerts that
-  # consume these series would load, select nothing and never fire.
-  cnpg_cluster_metrics = var.enable_cnpg
-
-  prometheus_retention = var.monitoring_prometheus_retention
-  prometheus_storage   = var.monitoring_prometheus_storage
-  storage_class        = var.monitoring_storage_class
-
-  # Grafana SSO (ADR-047): operator-tier-only OAuth against user-management + the
-  # /grafana ingress. Off unless the bring-up mints a client secret and supplies URLs.
-  grafana_oauth_enabled       = var.monitoring_grafana_oauth_enabled
-  grafana_oauth_client_id     = var.monitoring_grafana_oauth_client_id
-  grafana_oauth_client_secret = var.monitoring_grafana_oauth_client_secret
-  grafana_oauth_auth_url      = var.monitoring_grafana_oauth_auth_url
-  grafana_oauth_token_url     = var.monitoring_grafana_oauth_token_url
-  grafana_oauth_api_url       = var.monitoring_grafana_oauth_api_url
-  grafana_root_url            = var.monitoring_grafana_root_url
-  grafana_ingress_host        = var.monitoring_grafana_ingress_host
-  ingress_class               = var.ingress_class
-
-  # When SSO is on, the monitoring stack ships a /grafana Ingress, which the
-  # ingress-nginx admission webhook must validate. Both installs otherwise run in
-  # parallel, so the webhook can still be unreachable (connection refused) when the
-  # Grafana ingress is created. Serialize monitoring after ingress-nginx — whose
-  # helm_release waits for the controller (and thus its admission endpoint) to be
-  # ready. The app services avoid this naturally: their ingresses are created in the
-  # later helm step, after this apply completes.
-  depends_on = [module.ingress_nginx]
+  # 🔑 NO depends_on, for the same reason as the broker above: both the namespace
+  # and the CloudNativePG operator this Cluster needs belong to the cluster root.
+  # The operator's presence is not left to hope — backup_prerequisite_guard checks
+  # the plugin at plan time, and a Cluster created with no operator at all simply
+  # never reconciles, which is loud rather than silent.
 }
