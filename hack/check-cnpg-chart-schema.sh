@@ -41,7 +41,20 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart="$repo_root/deploy/opentofu/modules/cnpg-cluster/chart"
-variables="$repo_root/deploy/opentofu/instance/variables.tf"
+
+# EVERY root's variables.tf, not one named root.
+#
+# 🔴 THIS GATE FAILS GREEN IF IT LOOKS IN THE WRONG PLACE, which is why the file
+# list matters more here than the logic. It hardcoded the instance root, and the
+# CNPG chart pins are exactly the ones a cluster-prerequisite root owns — the
+# operator and its backup plugin are installed once per cluster. The split moved
+# them, and a version of this script that kept looking in the instance root would
+# have exited on "no variable 'cnpg_chart_version'"... which is the LUCKY outcome.
+# The unlucky one is a pin that exists in both roots with different values.
+#
+# Roots come from hack/tofu-roots.sh, which refuses an empty list.
+mapfile -t variable_files < <(cd "$repo_root" && bash hack/tofu-roots.sh |
+  while IFS= read -r r; do [ -e "$repo_root/$r/variables.tf" ] && echo "$repo_root/$r/variables.tf"; done)
 
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
@@ -58,20 +71,32 @@ python3 -c 'import yaml' 2>/dev/null || fail "python3 needs PyYAML (pip install 
 # reports the NEXT variable's default and the check then validates against a
 # schema nobody installs.
 tofu_default() {
-  python3 - "$variables" "$1" <<'PY'
+  python3 - "$1" "${variable_files[@]}" <<'PY'
 import re, sys
-source, name = open(sys.argv[1]).read(), sys.argv[2]
-start = source.find('\nvariable "%s"' % name)
-if start < 0:
-    sys.exit('no variable %r in variables.tf' % name)
-block = source[start + 1:]
-nxt = block[1:].find('\nvariable "')
-if nxt >= 0:
-    block = block[:nxt + 1]
-m = re.search(r'(?m)^\s*default\s*=\s*"([^"]*)"', block)
-if not m:
-    sys.exit('variable %r declares no string default' % name)
-print(m.group(1))
+name, files = sys.argv[1], sys.argv[2:]
+hits = {}
+for path in files:
+    source = open(path).read()
+    start = source.find('\nvariable "%s"' % name)
+    if start < 0:
+        continue
+    block = source[start + 1:]
+    nxt = block[1:].find('\nvariable "')
+    if nxt >= 0:
+        block = block[:nxt + 1]
+    m = re.search(r'(?m)^\s*default\s*=\s*"([^"]*)"', block)
+    if not m:
+        sys.exit('variable %r declares no string default in %s' % (name, path))
+    hits[path] = m.group(1)
+if not hits:
+    sys.exit('no variable %r in any root variables.tf (looked in: %s)' % (name, ', '.join(files)))
+# A pin defined in two roots with DIFFERENT values is itself a failure: the two
+# roots would install different chart versions under one name, and this check
+# would validate against whichever it happened to read first.
+if len(set(hits.values())) > 1:
+    sys.exit('variable %r is pinned in more than one root and they disagree: %s' %
+             (name, ', '.join('%s=%s' % (p, v) for p, v in hits.items())))
+print(next(iter(hits.values())))
 PY
 }
 
