@@ -784,7 +784,17 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		if st.NoMonitoring {
 			monitoring = "monitoring SKIPPED (--no-monitoring)"
 		}
-		wouldDo("tofu init+apply deploy/opentofu (NATS, Postgres, Timescale, ingress, cert-manager, " + monitoring + ")")
+		// TWO applies, named separately, because that is what a dry run is FOR. The
+		// operator reading this is deciding whether to let dcctl touch a cluster, and
+		// the thing worth knowing is that one of these applies is CLUSTER-WIDE and
+		// shared with every other instance while the other is this instance's alone.
+		// Describing them as one line would hide exactly the distinction the split
+		// exists to make.
+		wouldDo("tofu init+apply deploy/opentofu/cluster — shared, once per cluster " +
+			"(CloudNativePG operator + backup plugin, ingress, cert-manager, " + monitoring +
+			", the shared relational database, the backup object store)")
+		wouldDo("tofu init+apply deploy/opentofu/instance — this instance only " +
+			"(NATS, Timescale)")
 		return nil
 	}
 	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",

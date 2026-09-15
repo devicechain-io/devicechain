@@ -788,7 +788,7 @@ build_target_dcctl() {
 #
 # TF_VAR_* is honoured because dcctl passes no `-var` for these (see infraVars) —
 # an explicit -var would outrank the environment.
-# root_vars_file <tree> -- the instance root's variables.tf inside a checkout,
+# root_vars_files <tree> -- every OpenTofu ROOT's variables.tf inside a checkout,
 # whichever layout that checkout uses.
 #
 # 🔴 THIS FUNCTION EXISTS BECAUSE THE RIG READS TWO TREES AT DIFFERENT AGES. The
@@ -804,29 +804,61 @@ build_target_dcctl() {
 # that baseline never shipped, and the drill would be measuring an upgrade from
 # something that was never released. An absence read as an answer, in the one
 # direction that quietly corrupts the experiment.
-root_vars_file() {
-  local tree="$1" p
-  for p in "$tree/deploy/opentofu/instance/variables.tf" "$tree/deploy/opentofu/variables.tf"; do
-    [[ -f "$p" ]] && { printf '%s\n' "$p"; return 0; }
+#
+# 🔴 AND IT PRINTS EVERY ROOT'S FILE, NOT THE FIRST ONE THAT EXISTS. The roots split
+# again after the per-root move: the cluster prerequisites — ingress-nginx,
+# cert-manager, the CloudNativePG operator — took their chart pins into
+# deploy/opentofu/cluster, and those are three of the pins this rig reads. A function
+# returning only the instance root would answer "no default" for each of them, which
+# takes the branch that EXPORTS HEAD's pin over the baseline's — installing a chart
+# version the baseline never shipped, and measuring an upgrade from something that
+# was never released.
+#
+# Roots are discovered structurally rather than listed, for the same reason
+# hack/tofu-roots.sh exists: any directory under deploy/opentofu holding a .tf file
+# with no `modules` segment. It is restated here rather than shelling out to that
+# script because this function also reads an EXTRACTED BASELINE, whose own copy of
+# hack/ is whatever that release shipped.
+root_vars_files() {
+  local tree="$1" found=()
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && found+=("$f")
+  done < <(find "$tree/deploy/opentofu" -type f -name variables.tf 2>/dev/null |
+    grep -v -E '(^|/)(modules|\.terraform)(/|$)' | sort)
+  [[ ${#found[@]} -gt 0 ]] || fail "no root variables.tf under $tree/deploy/opentofu.
+The chart pins cannot be read, and an unreadable file here reads as \"this tree pins
+nothing\" — which would silently install a chart version this tree never declared."
+  printf '%s\n' "${found[@]}"
+}
+
+# tofu_default_any <var> <file...> — the first non-empty default across every root's
+# variables file. A pin lives in exactly one root; searching all of them is what makes
+# this immune to which root that is today.
+tofu_default_any() {
+  local var="$1" f out
+  shift
+  for f in "$@"; do
+    out="$(tofu_default "$f" "$var")"
+    [[ -n "$out" ]] && { printf '%s\n' "$out"; return 0; }
   done
-  fail "no root variables.tf under $tree (looked in deploy/opentofu/instance/ and
-deploy/opentofu/). The chart pins cannot be read, and an unreadable file here reads
-as \"this tree pins nothing\" — which would silently install a chart version this
-tree never declared."
+  return 0
 }
 
 pin_baseline_charts() {
-  local var pin baseline_default pinned=()
+  local var pin baseline_default pinned=() head_vars=() baseline_vars=()
   for var in nats_chart_version ingress_nginx_chart_version cert_manager_chart_version; do
     # The value the WORKING TREE pins, read out of the tree rather than repeated
     # here, so a deliberate bump at HEAD carries into the rig instead of drifting
     # away from it behind a second copy nobody remembers to edit.
-    pin="$(tofu_default "$(root_vars_file "$repo_root")" "$var")"
+    mapfile -t head_vars < <(root_vars_files "$repo_root")
+    pin="$(tofu_default_any "$var" "${head_vars[@]}")"
     [[ -n "$pin" ]] || fail "the working tree declares no default for $var, so this rig
 cannot pin the baseline's copy of that chart. Either the variable was renamed or the
 pin was removed — hack/check-chart-pins.sh is the authority on the second."
 
-    baseline_default="$(tofu_default "$(root_vars_file "$baseline_src")" "$var")"
+    mapfile -t baseline_vars < <(root_vars_files "$baseline_src")
+    baseline_default="$(tofu_default_any "$var" "${baseline_vars[@]}")"
     if [[ -n "$baseline_default" ]]; then
       note "$baseline_tag pins $var itself ($baseline_default); left alone"
       continue

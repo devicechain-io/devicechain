@@ -26,18 +26,35 @@ import (
 // and it is a hole that fails SILENTLY in the one direction that matters: the run
 // proceeds and the apply deletes the credential.
 //
-// ✅ VERIFIED 2026-09-11, and the method is repeatable without a cluster. Check the
-// list against what the PRE-CUTOVER configuration would create, not against this
-// file and not against memory:
+// ✅ VERIFIED 2026-09-11. Check the list against what the PRE-CUTOVER configuration
+// would create, not against this file and not against memory:
 //
+//	kind create cluster --name dc-fence-probe
 //	git archive <commit-before-the-cutover> deploy/opentofu | tar -x -C /tmp/pre
-//	cd /tmp/pre/deploy/opentofu && terraform init -backend=false
-//	terraform plan -refresh=false -var kubeconfig_context=<any> -out=p.bin
+//	cd /tmp/pre/opentofu/instance && terraform init -backend=false
+//	terraform plan -refresh=false -var kubeconfig_context=kind-dc-fence-probe -out=p.bin
 //	terraform show -json p.bin | jq -r '.resource_changes[].address'
 //
 // A plan against an EMPTY state enumerates every address the old tree would have
-// put in a real instance's state, which is exactly what this list has to cover — and
-// it does so without standing anything up, so it can be re-run by anyone.
+// put in a real instance's state, which is exactly what this list has to cover.
+//
+// 🔴 IT NEEDS A REACHABLE CLUSTER, AND THIS COMMENT USED TO SAY OTHERWISE. It
+// claimed the enumeration runs "without standing anything up, so it can be re-run by
+// anyone". MEASURED 2026-09-14: it never could. main.tf has carried
+// `data.kubernetes_resources.legacy_db_statefulsets` since #561 and
+// `data.kubernetes_resources.object_store_pvc` since #563 — both predating this
+// comment by months — and a plan must resolve both against a live API. No variable
+// combination removes either; tried with enable_database_backups=false and
+// enable_cnpg=false, and the plan still died on `i/o timeout`.
+//
+// 🔑 An EMPTY kind cluster is enough. Nothing has to be installed on it — the two
+// data sources return zero objects against a bare cluster, which is the behaviour the
+// cutover guard already depends on. The path above also changed: the roots moved into
+// their own directories, so the init runs in `opentofu/instance`, not at the top.
+//
+// The other half of the 2026-09-11 verification was real and is unaffected: a
+// 30-day-old cluster held exactly these nine addresses. It was the CLUSTER-FREE,
+// re-runnable claim that was false, which is the half a future author relies on.
 //
 // ✅ AND CONFIRMED AGAINST A REAL INSTANCE, which is the check this comment used to
 // ask for and could not perform. A 30-day-old cluster built by a pre-cutover dcctl
