@@ -5,12 +5,10 @@ package bootstrap
 
 import (
 	"fmt"
-	"io/fs"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
-
-	assets "github.com/devicechain-io/dc-deploy"
 )
 
 // The CloudNativePG operator (ADR-020 A2) is installed on every bootstrap, HA or
@@ -167,19 +165,11 @@ func TestTheDefaultBootstrapKeepsDatabaseBackupsOn(t *testing.T) {
 // `enable_backup_plugin = false` in the module call turns every install's backups
 // off while leaving enable_database_backups=true and every assertion above green.
 func TestTheBackupFlagIsActuallyWiredToThePlugin(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
-	if err != nil {
-		t.Fatalf("reading the embedded main.tf: %v", err)
-	}
 
-	const wiring = "enable_backup_plugin   = var.enable_database_backups"
-	if !strings.Contains(string(body), wiring) {
-		t.Errorf("the cnpg module call no longer contains %q.\n"+
-			"  enable_database_backups is only the plugin's switch while this line connects them;\n"+
+	requireWiredInSomeRoot(t, "main.tf", "enable_backup_plugin   = var.enable_database_backups",
+		"  enable_database_backups is only the plugin's switch while this line connects them;\n"+
 			"  without it the variable is decoration and the tests that pin its default prove nothing.\n"+
-			"  If the wiring was legitimately reformatted, update this string — do not delete the test.",
-			wiring)
-	}
+			"  If the wiring was legitimately reformatted, update this string — do not delete the test.")
 }
 
 // The pins above are only as good as the reader underneath them, and the first
@@ -223,12 +213,41 @@ func effectiveInfraVar(t *testing.T, st *State, name string) string {
 // root — the same bytes the apply runs, not a copy of the repo file — and fails
 // if it cannot find the variable at all, so a rename surfaces as a failure rather
 // than as an empty string that quietly matches nothing.
-func tofuVariableDefault(t *testing.T, name string) string {
+func tofuVariableDefault(t *testing.T, varName string) string {
 	t.Helper()
 
-	body, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
-	if err != nil {
-		t.Fatalf("reading the embedded variables.tf: %v", err)
+	// 🔴 EVERY ROOT, AND A DISAGREEMENT IS A FAILURE. After the split a variable
+	// lives in whichever root declares it, and a reader pointed at one root reports
+	// "no such variable" for every pin that moved — which reads as a rename and
+	// invites deleting the pin. Worse in the other direction: a variable declared in
+	// BOTH roots with DIFFERENT defaults would have this return whichever root was
+	// read first, and the pin would then describe one half of an instance while the
+	// other half installed something else.
+	var body []byte
+	var declaredIn []string
+	for name, src := range rootSources(t, "variables.tf") {
+		if strings.Contains(src, "\nvariable \""+varName+"\"") {
+			declaredIn = append(declaredIn, name)
+			body = []byte(src)
+		}
+	}
+	sort.Strings(declaredIn)
+	if len(declaredIn) > 1 {
+		// Only a disagreement is fatal; the same default in both roots is how a
+		// genuinely shared question (namespace, ha) is declared.
+		defaults := map[string]string{}
+		for _, root := range declaredIn {
+			defaults[root] = rawVariableDefault(t, rootSources(t, "variables.tf")[root], varName)
+		}
+		first := defaults[declaredIn[0]]
+		for _, root := range declaredIn[1:] {
+			if defaults[root] != first {
+				t.Fatalf("variable %q is declared in %s with DIFFERENT defaults (%v).\n"+
+					"  One name must mean one value: the two roots are two halves of one\n"+
+					"  instance, and a pin here would describe only whichever was read first.",
+					varName, strings.Join(declaredIn, " and "), defaults)
+			}
+		}
 	}
 
 	// 🔴 BOUNDED TO THE VARIABLE'S OWN BLOCK, which the first version was not.
@@ -241,7 +260,18 @@ func tofuVariableDefault(t *testing.T, name string) string {
 	// Splitting on top-level `variable "` declarations first makes the miss
 	// impossible rather than unlikely. Still not an HCL parser, and does not need
 	// to be: it pins one scalar in a file this repo controls.
-	chunk := variableBlock(t, string(body), name)
+	if len(declaredIn) == 0 {
+		t.Fatalf("no variable %q was found in any embedded root's variables.tf.\n"+
+			"  If it was renamed, this test is no longer pinning anything and must follow it.", varName)
+	}
+	return rawVariableDefault(t, string(body), varName)
+}
+
+// rawVariableDefault pulls one variable's default out of one root's source.
+func rawVariableDefault(t *testing.T, source, varName string) string {
+	t.Helper()
+
+	chunk := variableBlock(t, source, varName)
 
 	re := regexp.MustCompile(`(?m)^\s*default\s*=\s*(\S+)`)
 	m := re.FindStringSubmatch(chunk)
@@ -249,7 +279,7 @@ func tofuVariableDefault(t *testing.T, name string) string {
 		t.Fatalf("variable %q declares no default in the embedded variables.tf.\n"+
 			"  A variable with no default is REQUIRED, and dcctl passes no value for this one —\n"+
 			"  so the apply would fail rather than quietly install the wrong thing. Either restore\n"+
-			"  the default or make dcctl pass it explicitly.", name)
+			"  the default or make dcctl pass it explicitly.", varName)
 	}
 	return strings.Trim(m[1], `"`)
 }

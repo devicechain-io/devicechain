@@ -39,7 +39,72 @@ const (
 // kill lands in the middle of exactly the slow operation it was sized for.
 const tofuGracefulStopBudget = 20 * time.Minute
 
-func applyInfra(ctx context.Context, st *State) (err error) {
+// applyInfra brings the cluster's shared prerequisites and this instance's own
+// infrastructure up, in that order.
+//
+// 🔴 THE ORDER IS THE ONLY THING ENFORCING A DEPENDENCY OPENTOFU USED TO ENFORCE
+// FOR US. One root and one graph used to order "install the operator" before
+// "create a database Cluster", and "install cert-manager" before "install the backup
+// plugin that renders an Issuer". Two roots are two graphs, so the edge between them
+// is this function's sequence and nothing else. That is why the two applies live
+// behind one call rather than being two pipeline steps a future edit could reorder
+// or run selectively.
+//
+// 🔑 AND IT IS WHAT MAKES A SECOND INSTANCE CHEAP RATHER THAN DANGEROUS. The
+// prerequisite root is keyed on the CLUSTER, so the second bootstrap against one
+// cluster re-applies the same state convergently — a no-op — instead of building a
+// second ingress controller and a second relational database.
+func applyInfra(ctx context.Context, st *State) error {
+	if st.ClusterUID == "" {
+		return fmt.Errorf("the cluster's identity is not known, so dcctl cannot tell which " +
+			"cluster's shared prerequisite state to use. Refusing rather than falling back to " +
+			"the kube-context name: a cluster deleted and recreated wears the same context name, " +
+			"and state filed under it would be inherited by a cluster holding none of those " +
+			"resources")
+	}
+
+	// Every value dcctl decides, computed ONCE and then routed by which root declares
+	// it. See splitVars for why this is computed rather than two hand-kept lists.
+	clusterVars, instanceVars, err := splitVars(infraVars(st))
+	if err != nil {
+		return err
+	}
+
+	// The shared infrastructure namespace and every minted credential, BEFORE either
+	// apply.
+	//
+	// 🔴 IT HAS TO EXIST BEFORE THE APPLIES BECAUSE THE CREDENTIALS DO. CloudNativePG
+	// builds a database role from a Secret when it CREATES the Cluster, so a Secret
+	// written afterwards leaves the role on one password and every service on another
+	// — and a Secret cannot be written into a namespace that is not there.
+	//
+	// 🔑 IT MOVED UP HERE RATHER THAN INTO ONE OF THE APPLIES, because after the
+	// split BOTH roots need it: the shared relational store is created by the cluster
+	// root and the event store by the instance root, and each reads its credentials
+	// Secret out of this one namespace.
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
+	}
+	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
+		return err
+	}
+	if err := writeMintedSecrets(ctx, typed, st); err != nil {
+		return err
+	}
+
+	archive, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
+	if err != nil {
+		return err
+	}
+
+	// The archive contract, READ BACK from the root that owns the object store rather
+	// than recomputed here. Appended after the instance's own variables so that what
+	// the cluster actually built wins over anything derived from this run's flags.
+	return applyInstanceInfra(ctx, st, append(instanceVars, archive.archiveVars()...))
+}
+
+func applyInstanceInfra(ctx context.Context, st *State, vars []string) (err error) {
 	tofuBin, err := findTofu()
 	if err != nil {
 		return err
@@ -124,48 +189,22 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
+	// 🔴 AND THE SECOND FENCE, FOR THE SECOND TIME THIS ROOT STOPPED DECLARING
+	// THINGS ITS STATE STILL HOLDS. An instance built before the cluster
+	// prerequisites moved to their own root has them in THIS state, and this
+	// configuration no longer declares them — so the apply below would destroy the
+	// CNPG operator, ingress, cert-manager, monitoring, the object store and the
+	// shared relational database. Same position and same reason as the fence above:
+	// after Init because it reads state, before everything else because everything
+	// else assumes it did not fire.
+	if err := checkNoPreSplitInfrastructure(ctx, tf, st.Instance); err != nil {
+		return err
+	}
+
 	// Refuse to shrink a broker cluster that is already carrying replicated data.
 	// Reads the CURRENT state, so it must run after Init and before Apply — this is
 	// the only point where both the applied topology and the requested one are known.
 	if err := checkHaNotTornDown(ctx, st, tf); err != nil {
-		return err
-	}
-
-	vars := infraVars(st)
-
-	// The shared infrastructure namespace, created here and handed to OpenTofu.
-	//
-	// 🔴 IT HAS TO EXIST BEFORE THE APPLY BECAUSE THE CREDENTIALS DO. CloudNativePG
-	// builds the database role from a Secret when it CREATES the Cluster, so a Secret
-	// written after the apply leaves the role on one password and every service on
-	// another — which means dcctl writes those Secrets first, and a Secret cannot be
-	// written into a namespace that is not there. See adoptInfraNamespace for why the
-	// namespace is then IMPORTED rather than switched off in the configuration.
-	_, _, typed, err := kubeClients(st.KubeContext)
-	if err != nil {
-		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
-	}
-	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
-		return err
-	}
-	if err := adoptInfraNamespace(ctx, tf, infraNamespace, vars); err != nil {
-		return err
-	}
-
-	// EVERY MINTED CREDENTIAL, WRITTEN BEFORE THE APPLY THAT CONSUMES IT.
-	//
-	// 🔴 THIS IS THE HALF THAT CANNOT BE REORDERED. CloudNativePG reads the
-	// credentials Secret when it CREATES a Cluster and never again — the owner role
-	// is declared under `managed.roles` with no `passwordSecret`, so nothing
-	// reconciles it afterwards. A Secret written after this apply would leave the
-	// role on a password no service has and every service on one the role has never
-	// been told about, with nothing failing in between.
-	//
-	// The object store's root credentials and the broker's TLS material are here for
-	// the weaker version of the same reason: each is read by a workload the apply
-	// stands up, so a value that arrives later is a value something has already
-	// started without.
-	if err := writeMintedSecrets(ctx, typed, st); err != nil {
 		return err
 	}
 

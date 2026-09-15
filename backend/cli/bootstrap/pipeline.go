@@ -63,9 +63,21 @@ func IsUnpublishedImageVersion(tag string) bool {
 type State struct {
 	Instance    string
 	KubeContext string
-	Profile     string
-	DryRun      bool
-	AssumeYes   bool
+	// ClusterUID identifies the CLUSTER this instance is being built on — the
+	// kube-system namespace's UID, which survives a rebuild under the same context
+	// name and is therefore what the shared prerequisite state is filed under.
+	//
+	// 🔴 EMPTY MEANS "NOT ESTABLISHED", AND THE PREREQUISITE APPLY REFUSES IT rather
+	// than falling back to the context name. A cluster deleted and recreated wears
+	// the same context name, so state keyed on that name would be inherited by a
+	// cluster holding none of those resources — and the apply would plan updates to
+	// things that do not exist. The command layer fails before it gets here; this
+	// field being empty in a pipeline built by hand (a test, a future caller) must
+	// fail too rather than quietly pick a key.
+	ClusterUID string
+	Profile    string
+	DryRun     bool
+	AssumeYes  bool
 	// Image source. By default the pipeline pulls published images
 	// (ImageRegistry/<area>:ImageVersion); BuildImages flips to the developer
 	// path of building from source into a local registry.

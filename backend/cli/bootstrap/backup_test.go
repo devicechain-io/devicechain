@@ -4,7 +4,6 @@
 package bootstrap
 
 import (
-	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -56,10 +55,6 @@ func TestTheDefaultBootstrapGetsARealBackupDestination(t *testing.T) {
 // near-identical blocks produces. The event store is the easier one to lose,
 // because losing it breaks nothing an operator would notice.
 func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
-	if err != nil {
-		t.Fatalf("reading the embedded main.tf: %v", err)
-	}
 	// Collapse runs of spaces before matching. `terraform fmt` ALIGNS the `=` of
 	// adjacent arguments, so adding a longer argument name to one of these module
 	// blocks silently rewrites its neighbours' whitespace — which is exactly what
@@ -67,7 +62,14 @@ func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
 	// `backup = ` into `backup  = `. The wiring was intact; only the literal moved.
 	// Matching on the assignment rather than on its column keeps the test pointed
 	// at the thing that matters.
-	main := regexp.MustCompile(`[ \t]+`).ReplaceAllString(string(body), " ")
+	// 🔑 ACROSS EVERY ROOT, because the two stores no longer live in the same one:
+	// the relational store is a cluster prerequisite and the event store is
+	// per-instance. What this test asserts is unchanged — both stores are wired to a
+	// destination — and it deliberately does not care which root does the wiring.
+	main := ""
+	for _, src := range rootSources(t, "main.tf") {
+		main += regexp.MustCompile(`[ \t]+`).ReplaceAllString(src, " ") + "\n"
+	}
 
 	for _, tc := range []struct {
 		what  string
@@ -102,20 +104,63 @@ func TestBothStoresAreActuallyWiredToABackupDestination(t *testing.T) {
 // what stops a configuration that provisions an object store and two ObjectStore
 // resources for a plugin that was never installed — which does not fail, it just
 // archives to a destination nothing writes to.
-func TestBackupsAreDerivedFromTheOperatorToo(t *testing.T) {
-	body, err := fs.ReadFile(assets.OpenTofuInstance(), "main.tf")
-	if err != nil {
-		t.Fatalf("reading the embedded main.tf: %v", err)
-	}
-
+//
+// 🔴 AND AFTER THE ROOT SPLIT THE SAME CONJUNCTION IS RIGHT IN ONE ROOT AND WRONG
+// IN THE OTHER, which is why this is two assertions rather than one.
+//
+// The CLUSTER root both installs the operator and creates the relational store, so
+// asking "did I install the plugin?" about its own variable is exactly right there.
+//
+// The INSTANCE root does not install anything of the sort: it runs permanently in
+// the mode enable_cnpg = false describes, "the cluster already runs CNPG". MEASURED
+// on the pre-split tree: enable_database_backups = true with enable_cnpg = false
+// evaluates backups_on to FALSE, which drops the ObjectStore, the ScheduledBackup
+// and every archive setting on the Cluster. Carrying the conjunction across the
+// split would therefore have turned every instance's event-store backups off, with
+// the flag still reading true and nothing failing.
+func TestTheOperatorConjunctionLivesOnlyWhereItIsTrue(t *testing.T) {
 	const derivation = "backups_on = var.enable_database_backups && var.enable_cnpg"
-	if !strings.Contains(string(body), derivation) {
-		t.Errorf("main.tf no longer derives backups_on as %q.\n"+
-			"  Both halves matter: --no-cnpg already sets enable_database_backups=false, so\n"+
-			"  dropping the conjunction looks harmless today and stops being harmless the\n"+
-			"  moment anything else turns the operator off. A destination provisioned for an\n"+
-			"  absent plugin is a running MinIO, a 20Gi volume, and no backups.",
-			derivation)
+
+	sources := rootSources(t, "main.tf")
+	if !strings.Contains(sources[assets.ClusterRootDir], derivation) {
+		t.Errorf("the cluster root no longer derives backups_on as %q.\n"+
+			"  Both halves matter there: it installs the operator AND creates the relational\n"+
+			"  store, so a destination provisioned for an absent plugin is a running MinIO, a\n"+
+			"  20Gi volume, and no backups.", derivation)
+	}
+	if strings.Contains(sources[assets.InstanceRootDir], derivation) {
+		t.Errorf("the instance root derives backups_on as %q, and it must not.\n"+
+			"  That root never installs the operator, so it runs with enable_cnpg = false by\n"+
+			"  construction and this conjunction evaluates FALSE on every install — dropping\n"+
+			"  the event store's archiving silently while the flag still reads true.\n"+
+			"  Whether the plugin exists is a question about the CLUSTER, and\n"+
+			"  backup_prerequisite_guard is what asks it.", derivation)
+	}
+}
+
+// 🔴 AND THE QUESTION THE CONJUNCTION USED TO ANSWER MUST STILL BE ASKED. Removing
+// it from the instance root is only safe because something else checks that the
+// plugin is actually installed — otherwise the fix for a silent no-backups bug is a
+// different silent no-backups bug, one where the Cluster is created with archive
+// settings nothing acts on.
+//
+// This is the assertion that fails if that guard is ever deleted as redundant.
+func TestTheInstanceRootAsksTheClusterWhetherThePluginIsThere(t *testing.T) {
+	src := rootSources(t, "main.tf")[assets.InstanceRootDir]
+
+	for _, want := range []string{
+		// The CRD the Barman Cloud plugin serves — its presence IS the plugin's.
+		"objectstores.barmancloud.cnpg.io",
+		// ...read at plan time, and refused as a precondition rather than reported.
+		"backup_prerequisite_guard",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the instance root no longer contains %q.\n"+
+				"  Without it nothing checks that the plugin performing the archiving exists:\n"+
+				"  the event store would be created with archive settings nothing acts on —\n"+
+				"  no WAL shipped, no base backup taken, no error — until a restore finds an\n"+
+				"  empty archive.", want)
+		}
 	}
 }
 
