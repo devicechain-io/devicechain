@@ -126,6 +126,22 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err != nil {
 		return archive, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
 	}
+	archive, err = archiveFromOutputs(outputs)
+	if err != nil {
+		return archive, err
+	}
+	return archive, nil
+}
+
+// archiveFromOutputs decodes the archive contract out of the cluster root's outputs.
+//
+// 🔑 SEPARATED FROM THE APPLY SO IT CAN BE EXERCISED. applyClusterPrereqs needs a tofu
+// binary and a live cluster, so every branch inside it is unreachable from a test —
+// and a mutation round proved it: reading a MISSING output as an empty one survived,
+// because nothing could supply the input that reaches that branch. The decode is
+// ordinary map handling and does not need a cluster to be wrong.
+func archiveFromOutputs(outputs map[string]tfexec.OutputMeta) (ClusterArchive, error) {
+	var archive ClusterArchive
 	for _, field := range []struct {
 		name string
 		into *string
@@ -139,9 +155,9 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		meta, ok := outputs[field.name]
 		if !ok {
 			// 🔴 A MISSING OUTPUT IS AN ERROR, NOT AN EMPTY STRING. Empty is a
-			// meaningful value here — it is what this root returns when backups are
-			// off — so reading an ABSENT output as empty would turn "the cluster root
-			// no longer exports this" into "this cluster has no backups", and the
+			// meaningful value here — it is what the cluster root returns when backups
+			// are off — so reading an ABSENT output as empty would turn "the cluster
+			// root no longer exports this" into "this cluster has no backups", and the
 			// instance would be built with archiving silently disabled.
 			return archive, fmt.Errorf("the cluster prerequisite root did not export %q; "+
 				"dcctl cannot tell whether this cluster has an archive or whether the "+

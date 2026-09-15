@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	assets "github.com/devicechain-io/dc-deploy"
 )
@@ -158,5 +159,61 @@ func TestBothRootsDeclareVariablesThatCanBeRead(t *testing.T) {
 					tc.name)
 			}
 		})
+	}
+}
+
+// 🔴 THE PARSER'S OWN CONTROL, PLANTED. Deleting the zero-declarations refusal from
+// rootDeclaredVars SURVIVED the mutation round — not because the refusal is wrong, but
+// because nothing in the tree currently reaches it: both real roots declare dozens of
+// variables, so the branch is a BELIEF rather than a behaviour.
+//
+// 🔑 Rule 33's move: plant the case the guard exists FOR rather than assert the line is
+// present. Without the refusal, a root whose variables.tf failed to parse reports that
+// it declares NOTHING — and splitVars would then route every variable to the other root
+// and refuse the ones only the broken root declares, blaming the caller for a parser
+// fault.
+func TestARootThatParsesToNoVariablesIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		src  string
+	}{
+		{"an empty file", ""},
+		{"comments only", "# Copyright The DeviceChain Authors\n# nothing declared here\n"},
+		{
+			// The shape a broken parser actually produces: real content, no top-level
+			// `variable "` at column zero.
+			"declarations that are all indented",
+			"locals {\n  variable \"not_a_declaration\" = 1\n}\n",
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			_, err := rootDeclaredVars(fstest.MapFS{
+				"variables.tf": &fstest.MapFile{Data: []byte(tc.src)},
+			})
+			if err == nil {
+				t.Fatal("a root that declares no variables was accepted; splitVars would then " +
+					"route every variable away from it and blame the caller for a parser fault")
+			}
+		})
+	}
+
+	// The counterweight: one real declaration is enough to be read, so the refusal is
+	// about emptiness and not about the parser rejecting everything.
+	names, err := rootDeclaredVars(fstest.MapFS{
+		"variables.tf": &fstest.MapFile{Data: []byte("variable \"kubeconfig_context\" {\n  type = string\n}\n")},
+	})
+	if err != nil {
+		t.Fatalf("a root with one declaration was refused: %v", err)
+	}
+	if !names["kubeconfig_context"] {
+		t.Errorf("the declaration was not seen: %v", names)
+	}
+}
+
+// A root with no variables.tf at all is a different fault from one that parses to
+// nothing, and it must also be an error rather than an empty set.
+func TestARootWithNoVariablesFileIsRefused(t *testing.T) {
+	if _, err := rootDeclaredVars(fstest.MapFS{}); err == nil {
+		t.Error("a root with no variables.tf was accepted as declaring nothing")
 	}
 }

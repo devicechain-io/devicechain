@@ -216,3 +216,76 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			"be keyed on the refusal", fset.Position(unwind), fset.Position(run))
 	}
 }
+
+// 🔴 AN UNIDENTIFIABLE CLUSTER MUST STOP THE RUN, NOT WARN.
+//
+// The identity was a nicety while it only annotated a local record — an instance
+// whose record lacked it was merely indistinguishable from one on a rebuilt cluster.
+// After the root split it is the KEY THE SHARED PREREQUISITE STATE IS FILED UNDER, so
+// carrying on has two possible meanings and both are worse than stopping: falling back
+// to the context name files this cluster's state under a name the next cluster
+// inherits, and skipping the prerequisite apply bootstraps an instance onto a cluster
+// with no operator, no ingress and no database.
+//
+// 🔑 THIS IS A SOURCE-LEVEL ASSERTION BECAUSE THE BRANCH IS IN A RunE. It creates
+// clusters and talks to a live API, so no unit test can execute it — the same case leg
+// 3 met and answered the same way. A mutation round proved the gap: turning the refusal
+// back into a warning SURVIVED, because the ordering guard above checks that
+// IdentifyCluster is CALLED and says nothing about what happens when it fails.
+func TestAnUnidentifiableClusterStopsTheBootstrap(t *testing.T) {
+	fset := token.NewFileSet()
+	src, err := os.ReadFile("bootstrap.go")
+	if err != nil {
+		t.Fatalf("reading bootstrap.go: %v", err)
+	}
+	file, err := parser.ParseFile(fset, "bootstrap.go", src, 0)
+	if err != nil {
+		t.Fatalf("parsing bootstrap.go: %v", err)
+	}
+
+	var checked bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		stmt, ok := n.(*ast.IfStmt)
+		if !ok || stmt.Init == nil {
+			return true
+		}
+		// The shape `if uid, err := bootstrap.IdentifyCluster(...); err != nil {`.
+		assign, ok := stmt.Init.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "IdentifyCluster" {
+			return true
+		}
+		checked = true
+
+		// The failure arm must RETURN. A branch that prints and falls through leaves
+		// clusterUID empty, and everything downstream then behaves as though the
+		// operator had asked for an unidentified cluster.
+		var returns bool
+		ast.Inspect(stmt.Body, func(inner ast.Node) bool {
+			if _, ok := inner.(*ast.ReturnStmt); ok {
+				returns = true
+			}
+			return true
+		})
+		if !returns {
+			t.Errorf("the IdentifyCluster failure branch at %s does not return.\n"+
+				"  A warning leaves clusterUID empty, and the shared prerequisite state then has\n"+
+				"  no key: dcctl would either file it under the kube-context name (which the next\n"+
+				"  cluster inherits) or skip the prerequisite apply entirely.",
+				fset.Position(stmt.Pos()))
+		}
+		return true
+	})
+
+	if !checked {
+		t.Fatal("bootstrap.go no longer has an `if ...IdentifyCluster(...); err != nil` branch, " +
+			"so nothing here can say what happens when a cluster cannot be identified")
+	}
+}

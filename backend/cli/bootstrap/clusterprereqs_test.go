@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
 // 🔴 NO ARCHIVE MEANS NO VARIABLES, NOT EMPTY ONES. Every archive variable has a
@@ -161,5 +164,97 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 				pair.first, fset.Position(positions[pair.first]),
 				pair.then, fset.Position(positions[pair.then]), pair.why)
 		}
+	}
+}
+
+// 🔴 A MISSING OUTPUT MUST STOP THE RUN, and the mutation round is why this test
+// exists: reading an absent output as an empty string SURVIVED, because every branch
+// inside applyClusterPrereqs needs a tofu binary and a live cluster to reach. The
+// decode was extracted so the input class that reaches it can be supplied.
+//
+// 🔑 THE FAILURE THIS PREVENTS IS SILENT. Empty is a legitimate value — it is what the
+// cluster root exports when backups are off — so an absent output read as empty says
+// "this cluster has no archive" when what actually happened is that the cluster root
+// stopped exporting it. The instance is then built with archiving disabled, comes up
+// green, and the difference surfaces when someone tries to restore.
+func TestAMissingArchiveOutputIsAnErrorNotAnEmptyArchive(t *testing.T) {
+	full := map[string]tfexec.OutputMeta{
+		"backup_endpoint_url":          {Value: []byte(`"http://dc-object-store.dc-system:9000"`)},
+		"backup_credentials_secret":    {Value: []byte(`"dc-object-store-credentials"`)},
+		"backup_access_key_id_key":     {Value: []byte(`"MINIO_ROOT_USER"`)},
+		"backup_secret_access_key_key": {Value: []byte(`"MINIO_ROOT_PASSWORD"`)},
+		"backup_bucket_tsdb":           {Value: []byte(`"devicechain-tsdb"`)},
+	}
+
+	// The counterweight first: a complete set must decode, or the refusals below are
+	// satisfied by a function that rejects everything.
+	got, err := archiveFromOutputs(full)
+	if err != nil {
+		t.Fatalf("a complete output set was refused: %v", err)
+	}
+	if got.EndpointURL == "" || got.BucketTsdb != "devicechain-tsdb" {
+		t.Fatalf("the contract decoded wrongly: %+v", got)
+	}
+
+	// ...and every field on its own, so a check that happens to notice one absence
+	// cannot stand in for the rest.
+	for name := range full {
+		t.Run("missing "+name, func(t *testing.T) {
+			partial := map[string]tfexec.OutputMeta{}
+			for k, v := range full {
+				if k != name {
+					partial[k] = v
+				}
+			}
+			_, err := archiveFromOutputs(partial)
+			if err == nil {
+				t.Fatalf("a missing %q output was read as an empty value; the instance would "+
+					"be built with archiving silently disabled", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("the refusal does not name %q: %v", name, err)
+			}
+		})
+	}
+}
+
+// 🔴 EMPTY IS A REAL ANSWER, and must not be confused with the absence above. The
+// cluster root exports empty strings when backups are off, and that has to decode
+// cleanly into an archive that emits no variables.
+func TestAnArchiveThatIsOffDecodesRatherThanFailing(t *testing.T) {
+	off := map[string]tfexec.OutputMeta{
+		"backup_endpoint_url":          {Value: []byte(`""`)},
+		"backup_credentials_secret":    {Value: []byte(`""`)},
+		"backup_access_key_id_key":     {Value: []byte(`""`)},
+		"backup_secret_access_key_key": {Value: []byte(`""`)},
+		"backup_bucket_tsdb":           {Value: []byte(`""`)},
+	}
+	got, err := archiveFromOutputs(off)
+	if err != nil {
+		t.Fatalf("a cluster with backups off was refused: %v", err)
+	}
+	if vars := got.archiveVars(); vars != nil {
+		t.Errorf("a cluster with no archive emitted %v", vars)
+	}
+}
+
+// 🔴 NO CLUSTER IDENTITY, NO APPLY. The guard is the first statement in applyInfra
+// and returns before any tofu binary or cluster is reached, which is what makes it
+// testable at all — and the mutation round found it untested.
+//
+// Falling back to the kube-context name is the tempting alternative and is exactly
+// what must not happen: a cluster deleted and recreated wears the same context name,
+// so state filed under it would be inherited by a cluster holding none of those
+// resources, and the apply would plan updates to things that do not exist.
+func TestApplyInfraRefusesAClusterItCannotIdentify(t *testing.T) {
+	err := applyInfra(context.Background(), &State{
+		Instance: "a", KubeContext: "kind-a", Values: map[string]string{},
+	})
+	if err == nil {
+		t.Fatal("a bootstrap with no cluster identity was allowed to apply; it would file " +
+			"the shared prerequisite state under a key the next cluster inherits")
+	}
+	if !strings.Contains(err.Error(), "identity") {
+		t.Errorf("the refusal does not say what is missing: %v", err)
 	}
 }
