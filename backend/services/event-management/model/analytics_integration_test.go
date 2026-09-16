@@ -47,6 +47,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
 )
 
@@ -767,8 +768,9 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 //
 // 🔴 EVERY GATE IN THIS REPO MIGRATES AS A SUPERUSER. hack/migration-diff.sh, the
 // integration harness above, and the replay pass all connect as `postgres`. Production
-// does not: the platform's role is an unprivileged owner with CREATEDB and pg_monitor and
-// nothing else. So a migration that needs one more privilege than that passes every check
+// does not: the platform's role is an unprivileged login that owns its instance's database
+// and holds nothing else — not even CREATEDB, because the database exists before any
+// service starts. So a migration that needs one more privilege than that passes every check
 // here and crash-loops on the first real boot, with a permissions error naming a statement
 // rather than the privilege.
 //
@@ -777,8 +779,9 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 // not have. This test is what makes "the migration creates no roles" a checked property
 // instead of a comment.
 //
-// The role built here mirrors deploy/opentofu's managed role deliberately, including what
-// it LEAVES OUT: no SUPERUSER, no CREATEROLE, no BYPASSRLS.
+// The role built here mirrors that production login deliberately, including what it
+// LEAVES OUT: no SUPERUSER, no CREATEDB, no CREATEROLE, no BYPASSRLS. The database it
+// migrates into is created for it and owned by it, the way dcctl and initdb create it.
 func TestIntegrationChainRunsAsTheLeastPrivilegeRole(t *testing.T) {
 	// A superuser connection, only to mint the unprivileged role the chain then runs as.
 	admin := newPostgresManager(t, analyticsITInstance)
@@ -793,12 +796,15 @@ func TestIntegrationChainRunsAsTheLeastPrivilegeRole(t *testing.T) {
 	}
 	drop()
 	require.NoError(t, sys.Exec(fmt.Sprintf(
-		"CREATE ROLE %q LOGIN PASSWORD '%s' CREATEDB", role, password)).Error)
+		"CREATE ROLE %q LOGIN PASSWORD '%s' NOCREATEDB NOCREATEROLE", role, password)).Error)
 	require.NoError(t, sys.Exec(fmt.Sprintf("GRANT pg_monitor TO %q", role)).Error)
 	t.Cleanup(drop)
 
 	port, err := strconv.Atoi(envOr("DC_IT_PGPORT", "5432"))
 	require.NoError(t, err)
+	require.NoError(t, rdbtest.EnsureDatabase(context.Background(), envOr("DC_IT_PGHOST", "localhost"), port,
+		envOr("DC_IT_PGUSER", "postgres"), envOr("DC_IT_PGPASSWORD", "devicechain"), instance, role),
+		"create the instance database, owned by the least-privilege role")
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: instance, FunctionalArea: "event-management"},
 		Migrations:   Migrations,

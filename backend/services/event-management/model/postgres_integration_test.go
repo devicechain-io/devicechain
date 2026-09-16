@@ -39,6 +39,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +77,11 @@ func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
 	port, err := strconv.Atoi(envOr("DC_IT_PGPORT", "5432"))
 	require.NoError(t, err, "DC_IT_PGPORT must be numeric")
 
+	// The instance database exists before a service starts — dcctl creates it — so the
+	// harness creates it the same way.
+	require.NoError(t, rdbtest.EnsureDatabase(context.Background(), envOr("DC_IT_PGHOST", "localhost"), port,
+		envOr("DC_IT_PGUSER", "postgres"), envOr("DC_IT_PGPASSWORD", "devicechain"), instance, ""),
+		"create the instance database")
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: instance, FunctionalArea: "event-management"},
 		Migrations:   Migrations,
