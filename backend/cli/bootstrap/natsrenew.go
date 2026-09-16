@@ -84,7 +84,7 @@ func readNATSAuthority(
 ) (*x509.Certificate, *rsa.PrivateKey, error) {
 	ref := mintedCredentialRef{infraNamespace, natsAuthoritySecretName, "tls.key"}
 
-	foundKey, keyPEM, err := reuseMintedCredential(ctx, typed, instance, instanceUID, ref)
+	foundKey, keyPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID), ref)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,7 +97,7 @@ func readNATSAuthority(
 		return nil, nil, nil
 	}
 
-	foundCert, certPEM, err := reuseMintedCredential(ctx, typed, instance, instanceUID,
+	foundCert, certPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID),
 		mintedCredentialRef{infraNamespace, natsAuthoritySecretName, "tls.crt"})
 	if err != nil {
 		return nil, nil, err
@@ -253,7 +253,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		LeafCertPEM: leafCertPEM,
 		LeafKeyPEM:  leafKeyPEM,
 	}
-	if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID,
+	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		natsTLSSecret(natsReleaseName, material), time.Now); err != nil {
 		return err
 	}

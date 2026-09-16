@@ -60,7 +60,10 @@ func writeMintedSecrets(ctx context.Context, typed kubernetes.Interface, st *Sta
 	}
 
 	for _, spec := range secrets {
-		if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID, spec, time.Now); err != nil {
+		// Each Secret is written as its SCOPE's: the shared credentials the cluster
+		// prerequisites are built from belong to the cluster, everything else to the
+		// instance. See planOwnedSecrets for which is which.
+		if err := writeOwnedSecret(ctx, typed, ownerFor(spec.Scope, st), spec, time.Now); err != nil {
 			return fmt.Errorf("writing the credential this instance's infrastructure is built "+
 				"from: %w", err)
 		}

@@ -87,9 +87,18 @@ type mintedCredentialRef struct {
 func reuseMintedCredential(
 	ctx context.Context,
 	typed kubernetes.Interface,
-	instance, instanceUID string,
+	owner secretOwner,
 	ref mintedCredentialRef,
 ) (reuseOutcome, string, error) {
+	// 🔴 AN OWNER WITH NO UID CANNOT OWN ANYTHING, and reading with one would call every
+	// real Secret foreign — the wrong refusal, naming ownership when what is actually
+	// missing is the identity of the thing asking. Refused here, the way the writer
+	// refuses to mint under one.
+	if owner.UID == "" {
+		return reuseAbsent, "", fmt.Errorf("cannot tell whether Secret %s/%s is %s's: the "+
+			"owner's identity is not known, so nothing could be recognised as reusable",
+			ref.Namespace, ref.Name, owner)
+	}
 	s, err := typed.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
@@ -101,18 +110,17 @@ func reuseMintedCredential(
 			ref.Namespace, ref.Name, err)
 	}
 
-	own := readOwnership(s)
-	if !own.managed || own.instance != instance || own.uid != instanceUID {
+	if foreignReason(readOwnership(s), owner) != "" {
 		return reuseForeign, "", nil
 	}
 
 	// StringData is write-only on a real API server — what comes back is Data.
 	v := string(s.Data[ref.Key])
 	if v == "" {
-		return reuseAbsent, "", fmt.Errorf("Secret %s/%s was minted by this instance but its %q entry is "+
+		return reuseAbsent, "", fmt.Errorf("Secret %s/%s was minted for %s but its %q entry is "+
 			"empty, so the credential it is running on cannot be recovered from it. Minting a "+
 			"replacement would leave the services holding a value the database was never told "+
-			"about", ref.Namespace, ref.Name, ref.Key)
+			"about", ref.Namespace, ref.Name, owner, ref.Key)
 	}
 	return reuseRecovered, v, nil
 }

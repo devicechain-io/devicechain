@@ -127,7 +127,8 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 			return true
 		}
 		switch id.Name {
-		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "applyClusterPrereqs", "applyInstanceInfra", "splitVars":
+		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "markInstallApplying",
+			"applyClusterPrereqs", "writeInstalled", "applyInstanceInfra", "splitVars":
 			// First occurrence wins, so a later reference cannot reorder the record.
 			if _, seen := positions[id.Name]; !seen {
 				positions[id.Name] = call.Pos()
@@ -143,6 +144,8 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		{"writeMintedSecrets", "CloudNativePG would mint its own password and no service would hold it"},
 		{"applyClusterPrereqs", "the cluster would have no operator, no ingress and no shared database"},
 		{"applyInstanceInfra", "the instance's own broker and event store would never be applied"},
+		{"markInstallApplying", "a failed re-install would leave the previous record reading as installed"},
+		{"writeInstalled", "nothing would record that the cluster prerequisites are installed"},
 	} {
 		if _, ok := positions[want.name]; !ok {
 			t.Fatalf("applyInfra no longer calls %s — %s", want.name, want.why)
@@ -165,6 +168,11 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 			"CloudNativePG reads the credentials Secret when it CREATES the shared relational " +
 				"Cluster and never again, so a Secret written afterwards leaves the role on one " +
 				"password and every service on another"},
+		{"markInstallApplying", "applyClusterPrereqs",
+			"the record must say an apply is under way BEFORE one is, or a failure mid-apply " +
+				"leaves the previous record reading as a finished install"},
+		{"applyClusterPrereqs", "writeInstalled",
+			"the record may say installed only after the apply that installs has succeeded"},
 		{"applyClusterPrereqs", "applyInstanceInfra",
 			"the instance root's event store needs the operator and the backup plugin the " +
 				"cluster root installs, and it is handed the archive contract that apply RETURNS"},

@@ -125,9 +125,11 @@ func TestThePlacementsAreWhereThePlanActuallyPutsThem(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// What the writer decided to put where.
 			planned := map[string]string{}
+			plannedScope := map[string]ownerKind{}
 			for _, s := range planOwnedSecrets(tc.st, tc.st.Credentials) {
 				for k, v := range s.Data {
 					planned[s.Namespace+"/"+s.Name+":"+k] = v
+					plannedScope[s.Namespace+"/"+s.Name+":"+k] = s.Scope
 				}
 			}
 
@@ -144,6 +146,13 @@ func TestThePlacementsAreWhereThePlanActuallyPutsThem(t *testing.T) {
 				if got != want {
 					t.Errorf("the upgrade reads %s from %s, but the writer puts a different "+
 						"credential in that key", p.Field, at)
+				}
+				// 🔴 AND UNDER THE SAME OWNER. A placement reading as the instance what the
+				// writer stamped as the cluster's finds the Secret, calls it foreign, and
+				// refuses every upgrade.
+				if (plannedScope[at] == ownerCluster) != (p.Scope == ownerCluster) {
+					t.Errorf("the upgrade reads %s at %s as scope %q, but the writer stamps it %q",
+						p.Field, at, p.Scope, plannedScope[at])
 				}
 				placed[p.Field] = true
 			}
@@ -238,7 +247,7 @@ func TestACredentialThatIsNotOursIsNamedAsOwnershipNotAbsence(t *testing.T) {
 		t.Errorf("a Secret that is present was reported as missing, which is the message that "+
 			"meets every instance built before dcctl owned these: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not written by dcctl") {
+	if !strings.Contains(err.Error(), "dcctl did not write it") {
 		t.Errorf("the refusal does not say what it actually found: %v", err)
 	}
 }

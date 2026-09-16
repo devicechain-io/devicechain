@@ -227,22 +227,47 @@ func ownedSecretInstances(ctx context.Context, typed kubernetes.Interface) ([]st
 	}
 	seen := map[string]bool{}
 	var ids []string
+	var liveUID string
 	for i := range list.Items {
 		s := &list.Items[i]
 		own := readOwnership(s)
 		if !own.managed {
 			continue
 		}
-		if own.instance == "" {
+		// 🔴 A CLUSTER-OWNED SECRET IS NOT AN INSTANCE, and counting it as one — or
+		// refusing it as unattributed — is what would make the shared credentials the
+		// cluster prerequisites are built from block every bootstrap on the cluster. It
+		// is skipped only when it names the cluster it belongs to; a cluster stamp with
+		// no UID is as unattributable as an instance stamp with no name.
+		if own.owner.Kind == ownerCluster && own.owner.UID != "" {
+			// 🔴 ONLY THIS CLUSTER'S. A cluster-owned Secret stamped with ANOTHER cluster's
+			// identity was carried in from elsewhere — a restored namespace, a copied
+			// backup — and skipping it would let the run go all the way to the credential
+			// write before being refused. The identity is read only when a cluster-owned
+			// Secret is actually present, so a cluster holding none never needs it.
+			if liveUID == "" {
+				if liveUID, err = ClusterUID(ctx, typed); err != nil {
+					return nil, err
+				}
+			}
+			if own.owner.UID != liveUID {
+				return nil, fmt.Errorf("Secret %s/%s is stamped as cluster %s's, and this cluster is "+
+					"%s: it was carried here from elsewhere, so what this cluster holds cannot be "+
+					"told. Refusing to bootstrap into it rather than build on a credential another "+
+					"cluster minted", infraNamespace, s.Name, own.owner.UID, liveUID)
+			}
+			continue
+		}
+		if own.owner.Kind != ownerInstance || own.owner.Name == "" {
 			return nil, fmt.Errorf("Secret %s/%s carries dcctl's %s=%s stamp and does not say "+
-				"which instance it was minted for, so this cluster cannot be told from an empty "+
-				"one. Refusing to bootstrap into it rather than guess — inspect it with "+
+				"which instance or cluster it was minted for, so this cluster cannot be told from an "+
+				"empty one. Refusing to bootstrap into it rather than guess — inspect it with "+
 				"`kubectl get secret %s -n %s -o yaml`",
 				infraNamespace, s.Name, annotationManagedBy, managedByDcctl, s.Name, infraNamespace)
 		}
-		if !seen[own.instance] {
-			seen[own.instance] = true
-			ids = append(ids, own.instance)
+		if !seen[own.owner.Name] {
+			seen[own.owner.Name] = true
+			ids = append(ids, own.owner.Name)
 		}
 	}
 	sort.Strings(ids)

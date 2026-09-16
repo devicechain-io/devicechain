@@ -38,6 +38,12 @@ func TestTheBackupPredicateMatchesTheVariablesEmitted(t *testing.T) {
 							noCNPG, compact, noTLS, got, emittedOff)
 					}
 
+					cmOff := slices.Contains(vars, "enable_cert_manager=false")
+					if got := certManagerEnabled(st); got == cmOff {
+						t.Errorf("compact=%v no-tls=%v: cert-manager predicate says on=%v, "+
+							"variables say off=%v", compact, noTLS, got, cmOff)
+					}
+
 					monOff := slices.Contains(vars, "enable_monitoring=false")
 					if got := monitoringEnabled(st); got == monOff {
 						t.Errorf("no-monitoring=%v: predicate says on=%v, variables say off=%v",

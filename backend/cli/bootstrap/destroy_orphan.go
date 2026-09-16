@@ -211,7 +211,10 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 	}
 	var owned []string
 	for i := range secrets.Items {
-		if readOwnership(&secrets.Items[i]).instance == instance {
+		// A cluster-owned Secret names no instance, so it never matches here — which is
+		// right: it outlives every instance on the cluster by design and is evidence
+		// about none of them.
+		if readOwnership(&secrets.Items[i]).owner.Name == instance {
 			owned = append(owned, secrets.Items[i].Name)
 		}
 	}

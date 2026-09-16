@@ -94,6 +94,11 @@ func databaseBackupsEnabled(st *State) bool {
 // therefore whether a dashboard credential is needed at all.
 func monitoringEnabled(st *State) bool { return !st.NoMonitoring }
 
+// certManagerEnabled reports whether cert-manager is part of this run. The compact
+// preset drops it only when it also serves plain HTTP — see infraVars, which
+// TestTheBackupPredicateMatchesTheVariablesEmitted holds this against.
+func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
+
 // backupsAreExternal reports whether this run archives to an object store the
 // operator already owns rather than one it stands up.
 //
@@ -135,6 +140,10 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			Namespace: infraNamespace,
 			Type:      corev1.SecretTypeBasicAuth,
 			Labels:    dbLabels(rdbClusterName),
+			// 🔴 THE CLUSTER'S. The relational store is a cluster prerequisite, created
+			// by the cluster root and shared by every instance on the cluster, and
+			// CloudNativePG reads this Secret once — when it creates that store.
+			Scope: ownerCluster,
 			Data: map[string]string{
 				secretKeyUsername: dbRoleUsername,
 				secretKeyPassword: set.RDBPassword,
@@ -164,6 +173,8 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			Name:      grafanaSecretName,
 			Namespace: monitoringNamespace,
 			Type:      corev1.SecretTypeOpaque,
+			// The monitoring stack is installed once per cluster.
+			Scope: ownerCluster,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "grafana",
 				"app.kubernetes.io/component": "monitoring",
@@ -186,6 +197,8 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			Name:      objectStoreName + "-credentials",
 			Namespace: infraNamespace,
 			Type:      corev1.SecretTypeOpaque,
+			// The object store is a cluster prerequisite; both stores archive into it.
+			Scope: ownerCluster,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      objectStoreName,
 				"app.kubernetes.io/component": "object-store",
@@ -249,17 +262,18 @@ func resolveCredentials(
 	for _, c := range []struct {
 		into    *string
 		ref     mintedCredentialRef
+		scope   ownerKind
 		cluster string
 		exists  bool
 	}{
 		{&set.RDBPassword, mintedCredentialRef{
 			infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword,
-		}, rdbClusterName, live.Rdb.Exists},
+		}, ownerCluster, rdbClusterName, live.Rdb.Exists},
 		{&set.TSDBPassword, mintedCredentialRef{
 			infraNamespace, tsdbClusterName + "-app-credentials", secretKeyPassword,
-		}, tsdbClusterName, live.Tsdb.Exists},
+		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists},
 	} {
-		found, reused, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID, c.ref)
+		found, reused, err := reuseMintedCredential(ctx, typed, ownerFor(c.scope, st), c.ref)
 		if err != nil {
 			return nil, err
 		}
@@ -273,12 +287,12 @@ func resolveCredentials(
 
 	if databaseBackupsEnabled(st) {
 		name := objectStoreName + "-credentials"
-		foundUser, user, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+		foundUser, user, err := reuseMintedCredential(ctx, typed, ownerFor(ownerCluster, st),
 			mintedCredentialRef{infraNamespace, name, keyMinioUser})
 		if err != nil {
 			return nil, err
 		}
-		foundPass, pass, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID,
+		foundPass, pass, err := reuseMintedCredential(ctx, typed, ownerFor(ownerCluster, st),
 			mintedCredentialRef{infraNamespace, name, keyMinioPassword})
 		if err != nil {
 			return nil, err
