@@ -309,8 +309,13 @@ func TestAPreIdentityRecordStillReadsAsABinding(t *testing.T) {
 // would land in the cluster's own directory rather than under it — on top of
 // cluster.json, beside it — so `tofu init` would write its provider cache and its state
 // into the same directory the identity record lives in. The record still reads, the
-// apply still runs, and the only symptom is a record sharing a directory with a
-// terraform.tfstate holding the database superuser password.
+// apply still runs, and the only symptom is a record written to be read sharing a
+// directory with a terraform.tfstate.
+//
+// (An earlier version of this comment said that state holds the database superuser
+// password. Measured on a live round-trip, it does not: since dcctl began minting the
+// credentials before the apply, the prerequisite state carries only Secret NAMES and key
+// names. The directory stays owner-only anyway — see the next test.)
 func TestClusterStateDirPutsTheRootUnderTheClusterNotBesideIt(t *testing.T) {
 	home := fakeHome(t)
 
@@ -360,7 +365,8 @@ func TestTheClusterStateSubdirectoryIsOwnerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := fi.Mode().Perm(); got != stateDirMode {
-		t.Errorf("the prerequisite state directory is %#o, want %#o — it holds a tfstate "+
-			"carrying the database superuser password in cleartext", got, stateDirMode)
+		t.Errorf("the prerequisite state directory is %#o, want %#o — it holds a tfstate, "+
+			"which describes the cluster's shared infrastructure and is one provider change "+
+			"away from holding a value that must not be world-readable", got, stateDirMode)
 	}
 }
