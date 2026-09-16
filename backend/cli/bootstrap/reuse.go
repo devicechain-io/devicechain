@@ -110,8 +110,7 @@ func reuseMintedCredential(
 			ref.Namespace, ref.Name, err)
 	}
 
-	own := readOwnership(s)
-	if !own.managed || own.owner != owner {
+	if foreignReason(readOwnership(s), owner) != "" {
 		return reuseForeign, "", nil
 	}
 

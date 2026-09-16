@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -108,6 +109,15 @@ func credentialPlacements(st *State) []credentialPlacement {
 // fresh value would be destructive, because it mints first and asks afterwards. Here
 // the answer is uniform — everything is kept — and the only question left is whether
 // it is actually there.
+// describeForeign reads a Secret back to say why it is not `want`'s.
+func describeForeign(ctx context.Context, typed kubernetes.Interface, ref mintedCredentialRef, want secretOwner) string {
+	s, err := typed.CoreV1().Secrets(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Sprintf("it could not be read again to say why (%v)", err)
+	}
+	return foreignReason(readOwnership(s), want)
+}
+
 func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st *State) (*credentialSet, error) {
 	var set credentialSet
 
@@ -126,13 +136,17 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 			// live cluster had to teach this package once already. A Secret sitting
 			// right there, written by something else, is a different problem with a
 			// different answer than one that is gone.
+			//
+			// The reason comes from foreignReason, the same sentence the writer uses, so the
+			// one case with a specific remedy — a Secret stamped before shared credentials
+			// were the cluster's — says so instead of claiming dcctl did not write it.
 			return nil, fmt.Errorf(
-				"Secret %s/%s holds instance %q's %s, but it was not written by dcctl for %s "+
-					"— so this upgrade cannot tell whether the value in it is the one "+
-					"the instance is running on. Refusing rather than guessing: an upgrade that "+
-					"read the wrong value here would hand every service a credential nothing "+
-					"has been told about",
-				p.Ref.Namespace, p.Ref.Name, st.Instance, p.Field, owner)
+				"Secret %s/%s holds instance %q's %s, but it is not %s's: %s. This upgrade "+
+					"cannot tell whether the value in it is the one the instance is running on, "+
+					"and an upgrade that read the wrong value would hand every service a "+
+					"credential nothing has been told about",
+				p.Ref.Namespace, p.Ref.Name, st.Instance, p.Field, owner,
+				describeForeign(ctx, typed, p.Ref, owner))
 
 		default: // reuseAbsent
 			return nil, fmt.Errorf(

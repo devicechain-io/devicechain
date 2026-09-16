@@ -71,10 +71,16 @@ func clusterOwner(uid string) secretOwner {
 }
 
 func (o secretOwner) String() string {
-	if o.Kind == ownerCluster {
-		return fmt.Sprintf("this cluster (%s)", o.UID)
+	switch o.Kind {
+	case ownerCluster:
+		return fmt.Sprintf("cluster %s", o.UID)
+	case ownerInstance:
+		return fmt.Sprintf("instance %q", o.Name)
+	default:
+		// Kept as written by readOwnership: a kind a newer dcctl knows and this one
+		// does not. Naming it as an instance would be a wrong statement about it.
+		return fmt.Sprintf("an owner of kind %q this dcctl does not recognise", string(o.Kind))
 	}
-	return fmt.Sprintf("instance %q", o.Name)
 }
 
 // ownedSecret is one Secret dcctl is the author of.
@@ -116,6 +122,10 @@ type secretOwnership struct {
 	managed  bool
 	owner    secretOwner
 	mintedAt string
+	// kindless is a stamp written before owner kinds existed. It reads as its instance's
+	// — and is the one case where a refusal has something specific to say, because the
+	// credential it holds may be one that now belongs to the cluster.
+	kindless bool
 }
 
 // readOwnership reads the stamp back.
@@ -135,6 +145,7 @@ func readOwnership(s *corev1.Secret) secretOwnership {
 		own.owner = clusterOwner(a[annotationClusterUID])
 	case "", ownerInstance:
 		own.owner = instanceOwner(a[annotationOwnerName], a[annotationOwnerUID])
+		own.kindless = kind == ""
 	default:
 		own.owner = secretOwner{Kind: kind}
 	}
@@ -198,31 +209,8 @@ func writeOwnedSecret(
 	}
 
 	own := readOwnership(existing)
-	switch {
-	case !own.managed:
-		return &ErrForeignSecret{spec.Namespace, spec.Name, fmt.Sprintf(
-			"it carries no %s=%s annotation, so dcctl did not write it. Something else is the "+
-				"author of this credential, and overwriting it would break whatever is using it",
-			annotationManagedBy, managedByDcctl)}
-	case own.owner.Kind != owner.Kind:
-		return &ErrForeignSecret{spec.Namespace, spec.Name, fmt.Sprintf(
-			"it belongs to %s, and this run writes it as %s's. A Secret does not change hands "+
-				"between an instance and the cluster; rebuild whichever wrote it the other way",
-			own.owner, owner)}
-	case own.owner.Name != owner.Name:
-		return &ErrForeignSecret{spec.Namespace, spec.Name, fmt.Sprintf(
-			"it belongs to instance %q, not %q", own.owner.Name, owner.Name)}
-	case own.owner.UID != owner.UID && owner.Kind == ownerCluster:
-		return &ErrForeignSecret{spec.Namespace, spec.Name, fmt.Sprintf(
-			"it was minted for a different cluster (%s; this one is %s). A cluster's identity "+
-				"does not change while it lives, so this Secret was carried here from elsewhere "+
-				"and is not this cluster's credential", own.owner.UID, owner.UID)}
-	case own.owner.UID != owner.UID:
-		return &ErrForeignSecret{spec.Namespace, spec.Name, fmt.Sprintf(
-			"it was minted for a previous %s instance (declaration %s, this run is %s). A destroy "+
-				"left it behind; run `dcctl destroy %s` before bootstrapping this name again, so "+
-				"the rebuild does not inherit the old instance's credentials",
-			owner.Name, own.owner.UID, owner.UID, owner.Name)}
+	if reason := foreignReason(own, owner); reason != "" {
+		return &ErrForeignSecret{spec.Namespace, spec.Name, reason}
 	}
 
 	// Ours. Keep the original minted-at — the value is when this credential came into
@@ -235,6 +223,49 @@ func writeOwnedSecret(
 		return fmt.Errorf("updating Secret %s/%s: %w", spec.Namespace, spec.Name, err)
 	}
 	return nil
+}
+
+// foreignReason says why a Secret is not `want`'s, or "" when it is.
+//
+// ONE DEFINITION, used by the writer and by every reader that has to explain a refusal,
+// so a Secret is never described one way when it is written and another when it is read.
+func foreignReason(own secretOwnership, want secretOwner) string {
+	switch {
+	case !own.managed:
+		return fmt.Sprintf(
+			"it carries no %s=%s annotation, so dcctl did not write it. Something else is the "+
+				"author of this credential, and overwriting it would break whatever is using it",
+			annotationManagedBy, managedByDcctl)
+	case own.kindless && want.Kind == ownerCluster:
+		// 🔴 NAMED, BECAUSE THE GENERIC SENTENCE IS FALSE HERE. Every instance built before
+		// the shared credentials became the cluster's holds exactly this: a dcctl-written
+		// Secret stamped with the instance. It WAS written by dcctl, and there is no
+		// in-place conversion — the credential the database was created with cannot be
+		// re-attributed without a guess about which instances share it.
+		return fmt.Sprintf(
+			"it was written by a dcctl from before this credential belonged to the cluster, and "+
+				"is stamped as instance %q's. There is no in-place conversion: recreate the "+
+				"instance (`dcctl destroy %s`, then bootstrap it again), taking its data with it",
+			own.owner.Name, own.owner.Name)
+	case own.owner.Kind != want.Kind:
+		return fmt.Sprintf(
+			"it belongs to %s, and this run writes it as %s's. A Secret does not change hands "+
+				"between an instance and the cluster", own.owner, want)
+	case own.owner.Name != want.Name:
+		return fmt.Sprintf("it belongs to instance %q, not %q", own.owner.Name, want.Name)
+	case own.owner.UID != want.UID && want.Kind == ownerCluster:
+		return fmt.Sprintf(
+			"it was minted for a different cluster (%s; this one is %s). A cluster's identity "+
+				"does not change while it lives, so this Secret was carried here from elsewhere "+
+				"and is not this cluster's credential", own.owner.UID, want.UID)
+	case own.owner.UID != want.UID:
+		return fmt.Sprintf(
+			"it was minted for a previous %s instance (declaration %s, this run is %s). A destroy "+
+				"left it behind; run `dcctl destroy %s` before bootstrapping this name again, so "+
+				"the rebuild does not inherit the old instance's credentials",
+			want.Name, own.owner.UID, want.UID, want.Name)
+	}
+	return ""
 }
 
 func createOwnedSecret(

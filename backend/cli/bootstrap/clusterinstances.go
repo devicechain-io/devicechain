@@ -227,6 +227,7 @@ func ownedSecretInstances(ctx context.Context, typed kubernetes.Interface) ([]st
 	}
 	seen := map[string]bool{}
 	var ids []string
+	var liveUID string
 	for i := range list.Items {
 		s := &list.Items[i]
 		own := readOwnership(s)
@@ -239,6 +240,22 @@ func ownedSecretInstances(ctx context.Context, typed kubernetes.Interface) ([]st
 		// is skipped only when it names the cluster it belongs to; a cluster stamp with
 		// no UID is as unattributable as an instance stamp with no name.
 		if own.owner.Kind == ownerCluster && own.owner.UID != "" {
+			// 🔴 ONLY THIS CLUSTER'S. A cluster-owned Secret stamped with ANOTHER cluster's
+			// identity was carried in from elsewhere — a restored namespace, a copied
+			// backup — and skipping it would let the run go all the way to the credential
+			// write before being refused. The identity is read only when a cluster-owned
+			// Secret is actually present, so a cluster holding none never needs it.
+			if liveUID == "" {
+				if liveUID, err = ClusterUID(ctx, typed); err != nil {
+					return nil, err
+				}
+			}
+			if own.owner.UID != liveUID {
+				return nil, fmt.Errorf("Secret %s/%s is stamped as cluster %s's, and this cluster is "+
+					"%s: it was carried here from elsewhere, so what this cluster holds cannot be "+
+					"told. Refusing to bootstrap into it rather than build on a credential another "+
+					"cluster minted", infraNamespace, s.Name, own.owner.UID, liveUID)
+			}
 			continue
 		}
 		if own.owner.Kind != ownerInstance || own.owner.Name == "" {

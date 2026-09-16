@@ -122,18 +122,30 @@ func installOutputsFrom(st *State, archive ClusterArchive) InstallOutputs {
 }
 
 // markInstallApplying records that the cluster prerequisites are being applied, before
-// anything is. Settings and outputs are carried from any previous record so an operator
-// reading it mid-apply sees what was there — but the phase alone decides whether it can
-// be used.
+// anything is.
 func markInstallApplying(ctx context.Context, typed kubernetes.Interface, clusterUID, dcctlVersion string,
 	now func() time.Time) error {
-	rec := InstallRecord{}
-	if prev, err := getInstallRecordMap(ctx, typed); err == nil && prev != nil {
-		_ = json.Unmarshal([]byte(prev.Data[installRecordKey]), &rec)
+	prev, err := getInstallRecordMap(ctx, typed)
+	if err != nil {
+		return err
 	}
-	rec.Schema, rec.Phase = installRecordSchema, installPhaseApplying
-	rec.ClusterUID, rec.DcctlVersion, rec.UpdatedAt = clusterUID, dcctlVersion, now().UTC()
-	return putInstallRecord(ctx, typed, rec)
+	if prev != nil {
+		// 🔴 A NEWER dcctl'S RECORD IS NOT OURS TO REWRITE. Marking it would downgrade its
+		// schema to this one's and discard whatever it recorded that this build cannot
+		// name. A record that does not parse at all is overwritten: it describes nothing.
+		var old InstallRecord
+		if json.Unmarshal([]byte(prev.Data[installRecordKey]), &old) == nil && old.Schema > installRecordSchema {
+			return fmt.Errorf("this cluster was installed by a newer dcctl (install record schema "+
+				"%d; this build writes %d). Use that dcctl", old.Schema, installRecordSchema)
+		}
+	}
+	// Nothing is carried from a previous record. Settings and outputs describe a
+	// COMPLETED apply, and showing the last one's beside this run's version would tell
+	// anyone reading it mid-apply that those are what is being applied.
+	return putInstallRecord(ctx, typed, InstallRecord{
+		Schema: installRecordSchema, Phase: installPhaseApplying,
+		ClusterUID: clusterUID, DcctlVersion: dcctlVersion, UpdatedAt: now().UTC(),
+	})
 }
 
 // writeInstalled records a completed install. Call it ONLY after the cluster apply

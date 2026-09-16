@@ -247,7 +247,7 @@ func TestACredentialThatIsNotOursIsNamedAsOwnershipNotAbsence(t *testing.T) {
 		t.Errorf("a Secret that is present was reported as missing, which is the message that "+
 			"meets every instance built before dcctl owned these: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not written by dcctl") {
+	if !strings.Contains(err.Error(), "dcctl did not write it") {
 		t.Errorf("the refusal does not say what it actually found: %v", err)
 	}
 }

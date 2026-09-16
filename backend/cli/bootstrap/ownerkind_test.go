@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -238,7 +239,7 @@ func TestAClusterOwnedSecretIsNotAnInstance(t *testing.T) {
 	instanceSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dc-tsdb-app-credentials", Namespace: infraNamespace}}
 	setAnnotations(instanceSecret, instanceOwner("prod", testUID), "2026-09-16T00:00:00Z")
 
-	c := fake.NewSimpleClientset(clusterOwnedSecret("dc-rdb-app-credentials", testClusterUID, nil), instanceSecret)
+	c := fake.NewSimpleClientset(kubeSystem(testClusterUID), clusterOwnedSecret("dc-rdb-app-credentials", testClusterUID, nil), instanceSecret)
 	ids, err := ownedSecretInstances(context.Background(), c)
 	if err != nil {
 		t.Fatalf("a cluster-owned Secret made the guard refuse: %v", err)
@@ -342,5 +343,111 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 		if !strings.HasSuffix(got, "-in-use") {
 			t.Errorf("%s was re-minted rather than reused; the live store still holds the old value", field)
 		}
+	}
+}
+
+// kindlessInstanceSecret is what every instance built before owner kinds holds: a
+// dcctl stamp naming the instance, and no kind.
+func kindlessInstanceSecret(name string, data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: infraNamespace, Annotations: map[string]string{
+			"devicechain.io/managed-by": "dcctl", "devicechain.io/instance": testInstance,
+			"devicechain.io/instance-uid": testUID,
+		}},
+		Data: data,
+	}
+}
+
+// 🔴 A REVIEW FINDING: an instance built before shared credentials were the cluster's was
+// refused with "dcctl did not write it" — false, and with no remedy. Both the writer and
+// the upgrade read-back must name what it is and what to do.
+func TestAPreKindSharedSecretIsNamedWithItsRemedy(t *testing.T) {
+	spec := ownedSecret{Name: "dc-rdb-app-credentials", Namespace: infraNamespace, Scope: ownerCluster}
+	c := fake.NewSimpleClientset(kindlessInstanceSecret(spec.Name, nil))
+	err := writeOwnedSecret(context.Background(), c, clusterOwner(testClusterUID), spec, fixedClock("2026-09-16T01:00:00Z"))
+	if err == nil {
+		t.Fatal("a pre-kind shared Secret was silently re-attributed to the cluster")
+	}
+	for _, want := range []string{"from before this credential belonged to the cluster", "dcctl destroy " + testInstance} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the writer's refusal does not say %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "did not write") {
+		t.Errorf("the refusal claims dcctl did not write a Secret it did: %v", err)
+	}
+
+	st := aWritableState()
+	w := fake.NewSimpleClientset()
+	if err := writeMintedSecrets(context.Background(), w, st); err != nil {
+		t.Fatal(err)
+	}
+	settleStringDataLikeAnAPIServer(t, w)
+	if err := w.CoreV1().Secrets(infraNamespace).Delete(context.Background(), spec.Name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.CoreV1().Secrets(infraNamespace).Create(context.Background(),
+		kindlessInstanceSecret(spec.Name, map[string][]byte{"password": []byte("pw")}), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = readInstanceCredentials(context.Background(), w, st)
+	if err == nil || !strings.Contains(err.Error(), "from before this credential belonged to the cluster") {
+		t.Errorf("the upgrade does not name a pre-kind shared Secret for what it is: %v", err)
+	}
+}
+
+// 🔴 A REVIEW FINDING: the second-instance guard skipped a cluster-owned Secret stamped
+// with ANOTHER cluster's identity, so a namespace carried in from elsewhere was refused
+// only at the credential write, after the operator and declaration were installed.
+func TestAnotherClustersSecretStopsTheGuardEarly(t *testing.T) {
+	c := fake.NewSimpleClientset(kubeSystem(testClusterUID),
+		clusterOwnedSecret("dc-rdb-app-credentials", "446b60a1-5c0e-4a8e-9d8f-2b4a3e6f7c10", nil))
+	_, err := ownedSecretInstances(context.Background(), c)
+	if err == nil || !strings.Contains(err.Error(), "carried here from elsewhere") {
+		t.Errorf("another cluster's credential was skipped as this cluster's: %v", err)
+	}
+
+	// The identity is read only when a cluster-owned Secret is present: a cluster with
+	// none is answered without it (no kube-system in this fake at all).
+	if _, err := ownedSecretInstances(context.Background(), fake.NewSimpleClientset()); err != nil {
+		t.Errorf("an empty namespace needed the cluster's identity to answer: %v", err)
+	}
+}
+
+func TestAnUnrecognisedOwnerIsNotDescribedAsAnInstance(t *testing.T) {
+	got := secretOwner{Kind: "tenant"}.String()
+	if strings.Contains(got, "instance") || !strings.Contains(got, "tenant") {
+		t.Errorf("an unknown owner kind is described as %q", got)
+	}
+}
+
+// 🔴 A REVIEW FINDING: marking an install "applying" carried the previous record's
+// settings under this run's version, and would rewrite a newer dcctl's record as ours.
+func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
+	c := fake.NewSimpleClientset()
+	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
+		t.Fatal(err)
+	}
+	cm, _ := c.CoreV1().ConfigMaps("dc-system").Get(context.Background(), "dc-install", metav1.GetOptions{})
+	var rec InstallRecord
+	if err := json.Unmarshal([]byte(cm.Data["install.json"]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Settings != (InstallSettings{}) || rec.Outputs != (InstallOutputs{}) {
+		t.Errorf("an applying record shows the previous install's settings as this run's: %+v", rec)
+	}
+
+	rec = aCompleteInstall()
+	rec.Schema, rec.Phase = installRecordSchema+1, installPhaseInstalled
+	body, _ := json.Marshal(rec)
+	cm.Data["install.json"] = string(body)
+	if _, err := c.CoreV1().ConfigMaps("dc-system").Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err == nil {
+		t.Error("a newer dcctl's install record was rewritten as this build's schema")
 	}
 }
