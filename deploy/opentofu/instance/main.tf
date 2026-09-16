@@ -449,13 +449,12 @@ module "cnpg_tsdb" {
   shared_preload_libraries = ["timescaledb"]
 
   post_init_template_sql = [
-    # Coupling (b). Every DeviceChain service creates its own database at startup
-    # and NOTHING in the codebase ever issues `CREATE EXTENSION` — grep confirms
-    # zero occurrences. The platform has always depended on the extension already
-    # being present in whatever a new database is cloned from, which the stock
-    # TimescaleDB image happened to provide. Putting it in template1 makes that
-    # dependency explicit and keeps it true. Measured: a database created by the
-    # app user afterwards inherits timescaledb 2.28.3.
+    # Coupling (b). NOTHING in the codebase ever issues `CREATE EXTENSION` — grep
+    # confirms zero occurrences — so the instance database has to be cloned from a
+    # template that already carries it. initdb creates that database (named by
+    # `timescale_database`, which dcctl sets to the instance id) AFTER this runs, so
+    # it inherits the extension here rather than from any service. Measured: a
+    # database created from this template1 carries timescaledb 2.28.3.
     "CREATE EXTENSION IF NOT EXISTS timescaledb;",
 
     # 🔴 Remove the telemetry job, which is NOT the same thing as turning

@@ -192,6 +192,28 @@ variable "extra_roles" {
   }
 }
 
+variable "provisioner" {
+  description = <<-EOT
+    The base identity: a login role with CREATEROLE and CREATEDB and no data of its
+    own, which dcctl signs in as to give each instance its own login and its own
+    database. Null renders no such role -- the event store has none, because initdb
+    creates the one database it holds.
+
+    Its password is reconciled from `<name>-provisioner-credentials`, which dcctl
+    writes before the apply, the same way it writes the owner's.
+  EOT
+  type = object({
+    name             = string
+    connection_limit = optional(number, 3)
+  })
+  default = null
+
+  validation {
+    condition     = var.provisioner == null || try(var.provisioner.connection_limit > 0, false)
+    error_message = "provisioner.connection_limit must be above 0; the role draws on the same max_connections the platform's pools use."
+  }
+}
+
 variable "reserved_application_connections" {
   description = "Connections the platform must still be able to open after every extra login role has taken its limit. The chart refuses to render an over-committed server. 0 disables the headroom check but not the refusal of an unlimited role."
   type        = number
@@ -397,6 +419,11 @@ locals {
   # stores what it reads, which puts the password back in the state file.
   credentials_secret = "${var.name}-app-credentials"
 
+  # Named by convention, like the owner's, so dcctl and this module agree on it
+  # without either restating the other's value: dcctl reads it back from the
+  # `provisioner_credentials_secret` output.
+  provisioner_credentials_secret = var.provisioner == null ? null : "${var.name}-provisioner-credentials"
+
   # 🔴 ONE DEFINITION, READ BY BOTH THE CHART VALUES AND synchronous_enforced.
   #
   # This used to be written twice — the same expression in the `synchronous`
@@ -454,6 +481,16 @@ locals {
       inRoles            = r.in_roles
     }]
     reservedApplicationConnections = var.reserved_application_connections
+
+    provisioner = var.provisioner == null ? {
+      name               = null
+      passwordSecretName = null
+      connectionLimit    = 3
+      } : {
+      name               = var.provisioner.name
+      passwordSecretName = local.provisioner_credentials_secret
+      connectionLimit    = var.provisioner.connection_limit
+    }
 
     storage = {
       size         = var.storage
@@ -658,6 +695,21 @@ output "service" {
 output "cluster_name" {
   description = "The CNPG Cluster object name. Pods carry it as cnpg.io/cluster=<name>; the DR/HA rigs resolve through the alias Service instead, which is topology-independent."
   value       = var.name
+}
+
+output "credentials_secret" {
+  description = "The Secret holding the owner role's credentials (kubernetes.io/basic-auth: username, password)."
+  value       = local.base_values.bootstrap.secretName
+}
+
+output "provisioner_role" {
+  description = "The base identity's role name, or null when this store has none. Read back from what the chart is handed."
+  value       = local.base_values.provisioner.name
+}
+
+output "provisioner_credentials_secret" {
+  description = "The Secret holding the base identity's credentials (kubernetes.io/basic-auth: username, password), or null when this store has none."
+  value       = local.base_values.provisioner.passwordSecretName
 }
 
 output "backup_destination" {

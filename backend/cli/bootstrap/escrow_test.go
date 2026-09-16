@@ -1615,12 +1615,16 @@ func TestAnInstanceNamedEscrowIsNoLongerACollision(t *testing.T) {
 	// Names that are merely awkward must still be allowed, and the plainly broken ones
 	// still refused — a validator that accepted everything would "pass" every check
 	// above for the wrong reason.
-	for _, ok := range []string{"devicechain", "harig", "dc-prod.2", "a_b", "escrow", "sims", "instances"} {
+	for _, ok := range []string{"devicechain", "harig", "dc-prod-2", "a1", "escrow", "sims", "instances"} {
 		if err := ValidateInstanceName(ok); err != nil {
 			t.Errorf("ValidateInstanceName(%q) refused a legitimate name: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", ".", "..", "a/b", "../etc", "a b"} {
+	for _, bad := range []string{"", ".", "..", "a/b", "../etc", "a b",
+		// Not DNS-1123 labels: the name is also a namespace, a login and a database.
+		"dc-prod.2", "a_b", "Acme", "-a", "a-",
+		// Names PostgreSQL already owns.
+		"postgres", "template1", "public"} {
 		if err := ValidateInstanceName(bad); err == nil {
 			t.Errorf("ValidateInstanceName(%q) was accepted", bad)
 		}

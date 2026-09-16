@@ -133,15 +133,21 @@ variable "postgres_instances" {
 }
 
 variable "postgres_database" {
-  description = "Initial database name for the relational Postgres."
+  description = "The relational store's bootstrap database. Instances do not use it: each gets its own database, owned by its own login, created by the provisioner role. 🔴 Contains an underscore so it can never equal an instance id (a DNS-1123 label), which names every instance database."
   type        = string
-  default     = "devicechain"
+  default     = "dc_owner"
 }
 
 variable "postgres_username" {
-  description = "Superuser/username for the relational Postgres."
+  description = "The relational store's initdb owner. NOT a superuser, and not what services connect as -- each instance has its own login. 🔴 Contains an underscore so it can never equal an instance id, which names every instance login."
   type        = string
-  default     = "devicechain"
+  default     = "dc_owner"
+}
+
+variable "postgres_provisioner_role" {
+  description = "The base identity: the login role with CREATEROLE and CREATEDB that dcctl uses to create each instance's login and database. 🔴 Contains an underscore so it can never equal an instance id."
+  type        = string
+  default     = "dc_provisioner"
 }
 
 variable "postgres_storage" {

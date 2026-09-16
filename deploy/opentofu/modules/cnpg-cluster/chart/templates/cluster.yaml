@@ -87,6 +87,24 @@ webhook will keep catching it somewhere else.
 {{- end -}}
 
 {{- /*
+The provisioner is refused under the same reserved names as the owner, and refused as
+the owner itself: one role holding both the data and the power to mint logins is the
+shared identity this role exists to keep away from the data.
+*/ -}}
+{{- $provisioner := .Values.provisioner | default dict -}}
+{{- if $provisioner.name -}}
+  {{- if has $provisioner.name (list "postgres" "streaming_replica" "cnpg_pooler_pgbouncer") -}}
+    {{- fail (printf "cnpg-cluster %q: provisioner.name is %q, which CloudNativePG reserves for its own use." $name $provisioner.name) -}}
+  {{- end -}}
+  {{- if eq $provisioner.name $owner -}}
+    {{- fail (printf "cnpg-cluster %q: provisioner.name %q is also the owner. The role that creates logins must not be the role that owns the data." $name $owner) -}}
+  {{- end -}}
+  {{- if or (not (hasKey $provisioner "connectionLimit")) (le ($provisioner.connectionLimit | int) 0) -}}
+    {{- fail (printf "cnpg-cluster %q: provisioner %q needs a connectionLimit above 0; it draws on the same max_connections the platform's pools use." $name $provisioner.name) -}}
+  {{- end -}}
+{{- end -}}
+
+{{- /*
 THE CONNECTION BUDGET, enforced at render rather than discovered at 3am.
 
 `extraRoles` exists for one thing today: the read-only SQL/BI roles a BI tool
@@ -141,6 +159,9 @@ but not the unlimited-role half.
     {{- end -}}
     {{- $extraTotal = add $extraTotal ($role.connectionLimit | int) -}}
   {{- end -}}
+{{- end -}}
+{{- if $provisioner.name -}}
+  {{- $extraTotal = add $extraTotal ($provisioner.connectionLimit | int) -}}
 {{- end -}}
 {{- $usable := sub $maxConnections $superuserReserved -}}
 {{- $needed := add $extraTotal (.Values.reservedApplicationConnections | int) -}}
@@ -480,20 +501,20 @@ spec:
 
   managed:
     roles:
-      # Coupling (a), closed. Every DeviceChain service issues `CREATE DATABASE
-      # <instanceId>` at startup (backend/core/rdb/postgres.go), and CNPG's app
-      # role has rolcreatedb = f. Measured on the spike: `CREATE DATABASE` as the
-      # app user returns `permission denied to create database`, so without this
-      # grant every service fails to start on a stock CNPG cluster. `CREATE
-      # SCHEMA` succeeds -- only the database half breaks, which is why the
-      # symptom is narrower than "nothing works" and easier to misread.
+      # 🔴 NO createdb, and that is the isolation boundary rather than an omission.
+      # This role used to carry it because every service issued `CREATE DATABASE
+      # <instanceId>` at startup as this role. No service creates a database any
+      # more: on the relational store the provisioner role below creates each
+      # instance's database, owned by that instance's own login, and on the event
+      # store initdb creates the one database the instance uses. An owner that could
+      # still create databases would be a shared identity that every instance's
+      # services once held -- the thing per-instance logins exist to end.
       - name: {{ $owner }}
         ensure: present
         login: true
-        createdb: true
         inRoles:
-          # pg_monitor, so the HA verifier can see replication state through the
-          # SAME credentials every service uses. (It connects to the primary pod
+          # pg_monitor, so the HA verifier can see replication state through
+          # credentials dcctl already holds. (It connects to the primary pod
           # directly, not through the alias — the alias is checked separately,
           # against the Kubernetes API.)
           #
@@ -509,9 +530,27 @@ spec:
           # supposedly testing ever holding.
           #
           # pg_monitor is read-only and grants statistics visibility, not data
-          # access. This role already owns every database in the instance, so
-          # it widens observability rather than authority.
+          # access, so it widens observability rather than authority.
           - pg_monitor
+      {{- with .Values.provisioner }}
+      {{- if .name }}
+      # The base identity: the one role allowed to create other roles and databases.
+      # dcctl signs in as it to give each instance its own login and its own database,
+      # and nothing else ever holds it. It owns no data -- ownership of each instance's
+      # database goes to that instance's login -- and it is declared here, not under
+      # extraRoles, because that block exists for pod-facing roles and refuses to be
+      # where CREATEROLE lives. Its password is reconciled from its Secret, so unlike
+      # the owner's a lost Secret is recoverable by writing a new one.
+      - name: {{ .name }}
+        ensure: present
+        login: true
+        createrole: true
+        createdb: true
+        connectionLimit: {{ .connectionLimit }}
+        passwordSecret:
+          name: {{ required "cnpg-cluster: provisioner.passwordSecretName is required with provisioner.name" .passwordSecretName }}
+      {{- end }}
+      {{- end }}
       {{- range $role := .Values.extraRoles }}
       - name: {{ required "cnpg-cluster: every extraRoles entry needs a name" $role.name }}
         ensure: {{ $role.ensure | default "present" }}

@@ -85,9 +85,9 @@ func (t *Telemetry) Name() string { return StoreTelemetry }
 //     absence means the area has never run here.
 //
 // The second exists because the first is not enough, which this store learned the hard
-// way: CNPG's initdb creates a database named by `timescale_database`, defaulting to the
-// same value as the instance id, so on a profile without event-management the database is
-// present and empty and the connect succeeds.
+// way: CNPG's initdb creates a database named by `timescale_database`, which dcctl sets to
+// the instance id, so on a profile without event-management the database is present and
+// empty and the connect succeeds.
 //
 // # 🔴 Both answers are the most dangerous kind, so both are RECORDED
 //
@@ -117,8 +117,8 @@ func (t *Telemetry) Erase(ctx context.Context, tenant string, epoch time.Time) (
 	// is a defect this store shipped with. The reasoning went: an instance that runs no
 	// event-management never creates the instance database on the telemetry cluster, so
 	// its absence is the signal and nothing else needs one. That is false — CNPG's own
-	// initdb creates a database named by `timescale_database`, which defaults to
-	// `devicechain`, the same default as the instance id. So on the `ingest-only` profile
+	// initdb creates a database named by `timescale_database`, which dcctl sets to the
+	// instance id. So on the `ingest-only` profile
 	// the database is right there, empty, and the connection succeeds.
 	//
 	// Left at that, the empty classification core refuses (fail-closed, correctly) becomes

@@ -104,6 +104,9 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
 	}
+	if err := checkRelationalStoreOwner(ctx, st.KubeContext); err != nil {
+		return err
+	}
 	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
 		return err
 	}
@@ -117,7 +120,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
 		return err
 	}
-	archive, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
+	archive, rdb, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
 	if err != nil {
 		return err
 	}
@@ -125,8 +128,16 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
 		Settings:     installSettingsFor(st),
-		Outputs:      installOutputsFrom(st, archive),
+		Outputs:      installOutputsFrom(st, archive, rdb),
 	}, time.Now); err != nil {
+		return err
+	}
+
+	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE. After the
+	// shared store exists, because it is created on it; before the instance root, because
+	// the refusal it can raise — a database by this name that some other identity owns —
+	// has to come before anything of this instance's is built on top of it.
+	if err := provisionInstanceDatabase(ctx, st, rdb); err != nil {
 		return err
 	}
 
@@ -378,7 +389,13 @@ func databaseNamespaceFor(st *State) string {
 // Helm step states (TestCompactReservationFitsItsSmallerVolume), and that check
 // only means something if it reads the vars the apply actually passes.
 func infraVars(st *State) []string {
-	vars := []string{"kubeconfig_context=" + st.KubeContext}
+	vars := []string{
+		"kubeconfig_context=" + st.KubeContext,
+		// The event store's one database is named after the instance, and initdb
+		// creates it: every service connects to the database named after the instance
+		// and none of them creates it.
+		"timescale_database=" + st.Instance,
+	}
 	// The broker's certificate authority, PUBLIC HALF ONLY.
 	//
 	// 🔴 THE DIRECTION OF THIS ARROW IS THE POINT. The authority used to be created

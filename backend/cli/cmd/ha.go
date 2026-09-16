@@ -122,12 +122,6 @@ So the checks run against the running server:
   the alias Service and its endpoints   <- the Kubernetes API
   synchronous_standby_names             <- PostgreSQL
   connected + synchronous standbys      <- PostgreSQL
-  the app role's CREATEDB attribute     <- PostgreSQL
-
-The last one is not about replication at all, and it is here because its failure
-is invisible from the database: CloudNativePG's application role has no CREATEDB
-by default, and every DeviceChain service issues CREATE DATABASE at startup. A
-store missing that grant looks perfectly healthy while nothing can start.
 
 Exit status is the result: 0 when every assertion holds, 1 when any does not.
 

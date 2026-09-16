@@ -39,7 +39,7 @@ import (
 const (
 	installRecordName   = "dc-install"
 	installRecordKey    = "install.json"
-	installRecordSchema = 1
+	installRecordSchema = 2
 
 	installPhaseApplying  = "applying"
 	installPhaseInstalled = "installed"
@@ -72,6 +72,9 @@ type InstallSettings struct {
 // InstallOutputs is what the cluster prerequisites BUILT, read back from the cluster
 // root rather than derived from the settings above.
 type InstallOutputs struct {
+	// Rdb is the shared relational store: where it runs and which Secret holds the
+	// identity that gives each instance a login and database of its own. Schema 2.
+	Rdb                       ClusterRdb     `json:"rdb"`
 	Archive                   InstallArchive `json:"archive"`
 	BackupSurvivesClusterLoss bool           `json:"backupSurvivesClusterLoss"`
 	CNPGNamespace             string         `json:"cnpgNamespace,omitempty"`
@@ -104,9 +107,10 @@ func installSettingsFor(st *State) InstallSettings {
 }
 
 // installOutputsFrom collects what the cluster apply returned and recorded.
-func installOutputsFrom(st *State, archive ClusterArchive) InstallOutputs {
+func installOutputsFrom(st *State, archive ClusterArchive, rdb ClusterRdb) InstallOutputs {
 	offsite, _ := strconv.ParseBool(st.Values[databaseBackupOffsiteKey])
 	return InstallOutputs{
+		Rdb: rdb,
 		Archive: InstallArchive{
 			EndpointURL:       archive.EndpointURL,
 			CredentialsSecret: archive.CredentialsSecret,
@@ -223,6 +227,12 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 
 	// What the settings promise, the outputs must deliver. Each missing value is one an
 	// instance would silently build without.
+	// The relational store is not optional, so neither is knowing where it is: without
+	// it no instance can be given a login, and none can be destroyed cleanly.
+	if d := r.Outputs.Rdb; d.Namespace == "" || d.ClusterName == "" || d.ProvisionerSecret == "" {
+		return fmt.Errorf("the install record does not say where the relational store is or which "+
+			"Secret holds its provisioner (%+v); no instance could be given a database login", d)
+	}
 	a := r.Outputs.Archive
 	if r.Settings.DatabaseBackups && (a.EndpointURL == "" || a.CredentialsSecret == "" ||
 		a.AccessKeyIDKey == "" || a.SecretAccessKey == "" || a.BucketTsdb == "") {

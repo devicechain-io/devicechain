@@ -22,7 +22,7 @@ import (
 // # Why this is not an RdbManager
 //
 // RdbManager is the handle a service holds on ITS OWN storage, and everything it does
-// on the way up says so: it CREATEs the instance database and a schema named after the
+// on the way up says so: it CREATEs a schema named after the
 // caller's functional area, pins search_path to that schema, prefixes every model with
 // it, auto-migrates the audit journal into it, registers the tenant-scope, token-grammar
 // and audit callbacks against the caller's models, and runs the caller's migration chain.
@@ -271,10 +271,9 @@ func (g *Guest) Close() error {
 //
 // It is worth distinguishing from every other connection failure because it is an ANSWER
 // rather than a silence: the server was reachable, the credentials were accepted, and it
-// replied that there is no such database. On a cluster where the instance database is
-// created by whichever service owns it, that is how a caller learns the owning area was
-// never deployed here — the `ingest-only` profile ships no event-management, so nothing
-// ever creates the instance database on the telemetry cluster.
+// replied that there is no such database. No service creates the instance database —
+// it exists before any of them start — so on a working instance this means the store
+// is not the one the caller expected, or has not been restored yet.
 //
 // 🔴 It is not a proof of absence for all time. A cluster that is up but has not yet been
 // restored answers 3D000 too. A caller drawing a conclusion from it should say so where

@@ -375,10 +375,12 @@ func helmValues(st *State) map[string]interface{} {
 	// there is only one to give.
 	if creds := st.Credentials; creds != nil {
 		configVals["persistence"] = map[string]interface{}{
+			// 🔴 THE INSTANCE'S OWN LOGIN, not the store's owner. It owns this instance's
+			// database and can connect to no other instance's.
 			"rdb": map[string]interface{}{
 				"configuration": map[string]interface{}{
-					"username": dbRoleUsername,
-					"password": creds.RDBPassword,
+					"username": st.Instance,
+					"password": creds.RDBInstancePassword,
 				},
 			},
 			"tsdb": map[string]interface{}{

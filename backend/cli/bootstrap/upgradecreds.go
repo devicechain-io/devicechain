@@ -30,6 +30,9 @@ type credentialPlacement struct {
 	// planOwnedSecrets, which the placement test holds this against.
 	Scope ownerKind
 	Into  func(*credentialSet) *string
+	// WhenAbsent, if set, replaces the "it is gone" refusal for a credential whose
+	// absence has a more likely cause than deletion.
+	WhenAbsent func(instance string) error
 }
 
 // credentialPlacements lists every credential this configuration has, and where.
@@ -50,6 +53,27 @@ func credentialPlacements(st *State) []credentialPlacement {
 			Ref:   mintedCredentialRef{infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword},
 			Scope: ownerCluster,
 			Into:  func(s *credentialSet) *string { return &s.RDBPassword },
+		},
+		{
+			Field: "RDBProvisionerPassword",
+			Ref:   mintedCredentialRef{infraNamespace, rdbProvisionerSecretName, secretKeyPassword},
+			Scope: ownerCluster,
+			Into:  func(s *credentialSet) *string { return &s.RDBProvisionerPassword },
+		},
+		{
+			Field: "RDBInstancePassword",
+			Ref:   mintedCredentialRef{infraNamespace, instanceRdbSecretName(st.Instance), secretKeyPassword},
+			Into:  func(s *credentialSet) *string { return &s.RDBInstancePassword },
+			// 🔴 NOT "restore it from a backup". An instance built before each instance had
+			// a database login of its own never had this Secret, and restoring nothing
+			// is not a remedy. That instance's services connect as the store's shared
+			// owner, and the way to a login of its own is a rebuild.
+			WhenAbsent: func(instance string) error {
+				return fmt.Errorf("instance %q has no database login of its own (no Secret %s/%s): it was "+
+					"built before each instance had one, and its data belongs to the shared owner. An "+
+					"upgrade cannot move it; recreate the instance (`dcctl destroy` then `dcctl bootstrap`) "+
+					"on a cluster built by this dcctl", instance, infraNamespace, instanceRdbSecretName(instance))
+			},
 		},
 		{
 			Field: "TSDBPassword",
@@ -149,6 +173,9 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 				describeForeign(ctx, typed, p.Ref, owner))
 
 		default: // reuseAbsent
+			if p.WhenAbsent != nil {
+				return nil, p.WhenAbsent(st.Instance)
+			}
 			return nil, fmt.Errorf(
 				"instance %q is running but Secret %s/%s — which holds its %s — is gone. An "+
 					"upgrade keeps the credentials an instance is already running on and mints "+

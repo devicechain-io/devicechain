@@ -128,7 +128,8 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		}
 		switch id.Name {
 		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "markInstallApplying",
-			"applyClusterPrereqs", "writeInstalled", "applyInstanceInfra", "splitVars":
+			"applyClusterPrereqs", "writeInstalled", "applyInstanceInfra", "splitVars",
+			"checkRelationalStoreOwner", "provisionInstanceDatabase":
 			// First occurrence wins, so a later reference cannot reorder the record.
 			if _, seen := positions[id.Name]; !seen {
 				positions[id.Name] = call.Pos()
@@ -146,6 +147,8 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		{"applyInstanceInfra", "the instance's own broker and event store would never be applied"},
 		{"markInstallApplying", "a failed re-install would leave the previous record reading as installed"},
 		{"writeInstalled", "nothing would record that the cluster prerequisites are installed"},
+		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
+		{"provisionInstanceDatabase", "services would connect as a login that does not exist, to a database nothing created"},
 	} {
 		if _, ok := positions[want.name]; !ok {
 			t.Fatalf("applyInfra no longer calls %s — %s", want.name, want.why)
@@ -173,6 +176,14 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 				"leaves the previous record reading as a finished install"},
 		{"applyClusterPrereqs", "writeInstalled",
 			"the record may say installed only after the apply that installs has succeeded"},
+		{"checkRelationalStoreOwner", "ensureInfraNamespace",
+			"a store that cannot isolate instances must be refused before the first write"},
+		{"writeInstalled", "provisionInstanceDatabase",
+			"the login is created on the store the cluster apply just built, and a destroy finds " +
+				"the store through the record — which must exist before there is a login to remove"},
+		{"provisionInstanceDatabase", "applyInstanceInfra",
+			"a database by this name owned by someone else must be refused before anything of " +
+				"this instance's is built on top of it"},
 		{"applyClusterPrereqs", "applyInstanceInfra",
 			"the instance root's event store needs the operator and the backup plugin the " +
 				"cluster root installs, and it is handed the archive contract that apply RETURNS"},

@@ -147,7 +147,11 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		byName[s.Name] = s
 	}
 
-	for _, name := range []string{"dc-rdb-app-credentials", "dc-tsdb-app-credentials"} {
+	for name, wantUser := range map[string]string{
+		"dc-rdb-app-credentials":         rdbOwnerUsername,
+		"dc-rdb-provisioner-credentials": rdbProvisionerUsername,
+		"dc-tsdb-app-credentials":        dbRoleUsername,
+	} {
 		s, ok := byName[name]
 		if !ok {
 			t.Fatalf("%s missing from the plan", name)
@@ -155,10 +159,10 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		if s.Type != corev1.SecretTypeBasicAuth {
 			t.Errorf("%s has type %q, want basic-auth", name, s.Type)
 		}
-		if s.Data[secretKeyUsername] != dbRoleUsername {
+		if s.Data[secretKeyUsername] != wantUser {
 			t.Errorf("%s username is %q, want %q — the role name is not a secret and a "+
 				"value that disagrees with the rest of the install locks the services out",
-				name, s.Data[secretKeyUsername], dbRoleUsername)
+				name, s.Data[secretKeyUsername], wantUser)
 		}
 		if s.Data[secretKeyPassword] == "" {
 			t.Errorf("%s carries no password", name)
@@ -170,6 +174,17 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		if s.Namespace != infraNamespace {
 			t.Errorf("%s is planned for namespace %q, want %q", name, s.Namespace, infraNamespace)
 		}
+	}
+
+	// The instance's own login: named after it, and read by nothing but dcctl, so no
+	// reload label.
+	login, ok := byName["dci-acme-rdb-credentials"]
+	if !ok {
+		t.Fatal("the instance's own relational login is missing from the plan")
+	}
+	if login.Data[secretKeyUsername] != "acme" || login.Data[secretKeyPassword] == "" {
+		t.Errorf("the instance login Secret must carry username %q and a password; got username %q",
+			"acme", login.Data[secretKeyUsername])
 	}
 
 	obj, ok := byName["dc-object-store-credentials"]

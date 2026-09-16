@@ -27,6 +27,15 @@ const (
 	// database that refuses its own services. Only the password moves here.
 	dbRoleUsername = "devicechain"
 
+	// The relational store's roles, restated for the same reason and held against
+	// deploy/opentofu/cluster/variables.tf by TestTheRelationalRoleNamesMatchTheClusterRoot.
+	//
+	// 🔴 BOTH CARRY AN UNDERSCORE ON PURPOSE. Every instance gets a login and a
+	// database named after its id, and an id is a DNS-1123 label, which cannot hold
+	// one — so no instance can ever be named into either of these.
+	rdbOwnerUsername       = "dc_owner"
+	rdbProvisionerUsername = "dc_provisioner"
+
 	// The object store's access key is an identity, not entropy, for the same
 	// reason — but unlike the database role nothing outside these Secrets names it,
 	// so it is minted alongside its secret half.
@@ -63,7 +72,13 @@ const (
 // once before anything is applied. A rule spread across the call sites that happen to
 // need a value is not checkable; this is.
 type credentialSet struct {
-	RDBPassword          string
+	RDBPassword string
+	// RDBProvisionerPassword is the base identity's: the cluster's one role that may
+	// create logins and databases. CloudNativePG reconciles it from its Secret.
+	RDBProvisionerPassword string
+	// RDBInstancePassword is this instance's own login on the relational store —
+	// the one its services connect as, owning the one database they use.
+	RDBInstancePassword  string
 	TSDBPassword         string
 	ObjectStoreUser      string
 	ObjectStoreSecret    string
@@ -110,6 +125,16 @@ func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
 // before the supplied path existed: dcctl knew only "backups on or off".
 func backupsAreExternal(st *State) bool { return st.BackupDestination.Configured() }
 
+// rdbProvisionerSecretName is the base identity's Secret. The cnpg-cluster module
+// names it by the same convention and reports it as an output, which
+// TestTheProvisionerSecretIsTheOneTheClusterRootDeclares holds this against.
+const rdbProvisionerSecretName = rdbClusterName + "-provisioner-credentials"
+
+// instanceRdbSecretName is where an instance's own relational login is kept.
+func instanceRdbSecretName(instance string) string {
+	return "dci-" + instance + "-rdb-credentials"
+}
+
 // planOwnedSecrets says which Secrets this run writes, and what goes in each.
 //
 // Deciding the whole set before writing any of it is deliberate: a plan can be shown
@@ -145,8 +170,36 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			// CloudNativePG reads this Secret once — when it creates that store.
 			Scope: ownerCluster,
 			Data: map[string]string{
-				secretKeyUsername: dbRoleUsername,
+				secretKeyUsername: rdbOwnerUsername,
 				secretKeyPassword: set.RDBPassword,
+			},
+		},
+		{
+			Name:      rdbProvisionerSecretName,
+			Namespace: infraNamespace,
+			Type:      corev1.SecretTypeBasicAuth,
+			// The reload label matters more here than on the owner's: this role
+			// DECLARES a passwordSecret, so the operator reconciles its password from
+			// this Secret, and without the label a changed value never reaches it.
+			Labels: dbLabels(rdbClusterName),
+			Scope:  ownerCluster,
+			Data: map[string]string{
+				secretKeyUsername: rdbProvisionerUsername,
+				secretKeyPassword: set.RDBProvisionerPassword,
+			},
+		},
+		{
+			// This instance's own login. No database operator reads it — dcctl sets
+			// the role's password from it — so it carries no reload label.
+			Name:      instanceRdbSecretName(st.Instance),
+			Namespace: infraNamespace,
+			Type:      corev1.SecretTypeBasicAuth,
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "database",
+			},
+			Data: map[string]string{
+				secretKeyUsername: st.Instance,
+				secretKeyPassword: set.RDBInstancePassword,
 			},
 		},
 		{
@@ -221,10 +274,15 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 // instance without breaking it, and the rest can. The split is stated here, once,
 // rather than being a property of whichever call site was written last:
 //
-//   - THE DATABASE PASSWORDS ARE REUSED, ALWAYS. CloudNativePG sets the owner role's
-//     password when it CREATES the Cluster and never again — the role is declared
-//     under `managed.roles` with no `passwordSecret`, so nothing reconciles it. A
-//     fresh value would reach every service and none of the two databases.
+//   - THE DATABASE OWNER PASSWORDS ARE REUSED, ALWAYS. CloudNativePG sets the owner
+//     role's password when it CREATES the Cluster and never again — the role is
+//     declared under `managed.roles` with no `passwordSecret`, so nothing reconciles
+//     it. A fresh value would reach every service and none of the two databases.
+//   - THE PROVISIONER'S AND THE INSTANCE LOGIN'S PASSWORDS ARE REUSED WHEN PRESENT,
+//     AND MINTED WHEN ABSENT — not refused. Both are recoverable: the operator
+//     reconciles the provisioner's from its Secret, and dcctl sets the instance
+//     login's on every run. Refusing here would strand a cluster over a Secret that
+//     a fresh value repairs.
 //   - THE OBJECT-STORE CREDENTIALS ARE REUSED. Re-minting them is recoverable, but
 //     not cheaply: the store reads its root credentials at start-up while the backup
 //     archiver is handed them through a different object on a different schedule, so
@@ -278,6 +336,28 @@ func resolveCredentials(
 			return nil, err
 		}
 		if err := refuseUnrecoverableDatabaseCredential(c.exists, found, c.cluster, c.ref.Name); err != nil {
+			return nil, err
+		}
+		if found == reuseRecovered {
+			*c.into = reused
+		}
+	}
+
+	for _, c := range []struct {
+		into  *string
+		ref   mintedCredentialRef
+		scope ownerKind
+	}{
+		{&set.RDBProvisionerPassword, mintedCredentialRef{
+			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
+		}, ownerCluster},
+		{&set.RDBInstancePassword, mintedCredentialRef{
+			infraNamespace, instanceRdbSecretName(st.Instance), secretKeyPassword,
+		}, ownerInstance},
+	} {
+		// reuseForeign keeps the minted value: the writer refuses that Secret by name.
+		found, reused, err := reuseMintedCredential(ctx, typed, ownerFor(c.scope, st), c.ref)
+		if err != nil {
 			return nil, err
 		}
 		if found == reuseRecovered {
@@ -341,6 +421,12 @@ func mintNewCredentials(st *State) (*credentialSet, error) {
 	var err error
 
 	if set.RDBPassword, err = mintPassword(); err != nil {
+		return nil, err
+	}
+	if set.RDBProvisionerPassword, err = mintPassword(); err != nil {
+		return nil, err
+	}
+	if set.RDBInstancePassword, err = mintPassword(); err != nil {
 		return nil, err
 	}
 	if set.TSDBPassword, err = mintPassword(); err != nil {

@@ -430,3 +430,46 @@ func TestEachApplyExtractsOnlyItsOwnRoot(t *testing.T) {
 		})
 	}
 }
+
+// The relational store's contract decodes from exactly what the cluster root declares —
+// and a missing or empty value is an error, never a store at an empty address.
+func TestTheRelationalStoreContractReadsOnlyWhatTheClusterRootDeclares(t *testing.T) {
+	declared := rootDeclaredOutputs(t, assets.OpenTofuCluster(), "cluster")
+	full := map[string]tfexec.OutputMeta{}
+	for k := range declared {
+		full[k] = tfexec.OutputMeta{Value: []byte(`"x"`)}
+	}
+	full["postgres_provisioner_credentials_secret"] = tfexec.OutputMeta{Value: []byte(`"` + rdbProvisionerSecretName + `"`)}
+	got, err := rdbFromOutputs(full)
+	if err != nil {
+		t.Fatalf("the relational store decoder needs an output the cluster root does not declare: %v", err)
+	}
+	if got.ProvisionerSecret != rdbProvisionerSecretName || got.Namespace != "x" || got.ClusterName != "x" {
+		t.Errorf("decoded %+v", got)
+	}
+	for _, k := range []string{"namespace", "postgres_cluster_name", "postgres_provisioner_credentials_secret"} {
+		missing := map[string]tfexec.OutputMeta{}
+		empty := map[string]tfexec.OutputMeta{}
+		for kk, v := range full {
+			empty[kk] = v
+			if kk != k {
+				missing[kk] = v
+			}
+		}
+		empty[k] = tfexec.OutputMeta{Value: []byte(`""`)}
+		if _, err := rdbFromOutputs(missing); err == nil {
+			t.Errorf("a cluster root that stopped exporting %q decoded as a store", k)
+		}
+		if _, err := rdbFromOutputs(empty); err == nil {
+			t.Errorf("an empty %q decoded as a store", k)
+		}
+	}
+	renamed := map[string]tfexec.OutputMeta{}
+	for k, v := range full {
+		renamed[k] = v
+	}
+	renamed["postgres_provisioner_credentials_secret"] = tfexec.OutputMeta{Value: []byte(`"some-other-secret"`)}
+	if _, err := rdbFromOutputs(renamed); err == nil {
+		t.Error("a store reading its provisioner password from a Secret dcctl does not write was accepted")
+	}
+}

@@ -110,8 +110,8 @@ func resolveSslMode(configured string) (string, error) {
 //     fail-OPEN half of a fail-closed house rule, and it is precisely the shape
 //     the graphql-go fork exists to fix one layer up.
 //  2. sslMode is validated HERE, not only at the point of use. It used to be
-//     checked inside the connection builders, and `computePostgresRootUrl` is
-//     called from within `RetryInfraConnect` — so a typo produced 30 attempts
+//     checked inside the connection builders, which are called from within
+//     `RetryInfraConnect` — so a typo produced 30 attempts
 //     over ~58 seconds and 29 "infrastructure dependency not ready" warnings
 //     before surfacing, i.e. a config verdict wearing the costume of an
 //     unreachable database. This function runs once, before any retry, so the

@@ -56,7 +56,7 @@
       "type": "object",
       "required": ["id", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$", "description": "Instance id: becomes DC_INSTANCE_ID and the target namespace, and is the first segment of every messaging subject, the device-plane MQTT topic, and the HTTP ingest route (ADR-048). Constrained to the token safety alphabet (letters, digits, hyphen, underscore) so it cannot inject a subject/MQTT/route metacharacter; the service also fail-closes on a malformed value at startup." },
+        "id": { "type": "string", "minLength": 1, "maxLength": 50, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "description": "Instance id: becomes DC_INSTANCE_ID and the target namespace, names the instance's own database and login on the shared relational store, and is the first segment of every messaging subject, the device-plane MQTT topic, and the HTTP ingest route (ADR-048). A DNS-1123 label, which sits inside the token safety alphabet so it cannot inject a subject/MQTT/route metacharacter, and is lowercase so PostgreSQL case-folding cannot make two ids one identifier; the service also fail-closes on a malformed value at startup. At most 50 characters, because the release dcctl names after it is capped at 53." },
         "createNamespace": { "type": "boolean" },
         "existingSecret": {
           "type": "string",

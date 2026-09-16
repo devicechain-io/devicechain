@@ -118,6 +118,14 @@ restore:
   # the API server, so it gets its own lever rather than a footgun.
   recoveryTargetImmediate: false
 
+# The base identity: a login role with CREATEROLE and CREATEDB and no data of its
+# own, rendered only when a name is given. The relational store has one; the event
+# store does not.
+provisioner:
+  name: null
+  passwordSecretName: null
+  connectionLimit: 3
+
 bootstrap:
   database: null
   owner: null

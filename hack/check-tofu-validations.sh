@@ -696,6 +696,13 @@ run_assertions() {
   evaluates 'tostring(null)' 'module.cnpg_rdb.backup_destination' -var enable_database_backups=false
   evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_destination' -var enable_database_backups=false
 
+  # The base identity: the shared relational store has a provisioner — the one role
+  # that may create each instance's login and database — and an instance's own event
+  # store has none. Read back through the module outputs, which read the chart values.
+  evaluates '"dc_provisioner"' 'module.cnpg_rdb.provisioner_role'
+  evaluates '"dc-rdb-provisioner-credentials"' 'module.cnpg_rdb.provisioner_credentials_secret'
+  evaluates 'null' 'module.cnpg_tsdb.provisioner_role'
+
   # 🔴 THE TWO STORES MUST NOT SHARE A BUCKET, and this is the substitution guard
   # for it — the exact sibling of the instance-count one above, for the exact same
   # reason. Point the event store's module at var.backup_bucket_rdb by accident and
