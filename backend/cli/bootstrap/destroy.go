@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 )
 
@@ -153,6 +154,9 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 				opts.Instance, opts.Instance, binding.describe()))
 		default:
 			wouldDo(fmt.Sprintf("delete cluster %q and remove ~/.devicechain/instances/%s", binding.describe(), opts.Instance))
+			if binding.ClusterUID != "" {
+				wouldDo(fmt.Sprintf("remove the deleted cluster's local state (~/.devicechain/clusters/%s)", binding.ClusterUID))
+			}
 		}
 		if opts.PurgeRegistry {
 			wouldDo("remove the shared local image registry container")
@@ -200,6 +204,9 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 				fmt.Println(color.YellowString(
 					"Cluster %s is not there any more — nothing to uninstall. Clearing local state only.", binding.describe()))
 				if err := removeInstanceState(opts); err != nil {
+					return err
+				}
+				if err := removeGoneClusterState(binding); err != nil {
 					return err
 				}
 				// 🔴 NOT "destroyed". Every closing line on this path says what actually
@@ -276,6 +283,10 @@ func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptio
 	if err := removeInstanceState(opts); err != nil {
 		return err
 	}
+	// Both branches above end with the cluster gone — deleted here, or already gone.
+	if err := removeGoneClusterState(binding); err != nil {
+		return err
+	}
 
 	if opts.PurgeRegistry {
 		doing("removing local image registry container")
@@ -335,6 +346,42 @@ func removeInstanceState(opts DestroyOptions) error {
 				opts.Instance, p))
 		}
 	}
+	return nil
+}
+
+// removeGoneClusterState removes ~/.devicechain/clusters/<uid> for a cluster that no
+// longer exists. Call it ONLY once the cluster is gone.
+//
+// 🔴 THE SPLIT MADE THIS NECESSARY. While the prerequisites were applied from the
+// instance's own root, removeInstanceState took all of the infrastructure state with it.
+// Once they moved to a root keyed on the cluster, that half outlived every full teardown,
+// and each kind rebuild — a new cluster, so a new UID — left one more behind. Found on
+// the first live round-trip; no test was looking.
+//
+// 🔑 KEYED ON WHETHER THE CLUSTER IS GONE, NOT ON WHICH COMMAND RAN. State filed under a
+// dead cluster's UID describes nothing and the UID cannot recur. A cluster that is still
+// running (adopted and reachable, --keep-cluster) still has its prerequisites installed,
+// and this state is the only description of them — so those paths never call this.
+//
+// No UID recorded ⇒ nothing is removed. The instance predates the identity, so no
+// directory was ever filed under it; and an empty key must never reach dcdir.Cluster's
+// caller as a path, because it joins to the clusters directory itself.
+func removeGoneClusterState(binding ClusterBinding) error {
+	if binding.ClusterUID == "" {
+		return nil
+	}
+	dir, err := dcdir.Cluster(binding.ClusterUID)
+	if err != nil {
+		return fail("resolving the cluster's local state", err)
+	}
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	doing(fmt.Sprintf("removing the deleted cluster's local state (~/.devicechain/clusters/%s)", binding.ClusterUID))
+	if err := os.RemoveAll(dir); err != nil {
+		return fail("removing the cluster's local state", err)
+	}
+	done()
 	return nil
 }
 

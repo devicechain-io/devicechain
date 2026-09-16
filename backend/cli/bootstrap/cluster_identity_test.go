@@ -301,3 +301,72 @@ func TestAPreIdentityRecordStillReadsAsABinding(t *testing.T) {
 		t.Fatalf("the rest of the binding did not survive: %+v", b)
 	}
 }
+
+// 🔴 THE SUBDIRECTORY IS THE POINT, and the mutation round found it untested: ignoring
+// `sub` entirely SURVIVED, because every existing caller passed "".
+//
+// 🔑 WHAT THE MUTANT WOULD COST. The prerequisite root's working directory and state
+// would land in the cluster's own directory rather than under it — on top of
+// cluster.json, beside it — so `tofu init` would write its provider cache and its state
+// into the same directory the identity record lives in. The record still reads, the
+// apply still runs, and the only symptom is a record written to be read sharing a
+// directory with a terraform.tfstate.
+//
+// (An earlier version of this comment said that state holds the database superuser
+// password. Measured on a live round-trip, it does not: since dcctl began minting the
+// credentials before the apply, the prerequisite state carries only Secret NAMES and key
+// names. The directory stays owner-only anyway — see the next test.)
+func TestClusterStateDirPutsTheRootUnderTheClusterNotBesideIt(t *testing.T) {
+	home := fakeHome(t)
+
+	dir, err := clusterStateDir(firstClusterUID, "infra")
+	if err != nil {
+		t.Fatalf("clusterStateDir: %v", err)
+	}
+	want := filepath.Join(home, ".devicechain", "clusters", firstClusterUID, "infra")
+	if dir != want {
+		t.Errorf("clusterStateDir(uid, %q) = %q, want %q", "infra", dir, want)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("the subdirectory was not created: %v", err)
+	}
+
+	// The counterweight, and it is what stops this passing against a function that
+	// appends a fixed string: an empty sub must still mean the cluster's own directory,
+	// which is where cluster.json goes.
+	own, err := clusterStateDir(firstClusterUID, "")
+	if err != nil {
+		t.Fatalf("clusterStateDir with no sub: %v", err)
+	}
+	if own != filepath.Join(home, ".devicechain", "clusters", firstClusterUID) {
+		t.Errorf("clusterStateDir(uid, \"\") = %q, want the cluster's own directory", own)
+	}
+}
+
+// ...and the subdirectory must be owner-only too. The tree test above this one asserts
+// every level down to the cluster; the state the prerequisite root writes lands one
+// level deeper, and that is the level holding the tfstate.
+func TestTheClusterStateSubdirectoryIsOwnerOnly(t *testing.T) {
+	home := fakeHome(t)
+
+	// The layout an older dcctl would leave: world-readable already, since MkdirAll
+	// applies its mode only to directories it creates.
+	loose := filepath.Join(home, ".devicechain", "clusters", firstClusterUID, "infra")
+	if err := os.MkdirAll(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, err := clusterStateDir(firstClusterUID, "infra")
+	if err != nil {
+		t.Fatalf("clusterStateDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != stateDirMode {
+		t.Errorf("the prerequisite state directory is %#o, want %#o — it holds a tfstate, "+
+			"which describes the cluster's shared infrastructure and is one provider change "+
+			"away from holding a value that must not be world-readable", got, stateDirMode)
+	}
+}

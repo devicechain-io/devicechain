@@ -61,23 +61,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The directory the console assertions are evaluated in. They name variables that
-# belong to the INSTANCE root specifically, so this is that root and not a
-# discovered list: `tofu console` evaluates one configuration, and an assertion
-# about var.nats_mqtt_node_port has no meaning in a root that does not declare it.
-#
-# A second root is not therefore unguarded. root_tf_files below spans EVERY root,
-# so a validation block in one this script cannot evaluate is reported as never
-# exercised, by name — which is the correct outcome and is what makes adding a root
-# a decision rather than a silent narrowing.
-tofu_dir="$repo_root/deploy/opentofu/instance"
 
-# EVERY root's .tf files, not just tofu_dir's — and the difference is the whole
-# reason this is a list rather than a glob.
+# EVERY root's .tf files — and the difference is the whole reason this is a list
+# rather than a glob.
 #
 # The coverage check at the bottom is what makes this suite mean anything: it
 # refuses to pass while any variable carrying a validation block went unexercised.
-# It read "$tofu_dir"/*.tf, which was the entire repo's OpenTofu surface for as long
+# It read the one root's *.tf, which was the entire repo's OpenTofu surface for as long
 # as there was one root. Add a second, and the blocks in it are not reported as
 # uncovered — they are not SEEN, so the suite still prints "all N exercised" and the
 # number just happens to be smaller. That is the silently-smaller-coverage-set shape
@@ -85,9 +75,9 @@ tofu_dir="$repo_root/deploy/opentofu/instance"
 # indefensible to guard the parser against it and leave the file list open to it.
 #
 # Roots come from hack/tofu-roots.sh, which fails rather than returning an empty
-# list. The console assertions still run in tofu_dir — a variable in another root
-# cannot be evaluated from here, and the right outcome for one is precisely the
-# "never exercised" failure below, naming it.
+# list. The console assertions run once in EACH root (see run_assertions): an
+# assertion evaluates in the root that declares what it names and skips in the
+# others, and one that evaluates in NO root fails below, by name.
 mapfile -t tofu_roots < <(cd "$repo_root" && bash hack/tofu-roots.sh | sed "s#^#$repo_root/#")
 root_tf_files=()
 for _root in "${tofu_roots[@]}"; do
@@ -112,12 +102,71 @@ if [[ -z "$TF" ]]; then
   fi
 fi
 
-cd "$tofu_dir"
-if [[ ! -d .terraform ]]; then
-  "$TF" init -backend=false >/dev/null
-fi
+# 🔴 EVERY ROOT, AND THE ASSERTION BODY RUNS ONCE PER ROOT.
+#
+# `tofu console` evaluates ONE configuration, so an assertion about
+# var.nats_mqtt_node_port has no meaning in a root that does not declare it. Before
+# the split there was one root and that distinction did not exist. After it, running
+# the whole suite in a single root turns every assertion about the OTHER root into a
+# failure — which is loud, but it is loud in a way that invites deleting the
+# assertions rather than evaluating them where they live.
+#
+# 🔑 SO RUN THE BODY IN EACH ROOT AND LET EACH ASSERTION FIND ITS OWN HOME, rather
+# than tagging assertions with a root by hand. A hand-maintained mapping is a second
+# list to keep in step with the tree, and it would go stale exactly when a variable
+# MOVES between roots — the one edit that most needs checking. tofu tells us
+# instead: "Value for undeclared variable" and "Reference to undeclared module" both
+# mean "not this root", unambiguously and for no other reason.
+#
+# 🔴 AND AN ASSERTION THAT IS AT HOME NOWHERE IS A FAILURE, not a silent skip. That
+# is the whole risk of a skip-based design: a renamed variable would be
+# not-applicable in every root and would vanish from the suite while it kept
+# printing green. never_applicable below is what refuses that.
+for _root in "${tofu_roots[@]}"; do
+  if [[ ! -d "$_root/.terraform" ]]; then
+    (cd "$_root" && "$TF" init -backend=false >/dev/null)
+  fi
+done
 
 failures=0
+
+# Assertion keys seen as applicable in at least one root, and keys seen at all. The
+# difference between them is the set of assertions that evaluated NOWHERE.
+declare -A assertion_ran=()
+declare -A assertion_seen=()
+
+# not_applicable — true when the last console call failed only because the thing it
+# names belongs to a different root.
+#
+# 🔑 FOUR MARKERS, AND THEY ARE NOT INTERCHANGEABLE. tofu distinguishes assigning a
+# variable a root does not declare from REFERENCING one, and references to an
+# undeclared module and an undeclared local from both and from each other — so all
+# four have to be listed. Getting this
+# wrong is silent in the expensive direction: a missing marker makes a legitimate
+# skip look like a broken assertion, which invites deleting the assertion.
+#
+# 🔴 DELIBERATELY NARROW. A broken validation block says "Invalid value for
+# variable" and a renamed output says "Unsupported attribute"; neither appears here,
+# so neither can be mistaken for "belongs to the other root".
+not_applicable() {
+  local plain
+  plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$tf_console_out")"
+  grep -q "Value for undeclared variable" <<<"$plain" ||
+    grep -q "Reference to undeclared input variable" <<<"$plain" ||
+    grep -q "Reference to undeclared local value" <<<"$plain" ||
+    grep -q "Reference to undeclared module" <<<"$plain"
+}
+
+# applicable_here <key> — record the assertion and say whether this root is its home.
+applicable_here() {
+  local key="$1"
+  assertion_seen["$key"]=1
+  if not_applicable; then
+    return 1
+  fi
+  assertion_ran["$key"]=1
+  return 0
+}
 
 # EVERY console invocation goes through tf_console, and it is time-bounded.
 #
@@ -179,18 +228,24 @@ accepted_vars=()
 # assertion in this file goes green while testing nothing at all. It is also a real
 # failure in its own right: a default that fails validation makes a bare `tofu apply`
 # impossible.
-tf_console "1"
-if timed_out "the defaults baseline"; then
-  :
-elif grep -q "Invalid value for variable" <<<"$tf_console_out"; then
-  echo "FAIL  the root does not load at its own defaults — a shipped default fails its" \
-    "validation. Until that is fixed every 'rejected' line below is vacuous: the" \
-    "diagnostic they match on is emitted whatever value is supplied." >&2
-  sed 's/^/        /' <<<"$tf_console_out" >&2
-  failures=$((failures + 1))
-else
-  echo "ok    the root loads clean at its shipped defaults"
-fi
+#
+# 🔑 PER ROOT, because each root has its own defaults and either can break on its
+# own. A baseline proved in one root says nothing about the other, and the root most
+# likely to have a bad default is the newest one.
+check_defaults_baseline() {
+  tf_console "1"
+  if timed_out "the defaults baseline"; then
+    :
+  elif grep -q "Invalid value for variable" <<<"$tf_console_out"; then
+    echo "FAIL  this root does not load at its own defaults — a shipped default fails its" \
+      "validation. Until that is fixed every 'rejected' line below is vacuous: the" \
+      "diagnostic they match on is emitted whatever value is supplied." >&2
+    sed 's/^/        /' <<<"$tf_console_out" >&2
+    failures=$((failures + 1))
+  else
+    echo "ok    the root loads clean at its shipped defaults"
+  fi
+}
 
 # rejects <variable> <value> [--by <name>] [extra -var args...] — the value must trip
 # a validation block, and the diagnostic must name <variable> as the one that refused
@@ -213,6 +268,7 @@ rejects() {
   # variables, before the console would read an expression.
   tf_console "" -var "$var=$value" "$@"
   timed_out "$var=$value" && return
+  applicable_here "rejects $var=$value $*" || return 0
   rejected_vars+=("$var")
   plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$tf_console_out")"
   if ! grep -q "Invalid value for variable" <<<"$plain"; then
@@ -253,6 +309,7 @@ accepts() {
   shift 2
   tf_console "var.$var" -var "$var=$value" "$@"
   timed_out "$var=$value" && return
+  applicable_here "accepts $var=$value $*" || return 0
   accepted_vars+=("$var")
   out="$tf_console_out"
   if grep -q "Invalid value for variable" <<<"$out"; then
@@ -309,595 +366,643 @@ accepts() {
   echo "ok    $var=$value accepted"
 }
 
-# --- nats_cluster_replicas (ADR-020 A0) --------------------------------------
-# 0 derives from var.ha; 1/3/5 are the supported odd counts. Even counts buy no
-# extra fault tolerance, and JetStream refuses more than 5 replicas per stream, so
-# a 7-server cluster cannot host a stream replicated across it.
-for v in 0 1 3 5; do accepts nats_cluster_replicas "$v"; done
-for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
+run_assertions() {
+  # The assertion body. Every helper it calls records whether the current root is
+  # the one the assertion belongs to, so the same body is correct in both.
+  check_defaults_baseline
 
-# evaluates <expected> <expr> [-var k=v ...] — the expression must evaluate to
-# exactly <expected> under those variables.
-evaluates() {
-  local expected="$1" expr="$2"
-  shift 2
-  local out
-  # tf_console captures the status rather than letting it escape. Under
-  # `set -euo pipefail` a non-zero exit inside a bare $(...) aborts the whole script
-  # from within the substitution: the run ends on a green "ok" line with no FAIL, no
-  # summary, and every remaining assertion silently skipped. The exit code
-  # survives, so CI does go red — but the diagnostics do not, which is the same
-  # family as a pipe to `head` swallowing a failure.
-  tf_console "$expr" "$@"
-  timed_out "$expr  [$*]" && return
-  if ((tf_console_status != 0)); then
-    echo "FAIL  $expr did not evaluate (exit $tf_console_status)  [$*]" >&2
-    sed 's/^/        /' <<<"$tf_console_out" >&2
-    failures=$((failures + 1))
-    return
-  fi
-  out="$(tail -1 <<<"$tf_console_out")"
-  if [[ "$out" == "$expected" ]]; then
-    echo "ok    $expr == $expected  [$*]"
+  # --- nats_cluster_replicas (ADR-020 A0) --------------------------------------
+  # 0 derives from var.ha; 1/3/5 are the supported odd counts. Even counts buy no
+  # extra fault tolerance, and JetStream refuses more than 5 replicas per stream, so
+  # a 7-server cluster cannot host a stream replicated across it.
+  for v in 0 1 3 5; do accepts nats_cluster_replicas "$v"; done
+  for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
+
+  # evaluates <expected> <expr> [-var k=v ...] — the expression must evaluate to
+  # exactly <expected> under those variables.
+  evaluates() {
+    local expected="$1" expr="$2"
+    shift 2
+    local out
+    # tf_console captures the status rather than letting it escape. Under
+    # `set -euo pipefail` a non-zero exit inside a bare $(...) aborts the whole script
+    # from within the substitution: the run ends on a green "ok" line with no FAIL, no
+    # summary, and every remaining assertion silently skipped. The exit code
+    # survives, so CI does go red — but the diagnostics do not, which is the same
+    # family as a pipe to `head` swallowing a failure.
+    tf_console "$expr" "$@"
+    timed_out "$expr  [$*]" && return
+    applicable_here "evaluates $expr $*" || return 0
+    if ((tf_console_status != 0)); then
+      echo "FAIL  $expr did not evaluate (exit $tf_console_status)  [$*]" >&2
+      sed 's/^/        /' <<<"$tf_console_out" >&2
+      failures=$((failures + 1))
+      return
+    fi
+    out="$(tail -1 <<<"$tf_console_out")"
+    if [[ "$out" == "$expected" ]]; then
+      echo "ok    $expr == $expected  [$*]"
+    else
+      echo "FAIL  $expr == $out, want $expected  [$*]" >&2
+      failures=$((failures + 1))
+    fi
+  }
+
+  # --- the ADR-020 A0 server count, across both levers -------------------------
+  #
+  # The derivation `cluster_replicas > 0 ? cluster_replicas : (ha ? 3 : 1)` decides
+  # how many NATS servers exist, and therefore the CEILING on how widely any stream
+  # can be replicated. It is worth pinning at this level because it is the one place
+  # where two levers resolve to one number, and getting it backwards — the toggle
+  # silently winning over an explicit count — would produce a cluster the operator
+  # did not ask for while every artifact still read as if they had.
+  #
+  # This is the cheap half of the "render the HA topology in CI" check: no cluster,
+  # no provider credentials, no network. `tofu console` computes a module output as
+  # long as nothing in it depends on a resource attribute, which local-only
+  # arithmetic does not. The other half — that a 3-server cluster actually places one
+  # server per node — needs a real multi-node cluster and is the live A0 validation.
+  evaluates 1 module.nats.cluster_replicas -var ha=false
+  evaluates 3 module.nats.cluster_replicas -var ha=true
+  evaluates 5 module.nats.cluster_replicas -var nats_cluster_replicas=5
+  # An explicit count OVERRIDES the shorthand rather than being overridden by it.
+  evaluates 5 module.nats.cluster_replicas -var ha=true -var nats_cluster_replicas=5
+  # ha=false with an explicit cluster is NOT a contradiction: the cluster is enabled
+  # on the count, not on the flag, so this is the explicit-topology path.
+  evaluates 3 module.nats.cluster_replicas -var ha=false -var nats_cluster_replicas=3
+
+  # --- the values that decide whether HA is REAL -------------------------------
+  #
+  # Each of these can be broken in a way that leaves an instance looking highly
+  # available and surviving nothing, and none of them is reachable from a variable
+  # validation block. A resource `precondition` would not help either — those run
+  # during a PLAN, which no per-PR gate performs. So they are asserted here, off the
+  # module's ha_topology output, which `tofu console` can compute because it depends
+  # on no resource attribute.
+  #
+  # whenUnsatisfiable is the sharpest of them: flipping it to ScheduleAnyway is a
+  # one-word change that lets the scheduler put all three NATS servers on one node,
+  # which passes every other check A0 adds (three peers, Replicas:3, all current)
+  # and survives zero node losses.
+  evaluates '"DoNotSchedule"' 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].whenUnsatisfiable' -var ha=true
+  evaluates 1 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].maxSkew' -var ha=true
+  evaluates '{}' 'module.nats.ha_topology.spread_constraints' -var ha=false
+  # Whether a NATS config change is ADOPTED by the running broker at all. nats-server
+  # refuses to hot-reload the auth_callout block — and the refusal is wholesale, so
+  # every other change in the same apply goes with it — which means without the pod
+  # template's config checksum a change is applied, reported successful by tofu, by
+  # the reloader and by the ConfigMap, and never reaches the server. Asserted in BOTH
+  # topologies because it is not an HA property: a single-server instance has exactly
+  # the same silent-divergence bug.
+  #
+  # Read-back, not a grep: hack/check-nats-config-adoption.sh pins that the line
+  # exists, but only this can see that it is still nested under podTemplate. The
+  # chart has no values.schema.json, so a key at the wrong depth is ignored in
+  # silence — and `tofu console` fails on the missing attribute before it ever gets
+  # to compare values.
+  evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=true
+  evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=false
+  # The MQTT gateway's own streams hold persistent sessions and inflight QoS 1
+  # messages; at 1 on a clustered broker, losing their node drops every session.
+  evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var ha=true
+  evaluates 1 module.nats.ha_topology.mqtt_stream_replicas -var ha=false
+  evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var nats_cluster_replicas=5
+  # Clustering opens route port 6222, which carries every replicated write. Without
+  # mutual verification any pod that can reach it joins the cluster as a peer and
+  # reads every account, bypassing the auth callout.
+  evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
+  # Both counterweights, because a single `true` is satisfied by an output hard-wired
+  # to true. An unclustered broker opens NO route, so "route TLS verified" must be
+  # false there rather than vacuously true — and with TLS off it must be false on a
+  # clustered one, which is the state that actually leaves 6222 in the clear.
+  evaluates false module.nats.ha_topology.route_tls_verified -var ha=false
+  evaluates false module.nats.ha_topology.route_tls_verified -var ha=true -var nats_enable_tls=false
+  evaluates true module.nats.ha_topology.clustered -var ha=true
+  evaluates false module.nats.ha_topology.clustered -var ha=false
+
+  # ROUTE TLS BEING ON AND ROUTE TLS WORKING ARE DIFFERENT FACTS, and the gap
+  # between them cost a working cluster. The assertion above passed — the
+  # configuration was right — while every route handshake failed, because the
+  # server certificate was issued only for the names CLIENTS dial. Servers reach
+  # each other by POD name through the headless Service (dc-nats-1.dc-nats-headless),
+  # which a load-balanced Service name cannot address, so with verification on the
+  # peers rejected each other and no cluster formed at all. Three isolated servers,
+  # no JetStream meta leader.
+  #
+  # Nothing saw it: not `tofu validate`, not helm lint, not the ha_topology output,
+  # and not any single-node install, which never opens a route. Only the live 3-node
+  # rig did. These lines are what move it back into a gate that runs on every PR.
+  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var ha=true
+  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.dc-system.svc.cluster.local")])' -var ha=true
+  # Scaled explicitly: a 5-server cluster needs five peers named, and a SAN list
+  # built for three would leave servers 3 and 4 unable to join.
+  evaluates true 'alltrue([for i in range(5) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var nats_cluster_replicas=5
+  # The counterweight: an unclustered broker opens no route, so it gets no route
+  # names. Without this the assertions above are satisfied by naming every possible
+  # pod unconditionally, which would be a certificate promising peers that do not
+  # exist.
+  evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats-0.dc-nats-headless")' -var ha=false
+  # And the client names survive. A route-name change that dropped them would break
+  # every service connection instead — the same failure, pointed the other way.
+  evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
+
+  # The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
+  # helm_release precondition, which only runs during a plan and which nothing in CI
+  # performs — so what is asserted here is that the module still DETECTS the
+  # contradiction, not that it refuses it. Worth having anyway: if this flips, the
+  # precondition is guarding a condition that can no longer occur, and an operator
+  # asking for HA would quietly get one server.
+  evaluates true module.nats.ha_topology.contradictory -var ha=true -var nats_cluster_replicas=1
+  evaluates false module.nats.ha_topology.contradictory -var ha=true
+  evaluates false module.nats.ha_topology.contradictory -var ha=false -var nats_cluster_replicas=3
+
+  # --- nats_mqtt_node_port -----------------------------------------------------
+  # Pre-existing guard, included so this script covers the root's validation blocks
+  # rather than only the newest one.
+  for v in 0 30000 31883 32767; do accepts nats_mqtt_node_port "$v"; done
+  # --by: this is the one variable in the root that declares NO grammar of its own —
+  # the refusal comes from modules/nats's mqtt_node_port block, which the root feeds
+  # directly. Worth naming rather than hiding: an operator reading variables.tf sees
+  # no constraint on nats_mqtt_node_port, and the day the module stops taking it
+  # straight through, this line is what says the root never guarded it.
+  for v in 1883 29999 32768; do rejects nats_mqtt_node_port "$v" --by mqtt_node_port; done
+
+  # --- postgres_instances (ADR-020 A2.3) ---------------------------------------
+  #
+  # 0 derives from var.ha; 1 is the supported non-HA topology (decision D4); 3 is
+  # the smallest synchronous one.
+  #
+  # 🔴 2 IS THE POINT OF THIS BLOCK, and it is refused for a reason that is not
+  # obvious and is not the same as CloudNativePG's own rule. The operator's
+  # admission webhook rejects only `number >= instances` — it accepts two
+  # instances quite happily. But synchronous replication at two means one standby
+  # must confirm every commit and there is exactly one standby: losing it stalls
+  # every write, which is WORSE for availability than the single node it replaced.
+  # Nothing upstream refuses that, so if this validation stops working, the
+  # unsafe topology becomes reachable and looks like a reasonable middle setting.
+  for v in 0 1 3 5; do accepts postgres_instances "$v"; done
+  for v in 2 4 -1; do rejects postgres_instances "$v"; done
+
+  # --- the derived database topology, across both levers -----------------------
+  #
+  # `postgres_instances != 0 ? postgres_instances : (ha ? 3 : 1)` decides how many
+  # database instances exist, and the module then derives whether synchronous
+  # replication is enabled AT ALL from that count. Both derivations are pinned
+  # here because the failure they prevent is silent in the dangerous direction: a
+  # topology that asked for synchronous replication and did not get enough
+  # instances runs ASYNCHRONOUSLY, with healthy pods and a green apply.
+  #
+  # postgres_synchronous_enforced is therefore the database sibling of
+  # ha_topology.contradictory — it reports what is in force, not what was asked
+  # for, so an instance that quietly lost its durability guarantee is legible
+  # from the root's own outputs rather than only from the cluster.
+  evaluates 3 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true
+  evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=false
+  evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true -var postgres_instances=1
+
+  # The SECOND derivation — whether synchronous replication is actually IN FORCE.
+  #
+  # This one is asymmetric, which is why it needs its own assertions rather than
+  # riding on the instance count above. Break the derivation toward ON and the
+  # chart's `fail` catches it loudly (the CI helm step covers exactly that). Break
+  # it toward OFF and a `--ha` install runs ASYNCHRONOUSLY behind three healthy
+  # pods and a green apply — the false-HA shape — with nothing in CI to notice.
+  #
+  # `synchronous_enforced` reports what is in force rather than what was asked
+  # for, which is what makes it the database sibling of ha_topology.contradictory.
+  # These three lines are what stop it from being decorative.
+  evaluates true 'module.cnpg_rdb.synchronous_enforced' -var ha=true
+  evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=false
+  evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=true -var postgres_instances=1
+
+  # --- timescale_instances (ADR-020 A2.4) --------------------------------------
+  #
+  # The event store's half of the same two-lever derivation. Same 1-or-3-never-2
+  # rule, and it needs its own assertions rather than being assumed to follow the
+  # relational store: the two are separate variables feeding separate modules, so
+  # a derivation that breaks on one is invisible from the other.
+  for v in 0 1 3 5; do accepts timescale_instances "$v"; done
+  for v in 2 4 -1; do rejects timescale_instances "$v"; done
+
+  evaluates 3 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true
+  evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=false
+  evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true -var timescale_instances=1
+
+  evaluates true 'module.cnpg_tsdb.synchronous_enforced' -var ha=true
+  evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=false
+  evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=true -var timescale_instances=1
+
+  # 🔴 The two stores must not share a lever by accident. If a future edit points
+  # the event store's module at postgres_instances, every assertion above still
+  # passes (both derive 3 under ha=true), and the only visible symptom is that
+  # pinning one store silently moves the other.
+  #
+  # 🔑 THE ROOT SPLIT NOW REFUSES THAT SUBSTITUTION OUTRIGHT, WHICH IS WHY THIS IS
+  # ONE LINE AND NOT TWO. postgres_instances is declared only in the cluster root,
+  # so pointing the event store's module at it is not a coincidence that happens to
+  # agree on the defaults — it is "Reference to undeclared input variable", and the
+  # instance root does not load at all. The line that set the levers apart and
+  # required the EVENT store to follow its own is gone with the shared root; what
+  # remains asserts the relational store still follows its own lever, which is
+  # still a substitution this root could make.
+  evaluates 1 'module.cnpg_rdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
+
+  # --- the node-loss eviction fuse (ADR-020 A1.4) ------------------------------
+  #
+  # 🔴 THE FAILURE THIS PINS IS A DELETION, NOT A WRONG VALUE, and that is why it
+  # is asserted at all when the module hard-codes a default. Drop
+  # `nodeLossTolerationSeconds` from base_values in a refactor and nothing breaks:
+  # the chart's own default is null, null renders no toleration, and Kubernetes'
+  # DefaultTolerationSeconds admission plugin then injects 300 onto every instance
+  # pod. Three healthy pods, a green apply, synchronous replication genuinely on —
+  # and a dead primary's pod lingering five minutes instead of thirty seconds,
+  # which lengthens the tail of every failover by the difference.
+  #
+  # There is no symptom until a node dies. So the assertion is that the value
+  # REACHES the chart, on both stores, in both postures.
+  #
+  # The expected value is a STRING because the output is tostring()'d: the "unset"
+  # case has to be distinguishable from a number, and an untyped null compares
+  # badly against a typed one.
+  #
+  # Measured, by deleting the wiring and running the mutation: the unset case
+  # prints `tostring(null)` here, NOT `<nil>` — an earlier version of this comment
+  # said `<nil>` and was simply wrong. That string is what "Kubernetes' 300s
+  # default is in force" looks like from the root, and it is the state these four
+  # lines exist to keep from appearing silently.
+  evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=true
+  evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=false
+  evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=true
+  evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=false
+
+  # --- the CNPG control plane's own availability (ADR-020 A1.5) ----------------
+  #
+  # 🔴 THE OPERATOR IS IN THE DATABASE FAILOVER PATH. CloudNativePG cannot
+  # reconcile a Cluster whose plugins it cannot reach, and a Cluster that does not
+  # reconcile does not promote a standby. Measured on one cluster, same fault
+  # minutes apart: 10m50s to fail over when the control plane shared the dead node,
+  # 1m51s when it did not.
+  #
+  # What these pin is a DELETION, and there are two distinct ones. Drop `ha =
+  # var.ha` at the module call and the module's own default (false) silently takes
+  # over — one replica, no spread, green apply. Drop `topologySpreadConstraints`
+  # from the values document and two replicas cheerfully share a node, which is the
+  # same false-HA shape as three database instances on one host: it costs twice as
+  # much and protects against nothing, and every replica count agrees it is fine.
+  #
+  # `operator_spread_enforced` reports the SELECTOR, not merely the constraint,
+  # because a topologySpreadConstraint whose labelSelector matches no pods renders
+  # fine and spreads nothing.
+  evaluates 2 'module.cnpg[0].operator_replicas' -var ha=true
+  evaluates 1 'module.cnpg[0].operator_replicas' -var ha=false
+  evaluates true 'module.cnpg[0].operator_spread_enforced' -var ha=true
+  evaluates false 'module.cnpg[0].operator_spread_enforced' -var ha=false
+
+  # The plugin is deliberately NOT replicated — its CNPG-I gRPC server is
+  # leader-election-gated and its chart's readinessProbe is a hard-coded tcpSocket
+  # on that port, so a second replica never becomes Ready and `helm wait` fails the
+  # apply. This asserts the fuse it DOES get, on both postures, since that is the
+  # whole of its node-loss story.
+  evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=true
+  evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=false
+
+  # --- database backups (ADR-028, ADR-020 A2.5) --------------------------------
+  #
+  # The destination is two-valued by construction. There is deliberately no third
+  # value meaning "backups on, destination none", because that is the exact state
+  # this slice exists to remove: the plugin installed, the flag reading true, and
+  # nothing archived anywhere. An empty string is the value a half-finished edit
+  # produces, so it has to be refused rather than treated as "no destination".
+  for v in in-cluster external; do accepts backup_destination "$v"; done
+  for v in "" none s3 In-Cluster local; do rejects backup_destination "$v"; done
+
+  # 🔴 BACKUPS REQUIRE THE OPERATOR, and the conjunction is the thing being pinned.
+  # `--no-cnpg` already sets enable_database_backups=false at the dcctl layer, so
+  # dropping `&& var.enable_cnpg` from the derivation looks harmless and passes
+  # every dcctl-side test. What it produces is an object store, a 20Gi volume and
+  # two ObjectStore resources standing ready for a plugin that was never installed
+  # — no error anywhere, and no backups.
+  evaluates true 'local.backups_on'
+  evaluates false 'local.backups_on' -var enable_database_backups=false
+  evaluates false 'local.backups_on' -var enable_cnpg=false
+  evaluates false 'local.backups_on' -var enable_cnpg=false -var enable_database_backups=true
+
+  # What the flag actually BUYS, read back through the modules rather than from the
+  # flag itself. `database_backups_enabled` used to mean only that the plugin was
+  # installed; these assert that each store resolves a real destination path, which
+  # is the claim that was previously unsupported.
+  evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination'
+  evaluates '"s3://devicechain-tsdb/dc-tsdb"' 'module.cnpg_tsdb.backup_destination'
+  evaluates 'tostring(null)' 'module.cnpg_rdb.backup_destination' -var enable_database_backups=false
+  evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_destination' -var enable_database_backups=false
+
+  # 🔴 THE TWO STORES MUST NOT SHARE A BUCKET, and this is the substitution guard
+  # for it — the exact sibling of the instance-count one above, for the exact same
+  # reason. Point the event store's module at var.backup_bucket_rdb by accident and
+  # every assertion in this file still passes on the defaults, because the two
+  # buckets are only ever compared here. What it would silently cost is the whole
+  # core-data / event-data split: one bucket, one retention policy, and "restore
+  # the event database without touching the control plane" stops being a thing that
+  # can be done.
+  #
+  # Setting the two levers to DIFFERENT values is what makes a substitution fail
+  # rather than coincide.
+  #
+  # 🔑 AND THE SPLIT CLOSES HALF OF IT STRUCTURALLY. backup_bucket_rdb is a cluster
+  # root variable, so the event store's module cannot reach it by accident any more
+  # — the line that pinned rdb's bucket and required tsdb NOT to follow it has gone
+  # with the shared root. The remaining three still bite: the cluster root declares
+  # BOTH bucket names (it creates both buckets beside the object store), so a
+  # transposition there is still an ordinary, silent mistake.
+  evaluates '"s3://core-only/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_rdb=core-only
+  evaluates '"s3://events-only/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_tsdb=events-only
+  evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_tsdb=events-only
+
+  # The object store is provisioned only where it is used. An external destination
+  # must not stand one up — that would be a MinIO pod and a volume nobody writes to,
+  # on the configuration whose whole point is that storage lives elsewhere.
+  evaluates 1 'length(module.object_store)'
+  evaluates 0 'length(module.object_store)' -var enable_database_backups=false
+  evaluates 0 'length(module.object_store)' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
+
+  # ...and the credentials come from the matching source. The in-cluster
+  # destination REUSES the object store's own Secret rather than writing a second
+  # copy of the same credential — MinIO's root credentials and the credentials the
+  # archiver presents are the same credentials, and two Secrets holding one value
+  # is two things to rotate and one of them to forget.
+  #
+  # Asserted on the KEY NAMES rather than on a resource count, and not by choice:
+  # `length(kubernetes_secret_v1.backup_credentials)` is `(known after apply)` in
+  # the console, so it cannot discriminate anything. The key names can, and they
+  # are a sharper probe anyway — they differ between the two branches, so this
+  # fails if the conditional ever selects the wrong source while both branches
+  # still produce a Secret.
+  evaluates '"MINIO_ROOT_USER"' 'local.backup_credentials.access_key'
+  evaluates '"ACCESS_KEY_ID"' 'local.backup_credentials.access_key' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
+  evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -var enable_database_backups=false
+
+  # --- restore (ADR-028, ADR-020 A2.5c) ----------------------------------------
+  #
+  # A restore is a rebuild-time lever, and the whole reason it needs a gate here is
+  # that its failure modes are QUIET. CloudNativePG reads `spec.bootstrap` only
+  # when it CREATES a Cluster, so most ways of getting this wrong produce a green
+  # apply and a cluster that either came up empty or is wedged part-way through
+  # coming up — neither of which is an apply error anybody sees.
+  #
+  # 🔴 WHAT THIS CANNOT DO, stated plainly for the same reason the ha=true +
+  # cluster_replicas=1 block above states it: the REFUSALS live in
+  # terraform_data.restore_guard preconditions, which run during a PLAN, and no
+  # per-PR gate performs one. NONE of the four is checked here or anywhere else.
+  #
+  # An earlier version of this header said the section asserts "the root still
+  # DETECTS each condition — the exact expressions the preconditions evaluate." That
+  # was false, and provably so: deleting terraform_data.restore_guard in full left
+  # every assertion below green. Restating a precondition's expression and asking
+  # `tofu console` to evaluate it does not reach the precondition; it re-runs the
+  # operators inside it. Those five assertions are gone — see the note further down.
+  #
+  # What is left is what this tool can honestly establish without a plan: that the
+  # variable validations refuse what they claim to, and that the LOCALS the module
+  # blocks are wired from take the shapes the chart expects. The refusals stay
+  # unverified until hack/dr-rig.sh drives one against a live cluster and is turned
+  # away.
+
+  # A target with nothing to restore is a variable validation, so it IS refused in
+  # CI. It matters because it is silent otherwise: recovery would replay the whole
+  # archive and the operator would believe they had stopped before the bad delete.
+  rejects restore_rdb_target_time "2026-07-28 03:00:00+00"
+  rejects restore_tsdb_target_time "2026-07-28 03:00:00+00"
+  # 🔴 THE COUNTERWEIGHT, AND IT HAS TO SET A SOURCE. `accepts <target> ""` — the only
+  # acceptance these two blocks had — passes against a condition hard-wired to reject
+  # every non-empty target, because the empty string IS the default and the guard is
+  # then never asked anything. What has to keep working is the real recovery: a target
+  # WITH the source it names. The event store's block had no acceptance at all.
+  accepts restore_rdb_target_time "2026-07-28 03:00:00+00" -var restore_rdb_from=dc-rdb
+  accepts restore_tsdb_target_time "2026-07-26 01:02:03+00" -var restore_tsdb_from=dc-tsdb
+
+  # --- chart version pins, the RUNTIME half -------------------------------------
+  #
+  # hack/check-chart-pins.sh keeps the source pinned; these blocks keep a tfvars
+  # override from undoing it. Both halves are needed and neither subsumes the other:
+  # the script cannot see a value a user supplies, and a validation block cannot see a
+  # default that was quietly emptied in the tree.
+  #
+  # Two shapes are refused, and the second is the one that motivated a regex rather
+  # than a `!= ""`:
+  #   ""              — used to mean "install latest"
+  #   "4.15.1 - 5.0.0" — a helm version RANGE, resolved at apply time wearing a pin's
+  #                      clothes. It reads as pinned in a diff and behaves as unpinned.
+  # Both make the chart repository a dependency of PLANNING, which is how a repo 503
+  # reaches an operator as "Provider produced inconsistent final plan ... .version:
+  # was known, but now unknown" — a message naming neither the chart nor the network.
+  #
+  # 🔴 THE ACCEPTS ARE NOT DECORATION HERE. The condition is a `can(regex(...))`, and a
+  # regex that is subtly too strict refuses the very versions we ship — `v1.21.1` has a
+  # leading v and `1.2.3-rc.1` has a pre-release suffix, and a naive `^[0-9.]+$` eats
+  # both while passing every rejection above.
+  for _cv in nats_chart_version cnpg_chart_version cnpg_plugin_chart_version \
+  	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version; do
+  	rejects "$_cv" ""
+  	rejects "$_cv" "4.15.1 - 5.0.0"
+  	accepts "$_cv" "1.2.3"
+  	accepts "$_cv" "v1.2.3"
+  	accepts "$_cv" "1.2.3-rc.1"
+  done
+  unset _cv
+
+  # --- the read-only SQL/BI reader roles ----------------------------------------
+  #
+  # 🔴 EVERY ONE OF THESE REFUSALS IS A CROSS-TENANT READ IF IT STOPS FIRING, which
+  # is not the usual shape here (most of the blocks above refuse an unavailable or
+  # unrecoverable topology). The read surface derives a reader's tenant from its ROLE
+  # NAME and from nothing else, so the name is the whole of the authorization
+  # decision and these three blocks are what keep it well-formed.
+  #
+  #   wrong prefix   the role resolves to no tenant and reads zero rows -- fails
+  #                  safe, but silently, with every affordance succeeding.
+  #   over 63 bytes  PostgreSQL TRUNCATES an identifier rather than rejecting it, so
+  #                  `analytics_<53 x's>y` becomes the role for `<53 x's>`. Measured:
+  #                  a NOTICE, and a reader for a DIFFERENT tenant. This one does not
+  #                  fail safe.
+  #   a group role   the surface's own group roles. Declared here one would be given
+  #                  LOGIN, and both names match the reader prefix. There are TWO of
+  #                  them since position became its own grant, and the second is the
+  #                  one an edit will forget: `analytics_location_reader` with LOGIN
+  #                  resolves to a tenant called `location_reader`.
+  rejects timescale_analytics_readers '[{name="bi_acme",connection_limit=5}]'
+  rejects timescale_analytics_readers '[{name="analytics_",connection_limit=5}]'
+  rejects timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",connection_limit=5}]'
+  rejects timescale_analytics_readers '[{name="analytics_reader",connection_limit=5}]'
+  rejects timescale_analytics_readers '[{name="analytics_location_reader",connection_limit=5}]'
+
+  # 🔴 THE COUNTERWEIGHT, and the length one is why it is not decoration: a bound
+  # written `< 63` or applied to the tenant id rather than the role name refuses the
+  # longest name that is actually legal, and every rejection above would still pass.
+  # 63 bytes exactly is the boundary value.
+  accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,password_secret="analytics-acme-credentials"}]'
+  accepts timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",connection_limit=1}]'
+  accepts timescale_analytics_readers '[]'
+  # The position opt-in is a real field on the object, in both states. Without these the
+  # name refusals above would pass just as well against a variable that never gained it —
+  # and a reader declared with reads_location would then be refused as a TYPE error, at
+  # apply time, for a key the documentation tells the operator to write.
+  accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=true}]'
+  accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=false}]'
+
+  # The per-store objects the modules actually receive. Null on a normal install —
+  # and this is the assertion that fails if a future edit makes "restore" a flag
+  # rather than an absent object, which would hand the chart a half-populated
+  # restore block on every ordinary bootstrap.
+  evaluates 'tostring(null)' 'local.rdb_restore == null ? null : "set"'
+  evaluates 'tostring(null)' 'local.tsdb_restore == null ? null : "set"'
+  evaluates '"dc-rdb"' 'local.rdb_restore.source_server_name' -var restore_rdb_from=dc-rdb
+  evaluates '"dc-tsdb"' 'local.tsdb_restore.source_server_name' -var restore_tsdb_from=dc-tsdb
+
+  # 🔴 ONE STORE AT A TIME IS THE NORMAL CASE, and the pair above is what proves
+  # the two levers are independent. A restore wired to a single shared switch
+  # would rewind the control plane every time somebody recovered the event store,
+  # discarding every tenant, device and rule created since — a data-loss bug
+  # committed while restoring from data loss.
+
+  # The point-in-time target reaches the module as CNPG's own camelCase field.
+  # Spelled wrongly it is pruned by the API server and the recovery silently
+  # replays everything: a PITR that restores the damage it was run to undo.
+  evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetTime"]' \
+    -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00'
+  evaluates 'tomap({})' 'local.rdb_restore.recovery_target' -var restore_rdb_from=dc-rdb
+
+  # AND THE EVENT STORE'S TWIN, which had none of this. The rdb block above is
+  # where a spelling mistake would be caught; the tsdb block is a hand-written copy
+  # of it, and until now nothing read it at all — so `targetTime` misspelled there
+  # was silent, and it is the store an operator is MORE likely to rewind, since
+  # telemetry is where a bad ingest lands. The counterweight matters for the same
+  # reason it does above: without it a `recovery_target` hard-wired to a constant
+  # map satisfies the positive case.
+  #
+  # A DIFFERENT instant on purpose. With one shared literal, a tsdb block wired to
+  # var.restore_rdb_target_time by copy-paste would read the right value whenever
+  # both were set, and the assertion would confirm the bug.
+  evaluates '"2026-07-26 01:02:03+00"' 'local.tsdb_restore.recovery_target["targetTime"]' \
+    -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
+  evaluates 'tomap({})' 'local.tsdb_restore.recovery_target' -var restore_tsdb_from=dc-tsdb
+  # 🔑 THE CROSS-WIRE IS NOW UNWRITABLE, AND THAT IS WHY THE TWO ASSERTIONS THAT
+  # NAMED IT ARE GONE RATHER THAN WEAKENED.
+  #
+  # They set all four restore variables to two different moments and required each
+  # store to read its own — the only shape in which a transposition produces a value
+  # rather than an empty map. That test needed one root to declare all four. After
+  # the split restore_rdb_* live in the cluster root and restore_tsdb_* in the
+  # instance root, so an event-store block wired to var.restore_rdb_target_time does
+  # not quietly read the wrong instant: it fails to load, naming the variable.
+  #
+  # 🔴 Do not restore these lines against a single root "to be safe". Either root
+  # would then have to declare the other's restore variables, which is the coupling
+  # the split exists to remove, and the assertion would be manufacturing the
+  # condition it claims to detect.
+
+  # 🔴 THE WEDGE CONDITION IS NOT CHECKED HERE, AND FIVE ASSERTIONS THAT CLAIMED TO
+  # CHECK IT HAVE BEEN DELETED.
+  #
+  # They restated the precondition's own expression and asked `tofu console` to
+  # evaluate it:
+  #
+  #   evaluates false 'var.backup_server_name_rdb != "" && \
+  #     var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb
+  #
+  # That references nothing this root declares beyond two variables, so it tests
+  # that OpenTofu's `!=` operator works. Measured, not argued: deleting
+  # `terraform_data.restore_guard` in full -- all four preconditions -- left the
+  # whole script printing "All OpenTofu variable validations behave as declared."
+  # The header above once claimed this section asserts "the root still DETECTS each
+  # condition." It did not, and a check that passes against the feature's absence is
+  # worse than no check, because it is counted.
+  #
+  # A precondition is only evaluated during a PLAN, and nothing in CI plans this
+  # root (it needs credentials and a cluster). So the four preconditions at
+  # main.tf's restore_guard are UNVERIFIED until hack/dr-rig.sh runs one live and
+  # is shown to be refused. What survives below is what `tofu console` can honestly
+  # reach: variable validations, and the locals the module blocks are wired from.
+
+  # Restoring with backups off: there is no ObjectStore to read from, and the
+  # cluster would come up EMPTY rather than failing — which during a rebuild looks
+  # exactly like a restore that found nothing to bring back.
+  evaluates false 'local.backups_on' -var restore_rdb_from=dc-rdb -var enable_database_backups=false
+
+  # NOT ASSERTED HERE: the `database_restored_from` output — which, to be accurate
+  # about what it is, NOTHING currently reads. dcctl consumes
+  # database_backups_enabled and database_backup_survives_cluster_loss; this one was
+  # written for the "what did the infrastructure do vs what did I ask for" question
+  # and never wired to a consumer, so dcctl's own "recovering from archive %q" line
+  # is printed from argv — the very thing the output exists to stop.
+  # `tofu console` cannot address `output.*` at all — outputs exist in state, after
+  # an apply — and the only way to check one from here is to restate its expression,
+  # which is a second copy that stops matching the day the first one changes. The
+  # local it projects is asserted above instead, which is the thing that could
+  # actually be wrong; the projection is a null check on it.
+
+  # --- the operand image tag is a SECOND COPY, and nothing links it to its source
+  #
+  # deploy/images/timescaledb/versions.conf is the single source of truth for the
+  # image we build. The workflow computes the published tag from it as
+  # `<pg_minor>-ts<timescaledb_version>-r<revision>`; variables.tf then carries
+  # that tag as a hand-written string, because a Terraform default cannot read a
+  # shell file.
+  #
+  # So the deployed event store's image version is defined in two places that have
+  # no mechanical relationship. Bump versions.conf, rebuild, publish — and the
+  # platform keeps deploying the OLD tag, successfully, with the new image sitting
+  # unused in the registry. Nothing fails; the fix simply does not take effect.
+  # This recomputes the tag and requires the default to match it.
+  versions_conf="$repo_root/deploy/images/timescaledb/versions.conf"
+  if [[ -f $versions_conf ]]; then
+    # shellcheck disable=SC1090
+    source "$versions_conf"
+    pg_minor=${PG_IMAGE##*:}
+    pg_minor=${pg_minor%%-*}
+    # Guarded, because the workflow this formula is copied from guards it too. A
+    # digest-pinned PG_IMAGE leaves hex here, and the assertion would then fail
+    # pointing at variables.tf when the problem is PG_IMAGE.
+    if ! grep -qE '^[0-9]+\.[0-9]+$' <<<"$pg_minor"; then
+      echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE (got '$pg_minor')."
+      failures=$((failures + 1))
+      pg_minor=""
+    fi
+    want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
+    # `tofu console` renders a string result WITH its quotes, so the expected value
+    # carries them too. Comparing the raw tag would fail on every correct run.
+    evaluates "\"$want_image\"" 'var.timescale_image'
   else
-    echo "FAIL  $expr == $out, want $expected  [$*]" >&2
+    echo >&2 "MISSING: $versions_conf — cannot check the operand image tag against its source of truth."
+    # NOT `((failures++))`: with failures at 0 that arithmetic command evaluates to 0,
+    # exits 1, and `set -e` kills the script right here — losing the summary below.
     failures=$((failures + 1))
   fi
+
 }
 
-# --- the ADR-020 A0 server count, across both levers -------------------------
-#
-# The derivation `cluster_replicas > 0 ? cluster_replicas : (ha ? 3 : 1)` decides
-# how many NATS servers exist, and therefore the CEILING on how widely any stream
-# can be replicated. It is worth pinning at this level because it is the one place
-# where two levers resolve to one number, and getting it backwards — the toggle
-# silently winning over an explicit count — would produce a cluster the operator
-# did not ask for while every artifact still read as if they had.
-#
-# This is the cheap half of the "render the HA topology in CI" check: no cluster,
-# no provider credentials, no network. `tofu console` computes a module output as
-# long as nothing in it depends on a resource attribute, which local-only
-# arithmetic does not. The other half — that a 3-server cluster actually places one
-# server per node — needs a real multi-node cluster and is the live A0 validation.
-evaluates 1 module.nats.cluster_replicas -var ha=false
-evaluates 3 module.nats.cluster_replicas -var ha=true
-evaluates 5 module.nats.cluster_replicas -var nats_cluster_replicas=5
-# An explicit count OVERRIDES the shorthand rather than being overridden by it.
-evaluates 5 module.nats.cluster_replicas -var ha=true -var nats_cluster_replicas=5
-# ha=false with an explicit cluster is NOT a contradiction: the cluster is enabled
-# on the count, not on the flag, so this is the explicit-topology path.
-evaluates 3 module.nats.cluster_replicas -var ha=false -var nats_cluster_replicas=3
-
-# --- the values that decide whether HA is REAL -------------------------------
-#
-# Each of these can be broken in a way that leaves an instance looking highly
-# available and surviving nothing, and none of them is reachable from a variable
-# validation block. A resource `precondition` would not help either — those run
-# during a PLAN, which no per-PR gate performs. So they are asserted here, off the
-# module's ha_topology output, which `tofu console` can compute because it depends
-# on no resource attribute.
-#
-# whenUnsatisfiable is the sharpest of them: flipping it to ScheduleAnyway is a
-# one-word change that lets the scheduler put all three NATS servers on one node,
-# which passes every other check A0 adds (three peers, Replicas:3, all current)
-# and survives zero node losses.
-evaluates '"DoNotSchedule"' 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].whenUnsatisfiable' -var ha=true
-evaluates 1 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].maxSkew' -var ha=true
-evaluates '{}' 'module.nats.ha_topology.spread_constraints' -var ha=false
-# Whether a NATS config change is ADOPTED by the running broker at all. nats-server
-# refuses to hot-reload the auth_callout block — and the refusal is wholesale, so
-# every other change in the same apply goes with it — which means without the pod
-# template's config checksum a change is applied, reported successful by tofu, by
-# the reloader and by the ConfigMap, and never reaches the server. Asserted in BOTH
-# topologies because it is not an HA property: a single-server instance has exactly
-# the same silent-divergence bug.
-#
-# Read-back, not a grep: hack/check-nats-config-adoption.sh pins that the line
-# exists, but only this can see that it is still nested under podTemplate. The
-# chart has no values.schema.json, so a key at the wrong depth is ignored in
-# silence — and `tofu console` fails on the missing attribute before it ever gets
-# to compare values.
-evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=true
-evaluates true module.nats.ha_topology.config_checksum_annotation -var ha=false
-# The MQTT gateway's own streams hold persistent sessions and inflight QoS 1
-# messages; at 1 on a clustered broker, losing their node drops every session.
-evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var ha=true
-evaluates 1 module.nats.ha_topology.mqtt_stream_replicas -var ha=false
-evaluates 3 module.nats.ha_topology.mqtt_stream_replicas -var nats_cluster_replicas=5
-# Clustering opens route port 6222, which carries every replicated write. Without
-# mutual verification any pod that can reach it joins the cluster as a peer and
-# reads every account, bypassing the auth callout.
-evaluates true module.nats.ha_topology.route_tls_verified -var ha=true
-# Both counterweights, because a single `true` is satisfied by an output hard-wired
-# to true. An unclustered broker opens NO route, so "route TLS verified" must be
-# false there rather than vacuously true — and with TLS off it must be false on a
-# clustered one, which is the state that actually leaves 6222 in the clear.
-evaluates false module.nats.ha_topology.route_tls_verified -var ha=false
-evaluates false module.nats.ha_topology.route_tls_verified -var ha=true -var nats_enable_tls=false
-evaluates true module.nats.ha_topology.clustered -var ha=true
-evaluates false module.nats.ha_topology.clustered -var ha=false
-
-# ROUTE TLS BEING ON AND ROUTE TLS WORKING ARE DIFFERENT FACTS, and the gap
-# between them cost a working cluster. The assertion above passed — the
-# configuration was right — while every route handshake failed, because the
-# server certificate was issued only for the names CLIENTS dial. Servers reach
-# each other by POD name through the headless Service (dc-nats-1.dc-nats-headless),
-# which a load-balanced Service name cannot address, so with verification on the
-# peers rejected each other and no cluster formed at all. Three isolated servers,
-# no JetStream meta leader.
-#
-# Nothing saw it: not `tofu validate`, not helm lint, not the ha_topology output,
-# and not any single-node install, which never opens a route. Only the live 3-node
-# rig did. These lines are what move it back into a gate that runs on every PR.
-evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var ha=true
-evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.dc-system.svc.cluster.local")])' -var ha=true
-# Scaled explicitly: a 5-server cluster needs five peers named, and a SAN list
-# built for three would leave servers 3 and 4 unable to join.
-evaluates true 'alltrue([for i in range(5) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var nats_cluster_replicas=5
-# The counterweight: an unclustered broker opens no route, so it gets no route
-# names. Without this the assertions above are satisfied by naming every possible
-# pod unconditionally, which would be a certificate promising peers that do not
-# exist.
-evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats-0.dc-nats-headless")' -var ha=false
-# And the client names survive. A route-name change that dropped them would break
-# every service connection instead — the same failure, pointed the other way.
-evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
-
-# The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
-# helm_release precondition, which only runs during a plan and which nothing in CI
-# performs — so what is asserted here is that the module still DETECTS the
-# contradiction, not that it refuses it. Worth having anyway: if this flips, the
-# precondition is guarding a condition that can no longer occur, and an operator
-# asking for HA would quietly get one server.
-evaluates true module.nats.ha_topology.contradictory -var ha=true -var nats_cluster_replicas=1
-evaluates false module.nats.ha_topology.contradictory -var ha=true
-evaluates false module.nats.ha_topology.contradictory -var ha=false -var nats_cluster_replicas=3
-
-# --- nats_mqtt_node_port -----------------------------------------------------
-# Pre-existing guard, included so this script covers the root's validation blocks
-# rather than only the newest one.
-for v in 0 30000 31883 32767; do accepts nats_mqtt_node_port "$v"; done
-# --by: this is the one variable in the root that declares NO grammar of its own —
-# the refusal comes from modules/nats's mqtt_node_port block, which the root feeds
-# directly. Worth naming rather than hiding: an operator reading variables.tf sees
-# no constraint on nats_mqtt_node_port, and the day the module stops taking it
-# straight through, this line is what says the root never guarded it.
-for v in 1883 29999 32768; do rejects nats_mqtt_node_port "$v" --by mqtt_node_port; done
-
-# --- postgres_instances (ADR-020 A2.3) ---------------------------------------
-#
-# 0 derives from var.ha; 1 is the supported non-HA topology (decision D4); 3 is
-# the smallest synchronous one.
-#
-# 🔴 2 IS THE POINT OF THIS BLOCK, and it is refused for a reason that is not
-# obvious and is not the same as CloudNativePG's own rule. The operator's
-# admission webhook rejects only `number >= instances` — it accepts two
-# instances quite happily. But synchronous replication at two means one standby
-# must confirm every commit and there is exactly one standby: losing it stalls
-# every write, which is WORSE for availability than the single node it replaced.
-# Nothing upstream refuses that, so if this validation stops working, the
-# unsafe topology becomes reachable and looks like a reasonable middle setting.
-for v in 0 1 3 5; do accepts postgres_instances "$v"; done
-for v in 2 4 -1; do rejects postgres_instances "$v"; done
-
-# --- the derived database topology, across both levers -----------------------
-#
-# `postgres_instances != 0 ? postgres_instances : (ha ? 3 : 1)` decides how many
-# database instances exist, and the module then derives whether synchronous
-# replication is enabled AT ALL from that count. Both derivations are pinned
-# here because the failure they prevent is silent in the dangerous direction: a
-# topology that asked for synchronous replication and did not get enough
-# instances runs ASYNCHRONOUSLY, with healthy pods and a green apply.
-#
-# postgres_synchronous_enforced is therefore the database sibling of
-# ha_topology.contradictory — it reports what is in force, not what was asked
-# for, so an instance that quietly lost its durability guarantee is legible
-# from the root's own outputs rather than only from the cluster.
-evaluates 3 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true
-evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=false
-evaluates 1 'var.postgres_instances != 0 ? var.postgres_instances : (var.ha ? 3 : 1)' -var ha=true -var postgres_instances=1
-
-# The SECOND derivation — whether synchronous replication is actually IN FORCE.
-#
-# This one is asymmetric, which is why it needs its own assertions rather than
-# riding on the instance count above. Break the derivation toward ON and the
-# chart's `fail` catches it loudly (the CI helm step covers exactly that). Break
-# it toward OFF and a `--ha` install runs ASYNCHRONOUSLY behind three healthy
-# pods and a green apply — the false-HA shape — with nothing in CI to notice.
-#
-# `synchronous_enforced` reports what is in force rather than what was asked
-# for, which is what makes it the database sibling of ha_topology.contradictory.
-# These three lines are what stop it from being decorative.
-evaluates true 'module.cnpg_rdb.synchronous_enforced' -var ha=true
-evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=false
-evaluates false 'module.cnpg_rdb.synchronous_enforced' -var ha=true -var postgres_instances=1
-
-# --- timescale_instances (ADR-020 A2.4) --------------------------------------
-#
-# The event store's half of the same two-lever derivation. Same 1-or-3-never-2
-# rule, and it needs its own assertions rather than being assumed to follow the
-# relational store: the two are separate variables feeding separate modules, so
-# a derivation that breaks on one is invisible from the other.
-for v in 0 1 3 5; do accepts timescale_instances "$v"; done
-for v in 2 4 -1; do rejects timescale_instances "$v"; done
-
-evaluates 3 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true
-evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=false
-evaluates 1 'var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)' -var ha=true -var timescale_instances=1
-
-evaluates true 'module.cnpg_tsdb.synchronous_enforced' -var ha=true
-evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=false
-evaluates false 'module.cnpg_tsdb.synchronous_enforced' -var ha=true -var timescale_instances=1
-
-# 🔴 The two stores must not share a lever by accident. If a future edit points
-# the event store's module at postgres_instances, every assertion above still
-# passes (both derive 3 under ha=true), and the only visible symptom is that
-# pinning one store silently moves the other. These two lines are what make that
-# substitution fail: they set the levers to DIFFERENT values and require each
-# store to follow its own.
-evaluates 3 'module.cnpg_tsdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
-evaluates 1 'module.cnpg_rdb.synchronous_enforced ? 3 : 1' -var ha=true -var postgres_instances=1
-
-# --- the node-loss eviction fuse (ADR-020 A1.4) ------------------------------
-#
-# 🔴 THE FAILURE THIS PINS IS A DELETION, NOT A WRONG VALUE, and that is why it
-# is asserted at all when the module hard-codes a default. Drop
-# `nodeLossTolerationSeconds` from base_values in a refactor and nothing breaks:
-# the chart's own default is null, null renders no toleration, and Kubernetes'
-# DefaultTolerationSeconds admission plugin then injects 300 onto every instance
-# pod. Three healthy pods, a green apply, synchronous replication genuinely on —
-# and a dead primary's pod lingering five minutes instead of thirty seconds,
-# which lengthens the tail of every failover by the difference.
-#
-# There is no symptom until a node dies. So the assertion is that the value
-# REACHES the chart, on both stores, in both postures.
-#
-# The expected value is a STRING because the output is tostring()'d: the "unset"
-# case has to be distinguishable from a number, and an untyped null compares
-# badly against a typed one.
-#
-# Measured, by deleting the wiring and running the mutation: the unset case
-# prints `tostring(null)` here, NOT `<nil>` — an earlier version of this comment
-# said `<nil>` and was simply wrong. That string is what "Kubernetes' 300s
-# default is in force" looks like from the root, and it is the state these four
-# lines exist to keep from appearing silently.
-evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=true
-evaluates '"30"' 'module.cnpg_rdb.node_loss_toleration_seconds' -var ha=false
-evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=true
-evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=false
-
-# --- the CNPG control plane's own availability (ADR-020 A1.5) ----------------
-#
-# 🔴 THE OPERATOR IS IN THE DATABASE FAILOVER PATH. CloudNativePG cannot
-# reconcile a Cluster whose plugins it cannot reach, and a Cluster that does not
-# reconcile does not promote a standby. Measured on one cluster, same fault
-# minutes apart: 10m50s to fail over when the control plane shared the dead node,
-# 1m51s when it did not.
-#
-# What these pin is a DELETION, and there are two distinct ones. Drop `ha =
-# var.ha` at the module call and the module's own default (false) silently takes
-# over — one replica, no spread, green apply. Drop `topologySpreadConstraints`
-# from the values document and two replicas cheerfully share a node, which is the
-# same false-HA shape as three database instances on one host: it costs twice as
-# much and protects against nothing, and every replica count agrees it is fine.
-#
-# `operator_spread_enforced` reports the SELECTOR, not merely the constraint,
-# because a topologySpreadConstraint whose labelSelector matches no pods renders
-# fine and spreads nothing.
-evaluates 2 'module.cnpg[0].operator_replicas' -var ha=true
-evaluates 1 'module.cnpg[0].operator_replicas' -var ha=false
-evaluates true 'module.cnpg[0].operator_spread_enforced' -var ha=true
-evaluates false 'module.cnpg[0].operator_spread_enforced' -var ha=false
-
-# The plugin is deliberately NOT replicated — its CNPG-I gRPC server is
-# leader-election-gated and its chart's readinessProbe is a hard-coded tcpSocket
-# on that port, so a second replica never becomes Ready and `helm wait` fails the
-# apply. This asserts the fuse it DOES get, on both postures, since that is the
-# whole of its node-loss story.
-evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=true
-evaluates '"30"' 'module.cnpg[0].control_plane_toleration_seconds' -var ha=false
-
-# --- database backups (ADR-028, ADR-020 A2.5) --------------------------------
-#
-# The destination is two-valued by construction. There is deliberately no third
-# value meaning "backups on, destination none", because that is the exact state
-# this slice exists to remove: the plugin installed, the flag reading true, and
-# nothing archived anywhere. An empty string is the value a half-finished edit
-# produces, so it has to be refused rather than treated as "no destination".
-for v in in-cluster external; do accepts backup_destination "$v"; done
-for v in "" none s3 In-Cluster local; do rejects backup_destination "$v"; done
-
-# 🔴 BACKUPS REQUIRE THE OPERATOR, and the conjunction is the thing being pinned.
-# `--no-cnpg` already sets enable_database_backups=false at the dcctl layer, so
-# dropping `&& var.enable_cnpg` from the derivation looks harmless and passes
-# every dcctl-side test. What it produces is an object store, a 20Gi volume and
-# two ObjectStore resources standing ready for a plugin that was never installed
-# — no error anywhere, and no backups.
-evaluates true 'local.backups_on'
-evaluates false 'local.backups_on' -var enable_database_backups=false
-evaluates false 'local.backups_on' -var enable_cnpg=false
-evaluates false 'local.backups_on' -var enable_cnpg=false -var enable_database_backups=true
-
-# What the flag actually BUYS, read back through the modules rather than from the
-# flag itself. `database_backups_enabled` used to mean only that the plugin was
-# installed; these assert that each store resolves a real destination path, which
-# is the claim that was previously unsupported.
-evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination'
-evaluates '"s3://devicechain-tsdb/dc-tsdb"' 'module.cnpg_tsdb.backup_destination'
-evaluates 'tostring(null)' 'module.cnpg_rdb.backup_destination' -var enable_database_backups=false
-evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_destination' -var enable_database_backups=false
-
-# 🔴 THE TWO STORES MUST NOT SHARE A BUCKET, and this is the substitution guard
-# for it — the exact sibling of the instance-count one above, for the exact same
-# reason. Point the event store's module at var.backup_bucket_rdb by accident and
-# every assertion in this file still passes on the defaults, because the two
-# buckets are only ever compared here. What it would silently cost is the whole
-# core-data / event-data split: one bucket, one retention policy, and "restore
-# the event database without touching the control plane" stops being a thing that
-# can be done.
-#
-# Setting the two levers to DIFFERENT values is what makes a substitution fail
-# rather than coincide.
-evaluates '"s3://core-only/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_rdb=core-only
-evaluates '"s3://devicechain-tsdb/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_rdb=core-only
-evaluates '"s3://events-only/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_tsdb=events-only
-evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_tsdb=events-only
-
-# The object store is provisioned only where it is used. An external destination
-# must not stand one up — that would be a MinIO pod and a volume nobody writes to,
-# on the configuration whose whole point is that storage lives elsewhere.
-evaluates 1 'length(module.object_store)'
-evaluates 0 'length(module.object_store)' -var enable_database_backups=false
-evaluates 0 'length(module.object_store)' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
-
-# ...and the credentials come from the matching source. The in-cluster
-# destination REUSES the object store's own Secret rather than writing a second
-# copy of the same credential — MinIO's root credentials and the credentials the
-# archiver presents are the same credentials, and two Secrets holding one value
-# is two things to rotate and one of them to forget.
-#
-# Asserted on the KEY NAMES rather than on a resource count, and not by choice:
-# `length(kubernetes_secret_v1.backup_credentials)` is `(known after apply)` in
-# the console, so it cannot discriminate anything. The key names can, and they
-# are a sharper probe anyway — they differ between the two branches, so this
-# fails if the conditional ever selects the wrong source while both branches
-# still produce a Secret.
-evaluates '"MINIO_ROOT_USER"' 'local.backup_credentials.access_key'
-evaluates '"ACCESS_KEY_ID"' 'local.backup_credentials.access_key' -var backup_destination=external -var backup_endpoint_url=https://s3.example.com
-evaluates 'tostring(null)' 'local.backup_credentials == null ? null : "set"' -var enable_database_backups=false
-
-# --- restore (ADR-028, ADR-020 A2.5c) ----------------------------------------
-#
-# A restore is a rebuild-time lever, and the whole reason it needs a gate here is
-# that its failure modes are QUIET. CloudNativePG reads `spec.bootstrap` only
-# when it CREATES a Cluster, so most ways of getting this wrong produce a green
-# apply and a cluster that either came up empty or is wedged part-way through
-# coming up — neither of which is an apply error anybody sees.
-#
-# 🔴 WHAT THIS CANNOT DO, stated plainly for the same reason the ha=true +
-# cluster_replicas=1 block above states it: the REFUSALS live in
-# terraform_data.restore_guard preconditions, which run during a PLAN, and no
-# per-PR gate performs one. NONE of the four is checked here or anywhere else.
-#
-# An earlier version of this header said the section asserts "the root still
-# DETECTS each condition — the exact expressions the preconditions evaluate." That
-# was false, and provably so: deleting terraform_data.restore_guard in full left
-# every assertion below green. Restating a precondition's expression and asking
-# `tofu console` to evaluate it does not reach the precondition; it re-runs the
-# operators inside it. Those five assertions are gone — see the note further down.
-#
-# What is left is what this tool can honestly establish without a plan: that the
-# variable validations refuse what they claim to, and that the LOCALS the module
-# blocks are wired from take the shapes the chart expects. The refusals stay
-# unverified until hack/dr-rig.sh drives one against a live cluster and is turned
-# away.
-
-# A target with nothing to restore is a variable validation, so it IS refused in
-# CI. It matters because it is silent otherwise: recovery would replay the whole
-# archive and the operator would believe they had stopped before the bad delete.
-rejects restore_rdb_target_time "2026-07-28 03:00:00+00"
-rejects restore_tsdb_target_time "2026-07-28 03:00:00+00"
-# 🔴 THE COUNTERWEIGHT, AND IT HAS TO SET A SOURCE. `accepts <target> ""` — the only
-# acceptance these two blocks had — passes against a condition hard-wired to reject
-# every non-empty target, because the empty string IS the default and the guard is
-# then never asked anything. What has to keep working is the real recovery: a target
-# WITH the source it names. The event store's block had no acceptance at all.
-accepts restore_rdb_target_time "2026-07-28 03:00:00+00" -var restore_rdb_from=dc-rdb
-accepts restore_tsdb_target_time "2026-07-26 01:02:03+00" -var restore_tsdb_from=dc-tsdb
-
-# --- chart version pins, the RUNTIME half -------------------------------------
-#
-# hack/check-chart-pins.sh keeps the source pinned; these blocks keep a tfvars
-# override from undoing it. Both halves are needed and neither subsumes the other:
-# the script cannot see a value a user supplies, and a validation block cannot see a
-# default that was quietly emptied in the tree.
-#
-# Two shapes are refused, and the second is the one that motivated a regex rather
-# than a `!= ""`:
-#   ""              — used to mean "install latest"
-#   "4.15.1 - 5.0.0" — a helm version RANGE, resolved at apply time wearing a pin's
-#                      clothes. It reads as pinned in a diff and behaves as unpinned.
-# Both make the chart repository a dependency of PLANNING, which is how a repo 503
-# reaches an operator as "Provider produced inconsistent final plan ... .version:
-# was known, but now unknown" — a message naming neither the chart nor the network.
-#
-# 🔴 THE ACCEPTS ARE NOT DECORATION HERE. The condition is a `can(regex(...))`, and a
-# regex that is subtly too strict refuses the very versions we ship — `v1.21.1` has a
-# leading v and `1.2.3-rc.1` has a pre-release suffix, and a naive `^[0-9.]+$` eats
-# both while passing every rejection above.
-for _cv in nats_chart_version cnpg_chart_version cnpg_plugin_chart_version \
-	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version; do
-	rejects "$_cv" ""
-	rejects "$_cv" "4.15.1 - 5.0.0"
-	accepts "$_cv" "1.2.3"
-	accepts "$_cv" "v1.2.3"
-	accepts "$_cv" "1.2.3-rc.1"
+# 🔴 ONCE PER ROOT. An assertion evaluates in the root that declares what it names
+# and skips in the other; what it must never do is skip in BOTH.
+for _root in "${tofu_roots[@]}"; do
+  echo "==> ${_root#"$repo_root"/}"
+  (cd "$_root" && true) || { echo "FAIL  cannot enter $_root" >&2; failures=$((failures + 1)); continue; }
+  pushd "$_root" >/dev/null
+  run_assertions
+  popd >/dev/null
 done
-unset _cv
 
-# --- the read-only SQL/BI reader roles ----------------------------------------
-#
-# 🔴 EVERY ONE OF THESE REFUSALS IS A CROSS-TENANT READ IF IT STOPS FIRING, which
-# is not the usual shape here (most of the blocks above refuse an unavailable or
-# unrecoverable topology). The read surface derives a reader's tenant from its ROLE
-# NAME and from nothing else, so the name is the whole of the authorization
-# decision and these three blocks are what keep it well-formed.
-#
-#   wrong prefix   the role resolves to no tenant and reads zero rows -- fails
-#                  safe, but silently, with every affordance succeeding.
-#   over 63 bytes  PostgreSQL TRUNCATES an identifier rather than rejecting it, so
-#                  `analytics_<53 x's>y` becomes the role for `<53 x's>`. Measured:
-#                  a NOTICE, and a reader for a DIFFERENT tenant. This one does not
-#                  fail safe.
-#   a group role   the surface's own group roles. Declared here one would be given
-#                  LOGIN, and both names match the reader prefix. There are TWO of
-#                  them since position became its own grant, and the second is the
-#                  one an edit will forget: `analytics_location_reader` with LOGIN
-#                  resolves to a tenant called `location_reader`.
-rejects timescale_analytics_readers '[{name="bi_acme",connection_limit=5}]'
-rejects timescale_analytics_readers '[{name="analytics_",connection_limit=5}]'
-rejects timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",connection_limit=5}]'
-rejects timescale_analytics_readers '[{name="analytics_reader",connection_limit=5}]'
-rejects timescale_analytics_readers '[{name="analytics_location_reader",connection_limit=5}]'
-
-# 🔴 THE COUNTERWEIGHT, and the length one is why it is not decoration: a bound
-# written `< 63` or applied to the tenant id rather than the role name refuses the
-# longest name that is actually legal, and every rejection above would still pass.
-# 63 bytes exactly is the boundary value.
-accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,password_secret="analytics-acme-credentials"}]'
-accepts timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",connection_limit=1}]'
-accepts timescale_analytics_readers '[]'
-# The position opt-in is a real field on the object, in both states. Without these the
-# name refusals above would pass just as well against a variable that never gained it —
-# and a reader declared with reads_location would then be refused as a TYPE error, at
-# apply time, for a key the documentation tells the operator to write.
-accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=true}]'
-accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=false}]'
-
-# The per-store objects the modules actually receive. Null on a normal install —
-# and this is the assertion that fails if a future edit makes "restore" a flag
-# rather than an absent object, which would hand the chart a half-populated
-# restore block on every ordinary bootstrap.
-evaluates 'tostring(null)' 'local.rdb_restore == null ? null : "set"'
-evaluates 'tostring(null)' 'local.tsdb_restore == null ? null : "set"'
-evaluates '"dc-rdb"' 'local.rdb_restore.source_server_name' -var restore_rdb_from=dc-rdb
-evaluates 'tostring(null)' 'local.tsdb_restore == null ? null : "set"' -var restore_rdb_from=dc-rdb
-evaluates '"dc-tsdb"' 'local.tsdb_restore.source_server_name' -var restore_tsdb_from=dc-tsdb
-
-# 🔴 ONE STORE AT A TIME IS THE NORMAL CASE, and the pair above is what proves
-# the two levers are independent. A restore wired to a single shared switch
-# would rewind the control plane every time somebody recovered the event store,
-# discarding every tenant, device and rule created since — a data-loss bug
-# committed while restoring from data loss.
-
-# The point-in-time target reaches the module as CNPG's own camelCase field.
-# Spelled wrongly it is pruned by the API server and the recovery silently
-# replays everything: a PITR that restores the damage it was run to undo.
-evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetTime"]' \
-  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00'
-evaluates 'tomap({})' 'local.rdb_restore.recovery_target' -var restore_rdb_from=dc-rdb
-
-# AND THE EVENT STORE'S TWIN, which had none of this. The rdb block above is
-# where a spelling mistake would be caught; the tsdb block is a hand-written copy
-# of it, and until now nothing read it at all — so `targetTime` misspelled there
-# was silent, and it is the store an operator is MORE likely to rewind, since
-# telemetry is where a bad ingest lands. The counterweight matters for the same
-# reason it does above: without it a `recovery_target` hard-wired to a constant
-# map satisfies the positive case.
-#
-# A DIFFERENT instant on purpose. With one shared literal, a tsdb block wired to
-# var.restore_rdb_target_time by copy-paste would read the right value whenever
-# both were set, and the assertion would confirm the bug.
-evaluates '"2026-07-26 01:02:03+00"' 'local.tsdb_restore.recovery_target["targetTime"]' \
-  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
-evaluates 'tomap({})' 'local.tsdb_restore.recovery_target' -var restore_tsdb_from=dc-tsdb
-# The cross-wire, named directly: the event store's target must not follow the
-# relational store's variable. Both set, to different moments -- the only shape
-# in which a transposition produces a value rather than an empty map.
-evaluates '"2026-07-26 01:02:03+00"' 'local.tsdb_restore.recovery_target["targetTime"]' \
-  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00' \
-  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
-evaluates '"2026-07-28 03:00:00+00"' 'local.rdb_restore.recovery_target["targetTime"]' \
-  -var restore_rdb_from=dc-rdb -var 'restore_rdb_target_time=2026-07-28 03:00:00+00' \
-  -var restore_tsdb_from=dc-tsdb -var 'restore_tsdb_target_time=2026-07-26 01:02:03+00'
-
-# 🔴 THE WEDGE CONDITION IS NOT CHECKED HERE, AND FIVE ASSERTIONS THAT CLAIMED TO
-# CHECK IT HAVE BEEN DELETED.
-#
-# They restated the precondition's own expression and asked `tofu console` to
-# evaluate it:
-#
-#   evaluates false 'var.backup_server_name_rdb != "" && \
-#     var.backup_server_name_rdb != var.restore_rdb_from' -var restore_rdb_from=dc-rdb
-#
-# That references nothing this root declares beyond two variables, so it tests
-# that OpenTofu's `!=` operator works. Measured, not argued: deleting
-# `terraform_data.restore_guard` in full -- all four preconditions -- left the
-# whole script printing "All OpenTofu variable validations behave as declared."
-# The header above once claimed this section asserts "the root still DETECTS each
-# condition." It did not, and a check that passes against the feature's absence is
-# worse than no check, because it is counted.
-#
-# A precondition is only evaluated during a PLAN, and nothing in CI plans this
-# root (it needs credentials and a cluster). So the four preconditions at
-# main.tf's restore_guard are UNVERIFIED until hack/dr-rig.sh runs one live and
-# is shown to be refused. What survives below is what `tofu console` can honestly
-# reach: variable validations, and the locals the module blocks are wired from.
-
-# Restoring with backups off: there is no ObjectStore to read from, and the
-# cluster would come up EMPTY rather than failing — which during a rebuild looks
-# exactly like a restore that found nothing to bring back.
-evaluates false 'local.backups_on' -var restore_rdb_from=dc-rdb -var enable_database_backups=false
-
-# NOT ASSERTED HERE: the `database_restored_from` output — which, to be accurate
-# about what it is, NOTHING currently reads. dcctl consumes
-# database_backups_enabled and database_backup_survives_cluster_loss; this one was
-# written for the "what did the infrastructure do vs what did I ask for" question
-# and never wired to a consumer, so dcctl's own "recovering from archive %q" line
-# is printed from argv — the very thing the output exists to stop.
-# `tofu console` cannot address `output.*` at all — outputs exist in state, after
-# an apply — and the only way to check one from here is to restate its expression,
-# which is a second copy that stops matching the day the first one changes. The
-# local it projects is asserted above instead, which is the thing that could
-# actually be wrong; the projection is a null check on it.
-
-# --- the operand image tag is a SECOND COPY, and nothing links it to its source
-#
-# deploy/images/timescaledb/versions.conf is the single source of truth for the
-# image we build. The workflow computes the published tag from it as
-# `<pg_minor>-ts<timescaledb_version>-r<revision>`; variables.tf then carries
-# that tag as a hand-written string, because a Terraform default cannot read a
-# shell file.
-#
-# So the deployed event store's image version is defined in two places that have
-# no mechanical relationship. Bump versions.conf, rebuild, publish — and the
-# platform keeps deploying the OLD tag, successfully, with the new image sitting
-# unused in the registry. Nothing fails; the fix simply does not take effect.
-# This recomputes the tag and requires the default to match it.
-versions_conf="$repo_root/deploy/images/timescaledb/versions.conf"
-if [[ -f $versions_conf ]]; then
-  # shellcheck disable=SC1090
-  source "$versions_conf"
-  pg_minor=${PG_IMAGE##*:}
-  pg_minor=${pg_minor%%-*}
-  # Guarded, because the workflow this formula is copied from guards it too. A
-  # digest-pinned PG_IMAGE leaves hex here, and the assertion would then fail
-  # pointing at variables.tf when the problem is PG_IMAGE.
-  if ! grep -qE '^[0-9]+\.[0-9]+$' <<<"$pg_minor"; then
-    echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE (got '$pg_minor')."
+# 🔴 AN ASSERTION AT HOME IN NO ROOT. It names a variable or a module that no root
+# declares any more — renamed, deleted, or moved to a root this script does not
+# discover. It printed nothing and cost nothing, which is exactly why it has to be
+# reported: a suite quietly shedding assertions still prints every remaining one
+# green.
+for _key in "${!assertion_seen[@]}"; do
+  if [[ -z "${assertion_ran[$_key]:-}" ]]; then
+    echo "FAIL  assertion was not applicable in ANY root: $_key" >&2
+    echo "      It names a variable or module no discovered root declares. It has" >&2
+    echo "      been silently skipped everywhere rather than checked." >&2
     failures=$((failures + 1))
-    pg_minor=""
   fi
-  want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
-  # `tofu console` renders a string result WITH its quotes, so the expected value
-  # carries them too. Comparing the raw tag would fail on every correct run.
-  evaluates "\"$want_image\"" 'var.timescale_image'
-else
-  echo >&2 "MISSING: $versions_conf — cannot check the operand image tag against its source of truth."
-  # NOT `((failures++))`: with failures at 0 that arithmetic command evaluates to 0,
-  # exits 1, and `set -e` kills the script right here — losing the summary below.
-  failures=$((failures + 1))
-fi
+done
 
 # --- coverage: every validation block the root declares must be exercised -------
 #
@@ -951,7 +1056,19 @@ while read -r v; do
   fi
   covered=$((covered + 1))
 done <<<"$guarded"
-echo "ok    all $covered validated variable(s) exercised in both directions"
+# 🔴 NOT "all N" UNCONDITIONALLY. This line used to print whatever $covered had
+# reached even when the loop above had just failed on a variable it could not
+# count — so a run that refused an unexercised block still signed off with
+# "ok  all 13 validated variable(s) exercised", one line below the failure. The
+# gate exited 1 either way, but the sentence a human scans for reassurance was
+# false exactly when there was something to worry about.
+declared_guarded=$(printf '%s\n' "$guarded" | grep -c . || true)
+if ((covered == declared_guarded)); then
+  echo "ok    all $covered validated variable(s) exercised in both directions"
+else
+  echo "FAIL  $covered of $declared_guarded validated variable(s) exercised in both" \
+    "directions; the rest are named above" >&2
+fi
 
 if ((failures > 0)); then
   echo >&2

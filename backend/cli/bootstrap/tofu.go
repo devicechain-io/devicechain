@@ -39,17 +39,112 @@ const (
 // kill lands in the middle of exactly the slow operation it was sized for.
 const tofuGracefulStopBudget = 20 * time.Minute
 
+// applyInfra brings the cluster's shared prerequisites and this instance's own
+// infrastructure up, in that order.
+//
+// 🔴 THE ORDER IS THE ONLY THING ENFORCING A DEPENDENCY OPENTOFU USED TO ENFORCE
+// FOR US. One root and one graph used to order "install the operator" before
+// "create a database Cluster", and "install cert-manager" before "install the backup
+// plugin that renders an Issuer". Two roots are two graphs, so the edge between them
+// is this function's sequence and nothing else. That is why the two applies live
+// behind one call rather than being two pipeline steps a future edit could reorder
+// or run selectively.
+//
+// 🔑 AND IT IS WHAT MAKES A SECOND INSTANCE CHEAP RATHER THAN DANGEROUS. The
+// prerequisite root is keyed on the CLUSTER, so the second bootstrap against one
+// cluster re-applies the same state convergently — a no-op — instead of building a
+// second ingress controller and a second relational database.
 func applyInfra(ctx context.Context, st *State) (err error) {
-	tofuBin, err := findTofu()
+	if st.ClusterUID == "" {
+		return fmt.Errorf("the cluster's identity is not known, so dcctl cannot tell which " +
+			"cluster's shared prerequisite state to use. Refusing rather than falling back to " +
+			"the kube-context name: a cluster deleted and recreated wears the same context name, " +
+			"and state filed under it would be inherited by a cluster holding none of those " +
+			"resources")
+	}
+
+	// Every value dcctl decides, computed ONCE and then routed by which root declares
+	// it. See splitVars for why this is computed rather than two hand-kept lists.
+	clusterVars, instanceVars, err := splitVars(infraVars(st))
 	if err != nil {
 		return err
 	}
 
-	workdir, err := instanceStateDir(st.Instance, "infra")
+	// 🔴 THE INSTANCE ROOT IS OPENED, AND ITS FENCES RUN, BEFORE ANYTHING IS WRITTEN.
+	// The fences refuse an instance whose state this build would damage — and the
+	// most important of them, the pre-split fence, guards against exactly the state
+	// in which the CLUSTER apply below cannot succeed: an instance built before the
+	// split already runs the operator, ingress and shared database as Helm releases
+	// its own state owns, so a cluster root applied first dies on "cannot re-use a
+	// name that is still in use" and the operator is handed a Helm error instead of
+	// the explanation. A refusal has to come before the first thing it refuses.
+	inst, err := openInstanceRoot(ctx, st)
 	if err != nil {
 		return err
 	}
-	// The tree extracted below holds every root plus the shared modules, and a root
+	defer func() {
+		if herr := hardenStateFiles(inst.rootdir); herr != nil && err == nil {
+			err = herr
+		}
+	}()
+
+	// The shared infrastructure namespace and every minted credential, BEFORE either
+	// apply.
+	//
+	// 🔴 IT HAS TO EXIST BEFORE THE APPLIES BECAUSE THE CREDENTIALS DO. CloudNativePG
+	// builds a database role from a Secret when it CREATES the Cluster, so a Secret
+	// written afterwards leaves the role on one password and every service on another
+	// — and a Secret cannot be written into a namespace that is not there.
+	//
+	// 🔑 IT MOVED UP HERE RATHER THAN INTO ONE OF THE APPLIES, because after the
+	// split BOTH roots need it: the shared relational store is created by the cluster
+	// root and the event store by the instance root, and each reads its credentials
+	// Secret out of this one namespace.
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
+	}
+	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
+		return err
+	}
+	if err := writeMintedSecrets(ctx, typed, st); err != nil {
+		return err
+	}
+
+	archive, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
+	if err != nil {
+		return err
+	}
+
+	// The archive contract, READ BACK from the root that owns the object store rather
+	// than recomputed here. Appended after the instance's own variables so that what
+	// the cluster actually built wins over anything derived from this run's flags.
+	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, archive.archiveVars()...))
+}
+
+// instanceRoot is the instance root, extracted, initialised and fenced — ready to apply.
+type openedInstanceRoot struct {
+	tf      *tfexec.Terraform
+	rootdir string
+}
+
+// openInstanceRoot extracts the instance root, initialises it, and runs every refusal
+// that reads its state. It changes nothing in the cluster, which is what lets
+// applyInfra run it before anything else.
+//
+// The caller owns hardening the state files under rootdir, and must register that
+// the moment this returns successfully; on an error return this hardens them itself.
+func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err error) {
+	tofuBin, err := findTofu()
+	if err != nil {
+		return openedInstanceRoot{}, err
+	}
+
+	workdir, err := instanceStateDir(st.Instance, "infra")
+	if err != nil {
+		return openedInstanceRoot{}, err
+	}
+	// The tree extracted below holds this root plus the shared modules, and a root
 	// reaches those as "../modules/<x>". So tofu runs one level down, in the root's
 	// own directory, and the state it keeps lives there with it.
 	rootdir := filepath.Join(workdir, assets.InstanceRootDir)
@@ -60,26 +155,27 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// nothing else went wrong; the apply's own error is always the better one to
 	// hand back.
 	defer func() {
-		if herr := hardenStateFiles(rootdir); herr != nil && err == nil {
-			err = herr
+		if err == nil {
+			return // the caller hardens from here on, after the apply writes state
 		}
+		_ = hardenStateFiles(rootdir)
 	}()
-	if err := extractFS(assets.OpenTofu(), workdir); err != nil {
-		return fmt.Errorf("extracting infrastructure config: %w", err)
+	if err := extractRoot(assets.OpenTofu(), assets.InstanceRootDir, workdir); err != nil {
+		return openedInstanceRoot{}, fmt.Errorf("extracting infrastructure config: %w", err)
 	}
 	// 🔴 BEFORE ANY tofu CALL, AND THE ORDER IS NOT COSMETIC. Init does not read
 	// state, but the retired-infrastructure fence immediately after it does — and a
 	// fence reading an empty state concludes there is nothing to fence.
 	if err := relocateRootState(workdir, rootdir); err != nil {
-		return err
+		return openedInstanceRoot{}, err
 	}
 	if err := removeSupersededRootConfig(workdir); err != nil {
-		return err
+		return openedInstanceRoot{}, err
 	}
 
 	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
-		return err
+		return openedInstanceRoot{}, err
 	}
 	// Stream tofu's own progress so a long apply is not a silent wait.
 	tf.SetStdout(os.Stdout)
@@ -112,7 +208,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {
-		return fmt.Errorf("tofu init: %w", err)
+		return openedInstanceRoot{}, fmt.Errorf("tofu init: %w", err)
 	}
 
 	// 🔴 THE FENCE COMES FIRST, BEFORE ANY OTHER READ OR WRITE. An instance built
@@ -121,88 +217,42 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// them — so the apply below would DELETE them. Everything after this point
 	// assumes it did not fire. Needs state, so it runs after Init.
 	if err := checkNoRetiredInfrastructure(ctx, tf, st.Instance); err != nil {
-		return err
+		return openedInstanceRoot{}, err
+	}
+
+	// 🔴 AND THE SECOND FENCE, FOR THE SECOND TIME THIS ROOT STOPPED DECLARING
+	// THINGS ITS STATE STILL HOLDS. An instance built before the cluster
+	// prerequisites moved to their own root has them in THIS state, and this
+	// configuration no longer declares them — so the apply below would destroy the
+	// CNPG operator, ingress, cert-manager, monitoring, the object store and the
+	// shared relational database. Same position and same reason as the fence above:
+	// after Init because it reads state, before everything else because everything
+	// else assumes it did not fire.
+	if err := checkNoPreSplitInfrastructure(ctx, tf, st.Instance); err != nil {
+		return openedInstanceRoot{}, err
 	}
 
 	// Refuse to shrink a broker cluster that is already carrying replicated data.
 	// Reads the CURRENT state, so it must run after Init and before Apply — this is
 	// the only point where both the applied topology and the requested one are known.
 	if err := checkHaNotTornDown(ctx, st, tf); err != nil {
-		return err
+		return openedInstanceRoot{}, err
 	}
+	return openedInstanceRoot{tf: tf, rootdir: rootdir}, nil
+}
 
-	vars := infraVars(st)
+// applyInstanceInfra applies the instance root openInstanceRoot prepared, and records
+// what it built.
+func applyInstanceInfra(ctx context.Context, st *State, tf *tfexec.Terraform, vars []string) error {
 
-	// The shared infrastructure namespace, created here and handed to OpenTofu.
-	//
-	// 🔴 IT HAS TO EXIST BEFORE THE APPLY BECAUSE THE CREDENTIALS DO. CloudNativePG
-	// builds the database role from a Secret when it CREATES the Cluster, so a Secret
-	// written after the apply leaves the role on one password and every service on
-	// another — which means dcctl writes those Secrets first, and a Secret cannot be
-	// written into a namespace that is not there. See adoptInfraNamespace for why the
-	// namespace is then IMPORTED rather than switched off in the configuration.
-	_, _, typed, err := kubeClients(st.KubeContext)
-	if err != nil {
-		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
-	}
-	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
-		return err
-	}
-	if err := adoptInfraNamespace(ctx, tf, infraNamespace, vars); err != nil {
-		return err
-	}
-
-	// EVERY MINTED CREDENTIAL, WRITTEN BEFORE THE APPLY THAT CONSUMES IT.
-	//
-	// 🔴 THIS IS THE HALF THAT CANNOT BE REORDERED. CloudNativePG reads the
-	// credentials Secret when it CREATES a Cluster and never again — the owner role
-	// is declared under `managed.roles` with no `passwordSecret`, so nothing
-	// reconciles it afterwards. A Secret written after this apply would leave the
-	// role on a password no service has and every service on one the role has never
-	// been told about, with nothing failing in between.
-	//
-	// The object store's root credentials and the broker's TLS material are here for
-	// the weaker version of the same reason: each is read by a workload the apply
-	// stands up, so a value that arrives later is a value something has already
-	// started without.
-	if err := writeMintedSecrets(ctx, typed, st); err != nil {
-		return err
-	}
-
-	opts := make([]tfexec.ApplyOption, 0, 16)
+	opts := make([]tfexec.ApplyOption, 0, len(vars))
 	for _, v := range vars {
 		opts = append(opts, tfexec.Var(v))
 	}
-	if err := tf.Apply(ctx, opts...); err != nil {
-		// The ONE failure this retries: the API server could not call the CNPG
-		// admission webhook, so the database Cluster releases were refused (and,
-		// thanks to atomic, rolled back leaving nothing behind). See
-		// cnpgadmission.go for why the gate lives here rather than in the tofu
-		// root, and why the probe is a server-side dry-run create.
-		//
-		// Everything else is returned untouched. A retry that hides a real error
-		// is worse than the race it was written for.
-		if !isCNPGWebhookUnavailable(err.Error()) {
-			return fmt.Errorf("tofu apply: %w", err)
-		}
-		reportCNPGAdmissionWait()
-		if werr := waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout); werr != nil {
-			return fmt.Errorf("tofu apply failed because the CloudNativePG admission webhook "+
-				"was unreachable, and it did not recover: %w (original apply error: %v)", werr, err)
-		}
-		// Once, not in a loop. The probe has proved the API server can admit a
-		// Cluster, so a second failure of the same kind is not a race and must
-		// surface rather than be retried around.
-		if retryErr := tf.Apply(ctx, opts...); retryErr != nil {
-			// Both errors, deliberately. The retry can fail for a reason the first
-			// attempt caused rather than shared — a refused UPDATE leaves Helm
-			// rolling back through the same dead webhook, and the release can land
-			// in pending-rollback, whose "another operation is in progress" says
-			// nothing about the webhook. Dropping the original would leave the
-			// operator holding the second error and none of the story.
-			return fmt.Errorf("tofu apply, retried after waiting on the CloudNativePG "+
-				"admission webhook: %w (the apply that triggered the wait failed with: %v)", retryErr, err)
-		}
+	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply", func(ctx context.Context) error {
+		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
+	}); err != nil {
+		return err
 	}
 
 	// Read the NATS TLS material back out (ADR-025): the broker terminates TLS and
@@ -268,16 +318,6 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 			st.Values[databaseBackupsKey] = "true"
 		}
 	}
-	// Whether those backups survive losing the cluster, which is a different
-	// question from whether they exist and the one an operator is most likely to
-	// get wrong. Null when backups are off; "false" for the default in-cluster
-	// destination.
-	if meta, ok := outputs["database_backup_survives_cluster_loss"]; ok {
-		var offsite bool
-		if err := json.Unmarshal(meta.Value, &offsite); err == nil {
-			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(offsite)
-		}
-	}
 	// The namespace the database Clusters run in, which is where their metrics are
 	// exported from. NOT the instance namespace — an alert scoped to the instance's
 	// own namespace selects no series at all.
@@ -285,50 +325,6 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		var ns string
 		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
 			st.Values[databaseNamespaceKey] = ns
-		}
-	}
-	// The namespace the CloudNativePG OPERATOR runs in — the database CONTROL
-	// PLANE, which is a different tier from the databases and a different
-	// namespace: dc-system holds the Clusters, cnpg-system holds the operator that
-	// drives them. It gates the operator's PodMonitor and the control-plane
-	// alerting rules together (ADR-020 A1.5).
-	//
-	// 🔑 CLEARED FIRST, like databaseBackups above and for the same reason. This
-	// map is persisted state, so a value written by an earlier apply outlives the
-	// condition that produced it: take CloudNativePG out of an instance that once
-	// had it and, without this line, the next install still renders a PodMonitor
-	// and three alerts against a namespace with no operator in it.
-	//
-	// The damage is SILENCE rather than noise, which is the worse of the two and
-	// the reason this is worth a line of code. CNPGControlPlaneUnavailable would
-	// select deployments in a namespace that has none — an empty vector, so no
-	// alert, forever — while the whole group would render and look present.
-	// `kubectl get prometheusrule` shows three healthy rules and one of them can
-	// no longer fire. Clearing the value instead removes the group outright, which
-	// is a visible absence.
-	//
-	// The output is null when enable_cnpg is false, and json.Unmarshal of a null
-	// into a string is a silent no-op rather than an error — so "" is reached by
-	// leaving it cleared, not by trusting the decode to report anything.
-	st.Values[cnpgNamespaceKey] = ""
-	if meta, ok := outputs["cnpg_namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values[cnpgNamespaceKey] = ns
-		}
-	}
-	// Grafana access (when monitoring was installed): stash the namespace/service so
-	// the report step can print a port-forward hint. Null when --no-monitoring.
-	if meta, ok := outputs["grafana_service"]; ok {
-		var svc string
-		if err := json.Unmarshal(meta.Value, &svc); err == nil && svc != "" {
-			st.Values["grafanaService"] = svc
-		}
-	}
-	if meta, ok := outputs["grafana_namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values["grafanaNamespace"] = ns
 		}
 	}
 	return nil
@@ -795,6 +791,35 @@ func removeSupersededRootConfig(workdir string) error {
 		}
 		if err := os.Remove(filepath.Join(workdir, e.Name())); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing superseded %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// extractRoot extracts ONE root and the shared modules it reaches as ../modules/<x>.
+//
+// 🔴 NEVER THE WHOLE TREE, BECAUSE A ROOT'S CONFIGURATION WITH NO STATE IS A LOADED
+// GUN. Each root is applied from its own state directory, so extracting every root
+// there leaves the OTHER root sitting beside it: a complete, initialisable
+// configuration with an empty state, in a directory an operator debugging an install
+// is told to run tofu in. A `tofu plan` in the wrong one plans to CREATE a second
+// operator, ingress and relational database — or a second broker and event store —
+// against the live cluster, and nothing in that output looks like a mistake.
+// removeSupersededRootConfig documents the same shape for the pre-split layout.
+func extractRoot(src fs.FS, root, dir string) error {
+	for _, keep := range []string{root, "modules"} {
+		// fs.Sub does not check the directory exists, and a root extracted as an
+		// empty directory would fail at init with an error about providers rather
+		// than about a missing root.
+		if _, err := fs.Stat(src, keep); err != nil {
+			return fmt.Errorf("the embedded OpenTofu tree has no %q: %w", keep, err)
+		}
+		part, err := fs.Sub(src, keep)
+		if err != nil {
+			return err
+		}
+		if err := extractFS(part, filepath.Join(dir, keep)); err != nil {
+			return err
 		}
 	}
 	return nil

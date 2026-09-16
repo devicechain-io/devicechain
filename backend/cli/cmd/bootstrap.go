@@ -467,11 +467,21 @@ var bootstrapCmd = &cobra.Command{
 		// now, so the degradation is to the status quo rather than below it.
 		var clusterUID string
 		if !opts.DryRun {
+			// 🔴 FATAL NOW, WHERE IT USED TO BE A WARNING, AND THE ROOT SPLIT IS WHY.
+			// The identity was a nicety while it only annotated a local record: an
+			// instance whose record lacked it was merely indistinguishable from one on
+			// a rebuilt cluster. It is now the KEY THE CLUSTER PREREQUISITE STATE IS
+			// FILED UNDER, so without it there is nowhere for that state to live —
+			// and the two ways to carry on are both worse than stopping. Falling back
+			// to the context name would file this cluster's state under a name the
+			// next cluster inherits; skipping the prerequisite apply would bootstrap
+			// an instance onto a cluster with no operator, no ingress and no database.
 			if uid, err := bootstrap.IdentifyCluster(ctx, binding.KubeContext); err != nil {
-				fmt.Println(color.YellowString(
-					"warning: could not read the identity of cluster %s (%v).\n"+
-						"  Its local state will be recorded without it, so a cluster rebuilt under this\n"+
-						"  name cannot later be told apart from this one.", binding.Describe(), err))
+				return fmt.Errorf("reading the identity of cluster %s: %w\n"+
+					"  dcctl files this cluster's shared prerequisite state under that identity, so it "+
+					"cannot install them without it.\n"+
+					"  The identity is the kube-system namespace's UID; a context that cannot read it "+
+					"is one dcctl cannot install onto", binding.Describe(), err)
 			} else {
 				clusterUID = uid
 				binding.ClusterUID = uid
@@ -511,6 +521,7 @@ var bootstrapCmd = &cobra.Command{
 		st := &bootstrap.State{
 			Instance:             opts.Instance,
 			KubeContext:          binding.KubeContext,
+			ClusterUID:           clusterUID,
 			Binding:              binding,
 			Provider:             provider.Name(),
 			DcctlVersion:         Version,

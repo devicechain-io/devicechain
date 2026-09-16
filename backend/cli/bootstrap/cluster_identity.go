@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
@@ -102,11 +103,11 @@ type ClusterRecord struct {
 // passed. clusters/ sits above whatever prerequisite state lands here, so it is one of
 // the levels that matters rather than a parent nobody looks at.
 //
-// 🔑 IT TAKES NO SUBDIRECTORY, THOUGH instanceStateDir DOES. The prerequisite root's
-// state will want one and does not exist yet; a parameter added now would be a branch no
-// caller takes and no test can reach, which is the same thing the inventory refuses an
-// entry for. Add it with the root that needs it.
-func clusterStateDir(uid string) (string, error) {
+// 🔑 THE SUBDIRECTORY ARRIVED WITH THE ROOT THAT NEEDED IT. It was deliberately absent
+// while nothing applied anything per-cluster — a parameter no caller passes is a branch
+// no test can reach — and the cluster prerequisite root is the caller it was waiting for.
+// An empty sub means the cluster's own directory, which is where cluster.json lives.
+func clusterStateDir(uid, sub string) (string, error) {
 	root, err := dcdir.Root()
 	if err != nil {
 		return "", err
@@ -119,10 +120,18 @@ func clusterStateDir(uid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The cluster's own directory is always created and hardened, even when a
+	// subdirectory was asked for: it is the level that holds cluster.json, and a
+	// caller reaching past it must not leave it behind at whatever modes it had.
+	levels := []string{root, clusters, dir}
+	if sub != "" {
+		dir = filepath.Join(dir, sub)
+		levels = append(levels, dir)
+	}
 	if err := os.MkdirAll(dir, stateDirMode); err != nil {
 		return "", err
 	}
-	for _, p := range []string{root, clusters, dir} {
+	for _, p := range levels {
 		if err := os.Chmod(p, stateDirMode); err != nil {
 			return "", fmt.Errorf("restricting permissions on %s: %w", p, err)
 		}
@@ -138,7 +147,7 @@ func clusterStateDir(uid string) (string, error) {
 // record CORRECTED, and one that only ever accumulated would preserve exactly the
 // staleness the UID key exists to avoid.
 func WriteClusterRecord(rec ClusterRecord) error {
-	dir, err := clusterStateDir(rec.UID)
+	dir, err := clusterStateDir(rec.UID, "")
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/hashicorp/terraform-exec/tfexec"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -365,4 +366,58 @@ func reportCNPGAdmissionWait() {
 	fmt.Println(color.YellowString("   database cluster step was refused and rolled itself back. Waiting for the"))
 	fmt.Println(color.YellowString("   API server to be able to admit a Cluster, then retrying once."))
 	fmt.Println(color.YellowString("   If you see this on EVERY bootstrap it is not a race and should be reported."))
+}
+
+// tofuApplier is the one method applyWithCNPGAdmissionRetry needs, so the retry
+// decision can be exercised without a tofu binary.
+type tofuApplier interface {
+	Apply(ctx context.Context, opts ...tfexec.ApplyOption) error
+}
+
+// applyWithCNPGAdmissionRetry applies, and retries ONCE when the only thing wrong was
+// that the API server could not call the CNPG admission webhook, so the database
+// Cluster releases were refused (and, thanks to atomic, rolled back leaving nothing
+// behind). The probe is a server-side dry-run create; see the top of this file.
+//
+// 🔴 IT WRAPS EVERY ROOT THAT CREATES A DATABASE CLUSTER, and the one that matters most
+// is the cluster root. The race needs the operator installed and a Cluster created in
+// ONE graph — the operator's Deployment Ready, its webhook not yet routable — and after
+// the split that graph is the cluster root's: it installs the operator and creates the
+// shared relational store in the same apply. An earlier version of the split kept this
+// retry on the instance root only, and said in a comment that the cluster root could
+// not race because "there is no webhook to be unreachable" — which is the race's
+// precondition stated as its absence. The instance root creates the event store after
+// the operator has been serving for minutes, so it rarely needs this; it keeps it
+// because a restarted operator reopens the same window.
+//
+// Everything else is returned untouched. A retry that hides a real error is worse than
+// the race it was written for.
+func applyWithCNPGAdmissionRetry(ctx context.Context, tf tofuApplier, opts []tfexec.ApplyOption,
+	what string, waitForAdmission func(context.Context) error) error {
+	err := tf.Apply(ctx, opts...)
+	if err == nil {
+		return nil
+	}
+	if !isCNPGWebhookUnavailable(err.Error()) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	reportCNPGAdmissionWait()
+	if werr := waitForAdmission(ctx); werr != nil {
+		return fmt.Errorf("%s failed because the CloudNativePG admission webhook "+
+			"was unreachable, and it did not recover: %w (original apply error: %v)", what, werr, err)
+	}
+	// Once, not in a loop. The probe has proved the API server can admit a Cluster, so
+	// a second failure of the same kind is not a race and must surface rather than be
+	// retried around.
+	if retryErr := tf.Apply(ctx, opts...); retryErr != nil {
+		// Both errors, deliberately. The retry can fail for a reason the first attempt
+		// caused rather than shared — a refused UPDATE leaves Helm rolling back through
+		// the same dead webhook, and the release can land in pending-rollback, whose
+		// "another operation is in progress" says nothing about the webhook. Dropping
+		// the original would leave the operator holding the second error and none of
+		// the story.
+		return fmt.Errorf("%s, retried after waiting on the CloudNativePG "+
+			"admission webhook: %w (the apply that triggered the wait failed with: %v)", what, retryErr, err)
+	}
+	return nil
 }
