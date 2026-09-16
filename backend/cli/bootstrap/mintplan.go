@@ -94,6 +94,11 @@ func databaseBackupsEnabled(st *State) bool {
 // therefore whether a dashboard credential is needed at all.
 func monitoringEnabled(st *State) bool { return !st.NoMonitoring }
 
+// certManagerEnabled reports whether cert-manager is part of this run. The compact
+// preset drops it only when it also serves plain HTTP — see infraVars, which
+// TestTheBackupPredicateMatchesTheVariablesEmitted holds this against.
+func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
+
 // backupsAreExternal reports whether this run archives to an object store the
 // operator already owns rather than one it stands up.
 //

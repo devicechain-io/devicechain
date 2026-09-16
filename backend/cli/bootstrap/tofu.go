@@ -111,8 +111,22 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
+	// 🔴 THE RECORD BRACKETS THE APPLY: "applying" before it, "installed" only after it
+	// succeeds. See installrecord.go for why a record written once, at the end, reads a
+	// failed re-install as a finished one.
+	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
+		return err
+	}
 	archive, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
 	if err != nil {
+		return err
+	}
+	if err := writeInstalled(ctx, typed, InstallRecord{
+		ClusterUID:   st.ClusterUID,
+		DcctlVersion: st.DcctlVersion,
+		Settings:     installSettingsFor(st),
+		Outputs:      installOutputsFrom(st, archive),
+	}, time.Now); err != nil {
 		return err
 	}
 
