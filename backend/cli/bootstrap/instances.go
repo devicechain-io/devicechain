@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dcctl/dcdir"
@@ -157,8 +156,14 @@ const maxInstanceNameLen = 50
 // directory to dcdir's inventory instead, where it is a sibling of instances/ and
 // cannot collide with anything in it.
 //
-// Deliberately strict rather than clever: these are directory names on one machine, and
-// nothing is lost by requiring them to look like identifiers.
+// 🔴 AND IT IS A DNS-1123 LABEL, BECAUSE A NAME IS NOW FOUR THINGS AT ONCE. It names a
+// directory here, a Kubernetes namespace, and — on the shared relational store — both
+// the instance's login and its database. A label is the narrowest of the four grammars
+// and the only one that fits all of them: lowercase, so PostgreSQL's case-folding cannot
+// turn one instance's identifiers into another's, and no underscore, which is what keeps
+// the store's own roles (`dc_owner`, `dc_provisioner`) out of reach of any instance name.
+//
+// reservedInstanceNames are the labels PostgreSQL already means something by.
 func ValidateInstanceName(instance string) error {
 	switch {
 	case instance == "":
@@ -170,18 +175,32 @@ func ValidateInstanceName(instance string) error {
 				"Refusing here rather than in the Helm step, which runs after the declaration, "+
 				"the infrastructure and every credential have already been written",
 			instance, len(instance), maxInstanceNameLen)
-	case instance == "." || instance == "..":
-		return fmt.Errorf("instance name %q is not a usable directory name", instance)
-	case strings.ContainsAny(instance, `/\`) || strings.Contains(instance, ".."):
-		return fmt.Errorf("instance name %q may not contain a path separator or \"..\"", instance)
 	}
 	for _, r := range instance {
-		if !(r == '-' || r == '_' || r == '.' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			return fmt.Errorf("instance name %q contains %q; use letters, digits, '-', '_' or '.'", instance, r)
+		if !(r == '-' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return fmt.Errorf("instance name %q contains %q; use lowercase letters, digits and '-' "+
+				"(the name also becomes a Kubernetes namespace and the instance's database login)",
+				instance, r)
 		}
 	}
+	if instance[0] == '-' || instance[len(instance)-1] == '-' {
+		return fmt.Errorf("instance name %q must start and end with a lowercase letter or digit", instance)
+	}
+	if reservedInstanceNames[instance] {
+		return fmt.Errorf("instance name %q is reserved: the relational store already has a database "+
+			"or role by that name, and every instance gets a login and a database named after it", instance)
+	}
 	return nil
+}
+
+// reservedInstanceNames are the DNS-1123 labels that name something PostgreSQL itself
+// owns — a built-in database, or a role name it refuses to create.
+var reservedInstanceNames = map[string]bool{
+	"postgres":  true,
+	"template0": true,
+	"template1": true,
+	"public":    true,
+	"none":      true,
 }
 
 // instanceRecordPath is the record's path for an instance. It does NOT create anything,

@@ -91,7 +91,8 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nUninstall instance %q (keeping cluster %s)", opts.Instance, binding.describe())))
 	announceBinding(binding, source, opts.Instance)
 	if opts.DryRun {
-		wouldDo("helm uninstall the instance release and delete namespace " + opts.Instance)
+		wouldDo("helm uninstall the instance release, delete namespace " + opts.Instance +
+			", and drop its database and login from the shared relational store")
 		return nil
 	}
 	if !opts.AssumeYes && !confirm(fmt.Sprintf(
@@ -122,6 +123,12 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	}
 	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
 		return fail("removing the instance namespace", err)
+	}
+	// 🔴 AND ITS DATABASE AND LOGIN ON THE SHARED STORE, which nothing above reaches: the
+	// store is the cluster's, so uninstalling the instance leaves both behind — and a
+	// later instance by the same name would be refused over a database it did not create.
+	if err := removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance); err != nil {
+		return fail("removing the instance's database and login", err)
 	}
 	done()
 

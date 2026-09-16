@@ -120,8 +120,8 @@ func TestTheTelemetryStoreKeepsItsLedgerName(t *testing.T) {
 //
 // 🔴 THE ORIGINAL REASONING WAS: an instance running no event-management never creates the
 // instance database on the telemetry cluster, so 3D000 is the whole signal. It is false.
-// CNPG's initdb creates a database named by `timescale_database`, whose default is the same
-// as the instance id's — so on the `ingest-only` profile the database is present, empty,
+// CNPG's initdb creates a database named by `timescale_database`, which dcctl sets to the
+// instance id — so on the `ingest-only` profile the database is present, empty,
 // and the connect succeeds. With only the 3D000 branch, core's empty-classification guard
 // then fails the store on every pass forever: no completion, no token release, permanently,
 // on a shipped profile.

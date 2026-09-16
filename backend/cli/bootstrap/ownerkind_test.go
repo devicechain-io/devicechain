@@ -39,9 +39,10 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 			[]string{
 				"dc-system/dc-object-store-credentials",
 				"dc-system/dc-rdb-app-credentials",
+				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"dc-system/dc-tsdb-app-credentials"},
+			[]string{"dc-system/dc-tsdb-app-credentials", "dc-system/dci-acme-rdb-credentials"},
 		},
 		{
 			"backups to an object store the operator owns",
@@ -56,9 +57,10 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 			[]string{
 				"dc-system/dc-backup-credentials",
 				"dc-system/dc-rdb-app-credentials",
+				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"dc-system/dc-tsdb-app-credentials"},
+			[]string{"dc-system/dc-tsdb-app-credentials", "dc-system/dci-acme-rdb-credentials"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -327,6 +329,10 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"MINIO_ROOT_USER": []byte("os-user-in-use"), "MINIO_ROOT_PASSWORD": []byte("os-secret-in-use")}),
 		mintedSecret(infraNamespace, "dc-tsdb-app-credentials", testUID, map[string]string{
 			"username": "devicechain", "password": "tsdb-in-use"}),
+		clusterOwnedSecret("dc-rdb-provisioner-credentials", testClusterUID, map[string][]byte{
+			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
+		mintedSecret(infraNamespace, "dci-acme-rdb-credentials", testUID, map[string]string{
+			"username": "acme", "password": "login-in-use"}),
 	)
 	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true}, Tsdb: clusterArchiveState{Exists: true}}
 
@@ -335,10 +341,12 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 		t.Fatalf("a re-run over the credentials it wrote was refused: %v", err)
 	}
 	for field, got := range map[string]string{
-		"RDBPassword":       set.RDBPassword,
-		"TSDBPassword":      set.TSDBPassword,
-		"ObjectStoreUser":   set.ObjectStoreUser,
-		"ObjectStoreSecret": set.ObjectStoreSecret,
+		"RDBPassword":            set.RDBPassword,
+		"RDBProvisionerPassword": set.RDBProvisionerPassword,
+		"RDBInstancePassword":    set.RDBInstancePassword,
+		"TSDBPassword":           set.TSDBPassword,
+		"ObjectStoreUser":        set.ObjectStoreUser,
+		"ObjectStoreSecret":      set.ObjectStoreSecret,
 	} {
 		if !strings.HasSuffix(got, "-in-use") {
 			t.Errorf("%s was re-minted rather than reused; the live store still holds the old value", field)

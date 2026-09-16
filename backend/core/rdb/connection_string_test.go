@@ -70,11 +70,10 @@ func builders() []builder {
 	}
 	return []builder{
 		{"computePostgresDsn", onManager((*RdbManager).computePostgresDsn), "prod"},
-		{"computePostgresRootUrl", onManager((*RdbManager).computePostgresRootUrl), "postgres"},
 		{"computePostgresInstanceDatabaseUrl", onManager((*RdbManager).computePostgresInstanceDatabaseUrl), "prod"},
 		// The guest connection (guest.go). It reaches a database this service does not
 		// own, but it is the same hop with the same TLS posture to get wrong, so it is
-		// held to the same contract as the three above.
+		// held to the same contract as the two above.
 		{"computeGuestDsn", func(t *testing.T, pg *PostgresConfig) (string, error) {
 			return guestFixture(t, guestPgConfig()).computeGuestDsn(pg)
 		}, "prod"},

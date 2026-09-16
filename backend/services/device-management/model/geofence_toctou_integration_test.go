@@ -33,6 +33,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
 )
 
@@ -76,6 +77,12 @@ func newPostgresRdbManager(t *testing.T) *rdb.RdbManager {
 	port, err := strconv.Atoi(itEnv("DC_IT_PGPORT", "5432"))
 	if err != nil {
 		t.Fatalf("DC_IT_PGPORT must be numeric: %v", err)
+	}
+	// The instance database exists before a service starts — dcctl creates it — so the
+	// harness creates it the same way.
+	if err := rdbtest.EnsureDatabase(context.Background(), itEnv("DC_IT_PGHOST", "localhost"), port,
+		itEnv("DC_IT_PGUSER", "postgres"), itEnv("DC_IT_PGPASSWORD", "postgres"), "dctoctou", ""); err != nil {
+		t.Fatalf("creating the instance database: %v", err)
 	}
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{

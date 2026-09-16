@@ -404,7 +404,7 @@ variable "allow_legacy_tsdb_removal" {
 }
 
 variable "timescale_database" {
-  description = "Initial database name for TimescaleDB."
+  description = "The event store's one database, created by initdb. dcctl sets it to the instance id: every service connects to the database named after the instance, and none of them creates it."
   type        = string
   default     = "devicechain"
 }

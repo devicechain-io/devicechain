@@ -357,6 +357,26 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 	return out, nil
 }
 
+// freshTsdbArchivePath is where a NEW event store archives: under a path of its own
+// instance, and of this generation of it.
+//
+// 🔴 BOTH HALVES ARE LOAD-BEARING. Every instance's event store archives into one
+// shared bucket, and CloudNativePG refuses to start a new Cluster over a path that
+// already holds an archive — it waits in "Setting up primary" on "Expected empty
+// archive", with nothing failing. The instance id keeps two instances apart; the
+// declaration's UID keeps a rebuilt instance off the archive its previous generation
+// left behind, which outlives a destroy on purpose.
+//
+// A dry run has no declaration to read a UID from, and deploys nothing, so it shows
+// the id half alone.
+func freshTsdbArchivePath(instance, instanceUID string) string {
+	p := TsdbClusterName + "-" + instance
+	if len(instanceUID) >= 8 {
+		p += "-" + instanceUID[:8]
+	}
+	return p
+}
+
 // archivePaths is what resolveArchivePaths settles: the serverName each store
 // should archive under for the rest of this instance's life. "" means "the
 // Cluster's own name", which is the OpenTofu default and every ordinary install.
@@ -386,16 +406,22 @@ type archivePaths struct {
 // ordinary install, archiving under its own name). Keeping "" there would send the
 // restored cluster back over the archive it just recovered from — the wedge — so a
 // fresh path is derived instead.
-func resolveArchivePaths(live liveArchiveState, plan RestorePlan, now time.Time) archivePaths {
+//
+// fresh is what a store that neither exists nor is being restored archives under.
+// The relational store's is "" (its own name — it is the cluster's, and there is one).
+// The event store's is freshTsdbArchivePath: every instance's event store archives into
+// the SAME bucket, so its own name would be every instance's path.
+func resolveArchivePaths(live liveArchiveState, plan RestorePlan, fresh archivePaths, now time.Time) archivePaths {
 	out := archivePaths{}
 	for _, s := range []struct {
 		live    clusterArchiveState
 		from    string
 		target  *string
+		fresh   string
 		cluster string
 	}{
-		{live.Rdb, plan.RdbFrom, &out.Rdb, RdbClusterName},
-		{live.Tsdb, plan.TsdbFrom, &out.Tsdb, TsdbClusterName},
+		{live.Rdb, plan.RdbFrom, &out.Rdb, fresh.Rdb, RdbClusterName},
+		{live.Tsdb, plan.TsdbFrom, &out.Tsdb, fresh.Tsdb, TsdbClusterName},
 	} {
 		switch {
 		case s.live.Exists:
@@ -421,8 +447,8 @@ func resolveArchivePaths(live liveArchiveState, plan RestorePlan, now time.Time)
 			// CREATED and needs a path of its own to archive into.
 			*s.target = RestoredArchivePath(s.from, now)
 		default:
-			// A fresh ordinary install. The Cluster's own name, i.e. no var at all.
-			*s.target = ""
+			// A fresh ordinary install.
+			*s.target = s.fresh
 		}
 		if s.from != "" && s.live.Exists {
 			out.AlreadyLive = append(out.AlreadyLive, s.cluster)

@@ -405,9 +405,9 @@ SELECT t.table_name,
 	return counts, nil
 }
 
-// ensureDatabase creates the replay database if it is absent. The RdbManager would create
-// it on its first ExecuteInitialize, but the admin connection that drops schemas has to
-// exist BEFORE the first area runs — and the first iteration is precisely the one whose
+// ensureDatabase creates the replay database if it is absent. No RdbManager creates it —
+// migrateSome does, as dcctl would — but the admin connection that drops schemas has to
+// exist BEFORE the first area runs, and the first iteration is precisely the one whose
 // schema most needs to start clean, since an earlier invocation of this tool will have
 // left one behind.
 func ensureDatabase(ctx context.Context, host string, port int, user, password, name string) error {

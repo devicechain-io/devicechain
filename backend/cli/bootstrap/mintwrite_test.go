@@ -19,11 +19,13 @@ func aWritableState() *State {
 		ClusterUID:  testClusterUID,
 		Values:      map[string]string{},
 		Credentials: &credentialSet{
-			RDBPassword:          "rdb-pw",
-			TSDBPassword:         "tsdb-pw",
-			ObjectStoreUser:      "os-user",
-			ObjectStoreSecret:    "os-secret",
-			GrafanaAdminPassword: "grafana-pw",
+			RDBPassword:            "rdb-pw",
+			RDBProvisionerPassword: "rdb-provisioner-pw",
+			RDBInstancePassword:    "rdb-instance-pw",
+			TSDBPassword:           "tsdb-pw",
+			ObjectStoreUser:        "os-user",
+			ObjectStoreSecret:      "os-secret",
+			GrafanaAdminPassword:   "grafana-pw",
 		},
 	}
 }
@@ -125,9 +127,12 @@ func TestTheDocumentCarriesTheSamePasswordsTheDatabasesWereBuiltWith(t *testing.
 			"connect with the chart's default password")
 	}
 
-	for _, c := range []struct{ store, want string }{
-		{"rdb", st.Credentials.RDBPassword},
-		{"tsdb", st.Credentials.TSDBPassword},
+	// 🔴 THE RELATIONAL STORE'S IS THE INSTANCE'S OWN LOGIN, not the store's owner: the
+	// owner's password reaching the document would put every instance's services on one
+	// shared identity again.
+	for _, c := range []struct{ store, want, user string }{
+		{"rdb", st.Credentials.RDBInstancePassword, st.Instance},
+		{"tsdb", st.Credentials.TSDBPassword, dbRoleUsername},
 	} {
 		store, _ := persistence[c.store].(map[string]interface{})
 		conf, _ := store["configuration"].(map[string]interface{})
@@ -135,9 +140,9 @@ func TestTheDocumentCarriesTheSamePasswordsTheDatabasesWereBuiltWith(t *testing.
 			t.Errorf("%s password in the document is %q, not the %q the Secret was written with",
 				c.store, got, c.want)
 		}
-		if got, _ := conf["username"].(string); got != dbRoleUsername {
+		if got, _ := conf["username"].(string); got != c.user {
 			t.Errorf("%s username in the document is %q, not the role %q that actually exists",
-				c.store, got, dbRoleUsername)
+				c.store, got, c.user)
 		}
 	}
 }

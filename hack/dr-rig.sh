@@ -206,7 +206,13 @@ rdb_source="$rdb_cluster"
 # history with no control plane. This rig now does both at once, which is the
 # harder case and the one an operator rebuilding after a total loss performs.
 tsdb_cluster="dc-tsdb"
-tsdb_source="$tsdb_cluster"
+# 🔴 THE EVENT STORE'S SOURCE IS READ FROM THE CLUSTER, NOT NAMED HERE. Unlike the
+# relational store, which archives under its own name, a fresh event store archives
+# under a path of its own instance AND generation (dc-tsdb-<instance>-<uid>): every
+# instance's event store shares one bucket, and a rebuilt instance must not meet the
+# archive its previous generation left there. So `up` reads the path the live Cluster
+# archives under and records it with the other off-site material; every later phase
+# reads it back. See tsdb_source.
 
 # 🔴 Everything the rig does to an archive is now per-STORE, and these three
 # lookups are how. The alternative — a second copy of take_base_backup,
@@ -225,7 +231,7 @@ tsdb_source="$tsdb_cluster"
 # exit kills only the subshell — so it would abort nothing and report nothing. The
 # startup check below is what turns an unknown store into a stopped run.
 store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s' "$bucket_tsdb" ;; *) return 1 ;; esac; }
-store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) printf '%s' "$tsdb_source" ;; *) return 1 ;; esac; }
+store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) tsdb_source ;; *) return 1 ;; esac; }
 store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) return 1 ;; esac; }
 store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) return 1 ;; esac; }
 
@@ -238,6 +244,30 @@ stores=(rdb tsdb)
 # destruction of both the cluster and ~/.devicechain/instances/<instance>. It
 # therefore lives outside both, and `disaster` deliberately does not touch it.
 work="${DC_DR_WORK:-$HOME/.devicechain-dr-rig}"
+tsdb_source_file="$work/tsdb-archive-path"
+
+# The event store's recorded archive path. Before `up` has recorded one it prints a
+# placeholder that names no archive, so a phase run too early fails on a path that
+# plainly does not exist instead of on `dc-tsdb`, which looks like it should.
+tsdb_source() {
+  if [[ -s "$tsdb_source_file" ]]; then
+    cat "$tsdb_source_file"
+  else
+    printf '%s' "unrecorded-run-up-first"
+  fi
+}
+
+# record_tsdb_source reads the serverName the live event store's WAL archiver uses.
+record_tsdb_source() {
+  local path
+  path="$(kubectl --context "$kube_context" -n dc-system get clusters.postgresql.cnpg.io "$tsdb_cluster" -o json |
+    jq -r '[.spec.plugins[]? | select(.isWALArchiver == true) | .parameters.serverName // empty][0] // empty')" ||
+    fail "could not read the event store's archive path from Cluster $tsdb_cluster"
+  [[ -n "$path" ]] || fail "Cluster $tsdb_cluster names no archive path of its own; the restore
+would have nothing to recover from"
+  printf '%s' "$path" >"$tsdb_source_file"
+  note "event store archives under: $path"
+}
 escrow_file="$work/rootkey.escrow"
 decoy_file="$work/decoy.escrow"
 receipt_file="$work/receipt.json"
@@ -1020,6 +1050,7 @@ drill against an artifact that belongs to a cluster that no longer exists."
 
   wait_for_cluster_healthy "$rdb_cluster"
   wait_for_cluster_healthy "$tsdb_cluster"
+  record_tsdb_source
   for store in "${stores[@]}"; do take_base_backup "$store"; done
   quiesce_base_backups
 
@@ -1397,7 +1428,7 @@ cmd_restore() {
     [[ -s "$f" ]] || fail "$f is missing or empty; run 'up' then 'disaster' first"
   done
 
-  rebuild "$escrow_file" "the ESCROWED root key" "$tsdb_source"
+  rebuild "$escrow_file" "the ESCROWED root key" "$(tsdb_source)"
 
   # The premise, asserted with the shipped tool rather than assumed: this instance
   # really is running the key the artifact holds. `escrow verify` compares the
@@ -1595,14 +1626,10 @@ cmd_control() {
   # hardest version of the test: every hypertable, the continuous aggregate and
   # every policy are PRESENT and correct, and only the data is missing.
   #
-  # 🔑 Known and deliberate side effect: because it is not restored, this dc-tsdb
-  # takes the DEFAULT serverName — the same archive path the original cluster owns
-  # — and the barman plugin refuses to archive into a non-empty archive (see
-  # RestoredArchivePath in the cnpg-cluster module). So the control cluster runs its
-  # whole short life with event-store WAL archiving broken. That is verdict-neutral:
-  # the control asserts the telemetry is ABSENT, which needs no archive of its own,
-  # and this cluster is destroyed by `down`. Worth knowing before reading its logs
-  # and mistaking the archiving errors for the finding.
+  # 🔑 Because it is not restored, this dc-tsdb is a fresh event store, and a fresh
+  # one archives under a path of its own generation — so it archives into an empty
+  # path beside the original's rather than colliding with it. Verdict-neutral either
+  # way: the control asserts the telemetry is ABSENT, which needs no archive.
   rebuild "$decoy_file" "a DECOY root key (the negative control)" "" \
     "notification-management stores secrets, so under a decoy root key it refuses to
 start and the instance never becomes fully ready. The bootstrap reporting that as a

@@ -430,3 +430,37 @@ func TestEachApplyExtractsOnlyItsOwnRoot(t *testing.T) {
 		})
 	}
 }
+
+// The relational store's contract decodes from exactly what the cluster root declares —
+// and a missing or empty value is an error, never a store at an empty address.
+func TestTheRelationalStoreContractReadsOnlyWhatTheClusterRootDeclares(t *testing.T) {
+	declared := rootDeclaredOutputs(t, assets.OpenTofuCluster(), "cluster")
+	full := map[string]tfexec.OutputMeta{}
+	for k := range declared {
+		full[k] = tfexec.OutputMeta{Value: []byte(`"x"`)}
+	}
+	got, err := rdbFromOutputs(full)
+	if err != nil {
+		t.Fatalf("the relational store decoder needs an output the cluster root does not declare: %v", err)
+	}
+	if got != (ClusterRdb{Namespace: "x", ClusterName: "x", ProvisionerSecret: rdbProvisionerSecretName}) {
+		t.Errorf("decoded %+v", got)
+	}
+	for _, k := range []string{"namespace", "postgres_cluster_name"} {
+		missing := map[string]tfexec.OutputMeta{}
+		empty := map[string]tfexec.OutputMeta{}
+		for kk, v := range full {
+			empty[kk] = v
+			if kk != k {
+				missing[kk] = v
+			}
+		}
+		empty[k] = tfexec.OutputMeta{Value: []byte(`""`)}
+		if _, err := rdbFromOutputs(missing); err == nil {
+			t.Errorf("a cluster root that stopped exporting %q decoded as a store", k)
+		}
+		if _, err := rdbFromOutputs(empty); err == nil {
+			t.Errorf("an empty %q decoded as a store", k)
+		}
+	}
+}

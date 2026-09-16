@@ -33,6 +33,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 )
 
 func main() {
@@ -155,7 +156,7 @@ func run(mode, container, host string, port int, user, password, db, goldenDir s
 }
 
 // migrateChain runs one area's chain via the real RdbManager path: it creates the
-// database (once), the per-area schema, pins search_path + the gorm table prefix, and
+// per-area schema, pins search_path + the gorm table prefix, and
 // runs gormigrate with the production MigrationOptions — so the snapshot reflects the
 // real schema, not a lookalike. Constructed as a struct literal (not NewRdbManager) so
 // no lifecycle callbacks are needed; ExecuteInitialize is the migration entrypoint.
@@ -168,6 +169,11 @@ func migrateChain(ctx context.Context, a area, host string, port int, user, pass
 // migrateChain keeps every existing caller reading as "run this area's chain", which is
 // what they mean; only replay cares that a chain has a middle.
 func migrateSome(ctx context.Context, areaName string, migrations []*gormigrate.Migration, host string, port int, user, password, db string) error {
+	// No service creates its database — dcctl does, before any service starts — so this
+	// harness stands in for that step, as every harness does.
+	if err := rdbtest.EnsureDatabase(ctx, host, port, user, password, db, ""); err != nil {
+		return err
+	}
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: db, FunctionalArea: areaName},
 		Migrations:   migrations,

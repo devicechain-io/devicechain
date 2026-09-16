@@ -18,26 +18,6 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-// Compute non-database connection URL for querying/creating database.
-//
-// This carries the SAME sslMode as the per-database DSN, which it previously did
-// not: the URL form omitted sslmode entirely, so libpq/pgx applied its own
-// default of `prefer` while the DSN form hard-coded `disable`. Two different TLS
-// postures on the same hop, decided by which function happened to build the
-// string — and the weaker one was the one used for the connection that CREATES
-// databases (ADR-020 A2.1).
-func (rdb *RdbManager) computePostgresRootUrl(pg *PostgresConfig) (string, error) {
-	sslMode, err := resolveSslMode(pg.SslMode)
-	if err != nil {
-		return "", err
-	}
-	// Read from the typed config rather than re-deriving from the raw map: the
-	// map path formatted every value with %v, so a port that arrived as a float
-	// rendered as "5432" or "5432.000000" depending on how the JSON was decoded.
-	return postgresURL(pg.Username, pg.Password, pg.Hostname, pg.Port, "postgres", sslMode,
-		map[string]string{"connect_timeout": ownedConnectTimeoutSeconds}), nil
-}
-
 // ownedConnectTimeoutSeconds bounds a single connection attempt on the connections
 // this service OWNS, and it is the twin of guestConnectTimeoutSeconds (guest.go).
 //
@@ -52,60 +32,14 @@ func (rdb *RdbManager) computePostgresRootUrl(pg *PostgresConfig) (string, error
 // Five seconds is generous for a same-cluster hop.
 const ownedConnectTimeoutSeconds = "5"
 
-// Assure that database is created before connecting to it.
-func (rdb *RdbManager) assurePostgresDatabase(ctx context.Context, pgconfig *PostgresConfig) error {
-	url, err := rdb.computePostgresRootUrl(pgconfig)
-	if err != nil {
-		return err
-	}
-	// Log the connection coordinates but never the URL — it embeds the password (C1).
-	log.Info().Str("database", rdb.Microservice.InstanceId).
-		Str("host", pgconfig.Hostname).Int32("port", pgconfig.Port).
-		Msg("Verifying that instance database exists.")
-	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(context.Background())
-
-	// List all databases
-	found := false
-	result := conn.PgConn().ExecParams(ctx, "SELECT datname FROM pg_database WHERE datistemplate = false", [][]byte{}, nil, nil, nil)
-	for result.NextRow() {
-		currdb := string(result.Values()[0])
-		if rdb.Microservice.InstanceId == currdb {
-			log.Info().Msg("Found existing instance database.")
-			found = true
-		}
-	}
-	_, err = result.Close()
-	if err != nil {
-		return err
-	}
-
-	if !found {
-		// Create instance database.
-		log.Info().Msg("Database was not found. Creating...")
-		result := conn.PgConn().ExecParams(ctx, fmt.Sprintf("CREATE DATABASE %s", rdb.Microservice.InstanceId),
-			[][]byte{}, nil, nil, nil)
-		_, err := result.Close()
-		if err != nil {
-			return err
-		}
-		log.Info().Str("database", rdb.Microservice.InstanceId).Msg("Successfully created instance database.")
-	}
-
-	return nil
-}
-
 // Compute connection URL for the instance database, used to create the
 // functional-area schema.
 //
-// This is the THIRD connection builder on this hop, and it was the one missed
-// when sslMode was introduced — found by a vacuity audit, not by reading the
-// diff. All three now resolve the same configured value, which is the whole
-// point: a TLS posture that applies to two of three connections is not a
-// posture, it is a coin toss whose outcome depends on which function ran.
+// This builder was the one missed when sslMode was introduced — found by a
+// vacuity audit, not by reading the diff. Every builder now resolves the same
+// configured value, which is the whole point: a TLS posture that applies to some
+// connections and not others is not a posture, it is a coin toss whose outcome
+// depends on which function ran.
 func (rdb *RdbManager) computePostgresInstanceDatabaseUrl(pg *PostgresConfig) (string, error) {
 	sslMode, err := resolveSslMode(pg.SslMode)
 	if err != nil {
@@ -203,20 +137,16 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
 // interrupted DURING one, so a cancellation arriving mid-dial was not observed until
 // the dial ended on its own — which against a host that is dropping packets rather
 // than refusing connections is not a bounded wait at all.
+//
+// 🔴 IT DOES NOT CREATE THE DATABASE, and must not start to. The instance database
+// exists before any service starts: on the relational store dcctl creates it, owned by
+// this instance's own login, and on the event store initdb creates it. The login a
+// service holds has no CREATEDB — that is what keeps one instance out of another's
+// database — so a missing database is reported by the connection itself ("database
+// ... does not exist"), which is the loud failure it should be rather than something
+// to repair from inside a pod.
 func (rdb *RdbManager) bootstrapPostgres(ctx context.Context, pgconf *PostgresConfig) error {
-	// Verify/create instance database.
-	err := rdb.assurePostgresDatabase(ctx, pgconf)
-	if err != nil {
-		return err
-	}
-
-	// Verify/create functional area schema.
-	err = rdb.assurePostgresSchema(ctx, pgconf)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return rdb.assurePostgresSchema(ctx, pgconf)
 }
 
 // Initialize a postgres database.

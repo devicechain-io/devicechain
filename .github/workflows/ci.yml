@@ -1615,6 +1615,26 @@ jobs:
             --set bootstrap.secretName=dc-tsdb-app-credentials >/dev/null
           echo "ok: a valid owner still renders"
 
+          # The store's owner must not be able to create databases or roles. Every
+          # instance gets its own login owning its own database; an owner that could
+          # create databases would be a shared identity above all of them. Read back
+          # from the render, with a presence check so an empty read cannot pass.
+          rendered="$(helm template dc-rdb deploy/opentofu/modules/cnpg-cluster/chart \
+            --set name=dc-rdb --set imageName=example/pg:17 --set instances=3 \
+            --set aliasServiceName=dc-postgresql --set storage.size=8Gi \
+            --set bootstrap.database=dc_owner --set bootstrap.owner=dc_owner \
+            --set bootstrap.secretName=dc-rdb-app-credentials)"
+          owner="$(printf '%s\n' "$rendered" | awk '
+            $0 ~ /^      - name: / { on = ($0 == "      - name: dc_owner"); next }
+            $0 ~ /^    services:/ { on = 0 }
+            on && $0 !~ /^ *#/ { print }')"
+          printf '%s\n' "$owner" | grep -q "login: true" || {
+            echo "FAIL: the owner's role block was not found, so the check below would read nothing." >&2; exit 1; }
+          if printf '%s\n' "$owner" | grep -Eq "create(db|role): true"; then
+            echo "FAIL: the store's owner renders with CREATEDB or CREATEROLE." >&2; exit 1
+          fi
+          echo "ok: the store's owner can create neither databases nor roles"
+
       # Self-test first, and it plants each defect ALONE: a self-test that plants
       # all of them at once is satisfied by a checker that finds any one. Nineteen
       # defects here — a required group that stopped rendering, a render with no

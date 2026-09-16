@@ -30,6 +30,7 @@ func aCompleteInstall() InstallRecord {
 			Monitoring: true, CNPG: true, CertManager: true, DatabaseBackups: true,
 		},
 		Outputs: InstallOutputs{
+			Rdb: aRelationalStore(),
 			Archive: InstallArchive{
 				EndpointURL:       "http://dc-object-store.dc-system:9000",
 				CredentialsSecret: "dc-object-store-credentials",
@@ -42,6 +43,10 @@ func aCompleteInstall() InstallRecord {
 			GrafanaNamespace: "monitoring",
 		},
 	}
+}
+
+func aRelationalStore() ClusterRdb {
+	return ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "dc-rdb-provisioner-credentials"}
 }
 
 // The contract, by literal: where a bootstrap on any machine looks.
@@ -183,6 +188,10 @@ func TestARecordMissingWhatItsSettingsPromiseIsRefused(t *testing.T) {
 		"operator namespace":         func(r *InstallRecord) { r.Outputs.CNPGNamespace = "" },
 		"dashboard service":          func(r *InstallRecord) { r.Outputs.GrafanaService = "" },
 		"dashboard namespace":        func(r *InstallRecord) { r.Outputs.GrafanaNamespace = "" },
+		// Not gated on any setting: every install has a relational store.
+		"relational store namespace":   func(r *InstallRecord) { r.Outputs.Rdb.Namespace = "" },
+		"relational store cluster":     func(r *InstallRecord) { r.Outputs.Rdb.ClusterName = "" },
+		"relational store provisioner": func(r *InstallRecord) { r.Outputs.Rdb.ProvisionerSecret = "" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := aCompleteInstall()
@@ -197,7 +206,8 @@ func TestARecordMissingWhatItsSettingsPromiseIsRefused(t *testing.T) {
 // The counterweight: with those settings OFF, the same values are legitimately absent,
 // so the checks above are about the promise and not about the fields.
 func TestAMinimalInstallNeedsNoneOfThoseOutputs(t *testing.T) {
-	rec := InstallRecord{ClusterUID: testClusterUID, Settings: InstallSettings{}}
+	rec := InstallRecord{ClusterUID: testClusterUID, Settings: InstallSettings{},
+		Outputs: InstallOutputs{Rdb: aRelationalStore()}}
 	c := fake.NewSimpleClientset()
 	if err := writeInstalled(context.Background(), c, rec, installClock); err != nil {
 		t.Fatalf("an install with no backups, operator or monitoring was refused: %v", err)
@@ -250,7 +260,7 @@ func TestTheInstallRecordHoldsNoCredential(t *testing.T) {
 	st.ClusterUID = testClusterUID
 	recordClusterOutputs(st, nil)
 	rec := InstallRecord{ClusterUID: testClusterUID, Settings: installSettingsFor(st),
-		Outputs: installOutputsFrom(st, ClusterArchive{})}
+		Outputs: installOutputsFrom(st, ClusterArchive{}, ClusterRdb{})}
 	body, _ := json.Marshal(rec)
 	for _, secret := range []string{"rdb-pw", "tsdb-pw", "os-user", "os-secret", "grafana-pw"} {
 		if strings.Contains(string(body), secret) {
@@ -287,8 +297,9 @@ func TestTheRecordedOutputsAreWhatTheClusterApplyReturned(t *testing.T) {
 	}}
 	got := installOutputsFrom(st, ClusterArchive{
 		EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b",
-	})
+	}, ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"})
 	want := InstallOutputs{
+		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"},
 		Archive:                   InstallArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
 		BackupSurvivesClusterLoss: true,
 		CNPGNamespace:             "cnpg-system", GrafanaService: "svc", GrafanaNamespace: "monitoring",

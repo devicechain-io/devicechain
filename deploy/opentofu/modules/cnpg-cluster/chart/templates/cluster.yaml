@@ -480,20 +480,20 @@ spec:
 
   managed:
     roles:
-      # Coupling (a), closed. Every DeviceChain service issues `CREATE DATABASE
-      # <instanceId>` at startup (backend/core/rdb/postgres.go), and CNPG's app
-      # role has rolcreatedb = f. Measured on the spike: `CREATE DATABASE` as the
-      # app user returns `permission denied to create database`, so without this
-      # grant every service fails to start on a stock CNPG cluster. `CREATE
-      # SCHEMA` succeeds -- only the database half breaks, which is why the
-      # symptom is narrower than "nothing works" and easier to misread.
+      # 🔴 NO createdb, and that is the isolation boundary rather than an omission.
+      # This role used to carry it because every service issued `CREATE DATABASE
+      # <instanceId>` at startup as this role. No service creates a database any
+      # more: on the relational store dcctl's provisioner role creates each
+      # instance's database, owned by that instance's own login, and on the event
+      # store initdb creates the one database the instance uses. An owner that could
+      # still create databases would be a shared identity that every instance's
+      # services once held -- the thing per-instance logins exist to end.
       - name: {{ $owner }}
         ensure: present
         login: true
-        createdb: true
         inRoles:
-          # pg_monitor, so the HA verifier can see replication state through the
-          # SAME credentials every service uses. (It connects to the primary pod
+          # pg_monitor, so the HA verifier can see replication state through
+          # credentials dcctl already holds. (It connects to the primary pod
           # directly, not through the alias — the alias is checked separately,
           # against the Kubernetes API.)
           #
@@ -509,8 +509,7 @@ spec:
           # supposedly testing ever holding.
           #
           # pg_monitor is read-only and grants statistics visibility, not data
-          # access. This role already owns every database in the instance, so
-          # it widens observability rather than authority.
+          # access, so it widens observability rather than authority.
           - pg_monitor
       {{- range $role := .Values.extraRoles }}
       - name: {{ required "cnpg-cluster: every extraRoles entry needs a name" $role.name }}

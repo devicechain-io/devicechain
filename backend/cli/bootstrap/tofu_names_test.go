@@ -186,3 +186,29 @@ func TestTheSuppliedBackupCredentialIsWrittenBySomething(t *testing.T) {
 			"infrastructure tree reads", got)
 	}
 }
+
+// 🔴 THE OWNER NAME dcctl WRITES INTO ITS SECRET IS THE ONE THE STORE IS BUILT WITH — it
+// is fixed at initdb, so a Secret naming another role authenticates as nobody. And the
+// provisioner is NOT in the infrastructure at all: a role the database operator manages
+// has its memberships reconciled, which revokes the provisioner's authority over every
+// login it creates (see withProvisionerSession).
+func TestTheRelationalRoleNamesMatchTheClusterRoot(t *testing.T) {
+	tree := readTofuTree(t)
+	for _, c := range []struct{ what, want string }{
+		{"the owner", `variable "postgres_username" {`},
+		{"the owner's default", `default     = "` + rdbOwnerUsername + `"`},
+	} {
+		if !tofuTreeContains(tree, c.want) {
+			t.Errorf("%s: the infrastructure tree no longer contains %s", c.what, c.want)
+		}
+	}
+	if tofuTreeContains(tree, rdbProvisionerUsername) {
+		t.Errorf("the infrastructure tree names %q; the provisioner must not be a role the database "+
+			"operator manages", rdbProvisionerUsername)
+	}
+	for _, name := range []string{rdbOwnerUsername, rdbProvisionerUsername} {
+		if err := ValidateInstanceName(name); err == nil {
+			t.Errorf("%q is a valid instance name, so an instance could be given the store's own role", name)
+		}
+	}
+}

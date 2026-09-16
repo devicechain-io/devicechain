@@ -47,7 +47,7 @@ func TestArchivePathSurvivesAFlaglessRerun(t *testing.T) {
 	}
 
 	// The re-run: no restore flags at all.
-	got := resolveArchivePaths(restored, RestorePlan{}, testNow.Add(72*time.Hour))
+	got := resolveArchivePaths(restored, RestorePlan{}, archivePaths{}, testNow.Add(72*time.Hour))
 
 	if got.Rdb != restored.Rdb.Path {
 		t.Errorf("a flagless re-run moved the relational store's archive path:\n"+
@@ -75,7 +75,7 @@ func TestOrdinaryInstallKeepsTheDefaultArchivePath(t *testing.T) {
 		Rdb:  clusterArchiveState{Exists: true},
 		Tsdb: clusterArchiveState{Exists: true},
 	}
-	got := resolveArchivePaths(live, RestorePlan{}, testNow)
+	got := resolveArchivePaths(live, RestorePlan{}, archivePaths{}, testNow)
 	if got.Rdb != "" || got.Tsdb != "" {
 		t.Fatalf("an ordinary install must archive under the Cluster's own name (the OpenTofu "+
 			"default, emitted as no var at all); got rdb=%q tsdb=%q", got.Rdb, got.Tsdb)
@@ -104,7 +104,7 @@ func TestARestoreAimedAtALiveClusterNeverMovesItsArchive(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := resolveArchivePaths(
-				liveArchiveState{Rdb: live}, RestorePlan{RdbFrom: RdbClusterName}, testNow)
+				liveArchiveState{Rdb: live}, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow)
 			if got.Rdb != live.Path {
 				t.Fatalf("a restore aimed at a LIVE cluster moved its archive path from %q to %q.\n"+
 					"  The restore cannot run (spec.bootstrap is read at CREATE only), so the only\n"+
@@ -124,7 +124,7 @@ func TestARestoreAimedAtALiveClusterNeverMovesItsArchive(t *testing.T) {
 // just read, and CloudNativePG does not fail that cleanly — it hangs in `Setting up
 // primary` logging `Expected empty archive`.
 func TestRestoreIntoADefaultInstallTakesAFreshPath(t *testing.T) {
-	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: RdbClusterName}, testNow)
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow)
 
 	if got.Rdb == "" {
 		t.Fatal("restoring into a store with no explicit archive path kept the default, which " +
@@ -144,7 +144,7 @@ func TestRestoreIntoADefaultInstallTakesAFreshPath(t *testing.T) {
 // straight back over the WAL it is recovering from.
 func TestRestoreFromAnArchiveTheDeadInstanceOwnedTakesAFreshPath(t *testing.T) {
 	const owned = "dc-rdb-2026"
-	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: owned}, testNow)
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: owned}, archivePaths{}, testNow)
 	if got.Rdb == owned {
 		t.Fatalf("recovering from %q kept it as the archive path, so the restored cluster "+
 			"archives back over the WAL it recovered from — `Setting up primary`, forever", owned)
@@ -158,7 +158,7 @@ func TestRerunningARestoreKeepsThePathItAlreadyTook(t *testing.T) {
 	const taken = "dc-rdb-restored-20260728T140506Z"
 	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true, Path: taken}}
 
-	got := resolveArchivePaths(live, RestorePlan{RdbFrom: RdbClusterName}, testNow.Add(time.Hour))
+	got := resolveArchivePaths(live, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow.Add(time.Hour))
 	if got.Rdb != taken {
 		t.Fatalf("re-running the same restore moved the archive path from %q to %q", taken, got.Rdb)
 	}
@@ -176,8 +176,8 @@ func TestTwoRestoresFromOneSourceTakeDifferentPaths(t *testing.T) {
 	fresh := liveArchiveState{} // both stores gone: this is the disaster case
 	plan := RestorePlan{RdbFrom: RdbClusterName}
 
-	first := resolveArchivePaths(fresh, plan, testNow)
-	second := resolveArchivePaths(fresh, plan, testNow.Add(time.Second))
+	first := resolveArchivePaths(fresh, plan, archivePaths{}, testNow)
+	second := resolveArchivePaths(fresh, plan, archivePaths{}, testNow.Add(time.Second))
 
 	if first.Rdb == second.Rdb {
 		t.Fatalf("two restores from %q both took archive path %q. The first cluster archived "+
@@ -194,7 +194,7 @@ func TestRestoringOneStoreLeavesTheOtherAlone(t *testing.T) {
 		Rdb:  clusterArchiveState{Exists: true, Path: "dc-rdb-owned"},
 		Tsdb: clusterArchiveState{Exists: true, Path: "dc-tsdb-owned"},
 	}
-	got := resolveArchivePaths(live, RestorePlan{TsdbFrom: "dc-tsdb-old"}, testNow)
+	got := resolveArchivePaths(live, RestorePlan{TsdbFrom: "dc-tsdb-old"}, archivePaths{}, testNow)
 
 	if got.Rdb != "dc-rdb-owned" {
 		t.Errorf("restoring the event store moved the relational store's archive path to %q", got.Rdb)
@@ -204,21 +204,40 @@ func TestRestoringOneStoreLeavesTheOtherAlone(t *testing.T) {
 	}
 }
 
-// A fresh ordinary install — nothing there, nothing being restored — must settle on
-// "", which infraVars then omits entirely.
+// A fresh ordinary install — nothing there, nothing being restored — settles on the
+// fresh paths it was handed: "" for the relational store, which infraVars then omits
+// entirely, and an instance-derived path for the event store.
 //
-// The empty string is not cosmetic here. Unset, the chart renders NO serverName
-// parameter and CloudNativePG defaults it to the Cluster's own name; the chart's
-// restore guard keys on exactly that emptiness. Emitting the name explicitly reaches
-// the same archive prefix by a path the guard can no longer see.
-func TestAFreshOrdinaryInstallSettlesOnNoArchivePath(t *testing.T) {
-	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{}, testNow)
-	if got.Rdb != "" || got.Tsdb != "" {
-		t.Fatalf("a fresh install with no restore must take the root's default (no var at all); "+
+// The relational store's empty string is not cosmetic. Unset, the chart renders NO
+// serverName parameter and CloudNativePG defaults it to the Cluster's own name; the
+// chart's restore guard keys on exactly that emptiness.
+func TestAFreshOrdinaryInstallSettlesOnTheFreshPaths(t *testing.T) {
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{},
+		archivePaths{Tsdb: "dc-tsdb-planted"}, testNow)
+	if got.Rdb != "" || got.Tsdb != "dc-tsdb-planted" {
+		t.Fatalf("a fresh install with no restore must take the fresh paths; "+
 			"got rdb=%q tsdb=%q", got.Rdb, got.Tsdb)
 	}
 	if len(got.AlreadyLive) != 0 {
 		t.Errorf("no store exists and none is being restored; got %v", got.AlreadyLive)
+	}
+}
+
+// 🔴 A NEW EVENT STORE MUST NOT ARCHIVE WHERE ANOTHER ONE DID. Two instances share the
+// bucket, and a rebuilt instance meets the archive its previous generation left behind;
+// either one makes CloudNativePG wait forever on "Expected empty archive".
+func TestAFreshEventStoreArchivesUnderItsInstanceAndGeneration(t *testing.T) {
+	a := freshTsdbArchivePath("alpha", "11111111-aaaa-4000-8000-000000000000")
+	b := freshTsdbArchivePath("beta", "11111111-aaaa-4000-8000-000000000000")
+	rebuilt := freshTsdbArchivePath("alpha", "22222222-bbbb-4000-8000-000000000000")
+	if a != "dc-tsdb-alpha-11111111" {
+		t.Errorf("got %q, want dc-tsdb-alpha-11111111", a)
+	}
+	if a == b || a == rebuilt {
+		t.Errorf("paths must differ by instance and by generation: %q %q %q", a, b, rebuilt)
+	}
+	if got := freshTsdbArchivePath("alpha", ""); got != "dc-tsdb-alpha" {
+		t.Errorf("with no declaration (dry run) got %q, want dc-tsdb-alpha", got)
 	}
 }
 
@@ -229,7 +248,7 @@ func TestAFreshOrdinaryInstallSettlesOnNoArchivePath(t *testing.T) {
 // destroy instruction for the data they have just recovered.
 func TestARestoreIntoNothingIsNotReportedAsIneffective(t *testing.T) {
 	got := resolveArchivePaths(liveArchiveState{},
-		RestorePlan{RdbFrom: RdbClusterName, TsdbFrom: TsdbClusterName}, testNow)
+		RestorePlan{RdbFrom: RdbClusterName, TsdbFrom: TsdbClusterName}, archivePaths{}, testNow)
 	if len(got.AlreadyLive) != 0 {
 		t.Fatalf("neither Cluster exists, so both restores WILL run; reporting %v tells the "+
 			"operator to destroy and rebuild the instance they are in the middle of recovering",
@@ -584,6 +603,30 @@ func TestRenderConfigKeepsTheLiveArchivePath(t *testing.T) {
 	}
 	if !slices.Contains(infraVars(st), "backup_server_name_rdb="+owned) {
 		t.Errorf("the settled path never reached OpenTofu: %v", infraVars(st))
+	}
+}
+
+// 🔴 AND A FRESH EVENT STORE, THROUGH THE REAL STEP, ARCHIVES UNDER ITS INSTANCE AND
+// GENERATION. Every instance's event store shares one bucket; a step that stopped
+// handing resolveArchivePaths the fresh path would put them all under `dc-tsdb`, and
+// the second instance — or a rebuild — would wait forever on "Expected empty archive".
+func TestRenderConfigGivesAFreshEventStoreAPathOfItsOwn(t *testing.T) {
+	withExistingInstance(t, "3q2+796tvu/erb7v3q2+796tvu/erb7v3q0=", nil)
+	withArchiveState(t, liveArchiveState{}, nil)
+
+	st := &State{Instance: "prod", InstanceUID: "4f979c6f-0000-4000-8000-000000000000",
+		BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Values["backupServerNameTsdb"]; got != "dc-tsdb-prod-4f979c6f" {
+		t.Errorf("a fresh event store archives under %q, want dc-tsdb-prod-4f979c6f", got)
+	}
+	if got := st.Values["backupServerNameRdb"]; got != "" {
+		t.Errorf("the relational store is the cluster's and archives under its own name; got %q", got)
+	}
+	if !slices.Contains(infraVars(st), "backup_server_name_tsdb=dc-tsdb-prod-4f979c6f") {
+		t.Errorf("the fresh event-store path never reached OpenTofu: %v", infraVars(st))
 	}
 }
 

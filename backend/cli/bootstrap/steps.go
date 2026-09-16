@@ -201,7 +201,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	}
 	st.Values["natsCA"] = st.NATSTLS.CACertPEM
 
-	paths := resolveArchivePaths(live, st.Restore, time.Now().UTC())
+	paths := resolveArchivePaths(live, st.Restore,
+		archivePaths{Tsdb: freshTsdbArchivePath(st.Instance, st.InstanceUID)}, time.Now().UTC())
 	st.Values["backupServerNameRdb"] = paths.Rdb
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.Active() {

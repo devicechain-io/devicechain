@@ -54,17 +54,18 @@ type ClusterArchive struct {
 // wearing the SAME context name; state keyed on the name would be inherited by a
 // cluster that has none of these resources, and the apply would plan updates to
 // things that do not exist.
-func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []string, namespace string) (_ ClusterArchive, err error) {
+func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []string, namespace string) (_ ClusterArchive, _ ClusterRdb, err error) {
 	var archive ClusterArchive
+	var rdb ClusterRdb
 
 	tofuBin, err := findTofu()
 	if err != nil {
-		return archive, err
+		return archive, rdb, err
 	}
 
 	workdir, err := clusterStateDir(uid, prereqStateSubdir)
 	if err != nil {
-		return archive, err
+		return archive, rdb, err
 	}
 	// The extracted tree holds THIS root plus the shared modules, and a root reaches
 	// those as "../modules/<x>" — so tofu runs one level down, in the root's own
@@ -79,19 +80,19 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		}
 	}()
 	if err := extractRoot(assets.OpenTofu(), assets.ClusterRootDir, workdir); err != nil {
-		return archive, fmt.Errorf("extracting cluster prerequisite config: %w", err)
+		return archive, rdb, fmt.Errorf("extracting cluster prerequisite config: %w", err)
 	}
 
 	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
-		return archive, err
+		return archive, rdb, err
 	}
 	tf.SetStdout(os.Stdout)
 	tf.SetStderr(os.Stderr)
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {
-		return archive, fmt.Errorf("tofu init (cluster prerequisites): %w", err)
+		return archive, rdb, fmt.Errorf("tofu init (cluster prerequisites): %w", err)
 	}
 
 	// The shared infrastructure namespace is IMPORTED into this root's state rather
@@ -104,7 +105,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	// of a namespace holding every other instance's data. The namespace is a cluster
 	// prerequisite, so it belongs to the cluster's state and outlives every instance.
 	if err := adoptInfraNamespace(ctx, tf, namespace, vars); err != nil {
-		return archive, err
+		return archive, rdb, err
 	}
 
 	opts := make([]tfexec.ApplyOption, 0, len(vars))
@@ -117,19 +118,23 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
 		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
 	}); err != nil {
-		return archive, err
+		return archive, rdb, err
 	}
 
 	outputs, err := tf.Output(ctx)
 	if err != nil {
-		return archive, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
+		return archive, rdb, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
 	}
 	archive, err = archiveFromOutputs(outputs)
 	if err != nil {
-		return archive, err
+		return archive, rdb, err
+	}
+	rdb, err = rdbFromOutputs(outputs)
+	if err != nil {
+		return archive, rdb, err
 	}
 	recordClusterOutputs(st, outputs)
-	return archive, nil
+	return archive, rdb, nil
 }
 
 // recordClusterOutputs stashes what the cluster root built for the steps after the

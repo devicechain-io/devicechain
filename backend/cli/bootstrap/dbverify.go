@@ -467,7 +467,7 @@ func verifyPostgresState(
 	//
 	// This is not hypothetical. A Cluster created by `bootstrap.recovery` — which
 	// is exactly what A2.5's restore drill produces — has no `initdb` block at
-	// all, so `database` and `secretName` are both empty. Without this, B5/B6/B7
+	// all, so `database` and `secretName` are both empty. Without this, B6/B7
 	// and B8 would all silently vanish on a restored cluster and CHECK B would
 	// pass with `--require-synchronous` set, because only B3 reads the spec.
 	// Set BEFORE any skip path, so the counts line prints even when the axis could
@@ -535,23 +535,6 @@ func verifyPostgresState(
 		return fmt.Errorf("connecting to the database as %q: %w", user, err)
 	}
 	defer conn.Close(ctx)
-
-	// Coupling (a). Every DeviceChain service issues CREATE DATABASE at startup,
-	// and CNPG's app role does not have CREATEDB by default — so without the
-	// grant, every service crashloops on a cluster that otherwise looks perfect.
-	// Asserted here because the symptom (permission denied to create database)
-	// appears eleven times in service logs and nowhere in the database's own
-	// health.
-	var createdb bool
-	if err := conn.QueryRow(ctx,
-		`select rolcreatedb from pg_roles where rolname = current_user`).Scan(&createdb); err != nil {
-		return fmt.Errorf("reading the app role's attributes: %w", err)
-	}
-	if !createdb {
-		add("B5", user, "the application role lacks CREATEDB, so every DeviceChain "+
-			"service will fail at startup on `CREATE DATABASE` — the database itself "+
-			"will look entirely healthy while nothing can start")
-	}
 
 	// The live synchronous configuration. Distinct from the spec check above:
 	// this is what the running server has, which is the thing that decides
@@ -646,9 +629,9 @@ const timescaleTelemetryJob = "policy_telemetry"
 // the right time to add an assertion, not after it breaks.
 //
 // 🔴 Jobs are PER-DATABASE, so this cannot just look at the one it connected to.
-// Every DeviceChain service creates its own database at startup, so the real
-// hypertables and the aggregate refresh job live in a database named after the
-// instance, and the bootstrap database is very likely empty of them. Checking
+// The real hypertables and the aggregate refresh job live in the database named
+// after the instance, and on a store that was not bootstrapped with that name the
+// bootstrap database is very likely empty of them. Checking
 // only the connection database would examine the one place the answer is
 // guaranteed to be boring.
 func verifyTimescaleJobs(
@@ -731,13 +714,13 @@ func verifyTimescaleJobs(
 	// 🔴 VACUITY. Everything above passes trivially when nothing carries the
 	// extension, and "no databases have TimescaleDB" is not a healthy event
 	// store — it is coupling (b) broken. The extension reaches each database by
-	// being present in template1 when the app creates it, and nothing in the
+	// being present in template1 when initdb creates it, and nothing in the
 	// codebase ever issues CREATE EXTENSION, so if template1 lost it every new
 	// database silently comes up without hypertable support.
 	if rep.Checked.TimescaleDatabases == 0 {
 		add("B9", opts.ClusterName, "no database on this server carries the timescaledb "+
 			"extension, so the background-job checks examined nothing. Every DeviceChain "+
-			"database inherits the extension from template1 at CREATE DATABASE time and "+
+			"database inherits the extension from template1 when it is created, and "+
 			"nothing in the platform ever issues CREATE EXTENSION, so this means new "+
 			"databases are coming up without hypertable support")
 		return nil
