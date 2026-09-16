@@ -144,12 +144,6 @@ variable "postgres_username" {
   default     = "dc_owner"
 }
 
-variable "postgres_provisioner_role" {
-  description = "The base identity: the login role with CREATEROLE and CREATEDB that dcctl uses to create each instance's login and database. 🔴 Contains an underscore so it can never equal an instance id."
-  type        = string
-  default     = "dc_provisioner"
-}
-
 variable "postgres_storage" {
   description = "PersistentVolume size for the relational Postgres, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times postgres_instances — three times this under --ha. It sized a single StatefulSet before A2.3."
   type        = string

@@ -167,7 +167,8 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		if s.Data[secretKeyPassword] == "" {
 			t.Errorf("%s carries no password", name)
 		}
-		if s.Labels[cnpgReloadLabel] != "true" {
+		// The provisioner's is read by dcctl alone, which sets the role's password itself.
+		if name != rdbProvisionerSecretName && s.Labels[cnpgReloadLabel] != "true" {
 			t.Errorf("%s lacks the reload label, so a credential change would land in the "+
 				"Secret while the database kept the old password", name)
 		}

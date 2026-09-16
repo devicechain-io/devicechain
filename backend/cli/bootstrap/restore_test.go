@@ -606,6 +606,30 @@ func TestRenderConfigKeepsTheLiveArchivePath(t *testing.T) {
 	}
 }
 
+// 🔴 AND A FRESH EVENT STORE, THROUGH THE REAL STEP, ARCHIVES UNDER ITS INSTANCE AND
+// GENERATION. Every instance's event store shares one bucket; a step that stopped
+// handing resolveArchivePaths the fresh path would put them all under `dc-tsdb`, and
+// the second instance — or a rebuild — would wait forever on "Expected empty archive".
+func TestRenderConfigGivesAFreshEventStoreAPathOfItsOwn(t *testing.T) {
+	withExistingInstance(t, "3q2+796tvu/erb7v3q2+796tvu/erb7v3q0=", nil)
+	withArchiveState(t, liveArchiveState{}, nil)
+
+	st := &State{Instance: "prod", InstanceUID: "4f979c6f-0000-4000-8000-000000000000",
+		BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Values["backupServerNameTsdb"]; got != "dc-tsdb-prod-4f979c6f" {
+		t.Errorf("a fresh event store archives under %q, want dc-tsdb-prod-4f979c6f", got)
+	}
+	if got := st.Values["backupServerNameRdb"]; got != "" {
+		t.Errorf("the relational store is the cluster's and archives under its own name; got %q", got)
+	}
+	if !slices.Contains(infraVars(st), "backup_server_name_tsdb=dc-tsdb-prod-4f979c6f") {
+		t.Errorf("the fresh event-store path never reached OpenTofu: %v", infraVars(st))
+	}
+}
+
 // The disaster path through the real step: no instance, no Clusters, a restore
 // requested. It has to end up with a path that is NOT the source, or the recovered
 // cluster archives back over the archive it just read and hangs.

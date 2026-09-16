@@ -74,7 +74,7 @@ const (
 type credentialSet struct {
 	RDBPassword string
 	// RDBProvisionerPassword is the base identity's: the cluster's one role that may
-	// create logins and databases. CloudNativePG reconciles it from its Secret.
+	// create logins and databases. dcctl sets the role's password from its Secret.
 	RDBProvisionerPassword string
 	// RDBInstancePassword is this instance's own login on the relational store —
 	// the one its services connect as, owning the one database they use.
@@ -125,9 +125,8 @@ func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
 // before the supplied path existed: dcctl knew only "backups on or off".
 func backupsAreExternal(st *State) bool { return st.BackupDestination.Configured() }
 
-// rdbProvisionerSecretName is the base identity's Secret. The cnpg-cluster module
-// names it by the same convention and reports it as an output, which
-// TestTheProvisionerSecretIsTheOneTheClusterRootDeclares holds this against.
+// rdbProvisionerSecretName is the base identity's Secret. Only dcctl reads it: dcctl
+// creates the role and sets its password from it (see withProvisionerSession).
 const rdbProvisionerSecretName = rdbClusterName + "-provisioner-credentials"
 
 // instanceRdbSecretName is where an instance's own relational login is kept.
@@ -178,11 +177,13 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			Name:      rdbProvisionerSecretName,
 			Namespace: infraNamespace,
 			Type:      corev1.SecretTypeBasicAuth,
-			// The reload label matters more here than on the owner's: this role
-			// DECLARES a passwordSecret, so the operator reconciles its password from
-			// this Secret, and without the label a changed value never reaches it.
-			Labels: dbLabels(rdbClusterName),
-			Scope:  ownerCluster,
+			// No database operator reads it — dcctl creates the role and sets its
+			// password from this Secret — so it carries no reload label.
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      rdbClusterName,
+				"app.kubernetes.io/component": "database",
+			},
+			Scope: ownerCluster,
 			Data: map[string]string{
 				secretKeyUsername: rdbProvisionerUsername,
 				secretKeyPassword: set.RDBProvisionerPassword,
@@ -279,10 +280,9 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 //     declared under `managed.roles` with no `passwordSecret`, so nothing reconciles
 //     it. A fresh value would reach every service and none of the two databases.
 //   - THE PROVISIONER'S AND THE INSTANCE LOGIN'S PASSWORDS ARE REUSED WHEN PRESENT,
-//     AND MINTED WHEN ABSENT — not refused. Both are recoverable: the operator
-//     reconciles the provisioner's from its Secret, and dcctl sets the instance
-//     login's on every run. Refusing here would strand a cluster over a Secret that
-//     a fresh value repairs.
+//     AND MINTED WHEN ABSENT — not refused. Both are recoverable: dcctl sets both
+//     roles' passwords from their Secrets on every run. Refusing here would strand
+//     a cluster over a Secret that a fresh value repairs.
 //   - THE OBJECT-STORE CREDENTIALS ARE REUSED. Re-minting them is recoverable, but
 //     not cheaply: the store reads its root credentials at start-up while the backup
 //     archiver is handed them through a different object on a different schedule, so

@@ -497,10 +497,6 @@ module "cnpg_rdb" {
   storage            = var.postgres_storage
   storage_class      = var.postgres_storage_class
 
-  # The base identity. See the module's `provisioner` variable: dcctl signs in as
-  # this role to give every instance its own login and database.
-  provisioner = { name = var.postgres_provisioner_role }
-
   # 3 under --ha, 1 otherwise, unless pinned explicitly. Both halves of the
   # topology come from ONE value; see the postgres_instances variable for why 2
   # is refused rather than merely discouraged.

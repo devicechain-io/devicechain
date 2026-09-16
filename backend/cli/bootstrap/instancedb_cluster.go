@@ -4,21 +4,27 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	pgx "github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // ClusterRdb is the relational store's contract, read back from the cluster root: where
@@ -35,14 +41,13 @@ type ClusterRdb struct {
 // optional, so an empty value is never a meaningful answer — it is a root that stopped
 // exporting it.
 func rdbFromOutputs(outputs map[string]tfexec.OutputMeta) (ClusterRdb, error) {
-	var rdb ClusterRdb
+	rdb := ClusterRdb{ProvisionerSecret: rdbProvisionerSecretName}
 	for _, field := range []struct {
 		name string
 		into *string
 	}{
 		{"namespace", &rdb.Namespace},
 		{"postgres_cluster_name", &rdb.ClusterName},
-		{"postgres_provisioner_credentials_secret", &rdb.ProvisionerSecret},
 	} {
 		out, ok := outputs[field.name]
 		if !ok {
@@ -54,22 +59,22 @@ func rdbFromOutputs(outputs map[string]tfexec.OutputMeta) (ClusterRdb, error) {
 				"nothing; dcctl cannot give this instance its own login without it", field.name, out.Value)
 		}
 	}
-	// 🔴 THE SECRET THE STORE READS MUST BE THE ONE dcctl WROTE. The role reconciles its
-	// password from whatever the chart names; if that is not the Secret written before the
-	// apply, the provisioner has a password nobody holds and every bootstrap on the cluster
-	// fails authenticating as it — long after the rename that caused it.
-	if rdb.ProvisionerSecret != rdbProvisionerSecretName {
-		return rdb, fmt.Errorf("the relational store reads its provisioner password from Secret %q, "+
-			"but dcctl writes it to %q; the provisioner would hold a password nothing else does",
-			rdb.ProvisionerSecret, rdbProvisionerSecretName)
-	}
 	return rdb, nil
 }
 
 // instanceDatabaseTimeout bounds waiting for the shared store to accept the provisioner.
 // On a fresh cluster the apply returns once the Cluster object exists, not once its
-// primary is serving, and the operator reconciles the provisioner role after that.
+// primary is serving.
 const instanceDatabaseTimeout = 10 * time.Minute
+
+// errStoreNotReady marks what a store still coming up answers with. withProvisionerSession
+// retries these, and only these: anything else is an answer, and ten minutes of retries
+// would bury it.
+var errStoreNotReady = errors.New("the relational store is not ready")
+
+func notReady(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", errStoreNotReady, fmt.Sprintf(format, args...))
+}
 
 // provisionInstanceDatabase gives this instance its own login and database on the shared
 // relational store, signed in as the provisioner.
@@ -93,14 +98,20 @@ var removeInstanceDatabase = func(ctx context.Context, kubeContext, instance str
 	})
 }
 
-// withProvisionerSession opens one session on the shared store's primary as the
-// provisioner and runs fn in it, retrying what a store that is still coming up answers
-// with — no primary yet, a pod not accepting connections, a role the operator has not
-// reconciled — until instanceDatabaseTimeout.
+// withProvisionerSession makes sure the provisioner exists with the password in its
+// Secret, opens one session on the shared store's primary as it, and runs fn there.
 //
-// 🔴 A REFUSAL IS NEVER RETRIED. errInstanceDatabaseNotOurs means something by this name
-// exists and is not dcctl's; waiting does not change that, and ten minutes of retries
-// would bury the one message the operator needs.
+// 🔴 THE PROVISIONER IS dcctl'S, NOT THE DATABASE OPERATOR'S, AND IT CANNOT BE OTHERWISE.
+// It was first declared under the Cluster's `managed.roles`, and the operator reconciles
+// the memberships of every role declared there — revoking any the declaration does not
+// list. Since PostgreSQL 16, creating a role makes its creator a member of it with ADMIN,
+// and that membership IS the provisioner's authority over the login. So the operator
+// tried, on every reconcile, to revoke exactly what lets the provisioner manage the
+// logins it made; measured on a live cluster, it reported the provisioner as impossible
+// to reconcile, and only a dependent grant stood between it and a login nobody could
+// drop. Nothing about the membership is declarable ahead of time — it names instances
+// that do not exist yet — so the role is created here instead, as the database
+// superuser over the primary's local socket, and the operator never hears of it.
 func withProvisionerSession(ctx context.Context, kubeContext string, rdb ClusterRdb, fn func(instanceDBQuerier) error) error {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
@@ -111,55 +122,57 @@ func withProvisionerSession(ctx context.Context, kubeContext string, rdb Cluster
 		return fmt.Errorf("connecting to the cluster to reach the relational store: %w", err)
 	}
 
-	attempt := func() (retry bool, err error) {
+	attempt := func() error {
 		cl, err := dyn.Resource(clusterGVR).Namespace(rdb.Namespace).Get(ctx, rdb.ClusterName, metav1.GetOptions{})
 		if err != nil {
-			return true, fmt.Errorf("reading Cluster %s/%s: %w", rdb.Namespace, rdb.ClusterName, err)
+			return notReady("reading Cluster %s/%s: %v", rdb.Namespace, rdb.ClusterName, err)
 		}
 		primary, _, _ := unstructured.NestedString(cl.Object, "status", "currentPrimary")
 		if primary == "" {
-			return true, fmt.Errorf("Cluster %s/%s has no primary yet", rdb.Namespace, rdb.ClusterName)
+			return notReady("Cluster %s/%s has no primary yet", rdb.Namespace, rdb.ClusterName)
 		}
 		sec, err := typed.CoreV1().Secrets(rdb.Namespace).Get(ctx, rdb.ProvisionerSecret, metav1.GetOptions{})
-		if err != nil {
-			return false, fmt.Errorf("reading the provisioner's credentials from Secret %s/%s: %w",
-				rdb.Namespace, rdb.ProvisionerSecret, err)
+		switch {
+		case apierrors.IsNotFound(err):
+			return fmt.Errorf("the provisioner's credentials are missing: Secret %s/%s does not exist",
+				rdb.Namespace, rdb.ProvisionerSecret)
+		case err != nil:
+			return notReady("reading Secret %s/%s: %v", rdb.Namespace, rdb.ProvisionerSecret, err)
 		}
 		user, pass := string(sec.Data[secretKeyUsername]), string(sec.Data[secretKeyPassword])
-		if user == "" || pass == "" {
-			return false, fmt.Errorf("Secret %s/%s does not carry the provisioner's username and password",
-				rdb.Namespace, rdb.ProvisionerSecret)
+		if user != rdbProvisionerUsername || pass == "" {
+			return fmt.Errorf("Secret %s/%s does not carry the provisioner %q and a password",
+				rdb.Namespace, rdb.ProvisionerSecret, rdbProvisionerUsername)
 		}
+		if err := ensureProvisioner(ctx, restCfg, typed, rdb.Namespace, primary, pass); err != nil {
+			return err
+		}
+
 		local, stop, err := forwardPort(restCfg, rdb.Namespace, primary, 5432)
 		if err != nil {
-			return true, fmt.Errorf("opening a port-forward to the primary %s: %w", primary, err)
+			return notReady("opening a port-forward to the primary %s: %v", primary, err)
 		}
 		defer stop()
 		connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		conn, err := pgx.Connect(connectCtx, localPostgresURL(user, pass, local, "postgres"))
 		if err != nil {
-			// Authentication failing is retried: the operator reconciles the role, and its
-			// password, some time after the Cluster starts accepting connections.
-			return true, fmt.Errorf("connecting to the relational store as %q: %w", user, err)
+			return notReady("connecting to the relational store as %q: %v", user, err)
 		}
 		defer conn.Close(context.Background())
-		if err := fn(pgxSession{conn}); err != nil {
-			var pe *pgconn.PgError
-			// A statement the server rejected is an answer, not a store still starting.
-			return !errors.Is(err, errInstanceDatabaseNotOurs) && !errors.As(err, &pe), err
-		}
-		return false, nil
+		return fn(pgxSession{conn})
 	}
 
 	deadline := time.Now().Add(instanceDatabaseTimeout)
+	lastSaid := time.Now()
 	for {
-		retry, err := attempt()
-		if err == nil {
-			return nil
-		}
-		if !retry || time.Now().After(deadline) {
+		err := attempt()
+		if err == nil || !errors.Is(err, errStoreNotReady) || time.Now().After(deadline) {
 			return err
+		}
+		if time.Since(lastSaid) > 30*time.Second {
+			fmt.Printf("\n  still waiting for the relational store: %v", err)
+			lastSaid = time.Now()
 		}
 		select {
 		case <-ctx.Done():
@@ -167,6 +180,87 @@ func withProvisionerSession(ctx context.Context, kubeContext string, rdb Cluster
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// ensureProvisioner creates the provisioner, or brings it back to exactly what it should
+// be, as the database superuser on the primary's local socket.
+//
+// 🔴 THE SUPERUSER IS USED FOR THIS AND NOTHING ELSE, AND NOT OVER THE NETWORK. The
+// Cluster keeps superuser access disabled, which closes the network path; the local
+// socket inside the primary is the database operator's own route in, reachable only to
+// something already allowed to exec into that pod. Everything after this runs as the
+// provisioner.
+func ensureProvisioner(ctx context.Context, restCfg *rest.Config, typed kubernetes.Interface, namespace, primary, password string) error {
+	sql, err := provisionerSQL(password)
+	if err != nil {
+		return err
+	}
+	_, stderr, err := execInPod(ctx, restCfg, typed, namespace, primary, "postgres",
+		[]string{"psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-q", "-f", "-"},
+		strings.NewReader(sql))
+	if err != nil {
+		// 🔴 ONLY psql's OWN VERDICT LINES, never the rest of its stderr: on an error psql
+		// echoes the failing statement, and that statement carries the password verifier.
+		return notReady("creating the provisioner on %s: %v %s", primary, err, psqlVerdict(stderr))
+	}
+	return nil
+}
+
+// provisionerSQL is the statement that makes the provisioner exist with exactly these
+// attributes and this password. One DO block, so it is one round trip and idempotent.
+func provisionerSQL(password string) (string, error) {
+	verifier, err := scramSHA256Verifier(password)
+	if err != nil {
+		return "", err
+	}
+	role := pgx.Identifier{rdbProvisionerUsername}.Sanitize()
+	attrs := fmt.Sprintf("LOGIN NOSUPERUSER CREATEROLE CREATEDB NOREPLICATION NOBYPASSRLS "+
+		"CONNECTION LIMIT %d PASSWORD '%s'", provisionerConnectionLimit, verifier)
+	return fmt.Sprintf(`DO $dcctl$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
+    CREATE ROLE %s %s;
+  ELSE
+    ALTER ROLE %s %s;
+  END IF;
+END
+$dcctl$;
+`, "'"+rdbProvisionerUsername+"'", role, attrs, role, attrs), nil
+}
+
+// provisionerConnectionLimit bounds the provisioner's sessions. dcctl holds one at a time;
+// the headroom is for two runs overlapping on one cluster.
+const provisionerConnectionLimit = 3
+
+// psqlVerdict keeps the ERROR/FATAL lines of psql's stderr and drops everything else.
+func psqlVerdict(stderr string) string {
+	var keep []string
+	for _, line := range strings.Split(stderr, "\n") {
+		if i := strings.Index(line, "ERROR:"); i >= 0 {
+			keep = append(keep, strings.TrimSpace(line[i:]))
+		} else if i := strings.Index(line, "FATAL:"); i >= 0 {
+			keep = append(keep, strings.TrimSpace(line[i:]))
+		}
+	}
+	return strings.Join(keep, "; ")
+}
+
+// execInPod runs command in a container and returns what it wrote. Indirected so what
+// is sent through it can be exercised without a cluster.
+var execInPod = func(ctx context.Context, restCfg *rest.Config, typed kubernetes.Interface,
+	namespace, pod, container string, command []string, stdin io.Reader) (string, string, error) {
+	req := typed.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(pod).
+		SubResource("exec").VersionedParams(&corev1.PodExecOptions{
+		Container: container, Command: command,
+		Stdin: stdin != nil, Stdout: true, Stderr: true,
+	}, scheme.ParameterCodec)
+	ex, err := remotecommand.NewSPDYExecutor(restCfg, "POST", req.URL())
+	if err != nil {
+		return "", "", err
+	}
+	var stdout, stderr bytes.Buffer
+	err = ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: &stdout, Stderr: &stderr})
+	return stdout.String(), stderr.String(), err
 }
 
 // checkRelationalStoreOwner refuses a shared relational store built before instances had

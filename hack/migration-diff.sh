@@ -220,6 +220,32 @@ if [ "$MODE" = "verify" ]; then
   echo "==> Running the guest-connection integration suite"
   ( cd "$ROOT/backend/core" && DC_IT_PGPORT="$HOST_PORT" \
       go test -tags integration -count=1 ./rdb/... )
+
+  # dcctl's per-instance database logins. PostgreSQL 16 changed what CREATEROLE grants,
+  # and whether one instance's login is refused by another instance's database — the
+  # property these exist for — is the server's behaviour, which nothing short of a
+  # server can check. So they run on every major this script is run against. Without
+  # DCCTL_TEST_POSTGRES_URL they skip, which is why the `go` job's green says nothing
+  # about them.
+  echo "==> Running dcctl's per-instance database suite"
+  if ! dcctl_db_out="$(cd "$ROOT/backend/cli" &&
+      DCCTL_TEST_POSTGRES_URL="postgres://postgres:$PASSWORD@127.0.0.1:$HOST_PORT/postgres?sslmode=disable" \
+      go test -count=1 -v -run 'InstanceDatabase|Provisioner|ADropBlockedByASuperuserSession' ./bootstrap 2>&1)"; then
+    printf '%s\n' "$dcctl_db_out"
+    echo "dcctl's per-instance database suite FAILED" >&2
+    exit 1
+  fi
+  printf '%s\n' "$dcctl_db_out"
+  # A skip against a live server is a gate that examined nothing, and so is a filter
+  # that stopped matching the one test the suite exists for.
+  if printf '%s\n' "$dcctl_db_out" | grep -q -- '--- SKIP'; then
+    echo "dcctl's per-instance database suite SKIPPED against a live server" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$dcctl_db_out" | grep -q -- '--- PASS: TestInstanceDatabaseLoginsCannotReachEachOthersDatabases'; then
+    echo "dcctl's per-instance database suite did not run its isolation test" >&2
+    exit 1
+  fi
 fi
 
 echo "==> Done."

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // An instance's relational database, and the login that owns it.
@@ -204,6 +205,14 @@ func dropInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance str
 			return fmt.Errorf("returning to the provisioner after acting as %q: %w", instance, err)
 		}
 		if dropErr != nil {
+			// 🔴 A SESSION THIS ROLE CANNOT END IS A WAIT, NOT A REFUSAL. FORCE terminates
+			// the database's other sessions, but a non-superuser may not terminate a
+			// superuser's — and the database operator's metrics exporter connects to every
+			// database as one, briefly, on each scrape. So "permission denied to terminate"
+			// and "being accessed by other users" are retried until the exporter lets go.
+			if code := pgErrorCode(dropErr); code == "42501" || code == "55006" {
+				return notReady("dropping the database for instance %q while a session holds it: %v", instance, dropErr)
+			}
 			return fmt.Errorf("dropping the database for instance %q: %w", instance, dropErr)
 		}
 	}
@@ -218,8 +227,9 @@ func dropInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance str
 	case err != nil:
 		return fmt.Errorf("looking up the login for instance %q: %w", instance, err)
 	case !admin:
-		return fmt.Errorf("%w: role %q was not created by dcctl's provisioner, so it will not be dropped",
-			errInstanceDatabaseNotOurs, instance)
+		return fmt.Errorf("%w: role %q was not created by dcctl's provisioner, so it will not be dropped. "+
+			"If it is this instance's login and nothing else uses it, a database superuser can remove it "+
+			"(`DROP ROLE %s`) and the destroy can be run again", errInstanceDatabaseNotOurs, instance, ident)
 	default:
 		if _, err := q.Exec(ctx, "DROP ROLE "+ident); err != nil {
 			return fmt.Errorf("dropping the login for instance %q: %w", instance, err)
@@ -241,6 +251,15 @@ func dropInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance str
 			"for instance %q", dbLeft, roleLeft, instance)
 	}
 	return nil
+}
+
+// pgErrorCode is the SQLSTATE of a PostgreSQL error, or "" for anything else.
+func pgErrorCode(err error) string {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return pe.Code
+	}
+	return ""
 }
 
 // scramSHA256Verifier computes the SCRAM-SHA-256 verifier PostgreSQL stores for a

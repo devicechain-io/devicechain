@@ -38,21 +38,6 @@ output "postgres_cluster_name" {
   value       = module.cnpg_rdb.cluster_name
 }
 
-output "postgres_provisioner_role" {
-  description = "The base identity dcctl signs in as to create each instance's login and database."
-  value       = module.cnpg_rdb.provisioner_role
-}
-
-output "postgres_provisioner_credentials_secret" {
-  description = "The Secret (kubernetes.io/basic-auth: username, password) holding the base identity's credentials, in the namespace output above."
-  value       = module.cnpg_rdb.provisioner_credentials_secret
-}
-
-output "postgres_owner_credentials_secret" {
-  description = "The Secret (kubernetes.io/basic-auth: username, password) holding the relational store's owner credentials."
-  value       = module.cnpg_rdb.credentials_secret
-}
-
 output "ingress_class" {
   description = "IngressClass name to set on the Helm chart's ingress.className (null if the controller was not installed here)."
   value       = var.enable_ingress_nginx ? module.ingress_nginx[0].ingress_class : null

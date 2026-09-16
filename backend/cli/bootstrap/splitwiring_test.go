@@ -439,15 +439,14 @@ func TestTheRelationalStoreContractReadsOnlyWhatTheClusterRootDeclares(t *testin
 	for k := range declared {
 		full[k] = tfexec.OutputMeta{Value: []byte(`"x"`)}
 	}
-	full["postgres_provisioner_credentials_secret"] = tfexec.OutputMeta{Value: []byte(`"` + rdbProvisionerSecretName + `"`)}
 	got, err := rdbFromOutputs(full)
 	if err != nil {
 		t.Fatalf("the relational store decoder needs an output the cluster root does not declare: %v", err)
 	}
-	if got.ProvisionerSecret != rdbProvisionerSecretName || got.Namespace != "x" || got.ClusterName != "x" {
+	if got != (ClusterRdb{Namespace: "x", ClusterName: "x", ProvisionerSecret: rdbProvisionerSecretName}) {
 		t.Errorf("decoded %+v", got)
 	}
-	for _, k := range []string{"namespace", "postgres_cluster_name", "postgres_provisioner_credentials_secret"} {
+	for _, k := range []string{"namespace", "postgres_cluster_name"} {
 		missing := map[string]tfexec.OutputMeta{}
 		empty := map[string]tfexec.OutputMeta{}
 		for kk, v := range full {
@@ -463,13 +462,5 @@ func TestTheRelationalStoreContractReadsOnlyWhatTheClusterRootDeclares(t *testin
 		if _, err := rdbFromOutputs(empty); err == nil {
 			t.Errorf("an empty %q decoded as a store", k)
 		}
-	}
-	renamed := map[string]tfexec.OutputMeta{}
-	for k, v := range full {
-		renamed[k] = v
-	}
-	renamed["postgres_provisioner_credentials_secret"] = tfexec.OutputMeta{Value: []byte(`"some-other-secret"`)}
-	if _, err := rdbFromOutputs(renamed); err == nil {
-		t.Error("a store reading its provisioner password from a Secret dcctl does not write was accepted")
 	}
 }

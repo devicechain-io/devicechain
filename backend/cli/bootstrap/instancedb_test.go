@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	pgx "github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -26,7 +26,7 @@ import (
 // skip loudly without one.
 //
 // DCCTL_TEST_POSTGRES_URL is a SUPERUSER connection string, used only to stand up the
-// provisioner the way CloudNativePG declares it and to tear everything down; every
+// provisioner the way dcctl declares it and to tear everything down; every
 // statement under test runs as the provisioner. Locally:
 //
 //	docker run -d --rm --name dcctl-pg -e POSTGRES_PASSWORD=pw -p 55432:5432 postgres:17
@@ -34,7 +34,7 @@ import (
 //	  go test ./bootstrap -run InstanceDatabase -count=1
 const testPostgresURLEnv = "DCCTL_TEST_POSTGRES_URL"
 
-const testProvisioner = "dc_provisioner"
+const testProvisioner = rdbProvisionerUsername
 
 func superuserConn(t *testing.T) (*pgx.Conn, *url.URL) {
 	t.Helper()
@@ -65,8 +65,19 @@ func connectAs(t *testing.T, base *url.URL, role, password, database string) (*p
 	return pgx.Connect(context.Background(), u.String())
 }
 
-// withProvisioner declares the provisioner the way the chart does — LOGIN, CREATEROLE,
-// CREATEDB, nothing else — and cleans up every instance database and role afterwards.
+// serverChecksPasswords reports whether the server rejects a wrong password.
+func serverChecksPasswords(t *testing.T, base *url.URL) bool {
+	t.Helper()
+	c, err := connectAs(t, base, base.User.Username(), "certainly-not-the-password", "postgres")
+	if err == nil {
+		c.Close(context.Background())
+		return false
+	}
+	return true
+}
+
+// withProvisioner declares the provisioner the way dcctl does and cleans up every
+// instance database and role afterwards.
 func withProvisioner(t *testing.T, instances ...string) (*pgx.Conn, *url.URL) {
 	t.Helper()
 	ctx := context.Background()
@@ -81,8 +92,13 @@ func withProvisioner(t *testing.T, instances ...string) (*pgx.Conn, *url.URL) {
 	}
 	cleanup()
 	t.Cleanup(cleanup)
-	if _, err := su.Exec(ctx, "CREATE ROLE "+testProvisioner+
-		" LOGIN CREATEROLE CREATEDB PASSWORD 'provisioner-pw'"); err != nil {
+	// Declared with the very statement dcctl runs as the superuser — so this also proves
+	// the verifier it computes is one the server accepts at login.
+	sql, err := provisionerSQL("provisioner-pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := su.Exec(ctx, sql); err != nil {
 		t.Fatalf("declaring the provisioner: %v", err)
 	}
 	p, err := connectAs(t, base, testProvisioner, "provisioner-pw", "postgres")
@@ -91,14 +107,6 @@ func withProvisioner(t *testing.T, instances ...string) (*pgx.Conn, *url.URL) {
 	}
 	t.Cleanup(func() { p.Close(ctx) })
 	return p, base
-}
-
-func pgCode(err error) string {
-	var pe *pgconn.PgError
-	if errors.As(err, &pe) {
-		return pe.Code
-	}
-	return ""
 }
 
 // 🔴🔴 THE PROPERTY THE MODEL EXISTS FOR: two instances cannot reach each other's
@@ -134,7 +142,7 @@ func TestInstanceDatabaseLoginsCannotReachEachOthersDatabases(t *testing.T) {
 			t.Errorf("%s connected to %s's database; instances must not reach each other's data", pair[0], pair[1])
 			continue
 		}
-		if pgCode(err) != "42501" {
+		if pgErrorCode(err) != "42501" {
 			t.Errorf("%s → %s failed, but not with permission denied (42501): %v", pair[0], pair[1], err)
 		}
 	}
@@ -167,6 +175,13 @@ func TestInstanceDatabaseRerunTakesTheNewPassword(t *testing.T) {
 		t.Errorf("the new password does not log in: %v", err)
 	} else {
 		c.Close(ctx)
+	}
+	// Only meaningful against a server that checks passwords: a throwaway server started
+	// with `trust` host authentication admits any password, which says nothing about
+	// what was set.
+	if !serverChecksPasswords(t, base) {
+		t.Log("this server admits any password (trust authentication); the old password's rejection is not checkable here")
+		return
 	}
 	if c, err := connectAs(t, base, "gamma", "first-pw", "gamma"); err == nil {
 		c.Close(ctx)
@@ -303,5 +318,74 @@ func TestAStoreBuiltBeforeInstanceLoginsIsRefused(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "Recreate the cluster") {
 			t.Errorf("a store that cannot isolate instances was not refused with the way out: %v", err)
 		}
+	}
+}
+
+// Running the provisioner statement again resets the role to exactly its attributes and
+// the given password — which is what makes a lost Secret repairable and a tampered role
+// correctable.
+func TestTheProvisionerStatementConvergesTheRole(t *testing.T) {
+	ctx := context.Background()
+	_, base := withProvisioner(t)
+	su, _ := superuserConn(t)
+	if _, err := su.Exec(ctx, "ALTER ROLE "+testProvisioner+" SUPERUSER NOCREATEROLE CONNECTION LIMIT -1"); err != nil {
+		t.Fatal(err)
+	}
+	sql, err := provisionerSQL("second-pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := su.Exec(ctx, sql); err != nil {
+		t.Fatalf("re-running the provisioner statement: %v", err)
+	}
+	var super, createrole, createdb bool
+	var limit int
+	if err := su.QueryRow(ctx, `select rolsuper, rolcreaterole, rolcreatedb, rolconnlimit from pg_roles where rolname = $1`,
+		testProvisioner).Scan(&super, &createrole, &createdb, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if super || !createrole || !createdb || limit != provisionerConnectionLimit {
+		t.Errorf("provisioner after re-run: super=%t createrole=%t createdb=%t limit=%d", super, createrole, createdb, limit)
+	}
+	if c, err := connectAs(t, base, testProvisioner, "second-pw", "postgres"); err != nil {
+		t.Errorf("the new password does not log in: %v", err)
+	} else {
+		c.Close(ctx)
+	}
+}
+
+// 🔴 A DROP BLOCKED BY A SUPERUSER'S SESSION IS A WAIT, NOT A REFUSAL. The database
+// operator's metrics exporter connects to every database as a superuser; a non-superuser
+// FORCE cannot end that session. It must come back retryable — and the database must
+// still be there to drop once the session goes.
+func TestADropBlockedByASuperuserSessionIsRetryable(t *testing.T) {
+	ctx := context.Background()
+	p, base := withProvisioner(t, "theta")
+	q := pgxSession{p}
+	if err := ensureInstanceDatabase(ctx, q, "theta", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	su := *base
+	su.Path = "/theta"
+	held, err := pgx.Connect(ctx, su.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dropInstanceDatabase(ctx, q, "theta")
+	if !errors.Is(err, errStoreNotReady) {
+		held.Close(ctx)
+		t.Fatalf("a drop blocked by a superuser session must be retryable; got %v", err)
+	}
+	held.Close(ctx)
+	// The session is gone; the retry succeeds.
+	var dropErr error
+	for i := 0; i < 20; i++ {
+		if dropErr = dropInstanceDatabase(ctx, q, "theta"); dropErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if dropErr != nil {
+		t.Errorf("the drop did not succeed once the session ended: %v", dropErr)
 	}
 }
