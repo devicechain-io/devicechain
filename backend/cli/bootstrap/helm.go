@@ -219,7 +219,7 @@ func helmInstall(ctx context.Context, st *State) error {
 		releaseName, releaseNamespace); err != nil {
 		return err
 	}
-	if err := writeOwnedSecret(ctx, typed, st.Instance, st.InstanceUID,
+	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
 	}

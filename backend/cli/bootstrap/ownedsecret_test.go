@@ -18,6 +18,8 @@ import (
 const (
 	testInstance = "acme"
 	testUID      = "11111111-1111-1111-1111-111111111111"
+	// A kube-system namespace UID, measured on a real kind cluster.
+	testClusterUID = "74eaf68d-6c49-4019-8590-50b237333fb8"
 )
 
 func fixedClock(s string) func() time.Time {
@@ -49,7 +51,7 @@ func getSecret(t *testing.T, c *fake.Clientset, ns, name string) *corev1.Secret 
 
 func TestAMintedSecretCarriesItsOwnershipAndItsStamp(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	err := writeOwnedSecret(context.Background(), c, testInstance, testUID, aSpec(),
+	err := writeOwnedSecret(context.Background(), c, instanceOwner(testInstance, testUID), aSpec(),
 		fixedClock("2026-09-11T10:00:00Z"))
 	if err != nil {
 		t.Fatalf("minting: %v", err)
@@ -130,7 +132,7 @@ func TestAForeignSecretIsRefusedRatherThanOverwritten(t *testing.T) {
 				StringData: map[string]string{"password": "the-live-one"},
 			})
 
-			err := writeOwnedSecret(context.Background(), c, testInstance, testUID, aSpec(),
+			err := writeOwnedSecret(context.Background(), c, instanceOwner(testInstance, testUID), aSpec(),
 				fixedClock("2026-09-11T10:00:00Z"))
 			if err == nil {
 				t.Fatal("overwrote a Secret dcctl did not write")
@@ -159,13 +161,13 @@ func TestAForeignSecretIsRefusedRatherThanOverwritten(t *testing.T) {
 func TestAReRunKeepsTheOriginalStampAndReplacesTheValue(t *testing.T) {
 	c := fake.NewSimpleClientset()
 	ctx := context.Background()
-	if err := writeOwnedSecret(ctx, c, testInstance, testUID, aSpec(), fixedClock("2026-09-11T10:00:00Z")); err != nil {
+	if err := writeOwnedSecret(ctx, c, instanceOwner(testInstance, testUID), aSpec(), fixedClock("2026-09-11T10:00:00Z")); err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
 
 	second := aSpec()
 	second.Data = map[string]string{"username": "devicechain", "password": "rotated"}
-	if err := writeOwnedSecret(ctx, c, testInstance, testUID, second, fixedClock("2027-01-01T00:00:00Z")); err != nil {
+	if err := writeOwnedSecret(ctx, c, instanceOwner(testInstance, testUID), second, fixedClock("2027-01-01T00:00:00Z")); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 
@@ -185,10 +187,10 @@ func TestAKeyRemovedFromTheSpecLeavesTheSecret(t *testing.T) {
 	ctx := context.Background()
 	first := aSpec()
 	first.Data = map[string]string{"username": "devicechain", "password": "s3cret", "legacy": "old"}
-	if err := writeOwnedSecret(ctx, c, testInstance, testUID, first, fixedClock("2026-09-11T10:00:00Z")); err != nil {
+	if err := writeOwnedSecret(ctx, c, instanceOwner(testInstance, testUID), first, fixedClock("2026-09-11T10:00:00Z")); err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
-	if err := writeOwnedSecret(ctx, c, testInstance, testUID, aSpec(), fixedClock("2026-09-11T10:00:00Z")); err != nil {
+	if err := writeOwnedSecret(ctx, c, instanceOwner(testInstance, testUID), aSpec(), fixedClock("2026-09-11T10:00:00Z")); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
 	if _, still := getSecret(t, c, "dc-system", "dc-rdb-app-credentials").StringData["legacy"]; still {
@@ -200,7 +202,7 @@ func TestAKeyRemovedFromTheSpecLeavesTheSecret(t *testing.T) {
 // comparison is precisely what lets a rebuild adopt a dead generation's credentials.
 func TestMintingRefusesWithoutADeclarationUID(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	err := writeOwnedSecret(context.Background(), c, testInstance, "", aSpec(),
+	err := writeOwnedSecret(context.Background(), c, instanceOwner(testInstance, ""), aSpec(),
 		fixedClock("2026-09-11T10:00:00Z"))
 	if err == nil {
 		t.Fatal("minted without being able to tell one instance generation from another")

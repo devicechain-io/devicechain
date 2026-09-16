@@ -425,7 +425,7 @@ func TestAnExistingNamespaceIsNotRestamped(t *testing.T) {
 func TestTheWrittenSecretIsTheOneTheReadBackLooksFor(t *testing.T) {
 	c := fake.NewSimpleClientset()
 	doc := []byte(`{"infrastructure":{}}`)
-	err := writeOwnedSecret(context.Background(), c, "dctest", testUID,
+	err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", testUID),
 		instanceConfigSecret("dctest", doc), fixedClock("2026-09-11T10:00:00Z"))
 	if err != nil {
 		t.Fatalf("writing the instance configuration: %v", err)
@@ -447,7 +447,7 @@ func TestTheWrittenSecretIsTheOneTheReadBackLooksFor(t *testing.T) {
 // against no owner is how a rebuild inherits a destroyed instance's credentials.
 func TestWritingTheDocumentRefusesWithoutADeclarationUID(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	err := writeOwnedSecret(context.Background(), c, "dctest", "",
+	err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", ""),
 		instanceConfigSecret("dctest", []byte(`{}`)), time.Now)
 	if err == nil {
 		t.Fatal("the instance configuration was written with no owning declaration")
@@ -500,7 +500,7 @@ func helmWrittenConfigSecret(release, releaseNamespace string) *corev1.Secret {
 // the deletion it exists to prevent.
 func TestTheWrittenDocumentIsKeptWhenItLeavesTheChartsManifest(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	err := writeOwnedSecret(context.Background(), c, "dctest", testUID,
+	err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", testUID),
 		instanceConfigSecret("dctest", []byte(`{}`)), fixedClock("2026-09-11T10:00:00Z"))
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +527,7 @@ func TestAChartWrittenConfigIsTakenOverRatherThanRefused(t *testing.T) {
 	if err := adoptChartWrittenInstanceConfig(context.Background(), c, "dctest", testUID, "dc", "default"); err != nil {
 		t.Fatalf("taking over the chart's Secret: %v", err)
 	}
-	if err := writeOwnedSecret(context.Background(), c, "dctest", testUID,
+	if err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", testUID),
 		instanceConfigSecret("dctest", []byte(`{"infrastructure":{}}`)), fixedClock("2026-09-11T10:00:00Z")); err != nil {
 		t.Fatalf("writing after the takeover: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestOnlyTheReleasesOwnConfigSecretIsTakenOver(t *testing.T) {
 			if err := adoptChartWrittenInstanceConfig(context.Background(), c, "dctest", testUID, "dc", "default"); err != nil {
 				t.Fatalf("the takeover reported an error rather than declining: %v", err)
 			}
-			err := writeOwnedSecret(context.Background(), c, "dctest", testUID,
+			err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", testUID),
 				instanceConfigSecret("dctest", []byte(`{}`)), fixedClock("2026-09-11T10:00:00Z"))
 			var foreign *ErrForeignSecret
 			if !errors.As(err, &foreign) {
@@ -603,7 +603,7 @@ func TestTheTakeoverDoesNotRescueAPreviousGenerationsSecret(t *testing.T) {
 	if err := adoptChartWrittenInstanceConfig(context.Background(), c, "dctest", testUID, "dc", "default"); err != nil {
 		t.Fatalf("the takeover errored on an already-owned Secret: %v", err)
 	}
-	err := writeOwnedSecret(context.Background(), c, "dctest", testUID,
+	err := writeOwnedSecret(context.Background(), c, instanceOwner("dctest", testUID),
 		instanceConfigSecret("dctest", []byte(`{}`)), fixedClock("2026-09-11T10:00:00Z"))
 	if err == nil {
 		t.Fatal("a Secret minted for a previous instance of this name was written over: the " +

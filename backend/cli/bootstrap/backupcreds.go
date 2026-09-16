@@ -150,5 +150,8 @@ func backupCredentialsSecret(d *BackupDestination) ownedSecret {
 			keyBackupAccessKeyID:     d.AccessKeyID,
 			keyBackupSecretAccessKey: d.SecretAccessKey,
 		},
+		// The cluster's: both stores archive to this destination, and the relational
+		// store belongs to the cluster.
+		Scope: ownerCluster,
 	}
 }

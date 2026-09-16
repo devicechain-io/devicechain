@@ -1,0 +1,346 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package bootstrap
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"strings"
+	"testing"
+
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-microservice/config"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+// A Secret belongs to one instance, or to the cluster every instance on it shares. The
+// shared credentials the cluster prerequisites are built from have to be the cluster's
+// before `dcctl install` can write them — install has no instance — and every reader
+// that assumed an instance owner has to be able to tell the two apart.
+
+// 🔴🔴 WHICH SECRETS ARE THE CLUSTER'S, BY LITERAL NAME. A fixture built from the
+// constants would agree with itself through any rename; these are the contract.
+func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		st           *State
+		wantCluster  []string
+		wantInstance []string
+	}{
+		{
+			"in-cluster backups and monitoring",
+			aWritableState(),
+			[]string{
+				"dc-system/dc-object-store-credentials",
+				"dc-system/dc-rdb-app-credentials",
+				"monitoring/dc-grafana-admin",
+			},
+			[]string{"dc-system/dc-tsdb-app-credentials"},
+		},
+		{
+			"backups to an object store the operator owns",
+			func() *State {
+				s := aWritableState()
+				s.BackupDestination = &BackupDestination{
+					EndpointURL: "https://example.invalid", BucketRdb: "a", BucketTsdb: "b",
+					AccessKeyID: "k", SecretAccessKey: "s",
+				}
+				return s
+			}(),
+			[]string{
+				"dc-system/dc-backup-credentials",
+				"dc-system/dc-rdb-app-credentials",
+				"monitoring/dc-grafana-admin",
+			},
+			[]string{"dc-system/dc-tsdb-app-credentials"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var cluster, instance []string
+			for _, s := range planOwnedSecrets(tc.st, tc.st.Credentials) {
+				at := s.Namespace + "/" + s.Name
+				switch s.Scope {
+				case ownerCluster:
+					cluster = append(cluster, at)
+				case "", ownerInstance:
+					instance = append(instance, at)
+				default:
+					t.Errorf("%s has scope %q, which is neither", at, s.Scope)
+				}
+			}
+			sort.Strings(cluster)
+			sort.Strings(instance)
+			if got, want := strings.Join(cluster, ","), strings.Join(tc.wantCluster, ","); got != want {
+				t.Errorf("cluster-owned = %s\n                want %s", got, want)
+			}
+			if got, want := strings.Join(instance, ","), strings.Join(tc.wantInstance, ","); got != want {
+				t.Errorf("instance-owned = %s\n                 want %s", got, want)
+			}
+		})
+	}
+}
+
+// The broker's TLS and the instance config document are the instance's, and are
+// written through paths that do not go through planOwnedSecrets — so they are checked
+// where they land.
+func TestTheBrokerMaterialIsWrittenAsTheInstances(t *testing.T) {
+	st := aWritableState()
+	st.NATSTLS = &natsTLSMaterial{CACertPEM: "ca", CAKeyPEM: "cakey", LeafCertPEM: "leaf", LeafKeyPEM: "leafkey"}
+	c := fake.NewSimpleClientset()
+	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range []ownedSecret{natsTLSSecret(natsReleaseName, st.NATSTLS), natsAuthoritySecret(natsReleaseName, st.NATSTLS)} {
+		s, err := c.CoreV1().Secrets(spec.Namespace).Get(context.Background(), spec.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := readOwnership(s).owner; got != instanceOwner(testInstance, testUID) {
+			t.Errorf("%s was written as %s's; the broker belongs to the instance", spec.Name, got)
+		}
+	}
+}
+
+// 🔴 EXACTLY ONE OWNER'S FIELDS. A Secret carrying an instance name AND a cluster UID
+// is read correctly by readOwnership and wrongly by anything that looks at one
+// annotation alone.
+func TestAStampNamesExactlyOneOwner(t *testing.T) {
+	s := &corev1.Secret{}
+	setAnnotations(s, instanceOwner("prod", testUID), "2026-09-16T00:00:00Z")
+	setAnnotations(s, clusterOwner(testClusterUID), "")
+	a := s.GetAnnotations()
+	if a["devicechain.io/owner-kind"] != "cluster" || a["devicechain.io/cluster-uid"] != testClusterUID {
+		t.Errorf("the cluster stamp was not written by its literal names: %v", a)
+	}
+	for _, gone := range []string{"devicechain.io/instance", "devicechain.io/instance-uid"} {
+		if _, ok := a[gone]; ok {
+			t.Errorf("%s survived restamping the Secret as the cluster's", gone)
+		}
+	}
+
+	setAnnotations(s, instanceOwner("prod", testUID), "")
+	a = s.GetAnnotations()
+	if _, ok := a["devicechain.io/cluster-uid"]; ok {
+		t.Error("devicechain.io/cluster-uid survived restamping the Secret as an instance's")
+	}
+	if a["devicechain.io/owner-kind"] != "instance" || a["devicechain.io/instance"] != "prod" {
+		t.Errorf("the instance stamp was not written by its literal names: %v", a)
+	}
+}
+
+// A Secret written before the kind existed is an instance's, because its instance
+// annotations say so — and an unknown kind is kept as written, so it is never mistaken
+// for either.
+func TestAStampWithNoKindIsAnInstancesAndAnUnknownKindIsNeither(t *testing.T) {
+	legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		"devicechain.io/managed-by": "dcctl", "devicechain.io/instance": "prod", "devicechain.io/instance-uid": testUID,
+	}}}
+	if got := readOwnership(legacy).owner; got != instanceOwner("prod", testUID) {
+		t.Errorf("a pre-kind stamp read as %+v", got)
+	}
+	odd := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		"devicechain.io/managed-by": "dcctl", "devicechain.io/owner-kind": "tenant", "devicechain.io/cluster-uid": testClusterUID,
+	}}}
+	got := readOwnership(odd).owner
+	if got == clusterOwner(testClusterUID) || got.Kind == ownerInstance {
+		t.Errorf("an unrecognised kind was read as a known owner: %+v", got)
+	}
+}
+
+func clusterOwnedSecret(name, uid string, data map[string][]byte) *corev1.Secret {
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: infraNamespace}, Data: data}
+	setAnnotations(s, clusterOwner(uid), "2026-09-16T00:00:00Z")
+	return s
+}
+
+// 🔴 THE WRITER REFUSES EVERY CROSSING: an instance over the cluster's, the cluster
+// over an instance's, and one cluster over another's.
+func TestTheWriterRefusesAnyOtherOwnersSecret(t *testing.T) {
+	spec := ownedSecret{Name: "dc-rdb-app-credentials", Namespace: infraNamespace, Data: map[string]string{"password": "x"}}
+	for _, tc := range []struct {
+		name     string
+		existing *corev1.Secret
+		writer   secretOwner
+		// The refusal is read by an operator, and each crossing has a different
+		// remedy — so what it SAYS is asserted, not just that it refused. A generic
+		// "previous instance, run destroy" about another cluster's Secret sends them
+		// to destroy an instance that has nothing to do with it.
+		says string
+	}{
+		{"an instance over the cluster's", clusterOwnedSecret(spec.Name, testClusterUID, nil), instanceOwner("prod", testUID),
+			"does not change hands"},
+		{"another cluster's", clusterOwnedSecret(spec.Name, "446b60a1-5c0e-4a8e-9d8f-2b4a3e6f7c10", nil), clusterOwner(testClusterUID),
+			"different cluster"},
+		{"the cluster over an instance's", func() *corev1.Secret {
+			s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: infraNamespace}}
+			setAnnotations(s, instanceOwner("prod", testUID), "2026-09-16T00:00:00Z")
+			return s
+		}(), clusterOwner(testClusterUID), "does not change hands"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewSimpleClientset(tc.existing)
+			err := writeOwnedSecret(context.Background(), c, tc.writer, spec, fixedClock("2026-09-16T01:00:00Z"))
+			var foreign *ErrForeignSecret
+			if !errors.As(err, &foreign) {
+				t.Fatalf("the write was not refused as foreign: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not say %q: %v", tc.says, err)
+			}
+		})
+	}
+
+	// The counterweight: the cluster rewriting its own Secret succeeds.
+	c := fake.NewSimpleClientset(clusterOwnedSecret(spec.Name, testClusterUID, nil))
+	if err := writeOwnedSecret(context.Background(), c, clusterOwner(testClusterUID), spec, fixedClock("2026-09-16T01:00:00Z")); err != nil {
+		t.Errorf("the cluster could not rewrite its own Secret: %v", err)
+	}
+}
+
+func TestTheClusterCannotMintWithoutItsIdentity(t *testing.T) {
+	spec := ownedSecret{Name: "dc-rdb-app-credentials", Namespace: infraNamespace}
+	err := writeOwnedSecret(context.Background(), fake.NewSimpleClientset(), clusterOwner(""), spec, fixedClock("2026-09-16T01:00:00Z"))
+	if err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Errorf("a cluster-owned Secret was minted with no cluster identity: %v", err)
+	}
+}
+
+// Reuse follows the same owner, and an owner with no identity is an error rather than
+// a verdict of "foreign" about a Secret that may well be ours.
+func TestReuseRecognisesOnlyTheClustersOwnCredential(t *testing.T) {
+	ref := mintedCredentialRef{infraNamespace, "dc-rdb-app-credentials", "password"}
+	c := fake.NewSimpleClientset(clusterOwnedSecret(ref.Name, testClusterUID, map[string][]byte{"password": []byte("pw")}))
+
+	found, got, err := reuseMintedCredential(context.Background(), c, clusterOwner(testClusterUID), ref)
+	if err != nil || found != reuseRecovered || got != "pw" {
+		t.Errorf("the cluster's own credential was not recovered: %v %v %q", found, err, got)
+	}
+	if found, _, _ := reuseMintedCredential(context.Background(), c, clusterOwner("446b60a1-5c0e-4a8e-9d8f-2b4a3e6f7c10"), ref); found != reuseForeign {
+		t.Errorf("another cluster's credential read as %v, want foreign", found)
+	}
+	if found, _, _ := reuseMintedCredential(context.Background(), c, instanceOwner("prod", testUID), ref); found != reuseForeign {
+		t.Errorf("the cluster's credential read as an instance's own (%v)", found)
+	}
+	if _, _, err := reuseMintedCredential(context.Background(), c, clusterOwner(""), ref); err == nil {
+		t.Error("an identity-less read answered instead of refusing")
+	}
+}
+
+// 🔴🔴 THE ONE THAT WOULD BLOCK EVERY BOOTSTRAP. The second-instance guard reads every
+// dcctl-stamped Secret in the infrastructure namespace; a cluster-owned one must be
+// neither an instance nor an unattributable stamp.
+func TestAClusterOwnedSecretIsNotAnInstance(t *testing.T) {
+	instanceSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dc-tsdb-app-credentials", Namespace: infraNamespace}}
+	setAnnotations(instanceSecret, instanceOwner("prod", testUID), "2026-09-16T00:00:00Z")
+
+	c := fake.NewSimpleClientset(clusterOwnedSecret("dc-rdb-app-credentials", testClusterUID, nil), instanceSecret)
+	ids, err := ownedSecretInstances(context.Background(), c)
+	if err != nil {
+		t.Fatalf("a cluster-owned Secret made the guard refuse: %v", err)
+	}
+	if strings.Join(ids, ",") != "prod" {
+		t.Errorf("the guard reports instances %v, want exactly [prod]", ids)
+	}
+
+	// ...but a cluster stamp that names no cluster is as unattributable as an instance
+	// stamp that names no instance.
+	c = fake.NewSimpleClientset(clusterOwnedSecret("dc-rdb-app-credentials", "", nil))
+	if _, err := ownedSecretInstances(context.Background(), c); err == nil {
+		t.Error("a cluster stamp with no UID was skipped rather than refused")
+	}
+}
+
+// A cluster-owned Secret is not evidence that any one instance is still here.
+func TestAClusterOwnedSecretIsNotAnInstancesFootprint(t *testing.T) {
+	dyn := declarationClient()
+	typed := fake.NewSimpleClientset(clusterOwnedSecret("dc-rdb-app-credentials", testClusterUID, nil))
+	found, err := instanceFootprint(context.Background(), dyn, typed, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("the cluster's credential was counted as instance prod's footprint: %v", found)
+	}
+}
+
+// 🔴 THE UPGRADE WIRING, END TO END. readInstanceCredentials is exercised directly
+// elsewhere, which cannot see whether hydrateUpgradeState ever gives it the cluster's
+// identity — and without it every cluster-owned credential is unreadable, so every
+// upgrade refuses.
+func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
+	provider, err := Get("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDecl, prevDeployed := readInstanceDeclaration, lookupDeployedInstance
+	t.Cleanup(func() { readInstanceDeclaration, lookupDeployedInstance = prevDecl, prevDeployed })
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		return atVersion(t, "ghcr.io/devicechain-io", "v0.17.0"), nil
+	}
+	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
+		return &config.InstanceConfiguration{}, nil
+	}
+
+	// What a bootstrap wrote, into a cluster with a real identity.
+	written := aWritableState()
+	written.Instance = "prod"
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "kube-system", UID: types.UID(testClusterUID)}})
+	if err := writeMintedSecrets(context.Background(), c, written); err != nil {
+		t.Fatal(err)
+	}
+	settleStringDataLikeAnAPIServer(t, c)
+
+	st, err := hydrateUpgradeState(context.Background(), c, provider,
+		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
+		UpgradeOptions{Options: Options{Instance: "prod"}})
+	if err != nil {
+		t.Fatalf("the upgrade could not read back what bootstrap wrote: %v", err)
+	}
+	if st.ClusterUID != testClusterUID {
+		t.Errorf("the upgrade ran with cluster identity %q, want the cluster's", st.ClusterUID)
+	}
+	if st.Credentials.RDBPassword != "rdb-pw" || st.Credentials.ObjectStoreSecret != "os-secret" {
+		t.Errorf("the cluster-owned credentials were not recovered: %+v", st.Credentials)
+	}
+}
+
+// 🔴🔴 A RE-RUN REUSES THE CLUSTER'S CREDENTIALS, and the mutation round is why this
+// exists: reading the shared database password or the object-store identity under the
+// wrong owner SURVIVED every other test. The wrong owner reads the real Secret as
+// foreign, so the run keeps the fresh values it just minted — a password the live
+// database was never told about, which is the rotate-every-credential defect reported
+// as success.
+func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
+	st := aWritableState()
+	st.Credentials = nil
+	c := fake.NewSimpleClientset(
+		clusterOwnedSecret("dc-rdb-app-credentials", testClusterUID, map[string][]byte{
+			"username": []byte("devicechain"), "password": []byte("rdb-in-use")}),
+		clusterOwnedSecret("dc-object-store-credentials", testClusterUID, map[string][]byte{
+			"MINIO_ROOT_USER": []byte("os-user-in-use"), "MINIO_ROOT_PASSWORD": []byte("os-secret-in-use")}),
+		mintedSecret(infraNamespace, "dc-tsdb-app-credentials", testUID, map[string]string{
+			"username": "devicechain", "password": "tsdb-in-use"}),
+	)
+	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true}, Tsdb: clusterArchiveState{Exists: true}}
+
+	set, err := resolveCredentials(context.Background(), c, st, live)
+	if err != nil {
+		t.Fatalf("a re-run over the credentials it wrote was refused: %v", err)
+	}
+	for field, got := range map[string]string{
+		"RDBPassword":       set.RDBPassword,
+		"TSDBPassword":      set.TSDBPassword,
+		"ObjectStoreUser":   set.ObjectStoreUser,
+		"ObjectStoreSecret": set.ObjectStoreSecret,
+	} {
+		if !strings.HasSuffix(got, "-in-use") {
+			t.Errorf("%s was re-minted rather than reused; the live store still holds the old value", field)
+		}
+	}
+}

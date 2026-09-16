@@ -233,16 +233,24 @@ func ownedSecretInstances(ctx context.Context, typed kubernetes.Interface) ([]st
 		if !own.managed {
 			continue
 		}
-		if own.instance == "" {
+		// 🔴 A CLUSTER-OWNED SECRET IS NOT AN INSTANCE, and counting it as one — or
+		// refusing it as unattributed — is what would make the shared credentials the
+		// cluster prerequisites are built from block every bootstrap on the cluster. It
+		// is skipped only when it names the cluster it belongs to; a cluster stamp with
+		// no UID is as unattributable as an instance stamp with no name.
+		if own.owner.Kind == ownerCluster && own.owner.UID != "" {
+			continue
+		}
+		if own.owner.Kind != ownerInstance || own.owner.Name == "" {
 			return nil, fmt.Errorf("Secret %s/%s carries dcctl's %s=%s stamp and does not say "+
-				"which instance it was minted for, so this cluster cannot be told from an empty "+
-				"one. Refusing to bootstrap into it rather than guess — inspect it with "+
+				"which instance or cluster it was minted for, so this cluster cannot be told from an "+
+				"empty one. Refusing to bootstrap into it rather than guess — inspect it with "+
 				"`kubectl get secret %s -n %s -o yaml`",
 				infraNamespace, s.Name, annotationManagedBy, managedByDcctl, s.Name, infraNamespace)
 		}
-		if !seen[own.instance] {
-			seen[own.instance] = true
-			ids = append(ids, own.instance)
+		if !seen[own.owner.Name] {
+			seen[own.owner.Name] = true
+			ids = append(ids, own.owner.Name)
 		}
 	}
 	sort.Strings(ids)

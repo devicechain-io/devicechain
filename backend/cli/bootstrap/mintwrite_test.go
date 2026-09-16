@@ -16,6 +16,7 @@ func aWritableState() *State {
 	return &State{
 		Instance:    testInstance,
 		InstanceUID: testUID,
+		ClusterUID:  testClusterUID,
 		Values:      map[string]string{},
 		Credentials: &credentialSet{
 			RDBPassword:          "rdb-pw",
@@ -47,8 +48,8 @@ func TestEveryPlannedCredentialIsWrittenBeforeTheApply(t *testing.T) {
 			t.Errorf("%s/%s was planned but never written: %v", spec.Namespace, spec.Name, err)
 			continue
 		}
-		if readOwnership(s).instance != testInstance {
-			t.Errorf("%s/%s was written without this instance's ownership", spec.Namespace, spec.Name)
+		if got, want := readOwnership(s).owner, ownerFor(spec.Scope, st); got != want {
+			t.Errorf("%s/%s was written as %s's, want %s's", spec.Namespace, spec.Name, got, want)
 		}
 	}
 

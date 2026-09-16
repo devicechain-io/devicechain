@@ -100,6 +100,15 @@ func hydrateUpgradeState(
 	applyDeployedInfrastructure(st, deployed)
 
 	// 3. THE SECRETS.
+	//
+	// The shared credentials belong to the CLUSTER, so reading them back needs its
+	// identity. Read live rather than from the local instance record: this command is
+	// talking to the cluster anyway, and a record written on another machine — or
+	// never written, before dcctl kept one — is not a better witness than the cluster.
+	if st.ClusterUID, err = ClusterUID(ctx, typed); err != nil {
+		return nil, fmt.Errorf("identifying the cluster instance %q runs on, to read the "+
+			"credentials it shares: %w", opts.Instance, err)
+	}
 	if st.Credentials, err = readInstanceCredentials(ctx, typed, st); err != nil {
 		return nil, err
 	}

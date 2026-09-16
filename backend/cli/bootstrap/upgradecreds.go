@@ -25,6 +25,9 @@ type credentialPlacement struct {
 	// checks this against the struct, so it cannot quietly describe the wrong one.
 	Field string
 	Ref   mintedCredentialRef
+	// Scope is the owner the value was written under — the same as the Secret's in
+	// planOwnedSecrets, which the placement test holds this against.
+	Scope ownerKind
 	Into  func(*credentialSet) *string
 }
 
@@ -44,6 +47,7 @@ func credentialPlacements(st *State) []credentialPlacement {
 		{
 			Field: "RDBPassword",
 			Ref:   mintedCredentialRef{infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword},
+			Scope: ownerCluster,
 			Into:  func(s *credentialSet) *string { return &s.RDBPassword },
 		},
 		{
@@ -57,6 +61,7 @@ func credentialPlacements(st *State) []credentialPlacement {
 		out = append(out, credentialPlacement{
 			Field: "GrafanaAdminPassword",
 			Ref:   mintedCredentialRef{monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass},
+			Scope: ownerCluster,
 			Into:  func(s *credentialSet) *string { return &s.GrafanaAdminPassword },
 		})
 	}
@@ -67,11 +72,13 @@ func credentialPlacements(st *State) []credentialPlacement {
 			credentialPlacement{
 				Field: "ObjectStoreUser",
 				Ref:   mintedCredentialRef{infraNamespace, name, keyMinioUser},
+				Scope: ownerCluster,
 				Into:  func(s *credentialSet) *string { return &s.ObjectStoreUser },
 			},
 			credentialPlacement{
 				Field: "ObjectStoreSecret",
 				Ref:   mintedCredentialRef{infraNamespace, name, keyMinioPassword},
+				Scope: ownerCluster,
 				Into:  func(s *credentialSet) *string { return &s.ObjectStoreSecret },
 			},
 		)
@@ -105,7 +112,8 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 	var set credentialSet
 
 	for _, p := range credentialPlacements(st) {
-		found, value, err := reuseMintedCredential(ctx, typed, st.Instance, st.InstanceUID, p.Ref)
+		owner := ownerFor(p.Scope, st)
+		found, value, err := reuseMintedCredential(ctx, typed, owner, p.Ref)
 		if err != nil {
 			return nil, err
 		}
@@ -119,12 +127,12 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 			// right there, written by something else, is a different problem with a
 			// different answer than one that is gone.
 			return nil, fmt.Errorf(
-				"Secret %s/%s holds instance %q's %s, but it was not written by dcctl for this "+
-					"instance — so this upgrade cannot tell whether the value in it is the one "+
+				"Secret %s/%s holds instance %q's %s, but it was not written by dcctl for %s "+
+					"— so this upgrade cannot tell whether the value in it is the one "+
 					"the instance is running on. Refusing rather than guessing: an upgrade that "+
 					"read the wrong value here would hand every service a credential nothing "+
 					"has been told about",
-				p.Ref.Namespace, p.Ref.Name, st.Instance, p.Field)
+				p.Ref.Namespace, p.Ref.Name, st.Instance, p.Field, owner)
 
 		default: // reuseAbsent
 			return nil, fmt.Errorf(

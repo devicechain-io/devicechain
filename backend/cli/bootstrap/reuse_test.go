@@ -52,7 +52,7 @@ func TestALiveInstancesDatabasePasswordIsReadBackRatherThanReminted(t *testing.T
 		rdbClusterName+"-app-credentials", testUID,
 		map[string]string{secretKeyUsername: dbRoleUsername, secretKeyPassword: "the-one-in-force"}))
 
-	_, got, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, got, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err != nil {
 		t.Fatalf("reading back a credential this instance minted: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestALiveInstancesDatabasePasswordIsReadBackRatherThanReminted(t *testing.T
 // A first bootstrap has nothing to read back, and that IS an answer.
 func TestAFirstBootstrapHasNothingToReuse(t *testing.T) {
 	c := fake.NewSimpleClientset()
-	_, got, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, got, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err != nil {
 		t.Fatalf("an absent Secret was treated as a failure: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAnOursButEmptyCredentialIsRefusedRatherThanReadAsAbsent(t *testing.T) {
 		rdbClusterName+"-app-credentials", testUID,
 		map[string]string{secretKeyUsername: dbRoleUsername, secretKeyPassword: ""}))
 
-	_, _, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, _, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err == nil {
 		t.Fatal("an empty credential was read as an absent one, so the run would mint over it")
 	}
@@ -99,7 +99,7 @@ func TestAnUnreadableSecretStopsTheRunRatherThanMinting(t *testing.T) {
 		return true, nil, boom
 	})
 
-	_, _, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, _, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err == nil {
 		t.Fatal("an unreadable Secret was read as an absent one")
 	}
@@ -116,7 +116,7 @@ func TestAPreviousGenerationsCredentialIsNotInherited(t *testing.T) {
 		rdbClusterName+"-app-credentials", "99999999-9999-9999-9999-999999999999",
 		map[string]string{secretKeyPassword: "belongs-to-the-dead-one"}))
 
-	_, got, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, got, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err != nil {
 		t.Fatalf("unexpected failure: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAForeignCredentialIsNotReused(t *testing.T) {
 	delete(s.Annotations, annotationManagedBy)
 	c := fake.NewSimpleClientset(s)
 
-	_, got, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	_, got, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err != nil {
 		t.Fatalf("unexpected failure: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAPreCutoverInstancesForeignSecretIsNotReportedAsMissing(t *testing.T) {
 	tofuWritten.Labels = map[string]string{"app.kubernetes.io/managed-by": "opentofu"}
 	c := fake.NewSimpleClientset(tofuWritten)
 
-	found, _, err := reuseMintedCredential(context.Background(), c, testInstance, testUID, rdbRef())
+	found, _, err := reuseMintedCredential(context.Background(), c, instanceOwner(testInstance, testUID), rdbRef())
 	if err != nil {
 		t.Fatalf("reading a Secret OpenTofu wrote: %v", err)
 	}

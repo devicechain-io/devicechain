@@ -125,7 +125,7 @@ func TestADeclarationBeingDestroyedStillCounts(t *testing.T) {
 // stampedSecret builds a Secret as writeOwnedSecret would have left it.
 func stampedSecret(name, instance string) *corev1.Secret {
 	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: infraNamespace}}
-	setAnnotations(s, instance, "a-uid", "2026-01-01T00:00:00Z")
+	setAnnotations(s, instanceOwner(instance, "a-uid"), "2026-01-01T00:00:00Z")
 	return s
 }
 
