@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -65,7 +66,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err != nil {
 		return archive, err
 	}
-	// The extracted tree holds every root plus the shared modules, and a root reaches
+	// The extracted tree holds THIS root plus the shared modules, and a root reaches
 	// those as "../modules/<x>" — so tofu runs one level down, in the root's own
 	// directory, exactly as the instance apply does.
 	rootdir := filepath.Join(workdir, assets.ClusterRootDir)
@@ -77,7 +78,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 			err = herr
 		}
 	}()
-	if err := extractFS(assets.OpenTofu(), workdir); err != nil {
+	if err := extractRoot(assets.OpenTofu(), assets.ClusterRootDir, workdir); err != nil {
 		return archive, fmt.Errorf("extracting cluster prerequisite config: %w", err)
 	}
 
@@ -110,16 +111,13 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	for _, v := range vars {
 		opts = append(opts, tfexec.Var(v))
 	}
-	if err := tf.Apply(ctx, opts...); err != nil {
-		// 🔑 The CNPG admission race the instance apply retries around cannot happen
-		// here, and the reason is worth stating rather than leaving as an omission:
-		// that race is the API server failing to reach the CloudNativePG webhook
-		// while creating a database Cluster. This root INSTALLS the operator, so on
-		// a fresh cluster there is no webhook to be unreachable, and on a re-run the
-		// operator is already converged. The shared relational store is created in
-		// the same apply as the operator, which is the one ordering OpenTofu's graph
-		// still enforces for us.
-		return archive, fmt.Errorf("tofu apply (cluster prerequisites): %w", err)
+	// 🔴 THIS IS THE ROOT THE CNPG ADMISSION RACE LIVES IN. It installs the operator
+	// and creates the shared relational store in one graph, which is the race's exact
+	// precondition — see applyWithCNPGAdmissionRetry.
+	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
+		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
+	}); err != nil {
+		return archive, err
 	}
 
 	outputs, err := tf.Output(ctx)
@@ -130,7 +128,77 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err != nil {
 		return archive, err
 	}
+	recordClusterOutputs(st, outputs)
 	return archive, nil
+}
+
+// recordClusterOutputs stashes what the cluster root built for the steps after the
+// applies: the Helm values that gate monitoring and alerting, and the report.
+//
+// 🔴 THESE WERE READ FROM THE INSTANCE ROOT AFTER THE SPLIT, WHICH DECLARES NONE OF
+// THEM. Every read below is `if meta, ok := outputs[...]; ok`, so an output the root
+// does not export is indistinguishable from one that is null — and the split turned
+// four live reads into four permanent no-ops without a single failure. The CNPG
+// operator's PodMonitor and control-plane alerts stopped rendering on every fresh
+// install, the Grafana access line vanished from the report, and an off-site backup
+// was reported as in-cluster. Found in review, not by a test; which root each key is
+// read from is now held against each root's outputs.tf by
+// TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom.
+func recordClusterOutputs(st *State, outputs map[string]tfexec.OutputMeta) {
+	// Whether those backups survive losing the cluster, which is a different
+	// question from whether they exist and the one an operator is most likely to
+	// get wrong. Null when backups are off; "false" for the default in-cluster
+	// destination.
+	if meta, ok := outputs["database_backup_survives_cluster_loss"]; ok {
+		var offsite bool
+		if err := json.Unmarshal(meta.Value, &offsite); err == nil {
+			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(offsite)
+		}
+	}
+	// The namespace the CloudNativePG OPERATOR runs in — the database CONTROL
+	// PLANE, which is a different tier from the databases and a different
+	// namespace: dc-system holds the Clusters, cnpg-system holds the operator that
+	// drives them. It gates the operator's PodMonitor and the control-plane
+	// alerting rules together (ADR-020 A1.5).
+	//
+	// 🔑 CLEARED FIRST, like databaseBackups above and for the same reason. This
+	// map is persisted state, so a value written by an earlier apply outlives the
+	// condition that produced it: take CloudNativePG out of an instance that once
+	// had it and, without this line, the next install still renders a PodMonitor
+	// and three alerts against a namespace with no operator in it.
+	//
+	// The damage is SILENCE rather than noise, which is the worse of the two and
+	// the reason this is worth a line of code. CNPGControlPlaneUnavailable would
+	// select deployments in a namespace that has none — an empty vector, so no
+	// alert, forever — while the whole group would render and look present.
+	// `kubectl get prometheusrule` shows three healthy rules and one of them can
+	// no longer fire. Clearing the value instead removes the group outright, which
+	// is a visible absence.
+	//
+	// The output is null when enable_cnpg is false, and json.Unmarshal of a null
+	// into a string is a silent no-op rather than an error — so "" is reached by
+	// leaving it cleared, not by trusting the decode to report anything.
+	st.Values[cnpgNamespaceKey] = ""
+	if meta, ok := outputs["cnpg_namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values[cnpgNamespaceKey] = ns
+		}
+	}
+	// Grafana access (when monitoring was installed): stash the namespace/service so
+	// the report step can print a port-forward hint. Null when --no-monitoring.
+	if meta, ok := outputs["grafana_service"]; ok {
+		var svc string
+		if err := json.Unmarshal(meta.Value, &svc); err == nil && svc != "" {
+			st.Values["grafanaService"] = svc
+		}
+	}
+	if meta, ok := outputs["grafana_namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values["grafanaNamespace"] = ns
+		}
+	}
 }
 
 // archiveFromOutputs decodes the archive contract out of the cluster root's outputs.

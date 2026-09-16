@@ -127,7 +127,7 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 			return true
 		}
 		switch id.Name {
-		case "ensureInfraNamespace", "writeMintedSecrets", "applyClusterPrereqs", "applyInstanceInfra", "splitVars":
+		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "applyClusterPrereqs", "applyInstanceInfra", "splitVars":
 			// First occurrence wins, so a later reference cannot reorder the record.
 			if _, seen := positions[id.Name]; !seen {
 				positions[id.Name] = call.Pos()
@@ -138,6 +138,7 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 
 	for _, want := range []struct{ name, why string }{
 		{"splitVars", "every -var would go to both roots, and each would refuse the other's"},
+		{"openInstanceRoot", "nothing would run the fences that refuse an instance this build would damage"},
 		{"ensureInfraNamespace", "the credentials below cannot be written into a namespace that is not there"},
 		{"writeMintedSecrets", "CloudNativePG would mint its own password and no service would hold it"},
 		{"applyClusterPrereqs", "the cluster would have no operator, no ingress and no shared database"},
@@ -149,6 +150,15 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 	}
 
 	for _, pair := range []struct{ first, then, why string }{
+		// 🔴 The fences refuse before ANYTHING is written. An instance built before the
+		// split holds the operator, ingress and shared database as releases its own
+		// state owns; with the cluster root applied first, the run dies on a Helm
+		// "name still in use" error and the fence's explanation is never printed.
+		{"openInstanceRoot", "ensureInfraNamespace",
+			"the fences must refuse before the first write to the cluster"},
+		{"openInstanceRoot", "applyClusterPrereqs",
+			"a pre-split instance fails the cluster apply on releases its own state owns, " +
+				"so the fence that explains why would never be reached"},
 		{"ensureInfraNamespace", "writeMintedSecrets",
 			"a Secret cannot be written into a namespace that does not exist yet"},
 		{"writeMintedSecrets", "applyClusterPrereqs",

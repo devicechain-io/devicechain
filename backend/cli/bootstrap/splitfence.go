@@ -172,7 +172,11 @@ func checkNoPreSplitInfrastructure(ctx context.Context, tf stateLister, instance
 			"rules.\n"+
 			"There is no in-place upgrade for this: destroy the instance and bootstrap it "+
 			"again (`dcctl destroy %s` then `dcctl bootstrap %s`). Back up anything you need "+
-			"first — a destroy takes the databases with it",
+			"first — a destroy takes the databases with it.\n"+
+			"If dcctl did NOT create this cluster (it was bootstrapped with --kube-context), "+
+			"destroy leaves the cluster running and does not remove these prerequisites: "+
+			"uninstall them from the cluster yourself before bootstrapping again, or the next "+
+			"bootstrap will fail on releases that already exist",
 		instance, len(found), strings.Join(found, "\n  "), instance, instance)
 }
 
