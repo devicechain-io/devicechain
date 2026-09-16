@@ -61,23 +61,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The directory the console assertions are evaluated in. They name variables that
-# belong to the INSTANCE root specifically, so this is that root and not a
-# discovered list: `tofu console` evaluates one configuration, and an assertion
-# about var.nats_mqtt_node_port has no meaning in a root that does not declare it.
-#
-# A second root is not therefore unguarded. root_tf_files below spans EVERY root,
-# so a validation block in one this script cannot evaluate is reported as never
-# exercised, by name — which is the correct outcome and is what makes adding a root
-# a decision rather than a silent narrowing.
-tofu_dir="$repo_root/deploy/opentofu/instance"
 
-# EVERY root's .tf files, not just tofu_dir's — and the difference is the whole
-# reason this is a list rather than a glob.
+# EVERY root's .tf files — and the difference is the whole reason this is a list
+# rather than a glob.
 #
 # The coverage check at the bottom is what makes this suite mean anything: it
 # refuses to pass while any variable carrying a validation block went unexercised.
-# It read "$tofu_dir"/*.tf, which was the entire repo's OpenTofu surface for as long
+# It read the one root's *.tf, which was the entire repo's OpenTofu surface for as long
 # as there was one root. Add a second, and the blocks in it are not reported as
 # uncovered — they are not SEEN, so the suite still prints "all N exercised" and the
 # number just happens to be smaller. That is the silently-smaller-coverage-set shape
@@ -85,9 +75,9 @@ tofu_dir="$repo_root/deploy/opentofu/instance"
 # indefensible to guard the parser against it and leave the file list open to it.
 #
 # Roots come from hack/tofu-roots.sh, which fails rather than returning an empty
-# list. The console assertions still run in tofu_dir — a variable in another root
-# cannot be evaluated from here, and the right outcome for one is precisely the
-# "never exercised" failure below, naming it.
+# list. The console assertions run once in EACH root (see run_assertions): an
+# assertion evaluates in the root that declares what it names and skips in the
+# others, and one that evaluates in NO root fails below, by name.
 mapfile -t tofu_roots < <(cd "$repo_root" && bash hack/tofu-roots.sh | sed "s#^#$repo_root/#")
 root_tf_files=()
 for _root in "${tofu_roots[@]}"; do
@@ -144,7 +134,6 @@ failures=0
 # difference between them is the set of assertions that evaluated NOWHERE.
 declare -A assertion_ran=()
 declare -A assertion_seen=()
-current_root=""
 
 # not_applicable — true when the last console call failed only because the thing it
 # names belongs to a different root.
@@ -994,7 +983,6 @@ run_assertions() {
 # 🔴 ONCE PER ROOT. An assertion evaluates in the root that declares what it names
 # and skips in the other; what it must never do is skip in BOTH.
 for _root in "${tofu_roots[@]}"; do
-  current_root="$_root"
   echo "==> ${_root#"$repo_root"/}"
   (cd "$_root" && true) || { echo "FAIL  cannot enter $_root" >&2; failures=$((failures + 1)); continue; }
   pushd "$_root" >/dev/null
