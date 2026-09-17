@@ -32,6 +32,12 @@ spec:
         - ports:
             - port: 4222
               protocol: TCP
+          to:
+            - podSelector:
+                matchLabels:
+                    app.kubernetes.io/component: nats
+                    app.kubernetes.io/name: nats
+        - ports:
             - port: 5432
               protocol: TCP
           to:
@@ -111,6 +117,12 @@ spec:
         - ports:
             - port: 4222
               protocol: TCP
+          to:
+            - podSelector:
+                matchLabels:
+                    app.kubernetes.io/component: nats
+                    app.kubernetes.io/name: nats
+        - ports:
             - port: 5432
               protocol: TCP
           to:

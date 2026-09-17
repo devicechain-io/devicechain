@@ -82,6 +82,11 @@ substitute.
 {{- $ns := .Values.instance.id }}
 {{- $cnpgns := .Values.metrics.cnpgNamespace }}
 {{- $dbns := .Values.metrics.databaseNamespace }}
+{{- /* The relational store is the cluster's, in the shared namespace; the event store is
+this instance's own, in the instance namespace. Every database series is selected across
+both — and only both, so another instance's event store never raises this instance's
+alerts. The object store stays in the shared namespace alone. */}}
+{{- $dbsel := printf "%s|%s" $dbns .Values.instance.id }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -106,7 +111,7 @@ spec:
         # one.
         - alert: CNPGClusterNotReady
           expr: |
-            kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"} == 0
+            kube_cnpg_cluster_condition{type="Ready", namespace=~"{{ $dbsel }}"} == 0
           # 15m. A Cluster legitimately passes through Ready=False during a
           # switchover, a rolling restart of its instances, and its own initial
           # bootstrap; on the rig a real recovery took 19 SECONDS end to end once
@@ -263,7 +268,7 @@ spec:
         # the wrong instance.
         - alert: CNPGClusterUnusable
           expr: |
-            min by (cluster, namespace) (cnpg_collector_up{namespace="{{ $dbns }}"}) == 0
+            min by (cluster, namespace) (cnpg_collector_up{namespace=~"{{ $dbsel }}"}) == 0
           # 5m, and the number is MEASURED rather than assumed.
           #
           # 🔴 CORRECTING A PLAUSIBLE-SOUNDING MECHANISM: it is NOT true that a
@@ -310,6 +315,8 @@ spec:
         - alert: CNPGClusterStateUnobserved
           expr: |
             absent(kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"})
+            or
+            absent(kube_cnpg_cluster_condition{type="Ready", namespace="{{ .Values.instance.id }}"})
           # 30m, the longest here on purpose. This is the rule most able to cry
           # wolf: it is legitimately true between the monitoring stack starting
           # and the first CloudNativePG Cluster existing, and across a
@@ -323,7 +330,7 @@ spec:
           annotations:
             summary: "No CloudNativePG Cluster conditions are being collected"
             description: >-
-              Nothing is reporting PostgreSQL Cluster conditions in namespace {{ $dbns }}, so the
+              Nothing is reporting PostgreSQL Cluster conditions in namespace {{ "{{ $labels.namespace }}" }}, so the
               health of database failover is UNKNOWN rather than good — and while this fires,
               CNPGClusterNotReady CANNOT fire, because it reads the series this rule says are
               missing. Check, in order: kube-state-metrics is running; it was started with

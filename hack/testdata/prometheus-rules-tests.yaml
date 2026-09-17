@@ -143,17 +143,17 @@ tests:
   - name: an idle but working cluster raises nothing
     interval: 1m
     input_series:
-      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dc-system", pod="dc-tsdb-1"}'
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="devicechain", pod="dc-tsdb-1"}'
         values: "7+0x180"
       # Four hours since the last segment, and climbing. Healthy: nothing has
       # been written.
-      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dc-system", pod="dc-tsdb-1"}'
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="devicechain", pod="dc-tsdb-1"}'
         values: "14400+60x180"
-      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dc-system", pod="dc-tsdb-1"}'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="devicechain", pod="dc-tsdb-1"}'
         values: "1780000000+0x180"
-      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dc-system", pod="dc-tsdb-1"}'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="devicechain", pod="dc-tsdb-1"}'
         values: "-1+0x180"
-      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dc-system", pod="dc-tsdb-1"}'
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="devicechain", pod="dc-tsdb-1"}'
         values: "0+0x180"
     alert_rule_test:
       - eval_time: 150m
