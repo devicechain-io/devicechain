@@ -599,8 +599,8 @@ func TestConstructorWiresTheDispatchNudge(t *testing.T) {
 	if got := testutil.CollectAndCount(proc.ClaimsLost); got != 2 {
 		t.Fatalf("claims_lost exports %d series, want 2 (sweep and nudge, pre-initialised). "+
 			"A CounterVec gathers nothing until a label is first used, and the chart's dashboard "+
-			"drives its instance picker off this counter — an instance that has never lost a "+
-			"claim would name no instance at all", got)
+			"graphs this counter — on an instance that has never lost a claim its panels would "+
+			"read \"No data\" instead of zero", got)
 	}
 
 	proc.nudger.Start()

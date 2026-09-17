@@ -211,17 +211,14 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 	cproc.nudger = newDispatchNudger(cproc, cproc.NudgeMetrics)
 
 	// 🔴 EXPORT BOTH PATHS AT ZERO, BEFORE EITHER HAS LOST A CLAIM. A CounterVec gathers
-	// NOTHING until a label combination is first used, and this counter is not only read
-	// by an operator: the chart's dashboard drives its instance picker off
-	// label_values(command_delivery_claims_lost_total, namespace), chosen precisely
-	// BECAUSE it was a plain counter that exports from registration while the batch
-	// counters are vectors that stay empty until the first fleet write.
-	//
-	// Turning it into a vector without this loop would hand it exactly the defect it was
-	// picked to avoid — on any instance that has never lost a claim, which after B2's
-	// stand-down is the ordinary state, the picker would name no instance at all and the
-	// board would be unusable. It also makes "one path losing while the other is silent"
-	// readable, since a silent path is then a zero series rather than no series.
+	// NOTHING until a label combination is first used. The chart's command-delivery
+	// dashboard graphs this counter overall and per path, and on any instance that has
+	// never lost a claim — which after B2's stand-down is the ordinary state — both
+	// panels would read "No data" rather than zero: indistinguishable from a scrape that
+	// is not reaching the service at all. (The board once also drove an instance picker
+	// off this series; each instance now ships its own board scoped by a constant, but
+	// the panels still need the zero.) It also makes "one path losing while the other is
+	// silent" readable, since a silent path is then a zero series rather than no series.
 	for _, path := range []dispatchPath{pathSweep, pathNudge} {
 		if cproc.ClaimsLost != nil {
 			cproc.ClaimsLost.WithLabelValues(string(path))
