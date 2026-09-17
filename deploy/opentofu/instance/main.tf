@@ -200,7 +200,8 @@ resource "terraform_data" "cutover_guard" {
 
           To DISCARD the old data (local/dev instances, the usual case):
 
-            dcctl destroy <instance>     # or delete the cluster entirely
+            dcctl destroy <instance>     # or delete the cluster entirely and
+                                         # dcctl install it again first
             dcctl bootstrap ...          # rebuild on the new storage tier
 
           To KEEP it, dump before cutting over:
@@ -322,7 +323,7 @@ resource "terraform_data" "backup_prerequisite_guard" {
         nothing acts on — no WAL shipped, no base backup taken, and no error,
         until a restore is attempted and finds an empty archive.
 
-        Apply the cluster root against this cluster first (dcctl bootstrap does
+        Apply the cluster root against this cluster first (dcctl install does
         this for you), or set enable_database_backups = false to create an
         instance that deliberately has no backups.
       EOT

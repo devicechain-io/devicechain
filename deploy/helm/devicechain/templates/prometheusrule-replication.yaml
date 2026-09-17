@@ -167,7 +167,7 @@ spec:
               cluster and surviving zero node losses. Both halves of the toggle have to move
               together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the
               replica factor is the chart's
-              (instance.config.infrastructure.nats.streamReplicas). `dcctl bootstrap --ha` sets
+              (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets
               both from one value. If the single-server topology is what you intended, scale the
               NATS cluster back down rather than leaving it running unused.
 {{- end }}

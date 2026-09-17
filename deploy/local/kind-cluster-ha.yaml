@@ -9,11 +9,11 @@
 # (deploy/assets.go) and is the topology every local bring-up and the L5 release
 # gate get; making it multi-node would triple the resource cost of every one of
 # them to serve a drill that runs occasionally. So the HA rig creates its cluster
-# itself, from here, and dcctl bootstraps onto the cluster it finds.
+# itself, from here, and dcctl installs and bootstraps onto the cluster it finds.
 #
 # THREE WORKERS, NOT TWO — and the reason is not obvious.
 #
-# `dcctl bootstrap --ha` places one NATS server per node under a HARD topology
+# An instance on a `dcctl install --ha` cluster places one NATS server per node under a HARD topology
 # spread constraint (whenUnsatisfiable: DoNotSchedule), so it needs three nodes
 # that can actually take a pod. kind removes the control-plane's NoSchedule taint
 # ONLY when the cluster has exactly one node (kubeadminit/init.go:

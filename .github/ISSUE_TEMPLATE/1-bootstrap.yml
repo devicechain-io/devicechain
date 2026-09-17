@@ -1,5 +1,5 @@
 name: Install or bootstrap failed
-description: dcctl bootstrap, the Helm install, or the operator did not come up.
+description: dcctl install, dcctl bootstrap, the Helm install, or the operator did not come up.
 title: '[bootstrap] '
 labels: ['bug', 'area/bootstrap']
 body:

@@ -17,8 +17,8 @@
 # the data inside them passes it with every area green. The load harness drives
 # ingest, detection and a command round trip very hard, but it seeds its own world
 # on a fresh install and touches almost none of the CRUD API. And a fresh
-# `dcctl destroy && bootstrap` is the INSTALL path, which structurally cannot see
-# an upgrade defect at all.
+# `dcctl destroy && bootstrap` is the FRESH-INSTALL path, which structurally cannot
+# see an upgrade defect at all.
 #
 # So the only way to see it is to write rows through the real API on the OLD
 # version, upgrade the way the documentation tells an operator to, and read them
@@ -324,7 +324,9 @@ kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
 # developer's own cluster.
 instance="${DC_INSTANCE:-upgrig}"
 
-# The ingress the drill reaches the platform on. `--compact` implies plain HTTP,
+# The ingress the drill reaches the platform on. `--compact` implies plain HTTP
+# (whether the baseline takes it on `install` or, before that command existed, on
+# `bootstrap` — see cmd_up),
 # and the kind config maps the ingress onto 18081 — high enough that a local
 # cluster's own 80/443 and the DR rig's 18080/18443 are both left alone.
 api_server="localhost:18081"
@@ -1002,9 +1004,26 @@ cmd_up() {
   # --no-escrow: a throwaway instance destroyed by `down`, and the flag's own
   # documentation names exactly this case. It also keeps the run non-interactive,
   # which a passphrase prompt would not.
-  "$baseline_dcctl" bootstrap local "$instance" --yes --compact \
-    --kube-context "$kube_context" --host localhost --no-escrow \
-    --version "$baseline_tag" "${area_args[@]}"
+  #
+  # 🔴 THE BASELINE'S OWN COMMAND SHAPE, DETECTED FROM ITS TREE. A release cut after
+  # the install/bootstrap split provisions the cluster with `dcctl install` and
+  # REFUSES a bootstrap without one — and no longer accepts --compact on bootstrap
+  # at all. A release cut before it has no install command and takes --compact on
+  # the bootstrap. Neither dcctl can be driven with the other's arguments, so the
+  # rig asks the extracted tree which one it is holding, the way it already does for
+  # the baseline's chart pins, rather than keying on a version number.
+  if [[ -f "$baseline_src/backend/cli/cmd/install.go" ]]; then
+    note "$baseline_tag has 'dcctl install': installing the cluster, then bootstrapping onto it"
+    "$baseline_dcctl" install local --yes --compact --kube-context "$kube_context"
+    "$baseline_dcctl" bootstrap local "$instance" --yes \
+      --kube-context "$kube_context" --host localhost --no-escrow \
+      --version "$baseline_tag" "${area_args[@]}"
+  else
+    note "$baseline_tag predates 'dcctl install': a single bootstrap provisions everything"
+    "$baseline_dcctl" bootstrap local "$instance" --yes --compact \
+      --kube-context "$kube_context" --host localhost --no-escrow \
+      --version "$baseline_tag" "${area_args[@]}"
+  fi
 
   wait_for_every_api
 

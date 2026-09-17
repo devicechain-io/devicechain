@@ -185,10 +185,10 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
-      # kind: install ONLY the binary, pinned. dcctl runs `kind create cluster`
-      # itself from its embedded topology (ingress-ready node + host ports 80/443/
-      # 1883), so this job must never `kind create` -- that would fight dcctl for
-      # the cluster name. Bump deliberately; a newer kind means a newer default
+      # kind: install ONLY the binary, pinned. `dcctl install` runs `kind create
+      # cluster` itself from its embedded topology (ingress-ready node + host ports
+      # 80/443/1883), so this job must never `kind create` -- that would fight dcctl
+      # for the cluster name. Bump deliberately; a newer kind means a newer default
       # node image (k8s version), which the chart must still deploy on.
       - name: Install kind
         run: |
@@ -226,10 +226,14 @@ jobs:
         run: go build -o "$RUNNER_TEMP/dcctl" .
 
       # The one number the spike could not measure: cold `--compact` bring-up
-      # wall-clock on a real 2-core hosted runner. dcctl's pipeline ends in a
-      # "Wait for readiness" step, so a zero exit here already means green; the
-      # independent oracle below re-checks that from kubectl rather than trusting it.
-      - name: Bootstrap --compact (timed)
+      # wall-clock on a real 2-core hosted runner. A bring-up is now TWO commands --
+      # `dcctl install` (the kind cluster and its cluster-level prerequisites, where
+      # --compact lives) then `dcctl bootstrap` (the instance, which follows the
+      # install) -- and both are inside the timed window, so the number still means
+      # "cold cluster to green instance". The bootstrap pipeline ends in a "Wait for
+      # readiness" step, so a zero exit here already means green; the independent
+      # oracle below re-checks that from kubectl rather than trusting it.
+      - name: Install + bootstrap --compact (timed)
         id: bootstrap
         env:
           # Both triggers (dispatch + release's workflow_call) always supply inputs;
@@ -272,9 +276,13 @@ jobs:
           start=$(date +%s)
           rc=0
           # shellcheck disable=SC2086
-          DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
-          "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
-            --compact --host localhost -y $preflight $imgargs || rc=$?
+          "$RUNNER_TEMP/dcctl" install local --compact -y $preflight || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            # shellcheck disable=SC2086
+            DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
+            "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
+              --host localhost -y $preflight $imgargs || rc=$?
+          fi
           end=$(date +%s)
 
           elapsed=$((end - start))

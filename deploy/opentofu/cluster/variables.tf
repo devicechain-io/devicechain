@@ -49,7 +49,7 @@ variable "ha" {
     config (instance.config.infrastructure.nats.streamReplicas), rendered by the
     DeviceChain Helm chart, which this root does not install. Both halves must be
     raised together or the instance runs a 3-node broker holding single-replica
-    streams — replicated servers, unreplicated data. `dcctl bootstrap --ha` sets
+    streams — replicated servers, unreplicated data. `dcctl install --ha` sets
     both from one value and preflights that they agree; a direct tofu user must set
     the Helm value themselves.
   EOT
@@ -531,7 +531,7 @@ variable "backup_object_store_storage" {
     🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
     StorageClass with allowVolumeExpansion — kind's default local-path has none,
     and every provisioner refuses a SHRINK. That last one bites a real path:
-    re-running bootstrap on an existing instance with `--compact` asks for a
+    re-running `dcctl install --compact` over an existing install asks for a
     smaller value than the default and the apply fails.
   EOT
   type        = string

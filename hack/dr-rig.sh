@@ -15,7 +15,7 @@
 #
 # The relational store holds tenants, devices, profiles, rules, dashboards and
 # every stored secret; TimescaleDB holds event history. They are separate CNPG
-# Clusters, separate buckets and separate --restore-* flags, deliberately: a
+# Clusters, separate buckets and separate restores, deliberately: a
 # core-only restore yields an operational instance with no history, and an
 # event-only restore yields history with no control plane.
 #
@@ -40,6 +40,20 @@
 # after 7 days, so an instance older than a week is mostly compressed chunks, and
 # a drill that only seeds fresh data restores the shape production mostly is not.
 #
+# 🔴🔴 THE RESTORE HALF OF THIS DRILL IS DISABLED, AND SAYS SO RATHER THAN SKIPPING.
+#
+# The relational store is now CLUSTER-level: `dcctl install` provisions it, and
+# `dcctl bootstrap` builds an instance on top of it. Recovering it from an archive
+# was a bootstrap flag (--restore-rdb-from) that did not survive that split, and
+# `dcctl install` has no equivalent yet. Without it neither verdict this drill
+# reaches can be reached honestly: the sealed secret lives in the relational store,
+# and even the event half's verify logs in as the seeded identity, which lives there
+# too. So `restore`, `control` and `all` REFUSE before doing any work (see
+# relational_restore_unavailable), and a pass cannot be printed by a run that never
+# restored the half the claim is about. `up`, `archive`, `disaster` and `down` still
+# run: they build the instance, fill both archives and exercise the completeness
+# gate, none of which depends on a restore.
+#
 # Until this passes, WITH its negative control, nothing in the docs should tell
 # an operator their instance is recoverable. Every restore procedure that skips
 # the root key looks exactly like one that includes it, right up until the day it
@@ -47,18 +61,20 @@
 # gone. That is the failure this drill exists to make visible in a rehearsal
 # instead of an incident.
 #
-#   hack/dr-rig.sh up         off-cluster object store + cluster + bootstrap WITH
-#                             escrow and WITH backups; take a base backup of EACH
+#   hack/dr-rig.sh up         off-cluster object store + cluster + install WITH
+#                             backups + bootstrap WITH escrow; take a base backup of EACH
 #                             store, THEN seed a real secret and real telemetry,
 #                             then force both into the WAL
 #   hack/dr-rig.sh archive    force a WAL switch and re-run the completeness gate
 #                             (resume a run whose `up` got as far as seeding)
-#   hack/dr-rig.sh disaster   destroy the cluster and the local instance state,
+#   hack/dr-rig.sh disaster   destroy the cluster and the local cluster and instance state,
 #                             keeping only what an off-site backup would have
-#   hack/dr-rig.sh restore    fresh cluster recovered from the escrow artifact +
+#   hack/dr-rig.sh restore    [DISABLED — see above]
+#                             fresh cluster recovered from the escrow artifact +
 #                             BOTH off-cluster archives; the secret MUST decrypt
 #                             and the telemetry MUST come back intact
-#   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half: the identical
+#   hack/dr-rig.sh control    [DISABLED — see above]
+#                             THE NEGATIVE CONTROLS, one per half: the identical
 #                             restore under a DIFFERENT root key, with the event
 #                             store NOT restored at all. The secret half now fails
 #                             TWICE, at two different depths — the area that stores
@@ -67,6 +83,7 @@
 #                             telemetry must be reported MISSING, each with its own
 #                             exact exit code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
+#                             [DISABLED — refuses before `up`, see above]
 #   hack/dr-rig.sh down       delete the cluster, the object store and the rig's
 #                             working directory
 #
@@ -152,6 +169,41 @@ remove_instance_state() {
   rm -rf "${HOME:?}/.devicechain/instances/$name" "${HOME:?}/.devicechain/$name"
 }
 
+# remove_cluster_state deletes dcctl's local state for the rig's kind cluster:
+# ~/.devicechain/clusters/<kube-system UID>, where `dcctl install` keeps the cluster
+# root's OpenTofu state and the cluster.json record.
+#
+# 🔴 IT IS KEYED ON THE CLUSTER'S UID, NOT ITS NAME, so it cannot be found by the name
+# the rig knows. A deleted-and-recreated kind cluster wears the same context name and
+# a new UID, which is exactly why dcctl keys it that way. So the directory is found two
+# ways, both of which are needed:
+#
+#   - the UID of the cluster about to be deleted, passed in by delete_cluster while
+#     the cluster still exists to be asked;
+#   - every record whose cluster.json names this rig's context. That covers a cluster
+#     deleted by an earlier run, or by hand, whose UID nobody can read any more.
+#
+# This rig owns its context name outright (devicechain-dr exists for nothing else), so
+# once that cluster is gone no record naming it can describe a live cluster. A real
+# total loss takes this state with the laptop; keeping it would leave `disaster`
+# simulating less than it says.
+remove_cluster_state() {
+  local uid="${1:-}" dir clusters="${HOME:?}/.devicechain/clusters"
+  if [[ -n "$uid" ]]; then
+    case "$uid" in
+      . | .. | */* | *\\*) fail "refusing to remove state for cluster UID '$uid'" ;;
+    esac
+    rm -rf "${clusters:?}/$uid"
+  fi
+  [[ -d "$clusters" ]] || return 0
+  for dir in "$clusters"/*/; do
+    [[ -f "$dir/cluster.json" ]] || continue
+    if [[ "$(jq -r '.kubeContext // empty' "$dir/cluster.json" 2>/dev/null || true)" == "$kube_context" ]]; then
+      rm -rf "${dir:?}"
+    fi
+  done
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
 need_all() {
   local t
@@ -159,7 +211,7 @@ need_all() {
   # Either name will do — dcctl looks for both. Checked here rather than left to
   # surface from inside a bootstrap, where it reads as an infrastructure failure.
   command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 ||
-    fail "neither tofu nor terraform is on PATH; dcctl bootstrap shells out to one of them"
+    fail "neither tofu nor terraform is on PATH; dcctl install and bootstrap shell out to one of them"
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -173,13 +225,14 @@ kube_context="kind-$cluster"
 
 # The ingress host:port the drill reaches the platform's API on, and the scheme.
 #
-# 🔴 HTTPS, and that is load-bearing rather than cosmetic. `--compact` sets
-# NoTLS by itself (resolveCompactMode), and NoTLS means no cert-manager, and the
-# database backup plugin needs cert-manager — so a compact instance deployed
-# without an explicit `--no-tls=false` reports `Backups: NONE` and archives
-# nothing. The old rig passed `--compact --no-tls` and every drill it ever ran had
-# backups switched off. Keeping TLS on is what makes this drill possible at all,
-# and the port and scheme here have to follow it.
+# 🔴 HTTPS, and that is load-bearing rather than cosmetic. `dcctl install
+# --compact` sets NoTLS by itself, and NoTLS means no cert-manager, and the
+# database backup plugin needs cert-manager — so a compact install without an
+# explicit `--no-tls=false` reports `Backups: NONE` and archives nothing, and every
+# instance bootstrapped onto it inherits that. The old rig passed
+# `--compact --no-tls` and every drill it ever ran had backups switched off.
+# Keeping TLS on is what makes this drill possible at all, and the port and scheme
+# here have to follow it.
 api_server="localhost:18443"
 api_scheme="https"
 # Local port the Postgres forward binds for the drill's own connection.
@@ -191,17 +244,18 @@ pg_local_port="${DC_DR_PG_PORT:-15432}"
 event_pg_port="${DC_DR_TSDB_PORT:-15433}"
 
 # The CNPG Cluster whose archive the drill restores from, and the archive's
-# serverName within the bucket. They are the same string on a first bootstrap: the
+# serverName within the bucket. They are the same string on a first install: the
 # barman plugin defaults serverName to the cluster name, so the objects land under
 # <bucket>/dc-rdb/. A RESTORED cluster deliberately archives to a different
-# serverName, which is why `--restore-rdb-from` names the SOURCE explicitly rather
-# than being inferred.
+# serverName, which is why a relational restore has to name the SOURCE explicitly
+# rather than infer it. (dcctl currently exposes no relational restore at all — see
+# relational_restore_unavailable.)
 rdb_cluster="dc-rdb"
 rdb_source="$rdb_cluster"
 
 # The event store is the SECOND half of the instance, and the second half of the
 # drill (ADR-028). It is a separate CNPG Cluster, in a separate bucket, restored
-# by a separate flag — because they really are two operations: a core-only restore
+# by a separate operation — because they really are two operations: a core-only restore
 # yields an operational instance with no history, and an event-only restore yields
 # history with no control plane. This rig now does both at once, which is the
 # harder case and the one an operator rebuilding after a total loss performs.
@@ -404,11 +458,17 @@ create_cluster() {
   kind create cluster --name "$cluster" --config "$kind_config" --wait 120s
 }
 
+# delete_cluster deletes the kind cluster AND dcctl's local state for it. The UID is
+# read first, because once the cluster is gone nothing can say what it was; see
+# remove_cluster_state.
 delete_cluster() {
+  local uid=""
   if kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+    uid="$(kubectl --context "$kube_context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
     say "deleting kind cluster $cluster"
     kind delete cluster --name "$cluster"
   fi
+  remove_cluster_state "$uid"
 }
 
 # ---------------------------------------------------------------------------
@@ -440,7 +500,7 @@ rand_token() {
 # root key as a flag for the same reason, and the rig should not be looser with
 # the store holding every backup.
 #
-# The destination reaches the bootstrap through dcctl's own
+# The destination reaches the install through dcctl's own
 # --backup-credentials-file, which is a SHIPPED interface: the same file an
 # operator writes to archive off-site. It used to be a TF_VAR_ env file, which
 # worked only because tofu inherits the environment, and which stopped working the
@@ -469,10 +529,13 @@ EOF
 EOF
 }
 
-# backup_args yields the --backup-credentials-file argument every bootstrap in the
-# rig must carry — the original, the restore and the control. Without it the
-# instance comes up archiving to an in-cluster store it just created, and the phase
-# after it tests something else entirely.
+# backup_args yields the --backup-credentials-file argument every `dcctl install`
+# in the rig must carry — the original, the restore and the control. It goes to the
+# INSTALL and not to the bootstrap: the archive destination is a property of the
+# cluster, both stores' backups are configured from it, and a bootstrap follows
+# whatever its install chose (bootstrap no longer accepts the flag at all). Without
+# it the cluster comes up archiving to an in-cluster store it just created, and the
+# phase after it tests something else entirely.
 #
 # 🔴 A LATER PHASE CANNOT INVENT THIS FILE. The bucket the restore reads was written
 # under exactly these credentials, so a regenerated one points at an archive it
@@ -697,8 +760,8 @@ pg_pod() {
 
 # wait_for_cluster_healthy asserts on the DATABASE, not on dcctl's exit code.
 #
-# 🔴 This exists because of a live finding: `dcctl bootstrap`'s infrastructure
-# apply does not wait for the database. In the drill's first successful restore
+# 🔴 This exists because of a live finding: dcctl's infrastructure apply does not
+# wait for the database. In the drill's first successful restore
 # that step returned and the bootstrap moved on to the chart install and the admin
 # seed while BOTH CNPG Clusters were still 14 seconds into `Setting up primary`. It converged that time — but it
 # means a WEDGED restore would not fail the bootstrap. It would surface later, or
@@ -721,8 +784,8 @@ wait_for_cluster_healthy() {
       fail "CNPG Cluster $name never became healthy; its phase is stuck at ${phase:-<none>}.
 
 'Setting up primary' here means the recovery could not complete — most often the
-archive is unreachable, or --restore-rdb-from names a serverName that does not
-exist in the bucket. Note that the bootstrap ITSELF may have reported success:
+archive is unreachable, or the restore names a serverName that does not exist in
+the bucket. Note that dcctl ITSELF may have reported success:
 it does not wait for the database, which is why this check is not optional."
     fi
     sleep 5
@@ -1024,6 +1087,26 @@ restore cannot possibly find it."
   note "archive $(store_bucket "$store")/$(store_source "$store"): $(printf '%s\n' "$bases" | wc -l | tr -d ' ') base backup(s), $(printf '%s\n' "$wals" | wc -l | tr -d ' ') WAL segment(s)"
 }
 
+# install_cluster runs `dcctl install` on the rig's kind cluster: the cluster-level
+# half of the platform, which since the install/bootstrap split includes the
+# relational store and the backup configuration of BOTH stores.
+#
+# --compact --no-tls=false, and the second flag is NOT redundant. See the api_server
+# comment: --compact turns TLS off by itself, and no TLS means no cert-manager, which
+# means the backup plugin is not installed and this whole drill silently becomes a
+# test of an instance with no archive at all. The bootstrap that follows inherits
+# both choices from this install rather than restating them.
+#
+# The cluster itself is created by create_cluster, from the rig's own kind config, so
+# this installs into it by context rather than letting dcctl create a stock one.
+install_cluster() {
+  say "installing the cluster prerequisites WITH backups"
+  note "archive:  $bucket_rdb + $bucket_tsdb (on $minio_container, outside the cluster)"
+  "$dcctl" install local --yes --compact --no-tls=false \
+    --kube-context "$kube_context" \
+    "$(backup_args)"
+}
+
 # ---------------------------------------------------------------------------
 # up: a real instance, a real secret, a real off-cluster archive
 # ---------------------------------------------------------------------------
@@ -1041,17 +1124,12 @@ drill against an artifact that belongs to a cluster that no longer exists."
 
   minio_up
   create_cluster
+  install_cluster
 
-  say "bootstrapping $instance WITH a root-key escrow and WITH backups"
+  say "bootstrapping $instance WITH a root-key escrow"
   note "artifact: $escrow_file"
-  note "archive:  $bucket_rdb (on $minio_container, outside the cluster)"
-  # --no-tls=false is NOT redundant. See the api_server comment: --compact turns
-  # TLS off by itself, and no TLS means no cert-manager, which means the backup
-  # plugin is not installed and this whole drill silently becomes a test of an
-  # instance with no archive at all.
-  "$dcctl" bootstrap local "$instance" --yes --compact --no-tls=false \
+  "$dcctl" bootstrap local "$instance" --yes \
     --kube-context "$kube_context" --host localhost \
-    "$(backup_args)" \
     --escrow-file "$escrow_file" "${image_args[@]}"
 
   [[ -s "$escrow_file" ]] || fail "bootstrap reported success but wrote no escrow artifact at $escrow_file"
@@ -1134,12 +1212,13 @@ so there is nothing holding the archive the restore would read."
     assert_archive_complete "$store"
   done
 
-  say "SIMULATING TOTAL LOSS of the cluster and the local instance state"
+  say "SIMULATING TOTAL LOSS of the cluster and the local cluster and instance state"
+  # delete_cluster also removes ~/.devicechain/clusters/<uid>, the install's state.
   delete_cluster
-  # ~/.devicechain/instances/<instance> holds the OpenTofu state and nothing recoverable.
-  # A real disaster takes it too, and keeping it would make the rebuild a test of
-  # `tofu apply` convergence rather than of a runbook an operator can follow on a
-  # new laptop.
+  # ~/.devicechain/instances/<instance> holds the instance's OpenTofu state and
+  # nothing recoverable. A real disaster takes it too, and keeping it — or the
+  # cluster state above — would make the rebuild a test of `tofu apply` convergence
+  # rather than of a runbook an operator can follow on a new laptop.
   remove_instance_state "$instance"
   note "kept (as an off-site copy would be): the $bucket_rdb archive, $escrow_file, $receipt_file"
 }
@@ -1151,10 +1230,11 @@ so there is nothing holding the archive the restore would read."
 # require_no_instance enforces the premise BOTH rebuild paths depend on: a cluster
 # that is not already running this instance.
 #
-# create_cluster reuses an existing cluster, which is right after `disaster` has
-# destroyed it and catastrophic when it has not. A surviving instance still holds
-# its ORIGINAL root key, and `dcctl bootstrap` deliberately preserves the key of an
-# instance that already exists (that is the guard in ExistingRootKey). So without
+# create_cluster reuses an existing cluster, and `dcctl install` is re-runnable over
+# one, which is right after `disaster` has destroyed it and catastrophic when it has
+# not. A surviving instance still holds its ORIGINAL root key, and `dcctl bootstrap`
+# deliberately preserves the key of an instance that already exists (that is the
+# guard in ExistingRootKey). So without
 # this check:
 #
 #   `up` then `restore` prints DRILL PASSED having decrypted a secret that was
@@ -1185,9 +1265,18 @@ Run 'hack/dr-rig.sh disaster' first, or 'hack/dr-rig.sh all' to do it in order."
 # There is no separate restore step, and that is the shape of the real procedure:
 # the database is recovered by CNPG as the cluster is created, from the archive,
 # before any service connects to it. `--restore-root-key` is what makes that
-# recovered ciphertext readable, and dcctl REFUSES `--restore-rdb-from` without it
-# — because a recovery that mints a fresh key reports success and leaves every
-# secret permanently unreadable.
+# recovered ciphertext readable — a recovery that mints a fresh key reports success
+# and leaves every secret permanently unreadable.
+#
+# 🔴🔴 UNREACHABLE TODAY, AND INCOMPLETE ON PURPOSE. Its only callers, cmd_restore and
+# cmd_control, refuse first (relational_restore_unavailable). The disaster deleted
+# the cluster, so the rebuild has to `dcctl install` again before it can bootstrap,
+# and that install is where the RELATIONAL restore now belongs — dcctl has no flag
+# for it. As written, the install below would stand up an EMPTY relational store,
+# and one archiving under the same serverName the original archive occupies. When a
+# relational restore ships, it goes on install_cluster here, together with a
+# distinct archive serverName for the recovered store; only then may the refusal be
+# lifted.
 rebuild() {
   # $3 is the EVENT store's source serverName, and an EMPTY value means "do not
   # restore the event store". That is not a convenience flag — it is how the
@@ -1200,13 +1289,14 @@ rebuild() {
   local artifact="$1" what="$2" tsdb_from="${3:-}" expected_failure="${4:-}"
   create_cluster
   require_no_instance
+  install_cluster
 
   say "recovering $instance from the archive, under $what"
   # No --escrow-file here, and dcctl refuses the combination outright: a restored
   # instance keeps the artifact it was restored from rather than writing a second
   # one. The first live run of this rig passed both and was stopped by that guard,
   # which is the guard working.
-  local restore_args=(--restore-root-key "$artifact" --restore-rdb-from "$rdb_source")
+  local restore_args=(--restore-root-key "$artifact")
   if [[ -n "$tsdb_from" ]]; then
     note "event store: recovering from $tsdb_from"
     restore_args+=(--restore-tsdb-from "$tsdb_from")
@@ -1215,9 +1305,8 @@ rebuild() {
   fi
 
   local boot_rc=0
-  "$dcctl" bootstrap local "$instance" --yes --compact --no-tls=false \
+  "$dcctl" bootstrap local "$instance" --yes \
     --kube-context "$kube_context" --host localhost \
-    "$(backup_args)" \
     "${restore_args[@]}" "${image_args[@]}" || boot_rc=$?
 
   # 🔴 A TOLERATED FAILURE IS ASSERTED IN BOTH DIRECTIONS, and the second direction
@@ -1428,7 +1517,40 @@ here, so this run is INCONCLUSIVE. Re-run."
   return "$rc"
 }
 
+# relational_restore_unavailable is the refusal every phase that needs a RELATIONAL
+# restore makes, before it does any work at all.
+#
+# 🔴 A REFUSAL, NOT A SKIP. Both verdicts of this drill read the relational store:
+# the secret half decrypts a row that lives there, and the event half's
+# verify-events logs in as the seeded identity, which lives there too. Rebuilding
+# without restoring it would not produce a weaker pass — it would produce exit 1s
+# and "not found"s that read as a restore that did not work, and a negative control
+# that "holds" for a reason unrelated to the key. A phase that cannot reach its
+# question must say so in words, not report on something else.
+#
+# It is called FIRST — before building tools or creating a cluster — so `all` stops
+# before an hour of bring-up rather than after it.
+#
+# relational_restore_flag names the dcctl install flag that recovers the relational
+# store, and it is EMPTY because no such flag exists. 🔴 Filling it in is not enough to
+# lift the refusal honestly: rebuild must also pass it (with a distinct archive
+# serverName for the recovered store) — read the note on rebuild first.
+relational_restore_flag=""
+relational_restore_unavailable() {
+  [[ -n "$relational_restore_flag" ]] && return 0
+  fail "relational store restore is not available through dcctl since the install/bootstrap split; this drill's relational half is disabled until it ships.
+
+The relational store is now provisioned by 'dcctl install', and '--restore-rdb-from'
+was a bootstrap flag that did not survive the split. Both halves of this phase read
+that store (the sealed secret lives there, and the event verify logs in as an
+identity that lives there), so running it now could only report a failure that is
+not a finding.
+
+Still runnable: up, archive, disaster, down."
+}
+
 cmd_restore() {
+  relational_restore_unavailable
   need_all
   build_tools
   load_exit_codes
@@ -1601,12 +1723,21 @@ $state"
 # and the rig says so in those words.
 #
 # The wrong key arrives as a DECOY escrow artifact minted by `drdrill decoy`. That
-# is not a shortcut around the CLI: dcctl refuses --restore-rdb-from without
-# --restore-root-key (the guard against silently losing every secret), so the old
-# control — "rebuild with --no-escrow" — can no longer be expressed at all. See
+# is not a shortcut around the CLI: dcctl used to refuse a relational restore
+# without --restore-root-key (the guard against silently losing every secret), so
+# the old control — "rebuild with --no-escrow" — could not be expressed at all. See
 # the long comment on runDecoy for what the substitution does and does not stand
 # in for.
+#
+# 🔴 DISABLED, like cmd_restore and for the same reason: the relational restore it
+# rebuilds from has no dcctl flag since the install/bootstrap split. Without it the
+# control instance holds no sealed row at all — the secret-storing area's startup
+# self-test has nothing to refuse on, and run_verify reports NOT-FOUND rather than
+# DECRYPT-FAILED — so neither leg could hold, and "INCONCLUSIVE" on every run teaches
+# nothing. That guard's replacement belongs on whatever install flag restores the
+# relational store; when it exists, re-derive this paragraph from it.
 cmd_control() {
+  relational_restore_unavailable
   need_all
   build_tools
   load_exit_codes
@@ -1797,6 +1928,8 @@ case "${1:-all}" in
   control) cmd_control ;;
   down) cmd_down ;;
   all)
+    # Refused HERE, before `up`, rather than by cmd_restore an hour later.
+    relational_restore_unavailable
     cmd_up
     cmd_disaster
     cmd_restore
