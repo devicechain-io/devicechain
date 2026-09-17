@@ -616,9 +616,9 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, kubeContex
 // Uninstall.Run (Helm v3.21.4) takes no context: it runs the pre-delete hooks, deletes
 // the release's resources, waits for them to go — WaitForDelete on a background context —
 // and runs the post-delete hooks, giving each of those three phases up to helmTimeout of
-// its own. Returning early on ctx.Done would not stop any of that;
-// it would only abandon a goroutine still deleting things while the destroy reported
-// itself interrupted and moved on to giving back its lock. And saying NOTHING is worse
+// its own. Returning early on ctx.Done would not stop any of that; it would only abandon
+// a goroutine still deleting things while the destroy reported itself interrupted and
+// moved on to giving back its lock. And saying NOTHING is worse
 // than either: an operator who pressed Ctrl-C and sees no reaction for minutes presses it
 // again, and the second interrupt exits dcctl without running the deferred release of the
 // cluster lock. So the interrupt is answered at once, with what is happening and what the
@@ -631,15 +631,14 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, kubeContex
 //
 // The notice starts on a fresh line: it lands while a doing() line is still open, and the
 // done() or failure that closes that line comes after it.
-func awaitUninstall[T any](ctx context.Context, out io.Writer, kubeContext string, run func() (T, error)) (T, error) {
+func awaitUninstall(ctx context.Context, out io.Writer, kubeContext string, run func() (*release.UninstallReleaseResponse, error)) (*release.UninstallReleaseResponse, error) {
 	// Interrupted before it began: nothing has been asked of Helm, so there is nothing to
 	// wait for and nothing to acknowledge.
 	if err := ctx.Err(); err != nil {
-		var zero T
-		return zero, err
+		return nil, err
 	}
 	type result struct {
-		v   T
+		v   *release.UninstallReleaseResponse
 		err error
 	}
 	finished := make(chan result, 1)

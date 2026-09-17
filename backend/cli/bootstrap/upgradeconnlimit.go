@@ -133,7 +133,7 @@ func growInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string
 	return have, alterInstanceLoginLimit(ctx, q, instance, admit.Limit)
 }
 
-// shrinkInstanceLogin lowers the login's limit to limit when it holds more. It returns
+// shrinkInstanceLogin lowers the login's limit to admit.Limit when it holds more. It returns
 // the limit the login held before.
 //
 // 🔴 IT COMPARES AGAINST WHAT THE LOGIN HOLDS, NOT AGAINST WHETHER THIS RUN GREW IT. A
@@ -146,15 +146,14 @@ func shrinkInstanceLogin(ctx context.Context, q instanceDBQuerier, instance stri
 	if err := validateAdmission(instance, admit); err != nil {
 		return 0, err
 	}
-	limit := admit.Limit
 	have, err := readInstanceLoginLimit(ctx, q, instance)
 	if err != nil {
 		return 0, err
 	}
-	if loginResizeFor(have, limit) != loginResizeShrink {
+	if loginResizeFor(have, admit.Limit) != loginResizeShrink {
 		return have, nil
 	}
-	return have, alterInstanceLoginLimit(ctx, q, instance, limit)
+	return have, alterInstanceLoginLimit(ctx, q, instance, admit.Limit)
 }
 
 // alterInstanceLoginLimit sets the login's limit and nothing else — no PASSWORD, which

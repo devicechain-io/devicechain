@@ -187,20 +187,15 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	// than cosmetic. If that escape hatch is ever removed, this budget must shrink
 	// with it.
 	//
-	// 🔴 WHAT WaitDelay DOES NOT BOUND: A PIPE SOMETHING ELSE STILL HOLDS. An earlier
-	// version of this comment said it also capped how long Wait blocks for tofu's
-	// stdout/stderr pipes to close after it exits. Not under terraform-exec (v0.25.3,
-	// cmd_linux.go). It takes StdoutPipe/StderrPipe, which are plain files, so os/exec
-	// starts no copy goroutines and has nothing for WaitDelay to close; and it reads both
-	// pipes to EOF BEFORE it calls cmd.Wait (its legacy pipe closing, the one thing that
-	// would close them early, is never enabled by dcctl). So a process that outlives
-	// tofu while holding the inherited pipe — a provider plugin, say — hangs dcctl
-	// INDEFINITELY, interrupt or not: the read never sees EOF and Wait is never reached.
-	//
-	// What WaitDelay bounds is exactly the SIGINT→SIGKILL interval. That escalation runs
-	// from the context watcher Start sets up, not from Wait, so it still fires while the
-	// read is blocked — but it kills tofu's own PID and nothing else, and the pipe stays
-	// open. The second interrupt, which exits dcctl, is the only escape from a held pipe.
+	// 🔴 WaitDelay DOES NOT BOUND A PIPE SOMETHING ELSE STILL HOLDS. terraform-exec
+	// (v0.25.3, cmd_linux.go) takes StdoutPipe/StderrPipe, which are plain files, so
+	// os/exec starts no copy goroutines for WaitDelay to close; and it reads both pipes to
+	// EOF BEFORE it calls cmd.Wait (its legacy pipe closing, which would close them early,
+	// is never enabled by dcctl). So a process that outlives tofu holding the inherited
+	// pipe — a provider plugin, say — hangs dcctl INDEFINITELY, interrupt or not. The
+	// SIGKILL still fires, because the context watcher Start sets up sends it, not Wait;
+	// but it kills tofu's own PID and the pipe stays open. Only the second interrupt, which
+	// exits dcctl, escapes a held pipe.
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {

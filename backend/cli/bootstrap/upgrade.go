@@ -130,10 +130,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 
-	// 🔴 THE CONNECTION BUDGET IS ASKED BEFORE THE FIRST WRITE. A release that needs more
-	// connections than the shared store has left is refused here, while refusing still
-	// means nothing has moved — past the declaration it would leave an instance recorded
-	// on a release it cannot run. See upgradeconnlimit.go.
+	// 🔴 THE CONNECTION BUDGET IS ASKED BEFORE THE FIRST WRITE, while a refusal still
+	// means nothing has moved. See upgradeconnlimit.go.
 	if err := precheckUpgradeLogin(ctx, st); err != nil {
 		return err
 	}

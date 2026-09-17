@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"helm.sh/helm/v3/pkg/release"
 )
 
 // signallingWriter records what is written and says when anything was.
@@ -48,20 +50,21 @@ func (w *signallingWriter) String() string {
 func TestAnInterruptedUninstallIsAcknowledgedOnceAndStillAwaited(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	out := newSignallingWriter()
-	release := make(chan struct{})
+	finish := make(chan struct{})
 	helmErr := errors.New("helm's own verdict")
+	helmRes := &release.UninstallReleaseResponse{Info: "helm's own response"}
 
 	type answer struct {
-		v   bool
+		v   *release.UninstallReleaseResponse
 		err error
 	}
 	got := make(chan answer, 1)
 	started := make(chan struct{})
 	go func() {
-		v, err := awaitUninstall(ctx, out, "kind-prod", func() (bool, error) {
+		v, err := awaitUninstall(ctx, out, "kind-prod", func() (*release.UninstallReleaseResponse, error) {
 			close(started)
-			<-release
-			return true, helmErr
+			<-finish
+			return helmRes, helmErr
 		})
 		got <- answer{v, err}
 	}()
@@ -82,15 +85,15 @@ func TestAnInterruptedUninstallIsAcknowledgedOnceAndStillAwaited(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(release)
+	close(finish)
 	var a answer
 	select {
 	case a = <-got:
 	case <-time.After(5 * time.Second):
 		t.Fatal("awaitUninstall did not return once the uninstall finished")
 	}
-	if !a.v || !errors.Is(a.err, helmErr) {
-		t.Fatalf("awaitUninstall returned (%v, %v), want the uninstall's own (true, %v)", a.v, a.err, helmErr)
+	if a.v != helmRes || !errors.Is(a.err, helmErr) {
+		t.Fatalf("awaitUninstall returned (%v, %v), want the uninstall's own (%v, %v)", a.v, a.err, helmRes, helmErr)
 	}
 
 	said := out.String()
@@ -112,11 +115,12 @@ func TestAnInterruptedUninstallIsAcknowledgedOnceAndStillAwaited(t *testing.T) {
 // The negative control: an uninstall nobody interrupts prints nothing extra.
 func TestAnUninterruptedUninstallSaysNothing(t *testing.T) {
 	out := newSignallingWriter()
-	v, err := awaitUninstall(context.Background(), out, "kind-prod", func() (bool, error) {
-		return true, nil
+	helmRes := &release.UninstallReleaseResponse{}
+	v, err := awaitUninstall(context.Background(), out, "kind-prod", func() (*release.UninstallReleaseResponse, error) {
+		return helmRes, nil
 	})
-	if !v || err != nil {
-		t.Fatalf("got (%v, %v), want (true, nil)", v, err)
+	if v != helmRes || err != nil {
+		t.Fatalf("got (%v, %v), want (%v, nil)", v, err, helmRes)
 	}
 	if s := out.String(); s != "" {
 		t.Fatalf("an uninterrupted uninstall printed %q", s)
@@ -130,9 +134,9 @@ func TestAnUninstallInterruptedBeforeItBeganIsNotStarted(t *testing.T) {
 	cancel()
 	out := newSignallingWriter()
 	ran := false
-	_, err := awaitUninstall(ctx, out, "kind-prod", func() (bool, error) {
+	_, err := awaitUninstall(ctx, out, "kind-prod", func() (*release.UninstallReleaseResponse, error) {
 		ran = true
-		return true, nil
+		return nil, nil
 	})
 	if ran {
 		t.Fatal("an uninstall was started on a context already cancelled")

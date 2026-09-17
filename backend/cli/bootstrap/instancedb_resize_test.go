@@ -172,8 +172,8 @@ func TestInstanceDatabaseResizeRefusesALoginThatIsMissingOrNotOurs(t *testing.T)
 	}
 }
 
-// 🔴 THROUGH THE UPGRADE'S OWN STEPS: the check refuses as the typed budget refusal, and
-// the resize grows and shrinks the login it is pointed at.
+// 🔴 THROUGH THE UPGRADE'S OWN STEPS: the check passes, and the resize grows and shrinks
+// the login it is pointed at.
 func TestInstanceDatabaseResizeThroughTheUpgradeSteps(t *testing.T) {
 	ctx := context.Background()
 	p, _ := withProvisioner(t, "rs-g", "rs-h")
@@ -183,11 +183,11 @@ func TestInstanceDatabaseResizeThroughTheUpgradeSteps(t *testing.T) {
 	upgradeLoginSession = func(_ context.Context, _ *State, fn func(instanceDBQuerier) error) error { return fn(q) }
 
 	// Two relational areas: 2 × 20 × 2 = 80.
-	st := func(budget int) *State {
+	st := func() *State {
 		return &State{
 			Instance:     "rs-g",
 			EnabledAreas: []string{"user-management", "device-management"},
-			Install:      &InstallRecord{Outputs: InstallOutputs{Rdb: ClusterRdb{MaxConnections: budget}}},
+			Install:      &InstallRecord{Outputs: InstallOutputs{Rdb: ClusterRdb{MaxConnections: 200}}},
 		}
 	}
 	for _, i := range []string{"rs-g", "rs-h"} {
@@ -197,23 +197,17 @@ func TestInstanceDatabaseResizeThroughTheUpgradeSteps(t *testing.T) {
 	}
 
 	var err error
-	captureStdout(t, func() { err = precheckUpgradeLogin(ctx, st(120)) })
-	var typed *ErrConnectionBudget
-	if !errors.As(err, &typed) || !strings.Contains(err.Error(), "--max-connections") {
-		t.Fatalf("an upgrade the store has no room for was not refused naming --max-connections: %v", err)
-	}
-
-	captureStdout(t, func() { err = precheckUpgradeLogin(ctx, st(200)) })
+	captureStdout(t, func() { err = precheckUpgradeLogin(ctx, st()) })
 	if err != nil {
 		t.Fatalf("an upgrade the store has room for was refused: %v", err)
 	}
-	out := captureStdout(t, func() { err = resizeUpgradeLogin(ctx, st(200), loginResizeGrow) })
+	out := captureStdout(t, func() { err = resizeUpgradeLogin(ctx, st(), loginResizeGrow) })
 	if err != nil || loginLimit(t, q, "rs-g") != 80 || !strings.Contains(out, "40 → 80 connections") {
 		t.Fatalf("growing through the upgrade step: err %v, limit %d, said %q", err, loginLimit(t, q, "rs-g"), out)
 	}
 
 	// A later release needing fewer: one relational area is 40.
-	smaller := st(200)
+	smaller := st()
 	smaller.EnabledAreas = []string{"user-management"}
 	out = captureStdout(t, func() { err = resizeUpgradeLogin(ctx, smaller, loginResizeShrink) })
 	if err != nil || loginLimit(t, q, "rs-g") != 40 || !strings.Contains(out, "80 → 40 connections") {

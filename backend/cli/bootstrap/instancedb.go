@@ -200,7 +200,7 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 }
 
 // validateAdmission refuses an instance name that is not one, and a limit or budget that
-// was never settled. Both writers of an instance's login ask it first.
+// was never settled.
 func validateAdmission(instance string, admit connectionAdmission) error {
 	if err := ValidateInstanceName(instance); err != nil {
 		return err
@@ -246,7 +246,7 @@ func readInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string
 }
 
 // refuseIfNotDcctls refuses a role by the instance's name that is not the login dcctl's
-// provisioner made for it. Both writers of that login ask this before changing it.
+// provisioner made for it.
 //
 // 🔴 A ROLE BY THIS NAME THAT THE PROVISIONER DID NOT CREATE IS NOT REUSED. ADMIN is what
 // creating it granted, so its absence means somebody else made it — and re-passwording a
