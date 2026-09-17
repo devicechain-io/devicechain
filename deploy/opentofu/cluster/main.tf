@@ -184,8 +184,9 @@ resource "terraform_data" "cutover_guard" {
 
           To DISCARD the old data (local/dev instances, the usual case):
 
-            dcctl destroy <instance>     # or delete the cluster entirely
-            dcctl bootstrap ...          # rebuild on the new storage tier
+            delete the cluster entirely, then
+            dcctl install ...            # rebuild the cluster on the new storage tier
+            dcctl bootstrap ...          # and each instance on top of it
 
           To KEEP it, dump before cutting over:
 
@@ -264,8 +265,8 @@ module "object_store" {
 # The paths that do it are ordinary, not exotic:
 #   - enable_database_backups = false
 #   - backup_destination flipped to "external"
-#   - `dcctl bootstrap <existing-instance> --compact --no-tls`, which emits
-#     enable_database_backups=false on its own
+#   - `dcctl install --compact` (or `--compact --no-tls`) over an existing
+#     install, which emits enable_database_backups=false on its own
 #
 # 🔴 AND prevent_destroy ON THE PVC WOULD NOT HELP, which is why this is a
 # precondition in the ROOT instead. Dropping a module's count to zero ORPHANS its
@@ -315,7 +316,7 @@ resource "terraform_data" "backup_removal_guard" {
 
           enable_database_backups = false
           backup_destination      = "external"
-          dcctl bootstrap <instance> --compact --no-tls   (turns backups off)
+          dcctl install --compact          (turns backups off)
 
         If the backups are already safe elsewhere, or you do not want them:
 

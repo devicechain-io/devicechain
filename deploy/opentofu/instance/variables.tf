@@ -53,7 +53,7 @@ variable "ha" {
     config (instance.config.infrastructure.nats.streamReplicas), rendered by the
     DeviceChain Helm chart, which this root does not install. Both halves must be
     raised together or the instance runs a 3-node broker holding single-replica
-    streams — replicated servers, unreplicated data. `dcctl bootstrap --ha` sets
+    streams — replicated servers, unreplicated data. `dcctl install --ha` sets
     both from one value and preflights that they agree; a direct tofu user must set
     the Helm value themselves.
   EOT
