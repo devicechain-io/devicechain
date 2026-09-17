@@ -86,7 +86,7 @@ func TestADeclarationLeftMidDestroyIsRefused(t *testing.T) {
 		setPhase(inst, dcv1beta1.PhaseDestroying)
 	}))
 
-	err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0")
+	err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0", dcv1beta1.PhaseBootstrapping)
 	if err == nil {
 		t.Fatal("a bootstrap ran over an instance whose destroy did not finish")
 	}
@@ -126,7 +126,7 @@ func TestATerminatingDeclarationIsRefused(t *testing.T) {
 			inst.DeletionTimestamp = &deleting
 		}))
 
-		err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0")
+		err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0", dcv1beta1.PhaseBootstrapping)
 		if err == nil {
 			t.Fatal("a bootstrap adopted a declaration that is being deleted")
 		}
@@ -152,7 +152,7 @@ func TestATerminatingDeclarationIsRefused(t *testing.T) {
 			inst.DeletionTimestamp = &deleting
 		}))
 
-		err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0")
+		err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0", dcv1beta1.PhaseBootstrapping)
 		if err == nil {
 			t.Fatal("a declaration that is both terminating and mid-destroy was adopted")
 		}
@@ -172,7 +172,7 @@ func TestAnOrdinaryDeclarationIsWrittenAndRewritten(t *testing.T) {
 	t.Run("a fresh install creates it", func(t *testing.T) {
 		dyn := declarationClient()
 
-		if err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0"); err != nil {
+		if err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0", dcv1beta1.PhaseBootstrapping); err != nil {
 			t.Fatalf("a first bootstrap could not declare its instance: %v", err)
 		}
 
@@ -210,7 +210,7 @@ func TestAnOrdinaryDeclarationIsWrittenAndRewritten(t *testing.T) {
 		desired := desiredSpec()
 		desired.Profile = "full"
 		desired.HA = true
-		if err := writeInstanceCR(t.Context(), dyn, "prod", desired, "v0.18.0"); err != nil {
+		if err := writeInstanceCR(t.Context(), dyn, "prod", desired, "v0.18.0", dcv1beta1.PhaseBootstrapping); err != nil {
 			t.Fatalf("an ordinary re-run was refused: %v", err)
 		}
 
@@ -234,7 +234,7 @@ func TestAnOrdinaryDeclarationIsWrittenAndRewritten(t *testing.T) {
 			inst.Spec.RestoredAt = &restoredAt
 		}))
 
-		if err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0"); err != nil {
+		if err := writeInstanceCR(t.Context(), dyn, "prod", desiredSpec(), "v0.17.0", dcv1beta1.PhaseBootstrapping); err != nil {
 			t.Fatalf("a flagless re-run over a restored instance was refused: %v", err)
 		}
 
@@ -254,7 +254,7 @@ func TestAnOrdinaryDeclarationIsWrittenAndRewritten(t *testing.T) {
 		spec := desiredSpec()
 		spec.Provider = ""
 
-		if err := writeInstanceCR(t.Context(), dyn, "prod", spec, "v0.17.0"); err == nil {
+		if err := writeInstanceCR(t.Context(), dyn, "prod", spec, "v0.17.0", dcv1beta1.PhaseBootstrapping); err == nil {
 			t.Fatal("a declaration naming no provider was written")
 		}
 		if inst := readBack(t, dyn, "prod"); inst != nil {

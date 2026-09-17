@@ -22,7 +22,7 @@ const (
 	AnnotationLastAppliedAt = "core.devicechain.io/last-applied-at"
 
 	// AnnotationPhase records what the last dcctl run was TRYING to do:
-	// Bootstrapping, Ready, Failed or Destroying.
+	// Bootstrapping, Upgrading, Ready, Failed or Destroying.
 	//
 	// This is intent, not observation, which is why it is an annotation rather
 	// than a status field — status belongs to the operator and describes what it
@@ -39,8 +39,17 @@ const (
 )
 
 // The values AnnotationPhase takes.
+//
+// 🔴 PhaseUpgrading IS NOT COSMETIC. Every write of the declaration used to stamp
+// Bootstrapping, `dcctl upgrade` included — so an instance that had ever been
+// upgraded read "a bootstrap is part-way through" for the rest of its life, and
+// the annotation's own promise (what the LAST run was trying to do) was false for
+// the one instance that had been touched most recently. A verb that moves an
+// instance needs its own word, and a phase nobody can distinguish from another
+// verb's is worse than no phase: it is read as knowledge.
 const (
 	PhaseBootstrapping = "Bootstrapping"
+	PhaseUpgrading     = "Upgrading"
 	PhaseReady         = "Ready"
 	PhaseFailed        = "Failed"
 	PhaseDestroying    = "Destroying"
@@ -284,6 +293,21 @@ type InstanceStatus struct {
 //+kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 //+kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profile`
 //+kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.imageVersion`
+// The phase is a column because `kubectl get dci` is the one reader dcctl does not
+// control, and an operator looking at a cluster mid-run is exactly who needs to see
+// that a bootstrap, an upgrade or a destroy did not finish. An instance carrying no
+// annotation renders blank, which is honest: nothing recorded what it was doing.
+//
+// 🔴 THE BACKSLASHES ARE REQUIRED AND MUST NOT BE TIDIED AWAY, AND THE TIDY VERSION
+// FAILS SILENTLY. The API server evaluates this path itself — apiextensions-apiserver's
+// tableconvertor, over client-go's jsonpath, with AllowMissingKeys(true) — and renders
+// an EMPTY cell whenever the path errors or matches nothing. So the bracket spelling
+// `['core.devicechain.io/phase']`, which does not resolve, produces a column that is
+// blank for every instance rather than an error anybody sees. The backticks are what
+// carry the backslashes through: controller-gen parses a backquoted marker argument as
+// a raw string. Both halves are pinned by TestThePhaseColumnActuallyResolves, which
+// drives the real evaluator the way the API server drives it.
+//+kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.metadata.annotations.core\.devicechain\.io/phase`
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Instance is the declaration of a DeviceChain instance.

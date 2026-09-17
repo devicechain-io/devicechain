@@ -4,6 +4,7 @@
 package v1beta1_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/client-go/util/jsonpath"
 	"sigs.k8s.io/yaml"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -212,5 +214,118 @@ func TestTheClusterRuleSurvivesRemoval(t *testing.T) {
 	if !strings.Contains(joined, "has(self.cluster)") || !strings.Contains(joined, "has(oldSelf.cluster)") {
 		t.Errorf("the spec carries no rule comparing cluster's PRESENCE on both sides, so "+
 			"removing it and setting it again would repoint the binding. Rules found: %q", joined)
+	}
+}
+
+// printerColumns returns the served version's additional printer columns.
+func printerColumns(t *testing.T, crd map[string]interface{}) []map[string]interface{} {
+	t.Helper()
+	versions, _ := crd["spec"].(map[string]interface{})["versions"].([]interface{})
+	for _, v := range versions {
+		ver := v.(map[string]interface{})
+		if ver["name"] != "v1beta1" {
+			continue
+		}
+		raw, _ := ver["additionalPrinterColumns"].([]interface{})
+		var out []map[string]interface{}
+		for _, c := range raw {
+			out = append(out, c.(map[string]interface{}))
+		}
+		return out
+	}
+	t.Fatal("the CRD serves no v1beta1 version")
+	return nil
+}
+
+// 🔴 THE COLUMN IS EVALUATED, NOT MERELY PRESENT, AND THE DIFFERENCE IS THE WHOLE
+// POINT OF THIS TEST. A printer column whose JSONPath does not resolve is not an
+// error anybody sees: `kubectl get dci` prints the header and an empty cell, which
+// is indistinguishable from an instance that has recorded no phase — so the one
+// reader dcctl does not control would silently report nothing, forever.
+//
+// The evaluator here is the one the API server uses, driven the way it drives it.
+// The escaped-dot spelling is what resolves; the tidier
+// `['core.devicechain.io/phase']` renders blank, and the negative control at the
+// end pins that so the marker is not "cleaned up" by someone who reads the
+// backslashes as a mistake.
+//
+// It is joined to the Go constants deliberately: the object is built from
+// AnnotationPhase, so renaming the annotation without regenerating the manifest
+// fails here rather than in a cluster.
+func TestThePhaseColumnActuallyResolves(t *testing.T) {
+	var path string
+	for _, col := range printerColumns(t, loadInstanceCRD(t)) {
+		if col["name"] == "Phase" {
+			path, _ = col["jsonPath"].(string)
+		}
+	}
+	if path == "" {
+		t.Fatal("the generated CRD serves no Phase column, so `kubectl get dci` cannot show " +
+			"that a run did not finish. The column comes from the printcolumn marker on " +
+			"Instance via `make manifests` — run it, or restore the marker")
+	}
+
+	declared := func(annotations map[string]interface{}) map[string]interface{} {
+		md := map[string]interface{}{"name": "prod"}
+		if annotations != nil {
+			md["annotations"] = annotations
+		}
+		return map[string]interface{}{
+			"apiVersion": "core.devicechain.io/v1beta1",
+			"kind":       "Instance",
+			"metadata":   md,
+		}
+	}
+	// cell renders one column exactly the way the API server does, and mirroring it
+	// step for step is the point rather than an economy. apiextensions-apiserver's
+	// tableconvertor parses the path, sets AllowMissingKeys(true), and writes an
+	// EMPTY cell whenever FindResults errors or returns nothing — so a path that
+	// does not resolve raises no error at any layer an operator can see. Evaluating
+	// with error-on-missing would report a failure the real reader never reports,
+	// and would let a broken column look loudly broken here and silently blank
+	// there.
+	cell := func(expr string, obj map[string]interface{}) string {
+		jp := jsonpath.New("Phase")
+		if err := jp.Parse("{" + expr + "}"); err != nil {
+			return ""
+		}
+		jp.AllowMissingKeys(true)
+		results, err := jp.FindResults(obj)
+		if err != nil || len(results) == 0 || len(results[0]) == 0 {
+			return ""
+		}
+		var buf bytes.Buffer
+		if err := jp.PrintResults(&buf, results[0]); err != nil {
+			return ""
+		}
+		return buf.String()
+	}
+
+	annotated := declared(map[string]interface{}{
+		dcv1beta1.AnnotationPhase: dcv1beta1.PhaseUpgrading,
+	})
+	if got := cell(path, annotated); got != dcv1beta1.PhaseUpgrading {
+		t.Errorf("the Phase column rendered %q for an instance annotated %q. A column that "+
+			"resolves to nothing prints an empty cell — the same cell an instance with no phase "+
+			"prints — so this is the failure no operator would ever notice. The path is %q",
+			got, dcv1beta1.PhaseUpgrading, path)
+	}
+
+	// An instance nothing has stamped renders blank, which is honest, and it must
+	// not be an error: one such instance would otherwise spoil the whole listing.
+	if got := cell(path, declared(nil)); got != "" {
+		t.Errorf("an instance with no phase rendered %q, want a blank cell", got)
+	}
+
+	// 🔴 THE NEGATIVE CONTROL, and it is what makes the assertion above mean
+	// anything. Without it, a `cell` helper that returned the phase from anywhere
+	// would pass. The bracket spelling is the one a tidier would reach for; it
+	// renders BLANK rather than failing, which is precisely why the mistake would
+	// survive review and a cluster.
+	bracket := ".metadata.annotations['core.devicechain.io/phase']"
+	if got := cell(bracket, annotated); got != "" {
+		t.Errorf("%s rendered %q. It did not resolve when this column was written, which is the "+
+			"whole reason the marker carries backslashes; if client-go has changed, re-examine "+
+			"that comment rather than deleting this test", bracket, got)
 	}
 }
