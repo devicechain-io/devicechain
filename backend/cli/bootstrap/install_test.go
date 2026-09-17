@@ -49,7 +49,7 @@ func installed() *InstallRecord {
 	return &rec
 }
 
-// A first install, and a re-install of one that never finished, have nothing to hurt.
+// A first install, and a re-install of one that never finished ONCE, have nothing to hurt.
 func TestAnInstallWithNoFinishedPredecessorIsNotRefused(t *testing.T) {
 	calls := withClusterInstances(t, []string{"prod"}, nil)
 	st, settings := reinstallState()
@@ -62,10 +62,122 @@ func TestAnInstallWithNoFinishedPredecessorIsNotRefused(t *testing.T) {
 	applying := installed()
 	applying.Phase = installPhaseApplying
 	if err := refuseAReinstallThatWouldHurt(context.Background(), st, applying, settings, noState); err != nil {
-		t.Errorf("re-running an install that did not finish was refused: %v", err)
+		t.Errorf("re-running an install that never finished was refused: %v", err)
 	}
 	if *calls != 0 {
 		t.Errorf("the cluster's instances were read %d time(s) for an install with nothing to hurt", *calls)
+	}
+}
+
+// failedReinstall is the record a re-install that failed leaves: applying, with empty
+// settings of its own, and the install that finished before it kept.
+func failedReinstall() *InstallRecord {
+	last := aCompleteInstall()
+	return &InstallRecord{
+		Schema: installRecordSchema, Phase: installPhaseApplying, ClusterUID: testClusterUID,
+		DcctlVersion: "v0.17.1",
+		LastInstalled: &CompletedInstall{DcctlVersion: last.DcctlVersion, Settings: last.Settings,
+			Outputs: last.Outputs},
+	}
+}
+
+// 🔴🔴 A RE-INSTALL THAT FAILED STILL HAS INSTANCES BUILT TO THE ONE BEFORE IT. The
+// re-run is refused exactly as a re-run over the finished install would be.
+func TestAFailedReinstallStillProtectsTheInstancesOfTheLastCompletedOne(t *testing.T) {
+	t.Run("changed settings, instances running", func(t *testing.T) {
+		withClusterInstances(t, []string{"prod"}, nil)
+		st, settings := reinstallState()
+		settings.HA = true
+		err := refuseAReinstallThatWouldHurt(context.Background(), st, failedReinstall(), settings, stateHere())
+		if err == nil || !strings.Contains(err.Error(), "prod") {
+			t.Errorf("a settings change after a failed re-install was not refused under its instances: %v", err)
+		}
+	})
+	t.Run("lowered budget, instances running", func(t *testing.T) {
+		withClusterInstances(t, []string{"prod"}, nil)
+		st, settings := reinstallState()
+		st.MaxConnections = 300
+		err := refuseAReinstallThatWouldHurt(context.Background(), st, failedReinstall(), settings, stateHere())
+		if err == nil || !strings.Contains(err.Error(), "600 → 300") {
+			t.Errorf("a lowered budget after a failed re-install was not refused: %v", err)
+		}
+	})
+	t.Run("no local state", func(t *testing.T) {
+		withClusterInstances(t, nil, nil)
+		st, settings := reinstallState()
+		err := refuseAReinstallThatWouldHurt(context.Background(), st, failedReinstall(), settings,
+			func(string) (bool, error) { return false, nil })
+		if err == nil || !strings.Contains(err.Error(), "another machine") {
+			t.Errorf("a failed re-install re-run from a machine without the state was not refused: %v", err)
+		}
+	})
+	t.Run("the same settings, instances running", func(t *testing.T) {
+		withClusterInstances(t, []string{"prod"}, nil)
+		st, settings := reinstallState()
+		if err := refuseAReinstallThatWouldHurt(context.Background(), st, failedReinstall(), settings, stateHere()); err != nil {
+			t.Errorf("re-running a failed re-install with what the cluster runs was refused: %v", err)
+		}
+	})
+}
+
+// externallyArchived is a finished install archiving off-site, and a re-install asking
+// for the same destination.
+func externallyArchived() (*InstallRecord, *State, InstallSettings) {
+	rec := installed()
+	rec.Settings.BackupsExternal = true
+	rec.Outputs.Archive = InstallArchive{
+		EndpointURL: "https://s3.example.invalid", CredentialsSecret: "dc-backup-credentials",
+		AccessKeyIDKey: "ACCESS_KEY_ID", SecretAccessKey: "ACCESS_SECRET_KEY", BucketTsdb: "tsdb-archive",
+	}
+	st, _ := reinstallState()
+	st.BackupDestination = &BackupDestination{EndpointURL: rec.Outputs.Archive.EndpointURL,
+		BucketRdb: "rdb-archive", BucketTsdb: rec.Outputs.Archive.BucketTsdb, AccessKeyID: "k", SecretAccessKey: "s"}
+	return rec, st, rec.Settings
+}
+
+// 🔴 AN OFF-SITE ARCHIVE IS MORE THAN A BOOLEAN. Every instance's event store archives to
+// the endpoint and bucket it was built with; pointing the cluster elsewhere under them
+// is a change the settings comparison alone cannot see.
+func TestAChangedOffSiteArchiveIsRefusedUnderInstances(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		change    func(*BackupDestination)
+		instances []string
+		refused   bool
+	}{
+		{name: "same endpoint and bucket, instances running",
+			change: func(*BackupDestination) {}, instances: []string{"prod"}},
+		{name: "new credentials only, instances running",
+			change: func(d *BackupDestination) { d.AccessKeyID, d.SecretAccessKey = "k2", "s2" }, instances: []string{"prod"}},
+		{name: "endpoint changed, instances running",
+			change: func(d *BackupDestination) { d.EndpointURL = "https://other.example.invalid" }, instances: []string{"prod"}, refused: true},
+		{name: "event bucket changed, instances running",
+			change: func(d *BackupDestination) { d.BucketTsdb = "elsewhere" }, instances: []string{"prod"}, refused: true},
+		{name: "endpoint changed, no instances",
+			change: func(d *BackupDestination) { d.EndpointURL = "https://other.example.invalid" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withClusterInstances(t, tc.instances, nil)
+			rec, st, settings := externallyArchived()
+			tc.change(st.BackupDestination)
+			err := refuseAReinstallThatWouldHurt(context.Background(), st, rec, settings, stateHere())
+			if (err != nil) != tc.refused {
+				t.Fatalf("refused=%t, want %t: %v", err != nil, tc.refused, err)
+			}
+			if tc.refused && (!strings.Contains(err.Error(), "off-site archive") || !strings.Contains(err.Error(), "prod")) {
+				t.Errorf("the refusal does not name the archive change and the instances: %v", err)
+			}
+		})
+	}
+
+	// ...and after a failed re-install it is decided from the install that finished.
+	withClusterInstances(t, []string{"prod"}, nil)
+	rec, st, settings := externallyArchived()
+	failed := &InstallRecord{Schema: installRecordSchema, Phase: installPhaseApplying, ClusterUID: testClusterUID,
+		LastInstalled: rec.lastCompleted()}
+	st.BackupDestination.BucketTsdb = "elsewhere"
+	if err := refuseAReinstallThatWouldHurt(context.Background(), st, failed, settings, stateHere()); err == nil {
+		t.Error("an archive change after a failed re-install was not refused under its instances")
 	}
 }
 

@@ -99,8 +99,9 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 
 	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE: the
 	// refusals it can raise — a database by this name that some other identity owns, or
-	// no connection budget left on the shared store — have to come before anything of
-	// this instance's is built on top of it.
+	// no connection budget left on the shared store — have to come before the broker and
+	// event store are built on top of it. (The budget is also checked before anything is
+	// written, in stepCheckClusterSingletons; this is the admission that holds the lock.)
 	if err := provisionInstanceDatabase(ctx, st, st.Install.Outputs.Rdb); err != nil {
 		return err
 	}

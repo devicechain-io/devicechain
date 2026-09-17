@@ -326,7 +326,7 @@ func refuseAPreIsolationOwner(cl *unstructured.Unstructured) error {
 	}
 	return fmt.Errorf("the shared relational store (Cluster %s/%s) was created with owner %q, not %q: it "+
 		"was built before each instance had a database login of its own, and its owner cannot be changed "+
-		"in place. Recreate the cluster (delete it, then bootstrap again) to build a store that can "+
+		"in place. Recreate the cluster (delete it, then `dcctl install` and `dcctl bootstrap` again) to build a store that can "+
 		"isolate instances from each other", infraNamespace, rdbClusterName, owner, rdbOwnerUsername)
 }
 

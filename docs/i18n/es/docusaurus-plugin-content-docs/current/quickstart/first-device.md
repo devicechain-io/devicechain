@@ -14,7 +14,7 @@ Calcule alrededor de media hora, la mayor parte esperando al arranque inicial.
 **`dcctl`, más cinco herramientas en su `PATH`:** `docker`, `kubectl`, `helm`,
 [`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) (el binario `tofu`;
 `terraform` también sirve). `dcctl install` y `dcctl bootstrap` ejecutan primero cada uno una comprobación previa y **se
-detiene** si falta alguna, así que una carencia le cuesta los diez primeros segundos y no diez
+detienen** si falta alguna, así que una carencia le cuesta los diez primeros segundos y no diez
 minutos.
 
 `helm` está en esa lista aunque `dcctl` lleve el chart dentro y lo instale con la biblioteca Go de

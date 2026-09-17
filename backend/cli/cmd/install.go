@@ -58,6 +58,13 @@ the cluster, with one exception: the connection budget may be raised.`,
 			installAssumeYes = true
 			fmt.Println("dev mode: --yes")
 		}
+		// 🔴 --no-tls ALONE DOES NOTHING TO A CLUSTER, and accepting it would let an
+		// operator believe cert-manager was left out.
+		if cmd.Flags().Changed("no-tls") && installNoTLS && !installCompact {
+			return fmt.Errorf("--no-tls on dcctl install only takes effect with --compact (it drops " +
+				"cert-manager and, with it, database backups). Without --compact, choose plain HTTP per " +
+				"instance with dcctl bootstrap --no-tls")
+		}
 		if installCompact {
 			res, err := resolveCompactMode(cmd.Flags().Changed, "", installNoTLS, installNoMonitoring)
 			if err != nil {

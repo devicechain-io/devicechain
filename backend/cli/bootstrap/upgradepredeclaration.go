@@ -100,8 +100,13 @@ func (e *ErrPreDeclarationInstance) Error() string {
 			"profile, topology, exposure and functional areas — and there is nothing here to "+
 			"read. This is not a mistyped name and not the wrong cluster.\n\n"+
 			"THIS RELEASE DOES NOT UPGRADE ONTO ITS PREDECESSOR. The supported path is to "+
-			"destroy the instance and build it again:\n\n"+
+			"destroy the instance and build it again, on a cluster this release has installed. "+
+			"The release that built it also installed the cluster's shared prerequisites as part "+
+			"of the instance, so delete and recreate the cluster in between (for a local kind "+
+			"cluster, `kind delete cluster --name <cluster>`):\n\n"+
 			"      dcctl destroy %s %s --kube-context %s\n"+
+			"      # delete and recreate the cluster\n"+
+			"      dcctl install %s --kube-context %s\n"+
 			"      dcctl bootstrap %s %s --kube-context %s\n\n"+
 			"That takes %q's data with it, and there is no other route: nothing here writes a "+
 			"declaration on behalf of an instance that never had one, because what that "+
@@ -109,6 +114,7 @@ func (e *ErrPreDeclarationInstance) Error() string {
 			"Inventing one would deploy a guess over a live instance.",
 		e.Instance, source,
 		provider, e.Instance, e.KubeContext,
+		provider, e.KubeContext,
 		provider, e.Instance, e.KubeContext,
 		e.Instance)
 }

@@ -315,6 +315,56 @@ func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
 	}
 }
 
+// 🔴 WHICH SHARED CREDENTIALS EXIST IS THE INSTALL'S ANSWER. The declaration does not
+// record an off-site archive, so an upgrade deciding from it demands the in-cluster
+// object store's root credential — which a cluster archiving off-site never had.
+func TestAnUpgradeOnAnOffSiteArchivedClusterDemandsNoObjectStoreCredential(t *testing.T) {
+	provider, err := Get("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDecl, prevDeployed := readInstanceDeclaration, lookupDeployedInstance
+	t.Cleanup(func() { readInstanceDeclaration, lookupDeployedInstance = prevDecl, prevDeployed })
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		return atVersion(t, "ghcr.io/devicechain-io", "v0.17.0"), nil
+	}
+	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
+		return &config.InstanceConfiguration{}, nil
+	}
+
+	written := aWritableState()
+	written.Instance = "prod"
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "kube-system", UID: types.UID(testClusterUID)}})
+	writeInstallThenBootstrapSecrets(t, c, written)
+	settleStringDataLikeAnAPIServer(t, c)
+	// An off-site cluster never had the in-cluster store's credential.
+	if err := c.CoreV1().Secrets(infraNamespace).Delete(context.Background(), "dc-object-store-credentials",
+		metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rec := aCompleteInstall()
+	rec.Settings.BackupsExternal = true
+	rec.Outputs.Archive = InstallArchive{EndpointURL: "https://s3.example.invalid", CredentialsSecret: "dc-backup-credentials",
+		AccessKeyIDKey: "ACCESS_KEY_ID", SecretAccessKey: "ACCESS_SECRET_KEY", BucketTsdb: "tsdb-archive"}
+	if err := writeInstalled(context.Background(), c, rec, installClock); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := hydrateUpgradeState(context.Background(), c, provider,
+		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
+		UpgradeOptions{Options: Options{Instance: "prod"}})
+	if err != nil {
+		t.Fatalf("an upgrade on an off-site archived cluster was refused: %v", err)
+	}
+	if st.Install == nil || !st.Install.Settings.BackupsExternal {
+		t.Errorf("the upgrade state does not follow the install: %+v", st.Install)
+	}
+	if st.Credentials.ObjectStoreSecret != "" || st.Credentials.RDBPassword != "rdb-pw" {
+		t.Errorf("the recovered credentials are not the off-site cluster's: %+v", st.Credentials)
+	}
+}
+
 // 🔴🔴 A RE-RUN REUSES THE CLUSTER'S CREDENTIALS, and the mutation round is why this
 // exists: reading the shared database password or the object-store identity under the
 // wrong owner SURVIVED every other test. The wrong owner reads the real Secret as
@@ -431,6 +481,10 @@ func TestAnUnrecognisedOwnerIsNotDescribedAsAnInstance(t *testing.T) {
 
 // 🔴 A REVIEW FINDING: marking an install "applying" carried the previous record's
 // settings under this run's version, and would rewrite a newer dcctl's record as ours.
+//
+// 🔴 AND A SECOND ONE: carrying NOTHING forgot what the cluster runs, so a failed
+// re-install's re-run decided its budget and its refusals from empty settings. The last
+// completed install is carried — under its own name, never as this run's settings.
 func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
 	c := fake.NewSimpleClientset()
 	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
@@ -439,15 +493,15 @@ func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
 	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
 		t.Fatal(err)
 	}
-	cm, _ := c.CoreV1().ConfigMaps("dc-system").Get(context.Background(), "dc-install", metav1.GetOptions{})
-	var rec InstallRecord
-	if err := json.Unmarshal([]byte(cm.Data["install.json"]), &rec); err != nil {
-		t.Fatal(err)
-	}
+	rec := storedInstallRecord(t, c)
 	if rec.Settings != (InstallSettings{}) || rec.Outputs != (InstallOutputs{}) {
 		t.Errorf("an applying record shows the previous install's settings as this run's: %+v", rec)
 	}
+	if rec.DcctlVersion != "v0.17.1" || rec.Phase != installPhaseApplying {
+		t.Errorf("the applying record does not describe this run: %+v", rec)
+	}
 
+	cm, _ := c.CoreV1().ConfigMaps("dc-system").Get(context.Background(), "dc-install", metav1.GetOptions{})
 	rec = aCompleteInstall()
 	rec.Schema, rec.Phase = installRecordSchema+1, installPhaseInstalled
 	body, _ := json.Marshal(rec)
@@ -457,5 +511,111 @@ func TestMarkingAnInstallCarriesNothingAndRespectsANewerRecord(t *testing.T) {
 	}
 	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err == nil {
 		t.Error("a newer dcctl's install record was rewritten as this build's schema")
+	}
+}
+
+// storedInstallRecord decodes the record as written, without readInstallRecord's
+// refusals — an applying record is exactly what this needs to look at.
+func storedInstallRecord(t *testing.T, c *fake.Clientset) InstallRecord {
+	t.Helper()
+	cm, err := c.CoreV1().ConfigMaps("dc-system").Get(context.Background(), "dc-install", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec InstallRecord
+	if err := json.Unmarshal([]byte(cm.Data["install.json"]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// replaceStoredInstallRecord overwrites the record's body verbatim, keeping the
+// ConfigMap dcctl wrote (and so its managed-by stamp).
+func replaceStoredInstallRecord(t *testing.T, c *fake.Clientset, rec InstallRecord) {
+	t.Helper()
+	cm, err := c.CoreV1().ConfigMaps("dc-system").Get(context.Background(), "dc-install", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(rec)
+	cm.Data["install.json"] = string(body)
+	if _, err := c.CoreV1().ConfigMaps("dc-system").Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 🔴🔴 THE LAST COMPLETED INSTALL SURVIVES A RE-INSTALL THAT FAILS — AND ONE THAT FAILS
+// AGAIN. Marking over an installed record keeps that record; marking over an applying
+// record keeps what IT kept, not its own empty settings.
+func TestMarkingAnInstallKeepsTheLastCompletedOne(t *testing.T) {
+	c := fake.NewSimpleClientset()
+	want := aCompleteInstall()
+	if err := writeInstalled(context.Background(), c, want, installClock); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"v0.17.1", "v0.17.2"} {
+		if err := markInstallApplying(context.Background(), c, testClusterUID, version, installClock); err != nil {
+			t.Fatal(err)
+		}
+		rec := storedInstallRecord(t, c)
+		last := rec.LastInstalled
+		if last == nil {
+			t.Fatalf("after marking %s the last completed install was forgotten: %+v", version, rec)
+		}
+		if last.Settings != want.Settings || last.Outputs != want.Outputs || last.DcctlVersion != "v0.17.0" {
+			t.Errorf("after marking %s the last completed install is not the one that finished:\n got %+v\nwant settings %+v outputs %+v (v0.17.0)",
+				version, *last, want.Settings, want.Outputs)
+		}
+		if rec.Settings != (InstallSettings{}) || rec.Outputs != (InstallOutputs{}) {
+			t.Errorf("after marking %s the applying record shows settings as this run's: %+v", version, rec)
+		}
+	}
+
+	// ...and a completed install is its own last one again: nothing stale rides along.
+	if err := writeInstalled(context.Background(), c, want, installClock); err != nil {
+		t.Fatal(err)
+	}
+	if rec := storedInstallRecord(t, c); rec.LastInstalled != nil {
+		t.Errorf("an installed record still carries a previous install: %+v", rec.LastInstalled)
+	}
+}
+
+// An older schema's settings do not mean what this build's do, so nothing is carried
+// from one — the re-run decides as a first install would.
+func TestMarkingOverAnOlderSchemaCarriesNothing(t *testing.T) {
+	c := fake.NewSimpleClientset()
+	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
+		t.Fatal(err)
+	}
+	old := aCompleteInstall()
+	old.Schema, old.Phase = installRecordSchema-1, installPhaseInstalled
+	replaceStoredInstallRecord(t, c, old)
+
+	if err := markInstallApplying(context.Background(), c, testClusterUID, "v0.17.1", installClock); err != nil {
+		t.Fatalf("an older dcctl's record could not be marked: %v", err)
+	}
+	if rec := storedInstallRecord(t, c); rec.LastInstalled != nil || rec.Schema != installRecordSchema {
+		t.Errorf("an older schema's install was carried as this schema's last install: %+v", rec)
+	}
+}
+
+func TestTheLastCompletedInstallIsTheRecordOrWhatItKept(t *testing.T) {
+	var none *InstallRecord
+	if none.lastCompleted() != nil {
+		t.Error("no record has a last completed install")
+	}
+	rec := aCompleteInstall()
+	rec.Phase = installPhaseInstalled
+	if got := rec.lastCompleted(); got == nil || got.Settings != rec.Settings || got.Outputs != rec.Outputs {
+		t.Errorf("an installed record is not its own last completed install: %+v", got)
+	}
+	applying := InstallRecord{Phase: installPhaseApplying}
+	if applying.lastCompleted() != nil {
+		t.Error("an applying record with nothing kept invented a completed install")
+	}
+	kept := &CompletedInstall{Settings: rec.Settings, Outputs: rec.Outputs}
+	applying.LastInstalled = kept
+	if applying.lastCompleted() != kept {
+		t.Error("an applying record's kept install was not returned")
 	}
 }

@@ -349,9 +349,14 @@ mientras todas las instalaciones siguen siendo tempranas.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
+dcctl destroy local devicechain            # elimina la instancia
+kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
+dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
 ```
+
+Con el `dcctl` actual se recrea también el clúster, no solo la instancia: consulte
+[por qué](#pre-declaration-recreate).
 
 :::caution Exporte primero: recrear descarta sus datos
 La [protección de destrucción](#data-durability) protege las bases de datos frente a una operación normal de
@@ -397,9 +402,14 @@ existe ninguna ruta de actualización que conserve las filas existentes.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
+dcctl destroy local devicechain            # elimina la instancia
+kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
+dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
 ```
+
+Con el `dcctl` actual se recrea también el clúster, no solo la instancia: consulte
+[por qué](#pre-declaration-recreate).
 
 Se aplica la misma advertencia que más arriba: recrear la instancia descarta su telemetría, las
 definiciones de dispositivos y los paneles. Exporte lo que necesite antes de empezar.
@@ -1327,13 +1337,24 @@ configuró la instancia antigua nunca se escribió en una forma que esta versió
 modo que una declaración inventada a posteriori sería una conjetura aplicada sobre una
 instancia en funcionamiento.
 
-**Para migrar a esta versión, recree la instancia:**
+**Para migrar a esta versión, recree la instancia, y también el clúster que la aloja.** Las
+versiones que construyeron estas instancias no tenían `dcctl install`: instalaban los
+requisitos previos compartidos del clúster como parte de la instancia, y no registraban
+ninguna instalación. Por eso `dcctl destroy` deja atrás esos requisitos previos,
+`dcctl bootstrap` rechaza un clúster sin registro de instalación y `dcctl install` chocaría
+con lo que dejó la versión anterior. Parta de un clúster nuevo entre medias:
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
+dcctl destroy local devicechain            # elimina la instancia
+kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
+dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
 ```
+
+Para un clúster al que se llega con `--kube-context`, que `dcctl` nunca elimina, bórrelo y
+recréelo con lo que lo creó, y pase el mismo `--kube-context` a `install` y `bootstrap`.
+`dcctl upgrade` imprime esta misma receta cuando se niega.
 
 :::caution Exporte primero: recrear descarta sus datos
 La [protección de destrucción](#data-durability) protege las bases de datos frente a una
@@ -1406,8 +1427,9 @@ Actualizar una instancia creada antes de que las bases de datos pasaran al opera
 al azar. Vuelca primero ambas bases de datos y vuelve a ejecutar `dcctl install` con
 `--allow-legacy-db-removal` para la base de datos relacional, y el arranque con él para el
 almacén de eventos, lo que afirma que te has ocupado de los datos y no verifica nada.
-Para una instancia local, `dcctl destroy` seguido de un arranque nuevo es más simple y
-descarta los datos de forma deliberada.
+Para una instancia local, recrearla es más simple y descarta los datos de forma
+deliberada: destrúyela, recrea el clúster y después instala y arranca, como se describe en
+[Instancias creadas por la v0.16.0 y anteriores](#pre-declaration-recreate).
 :::
 
 Esto es durabilidad de los volúmenes en ejecución; no es un sustituto de las copias de seguridad programadas y la

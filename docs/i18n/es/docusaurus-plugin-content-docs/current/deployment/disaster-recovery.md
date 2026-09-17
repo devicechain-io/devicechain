@@ -171,8 +171,11 @@ dcctl bootstrap local mi-instancia \
 ```
 
 La clave raíz del almacén de secretos de la instancia se siembra desde el artefacto de
-depósito en lugar de acuñarse, de modo que los secretos que vuelvan con sus datos
-principales puedan descifrarse. Se le pedirá la frase de contraseña del artefacto (o puede
+depósito en lugar de acuñarse, de modo que la instancia conserva la clave con la que se
+cifraron sus secretos: los secretos de un respaldo relacional que se restaure más adelante
+—cuando esa restauración esté disponible— podrán descifrarse. Por sí solo, este paso no
+recupera ningún dato principal: produce una instancia con una base de datos relacional vacía
+y la clave antigua. Se le pedirá la frase de contraseña del artefacto (o puede
 proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
 
 Una recuperación es una de las pocas cosas que sí pueden ejecutarse contra una instancia
@@ -190,9 +193,11 @@ con ella. La opción solo surte efecto cuando se *crea* el almacén de eventos, 
 apuntarla a una instancia en uso no mueve ningún dato, en lugar de funcionar a medias. El
 paso 3 no depende de esto.
 
-**3. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
-un secreto (un conector de salida, un canal de notificación) desde la consola o la API.
-Una restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
+**3. Confirme que la clave raíz es la del depósito** con `dcctl secrets escrow verify` (vea
+[Verificar el depósito](#verify)). Leer un objeto respaldado por un secreto (un conector
+de salida, un canal de notificación) es la comprobación más fuerte, pero necesita la base
+de datos relacional restaurada, así que estará disponible con esa restauración: una
+restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
 
 **4. Si restauró datos de eventos, revise la maquinaria y no el número de filas.** Un
 almacén de eventos recuperado puede conservar todas las filas y haber dejado de ser en

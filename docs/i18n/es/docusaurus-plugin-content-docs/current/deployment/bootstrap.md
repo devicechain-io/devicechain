@@ -61,7 +61,19 @@ Volver a ejecutar `install` contra el mismo clúster lo hace converger: lo que y
 sitio se deja como está, y lo que falta se añade. **Cambiar sus ajustes** —`--ha`,
 `--compact`, la monitorización, los respaldos— se rechaza mientras exista alguna instancia
 en el clúster, porque cada instancia se construyó con los ajustes vigentes cuando se
-arrancó.
+arrancó, y ninguna se reconstruye cuando cambian. Eso incluye el archivo externo: un
+`--backup-credentials-file` que nombre otro endpoint u otro bucket del almacén de eventos
+también se rechaza, porque el almacén de eventos de cada instancia sigue archivando en el
+que tenía cuando se construyó.
+
+Hay una excepción: una nueva ejecución **puede aumentar** `--max-connections` mientras hay
+instancias en marcha (consulta [el presupuesto de conexiones](#connection-budget)).
+Reducirlo se rechaza como cualquier otro cambio, y una nueva ejecución que no pase
+`--max-connections` conserva el presupuesto que ya tiene el clúster.
+
+`--no-tls` en `dcctl install` solo tiene sentido junto con `--compact`, donde descarta
+cert-manager; sin `--compact` se rechaza. Para servir una instancia por HTTP simple, pasa
+`--no-tls` a `dcctl bootstrap`.
 
 Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil:
 
@@ -83,12 +95,23 @@ kind delete cluster --name devicechain
 docker rm -f kind-registry   # el registro de imágenes local, si usaste --build
 ```
 
-**El presupuesto de conexiones.** La base de datos relacional tiene un número fijo de
-conexiones, fijado por `--max-connections` (por defecto `600`). Cada instancia reserva un
-límite de conexiones en su login de base de datos, dimensionado a partir de las áreas que
-habilita, y `dcctl bootstrap` rechaza una instancia cuya reserva no cabe en lo que queda. Un
-clúster pensado para alojar muchas instancias, o instancias con muchas áreas habilitadas,
-necesita un presupuesto mayor, fijado al instalar el clúster.
+### El presupuesto de conexiones {#connection-budget}
+
+La base de datos relacional tiene un número fijo de conexiones, fijado por
+`--max-connections` (por defecto `600`). Cada instancia reserva un límite de conexiones en
+su login de base de datos, dimensionado a partir de las áreas que habilita, y
+`dcctl bootstrap` rechaza una instancia cuya reserva no cabe en lo que queda. Esa
+comprobación se hace **antes de escribir nada de la instancia** —ni namespace, ni base de
+datos, ni login—, así que un arranque rechazado no deja nada que limpiar. Un clúster pensado
+para alojar muchas instancias, o instancias con muchas áreas habilitadas, necesita un
+presupuesto mayor.
+
+El presupuesto es el único ajuste de instalación que puede cambiar con instancias en marcha,
+y solo hacia arriba: vuelve a ejecutar `dcctl install` con un `--max-connections` mayor. No
+sale gratis. Cambiar el límite de conexiones de la base de datos reinicia sus instancias de
+base de datos una a una; en un clúster instalado sin `--ha` solo hay una, así que **todas las
+instancias del clúster pierden brevemente su base de datos** mientras se reinicia. Hazlo en
+un momento tranquilo.
 
 ## Qué hace {#what-it-does}
 
@@ -344,11 +367,11 @@ arrancada en él los sigue; ninguno es un flag de `dcctl bootstrap`.
 | `--kube-context <name>` | Instala en el clúster existente al que apunta este kube-context. `dcctl` nunca lo crea ni lo elimina. |
 | `--compact` | Preajuste de huella pequeña —ver más abajo. |
 | `--ha` | Alta disponibilidad —ver más abajo. Requiere al menos **3 nodos planificables**. |
-| `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. |
+| `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. Se rechaza sin `--compact`: usa `dcctl bootstrap --no-tls` para servir una instancia por HTTP simple. |
 | `--no-monitoring` | Omite la pila de monitoreo (Prometheus y Grafana). |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera la instalación falla. |
 | `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
-| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600`) —consulta [el presupuesto de conexiones](#install). |
+| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual) —consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
 | `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace](#what-it-does). |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
 | `--yes` | No pregunta antes de crear un clúster de kind. |
@@ -387,9 +410,9 @@ sirve sin TLS: `dcctl bootstrap` activa `--no-tls` por defecto y rechaza `--no-t
 El plugin Barman Cloud emite sus propios certificados a través de cert-manager, así
 que descartar cert-manager descarta también el plugin. Volver a activar TLS
 (`--no-tls=false`) restablece ambos. Ten en cuenta que hacen falta *ambas* banderas de
-instalación: `--no-tls` por sí sola conserva cert-manager y por lo tanto conserva el
-plugin —y `--no-tls` en `dcctl bootstrap`, como en el ejemplo de URL local más abajo, solo
-cambia cómo se sirve esa instancia.
+instalación: `dcctl install --no-tls` sin `--compact` se rechaza —y `--no-tls` en
+`dcctl bootstrap`, como en el ejemplo de URL local más abajo, solo cambia cómo se sirve esa
+instancia.
 
 El operador CloudNativePG en sí se instala en *todo* clúster, incluido el
 compacto —un Deployment que solicita 100m/128Mi, más sus CRDs—. Ese es un costo de
@@ -559,7 +582,10 @@ conserva —consulta
 [Recuperación ante desastres](./disaster-recovery.md#after-destroy). Nunca elimina el
 clúster ni los requisitos previos que dejó `dcctl install`, así que el siguiente
 `dcctl bootstrap` en el clúster no necesita instalar antes. Destruir una instancia y volver
-a arrancarla con el mismo nombre es como se recrea una instancia.
+a arrancarla con el mismo nombre es como se recrea una instancia. Una instancia construida
+por una versión anterior, de antes de que existiera `dcctl install`, es la excepción: también
+hay que recrear su clúster —consulta
+[Versiones y actualizaciones](./releases-and-upgrades.md#pre-declaration-recreate).
 
 Todavía no hay ningún comando de desinstalación. Para eliminar un clúster local que creó
 `dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install).

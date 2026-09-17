@@ -55,6 +55,34 @@ type InstallRecord struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 	Settings     InstallSettings `json:"settings"`
 	Outputs      InstallOutputs  `json:"outputs"`
+	// LastInstalled is the most recent COMPLETED install, kept while a re-install is
+	// applying. Nil on an installed record, which is its own last completed install.
+	LastInstalled *CompletedInstall `json:"lastInstalled,omitempty"`
+}
+
+// CompletedInstall is what a finished install applied and built.
+type CompletedInstall struct {
+	DcctlVersion string          `json:"dcctlVersion,omitempty"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+	Settings     InstallSettings `json:"settings"`
+	Outputs      InstallOutputs  `json:"outputs"`
+}
+
+// lastCompleted is the most recent install that finished on this cluster, or nil.
+//
+// 🔴 A RE-INSTALL THAT FAILED MUST NOT FORGET WHAT THE CLUSTER RUNS. The instances on it
+// were built to the last completed install, and a re-run deciding its defaults and its
+// refusals from an `applying` record's empty settings would lower the budget, or change
+// the cluster's shape, under them — on a green run.
+func (r *InstallRecord) lastCompleted() *CompletedInstall {
+	switch {
+	case r == nil:
+		return nil
+	case r.Phase == installPhaseInstalled:
+		return &CompletedInstall{DcctlVersion: r.DcctlVersion, UpdatedAt: r.UpdatedAt, Settings: r.Settings, Outputs: r.Outputs}
+	default:
+		return r.LastInstalled
+	}
 }
 
 // InstallSettings is what the cluster prerequisites were APPLIED WITH — the half of an
@@ -146,22 +174,31 @@ func markInstallApplying(ctx context.Context, typed kubernetes.Interface, cluste
 	if err != nil {
 		return err
 	}
+	var last *CompletedInstall
 	if prev != nil {
 		// 🔴 A NEWER dcctl'S RECORD IS NOT OURS TO REWRITE. Marking it would downgrade its
 		// schema to this one's and discard whatever it recorded that this build cannot
 		// name. A record that does not parse at all is overwritten: it describes nothing.
 		var old InstallRecord
-		if json.Unmarshal([]byte(prev.Data[installRecordKey]), &old) == nil && old.Schema > installRecordSchema {
-			return fmt.Errorf("this cluster was installed by a newer dcctl (install record schema "+
-				"%d; this build writes %d). Use that dcctl", old.Schema, installRecordSchema)
+		if json.Unmarshal([]byte(prev.Data[installRecordKey]), &old) == nil {
+			if old.Schema > installRecordSchema {
+				return fmt.Errorf("this cluster was installed by a newer dcctl (install record schema "+
+					"%d; this build writes %d). Use that dcctl", old.Schema, installRecordSchema)
+			}
+			// Only this schema's: an older record's settings do not mean what these do.
+			if old.Schema == installRecordSchema {
+				last = old.lastCompleted()
+			}
 		}
 	}
-	// Nothing is carried from a previous record. Settings and outputs describe a
-	// COMPLETED apply, and showing the last one's beside this run's version would tell
-	// anyone reading it mid-apply that those are what is being applied.
+	// Settings and outputs are left EMPTY. They describe a COMPLETED apply, and showing
+	// the last one's beside this run's version would tell anyone reading it mid-apply
+	// that those are what is being applied. The last completed install is kept apart,
+	// under its own name, for the next re-run to decide from.
 	return putInstallRecord(ctx, typed, InstallRecord{
 		Schema: installRecordSchema, Phase: installPhaseApplying,
 		ClusterUID: clusterUID, DcctlVersion: dcctlVersion, UpdatedAt: now().UTC(),
+		LastInstalled: last,
 	})
 }
 
@@ -221,11 +258,15 @@ func readInstallRecord(ctx context.Context, typed kubernetes.Interface, liveClus
 // reader.
 func (r InstallRecord) validate(liveClusterUID string) error {
 	switch {
-	case r.Schema != installRecordSchema:
-		// Newer or older than this dcctl knows. Guessing at the fields would read a
-		// record whose meaning changed as if it had not.
+	case r.Schema > installRecordSchema:
+		// Newer than this dcctl knows. Guessing at the fields would read a record whose
+		// meaning changed as if it had not.
 		return fmt.Errorf("%w: the install record is schema %d and this dcctl reads schema %d; "+
 			"use the dcctl that installed this cluster", ErrInstallRecordSchema, r.Schema, installRecordSchema)
+	case r.Schema != installRecordSchema:
+		return fmt.Errorf("%w: the install record is schema %d, written by an older dcctl, and this dcctl "+
+			"reads schema %d. Re-run `dcctl install` with this dcctl to bring the record up to date",
+			ErrInstallRecordSchema, r.Schema, installRecordSchema)
 	case r.Phase == installPhaseApplying:
 		return fmt.Errorf("%w: an install of this cluster started and did not finish, so the "+
 			"prerequisites may be half-applied. Re-run the install", ErrNotInstalled)

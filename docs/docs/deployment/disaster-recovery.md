@@ -164,7 +164,10 @@ dcctl bootstrap local my-instance \
 ```
 
 The instance's secret-store root key is seeded from the escrow artifact instead of being
-minted, so secrets that come back with its core data can be decrypted. You will be asked
+minted, so the instance keeps the key its secrets were encrypted with: secrets in a
+relational backup restored later — once that restore is available — can be decrypted. On
+its own, this step does not bring any core data back. It yields an instance with an empty
+relational database and the old key. You will be asked
 for the artifact's passphrase (or supply it with `--escrow-passphrase-file` /
 `DCCTL_ESCROW_PASSPHRASE`).
 
@@ -181,9 +184,11 @@ should be rewound with it. The flag only takes effect when the event store is *c
 so aiming it at a live instance moves no data at all, rather than half-working. Step 3
 does not depend on this.
 
-**3. Confirm the stored secrets decrypt** — read back a secret-backed object (an
-outbound connector, a notification channel) through the console or the API. A restore
-that returns rows is not proof; a value that decrypts is.
+**3. Confirm the root key is the escrowed one** with `dcctl secrets escrow verify` (see
+[Verifying your escrow](#verify)). Reading a secret-backed object back — an outbound
+connector, a notification channel — is the stronger check, but it needs the relational
+database restored, so it becomes available with that restore: a restore that returns rows
+is not proof; a value that decrypts is.
 
 **4. If you restored event data, check the machinery and not the row count.** A
 recovered event store can hold every row and still have quietly stopped being a

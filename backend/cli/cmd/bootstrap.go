@@ -360,10 +360,11 @@ var bootstrapCmd = &cobra.Command{
 				fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
 					"cluster with default settings.", err))
 			}
-			if !opts.DryRun {
-				clusterUID = uid
-				binding.ClusterUID = uid
-			}
+			// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and
+			// asks whether each is THIS cluster's, which needs its identity. Nothing a dry
+			// run does writes it anywhere.
+			clusterUID = uid
+			binding.ClusterUID = uid
 		}
 
 		st := &bootstrap.State{
@@ -491,8 +492,9 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
 func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
-	var refusal *bootstrap.ErrHostTaken
-	if opts.DryRun || !errors.As(runErr, &refusal) {
+	var hostTaken *bootstrap.ErrHostTaken
+	var noBudget *bootstrap.ErrConnectionBudget
+	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget)) {
 		return
 	}
 	removed, err := prior.Restore()

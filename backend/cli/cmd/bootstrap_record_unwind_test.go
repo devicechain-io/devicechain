@@ -63,6 +63,20 @@ func TestTheCommandLayerClearsTheRecordAfterAHostRefusal(t *testing.T) {
 	}
 }
 
+// The budget refusal fires at the same point as the host refusal — before anything is
+// written — so it unwinds the record the same way.
+func TestTheCommandLayerClearsTheRecordAfterABudgetRefusal(t *testing.T) {
+	home, prior := refusedHome(t, "bravo")
+	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrConnectionBudget{
+		Err: errors.New("the shared relational store has no connection budget left for instance \"bravo\""),
+	})
+	unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	if recordDirExists(t, home, "bravo") {
+		t.Fatal("a bootstrap refused for its connection budget before anything was written left " +
+			"a record `dcctl instances list` shows")
+	}
+}
+
 // 🔴 THE NEGATIVE CONTROL, AND IT IS WHY THIS IS KEYED ON THE ERROR RATHER THAN ON
 // FAILURE. Every other way a bootstrap can fail may have left a cluster half-built, and
 // the record is the only thing that can name it. Widening this to "any error" restores
@@ -76,6 +90,10 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 		{"the rebuild refusal, which is about the SAME instance", errors.New(
 			"step \"Refuse a rebuild\": instance \"bravo\" is already running in this cluster")},
 		{"a successful run", nil},
+		// The same words, raised by the APPLY's admission rather than the early check:
+		// by then the instance's namespace and declaration exist, and the record names them.
+		{"a budget refusal that is not the typed early one", fmt.Errorf(
+			"step \"Apply infrastructure\": %w", errors.New("no connection budget left on the shared store"))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, prior := refusedHome(t, "bravo")

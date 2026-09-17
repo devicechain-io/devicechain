@@ -58,7 +58,19 @@ Which cluster it installs into:
 Re-running `install` against the same cluster converges it: what is already in place is
 left as it is, and what is missing is added. **Changing its settings** — `--ha`,
 `--compact`, monitoring, backups — is refused while any instance exists on the cluster,
-because every instance was built to the settings in place when it was bootstrapped.
+because every instance was built to the settings in place when it was bootstrapped, and
+none is rebuilt when they change. That includes the off-site archive: a
+`--backup-credentials-file` naming a different endpoint or event-store bucket is refused
+too, because every instance's event store keeps archiving to the one it was built with.
+
+There is one exception: a re-run **may raise** `--max-connections` while instances run
+(see [the connection budget](#connection-budget)). Lowering it is refused like any other
+change, and a re-run that does not pass `--max-connections` keeps the budget the cluster
+already has.
+
+`--no-tls` on `dcctl install` only means something together with `--compact`, where it
+drops cert-manager; without `--compact` it is refused. To serve one instance over plain
+HTTP, pass `--no-tls` to `dcctl bootstrap` instead.
 
 The flags are listed under [Install flags](#install-flags). On a laptop:
 
@@ -79,12 +91,21 @@ kind delete cluster --name devicechain
 docker rm -f kind-registry   # the local image registry, if you used --build
 ```
 
-**The connection budget.** The relational database has a fixed number of connections,
-set by `--max-connections` (default `600`). Each instance reserves a connection limit on
-its database login, sized from the areas it enables, and `dcctl bootstrap` refuses an
-instance whose reservation does not fit in what is left. A cluster meant to hold many
-instances, or instances with many areas enabled, needs a larger budget, set when the
-cluster is installed.
+### The connection budget {#connection-budget}
+
+The relational database has a fixed number of connections, set by `--max-connections`
+(default `600`). Each instance reserves a connection limit on its database login, sized
+from the areas it enables, and `dcctl bootstrap` refuses an instance whose reservation
+does not fit in what is left. That check runs **before anything of the instance is
+written** — no namespace, database or login — so a refused bootstrap leaves nothing to
+clean up. A cluster meant to hold many instances, or instances with many areas enabled,
+needs a larger budget.
+
+The budget is the one install setting that can change under running instances, and only
+upwards: re-run `dcctl install` with a larger `--max-connections`. It is not free.
+Changing the database's connection limit restarts its database instances one at a time;
+on a cluster installed without `--ha` there is only one, so **every instance on the
+cluster briefly loses its database** while it restarts. Do it in a quiet window.
 
 ## What it does {#what-it-does}
 
@@ -354,11 +375,11 @@ instance bootstrapped on it follows them; none of them is a `dcctl bootstrap` fl
 | `--kube-context <name>` | Install into the existing cluster this kube-context points at. `dcctl` never creates or deletes it. |
 | `--compact` | Small-footprint preset — see below. |
 | `--ha` | High availability — see below. Needs at least **3 schedulable nodes**. |
-| `--no-tls` | With `--compact`: install no cert-manager, and therefore no database backups. `--compact --no-tls=false` keeps both. |
+| `--no-tls` | With `--compact`: install no cert-manager, and therefore no database backups. `--compact --no-tls=false` keeps both. Refused without `--compact` — use `dcctl bootstrap --no-tls` to serve an instance over plain HTTP. |
 | `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
 | `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
-| `--max-connections <n>` | The relational database's connection budget (default `600`) — see [the connection budget](#install). |
+| `--max-connections <n>` | The relational database's connection budget (default `600` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What it does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
 | `--yes` | Do not ask before creating a kind cluster. |
@@ -394,9 +415,9 @@ without cert-manager, every instance is served without TLS: `dcctl bootstrap` de
 :::note Why `--compact --no-tls` drops the backup plugin
 The Barman Cloud plugin issues its own certificates through cert-manager, so dropping
 cert-manager drops the plugin with it. Turning TLS back on (`--no-tls=false`) restores
-both. Note it takes *both* install flags: `--no-tls` on its own keeps cert-manager and
-therefore keeps the plugin — and `--no-tls` on `dcctl bootstrap`, as in the local-URL
-example below, only changes how that one instance is served.
+both. Note it takes *both* install flags: `dcctl install --no-tls` without `--compact` is
+refused — and `--no-tls` on `dcctl bootstrap`, as in the local-URL example below, only
+changes how that one instance is served.
 
 The CloudNativePG operator itself is installed on *every* cluster, compact included —
 one Deployment requesting 100m/128Mi, plus its CRDs. That is a footprint cost compact
@@ -551,7 +572,9 @@ root-key escrow artifact is kept — see
 [Disaster Recovery](./disaster-recovery.md#after-destroy). It never deletes the cluster or
 the prerequisites `dcctl install` put there, so the next `dcctl bootstrap` on the cluster
 needs no install first. Destroying an instance and bootstrapping it again under the same
-name is how an instance is recreated.
+name is how an instance is recreated. An instance built by an older release, before
+`dcctl install` existed, is the exception: its cluster has to be recreated too — see
+[Releases & Upgrades](./releases-and-upgrades.md#pre-declaration-recreate).
 
 There is no uninstall command yet. To delete a local cluster `dcctl install` created, use
 kind directly, as shown under [Install the cluster](#install).

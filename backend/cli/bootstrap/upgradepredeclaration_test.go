@@ -52,6 +52,8 @@ func TestAnInstanceThatPredatesDeclarationsIsToldToRecreate(t *testing.T) {
 		{"that this is not a typo", "not a mistyped name"},
 		{"that this release will not upgrade onto its predecessor", "DOES NOT UPGRADE ONTO ITS PREDECESSOR"},
 		{"how to destroy it", "dcctl destroy local upgrig"},
+		{"that the cluster is recreated in between", "delete and recreate the cluster"},
+		{"how to install the recreated cluster", "dcctl install local --kube-context kind-devicechain-upgrade"},
 		{"how to build it again", "dcctl bootstrap local upgrig"},
 		{"the cluster the recipes act on", "kind-devicechain-upgrade"},
 		{"that the data goes with it", "data with it"},

@@ -311,3 +311,33 @@ func TestTheRecordedOutputsAreWhatTheClusterApplyReturned(t *testing.T) {
 		t.Errorf("recorded outputs\n got %+v\nwant %+v", got, want)
 	}
 }
+
+// Newer and older records are refused for opposite reasons, with opposite remedies: a
+// newer record needs the dcctl that wrote it, an older one needs this dcctl to re-install.
+func TestASchemaRefusalSendsTheOperatorTheRightWay(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		schema      int
+		want, wrong string
+	}{
+		{"newer", installRecordSchema + 1, "use the dcctl that installed this cluster", "Re-run `dcctl install`"},
+		{"older", installRecordSchema - 1, "Re-run `dcctl install` with this dcctl", "use the dcctl that installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewSimpleClientset()
+			if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
+				t.Fatal(err)
+			}
+			rec := storedInstallRecord(t, c)
+			rec.Schema = tc.schema
+			replaceStoredInstallRecord(t, c, rec)
+			_, err := readInstallRecord(context.Background(), c, testClusterUID)
+			if !errors.Is(err, ErrInstallRecordSchema) {
+				t.Fatalf("a %s record was not refused as another schema: %v", tc.name, err)
+			}
+			if !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tc.wrong) {
+				t.Errorf("a %s record's refusal does not say %q (or says %q): %v", tc.name, tc.want, tc.wrong, err)
+			}
+		})
+	}
+}

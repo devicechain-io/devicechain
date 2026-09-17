@@ -337,9 +337,14 @@ take on while every install is still an early one.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain     # removes the instance; the cluster stays installed
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+With the current `dcctl` the cluster is recreated too, not just the instance: see
+[why](#pre-declaration-recreate).
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm` operation,
@@ -384,9 +389,14 @@ upgrade path that preserves the existing rows.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain     # removes the instance; the cluster stays installed
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+With the current `dcctl` the cluster is recreated too, not just the instance: see
+[why](#pre-declaration-recreate).
 
 The same caution applies as above: recreation discards your telemetry, device definitions
 and dashboards. Export anything you need before you start.
@@ -1244,13 +1254,24 @@ There is no compatibility shim, and before `v1.0.0` there will not be one. What 
 instance was configured with was never written down in a form this release can read, so a
 declaration invented after the fact would be a guess applied over a live instance.
 
-**To move onto this release, recreate the instance:**
+**To move onto this release, recreate the instance — and the cluster under it.** The
+releases that built these instances had no `dcctl install`: they installed the cluster's
+shared prerequisites as part of the instance, and recorded no install. So `dcctl destroy`
+leaves those prerequisites behind, `dcctl bootstrap` refuses a cluster with no install
+record, and `dcctl install` would collide with what the older release left. Start from a
+fresh cluster in between:
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain     # removes the instance; the cluster stays installed
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+For a cluster reached with `--kube-context`, which `dcctl` never deletes, delete and
+recreate it with whatever created it, then pass the same `--kube-context` to `install` and
+`bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm`
@@ -1322,8 +1343,10 @@ Upgrading an instance created before the databases moved onto the operator is th
 where this comes up, and it is refused at plan time rather than left to chance. Dump both
 databases first, then re-run `dcctl install` with `--allow-legacy-db-removal` for the
 relational database, and the bootstrap with it for the event store — which asserts you have
-handled the data, and verifies nothing. For a local instance, `dcctl destroy`
-followed by a fresh bootstrap is simpler and discards the data deliberately.
+handled the data, and verifies nothing. For a local instance, recreating it is simpler and
+discards the data deliberately — destroy it, recreate the cluster, then install and
+bootstrap, as described under
+[Instances built by v0.16.0 and earlier](#pre-declaration-recreate).
 :::
 
 This is durability of the running volumes — it is not a substitute for scheduled backups and

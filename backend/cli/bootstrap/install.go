@@ -113,8 +113,8 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	if st.MaxConnections == 0 {
 		st.MaxConnections = defaultMaxConnections
-		if prev != nil && prev.Phase == installPhaseInstalled && prev.Outputs.Rdb.MaxConnections > 0 {
-			st.MaxConnections = prev.Outputs.Rdb.MaxConnections
+		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
+			st.MaxConnections = last.Outputs.Rdb.MaxConnections
 		}
 	}
 	if err := refuseAReinstallThatWouldHurt(ctx, st, prev, settings, localClusterStateExists); err != nil {
@@ -231,7 +231,8 @@ func localClusterStateExists(uid string) (bool, error) {
 //     the connection budget is the one change that cannot hurt them, so it is allowed.
 func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *InstallRecord, settings InstallSettings,
 	stateExists func(uid string) (bool, error)) error {
-	if prev == nil || prev.Phase != installPhaseInstalled {
+	last := prev.lastCompleted()
+	if last == nil {
 		return nil
 	}
 	exists, err := stateExists(st.ClusterUID)
@@ -243,17 +244,24 @@ func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *Install
 			"state for it under ~/.devicechain/clusters/%s. It was installed from another machine, and "+
 			"re-applying from empty state would try to create every prerequisite again. Run "+
 			"`dcctl install` from the machine that installed it",
-			st.Binding.Describe(), prev.DcctlVersion, prev.UpdatedAt.Format(time.RFC3339), st.ClusterUID)
+			st.Binding.Describe(), last.DcctlVersion, last.UpdatedAt.Format(time.RFC3339), st.ClusterUID)
 	}
 
 	var changed []string
-	if prev.Settings != settings {
+	if last.Settings != settings {
 		changed = append(changed, fmt.Sprintf("settings %s → %s",
-			describeInstallSettings(prev.Settings), describeInstallSettings(settings)))
+			describeInstallSettings(last.Settings), describeInstallSettings(settings)))
 	}
-	if st.MaxConnections < prev.Outputs.Rdb.MaxConnections {
+	if st.MaxConnections < last.Outputs.Rdb.MaxConnections {
 		changed = append(changed, fmt.Sprintf("connection budget %d → %d",
-			prev.Outputs.Rdb.MaxConnections, st.MaxConnections))
+			last.Outputs.Rdb.MaxConnections, st.MaxConnections))
+	}
+	// An off-site destination is more than a boolean: every instance's event store
+	// archives to the endpoint and bucket it was built with, and none is re-pointed.
+	if d, a := st.BackupDestination, last.Outputs.Archive; last.Settings.BackupsExternal && d.Configured() &&
+		(d.EndpointURL != a.EndpointURL || d.BucketTsdb != a.BucketTsdb) {
+		changed = append(changed, fmt.Sprintf("off-site archive %s/%s → %s/%s",
+			a.EndpointURL, a.BucketTsdb, d.EndpointURL, d.BucketTsdb))
 	}
 	if len(changed) == 0 {
 		return nil

@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -65,19 +67,21 @@ func readClusterArchiveCredential(ctx context.Context, typed kubernetes.Interfac
 		return nil, fmt.Errorf("Secret %s/%s is not this cluster's archive credential: %s. Re-run "+
 			"`dcctl install` on this cluster", infraNamespace, name, reason)
 	}
-	data := make(map[string]string, len(s.Data))
-	for k, v := range s.Data {
-		data[k] = string(v)
-	}
+	// Exactly the two keys the archive contract names, and none of the live object's
+	// labels: whatever else was added to the cluster's Secret is not the instance's to
+	// carry into its own namespace.
+	data := map[string]string{}
 	for _, key := range []string{st.Install.Outputs.Archive.AccessKeyIDKey, st.Install.Outputs.Archive.SecretAccessKey} {
-		if data[key] == "" {
+		if len(s.Data[key]) == 0 {
 			return nil, fmt.Errorf("the cluster's archive credential %s/%s has no %q, which the archive "+
 				"contract says the archiver presents", infraNamespace, name, key)
 		}
+		data[key] = string(s.Data[key])
 	}
 	return &ownedSecret{
-		Name: name, Namespace: infraNamespace, Type: s.Type,
-		Labels: s.Labels, Data: data, Scope: ownerCluster,
+		Name: name, Namespace: infraNamespace, Type: corev1.SecretTypeOpaque,
+		Labels: map[string]string{"app.kubernetes.io/component": "database-backup"},
+		Data:   data, Scope: ownerCluster,
 	}, nil
 }
 

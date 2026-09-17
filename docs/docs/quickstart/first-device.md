@@ -13,7 +13,7 @@ Budget about half an hour, most of it waiting for the bootstrap.
 :::note What this page assumes
 **`dcctl`, plus five tools on your `PATH`:** `docker`, `kubectl`, `helm`,
 [`kind`](https://kind.sigs.k8s.io/), and [OpenTofu](https://opentofu.org/) (the `tofu` binary;
-`terraform` also works). `dcctl install` and `dcctl bootstrap` each run a preflight first and **stops** if one of them is
+`terraform` also works). `dcctl install` and `dcctl bootstrap` each run a preflight first and **stop** if one of them is
 missing, so a gap costs you the first ten seconds rather than ten minutes.
 
 `helm` is on that list even though `dcctl` carries the chart inside itself and installs it
