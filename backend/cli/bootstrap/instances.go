@@ -165,9 +165,8 @@ const maxInstanceNameLen = 50
 // the namespaces `dcctl install` creates used to sit alongside it and has been
 // removed: an instance's namespace is being given a prefix of its own, which puts the
 // two sets of names out of each other's reach and retires that question rather than
-// answering it twice. Each
-// grammar answered where its answer lives is correct; one list answering all of them
-// is the shape that disagrees with itself.
+// answering it twice. Each grammar answered where its answer lives is correct; one
+// list answering all of them is the shape that disagrees with itself.
 //
 // 🔴 AND IT IS A DNS-1123 LABEL, BECAUSE A NAME IS NOW FOUR THINGS AT ONCE. It names a
 // directory here, a Kubernetes namespace, and — on the shared relational store — both

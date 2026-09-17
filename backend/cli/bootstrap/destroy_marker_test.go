@@ -28,6 +28,33 @@ func markerExists(t *testing.T, home, instance string) bool {
 	return err == nil
 }
 
+// unstattableMarker puts an instance directory into the "could not tell" state: the
+// marker inside it can be neither found nor ruled out. Three callers reach for it —
+// DestroyInProgress, RefuseUnfinishedDestroy and ListInstances all have to keep that
+// answer distinct from "absent" — and the two traps below belong to the fixture rather
+// than to any one of them, which is why they are written once.
+//
+// 🔴 0o000, NOT 0o100. With execute-only the directory is still TRAVERSABLE, so a stat of
+// a known name inside it succeeds and reports ErrNotExist — the reach control below skips
+// on that, which is a case that asserts nothing wearing a pass.
+//
+// 🔴 AND THE REACH CONTROL ITSELF. Running as root, or on a filesystem that ignores
+// modes, the stat SUCCEEDS and the caller's case would assert nothing at all.
+func unstattableMarker(t *testing.T, home, instance string) {
+	t.Helper()
+	dir := filepath.Join(home, ".devicechain", "instances", instance)
+	if err := os.MkdirAll(dir, stateDirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, stateDirMode) })
+	if _, err := os.Stat(filepath.Join(dir, destroyMarkerFile)); errors.Is(err, os.ErrNotExist) {
+		t.Skip("the tightened directory is still statable here, so this case cannot detect the fold")
+	}
+}
+
 // 🔴 THE ESCROW-COLLISION CONTROL, and for this file it is worse than it is for the
 // record. `destroy` spares every file whose name looks like escrow, so a marker matching
 // that pattern would survive the destroy that wrote it — and every later bootstrap and
@@ -87,21 +114,8 @@ func TestDestroyInProgressSeparatesPresentAbsentAndCouldNotTell(t *testing.T) {
 	})
 
 	t.Run("could not tell", func(t *testing.T) {
-		home := fakeHome(t)
-		dir := filepath.Join(home, ".devicechain", "instances", "acme")
-		if err := os.MkdirAll(dir, stateDirMode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(dir, 0o000); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, stateDirMode) })
+		unstattableMarker(t, fakeHome(t), "acme")
 
-		// 🔴 THE REACH CONTROL. Running as root, or on a filesystem that ignores modes,
-		// the stat SUCCEEDS — and then this case asserts nothing at all.
-		if _, err := os.Stat(filepath.Join(dir, destroyMarkerFile)); errors.Is(err, os.ErrNotExist) {
-			t.Skip("the unreadable directory is still statable here, so this case cannot detect the fold")
-		}
 		marked, err := DestroyInProgress("acme")
 		if err == nil {
 			t.Fatal("a marker that could not be statted was reported as a definite answer, " +
@@ -145,18 +159,7 @@ func TestRefuseUnfinishedDestroyRefusesAMarkedInstanceAndFailsClosed(t *testing.
 	// 🔴 AND "COULD NOT TELL" REFUSES. Proceeding on an unanswerable check is how a
 	// bootstrap lands on top of a half-removed instance.
 	t.Run("a marker that could not be checked is refused too", func(t *testing.T) {
-		home := fakeHome(t)
-		dir := filepath.Join(home, ".devicechain", "instances", "acme")
-		if err := os.MkdirAll(dir, stateDirMode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(dir, 0o000); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, stateDirMode) })
-		if _, err := os.Stat(filepath.Join(dir, destroyMarkerFile)); errors.Is(err, os.ErrNotExist) {
-			t.Skip("the unreadable directory is still statable here, so this case cannot detect the fold")
-		}
+		unstattableMarker(t, fakeHome(t), "acme")
 
 		err := RefuseUnfinishedDestroy("acme")
 		if err == nil {

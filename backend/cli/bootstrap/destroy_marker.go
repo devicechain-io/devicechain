@@ -165,22 +165,22 @@ func (e *ErrDestroyUnfinished) Error() string {
 // reads the path in the message and looks at it; the cost of proceeding wrongly is a
 // bootstrap over a half-removed instance, or an upgrade stamping Ready over Destroying.
 func RefuseUnfinishedDestroy(instance string) error {
+	// Settled once, for both refusals below. BOTH have to name the file — it is the
+	// escape hatch, and a refusal that does not say where the marker is leaves an
+	// operator certain nothing remains with no move — and the spelling they fall back on
+	// when the path itself will not resolve is the same one, for the same reason.
+	path, err := destroyMarkerPath(instance)
+	if err != nil {
+		path = "~/.devicechain/instances/" + instance + "/" + destroyMarkerFile
+	}
 	marked, err := DestroyInProgress(instance)
 	if err != nil {
-		path, pathErr := destroyMarkerPath(instance)
-		if pathErr != nil {
-			path = "~/.devicechain/instances/" + instance + "/" + destroyMarkerFile
-		}
 		return fmt.Errorf("could not tell whether a teardown of instance %q is part-way through "+
 			"(%s could not be read: %w). Refusing rather than guessing: acting on a half-destroyed "+
 			"instance is what this check exists to stop", instance, path, err)
 	}
 	if !marked {
 		return nil
-	}
-	path, err := destroyMarkerPath(instance)
-	if err != nil {
-		path = "~/.devicechain/instances/" + instance + "/" + destroyMarkerFile
 	}
 	return &ErrDestroyUnfinished{Instance: instance, Marker: path}
 }

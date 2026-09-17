@@ -765,17 +765,7 @@ func TestListInstancesReportsTheDestroyMarkerAndWhenItCouldNotBeChecked(t *testi
 	t.Run("a marker that could not be checked", func(t *testing.T) {
 		home := fakeHome(t)
 		writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
-		dir := filepath.Join(home, ".devicechain", "instances", "inst")
-		// 🔴 0o000, NOT 0o100. With execute-only the directory is still TRAVERSABLE, so a
-		// stat of a known name inside it succeeds and reports ErrNotExist — the reach
-		// control below skipped on it, which is a case that asserts nothing wearing a pass.
-		if err := os.Chmod(dir, 0o000); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-		if _, err := os.Stat(filepath.Join(dir, destroyMarkerFile)); errors.Is(err, os.ErrNotExist) {
-			t.Skip("the tightened directory is still statable here, so this case cannot detect the fold")
-		}
+		unstattableMarker(t, home, "inst")
 
 		got, err := ListInstances()
 		if err != nil {

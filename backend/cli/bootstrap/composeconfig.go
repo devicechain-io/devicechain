@@ -424,16 +424,19 @@ func ensureNamespaceForRelease(
 	instance, releaseName, releaseNamespace string,
 ) error {
 	api := typed.CoreV1().Namespaces()
-	existing, err := api.Get(ctx, instance, metav1.GetOptions{})
-	switch {
-	case err == nil:
+	// The same read the precheck makes four steps earlier, through the same function, so
+	// that "it is not there" means the same thing in both places — and so what counts as
+	// absent cannot later be changed in one of them only.
+	existing, err := lookupNamespace(ctx, typed, instance)
+	if err != nil {
+		return fmt.Errorf("reading namespace %q before writing the instance configuration: %w",
+			instance, err)
+	}
+	if existing != nil {
 		if err := refuseANamespaceThisInstanceDoesNotOwn(instance, existing); err != nil {
 			return err
 		}
 		return stampHelmAdoptionMetadata(ctx, api, existing, releaseName, releaseNamespace)
-	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("reading namespace %q before writing the instance configuration: %w",
-			instance, err)
 	}
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{

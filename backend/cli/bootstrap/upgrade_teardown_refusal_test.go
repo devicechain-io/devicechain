@@ -156,9 +156,7 @@ func TestFinishUpgradePhaseWillNotStampOverATeardown(t *testing.T) {
 	// 🔑 THE COUNTERWEIGHT, AND WITHOUT IT THE GUARD ABOVE IS SATISFIED BY A FUNCTION THAT
 	// WRITES NOTHING. Every other phase is still stamped over.
 	t.Run("every other phase is still closed out", func(t *testing.T) {
-		inst := atVersion(t, "ghcr.io/devicechain-io", "v1.3.0")
-		setPhase(inst, dcv1beta1.PhaseUpgrading)
-		dyn := declaring(t, inst)
+		dyn := declaring(t, upgrading(t))
 		finishUpgradePhase(t.Context(), dyn, "prod",
 			upgradingTo("ghcr.io/devicechain-io", "v1.3.0"), nil, nil)
 		if got := phaseOf(t, dyn); got != dcv1beta1.PhaseReady {

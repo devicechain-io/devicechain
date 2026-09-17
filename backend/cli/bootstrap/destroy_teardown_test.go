@@ -181,8 +181,8 @@ func TestADestroyInterruptedDuringTheUninstallStopsAfterItAsAnInterrupt(t *testi
 	// 🔴 AND THE MARKER SURVIVES IT, which is the case the marker exists for: this
 	// destroy removed the chart release and stopped, so the cluster holds part of the
 	// instance and no longer holds the rest. A re-run resumes; a bootstrap is refused.
-	if _, err := os.Stat(filepath.Join(r.home, ".devicechain", "instances", "acme", destroyMarkerFile)); err != nil {
-		t.Fatalf("an interrupted destroy left nothing saying a teardown had started: %v", err)
+	if !markerExists(t, r.home, "acme") {
+		t.Fatal("an interrupted destroy left nothing saying a teardown had started")
 	}
 }
 
