@@ -191,18 +191,25 @@ accidental destroys (methodology §11). Three guards back this up:
   `lifecycle { prevent_destroy = true }`, so a naive `tofu destroy` *refuses* to
   remove the databases (and therefore refuses to destroy this whole root).
 
+  `dcctl destroy` is the one deliberate exception, for the **instance** root only: to
+  remove an instance it uninstalls the event store's release directly, then drops it
+  from state, then runs a plain `tofu destroy` over the rest of the instance root. By
+  then the instance's Helm release has been uninstalled, and the namespace — with NATS
+  and the event store in it — has gone with it, so this mostly clears the instance's
+  state. The
+  cluster root — and with it the relational database — is never destroyed by `dcctl`.
+
   🔴 It protects a resource that is **in the configuration**. It does NOT protect one
   removed FROM the configuration: a resource whose module block is deleted becomes an
   orphan, and orphans are destroyed without consulting a `lifecycle` block that is no
   longer there to consult. That is what the plan-time cutover guard in `main.tf` is
   for, and it is measured rather than assumed.
 
-**Planned next step:** split this OpenTofu root into a durable **data stack**
-(PG/Timescale/NATS JetStream — Retain, prevent_destroy, rarely touched) with its
-own state, separate from the disposable **platform stack** (ingress, cert-manager),
-so the data tier can be applied/destroyed fully independently (methodology §11).
-Scheduled backups (`pg_dump` / volume snapshots) are a belt-and-suspenders
-fast-follow.
+The tree is split into two roots with separate state: `cluster/`, applied once per
+cluster by `dcctl install` (the relational store, object store, operators, ingress,
+cert-manager, monitoring), and `instance/`, applied per instance by `dcctl bootstrap`
+into the instance's own namespace (NATS and the event store). An instance root is
+destroyed without touching the cluster root.
 
 ## Notes & scope boundaries
 

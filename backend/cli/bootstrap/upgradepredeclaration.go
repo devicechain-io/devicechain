@@ -104,14 +104,17 @@ func (e *ErrPreDeclarationInstance) Error() string {
 			"The release that built it also installed the cluster's shared prerequisites as part "+
 			"of the instance, so delete and recreate the cluster in between (for a local kind "+
 			"cluster, `kind delete cluster --name <cluster>`):\n\n"+
-			"      dcctl destroy %s %s --kube-context %s\n"+
+			"      dcctl destroy %s %s --kube-context %s --without-state\n"+
 			"      # delete and recreate the cluster\n"+
 			"      dcctl install %s --kube-context %s\n"+
 			"      dcctl bootstrap %s %s --kube-context %s\n\n"+
 			"That takes %q's data with it, and there is no other route: nothing here writes a "+
 			"declaration on behalf of an instance that never had one, because what that "+
 			"instance was configured with was never recorded in a form this command can read. "+
-			"Inventing one would deploy a guess over a live instance.",
+			"Inventing one would deploy a guess over a live instance.\n\n"+
+			"--without-state is required, not optional: an instance this old keeps the cluster's shared "+
+			"prerequisites in its own infrastructure state, so a plain destroy refuses to run tofu destroy "+
+			"over them. Deleting the cluster is what removes them.",
 		e.Instance, source,
 		provider, e.Instance, e.KubeContext,
 		provider, e.KubeContext,

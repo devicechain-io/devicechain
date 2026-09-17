@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -79,12 +78,10 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		return InstallOutputs{}, fmt.Errorf("extracting cluster prerequisite config: %w", err)
 	}
 
-	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
+	tf, err := newTofuExec(rootdir, tofuBin)
 	if err != nil {
 		return InstallOutputs{}, err
 	}
-	tf.SetStdout(os.Stdout)
-	tf.SetStderr(os.Stderr)
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {

@@ -115,12 +115,14 @@ objeto recreado no tiene versión anterior contra la que comparar: borrar y volv
 aplicar reapuntaría el vínculo con el clúster en dos pasos que, por separado, parecen
 legítimos.
 
-**`dcctl destroy` libera el finalizador por sí mismo**, como último paso, una vez que la
-instancia ya no está —así que en el caso normal no hay nada que hacer a mano. `destroy`
+**`dcctl destroy` libera el finalizador por sí mismo**, como último paso en el clúster, una
+vez desaparecido el namespace y antes de eliminar el estado local —así que en el caso normal
+no hay nada que hacer a mano. `destroy`
 nunca elimina el clúster en sí, así que este es el paso que elimina la declaración.
 
 :::note Un destroy que falla deja la declaración en su sitio a propósito
-Sigue registrando en qué clúster vive la instancia, que es lo que necesita una nueva
+Salvo que falle solo al eliminar el estado local, cuando la declaración ya no está, sigue
+registrando en qué clúster vive la instancia, que es lo que necesita una nueva
 ejecución, y dice `Destroying` en lugar de `Ready`, de modo que el siguiente lector puede
 saber que está mirando un desmontaje en curso. Un `dcctl bootstrap` sobre una declaración
 así **se niega** en lugar de construir media instancia nueva sobre media instancia

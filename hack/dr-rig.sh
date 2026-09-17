@@ -84,8 +84,9 @@
 #                             exact exit code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
 #                             [DISABLED — refuses before `up`, see above]
-#   hack/dr-rig.sh down       delete the cluster, the object store and the rig's
-#                             working directory
+#   hack/dr-rig.sh down       dcctl destroy the instance (when it still has local
+#                             state), then delete the cluster, the object store and
+#                             the rig's working directory
 #
 # `all` is the one worth running. `restore` on its own reports a pass from a check
 # whose ability to FAIL has not been demonstrated in this session — and a drill
@@ -148,6 +149,9 @@ set -euo pipefail
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+# warn says something went wrong WITHOUT exiting — for the few steps (see cmd_down)
+# where stopping would strand more than carrying on does.
+warn() { printf '\n\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
 
 # remove_instance_state deletes an instance's local state from BOTH layouts.
 #
@@ -1909,8 +1913,45 @@ before it looked for a row, and exit $DRDRILL_EXIT_SETUP means it could not run 
   esac
 }
 
+# destroy_rig_instance runs `dcctl destroy` for the drill's instance, on a cluster
+# that is still there to be torn down from.
+#
+# WHY DESTROY BEFORE delete_cluster, when deleting the cluster takes the instance with
+# it anyway: destroying first exercises the real teardown an operator runs, and leaves
+# no local instance state for remove_instance_state to sweep up behind it.
+#
+# 🔴 IT ONLY ATTEMPTS WHAT CAN WORK, AND NEVER ABORTS `down`. The rig runs `set -euo
+# pipefail`, so a failing destroy left unguarded would exit before the cluster, the
+# object store and the working directory are removed. Hence `|| warn`. And it skips,
+# SAYING WHY, when there is no dcctl, no instance state, or no cluster. No instance
+# state is the NORMAL case after `disaster`, which removes it without dcctl on purpose
+# — a disaster that dcctl helped with is not one — so `disaster` is not changed to suit
+# this.
+#
+# --kube-context is passed rather than left to the instance record: the rig knows which
+# cluster it bootstrapped into, and without a readable record destroy would guess
+# kind-<instance>, which is not this rig's cluster.
+destroy_rig_instance() {
+  if [[ ! -x "$dcctl" ]]; then
+    note "not destroying instance $instance: dcctl is not built at $dcctl"
+    return 0
+  fi
+  if [[ ! -d "${HOME:?}/.devicechain/instances/$instance" ]]; then
+    note "not destroying instance $instance: there is no ~/.devicechain/instances/$instance (expected after 'disaster')"
+    return 0
+  fi
+  if ! kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+    note "not destroying instance $instance: kind cluster $cluster is not running"
+    return 0
+  fi
+  say "destroying instance $instance in kind cluster $cluster"
+  "$dcctl" destroy local "$instance" --yes --kube-context "$kube_context" ||
+    warn "dcctl destroy of instance $instance exited $?; deleting the cluster anyway"
+}
+
 cmd_down() {
   need kind; need docker
+  destroy_rig_instance
   delete_cluster
   minio_down
   if [[ -d "$work" ]]; then

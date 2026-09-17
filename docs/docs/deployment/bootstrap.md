@@ -566,10 +566,27 @@ data](../intro.md#trying-it-with-simulated-data).
 dcctl destroy local my-instance
 ```
 
-`dcctl destroy` removes **that instance only**: its Helm release, its database and database
-login, its namespace, and its local state under `~/.devicechain/instances/<instance>/`. The
-root-key escrow artifact is kept — see
-[Disaster Recovery](./disaster-recovery.md#after-destroy). It never deletes the cluster or
+`dcctl destroy` removes **that instance only**, in this order: its Helm release, which
+removes the instance's namespace and everything in it, including its NATS broker and its
+event store; its infrastructure state, through `tofu destroy`, which also removes anything
+that state still holds; its database and database login on the shared relational database;
+and then it waits to see the namespace fully gone. It then checks that what it deleted is really absent, and only after that
+removes its local state under `~/.devicechain/instances/<instance>/`. The root-key escrow
+artifact is kept — see [Disaster Recovery](./disaster-recovery.md#after-destroy).
+
+If a step fails or is interrupted — including a namespace that is still terminating when
+the wait runs out — destroy exits with an error and keeps the local state, so running the
+same command again picks up where it stopped.
+
+If the instance is still running but its local infrastructure state is missing — lost, or
+the instance was bootstrapped from another machine — destroy **refuses**, because it cannot
+run the infrastructure destroy without that state. `--without-state` removes the instance
+anyway, by its Helm release, database and login, and namespace, and reports that the
+infrastructure destroy was skipped. An instance whose local state predates the split of
+the infrastructure into a cluster part and an instance part is refused the same way, before
+any change, and needs `--without-state` too. `dcctl destroy --all` accepts `--without-state`.
+
+It never deletes the cluster or
 the prerequisites `dcctl install` put there, so the next `dcctl bootstrap` on the cluster
 needs no install first. Destroying an instance and bootstrapping it again under the same
 name is how an instance is recreated. An instance built by an older release, before

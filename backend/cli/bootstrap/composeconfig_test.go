@@ -670,7 +670,7 @@ func TestDestroyRemovesTheNamespaceTheUninstallCannotReach(t *testing.T) {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-config", Namespace: "dctest"}},
 	)
 
-	if err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+	if _, err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
 		t.Fatalf("removing the namespace: %v", err)
 	}
 	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{}); err == nil {
@@ -686,7 +686,7 @@ func TestDestroyLeavesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 		Labels: map[string]string{"devicechain.io/instance": "somebody-else"},
 	}})
 
-	if err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+	if _, err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
 		t.Fatalf("a namespace this instance does not own was treated as a failure: %v", err)
 	}
 	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{}); err != nil {
@@ -697,7 +697,7 @@ func TestDestroyLeavesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 // Destroy is re-run precisely when something went wrong the first time, so a
 // namespace that is already gone is success and not an error.
 func TestRemovingAnAbsentNamespaceIsSuccess(t *testing.T) {
-	if err := removeInstanceNamespace(context.Background(), fake.NewSimpleClientset(), "dctest"); err != nil {
+	if _, err := removeInstanceNamespace(context.Background(), fake.NewSimpleClientset(), "dctest"); err != nil {
 		t.Errorf("an already-deleted namespace failed the destroy: %v", err)
 	}
 }

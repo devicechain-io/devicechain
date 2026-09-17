@@ -114,7 +114,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 
 // instanceRoot is the instance root, extracted, initialised and fenced — ready to apply.
 type openedInstanceRoot struct {
-	tf      *tfexec.Terraform
+	tf      *tofuExec
 	rootdir string
 }
 
@@ -163,13 +163,12 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 		return openedInstanceRoot{}, err
 	}
 
-	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
+	// Streams tofu's own progress so a long apply is not a silent wait — and only its
+	// progress: see tofuExec for why a read must never reach the terminal.
+	tf, err := newTofuExec(rootdir, tofuBin)
 	if err != nil {
 		return openedInstanceRoot{}, err
 	}
-	// Stream tofu's own progress so a long apply is not a silent wait.
-	tf.SetStdout(os.Stdout)
-	tf.SetStderr(os.Stderr)
 
 	// 🔴 GIVE A CANCELLED APPLY LONG ENOUGH TO STOP THE WAY IT WANTS TO.
 	// terraform-exec cancels by sending SIGINT — tofu's graceful stop, which
@@ -239,7 +238,7 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 
 // applyInstanceInfra applies the instance root openInstanceRoot prepared, and records
 // what it built.
-func applyInstanceInfra(ctx context.Context, st *State, tf *tfexec.Terraform, vars []string) error {
+func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []string) error {
 
 	opts := make([]tfexec.ApplyOption, 0, len(vars))
 	for _, v := range vars {

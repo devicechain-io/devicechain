@@ -48,7 +48,9 @@
 #                                 different ways and require the right check to
 #                                 notice each, with the exact exit code for it
 #   hack/upgrade-rig.sh all       up, then whichever drill `mode` names
-#   hack/upgrade-rig.sh down      delete the cluster and the rig's state
+#   hack/upgrade-rig.sh down      dcctl destroy the instance (with the working tree's
+#                                 dcctl), then delete the cluster, dcctl's local state
+#                                 for it, and the rig's state
 #
 # `all` is the one worth running. `verify` on its own reports a pass from a check
 # whose ability to FAIL has not been demonstrated in this session — which is the
@@ -449,6 +451,9 @@ fail_code() {
 }
 
 fail() { fail_code 1 "$@"; }
+# warn says something went wrong WITHOUT exiting — for the few steps (see cmd_down)
+# where stopping would strand more than carrying on does.
+warn() { printf '\n\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
 
 # remove_instance_state deletes an instance's local state from BOTH layouts.
 #
@@ -2494,13 +2499,101 @@ rather than failing. (A shallow clone shows the same symptom; this check needs h
 # down
 # ---------------------------------------------------------------------------
 
+# remove_cluster_state deletes dcctl's local state for the rig's kind cluster:
+# ~/.devicechain/clusters/<kube-system UID>, where `dcctl install` keeps the cluster
+# root's OpenTofu state and the cluster.json record. `dcctl destroy` never removes it —
+# the cluster outlives its instances — so a rig that deletes the cluster has to.
+#
+# 🔴 IT IS KEYED ON THE CLUSTER'S UID, NOT ITS NAME, so it cannot be found by the name
+# the rig knows. A deleted-and-recreated kind cluster wears the same context name and
+# a new UID, which is exactly why dcctl keys it that way. So the directory is found two
+# ways, both of which are needed:
+#
+#   - the UID of the cluster about to be deleted, read by delete_cluster while the
+#     cluster still exists to be asked;
+#   - every record whose cluster.json names this rig's context. That covers a cluster
+#     deleted by an earlier run, or by hand, whose UID nobody can read any more.
+#
+# This rig owns its context name outright (devicechain-upgrade exists for nothing
+# else), so once that cluster is gone no record naming it can describe a live cluster.
+# (Same shape as hack/dr-rig.sh.)
+remove_cluster_state() {
+  local uid="${1:-}" context="${2:?}" dir clusters="${HOME:?}/.devicechain/clusters"
+  if [[ -n "$uid" ]]; then
+    case "$uid" in
+      . | .. | */* | *\\*) fail "refusing to remove state for cluster UID '$uid'" ;;
+    esac
+    rm -rf "${clusters:?}/$uid"
+  fi
+  [[ -d "$clusters" ]] || return 0
+  for dir in "$clusters"/*/; do
+    [[ -f "$dir/cluster.json" ]] || continue
+    if [[ "$(jq -r '.kubeContext // empty' "$dir/cluster.json" 2>/dev/null || true)" == "$context" ]]; then
+      rm -rf "${dir:?}"
+    fi
+  done
+}
+
+# delete_cluster deletes the rig's kind cluster and dcctl's local state for it.
+# The UID is read BEFORE the delete, because afterwards there is nothing left to ask.
+delete_cluster() {
+  local name="$cluster" context="$kube_context" uid=""
+  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+    uid="$(kubectl --context "$context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+    say "deleting kind cluster $name"
+    kind delete cluster --name "$name"
+  fi
+  remove_cluster_state "$uid" "$context"
+}
+
+# destroy_rig_instance runs `dcctl destroy` for the drill's instance, on a cluster
+# that is still there to be torn down from.
+#
+# WHY DESTROY BEFORE `kind delete cluster`, when deleting the cluster takes the
+# instance with it anyway: destroying first exercises the real teardown an operator
+# runs, and leaves no local instance state behind it.
+#
+# 🔴 WITH $target_dcctl, THE WORKING TREE'S BUILD — NOT $baseline_dcctl. The destroy
+# being exercised is the one this branch ships; the baseline's is a released binary
+# nobody is testing here. That has a cost this rig has to absorb: after an `up` that
+# never reached `upgrade`, the instance was built by the BASELINE, and its local state
+# can be in a shape the new destroy refuses (or, from a dcctl predating
+# ~/.devicechain/instances/, in the legacy ~/.devicechain/<name>, which the directory
+# check below does not see and so skips). Neither is a finding for `down` to stop on:
+# the cluster delete and remove_instance_state below clear both layouts regardless.
+#
+# 🔴 SO IT NEVER ABORTS `down`. The rig runs `set -euo pipefail`, so a failing destroy
+# left unguarded would exit before the cluster is deleted. Hence `|| warn`. And it
+# skips, SAYING WHY, when there is no dcctl, no instance state, or no cluster.
+#
+# --kube-context is passed rather than left to the instance record, which a baseline
+# dcctl may never have written: without one destroy guesses kind-<instance>, which is
+# not this rig's cluster.
+destroy_rig_instance() {
+  if [[ ! -x "$target_dcctl" ]]; then
+    note "not destroying instance $instance: the working tree's dcctl is not built at $target_dcctl"
+    return 0
+  fi
+  if [[ ! -d "${HOME:?}/.devicechain/instances/$instance" ]]; then
+    note "not destroying instance $instance: there is no ~/.devicechain/instances/$instance"
+    return 0
+  fi
+  if ! kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+    note "not destroying instance $instance: kind cluster $cluster is not running"
+    return 0
+  fi
+  say "destroying instance $instance in kind cluster $cluster with the working tree's dcctl"
+  "$target_dcctl" destroy local "$instance" --yes --kube-context "$kube_context" ||
+    warn "dcctl destroy of instance $instance exited $? (an instance the baseline built may be refused); deleting the cluster anyway"
+}
+
 cmd_down() {
   need kind
   need docker
-  if kind get clusters 2>/dev/null | grep -qx "$cluster"; then
-    say "deleting kind cluster $cluster"
-    kind delete cluster --name "$cluster"
-  fi
+  need kubectl
+  need jq
+  destroy_rig_instance
+  delete_cluster
   if [[ -d "$work" ]]; then
     say "removing the rig's working directory $work"
     rm -rf "${work:?}"

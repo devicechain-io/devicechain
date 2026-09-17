@@ -360,8 +360,9 @@ de arreglarla.
 
 ## Después de `dcctl destroy` {#after-destroy}
 
-`dcctl destroy` elimina la instancia —su release de Helm, su base de datos y su login de
-base de datos, su namespace— y su estado local, pero **no** el artefacto de depósito, que
+`dcctl destroy` elimina la instancia —su release de Helm, su broker NATS y su almacén de
+eventos, su base de datos y su login de base de datos, su namespace— y su estado local, pero
+**no** el artefacto de depósito, que
 vive fuera de ese directorio por diseño y que destroy nombra al terminar.
 
 Nunca elimina el clúster, ni los requisitos previos que `dcctl install` dejó en él: la base

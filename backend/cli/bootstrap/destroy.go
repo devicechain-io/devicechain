@@ -21,11 +21,16 @@ var errDestroyAborted = errors.New("aborted by operator")
 // DestroyOptions drives an instance destroy.
 type DestroyOptions struct {
 	Options
+	// WithoutState removes the instance without running `tofu destroy` over its
+	// infrastructure state: the chart release, the database and login, and the
+	// namespace. For an instance whose state is lost, or cannot be destroyed from.
+	WithoutState bool
 }
 
 // Destroy removes one DeviceChain instance — the inverse of bootstrap: its Helm release,
-// its database and login on the shared relational store, its namespace, and its local
-// state (root-key escrow spared).
+// its own infrastructure (`tofu destroy` over the instance root), its database and login
+// on the shared relational store, its namespace, and its local state (root-key escrow
+// spared).
 //
 // 🔴 IT NEVER DELETES THE CLUSTER, OR ANYTHING ELSE THE CLUSTER'S OTHER INSTANCES SHARE.
 // A cluster holds many instances and the prerequisites `dcctl install` put there serve
@@ -47,10 +52,18 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	// entire promise is "print what would happen without destroying anything". A flag
 	// that destroys is worse than no flag.
 	if opts.DryRun {
+		infra := "run tofu destroy over the instance's infrastructure state (its broker and event store) — " +
+			"skipped when that state lists nothing, and refused before anything is changed when the state " +
+			"cannot be read, still holds the cluster prerequisites, or is missing or empty while a broker or " +
+			"event store is running — then "
+		if opts.WithoutState {
+			infra = "SKIP tofu destroy (--without-state), "
+		}
 		wouldDo(fmt.Sprintf(
-			"uninstall the instance release, drop its database and login from the shared relational store, "+
-				"delete namespace %s, and remove ~/.devicechain/instances/%s (root-key escrow kept), LEAVING cluster %s running",
-			opts.Instance, opts.Instance, binding.describe()))
+			"uninstall the instance release, %sdrop its database and login from the shared relational store, "+
+				"delete namespace %s and wait until it is gone, and remove ~/.devicechain/instances/%s "+
+				"(root-key escrow kept), LEAVING cluster %s running",
+			infra, opts.Instance, opts.Instance, binding.describe()))
 		return nil
 	}
 
@@ -96,34 +109,66 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	}
 
 	opts.KubeContext = binding.KubeContext
+
+	// 🔴 THE STATE REFUSALS COME BEFORE THE FIRST CHANGE — before the prompt, the lock and
+	// the uninstall — because a refusal after any of them has already removed part of what
+	// it refuses to remove, and cannot truthfully say otherwise. See
+	// refuseUndestroyableInstance.
+	stateHasResources := false
+	if opts.WithoutState {
+		// 🔴 A STATE THAT CANNOT BE READ IS WARNED ABOUT TOO. The override exists for a
+		// state that is lost or unusable, and an unparseable one is exactly that — so it
+		// proceeds, but it does not proceed silently over a record it never looked into.
+		// (A pre-split state needs no clause of its own: every address it is fenced on is a
+		// managed resource, so it always counts one — withoutStateWarning names it.)
+		st, err := readInstanceRootState(opts.Instance)
+		if err != nil || st.Resources > 0 {
+			fmt.Println(withoutStateWarning(opts.Instance, st, err))
+		}
+	} else {
+		var err error
+		if stateHasResources, err = refuseUndestroyableInstance(ctx, opts.KubeContext, opts.Instance); err != nil {
+			return err
+		}
+	}
+
 	// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. An abort is not a
 	// completed uninstall: uninstallInstance once returned nil for both, so declining the
 	// confirmation still fell through to removeInstanceState — deleting the tfstate of an
 	// instance the operator had just said to leave alone. And the nothing-here outcome has
 	// already removed the local state and said what happened; falling through would remove
 	// it a second time and then claim a destroy over a cluster nothing touched.
-	leftDatabase, err := uninstallInstance(ctx, opts)
+	leftDatabase, err := uninstallInstance(ctx, opts, stateHasResources)
 	if err != nil {
 		if destroyNeedsNoFurtherWork(err) {
 			return nil
 		}
 		return err
 	}
+	// LAST, and only here: every failure above returns first, so a destroy that did not
+	// finish keeps the state a re-run resumes from.
 	if err := removeInstanceState(opts); err != nil {
 		return err
 	}
-	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase))
+	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase, opts.WithoutState))
 	return nil
 }
 
 // destroyedLine is the closing line of a destroy that uninstalled the instance.
-func destroyedLine(instance, cluster, leftDatabase string) string {
+func destroyedLine(instance, cluster, leftDatabase string, withoutState bool) string {
+	if withoutState {
+		// 🔴 NOT GREEN EITHER. Nothing checked that the instance's infrastructure was
+		// all in its namespace; the operator asked for that, and the line says so.
+		return color.YellowString("\nInstance %q removed WITHOUT tofu destroy (--without-state); cluster %s left running. "+
+			"Anything of its infrastructure outside namespace %s was not removed.%s",
+			instance, cluster, instanceNamespace(instance), leftDatabaseNote(leftDatabase))
+	}
 	if leftDatabase != "" {
 		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
 		// closing line that says it is gone is the sentence this command keeps being
 		// fixed for.
-		return color.YellowString("\nInstance %q uninstalled; cluster %s left running. Its database, "+
-			"if it has one, was LEFT on the shared relational store: %s", instance, cluster, leftDatabase)
+		return color.YellowString("\nInstance %q uninstalled; cluster %s left running.%s",
+			instance, cluster, leftDatabaseNote(leftDatabase))
 	}
 	return color.HiGreenString("\nInstance %q destroyed; cluster %s left running.", instance, cluster)
 }
@@ -158,10 +203,20 @@ func announceBinding(binding ClusterBinding, source BindingSource, instance stri
 	}
 }
 
-// uninstallInstance removes the instance from its cluster: the Helm release, its
-// database and login on the shared relational store, and its namespace. It returns a
+// leftDatabaseNote is the database half of a closing line, empty when it was dropped.
+func leftDatabaseNote(leftDatabase string) string {
+	if leftDatabase == "" {
+		return ""
+	}
+	return " Its database, if it has one, was LEFT on the shared relational store: " + leftDatabase
+}
+
+// uninstallInstance removes the instance from its cluster, in this order: the chart
+// release, the instance root's infrastructure (`tofu destroy`, unless there is nothing in
+// state or the operator said --without-state), its database and login on the shared
+// relational store, and its namespace — waited on until it is gone. It returns a
 // non-empty reason when the database was left on the store.
-func uninstallInstance(ctx context.Context, opts DestroyOptions) (leftDatabase string, err error) {
+func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResources bool) (leftDatabase string, err error) {
 	kubeContext := opts.KubeContext
 	if !opts.AssumeYes && !confirm(fmt.Sprintf(
 		"Destroy instance %q? This deletes the instance and ALL ITS DATA; the cluster and its shared prerequisites stay",
@@ -176,9 +231,32 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions) (leftDatabase s
 
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext, opts.Instance); err != nil {
-		return "", uninstallOutcome(err, func() error {
+		// nil from the outcome is the one non-failure a refusal can resolve to: this
+		// instance's release is already gone and the instance still has its footprint
+		// here, so this is a resumed destroy and the steps below finish it.
+		if err := uninstallOutcome(err, func() error {
 			return resolveForeignRelease(ctx, kubeContext, opts, err)
-		})
+		}); err != nil {
+			return "", err
+		}
+	} else {
+		done()
+	}
+
+	// 🔴 THE INSTANCE'S OWN INFRASTRUCTURE, AFTER THE CHART AND BEFORE THE DATABASE. The
+	// services are gone, so nothing is publishing to the broker or writing to the event
+	// store while they are destroyed; and the namespace delete below stays as the
+	// backstop for anything in it that tofu never managed.
+	switch {
+	case opts.WithoutState:
+		fmt.Println(color.YellowString("  tofu destroy SKIPPED (--without-state): the instance's infrastructure is removed only with its namespace"))
+	case !stateHasResources:
+		fmt.Println(color.WhiteString("  the instance's infrastructure state lists nothing — no tofu destroy to run"))
+	default:
+		fmt.Println(color.WhiteString("destroying the instance's infrastructure (tofu destroy)..."))
+		if err := destroyInstanceInfrastructure(ctx, kubeContext, opts.Instance); err != nil {
+			return "", fmt.Errorf("destroying the instance's infrastructure: %w", err)
+		}
 	}
 	// 🔴 AND THE NAMESPACE, WHICH THE UNINSTALL DOES NOT ALWAYS REACH. dcctl writes the
 	// instance configuration Secret — the root key with it — before Helm installs
@@ -186,20 +264,31 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions) (leftDatabase s
 	// uninstall, and the uninstall above reports that as success. See
 	// removeInstanceNamespace for why the leftover makes this very command the remedy
 	// that does not work.
-	_, _, typed, err := kubeClients(kubeContext)
+	_, typed, err := teardownClients(kubeContext)
 	if err != nil {
-		return "", fail("connecting to the cluster to remove the instance namespace", err)
+		return "", fmt.Errorf("connecting to the cluster to remove the instance namespace: %w", err)
 	}
 	// 🔴 AND ITS DATABASE AND LOGIN ON THE SHARED STORE, which nothing above reaches: the
 	// store is the cluster's, so uninstalling the instance leaves both behind — and a
 	// later instance by the same name would be refused over a database it did not create.
 	// After the uninstall, which ends the services' sessions on it.
+	doing("dropping the instance's database and login")
 	leftDatabase, err = removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance)
 	if err != nil {
 		return "", fail("removing the instance's database and login", err)
 	}
-	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
+	done()
+	doing(fmt.Sprintf("deleting namespace %s and waiting until it is gone", instanceNamespace(opts.Instance)))
+	deleted, err := removeInstanceNamespace(ctx, typed, opts.Instance)
+	if err != nil {
 		return "", fail("removing the instance namespace", err)
+	}
+	// 🔑 WAITED ON ONLY WHEN THIS RUN DELETED IT. A namespace left alone because it is not
+	// labelled as this instance's is not going anywhere, and was already reported.
+	if deleted {
+		if err := waitForNamespaceGone(ctx, typed, instanceNamespace(opts.Instance), namespaceGoneTimeout, namespaceGonePollEach); err != nil {
+			return "", fail("waiting for the instance namespace to be deleted", err)
+		}
 	}
 	done()
 	return leftDatabase, nil

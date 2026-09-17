@@ -16,10 +16,11 @@ import (
 
 // Destroy command flags.
 var (
-	destroyKubeContext string
-	destroyDryRun      bool
-	destroyAssumeYes   bool
-	destroyAll         bool
+	destroyKubeContext  string
+	destroyDryRun       bool
+	destroyAssumeYes    bool
+	destroyAll          bool
+	destroyWithoutState bool
 )
 
 // destroyCmd removes a DeviceChain instance — the inverse of bootstrap.
@@ -28,9 +29,19 @@ var destroyCmd = &cobra.Command{
 	Short: "Destroy a DeviceChain instance",
 	Long: `Removes a DeviceChain instance — the inverse of bootstrap.
 
-This deletes the instance and ALL ITS DATA: its Helm release, its database and
-login on the shared relational store, its namespace, and its local state under
-~/.devicechain/instances/<instance>. The root-key escrow is kept.
+This deletes the instance and ALL ITS DATA, in this order: its Helm release; its
+own infrastructure — the broker and event store — by "tofu destroy" over the
+instance's infrastructure state; its database and login on the shared relational
+store; its namespace, waiting until it is gone; and, last, its local state under
+~/.devicechain/instances/<instance>. The root-key escrow is kept. A destroy that
+fails part-way keeps the local state, and running it again resumes.
+
+If the instance's infrastructure state is missing or empty but its broker or event
+store is running, or the state cannot be read, or it still holds the cluster's shared
+prerequisites (an instance built by an older dcctl), destroy refuses before changing
+anything. --without-state removes such an instance anyway: it skips "tofu destroy"
+and removes the instance by its Helm release, database and login, and namespace,
+saying that tofu destroy was skipped and what it left on the cluster.
 
 The cluster, and the shared prerequisites "dcctl install" put there, are never
 touched — other instances may be using them, and destroy leaves the cluster
@@ -63,15 +74,7 @@ Use --all to destroy every instance on this machine.`,
 		if err != nil {
 			return err
 		}
-		opts := bootstrap.DestroyOptions{
-			Options: bootstrap.Options{
-				Instance:    args[1],
-				KubeContext: destroyKubeContext,
-				DryRun:      destroyDryRun,
-				AssumeYes:   destroyAssumeYes,
-			},
-		}
-		return bootstrap.Destroy(cmd.Context(), provider, opts)
+		return bootstrap.Destroy(cmd.Context(), provider, destroyOptionsFor(args[1], destroyKubeContext, destroyDryRun, destroyAssumeYes))
 	},
 	SilenceUsage: true,
 }
@@ -81,6 +84,8 @@ func init() {
 	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 	destroyCmd.Flags().BoolVar(&destroyAll, "all", false, "destroy EVERY instance on this machine (takes no arguments)")
+	destroyCmd.Flags().BoolVar(&destroyWithoutState, "without-state", false,
+		"skip tofu destroy and remove the instance by its release, database, login and namespace (for an instance whose infrastructure state is lost)")
 
 	rootCmd.AddCommand(destroyCmd)
 }
@@ -117,6 +122,9 @@ func destroyEveryInstance(ctx context.Context) error {
 			"An instance with no record has its cluster GUESSED from its name; if that guess is\n" +
 			"wrong, the instance is looked for in the wrong cluster."))
 
+	if destroyWithoutState {
+		fmt.Println(color.YellowString("\n--without-state: tofu destroy is SKIPPED for every instance above."))
+	}
 	if destroyDryRun {
 		fmt.Println(color.YellowString("\n[dry-run] nothing was destroyed."))
 		return nil
@@ -139,14 +147,8 @@ func destroyEveryInstance(ctx context.Context) error {
 			failed = append(failed, k.Instance)
 			continue
 		}
-		opts := bootstrap.DestroyOptions{
-			Options: bootstrap.Options{
-				Instance:  k.Instance,
-				DryRun:    false,
-				AssumeYes: true, // the one confirmation above covers the whole run
-			},
-		}
-		if err := bootstrap.Destroy(ctx, provider, opts); err != nil {
+		// DryRun false and AssumeYes true: the one confirmation above covers the whole run.
+		if err := bootstrap.Destroy(ctx, provider, destroyOptionsFor(k.Instance, "", false, true)); err != nil {
 			fmt.Println(color.RedString("  %s: %v", k.Instance, err))
 			failed = append(failed, k.Instance)
 		}
@@ -158,4 +160,22 @@ func destroyEveryInstance(ctx context.Context) error {
 	}
 	fmt.Println(color.HiGreenString("\nAll %d instance(s) destroyed.", len(known)))
 	return nil
+}
+
+// destroyOptionsFor builds one instance's destroy options, for both the single form and
+// every instance of --all.
+//
+// 🔴 ONE CONSTRUCTOR, BECAUSE --all BUILT ITS OWN AND A FLAG ADDED TO ONE LITERAL IS NOT
+// ADDED TO THE OTHER. --without-state dropped on the --all path would run tofu destroy —
+// or the empty-state refusal — on every instance the operator had said to skip it for.
+func destroyOptionsFor(instance, kubeContext string, dryRun, assumeYes bool) bootstrap.DestroyOptions {
+	return bootstrap.DestroyOptions{
+		Options: bootstrap.Options{
+			Instance:    instance,
+			KubeContext: kubeContext,
+			DryRun:      dryRun,
+			AssumeYes:   assumeYes,
+		},
+		WithoutState: destroyWithoutState,
+	}
 }

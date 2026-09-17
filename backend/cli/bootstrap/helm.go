@@ -487,7 +487,9 @@ func helmValues(st *State) map[string]interface{} {
 
 // helmUninstall removes the named instance's chart release, deleting every resource
 // the chart created (workloads, services, ingress, and the instance namespace).
-// A missing release is treated as success so destroy is idempotent.
+// A missing release is success on a cluster holding no other DeviceChain release; on one
+// that holds another instance's, it is the typed refusal below, which the caller resolves
+// into either a resumed destroy or a stale record — see resolveForeignRelease.
 //
 // 🔴 IT STILL CHECKS WHOSE THE RELEASE IS, AND THE INSTANCE-DERIVED NAME IS NOT A
 // SUBSTITUTE FOR THAT. This function destroys data, and templates/namespace.yaml renders
@@ -497,8 +499,8 @@ func helmValues(st *State) map[string]interface{} {
 // say instance.id is "b" is a contradiction rather than a permission.
 //
 // Measured on a live cluster, 2026-09-12, back when one constant name served every
-// instance: `dcctl destroy local b --keep-cluster`, for an instance "b" that had never
-// been installed, removed instance "a" in its entirety — namespace, all ten deployments,
+// instance: a destroy of instance "b" that left the cluster running, for an instance "b"
+// that had never been installed, removed instance "a" in its entirety — namespace, all ten deployments,
 // the release — and closed with `Instance "b" uninstalled; cluster kind-a left running.`
 // The rename makes that particular lookup impossible; the check below is what makes the
 // claim true rather than merely likely.
@@ -551,7 +553,7 @@ func foreignReleaseRefusal(cfg *action.Configuration, instance string) error {
 	}
 	for _, h := range held {
 		if h.Instance != instance {
-			return &foreignReleaseError{Owner: h.Instance, Instance: instance, Release: h.Name}
+			return &foreignReleaseError{Owner: h.Instance, Instance: instance, Release: h.Name, Absent: true}
 		}
 	}
 	return nil
@@ -658,9 +660,26 @@ type foreignReleaseError struct {
 	// Release is the release whose values disagree with the instance, so the message
 	// names the object an operator can go and look at.
 	Release string
+	// Absent says the named instance has NO release here and Release is simply another
+	// instance's — not a release whose name and values contradict each other.
+	//
+	// 🔴 ONLY AN ABSENT RELEASE MAY BE RESUMED OVER (see resolveForeignRelease); a
+	// contradiction never is: something renamed or re-used a release.
+	Absent bool
 }
 
 func (e *foreignReleaseError) Error() string {
+	if e.Absent {
+		// Not the contradiction message below: nothing here disagrees with itself, and
+		// telling the operator to destroy the instance that IS installed would send them
+		// to remove a neighbour.
+		return fmt.Sprintf(
+			"instance %q has no Helm release in this cluster; the DeviceChain release here, %q, belongs to "+
+				"instance %q and was left alone.\n\n"+
+				"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
+				"  `dcctl instances list` shows what dcctl believes it has.",
+			e.Instance, e.Release, e.Owner, e.Instance)
+	}
 	return fmt.Sprintf(
 		"the Helm release %q in this cluster says it belongs to instance %q, not %q, so "+
 			"uninstalling it would destroy an instance this command did not name. dcctl installs "+

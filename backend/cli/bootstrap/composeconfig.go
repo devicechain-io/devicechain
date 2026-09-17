@@ -474,23 +474,33 @@ func ensureNamespaceForRelease(
 // Guarded on the chart's instance label, so what goes is a namespace this instance
 // owns rather than one that merely shares its name. A namespace already gone, or one
 // deleted between the read and the delete, is success: destroy is re-run precisely
-// when something went wrong the first time.
-func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance string) error {
+// when something went wrong the first time. It reports whether it issued the delete, so
+// the caller waits only on a namespace that is actually going.
+func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance string) (deleted bool, err error) {
 	api := typed.CoreV1().Namespaces()
 	ns, err := api.Get(ctx, instance, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil
+		return false, nil
 	} else if err != nil {
-		return fmt.Errorf("reading namespace %q: %w", instance, err)
+		return false, fmt.Errorf("reading namespace %q: %w", instance, err)
 	}
 	if ns.Labels["devicechain.io/instance"] != instance {
 		fmt.Println(color.YellowString(
 			"  namespace %q is not labelled as this instance's, so it was left alone; "+
 				"anything dcctl wrote inside it is still there", instance))
-		return nil
+		return false, nil
 	}
-	if err := api.Delete(ctx, instance, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting namespace %q: %w", instance, err)
+	// 🔴 ALREADY TERMINATING IS "GOING", NOT "DELETE AGAIN". The API server answers a
+	// delete of a namespace that is still emptying with a Conflict, so a destroy resumed
+	// after a timed-out wait would fail here instead of waiting again.
+	if ns.DeletionTimestamp != nil {
+		return true, nil
 	}
-	return nil
+	if err := api.Delete(ctx, instance, metav1.DeleteOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("deleting namespace %q: %w", instance, err)
+	}
+	return true, nil
 }

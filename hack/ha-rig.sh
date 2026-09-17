@@ -24,7 +24,8 @@
 #   hack/ha-rig.sh control   THE NEGATIVE CONTROLS: the same two checks against a
 #                            non-HA instance, both required to FAIL
 #   hack/ha-rig.sh all       up + verify + control
-#   hack/ha-rig.sh down      delete both clusters
+#   hack/ha-rig.sh down      dcctl destroy both instances, then delete both clusters
+#                            and dcctl's local state for them
 #
 # TWO CHECKS, TWO SUBSYSTEMS (ADR-020 A0 and A2.3):
 #
@@ -48,7 +49,7 @@
 # ability to fail has not been demonstrated in this session, which is the exact
 # thing A0 is about.
 #
-# Requires: kind, kubectl, docker, `tofu` OR `terraform` on PATH, and a Go
+# Requires: kind, kubectl, docker, jq, `tofu` OR `terraform` on PATH, and a Go
 # toolchain (the script builds dcctl itself).
 # Four kind nodes plus the platform is a real load on a developer box; run
 # `down` afterwards.
@@ -83,6 +84,9 @@ trap 'rm -rf "$rig_tmp"' EXIT
 # "say: command not found" before the rig printed anything at all.
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
+# warn says something went wrong WITHOUT exiting — for the few steps (see cmd_down)
+# where stopping would strand more than carrying on does.
+warn() { printf '\n\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
 
 need() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"
@@ -479,14 +483,97 @@ would mean the checks examined nothing and CHECK B2's job half proves nothing."
   say "JOB-AXIS COVERAGE CONFIRMED"
 }
 
-cmd_down() {
-  need kind
-  for c in "$ha_cluster" "$control_cluster"; do
-    if kind get clusters 2>/dev/null | grep -qx "$c"; then
-      say "deleting kind cluster $c"
-      kind delete cluster --name "$c"
+# destroy_rig_instance runs `dcctl destroy` for one rig instance, on a cluster that
+# is still there to be torn down from.
+#
+# WHY DESTROY BEFORE `kind delete cluster`, when deleting the cluster takes the
+# instance with it anyway: the cluster delete leaves ~/.devicechain/instances/<instance>
+# behind, and a leftover state directory is what makes the NEXT `up` incremental over
+# infrastructure that no longer exists. Destroying first also exercises the real
+# teardown an operator runs, rather than one no operator would.
+#
+# 🔴 IT ONLY ATTEMPTS WHAT CAN WORK, AND NEVER ABORTS `down`. The rig runs `set -euo
+# pipefail`, so a failing destroy left unguarded would exit before the clusters are
+# deleted — a cleanup command that leaves four kind nodes running because the cleanup
+# of something smaller failed. Hence `|| warn`. And it skips, SAYING WHY, when there is
+# no dcctl to run, no instance state to destroy, or no cluster to destroy it from.
+#
+# --kube-context is passed rather than left to the instance record: the rig knows
+# exactly which cluster it bootstrapped each instance into, and a missing or unreadable
+# record would otherwise fall back to guessing kind-<instance>, which for these
+# instances names a cluster that does not exist.
+destroy_rig_instance() {
+  local kind_cluster="$1" inst="$2"
+  if [[ ! -x "$dcctl" ]]; then
+    say "not destroying instance $inst: dcctl is not built at $dcctl"
+    return 0
+  fi
+  if [[ ! -d "${HOME:?}/.devicechain/instances/$inst" ]]; then
+    say "not destroying instance $inst: there is no ~/.devicechain/instances/$inst"
+    return 0
+  fi
+  if ! kind get clusters 2>/dev/null | grep -qx "$kind_cluster"; then
+    say "not destroying instance $inst: kind cluster $kind_cluster is not running (clear the leftover state with: $dcctl destroy local $inst)"
+    return 0
+  fi
+  say "destroying instance $inst in kind cluster $kind_cluster"
+  "$dcctl" destroy local "$inst" --yes --kube-context "kind-$kind_cluster" ||
+    warn "dcctl destroy of instance $inst exited $?; deleting the cluster anyway, which leaves ~/.devicechain/instances/$inst behind"
+}
+
+# remove_cluster_state deletes dcctl's local state for one of this rig's kind clusters:
+# ~/.devicechain/clusters/<kube-system UID>, where `dcctl install` keeps the cluster
+# root's OpenTofu state and the cluster.json record. `dcctl destroy` never removes it —
+# the cluster outlives its instances — so a rig that deletes the cluster has to.
+#
+# 🔴 IT IS KEYED ON THE CLUSTER'S UID, NOT ITS NAME, so it cannot be found by the name
+# the rig knows. A deleted-and-recreated kind cluster wears the same context name and
+# a new UID, which is exactly why dcctl keys it that way. So the directory is found two
+# ways, both of which are needed:
+#
+#   - the UID of the cluster about to be deleted, read by delete_cluster while the
+#     cluster still exists to be asked;
+#   - every record whose cluster.json names this rig's context. That covers a cluster
+#     deleted by an earlier run, or by hand, whose UID nobody can read any more.
+#
+# This rig owns its context names outright (devicechain-ha and devicechain-ha-control
+# exist for nothing else), so once a cluster is gone no record naming its context can
+# describe a live cluster. (Same shape as hack/dr-rig.sh.)
+remove_cluster_state() {
+  local uid="${1:-}" context="${2:?}" dir clusters="${HOME:?}/.devicechain/clusters"
+  if [[ -n "$uid" ]]; then
+    case "$uid" in
+      . | .. | */* | *\\*) fail "refusing to remove state for cluster UID '$uid'" ;;
+    esac
+    rm -rf "${clusters:?}/$uid"
+  fi
+  [[ -d "$clusters" ]] || return 0
+  for dir in "$clusters"/*/; do
+    [[ -f "$dir/cluster.json" ]] || continue
+    if [[ "$(jq -r '.kubeContext // empty' "$dir/cluster.json" 2>/dev/null || true)" == "$context" ]]; then
+      rm -rf "${dir:?}"
     fi
   done
+}
+
+# delete_cluster deletes one of this rig's kind clusters and dcctl's local state for it.
+# The UID is read BEFORE the delete, because afterwards there is nothing left to ask.
+delete_cluster() {
+  local name="$1" context="kind-$1" uid=""
+  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+    uid="$(kubectl --context "$context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+    say "deleting kind cluster $name"
+    kind delete cluster --name "$name"
+  fi
+  remove_cluster_state "$uid" "$context"
+}
+
+cmd_down() {
+  need kind; need kubectl; need jq
+  destroy_rig_instance "$ha_cluster" "$instance"
+  destroy_rig_instance "$control_cluster" "$control_instance"
+  delete_cluster "$ha_cluster"
+  delete_cluster "$control_cluster"
 }
 
 case "${1:-all}" in

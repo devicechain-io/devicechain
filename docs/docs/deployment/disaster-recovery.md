@@ -337,8 +337,9 @@ work around the check rather than fix it.
 
 ## After `dcctl destroy` {#after-destroy}
 
-`dcctl destroy` removes the instance — its Helm release, its database and database login,
-its namespace — and its local state, but **not** the escrow artifact, which lives outside
+`dcctl destroy` removes the instance — its Helm release, its NATS broker and event store,
+its database and database login, its namespace — and its local state, but **not** the
+escrow artifact, which lives outside
 that directory by design, and which destroy names on its way out.
 
 It never deletes the cluster, nor the prerequisites `dcctl install` put on it: the

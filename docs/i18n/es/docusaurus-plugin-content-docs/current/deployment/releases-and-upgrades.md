@@ -349,7 +349,7 @@ mientras todas las instalaciones siguen siendo tempranas.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain            # elimina la instancia
+dcctl destroy local devicechain --without-state   # elimina la instancia; el clúster antiguo va después
 kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
 dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
@@ -402,7 +402,7 @@ existe ninguna ruta de actualización que conserve las filas existentes.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain            # elimina la instancia
+dcctl destroy local devicechain --without-state   # elimina la instancia; el clúster antiguo va después
 kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
 dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
@@ -996,8 +996,8 @@ destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas r
 derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
 
 :::note `dcctl destroy` ya no elimina clústeres
-En las versiones actuales `dcctl destroy` elimina solo una instancia —su release de Helm, su base
-de datos y su login, su namespace y su estado local— y nunca elimina un clúster ni los requisitos
+En las versiones actuales `dcctl destroy` elimina solo una instancia —su release de Helm, su broker
+NATS y su almacén de eventos, su base de datos y su login, su namespace y su estado local— y nunca elimina un clúster ni los requisitos
 previos que dejó `dcctl install`. Por tanto, `dcctl destroy --all` elimina todas las instancias y
 deja todos los clústeres en marcha. Para eliminar un clúster local, usa
 `kind delete cluster --name <name>`. Consulta [Eliminar una instancia](./bootstrap.md#destroy).
@@ -1340,13 +1340,14 @@ instancia en funcionamiento.
 **Para migrar a esta versión, recree la instancia, y también el clúster que la aloja.** Las
 versiones que construyeron estas instancias no tenían `dcctl install`: instalaban los
 requisitos previos compartidos del clúster como parte de la instancia, y no registraban
-ninguna instalación. Por eso `dcctl destroy` deja atrás esos requisitos previos,
+ninguna instalación. Por eso `dcctl destroy` se niega a ejecutar `tofu destroy` sobre el
+estado que escribieron esas versiones y necesita `--without-state`, lo que aun así deja atrás esos requisitos previos;
 `dcctl bootstrap` rechaza un clúster sin registro de instalación y `dcctl install` chocaría
 con lo que dejó la versión anterior. Parta de un clúster nuevo entre medias:
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain            # elimina la instancia
+dcctl destroy local devicechain --without-state   # elimina la instancia; el clúster antiguo va después
 kind delete cluster --name devicechain     # y el clúster que preparó la versión anterior
 dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
