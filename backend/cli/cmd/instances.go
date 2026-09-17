@@ -78,7 +78,7 @@ func instanceStatus(ctx context.Context, known bootstrap.KnownInstance) string {
 	case !exists:
 		return "cluster gone — stale local state"
 	case !known.Record.Managed:
-		return "running (adopted cluster — destroy will not delete it)"
+		return "running (adopted cluster — not named by dcctl)"
 	default:
 		return "running"
 	}

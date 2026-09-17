@@ -416,10 +416,9 @@ var bootstrapCmd = &cobra.Command{
 
 		// The cluster's identity is read HERE, in the same breath as the binding, because
 		// this is the last moment it is guaranteed readable. It lives in the cluster, and
-		// the paths that will need it most — anything clearing local state — run when the
-		// cluster is being deleted or is already gone. `dcctl destroy` deletes the cluster
-		// and THEN clears state, and has a whole branch for a cluster that had vanished
-		// before the command ran. So it is written down while it can be read, exactly as
+		// the paths that will need it most — anything clearing the state of a gone
+		// cluster — run when the cluster can no longer be asked: `dcctl destroy` has a whole
+		// branch for a cluster that had vanished before the command ran. So it is written down while it can be read, exactly as
 		// the cluster NAME is, and for the same reason.
 		//
 		// A failure is a WARNING for the same reason a failed record is: the cluster is up

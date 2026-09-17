@@ -16,35 +16,34 @@ import (
 
 // Destroy command flags.
 var (
-	destroyKubeContext   string
-	destroyKeepCluster   bool
-	destroyPurgeRegistry bool
-	destroyDryRun        bool
-	destroyAssumeYes     bool
-	destroyAll           bool
+	destroyKubeContext string
+	destroyDryRun      bool
+	destroyAssumeYes   bool
+	destroyAll         bool
 )
 
-// destroyCmd tears down a DeviceChain instance — the inverse of bootstrap.
+// destroyCmd removes a DeviceChain instance — the inverse of bootstrap.
 var destroyCmd = &cobra.Command{
 	Use:   "destroy <provider> <instance>",
 	Short: "Destroy a DeviceChain instance",
-	Long: `Tears down a DeviceChain instance — the inverse of bootstrap.
+	Long: `Removes a DeviceChain instance — the inverse of bootstrap.
 
-By default this is a full teardown: it deletes the cluster the instance lives in
-(for the local provider, the kind cluster), which removes the operator,
-infrastructure and all data in one shot, then clears the instance's local state.
+This deletes the instance and ALL ITS DATA: its Helm release, its database and
+login on the shared relational store, its namespace, and its local state under
+~/.devicechain/instances/<instance>. The root-key escrow is kept.
 
-Which cluster that is comes from a record written at bootstrap, not from the
-instance's name. An instance bootstrapped into a cluster somebody else created
-(with --kube-context) has that cluster LEFT RUNNING: the instance is uninstalled
-from it and its local state cleared, and the cluster is named on the way out.
+The cluster, and the shared prerequisites "dcctl install" put there, are never
+touched — other instances may be using them, and destroy leaves the cluster
+running whether or not dcctl created it. To delete a local cluster, do it by
+hand: kind delete cluster --name <name>
 
-An instance bootstrapped before dcctl recorded this has no record, and destroy
-falls back to guessing the cluster from the instance name — saying so as it goes.
-Run "dcctl instances list" to see which instances are in that state.
+Which cluster the instance is in comes from a record written at bootstrap, not
+from the instance's name; --kube-context overrides it. An instance bootstrapped
+before dcctl recorded this has no record, and destroy falls back to guessing the
+cluster from the instance name — saying so as it goes. Run "dcctl instances list"
+to see which instances are in that state. If the cluster is already gone, only
+the local state is cleared.
 
-Use --keep-cluster to uninstall only the instance (its Helm release + namespace),
-leaving the cluster, infrastructure and operator in place for a quick re-bootstrap.
 Use --all to destroy every instance on this machine.`,
 	// Not ExactArgs(2): `--all` takes no instance, because the whole point of it is that
 	// the operator does not have to know what is there. Validated below so the error says
@@ -71,8 +70,6 @@ Use --all to destroy every instance on this machine.`,
 				DryRun:      destroyDryRun,
 				AssumeYes:   destroyAssumeYes,
 			},
-			KeepCluster:   destroyKeepCluster,
-			PurgeRegistry: destroyPurgeRegistry,
 		}
 		return bootstrap.Destroy(cmd.Context(), provider, opts)
 	},
@@ -81,8 +78,6 @@ Use --all to destroy every instance on this machine.`,
 
 func init() {
 	destroyCmd.Flags().StringVar(&destroyKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap)")
-	destroyCmd.Flags().BoolVar(&destroyKeepCluster, "keep-cluster", false, "uninstall only the instance, leaving the cluster + infra + operator in place")
-	destroyCmd.Flags().BoolVar(&destroyPurgeRegistry, "purge-registry", false, "also remove the shared local image registry container (full teardown only)")
 	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 	destroyCmd.Flags().BoolVar(&destroyAll, "all", false, "destroy EVERY instance on this machine (takes no arguments)")
@@ -117,25 +112,16 @@ func destroyEveryInstance(ctx context.Context) error {
 	if err := runInstancesList(ctx, os.Stdout); err != nil {
 		return err
 	}
-	if destroyKeepCluster {
-		fmt.Println(color.YellowString(
-			"\n--keep-cluster: every cluster above is LEFT RUNNING. Only the instances are\n" +
-				"uninstalled, and their local state is kept for a re-bootstrap."))
-	} else {
-		fmt.Println(color.YellowString(
-			"\nAn ADOPTED cluster is left running — only the instance is uninstalled from it.\n" +
-				"An instance with no record has its cluster GUESSED from its name; if that guess is\n" +
-				"wrong the cluster is left running and its local state is still cleared."))
-	}
+	fmt.Println(color.YellowString(
+		"\nEvery cluster above is LEFT RUNNING — only the instances are removed from them.\n" +
+			"An instance with no record has its cluster GUESSED from its name; if that guess is\n" +
+			"wrong, the instance is looked for in the wrong cluster."))
 
 	if destroyDryRun {
 		fmt.Println(color.YellowString("\n[dry-run] nothing was destroyed."))
 		return nil
 	}
-	prompt := fmt.Sprintf("Permanently destroy ALL %d instance(s) above? This deletes ALL of their data", len(known))
-	if destroyKeepCluster {
-		prompt = fmt.Sprintf("Uninstall ALL %d instance(s) above, keeping their clusters?", len(known))
-	}
+	prompt := fmt.Sprintf("Permanently destroy ALL %d instance(s) above? This deletes ALL of their data; every cluster stays", len(known))
 	if !destroyAssumeYes && !bootstrap.Confirm(prompt) {
 		fmt.Println(color.YellowString("Aborted."))
 		return nil
@@ -159,13 +145,6 @@ func destroyEveryInstance(ctx context.Context) error {
 				DryRun:    false,
 				AssumeYes: true, // the one confirmation above covers the whole run
 			},
-			// 🔴 CARRIED THROUGH, not dropped. An earlier version built these options
-			// without KeepCluster, so `--all --keep-cluster` deleted every cluster the
-			// operator had just asked to keep — and the confirmation they answered never
-			// mentioned clusters at all. A flag silently ignored on the one command that
-			// acts on everything is the worst place for it.
-			KeepCluster:   destroyKeepCluster,
-			PurgeRegistry: destroyPurgeRegistry,
 		}
 		if err := bootstrap.Destroy(ctx, provider, opts); err != nil {
 			fmt.Println(color.RedString("  %s: %v", k.Instance, err))

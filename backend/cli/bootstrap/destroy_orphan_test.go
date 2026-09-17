@@ -169,7 +169,7 @@ func TestAClusterThatCannotBeReadKeepsTheRecord(t *testing.T) {
 	})
 }
 
-// 🔴 THE CALLER MATCHES ON TYPE, NOT ON WORDS. destroyInstanceOnly answers the
+// 🔴 THE CALLER MATCHES ON TYPE, NOT ON WORDS. uninstallInstance answers the
 // foreign-release refusal and no other failure; recognising it by its message would start
 // clearing local state the day the wording changed, or the day an unrelated error
 // happened to contain the same words.
@@ -186,7 +186,7 @@ func TestTheForeignReleaseRefusalIsRecognisableByTypeAndCarriesBothNames(t *test
 }
 
 // 🔴 THE REFUSAL HAS TO BE CONNECTED TO THE THING THAT ANSWERS IT. Written inline in
-// destroyInstanceOnly this branch sits behind a real Helm uninstall against a real
+// uninstallInstance this branch sits behind a real Helm uninstall against a real
 // cluster, so a version that dropped it would break no test at all: the guard would still
 // refuse, correctly, and the operator would still be stranded with a record nothing can
 // clear — which is the entire defect. This asserts the call HAPPENS.
@@ -222,12 +222,10 @@ func TestNoOtherUninstallFailureIsReadAsAForeignRelease(t *testing.T) {
 	}
 }
 
-// 🔴 THE TWO CALLERS OF destroyInstanceOnly READ ITS RESULT FOR DIFFERENT PURPOSES, AND
-// THE SET THEY READ IT AGAINST HAS TO BE THE SAME ONE. A failure that leaked into this
-// set would be reported as a completed destroy; an outcome that fell out of it would make
-// `dcctl destroy --keep-cluster` exit non-zero on a job it finished, and would send the
-// adopted-cluster branch on to remove the local state a second time and close with
-// "uninstalled" over a cluster nothing touched.
+// 🔴 DESTROY DECIDES ON THIS SET WHETHER TO CARRY ON. A failure that leaked into it would
+// be reported as a completed destroy; an outcome that fell out of it would make `dcctl
+// destroy` exit non-zero on a job it finished, or carry on to remove the local state a
+// second time and close with "destroyed" over a cluster nothing touched.
 func TestOnlyAnOutcomeCountsAsNoFurtherWorkAndAFailureNeverDoes(t *testing.T) {
 	for name, err := range map[string]error{
 		"the operator declined":     errDestroyAborted,

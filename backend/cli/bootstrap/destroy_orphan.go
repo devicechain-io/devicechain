@@ -20,24 +20,21 @@ import (
 // because the instance it named had nothing in the cluster to remove.
 //
 // 🔴 A SUCCESS, CARRIED AS AN ERROR, FOR THE REASON errDestroyAborted IS. Three
-// outcomes reach the callers of destroyInstanceOnly — it uninstalled, the operator
+// outcomes reach the caller of uninstallInstance — it uninstalled, the operator
 // declined, it found nothing to uninstall — and the one thing this file must not do is
 // collapse two of them into one return value. That is the mistake the aborted case
 // already records: a decline and a completed uninstall were both nil, so declining fell
 // through to deleting the tfstate of an instance the operator had just said to leave
-// alone. The callers below each say what this one means for them; nobody may read it as
-// "the release was uninstalled".
+// alone. Nobody may read this one as "the release was uninstalled".
 var errInstanceNotInCluster = errors.New("instance has nothing in this cluster")
 
-// destroyNeedsNoFurtherWork reports whether a non-nil result from destroyInstanceOnly is
+// destroyNeedsNoFurtherWork reports whether a non-nil result from uninstallInstance is
 // an OUTCOME rather than a failure: the operator declined, or there was nothing in the
 // cluster to uninstall and the local record has already been removed.
 //
-// 🔴 ONE DEFINITION BECAUSE BOTH CALLERS MUST AGREE. destroyInstanceOnly is called from
-// the --keep-cluster path and from the adopted-cluster branch of a full destroy, and the
-// two read its result for different purposes — one exits, one decides whether to carry on
-// deleting. A sentinel added to one list and not the other is how "the operator declined"
-// once fell through to deleting the tfstate of the instance they had just spared.
+// 🔴 ONE DEFINITION, NAMED, BECAUSE THE CALLER DECIDES ON IT WHETHER TO CARRY ON
+// DELETING. A sentinel missing from this list is how "the operator declined" once fell
+// through to deleting the tfstate of the instance they had just spared.
 func destroyNeedsNoFurtherWork(err error) bool {
 	return errors.Is(err, errDestroyAborted) || errors.Is(err, errInstanceNotInCluster)
 }
@@ -45,7 +42,7 @@ func destroyNeedsNoFurtherWork(err error) bool {
 // uninstallOutcome routes a FAILED uninstall: the foreign-release refusal is the one
 // that may still leave this command a job to do, and everything else is a failure.
 //
-// 🔴 SEPARATE FROM destroyInstanceOnly SO THE ROUTING CAN BE EXERCISED WITHOUT A CLUSTER,
+// 🔴 SEPARATE FROM uninstallInstance SO THE ROUTING CAN BE EXERCISED WITHOUT A CLUSTER,
 // which is the same reason uninstallRefusalReason is separate from helmUninstall — and
 // here it is load-bearing rather than tidy. Written inline, the branch that calls
 // resolveForeignRelease sits behind a real Helm uninstall against a real cluster, so
@@ -68,7 +65,7 @@ func uninstallOutcome(err error, resolveForeign func() error) error {
 //
 // 🔴 THIS IS THE HALF OF THE FOREIGN-RELEASE GUARD THAT MAKES IT ACTIONABLE, AND
 // WITHOUT IT THE GUARD IS A TRAP. The refusal (foreignReleaseError) is correct and it
-// stops real data loss — but on its own it also strands the operator: destroyInstanceOnly
+// stops real data loss — but on its own it also strands the operator: uninstallInstance
 // returns before removeInstanceState, so ~/.devicechain/instances/<instance> survives, every re-run
 // of `dcctl destroy` meets the same refusal, and NO dcctl path clears the record.
 // `dcctl instances list` then reports the instance as running. The way in is ordinary: a

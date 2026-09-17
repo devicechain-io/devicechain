@@ -531,7 +531,7 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 // foreignReleaseRefusal answers "nothing of this instance was here" by asking what IS.
 //
 // 🔴 WITHOUT IT THE RENAME SILENTLY UNDOES #862 AND #1065. Those fixes turned a destroy
-// that found somebody else's release into a refusal, which destroyInstanceOnly routes
+// that found somebody else's release into a refusal, which uninstallInstance routes
 // through uninstallOutcome to resolveForeignRelease: that checks the named instance has
 // no footprint here, removes its stale local record, and closes with a line saying the
 // installed instance was LEFT ALONE. Naming releases after instances removes the
@@ -617,7 +617,7 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseNam
 // 🔴 SKIPPING IT IS NOT THE END OF THE MATTER, AND AN EARLIER VERSION OF THIS COMMENT
 // CLAIMED IT WAS. It argued that refusing here "would fail the very destroy that exists
 // to clear a stale local record", which has the caller exactly backwards: the refusal is
-// the MECHANISM by which such a record is cleared. destroyInstanceOnly routes a
+// the MECHANISM by which such a record is cleared. uninstallInstance routes a
 // foreignReleaseError through uninstallOutcome to resolveForeignRelease, which proves the
 // named instance has no footprint here, removes its record, and returns a success the
 // caller recognises. Skipping and saying nothing cleared the record too — on one path,
@@ -645,7 +645,7 @@ func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, inst
 // foreignReleaseError is the refusal below, as a value the CALLER can recognise.
 //
 // 🔴 A TYPE RATHER THAN A MESSAGE, BECAUSE ONE CALLER HAS TO ACT ON THIS PARTICULAR
-// REFUSAL AND ON NO OTHER. destroyInstanceOnly answers it by asking whether the instance
+// REFUSAL AND ON NO OTHER. uninstallInstance answers it by asking whether the instance
 // it was told to destroy has anything in this cluster at all, and that question ends in
 // removing local state — see resolveForeignRelease. A caller that recognised the refusal
 // by matching words in its message would start clearing state the day the wording
@@ -668,7 +668,7 @@ func (e *foreignReleaseError) Error() string {
 			"instance.id disagree has been renamed, re-used, or installed by hand — which is "+
 			"exactly when guessing is worst.\n\n"+
 			"  To remove the instance that is actually installed here:\n"+
-			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
+			"      dcctl destroy <provider> %s\n\n"+
 			"  Inspect the release itself with:\n"+
 			"      helm get values %s -n %s\n\n"+
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
@@ -844,7 +844,7 @@ func (e *ErrLegacyNamedRelease) Error() string {
 			"objects that belong to another release, so continuing would stand a second set of "+
 			"workloads beside the ones that are running.\n\n"+
 			"  The supported path is to destroy the instance and build it again:\n\n"+
-			"      dcctl destroy <provider> %s --keep-cluster\n"+
+			"      dcctl destroy <provider> %s\n"+
 			"      dcctl bootstrap <provider> %s\n\n"+
 			"That takes %q's data with it. Before v1.0.0 an instance may be recreated; this is "+
 			"one of the changes that requires it.",
