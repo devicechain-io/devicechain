@@ -187,13 +187,20 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	// than cosmetic. If that escape hatch is ever removed, this budget must shrink
 	// with it.
 	//
-	// 🔴 A SECOND CONSEQUENCE, WITH NO INTERRUPT INVOLVED. WaitDelay also bounds
-	// how long Wait blocks for the child's stdout/stderr pipes to close after it
-	// exits, and terraform-exec reads through pipes. A provider plugin that
-	// outlives tofu holding the inherited pipe therefore hangs dcctl for this
-	// budget rather than the default minute. The same escape hatch applies, and
-	// the trade is the same one: a rare long hang is preferable to routinely
-	// killing an apply that was about to write its state.
+	// 🔴 WHAT WaitDelay DOES NOT BOUND: A PIPE SOMETHING ELSE STILL HOLDS. An earlier
+	// version of this comment said it also capped how long Wait blocks for tofu's
+	// stdout/stderr pipes to close after it exits. Not under terraform-exec (v0.25.3,
+	// cmd_linux.go). It takes StdoutPipe/StderrPipe, which are plain files, so os/exec
+	// starts no copy goroutines and has nothing for WaitDelay to close; and it reads both
+	// pipes to EOF BEFORE it calls cmd.Wait (its legacy pipe closing, the one thing that
+	// would close them early, is never enabled by dcctl). So a process that outlives
+	// tofu while holding the inherited pipe — a provider plugin, say — hangs dcctl
+	// INDEFINITELY, interrupt or not: the read never sees EOF and Wait is never reached.
+	//
+	// What WaitDelay bounds is exactly the SIGINT→SIGKILL interval. That escalation runs
+	// from the context watcher Start sets up, not from Wait, so it still fires while the
+	// read is blocked — but it kills tofu's own PID and nothing else, and the pipe stays
+	// open. The second interrupt, which exits dcctl, is the only escape from a held pipe.
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {

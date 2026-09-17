@@ -144,19 +144,8 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	case err != nil:
 		return fmt.Errorf("looking up the login for instance %q: %w", instance, err)
 	default:
-		// 🔴 A ROLE BY THIS NAME THAT THE PROVISIONER DID NOT CREATE IS NOT REUSED. ADMIN
-		// is what creating it granted, so its absence means somebody else made it — and
-		// re-passwording a stranger's role would hand this instance's services whatever
-		// that role can reach.
-		if !admin {
-			return fmt.Errorf("%w: a role named %q already exists on the relational store and was "+
-				"not created by dcctl's provisioner, so it may be something else's login. Refusing to "+
-				"take it over; remove it, or choose another instance name", errInstanceDatabaseNotOurs, instance)
-		}
-		if super || createdb || createrole {
-			return fmt.Errorf("%w: the login %q holds SUPERUSER, CREATEDB or CREATEROLE, which an "+
-				"instance's login never has — with any of them it could reach past its own database. "+
-				"Refusing to hand it to services", errInstanceDatabaseNotOurs, instance)
+		if err := refuseALoginDcctlDidNotMake(instance, admin, super, createdb, createrole); err != nil {
+			return err
 		}
 		if _, err := q.Exec(ctx, fmt.Sprintf("ALTER ROLE %s CONNECTION LIMIT %d PASSWORD '%s'", ident, admit.Limit, verifier)); err != nil {
 			return fmt.Errorf("setting the password of the login for instance %q: %w", instance, err)
@@ -215,6 +204,27 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	if publicCanConnect {
 		return fmt.Errorf("database %q is still open to every login on the relational store after "+
 			"revoking PUBLIC's access, so any other instance could connect to it", instance)
+	}
+	return nil
+}
+
+// refuseALoginDcctlDidNotMake refuses a role by the instance's name that is not the login
+// dcctl's provisioner made for it. Both writers of that login — the bootstrap that
+// passwords it and the upgrade that re-sizes it — ask this before changing it.
+//
+// 🔴 A ROLE BY THIS NAME THAT THE PROVISIONER DID NOT CREATE IS NOT REUSED. ADMIN is what
+// creating it granted, so its absence means somebody else made it — and re-passwording a
+// stranger's role would hand this instance's services whatever that role can reach.
+func refuseALoginDcctlDidNotMake(instance string, admin, super, createdb, createrole bool) error {
+	if !admin {
+		return fmt.Errorf("%w: a role named %q already exists on the relational store and was "+
+			"not created by dcctl's provisioner, so it may be something else's login. Refusing to "+
+			"take it over; remove it, or choose another instance name", errInstanceDatabaseNotOurs, instance)
+	}
+	if super || createdb || createrole {
+		return fmt.Errorf("%w: the login %q holds SUPERUSER, CREATEDB or CREATEROLE, which an "+
+			"instance's login never has — with any of them it could reach past its own database. "+
+			"Refusing to hand it to services", errInstanceDatabaseNotOurs, instance)
 	}
 	return nil
 }

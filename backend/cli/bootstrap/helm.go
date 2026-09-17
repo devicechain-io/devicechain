@@ -6,7 +6,9 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
@@ -516,11 +519,11 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 	if err != nil {
 		return err
 	}
-	removed, err := uninstallRelease(ctx, actionConfig, helmReleaseNameFor(instance), instance)
+	removed, err := uninstallRelease(ctx, actionConfig, kubeContext, helmReleaseNameFor(instance), instance)
 	if err != nil {
 		return err
 	}
-	sweptLegacy, err := uninstallLegacyRelease(ctx, actionConfig, instance)
+	sweptLegacy, err := uninstallLegacyRelease(ctx, actionConfig, kubeContext, instance)
 	if err != nil {
 		return err
 	}
@@ -578,7 +581,7 @@ var helmActionConfigFor = helmActionConfig
 // error — an absent release is idempotent success — and collapsing them is how a destroy
 // ends up reporting that it uninstalled a cluster it never touched. See
 // foreignReleaseRefusal.
-func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseName, instance string) (bool, error) {
+func uninstallRelease(ctx context.Context, cfg *action.Configuration, kubeContext, releaseName, instance string) (bool, error) {
 	owner, present, err := releaseInstanceNamed(cfg, releaseName)
 	if err != nil {
 		return false, err
@@ -595,13 +598,71 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseNam
 	un := action.NewUninstall(cfg)
 	un.Wait = true
 	un.Timeout = helmTimeout
-	_, err = un.Run(releaseName)
+	_, err = awaitUninstall(ctx, os.Stdout, kubeContext, func() (*release.UninstallReleaseResponse, error) {
+		return un.Run(releaseName)
+	})
 	if err != nil && strings.Contains(err.Error(), "not found") {
 		// Gone between the read and the delete. Nothing was removed BY THIS CALL, and
 		// saying otherwise would suppress the foreign-release question above.
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// awaitUninstall runs a Helm uninstall to completion, and says so once if the operator
+// interrupts it.
+//
+// 🔴 HELM'S UNINSTALL CANNOT BE CANCELLED, SO AN INTERRUPT IS ACKNOWLEDGED, NOT OBEYED.
+// Uninstall.Run (Helm v3.21.4) takes no context: it runs the pre-delete hooks, deletes
+// the release's resources and then waits for them to go — WaitForDelete on a background
+// context — for up to helmTimeout. Returning early on ctx.Done would not stop any of that;
+// it would only abandon a goroutine still deleting things while the destroy reported
+// itself interrupted and moved on to giving back its lock. And saying NOTHING is worse
+// than either: an operator who pressed Ctrl-C and sees no reaction for minutes presses it
+// again, and the second interrupt exits dcctl without running the deferred release of the
+// cluster lock. So the interrupt is answered at once, with what is happening and what the
+// second one costs, and the wait goes on until Helm is done.
+//
+// 🔴 IT RETURNS THE UNINSTALL'S OWN RESULT, NOT ctx.Err(). Whether the release is gone is
+// a fact the caller acts on — uninstallRelease turns it into "removed something" — and
+// dcctl waited precisely so that fact would be known. The cancelled context still stops
+// the run at the next step that honours it.
+//
+// The notice starts on a fresh line: it lands while a doing() line is still open, and the
+// done() or failure that closes that line comes after it.
+func awaitUninstall[T any](ctx context.Context, out io.Writer, kubeContext string, run func() (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		v, err := run()
+		finished <- result{v, err}
+	}()
+	interrupted := ctx.Done()
+	for {
+		select {
+		case r := <-finished:
+			return r.v, r.err
+		case <-interrupted:
+			// Nil from here on: a closed channel is always ready, and the notice is said once.
+			interrupted = nil
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, color.YellowString("%s", uninstallInterruptNotice(kubeContext)))
+		}
+	}
+}
+
+// uninstallInterruptNotice is what an operator is told when they interrupt a Helm
+// uninstall. See awaitUninstall.
+func uninstallInterruptNotice(kubeContext string) string {
+	return fmt.Sprintf("  interrupt received: Helm cannot be stopped part-way through an uninstall, so dcctl "+
+		"is waiting for it to finish — deleting the release's resources and waiting for them to go, "+
+		"for up to %s — and will then stop and give back its lock on the cluster.\n"+
+		"  Pressing Ctrl-C again stops waiting immediately, but exits WITHOUT giving back this "+
+		"destroy's lock; take it back with `dcctl instances reclaim --kube-context %s`. Either way, "+
+		"re-running `dcctl destroy` resumes where this one stopped.", helmTimeout, kubeContext)
 }
 
 // uninstallLegacyRelease removes the pre-v0.17.0 constant-named release when it belongs
@@ -630,7 +691,7 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseNam
 // 🔑 AN UNATTRIBUTABLE LEGACY RELEASE STILL FAILS CLOSED. releaseInstanceNamed's third
 // answer is an error, and it stays an error here: "there is a DeviceChain release and I
 // cannot tell whose" must never resolve to the branch that deletes it.
-func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, instance string) (bool, error) {
+func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, kubeContext, instance string) (bool, error) {
 	owner, present, err := releaseInstanceNamed(cfg, legacyHelmReleaseName)
 	if err != nil {
 		return false, err
@@ -641,7 +702,7 @@ func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, inst
 	fmt.Println(color.YellowString(
 		"  Instance %q was built by a release that installed under the name %q; removing that "+
 			"release too.", instance, legacyHelmReleaseName))
-	return uninstallRelease(ctx, cfg, legacyHelmReleaseName, instance)
+	return uninstallRelease(ctx, cfg, kubeContext, legacyHelmReleaseName, instance)
 }
 
 // foreignReleaseError is the refusal below, as a value the CALLER can recognise.
