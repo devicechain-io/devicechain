@@ -530,6 +530,25 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// which serves plain HTTP — a self-signed cert adds friction with no benefit
 	// on localhost.
 	st.Values["ingressHost"] = ingressHostFor(st)
+
+	// 🔴 WHAT ONLY ONE INSTANCE ON A CLUSTER CAN HOLD. Everything else is in the
+	// instance's own namespace; an ingress host and a node port are cluster-wide.
+	// Asked on a real run only: a rehearsal is often aimed at a cluster that does not
+	// exist yet.
+	if !st.DryRun {
+		held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, st.Values["ingressHost"])
+		if err != nil {
+			return fail("checking what other instances on this cluster hold", err)
+		}
+		if err := refuseAHostAnotherInstanceServes(held, st.Instance, st.Values["ingressHost"]); err != nil {
+			return fail("checking the ingress host", err)
+		}
+		if held.MQTTNodePortHolder != "" {
+			st.Values[mqttNodePortHolderKey] = held.MQTTNodePortHolder
+			notes = append(notes, fmt.Sprintf("MQTT node port %d is held by the instance in namespace %q, "+
+				"so this instance's broker is reachable in-cluster only", localMQTTNodePort, held.MQTTNodePortHolder))
+		}
+	}
 	scheme := "https"
 	if st.NoTLS {
 		scheme = "http"

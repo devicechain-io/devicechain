@@ -191,7 +191,7 @@ func init() {
 	haVerifyDbCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
 	haVerifyDbCmd.Flags().StringVar(&dbNamespace, "namespace", "dc-system",
-		"namespace holding the CloudNativePG Cluster")
+		"namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), the instance id for its event store (dc-tsdb)")
 	haVerifyDbCmd.Flags().StringVar(&dbClusterName, "cluster", "dc-rdb",
 		"the CloudNativePG Cluster object to check")
 	haVerifyDbCmd.Flags().StringVar(&dbAliasService, "alias-service", "dc-postgresql",

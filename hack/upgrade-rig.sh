@@ -285,10 +285,8 @@ drill a specific hop."
 # once; it is empty until a phase that reaches Postgres sets it.
 rdb_db=""
 
-# The CNPG Cluster holding the relational store, and the tenant the coverage sweep
-# writes under. A SECOND tenant, because the drill's own seed is baseline-constrained
-# and this measurement must not be — see cmd_tablesweep.
-rdb_cluster="${DC_RDB_CLUSTER:-dc-rdb}"
+# The tenant the coverage sweep writes under. A SECOND tenant, because the drill's own
+# seed is baseline-constrained and this measurement must not be — see cmd_tablesweep.
 sweep_tenant="${DC_SWEEP_TENANT:-apiprobe-coverage}"
 
 # Port-forward state. pf_pid is checked by stop_forward, which is called on every exit
@@ -1644,23 +1642,19 @@ release adds, and at what they do NOT rewrite."
 # the sweep have already passed, which means the finding is about this tool's reach and
 # not about the instance's data.
 
-# pg_credentials prints "<user> <secret>" for the relational store.
+# pg_credentials prints "<user> <secret>" for the instance's own login on the relational
+# store.
 #
-# The Secret's NAME is read from the live Cluster rather than assumed to be CNPG's
-# generated `<cluster>-app`. dcctl's own db-verify does the same, for the same reason:
-# the name is a function of the chart's bootstrap block, and a constant here would work
-# until the day the chart set one explicitly, then connect as nobody.
+# 🔴 THE INSTANCE'S LOGIN, NOT THE STORE'S OWNER. Each instance's database is owned by a
+# login of its own, with CONNECT revoked from everyone else — the store's owner included.
+# A sweep that connected as the owner would be refused by the very database it is
+# meant to read. The Secret is dcctl's, named after the instance, in its namespace.
 pg_credentials() {
-  local secret user
-  secret="$(kubectl --context "$kube_context" -n dc-system \
-    get cluster.postgresql.cnpg.io "$rdb_cluster" \
-    -o jsonpath='{.spec.bootstrap.initdb.secret.name}' 2>/dev/null)" || true
-  [[ -n "$secret" ]] || fail "the $rdb_cluster Cluster names no bootstrap credentials Secret.
-Nothing can connect, which says nothing about coverage in either direction."
-
-  user="$(kubectl --context "$kube_context" -n dc-system get secret "$secret" \
+  local secret="dci-${instance}-rdb-credentials" user
+  user="$(kubectl --context "$kube_context" -n "$instance" get secret "$secret" \
     -o jsonpath='{.data.username}' 2>/dev/null | base64 -d)" || true
-  [[ -n "$user" ]] || fail "Secret $secret carries no username"
+  [[ -n "$user" ]] || fail "Secret $instance/$secret carries no username, so nothing can connect
+as this instance — which says nothing about coverage in either direction."
   printf '%s %s' "$user" "$secret"
 }
 
@@ -1738,7 +1732,7 @@ failed is a CREATE, on an instance that is running the code under test."
   # is readable by any local process through /proc for as long as the command runs, and
   # is one `set -x` away from a CI step log with a ninety-day retention. apiprobe
   # REFUSES a DSN carrying one rather than trusting this comment.
-  PGPASSWORD="$(kubectl --context "$kube_context" -n dc-system get secret "$secret" \
+  PGPASSWORD="$(kubectl --context "$kube_context" -n "$instance" get secret "$secret" \
     -o jsonpath='{.data.password}' | base64 -d)" \
     "$apiprobe" tablesweep \
     --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \

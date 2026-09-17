@@ -950,6 +950,12 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// TestDeployedInstanceStubCoversEveryOutsideRead is the standing check that
 	// this line is still here.
 	withArchiveState(t, liveArchiveState{}, nil)
+	// And what other instances already hold — nothing, for a fake cluster with one instance.
+	origSingletons := readClusterSingletons
+	t.Cleanup(func() { readClusterSingletons = origSingletons })
+	readClusterSingletons = func(context.Context, string, string, string) (clusterSingletons, error) {
+		return clusterSingletons{}, nil
+	}
 	// And the THIRD cluster read: the broker's existing password hashes. Defaults to
 	// "none deployed", which is the honest answer for a fake instance that has no
 	// broker — and which exercises the fallback, so the tests below assert against a

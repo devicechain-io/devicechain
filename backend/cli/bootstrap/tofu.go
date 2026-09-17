@@ -367,6 +367,9 @@ const (
 	databaseNamespaceKey     = "databaseNamespace"
 	databaseBackupOffsiteKey = "databaseBackupOffsite"
 	cnpgNamespaceKey         = "cnpgNamespace"
+	// mqttNodePortHolderKey is the namespace of another instance already holding the
+	// local MQTT node port, set by the render step. Empty means this instance may take it.
+	mqttNodePortHolderKey = "mqttNodePortHolder"
 )
 
 // databaseNamespaceFor is where the SHARED relational store exports its metrics from.
@@ -442,19 +445,25 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"ingress_use_host_port=true",
 			"monitoring_slim=true",
-			// Expose MQTT as a NodePort on the port the embedded kind config maps
-			// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),
-			// so a device/tool on the host reaches the broker at ssl://127.0.0.1:1883
-			// out of the box — the same host-port treatment :80/:443 already get.
-			// Cloud leaves this 0 (ClusterIP only); a NodePort there would publish
-			// MQTT on every node IP. The gate is looksLocal — the same context-NAME
-			// heuristic that already sets ingress_use_host_port above, so a
-			// false-positive here also visibly breaks ingress (a louder signal); and
-			// the broker still terminates TLS + runs the auth callout, so an exposed
-			// listener is not an open relay. A provider-based gate would be a stronger
-			// signal than the name if this heuristic is ever tightened.
-			"nats_mqtt_node_port=31883",
 		)
+		// Expose MQTT as a NodePort on the port the embedded kind config maps
+		// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),
+		// so a device/tool on the host reaches the broker at ssl://127.0.0.1:1883
+		// out of the box — the same host-port treatment :80/:443 already get.
+		// Cloud leaves this 0 (ClusterIP only); a NodePort there would publish
+		// MQTT on every node IP. The gate is looksLocal — the same context-NAME
+		// heuristic that already sets ingress_use_host_port above, so a
+		// false-positive here also visibly breaks ingress (a louder signal); and
+		// the broker still terminates TLS + runs the auth callout, so an exposed
+		// listener is not an open relay. A provider-based gate would be a stronger
+		// signal than the name if this heuristic is ever tightened.
+		//
+		// 🔴 ONLY ONE INSTANCE PER CLUSTER CAN HAVE IT: a node port is cluster-wide, and
+		// an apply asking for one another Service holds fails. The first instance keeps
+		// it; the others get none, and the render step says so.
+		if st.Values[mqttNodePortHolderKey] == "" {
+			vars = append(vars, fmt.Sprintf("nats_mqtt_node_port=%d", localMQTTNodePort))
+		}
 	}
 	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
 	// skips it for a cluster that already has the Prometheus Operator.
