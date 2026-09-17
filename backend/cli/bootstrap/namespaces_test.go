@@ -59,7 +59,7 @@ func TestAnInstanceBuiltInTheSharedNamespaceIsRefused(t *testing.T) {
 		{nats: "acme", tsdb: "dc-system"},
 	} {
 		err := checkInstanceInItsOwnNamespace(ctx, tc, "acme")
-		if err == nil || !strings.Contains(err.Error(), "dcctl destroy acme") {
+		if err == nil || !strings.Contains(err.Error(), "dcctl destroy <provider> acme") {
 			t.Errorf("nats=%s tsdb=%s: want a refusal naming the rebuild, got %v", tc.nats, tc.tsdb, err)
 		}
 	}

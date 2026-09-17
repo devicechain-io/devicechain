@@ -42,7 +42,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 	//
 	// 🔴 THIS IS THE ADOPTED CASE, and it is the one the old code could not represent.
 	// The operator pointed dcctl at a cluster BY NAME; dcctl neither created it nor
-	// named it, so it is not dcctl's to delete. Both validation rigs arrive here.
+	// named it. Both validation rigs arrive here.
 	if opts.KubeContext != "" {
 		if !containsString(names, opts.KubeContext) {
 			return ClusterBinding{}, fmt.Errorf("kube-context %q not found; available contexts: %s",
@@ -52,7 +52,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 		return ClusterBinding{
 			// Recovered only when the context follows kind's own convention. A context
 			// named `prod-eu-west` says nothing about its cluster's name, and an empty
-			// string is the honest answer — nothing downstream may delete what it
+			// string is the honest answer — nothing downstream may declare gone what it
 			// cannot name, and the listing prints the context instead.
 			Cluster:     clusterNameFromKindContext(opts.KubeContext),
 			KubeContext: opts.KubeContext,
@@ -102,37 +102,6 @@ func clusterNameFromKindContext(kubeContext string) string {
 }
 
 const kindContextPrefix = "kind-"
-
-// DestroyCluster deletes the kind cluster the binding names.
-//
-// 🔴 THE NAME COMES FROM THE BINDING, NOT FROM THE INSTANCE. That single change is what
-// this whole record exists for: the previous version ran `kind delete cluster --name
-// <instance>`, and for any instance bootstrapped into a differently-named cluster that
-// deleted nothing — silently, because kind's delete is IDEMPOTENT and a missing cluster
-// exits 0. The caller reported success over a no-op. Now the caller reads the recorded
-// cluster and passes it here, and a cluster that is genuinely already gone is reported as
-// gone by the caller, which checked.
-//
-// The Managed re-check is defence in depth. destroy already refuses to reach an adopted
-// cluster; this makes deleting somebody else's cluster take two independent mistakes.
-func (localProvider) DestroyCluster(ctx context.Context, binding ClusterBinding, opts Options) error {
-	if !binding.Managed {
-		return fmt.Errorf(
-			"refusing to delete cluster %q: it was not created or named by dcctl (instance %q was bootstrapped with an explicit --kube-context). "+
-				"Use --keep-cluster to uninstall just the instance, or delete the cluster with the tool that made it",
-			binding.describe(), opts.Instance)
-	}
-	if binding.Cluster == "" {
-		return fmt.Errorf(
-			"refusing to delete a cluster for instance %q: the recorded binding names no cluster (context %q). "+
-				"Use --keep-cluster to uninstall just the instance",
-			opts.Instance, binding.KubeContext)
-	}
-	if _, err := exec.LookPath("kind"); err != nil {
-		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")
-	}
-	return run(ctx, "kind", "delete", "cluster", "--name", binding.Cluster)
-}
 
 // createKindCluster creates a kind cluster from the embedded topology (the same
 // config in deploy/local/kind-cluster.yaml). kind streams its own progress.
@@ -243,7 +212,7 @@ func (localProvider) ClusterExists(ctx context.Context, binding ClusterBinding) 
 		// cluster name to ask about, so the best available signal is whether kubeconfig
 		// still carries the context — and a kubeconfig entry's absence is NOT a cluster's
 		// absence. Someone pointing at a different KUBECONFIG would look like a deleted
-		// cluster. destroyEverything therefore refuses to conclude "gone" from an unnamed
+		// cluster. Destroy therefore refuses to conclude "gone" from an unnamed
 		// binding at all; this branch exists so `instances list` has something to print.
 		names, _, err := KubeContexts()
 		if err != nil {

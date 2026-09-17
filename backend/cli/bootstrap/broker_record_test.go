@@ -193,7 +193,7 @@ func TestTheRecordIsReplacedWholeAndStaysPrivate(t *testing.T) {
 	}
 }
 
-// 🔴 DESTROY MUST TAKE THE RECORD WITH IT. A full teardown removes the instance directory
+// 🔴 DESTROY MUST TAKE THE RECORD WITH IT. A destroy removes the instance directory
 // but SPARES anything whose name looks like escrow material, so a record named to sit
 // "next to the escrow" would survive — and a same-name rebuild would then find no instance
 // config, a present record, and silently resurrect the destroyed instance's broker

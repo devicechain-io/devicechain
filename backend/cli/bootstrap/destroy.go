@@ -18,35 +18,114 @@ import (
 // a declined uninstall fall through to deleting the instance's local state.
 var errDestroyAborted = errors.New("aborted by operator")
 
-// DestroyOptions drives a teardown. KeepCluster switches from the default full
-// teardown (delete the whole cluster) to an instance-only uninstall; PurgeRegistry
-// additionally removes the shared local image registry container.
+// DestroyOptions drives an instance destroy.
 type DestroyOptions struct {
 	Options
-	KeepCluster   bool
-	PurgeRegistry bool
 }
 
-// Destroy tears down a DeviceChain instance — the inverse of bootstrap.
+// Destroy removes one DeviceChain instance — the inverse of bootstrap: its Helm release,
+// its database and login on the shared relational store, its namespace, and its local
+// state (root-key escrow spared).
 //
-// Default (full): delete the whole cluster the instance lives in and remove the
-// instance's persisted local state. For the local provider this is a `kind
-// delete cluster`, which removes the operator, CRDs, infra and all data in one
-// shot — fast and total.
-//
-// --keep-cluster: uninstall only the instance (helm release + its namespace),
-// leaving the cluster, infra and operator in place so a re-bootstrap is quick.
+// 🔴 IT NEVER DELETES THE CLUSTER, OR ANYTHING ELSE THE CLUSTER'S OTHER INSTANCES SHARE.
+// A cluster holds many instances and the prerequisites `dcctl install` put there serve
+// all of them, so no single instance's teardown may take them down — whether or not dcctl
+// created the cluster. Deleting a cluster is done with the tool that made it.
 func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error {
-	if opts.KeepCluster {
-		// An operator declining a prompt is not a failed command, and neither is a
-		// record removed for an instance that was never installed — so `--keep-cluster`
-		// still exits 0 for both, as it always has for the first.
-		if err := destroyInstanceOnly(ctx, opts); err != nil && !destroyNeedsNoFurtherWork(err) {
-			return err
-		}
+	fmt.Println(GreenUnderline(fmt.Sprintf("\nDestroy instance %q on provider %q", opts.Instance, provider.Name())))
+
+	binding, source := ResolveBinding(opts.Options)
+	announceBinding(binding, source, opts.Instance)
+	if err := refuseUnreadable(source, opts.Instance); err != nil {
+		return err
+	}
+
+	// 🔴 THE DRY-RUN GUARD SITS ABOVE EVERY BRANCH, AND IT MUST. An earlier version of
+	// this function put the adopted branch first and the guard after it, so
+	// `--dry-run` on any instance bootstrapped with --kube-context fell into the adopted
+	// path and REMOVED ~/.devicechain/instances/<instance> — tfstate and all — under a flag whose
+	// entire promise is "print what would happen without destroying anything". A flag
+	// that destroys is worse than no flag.
+	if opts.DryRun {
+		wouldDo(fmt.Sprintf(
+			"uninstall the instance release, drop its database and login from the shared relational store, "+
+				"delete namespace %s, and remove ~/.devicechain/instances/%s (root-key escrow kept), LEAVING cluster %s running",
+			opts.Instance, opts.Instance, binding.describe()))
 		return nil
 	}
-	return destroyEverything(ctx, provider, opts)
+
+	// 🔴 THE ORDER MATTERS, AND GETTING IT WRONG RE-CREATES THE ORPHAN. A cluster is very
+	// often ALREADY GONE — a rig deletes its own cluster on the way out and leaves the
+	// instance's state behind, which is how nine orphaned directories accumulated.
+	// Uninstalling first would then fail on an unreachable cluster and abort before the
+	// state was cleared, so the one command that could tidy up would refuse to, for
+	// exactly the instances that need it.
+	//
+	// So: ask first. Cluster gone ⇒ there is nothing to uninstall and clearing the state
+	// is the whole job. Cluster present ⇒ uninstall, and a failure there is REAL — the
+	// instance is still deployed, so the state must survive to describe it, and the error
+	// is returned rather than swallowed.
+	//
+	// 🔴 ONLY A NAMED CLUSTER MAY BE DECLARED GONE. For a binding carrying no cluster
+	// name, ClusterExists falls back to "is this context still in kubeconfig", and a
+	// kubeconfig entry's absence is not a cluster's absence — a different KUBECONFIG
+	// would look exactly like a deleted cluster, and clearing the state on that reading
+	// would throw away the tfstate of a live instance. So an unnamed binding skips the
+	// shortcut and goes through the uninstall, which fails loudly if the cluster really
+	// is unreachable.
+	if binding.Cluster != "" {
+		exists, err := provider.ClusterExists(ctx, binding)
+		if err != nil {
+			return fail("checking whether the cluster exists", err)
+		}
+		if !exists {
+			fmt.Println(color.YellowString(
+				"Cluster %s is not there any more — nothing to uninstall. Clearing local state only.", binding.describe()))
+			if err := removeInstanceState(opts); err != nil {
+				return err
+			}
+			if err := removeGoneClusterState(binding); err != nil {
+				return err
+			}
+			// 🔴 NOT "destroyed". "Destroyed" over a cluster nobody touched is precisely
+			// the sentence this command was first fixed for.
+			fmt.Println(color.HiGreenString("\nInstance %q removed; its cluster %s was already gone.",
+				opts.Instance, binding.describe()))
+			return nil
+		}
+	}
+
+	opts.KubeContext = binding.KubeContext
+	// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. An abort is not a
+	// completed uninstall: uninstallInstance once returned nil for both, so declining the
+	// confirmation still fell through to removeInstanceState — deleting the tfstate of an
+	// instance the operator had just said to leave alone. And the nothing-here outcome has
+	// already removed the local state and said what happened; falling through would remove
+	// it a second time and then claim a destroy over a cluster nothing touched.
+	leftDatabase, err := uninstallInstance(ctx, opts)
+	if err != nil {
+		if destroyNeedsNoFurtherWork(err) {
+			return nil
+		}
+		return err
+	}
+	if err := removeInstanceState(opts); err != nil {
+		return err
+	}
+	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase))
+	return nil
+}
+
+// destroyedLine is the closing line of a destroy that uninstalled the instance.
+func destroyedLine(instance, cluster, leftDatabase string) string {
+	if leftDatabase != "" {
+		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
+		// closing line that says it is gone is the sentence this command keeps being
+		// fixed for.
+		return color.YellowString("\nInstance %q uninstalled; cluster %s left running. Its database, "+
+			"if it has one, was LEFT on the shared relational store: %s", instance, cluster, leftDatabase)
+	}
+	return color.HiGreenString("\nInstance %q destroyed; cluster %s left running.", instance, cluster)
 }
 
 // announceBinding prints where the cluster name came from, and is the reason this whole
@@ -74,31 +153,21 @@ func announceBinding(binding ClusterBinding, source BindingSource, instance stri
 		fmt.Println(color.YellowString(
 			"No record of which cluster instance %q lives in — GUESSING cluster %q (context %s) from its name.\n"+
 				"  This instance predates dcctl recording that, or its record was removed. If it was bootstrapped\n"+
-				"  with --kube-context, this guess is WRONG and the cluster below will be left running.",
+				"  with --kube-context, this guess targets the WRONG cluster: pass --kube-context to name the right one.",
 			instance, binding.Cluster, binding.KubeContext))
 	}
 }
 
-// destroyInstanceOnly removes just the instance's Helm release, leaving the
-// cluster and platform (infra + operator) warm for a fast re-bootstrap.
-func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
-	binding, source := ResolveBinding(opts.Options)
-	if err := refuseUnreadable(source, opts.Instance); err != nil {
-		return err
-	}
-	kubeContext := binding.KubeContext
-
-	fmt.Println(GreenUnderline(fmt.Sprintf("\nUninstall instance %q (keeping cluster %s)", opts.Instance, binding.describe())))
-	announceBinding(binding, source, opts.Instance)
-	if opts.DryRun {
-		wouldDo("helm uninstall the instance release, delete namespace " + opts.Instance +
-			", and drop its database and login from the shared relational store")
-		return nil
-	}
+// uninstallInstance removes the instance from its cluster: the Helm release, its
+// database and login on the shared relational store, and its namespace. It returns a
+// non-empty reason when the database was left on the store.
+func uninstallInstance(ctx context.Context, opts DestroyOptions) (leftDatabase string, err error) {
+	kubeContext := opts.KubeContext
 	if !opts.AssumeYes && !confirm(fmt.Sprintf(
-		"Uninstall instance %q? The cluster, infrastructure and operator stay in place", opts.Instance)) {
+		"Destroy instance %q? This deletes the instance and ALL ITS DATA; the cluster and its shared prerequisites stay",
+		opts.Instance)) {
 		fmt.Println(color.YellowString("Aborted."))
-		return errDestroyAborted
+		return "", errDestroyAborted
 	}
 
 	// Lock and intent BEFORE the first deletion. See beginDestroy.
@@ -107,7 +176,7 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext, opts.Instance); err != nil {
-		return uninstallOutcome(err, func() error {
+		return "", uninstallOutcome(err, func() error {
 			return resolveForeignRelease(ctx, kubeContext, opts, err)
 		})
 	}
@@ -119,219 +188,31 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	// that does not work.
 	_, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
-		return fail("connecting to the cluster to remove the instance namespace", err)
+		return "", fail("connecting to the cluster to remove the instance namespace", err)
 	}
 	// 🔴 AND ITS DATABASE AND LOGIN ON THE SHARED STORE, which nothing above reaches: the
 	// store is the cluster's, so uninstalling the instance leaves both behind — and a
 	// later instance by the same name would be refused over a database it did not create.
 	// After the uninstall, which ends the services' sessions on it.
-	leftDatabase, err := removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance)
+	leftDatabase, err = removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance)
 	if err != nil {
-		return fail("removing the instance's database and login", err)
+		return "", fail("removing the instance's database and login", err)
 	}
 	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
-		return fail("removing the instance namespace", err)
+		return "", fail("removing the instance namespace", err)
 	}
 	done()
-
-	if leftDatabase != "" {
-		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
-		// closing line that says it is gone is the sentence this command keeps being
-		// fixed for.
-		fmt.Println(color.YellowString("\nInstance %q uninstalled; cluster %s left running. Its database, "+
-			"if it has one, was LEFT on the shared relational store: %s", opts.Instance, kubeContext, leftDatabase))
-		return nil
-	}
-	fmt.Println(color.HiGreenString("\nInstance %q uninstalled; cluster %s left running.", opts.Instance, kubeContext))
-	return nil
-}
-
-// destroyEverything deletes the whole cluster and clears the instance's local
-// state (and, with PurgeRegistry, the shared local registry container).
-func destroyEverything(ctx context.Context, provider Provider, opts DestroyOptions) (err error) {
-	fmt.Println(GreenUnderline(fmt.Sprintf("\nDestroy instance %q on provider %q", opts.Instance, provider.Name())))
-
-	binding, source := ResolveBinding(opts.Options)
-	announceBinding(binding, source, opts.Instance)
-	if err := refuseUnreadable(source, opts.Instance); err != nil {
-		return err
-	}
-
-	// 🔴 THE DRY-RUN GUARD SITS ABOVE EVERY BRANCH, AND IT MUST. An earlier version of
-	// this function put the adopted branch first and the guard after it, so
-	// `--dry-run` on any instance bootstrapped with --kube-context fell into the adopted
-	// path and REMOVED ~/.devicechain/instances/<instance> — tfstate and all — under a flag whose
-	// entire promise is "print what would happen without destroying anything". A flag
-	// that destroys is worse than no flag.
-	if opts.DryRun {
-		switch {
-		case !binding.Managed:
-			wouldDo(fmt.Sprintf(
-				"uninstall instance %q and remove ~/.devicechain/instances/%s, LEAVING cluster %q running",
-				opts.Instance, opts.Instance, binding.describe()))
-		default:
-			wouldDo(fmt.Sprintf("delete cluster %q and remove ~/.devicechain/instances/%s", binding.describe(), opts.Instance))
-			if binding.ClusterUID != "" {
-				wouldDo(fmt.Sprintf("remove the deleted cluster's local state (~/.devicechain/clusters/%s)", binding.ClusterUID))
-			}
-		}
-		if opts.PurgeRegistry {
-			wouldDo("remove the shared local image registry container")
-		}
-		return nil
-	}
-
-	// 🔴 THE ADOPTED CASE, AND THE REASON THIS IS NOT JUST A NAME LOOKUP. The operator
-	// pointed dcctl at a cluster somebody else made — which is what both validation rigs
-	// do — so the cluster is not ours to delete. The old code expressed that as a hard
-	// REFUSAL inside DestroyCluster, which meant `destroy` could not clean up a rig
-	// instance at all; the operator's only route was `--keep-cluster`, which they had to
-	// know to reach for. Now the uninstall still happens and the cluster is named as
-	// left running, so the outcome is complete AND the boundary is visible.
-	if !binding.Managed {
-		fmt.Println(color.YellowString(
-			"Cluster %s was not created or named by dcctl, so it will be LEFT RUNNING.\n"+
-				"  Uninstalling the instance from it instead; delete the cluster with whatever made it.",
-			binding.describe()))
-
-		// 🔴 THE ORDER MATTERS, AND GETTING IT WRONG RE-CREATES THE ORPHAN. An adopted
-		// cluster is very often ALREADY GONE — a rig deletes its own cluster on the way
-		// out and leaves the instance's state behind, which is how nine orphaned
-		// directories accumulated. Uninstalling first would then fail on an unreachable
-		// cluster and abort before the state was cleared, so the one command that could
-		// tidy up would refuse to, for exactly the instances that need it.
-		//
-		// So: ask first. Cluster gone ⇒ there is nothing to uninstall and clearing the
-		// state is the whole job. Cluster present ⇒ uninstall, and a failure there is
-		// REAL — the instance is still deployed, so the state must survive to describe
-		// it, and the error is returned rather than swallowed.
-		// 🔴 ONLY A NAMED CLUSTER MAY BE DECLARED GONE. For a binding carrying no cluster
-		// name, ClusterExists falls back to "is this context still in kubeconfig", and a
-		// kubeconfig entry's absence is not a cluster's absence — a different KUBECONFIG
-		// would look exactly like a deleted cluster, and clearing the state on that
-		// reading would throw away the tfstate of a live instance. So an unnamed binding
-		// skips the shortcut and goes through the uninstall, which fails loudly if the
-		// cluster really is unreachable.
-		if binding.Cluster != "" {
-			exists, err := provider.ClusterExists(ctx, binding)
-			if err != nil {
-				return fail("checking whether the cluster exists", err)
-			}
-			if !exists {
-				fmt.Println(color.YellowString(
-					"Cluster %s is not there any more — nothing to uninstall. Clearing local state only.", binding.describe()))
-				if err := removeInstanceState(opts); err != nil {
-					return err
-				}
-				if err := removeGoneClusterState(binding); err != nil {
-					return err
-				}
-				// 🔴 NOT "destroyed". Every closing line on this path says what actually
-				// happened, because "destroyed" over a cluster nobody touched is
-				// precisely the sentence this whole change exists to stop printing.
-				fmt.Println(color.HiGreenString("\nInstance %q removed; its cluster %s was already gone.",
-					opts.Instance, binding.describe()))
-				return nil
-			}
-		}
-		keepOpts := opts
-		keepOpts.KeepCluster = true
-		keepOpts.KubeContext = binding.KubeContext
-		// 🔴 An ABORT is not a completed uninstall. destroyInstanceOnly used to return nil
-		// for both, so declining the confirmation still fell through to removeInstanceState
-		// — deleting the tfstate of an instance the operator had just said to leave alone,
-		// and closing with a line that said it was uninstalled.
-		// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. Both outcomes
-		// are already fully handled by the time they get here — the aborted one did
-		// nothing on purpose, and the nothing-here one already removed the local state
-		// and already said what happened. Falling through would remove the state a
-		// second time and then print "Instance %q uninstalled" over a cluster nothing
-		// touched, which is the sentence this command has been fixed for twice.
-		if err := destroyInstanceOnly(ctx, keepOpts); err != nil {
-			if destroyNeedsNoFurtherWork(err) {
-				return nil
-			}
-			return err
-		}
-		if err := removeInstanceState(opts); err != nil {
-			return err
-		}
-		fmt.Println(color.HiGreenString("\nInstance %q uninstalled; cluster %s was NOT created by dcctl and is still running.",
-			opts.Instance, binding.describe()))
-		return nil
-	}
-
-	if !opts.AssumeYes && !confirm(fmt.Sprintf(
-		"Permanently destroy instance %q AND cluster %q? This deletes ALL of its data", opts.Instance, binding.describe())) {
-		fmt.Println(color.YellowString("Aborted."))
-		return nil
-	}
-
-	// 🔴 ASKED, NOT ASSUMED. `kind delete cluster` on a cluster that does not exist exits
-	// 0 — which is exactly how the old command turned "there was nothing here" into
-	// "destroyed". Checking first is what lets the two outcomes be REPORTED differently;
-	// the delete itself stays idempotent, so a cluster that vanishes between the check
-	// and the call is still handled.
-	exists, err := provider.ClusterExists(ctx, binding)
-	if err != nil {
-		return fail("checking whether the cluster exists", err)
-	}
-	clusterWasDeleted := exists
-
-	// Lock and intent BEFORE the first deletion, as on every other destroy path,
-	// but AFTER the existence check — taking a lock on a cluster that is already
-	// gone only produces a confusing "could not reach the cluster" warning in front
-	// of an outcome that has nothing to do with locking. Nothing has been deleted
-	// between the check and here.
-	claim := beginDestroy(ctx, binding.KubeContext, opts.Instance)
-	defer func() { endDestroy(ctx, claim, binding.KubeContext, opts.Instance, false, &err) }()
-
-	if !exists {
-		fmt.Println(color.YellowString(
-			"Cluster %s is already gone — nothing to delete. Clearing local state only.", binding.describe()))
-	} else {
-		doing(fmt.Sprintf("deleting cluster %q", binding.describe()))
-		if err := provider.DestroyCluster(ctx, binding, opts.Options); err != nil {
-			return fail("deleting cluster", err)
-		}
-		done()
-	}
-
-	if err := removeInstanceState(opts); err != nil {
-		return err
-	}
-	// Both branches above end with the cluster gone — deleted here, or already gone.
-	if err := removeGoneClusterState(binding); err != nil {
-		return err
-	}
-
-	if opts.PurgeRegistry {
-		doing("removing local image registry container")
-		_ = removeLocalRegistry(ctx) // best-effort: a missing container is fine
-		done()
-	}
-
-	// 🔴 The closing line differs by what actually happened. `Instance %q destroyed.` over
-	// a cluster that was already gone is word-for-word the sentence the original defect
-	// printed — so the one case that could reproduce it gets its own wording, and
-	// TestDestroyClosingMessageMatchesWhatActuallyHappened asserts the phrase is absent.
-	if clusterWasDeleted {
-		fmt.Println(color.HiGreenString("\nInstance %q destroyed.", opts.Instance))
-	} else {
-		fmt.Println(color.HiGreenString("\nInstance %q removed; its cluster %s was already gone.",
-			opts.Instance, binding.describe()))
-	}
-	return nil
+	return leftDatabase, nil
 }
 
 // removeInstanceState removes the instance's persisted local state, sparing root-key
 // escrow, and reports what it spared.
 //
-// Extracted so the ADOPTED path can reach it too. That path uninstalls the instance and
-// leaves somebody else's cluster running — but the OpenTofu state, the instance record
-// and everything else under ~/.devicechain/instances/<instance> describe an instance that no
-// longer exists, and leaving them behind is how nine orphaned state directories
-// accumulated on one machine with nothing able to report them.
+// Every path that finishes a destroy reaches it, including the ones that leave a cluster
+// running: the OpenTofu state, the instance record and everything else under
+// ~/.devicechain/instances/<instance> describe an instance that no longer exists, and
+// leaving them behind is how nine orphaned state directories accumulated on one machine
+// with nothing able to report them.
 func removeInstanceState(opts DestroyOptions) error {
 	doing(fmt.Sprintf("removing local state (~/.devicechain/instances/%s)", opts.Instance))
 	var keptEscrow []string
@@ -343,7 +224,7 @@ func removeInstanceState(opts DestroyOptions) error {
 	// is exactly when an operator needs to know what survived in it, and reporting
 	// only on the success path meant the failure case said nothing.
 	for _, p := range keptEscrow {
-		fmt.Println(color.YellowString("  kept root-key escrow %s — the cluster is gone but this still opens its database backups", p))
+		fmt.Println(color.YellowString("  kept root-key escrow %s — the instance is gone but this still opens its database backups", p))
 	}
 	if removeErr != nil {
 		return fail("removing local state", removeErr)
@@ -371,14 +252,14 @@ func removeInstanceState(opts DestroyOptions) error {
 //
 // 🔴 THE SPLIT MADE THIS NECESSARY. While the prerequisites were applied from the
 // instance's own root, removeInstanceState took all of the infrastructure state with it.
-// Once they moved to a root keyed on the cluster, that half outlived every full teardown,
-// and each kind rebuild — a new cluster, so a new UID — left one more behind. Found on
-// the first live round-trip; no test was looking.
+// Once they moved to a root keyed on the cluster, that half outlived the cluster, and
+// each kind rebuild — a new cluster, so a new UID — left one more behind. Found on the
+// first live round-trip; no test was looking.
 //
 // 🔑 KEYED ON WHETHER THE CLUSTER IS GONE, NOT ON WHICH COMMAND RAN. State filed under a
 // dead cluster's UID describes nothing and the UID cannot recur. A cluster that is still
-// running (adopted and reachable, --keep-cluster) still has its prerequisites installed,
-// and this state is the only description of them — so those paths never call this.
+// running still has its prerequisites installed, and this state is the only description
+// of them — so a destroy that finds the cluster present never calls this.
 //
 // No UID recorded ⇒ nothing is removed. The instance predates the identity, so no
 // directory was ever filed under it; and an empty key must never reach dcdir.Cluster's
@@ -394,7 +275,7 @@ func removeGoneClusterState(binding ClusterBinding) error {
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	doing(fmt.Sprintf("removing the deleted cluster's local state (~/.devicechain/clusters/%s)", binding.ClusterUID))
+	doing(fmt.Sprintf("removing the gone cluster's local state (~/.devicechain/clusters/%s)", binding.ClusterUID))
 	if err := os.RemoveAll(dir); err != nil {
 		return fail("removing the cluster's local state", err)
 	}
@@ -405,9 +286,9 @@ func removeGoneClusterState(binding ClusterBinding) error {
 // refuseUnreadable stops a command that has a record it cannot trust.
 //
 // 🔴 REFUSING IS THE POINT. The alternative — falling back to the kind-<instance> guess —
-// is what made a corrupt record dangerous: the guess is Managed:true, so destroy would
-// delete a cluster named after the instance, which for a rig instance is either nothing
-// at all or somebody else's cluster. There is a safe manual route out (name the context,
+// is what made a corrupt record dangerous: destroy would act on a cluster named after the
+// instance, which for a rig instance is either nothing at all — so its state is cleared
+// as "already gone" over a live instance — or somebody else's cluster. There is a safe manual route out (name the context,
 // or delete the record and accept the guess knowingly), and the error says both.
 func refuseUnreadable(source BindingSource, instance string) error {
 	if source != BindingUnreadable {
@@ -415,7 +296,7 @@ func refuseUnreadable(source BindingSource, instance string) error {
 	}
 	return fmt.Errorf(
 		"instance %q has a cluster record that cannot be read, so which cluster it lives in is unknown.\n"+
-			"  Refusing to fall back to guessing %q from the instance name — that guess would delete whatever cluster\n"+
+			"  Refusing to fall back to guessing %q from the instance name — that guess would act on whatever cluster\n"+
 			"  happens to carry that name. Either pass --kube-context to say where it is, or remove\n"+
 			"  ~/.devicechain/instances/%s/%s to accept the guess deliberately",
 		instance, instance, instance, instanceRecordFile)

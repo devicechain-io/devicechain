@@ -74,7 +74,7 @@ type Options struct {
 type Provider interface {
 	Name() string
 	// EnsureCluster guarantees a usable cluster and returns the binding to record:
-	// which cluster, the context to reach it by, and whether it is dcctl's to delete.
+	// which cluster, the context to reach it by, and whether it is dcctl's own.
 	//
 	// 🔴 IT RETURNS THE CLUSTER NAME, NOT JUST THE CONTEXT, and that is the whole point of
 	// the type. The caller used to receive a context, and every later step re-derived the
@@ -83,21 +83,14 @@ type Provider interface {
 	// success while the cluster kept running. Only the provider knows this mapping;
 	// returning it is what stops everyone else guessing at it.
 	EnsureCluster(ctx context.Context, opts Options) (ClusterBinding, error)
-	// DestroyCluster deletes the cluster named by the BINDING (the inverse of
-	// EnsureCluster). For the local provider this deletes the kind cluster; a
-	// cloud provider would tofu-destroy it.
-	//
-	// Callers must only reach this with a binding they have checked is Managed. The
-	// implementation re-checks anyway, because the cost of being wrong is deleting
-	// somebody else's cluster.
-	DestroyCluster(ctx context.Context, binding ClusterBinding, opts Options) error
 	// ClusterExists reports whether the cluster the binding names is present right now.
 	//
-	// 🔴 IT EXISTS SO "ALREADY GONE" AND "DESTROYED" CAN BE DIFFERENT SENTENCES. kind's
-	// delete is idempotent: deleting a cluster that is not there exits 0, which is exactly
-	// how `destroy` used to report a successful teardown over a cluster it never touched.
-	// The delete stays idempotent — this is for the REPORT, and for the listing, which has
-	// no other way to tell a live instance from an orphaned state directory.
+	// 🔴 IT EXISTS SO "ALREADY GONE" IS A THING DESTROY CAN SAY. kind's delete is
+	// idempotent: deleting a cluster that is not there exits 0, which is exactly how
+	// `destroy` once reported a successful teardown over a cluster it never touched. Destroy
+	// asks this to tell an instance whose cluster was deleted by hand — nothing to uninstall,
+	// only local state to clear — from one it must uninstall; the listing asks it because it
+	// has no other way to tell a live instance from an orphaned state directory.
 	ClusterExists(ctx context.Context, binding ClusterBinding) (bool, error)
 }
 

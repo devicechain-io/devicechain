@@ -142,7 +142,7 @@ func ValidateInstanceSpecChange(existing, desired dcv1beta1.InstanceSpec) error 
 		{"cluster", existing.Cluster, desired.Cluster,
 			"a later `dcctl destroy` would be pointed at a different cluster"},
 		{"managed", fmt.Sprint(existing.Managed), fmt.Sprint(desired.Managed),
-			"this decides whether destroy may delete the CLUSTER, not just the instance"},
+			"it records whether the instance lives in the cluster dcctl names by convention or in one it was pointed at"},
 	} {
 		if f.was != f.is {
 			return fmt.Errorf("this run would change the instance's %s from %q to %q, and that "+

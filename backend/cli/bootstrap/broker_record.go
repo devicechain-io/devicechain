@@ -50,7 +50,7 @@ import (
 
 // brokerRecordFile is the record's name inside ~/.devicechain/instances/<instance>/.
 //
-// 🔴 IT MUST NOT MATCH looksLikeEscrow. A full `dcctl destroy` removes the instance
+// 🔴 IT MUST NOT MATCH looksLikeEscrow. `dcctl destroy` removes the instance
 // directory but SPARES anything whose name contains ".escrow", "rootkey" or "root-key" —
 // so a record named to sit "next to the escrow" would survive a teardown, and a same-name
 // rebuild would then find no instance config, a present record, and silently resurrect the
@@ -58,8 +58,8 @@ import (
 // generations, and the reuse note would report it as a truthful reuse.
 //
 // 🔴 The naming rule closes that for a destroy that COMPLETES, and only for one that does.
-// destroyEverything deletes the cluster first and removes local state second, so a run
-// killed between the two leaves the record behind for a dead instance. The residual is
+// Destroy uninstalls the instance first and removes local state second, so a run killed
+// between the two leaves the record behind for a dead instance. The residual is
 // known and accepted: closing it properly means arbitrating the record against the live
 // broker's hashes before reuse, which re-opens the objection this read is built under — a
 // transient hash-read failure would then mint against a perfectly healthy broker.

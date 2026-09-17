@@ -762,12 +762,6 @@ func dockerBuildNetwork() (string, error) {
 // name moving, which is precisely how the split this function closes would reopen.
 const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 
-// removeLocalRegistry force-removes the shared local registry container. Used by
-// destroy --purge-registry; best-effort (a missing container is fine).
-func removeLocalRegistry(ctx context.Context) error {
-	return run(ctx, "docker", "rm", "-f", registryContainerName)
-}
-
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {

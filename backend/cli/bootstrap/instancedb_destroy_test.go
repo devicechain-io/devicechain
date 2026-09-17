@@ -121,7 +121,7 @@ func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 }
 
 // 🔴 A DESTROY THAT STOPPED CALLING THE DROP WOULD LEAVE EVERY INSTANCE'S DATABASE ON THE
-// SHARED STORE, and nothing a unit test drives reaches destroyInstanceOnly — it needs a
+// SHARED STORE, and nothing a unit test drives reaches uninstallInstance — it needs a
 // cluster and a Helm release. So the call, and its place after the uninstall that ends
 // the services' sessions, is held by the source.
 func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
@@ -132,12 +132,12 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	}
 	var fn *ast.FuncDecl
 	for _, d := range file.Decls {
-		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "destroyInstanceOnly" {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "uninstallInstance" {
 			fn = f
 		}
 	}
 	if fn == nil {
-		t.Fatal("destroy.go no longer declares destroyInstanceOnly")
+		t.Fatal("destroy.go no longer declares uninstallInstance")
 	}
 	pos := map[string]token.Pos{}
 	ast.Inspect(fn, func(n ast.Node) bool {
@@ -152,7 +152,7 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	})
 	for _, name := range []string{"helmUninstall", "removeInstanceRelationalLogin", "removeInstanceNamespace"} {
 		if _, ok := pos[name]; !ok {
-			t.Fatalf("destroyInstanceOnly no longer calls %s; an instance destroy would leave its "+
+			t.Fatalf("uninstallInstance no longer calls %s; an instance destroy would leave its "+
 				"database and login on the shared store", name)
 		}
 	}
@@ -162,6 +162,51 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	if pos["removeInstanceNamespace"] < pos["removeInstanceRelationalLogin"] {
 		t.Error("the namespace is deleted before the drop, taking the login's Secret with it before the " +
 			"drop can report whether it succeeded")
+	}
+}
+
+// 🔴 AND THE LOCAL STATE GOES ONLY AFTER THE UNINSTALL, for the same reason: nothing a unit
+// test drives gets an uninstall to succeed. Removing the state first would throw away the
+// tfstate of an instance still deployed whenever the uninstall then failed; not removing
+// it at all is how orphaned instance directories accumulate.
+func TestDestroyClearsLocalStateOnlyAfterUninstalling(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "destroy.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fn *ast.FuncDecl
+	for _, d := range file.Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "Destroy" {
+			fn = f
+		}
+	}
+	if fn == nil {
+		t.Fatal("destroy.go no longer declares Destroy")
+	}
+	var uninstall token.Pos
+	var removals []token.Pos
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				switch id.Name {
+				case "uninstallInstance":
+					uninstall = call.Pos()
+				case "removeInstanceState":
+					removals = append(removals, call.Pos())
+				}
+			}
+		}
+		return true
+	})
+	if uninstall == token.NoPos {
+		t.Fatal("Destroy no longer calls uninstallInstance")
+	}
+	after := false
+	for _, p := range removals {
+		after = after || p > uninstall
+	}
+	if !after {
+		t.Error("Destroy never removes the instance's local state after uninstalling it")
 	}
 }
 

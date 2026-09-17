@@ -318,8 +318,8 @@ func resolveEscrowPath(instance, explicit string) (string, error) {
 	}
 	if within {
 		return "", fmt.Errorf(
-			"the escrow path %s is inside %s, which `dcctl destroy` deletes along with the cluster — "+
-				"the artifact would be removed by the one command that assumes the cluster is expendable. "+
+			"the escrow path %s is inside %s, which `dcctl destroy` deletes along with the instance — "+
+				"the artifact would be removed by the one command that assumes the instance is expendable. "+
 				"Write it somewhere else (the default is %s%c)",
 			abs, root, filepath.Dir(mustDefaultEscrowPath(instance)), filepath.Separator)
 	}
