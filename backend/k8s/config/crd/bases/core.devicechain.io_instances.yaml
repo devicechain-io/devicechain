@@ -29,6 +29,9 @@ spec:
     - jsonPath: .spec.imageVersion
       name: Version
       type: string
+    - jsonPath: .metadata.annotations.core\.devicechain\.io/phase
+      name: Phase
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date

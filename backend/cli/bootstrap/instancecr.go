@@ -237,12 +237,18 @@ func instanceToUnstructured(inst *dcv1beta1.Instance) (*unstructured.Unstructure
 // The claim semantics that make this safe under two operators (create-or-adopt
 // with a compare-and-swap, and a heartbeat) are a separate concern and land with
 // them. What is here is the declaration itself.
+//
+// It is the BOOTSTRAP path's entry point, which is why it names the phase its
+// caller is in rather than taking one: its single caller is the claim step, and a
+// step that could declare an instance under any phase it liked is a step that can
+// lie about which verb is running. The verb that needed a different word grew its
+// own caller of the inner function instead — see recordUpgradedVersion.
 func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to record the instance declaration: %w", err)
 	}
-	return writeInstanceCR(ctx, dyn, id, spec, dcctlVersion)
+	return writeInstanceCR(ctx, dyn, id, spec, dcctlVersion, dcv1beta1.PhaseBootstrapping)
 }
 
 // writeInstanceCR is WriteInstanceCR with the client supplied.
@@ -253,7 +259,14 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 // they were unreachable while the only entry point built its own client from a
 // kubeconfig. A branch that needs a live cluster to reach is a branch that goes
 // untested.
-func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
+//
+// 🔴 THE PHASE IS A PARAMETER BECAUSE HARD-CODING IT MADE THE ANNOTATION LIE. This
+// function stamped Bootstrapping on every write, and `dcctl upgrade` writes the
+// declaration too (recordUpgradedVersion) — so an instance that had ever been
+// upgraded read Bootstrapping for good, and any reader of the phase would have
+// reported a bootstrap in progress over a healthy instance. A field that names
+// which verb is running cannot be filled in by the function every verb shares.
+func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion, phase string) error {
 	if err := ValidateInstanceSpec(spec); err != nil {
 		return err
 	}
@@ -310,7 +323,7 @@ func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec
 	}
 	inst.Spec = spec
 	applyProvenance(inst, dcctlVersion)
-	setPhase(inst, dcv1beta1.PhaseBootstrapping)
+	setPhase(inst, phase)
 	addFinalizer(inst)
 
 	obj, err := instanceToUnstructured(inst)
@@ -411,6 +424,15 @@ func SetInstancePhase(ctx context.Context, kubeContext, id, phase string) error 
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to record the instance phase: %w", err)
 	}
+	return setInstancePhase(ctx, dyn, id, phase)
+}
+
+// setInstancePhase is SetInstancePhase with the client supplied, split for the
+// reason writeInstanceCR is split from WriteInstanceCR: a caller that already
+// holds a client should not build a second one from a kubeconfig, and a write
+// only reachable through a kubeconfig is a write no test can watch. Upgrade's
+// terminal stamp (finishUpgradePhase) is that caller.
+func setInstancePhase(ctx context.Context, dyn dynamic.Interface, id, phase string) error {
 	existing, err := readInstanceCR(ctx, dyn, id)
 	if err != nil {
 		return err
