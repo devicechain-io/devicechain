@@ -57,7 +57,7 @@ func TestTheCommandLayerClearsTheRecordAfterAHostRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrHostTaken{
 		Instance: "bravo", Host: "localhost", Holder: "alpha",
 	})
-	unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
 
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("`dcctl instances list` would still show an instance that was refused before " +
@@ -72,10 +72,25 @@ func TestTheCommandLayerClearsTheRecordAfterABudgetRefusal(t *testing.T) {
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrConnectionBudget{
 		Err: errors.New("the shared relational store has no connection budget left for instance \"bravo\""),
 	})
-	unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("a bootstrap refused for its connection budget before anything was written left " +
 			"a record `dcctl instances list` shows")
+	}
+}
+
+// And the namespace refusal, which fires from that same step and is the one that made the
+// discriminator worth naming: with three members, "the one refusal that fires before
+// anything is written" had stopped describing the list it was written over.
+func TestTheCommandLayerClearsTheRecordAfterANamespaceRefusal(t *testing.T) {
+	home, prior := refusedHome(t, "bravo")
+	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrNamespaceUnavailable{
+		Err: errors.New(`namespace "bravo" already exists and is not this instance's`),
+	})
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	if recordDirExists(t, home, "bravo") {
+		t.Fatal("a bootstrap refused for its namespace before anything was written left a record " +
+			"`dcctl instances list` shows for an instance that exists nowhere")
 	}
 }
 
@@ -96,10 +111,19 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 		// by then the instance's namespace and declaration exist, and the record names them.
 		{"a budget refusal that is not the typed early one", fmt.Errorf(
 			"step \"Apply infrastructure\": %w", errors.New("no connection budget left on the shared store"))},
+		// 🔴 AND THE SAME PAIRING FOR THE NAMESPACE REFUSAL, WHICH IS RAISED IN TWO
+		// PLACES. ensureNamespaceForRelease says these words from inside the
+		// infrastructure apply, by which time the operator, the declaration and the
+		// cluster lock are written and the record is the only thing that can name them.
+		// It is untyped for exactly this reason; typing it would clear the record of a
+		// half-built instance.
+		{"a namespace refusal raised at the apply rather than the early check", fmt.Errorf(
+			"step \"Apply infrastructure\": %w",
+			errors.New(`namespace "bravo" already exists and is not this instance's`))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, prior := refusedHome(t, "bravo")
-			unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, tc.err)
+			unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, tc.err)
 			if !recordDirExists(t, home, "bravo") {
 				t.Fatal("the record was cleared after a failure that may have left a cluster " +
 					"behind, so nothing can name the cluster to destroy it")
@@ -123,7 +147,7 @@ func TestADryRunIsNotUnwound(t *testing.T) {
 
 	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold",
 		&bootstrap.ErrHostTaken{Instance: "bravo", Host: "localhost", Holder: "alpha"})
-	unwindLocalRecordOnHostTaken(
+	unwindLocalRecordWhenNothingWasWritten(
 		bootstrap.Options{Instance: "bravo", DryRun: true}, prior, refusal)
 
 	if !recordDirExists(t, home, "bravo") {
@@ -156,7 +180,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 		if !ok {
 			return true
 		}
-		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "unwindLocalRecordOnHostTaken" {
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "unwindLocalRecordWhenNothingWasWritten" {
 			unwind = call.Pos()
 			return true
 		}
@@ -190,7 +214,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 		{"bootstrap.CapturePriorLocalState", capture},
 		{"bootstrap.WriteInstanceRecord", write},
 		{"NewDefaultPipeline().Run", run},
-		{"unwindLocalRecordOnHostTaken", unwind},
+		{"unwindLocalRecordWhenNothingWasWritten", unwind},
 	} {
 		if c.pos == token.NoPos {
 			t.Fatalf("the bootstrap command no longer calls %s, so a refused host "+

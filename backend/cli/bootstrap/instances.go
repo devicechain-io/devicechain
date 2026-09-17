@@ -144,14 +144,29 @@ const maxInstanceNameLen = 50
 // and an empty one resolves to the instances directory itself, which a destroy would
 // then try to remove wholesale — taking every other instance with it.
 //
-// 🔑 THE COLLISION HALF OF THIS IS GONE, AND THE REASON IS STRUCTURAL RATHER THAN
+// 🔑 THE DIRECTORY COLLISION IS GONE, AND THE REASON IS STRUCTURAL RATHER THAN
 // ENFORCED HERE. While instances sat directly under the root, a name like "escrow"
 // aimed an instance at a sibling dcctl owns, so this function had to reserve each
 // sibling by hand and ListInstances had to skip the same names — two lists that
 // disagreed. Nesting under instances/ put instance names in their own namespace, so
-// there is nothing left to reserve. Do not add a reservation case back here; add the
-// directory to dcdir's inventory instead, where it is a sibling of instances/ and
-// cannot collide with anything in it.
+// there is no DIRECTORY left to reserve. Do not add a directory reservation back
+// here; add it to dcdir's inventory instead, where it is a sibling of instances/
+// and cannot collide with anything in it.
+//
+// 🔴 THAT SAID "THERE IS NOTHING LEFT TO RESERVE", AND THAT WAS NEVER TRUE OF EVERY
+// GRAMMAR THE NAME LIVES IN. A name still collides in two more of them, and a reader
+// who takes the sentence above as a general statement will reinvent the defect it
+// describes by folding them in here. One of them IS a list: reservedInstanceNames
+// below, the labels POSTGRESQL owns, which can be a list because the store's
+// vocabulary is fixed and knowable without asking the store. The other is not, and
+// that is the point — whether the NAMESPACE this name becomes is free is settled
+// against the cluster by precheckInstanceNamespace, because "it exists and is not
+// this instance's" is a question only the cluster can answer. A hand-copied list of
+// the namespaces `dcctl install` creates used to sit alongside it and has been
+// removed: an instance's namespace is being given a prefix of its own, which puts the
+// two sets of names out of each other's reach and retires that question rather than
+// answering it twice. Each grammar answered where its answer lives is correct; one
+// list answering all of them is the shape that disagrees with itself.
 //
 // 🔴 AND IT IS A DNS-1123 LABEL, BECAUSE A NAME IS NOW FOUR THINGS AT ONCE. It names a
 // directory here, a Kubernetes namespace, and — on the shared relational store — both
@@ -288,17 +303,26 @@ func writeRecordFile(dir, name string, contents []byte) error {
 // PriorLocalState is what ~/.devicechain/instances/<instance>/ held before a run wrote its record
 // into it.
 //
-// 🔴 IT EXISTS FOR ONE FAILURE, AND THE REASON IS AN ORDERING NOBODY CAN CHANGE.
-// `dcctl bootstrap` records the instance→cluster binding BEFORE the pipeline starts, and
-// deliberately keeps it on every failure: the cluster may already be up by then, and a
-// cluster nothing can name is the orphan the record exists to prevent. That reasoning
-// holds for every failure except one. The refusal of a host another instance already
-// serves (ErrHostTaken) can only fire against a cluster that ALREADY held an instance, and
-// a cluster that already held an instance is one EnsureCluster adopted rather than created
-// — it creates only when no context of that name exists, and a cluster it has just created
-// holds nothing to refuse over. It also fires before anything is written. So on that one
-// refusal the record this run wrote describes nothing, and left behind it is a phantom:
-// `dcctl instances list` prints an instance that was never built.
+// 🔴 IT EXISTS FOR THE REFUSALS THAT FIRE BEFORE THIS RUN HAS WRITTEN ANYTHING, AND THE
+// REASON IS AN ORDERING NOBODY CAN CHANGE. `dcctl bootstrap` records the instance→cluster
+// binding BEFORE the pipeline starts, and deliberately keeps it on every failure: the
+// cluster may already be up by then, and a cluster nothing can name is the orphan the
+// record exists to prevent. That reasoning holds for every failure except the ones
+// stepCheckClusterSingletons raises, and what makes them the exception is WHERE they are
+// raised rather than what they are about — TestTheSingletonStepRunsBeforeAnythingIsWritten
+// holds that step ahead of the operator install and the declaration. On those the record
+// this run wrote describes nothing, and left behind it is a phantom: `dcctl instances
+// list` prints an instance that was never built. WHICH errors those are is
+// unwindLocalRecordWhenNothingWasWritten's list in cmd and is deliberately not restated
+// here; naming one of them as "the" refusal is how that comment went stale once already.
+//
+// 🔑 THE CLUSTER MAY BE THIS RUN'S OWN, AND THAT COSTS NOTHING. An earlier reading of the
+// above had these refusals firing only against a cluster EnsureCluster ADOPTED, on the
+// grounds that a cluster it had just created holds nothing to refuse over. The namespace
+// refusal is the counter-example: `monitoring` exists on a cluster this very run created
+// and installed. Nothing is orphaned by that, because a cluster is filed under its own
+// kube-system UID by the cluster record (cluster_identity.go) rather than under the
+// instance — so the instance's record is still the only thing that has to go back.
 //
 // 🔴 IT RESTORES RATHER THAN DELETES, AND THE DIFFERENCE IS A REAL INSTANCE.
 // WriteInstanceRecord REPLACES, so a run that names an instance which already exists
@@ -432,13 +456,32 @@ type KnownInstance struct {
 	// another instance). Reported per row rather than failing the whole listing — one
 	// unreadable record must not hide every healthy one.
 	Err error
+	// Destroying reports that a teardown of this instance started on this machine and
+	// did not finish — the destroy marker beside the record is still there. See
+	// destroy_marker.go.
+	Destroying bool
+	// DestroyingErr is set when the marker could not be STATTED, which is neither
+	// "present" nor "absent". It is carried separately rather than folded into
+	// Destroying because the two have opposite consequences for a reader: present means
+	// "re-run destroy", could-not-tell means "this row does not know" — and a listing
+	// that printed the second as the healthy answer is the defect this change exists to
+	// remove.
+	DestroyingErr error
 }
 
 // ListInstances enumerates every instance directory under ~/.devicechain/instances,
-// with its record where it has one.
+// with its record where it has one and whether a teardown of it is part-way through.
 //
-// 🔴 IT READS ONLY instance.json. Nothing else in the instance directory is opened, and
-// that is a security property rather than an optimisation — see the file header.
+// 🔴 IT READS instance.json AND THE DESTROY MARKER, AND NOTHING ELSE. That is a security
+// property rather than an optimisation — see the file header — and the marker is STATTED
+// rather than read, so no byte of the instance directory beyond the record reaches this
+// process. TestListInstancesReadsTheRecordAndTheDestroyMarkerAndNothingElse asserts it
+// against a planted, unreadable terraform.tfstate.
+//
+// 🔑 THE MARKER IS CHECKED HERE RATHER THAN BY THE COMMAND THAT PRINTS IT, and that is
+// the whole reason this function grew a field instead of the cmd layer growing an
+// os.Stat. The claim above is only as good as the test over it, and that test drives THIS
+// function; a second open in the command layer would have been outside it.
 func ListInstances() ([]KnownInstance, error) {
 	// One directory, in which everything IS an instance. There is no list of names
 	// to skip here any more, because there is nothing beside the instances to skip:
@@ -470,6 +513,10 @@ func ListInstances() ([]KnownInstance, error) {
 			known.Record = rec
 			known.HasRecord = true
 		}
+		// Reported per row, never returned: one instance whose marker could not be
+		// statted must not hide every other instance, for the reason an unreadable
+		// record does not.
+		known.Destroying, known.DestroyingErr = DestroyInProgress(e.Name())
 		out = append(out, known)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instance < out[j].Instance })

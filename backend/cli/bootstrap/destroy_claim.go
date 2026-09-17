@@ -14,27 +14,50 @@ import (
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
-// beginDestroy takes the cluster lock and records what is about to happen, and it
-// runs BEFORE the first deletion rather than merely early.
+// beginDestroy records what is about to happen — on this machine and in the
+// cluster — and takes the cluster lock, and it runs BEFORE the first deletion
+// rather than merely early.
 //
-// 🔴 THE ORDERING IS THE WHOLE VALUE OF THE PHASE. A destroy is several steps, any
-// of which can fail or be killed. Written first, the annotation means a destroy
-// that dies halfway leaves a declaration reading Destroying — which is true, and
-// which tells the next reader (a resumed destroy, another operator, `instances
-// list`) that what they are looking at is a teardown in progress. Written after
-// the first deletion, the same kill leaves one reading Ready over an instance that
-// is already half gone, which is the failure the field exists to prevent.
+// 🔴 THE ORDERING IS THE WHOLE VALUE OF BOTH RECORDS. A destroy is several steps,
+// any of which can fail or be killed. Written first, they mean a destroy that dies
+// halfway leaves evidence that a teardown is in progress — which is true, and
+// which is what the next reader needs. The readers are named because a record
+// nothing acts on is the thing this slice criticises elsewhere: the local marker
+// is what RefuseUnfinishedDestroy refuses `dcctl bootstrap` and `dcctl upgrade`
+// on; the phase annotation is what writeInstanceCR refuses a rebuild on and what
+// hydrateUpgradeState refuses an upgrade on. `dcctl instances list` reads BOTH and
+// prints either as PART-WAY DESTROYED — it became a reader in the same change that
+// added the marker, having been named as one here for a while before that while
+// reading neither. Written after the first deletion, the same kill leaves a
+// declaration reading Ready over an instance that is already half gone, which is
+// the failure they exist to prevent.
 //
-// The lock comes first inside that ordering for the same class of reason: the
-// annotation write is itself a write, so doing it before the lock makes it a race
-// with whatever else might be running.
+// 🔴 AND THE LOCAL MARKER COMES FIRST OF ALL, BECAUSE THE TWO STEPS AFTER IT BOTH
+// RETURN. ClaimClients fails on a cluster that cannot be reached and AcquireClaim
+// fails on a lock this run could not take; both warn and return, so neither
+// reaches the phase write below. Every destroy that proceeds past one of those
+// writes NO phase anywhere, and a marker placed beside the phase would be skipped
+// in exactly the case it exists for. The marker is also the only half that
+// outlives a cluster deleted out from under the instance.
+// TestTheMarkerIsWrittenBeforeTheFirstDeletionAndWithoutReachingTheCluster drives
+// that case end to end, against a context that does not resolve.
 //
-// Neither failure stops a destroy. The lock is a coordination courtesy and the
-// annotation is a report; an operator who has decided to tear an instance down
-// must not be blocked because the cluster could not be asked politely first. Both
-// are LOUD when they fail, because a destroy running without the lock is
+// The lock comes before the PHASE for a different reason: the annotation write is
+// itself a cluster write, so doing it before the lock makes it a race with
+// whatever else might be running. The marker is local and races with nothing.
+//
+// No failure here stops a destroy. An operator who has decided to tear an instance
+// down must not be blocked because a file could not be written or the cluster
+// could not be asked politely first. All three are LOUD when they fail, because a
+// destroy running without the lock — or leaving no evidence that it started — is
 // something the operator should know about.
 func beginDestroy(ctx context.Context, kubeContext, instance string) *Claim {
+	if err := writeDestroyMarker(instance); err != nil {
+		fmt.Println(color.YellowString(
+			"warning: could not record on this machine that instance %q is being destroyed (%v);\n"+
+				"  continuing — but if this run dies part-way, nothing local will say a teardown started",
+			instance, err))
+	}
 	ns, typed, err := ClaimClients(kubeContext)
 	if err != nil {
 		fmt.Println(color.YellowString(

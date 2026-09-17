@@ -77,6 +77,23 @@ func hydrateUpgradeState(
 		// undeclaredInstanceRefusal.
 		return nil, refuseUndeclaredInstance(ctx, provider.Name(), binding.KubeContext, opts.Instance)
 	}
+	// 🔴 AN INSTANCE PART-WAY THROUGH BEING DESTROYED IS NOT ONE TO MOVE, AND THE
+	// VERSION-CHANGING CASE WAS ALREADY COVERED WHILE THE ORDINARY ONE WAS NOT.
+	// recordUpgradedVersion reaches writeInstanceCR, which refuses a declaration reading
+	// Destroying — but only when the version actually MOVES. A flagless re-run, which is
+	// what an operator types after an upgrade that failed, matches the declared version
+	// and returns from that function before ever reaching the refusal; the terminal stamp
+	// registered immediately after it still fires, so such a run erased the Destroying
+	// and declared the instance Ready. finishUpgradePhase now declines that write too;
+	// this is the half that stops the upgrade from starting at all.
+	//
+	// 🔴 HERE, AND BEING HERE IS LOAD-BEARING. From the terminal stamp's registration
+	// onwards every exit from Upgrade writes a phase, so a refusal made after it would
+	// overwrite the very value it refused over.
+	// TestTheTeardownRefusalIsMadeBeforeTheUpgradeCanStampAnyPhase holds the order.
+	if err := refuseUnfinishedTeardown(opts.Instance, inst); err != nil {
+		return nil, err
+	}
 	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
 		return nil, err
 	}

@@ -159,6 +159,10 @@ func stubSingletons(t *testing.T, held clusterSingletons, err error) {
 // The step, not just the decision: a host another instance serves stops the run, a node
 // port another instance holds is recorded for the apply, and "could not tell" stops the run.
 func TestTheSingletonStepRefusesAHostAndRecordsTheNodePort(t *testing.T) {
+	// The step also prechecks the instance's namespace now, and that read is the only
+	// other thing in it that reaches a cluster. Pointed at an empty one so this test
+	// still measures the singletons.
+	stubNamespacePrecheck(t)
 	stubSingletons(t, clusterSingletons{HostHolder: "alpha"}, nil)
 	st := &State{Instance: "beta", IngressHost: "localhost", Values: map[string]string{}}
 	if err := stepCheckClusterSingletons(context.Background(), st); err == nil ||

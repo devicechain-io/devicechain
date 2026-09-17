@@ -252,10 +252,45 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          enableAreas,
 		}
 
+		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
+		// TOUCHES ANYTHING.
+		//
+		// 🔴 WHAT THESE TWO HAVE IN COMMON IS THAT NEITHER NEEDS A CLUSTER. Below this
+		// point the command resolves an image source, creates or adopts a cluster, reads
+		// its install record and writes a local record, and the pipeline then builds
+		// images, takes the cluster lock and reads what is deployed. A refusal that can be
+		// made from a string and a stat has no business waiting for any of that.
+		//
+		// Both refuse on a --dry-run as well, and that is deliberate: a rehearsal exists to
+		// find out whether these arguments are usable, so it is the run that most needs the
+		// answer soonest. The PIPELINE's refusals rehearse instead, because by then the
+		// question needs a cluster and a rehearsal is often aimed at one that is not there
+		// yet.
+
 		// 🔴 CHECKED WHERE A NEW NAME ENTERS, and only here. `destroy` deliberately does
 		// NOT validate: whatever is already on disk must stay destroyable, including
 		// anything created before this check existed.
 		if err := bootstrap.ValidateInstanceName(opts.Instance); err != nil {
+			return err
+		}
+
+		// 🔴 AN INSTANCE WHOSE TEARDOWN DID NOT FINISH IS NOT A NAME THIS COMMAND MAY
+		// BUILD ON. `dcctl destroy` writes a marker on this machine before it deletes
+		// anything (beginDestroy), and it survives a destroy that died part-way — which
+		// is exactly the state where the cluster holds some of the old instance and no
+		// longer holds the rest. Bootstrapping over that produces a half-old, half-new
+		// instance whose failures are attributed to the new run.
+		//
+		// 🔴 HERE, NOT IN THE PIPELINE, AND THE REASON IS THE LOCAL RECORD. The record is
+		// written before the pipeline starts, and for a marked instance it is not a
+		// phantom: it is the only thing that names the cluster the destroy has to finish
+		// in. Refused here it is never touched; refused later this run would first
+		// REPLACE it with its own binding — possibly naming a different cluster — and the
+		// only way back would be a rollback. So this refusal deliberately does NOT join
+		// unwindLocalRecordWhenNothingWasWritten's list, which exists for records that
+		// describe nothing. TestTheBootstrapCommandRefusesAHalfDestroyedInstanceBeforeItTouchesAnything
+		// is what holds it in front of both EnsureCluster and WriteInstanceRecord.
+		if err := bootstrap.RefuseUnfinishedDestroy(opts.Instance); err != nil {
 			return err
 		}
 
@@ -353,9 +388,10 @@ var bootstrapCmd = &cobra.Command{
 		// bring-up would trade a recoverable annoyance (destroy falls back to the guess,
 		// loudly) for a broken install.
 		//
-		// 🔴 What was here first is captured before it is replaced: on the one refusal that
-		// fires before anything is written — a host another instance serves — the record
-		// this run writes describes nothing. See PriorLocalState.
+		// 🔴 What was here first is captured before it is replaced: on the refusals that
+		// fire before this run has written anything to the cluster, the record this run
+		// writes describes an instance that was never built. See PriorLocalState and
+		// unwindLocalRecordWhenNothingWasWritten.
 		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
@@ -377,7 +413,7 @@ var bootstrapCmd = &cobra.Command{
 
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
-		unwindLocalRecordOnHostTaken(opts, prior, runErr)
+		unwindLocalRecordWhenNothingWasWritten(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
@@ -421,23 +457,32 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 	return nil
 }
 
-// unwindLocalRecordOnHostTaken puts the local record back after the one refusal
-// that makes it describe nothing.
+// unwindLocalRecordWhenNothingWasWritten puts the local record back after a refusal that
+// makes it describe nothing.
 //
-// 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
-// cluster that may be half-built and MUST keep its record, which is the whole reason the
-// record is written before the pipeline. This one cannot: it fires before anything is
-// written, on a cluster already holding another instance — one EnsureCluster adopted,
-// never one it created — so there is nothing for the record to name. Widening this to "any error" would restore the orphan
-// the record exists to prevent.
+// 🔴 THE QUESTION IS "DID THIS RUN WRITE ANYTHING TO THE CLUSTER", NOT "IS THIS
+// ErrHostTaken". Every other way a bootstrap can fail may leave a cluster half-built,
+// which MUST keep its record — the record is the only thing that can name the cluster to
+// destroy, and it is written before the pipeline for exactly that reason. Widening this to
+// "any error" would restore the orphan the record exists to prevent. Naming the
+// discriminator after one of its members is how the list stopped tracking it once already:
+// the comment here read "the one refusal that fires before anything is written" while two
+// refusals already qualified, and a third was about to.
+//
+// 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. All three types below
+// are raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
+// holds ahead of the operator install and the declaration. The namespace refusal is raised
+// in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable.
 //
 // It reports and moves on. The refusal is what the operator is about to read, and
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
-func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
 	var hostTaken *bootstrap.ErrHostTaken
 	var noBudget *bootstrap.ErrConnectionBudget
-	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget)) {
+	var noNamespace *bootstrap.ErrNamespaceUnavailable
+	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget) ||
+		errors.As(runErr, &noNamespace)) {
 		return
 	}
 	removed, err := prior.Restore()

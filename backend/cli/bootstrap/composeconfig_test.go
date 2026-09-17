@@ -391,17 +391,32 @@ func TestTheNamespaceIsCreatedInAShapeHelmCanAdopt(t *testing.T) {
 	}
 }
 
-// An existing namespace is left exactly as it is. Stamping our metadata onto one
-// somebody else is using would be claiming it rather than checking it — and Helm
-// already refuses it, with a better message than anything here could give.
-func TestAnExistingNamespaceIsNotRestamped(t *testing.T) {
+// 🔴 A NAMESPACE THAT IS NOT THIS INSTANCE'S IS REFUSED, AND NOT RESTAMPED EITHER.
+//
+// This test used to assert the opposite half: that such a namespace was LEFT ALONE and
+// the run carried on, on the reasoning that Helm's ownership check would refuse it later
+// with a better message. It does — eight steps later, and the caller writes this
+// instance's credentials into that namespace on the very next line. Measured on a real
+// cluster: a bootstrap named after the monitoring namespace put the secret-store root
+// key, the broker's TLS private key and four database credentials there before Helm
+// objected, and `dcctl destroy` then correctly refused to clean up after it.
+//
+// The "not restamped" half survives unchanged, and it is still the counterweight:
+// refusing a namespace must not turn into claiming one.
+func TestAForeignNamespaceIsRefusedAndNotRestamped(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "dctest",
 		Labels:      map[string]string{"app.kubernetes.io/managed-by": "someone-else"},
 		Annotations: map[string]string{"meta.helm.sh/release-name": "their-release"},
 	}})
-	if err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc", "default"); err != nil {
-		t.Fatalf("an existing namespace was treated as a failure: %v", err)
+	err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc", "default")
+	if err == nil {
+		t.Fatal("a namespace that is not this instance's was accepted, so the root key the " +
+			"caller writes next would land in somebody else's namespace")
+	}
+	if !strings.Contains(err.Error(), "kubectl label namespace dctest devicechain.io/instance=dctest") {
+		t.Errorf("the refusal does not say how to give the namespace to this instance on "+
+			"purpose, which leaves an operator who meant it with no way forward: %v", err)
 	}
 
 	ns, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{})
@@ -411,7 +426,7 @@ func TestAnExistingNamespaceIsNotRestamped(t *testing.T) {
 	if ns.Labels["app.kubernetes.io/managed-by"] != "someone-else" ||
 		ns.Annotations["meta.helm.sh/release-name"] != "their-release" {
 		t.Error("an existing namespace was restamped: dcctl would be claiming a namespace " +
-			"another release owns rather than letting Helm refuse it")
+			"another release owns rather than refusing it")
 	}
 }
 

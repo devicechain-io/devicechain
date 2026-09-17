@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	dck8s "github.com/devicechain-io/dc-k8s/config"
 	"github.com/fatih/color"
@@ -83,7 +84,11 @@ type UpgradeOptions struct {
 // release added to them. Applying the stream costs nothing extra — RenderOperator
 // already emits it as one document — and it means the CRD path is never the thing
 // nobody remembered.
-func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error {
+//
+// The result is named because a deferred call reads it: from the moment the
+// declaration says Upgrading, every exit from this function has to say how the
+// upgrade ended. See finishUpgradePhase.
+func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err error) {
 	// 🔴 THE SAME BINDING DESTROY USES, AND ANNOUNCED THE SAME WAY. `upgrade` carried the
 	// identical defect: it derived kind-<instance> and so pointed at a cluster that does
 	// not exist for any instance bootstrapped with --kube-context. Reading the record
@@ -142,6 +147,28 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 		return err
 	}
 
+	// Declared here and taken further down: the deferred call closes over the
+	// VARIABLE, so the lock the run takes later is the lock this hands back — and
+	// the exits between the two (a dry run, a manifest that renders no Deployment)
+	// reach the deferred call with nothing to release, which is the truth.
+	var upgradeClaim *Claim
+
+	// 🔴 REGISTERED HERE AND NOT ONE LINE EARLIER, BECAUSE WHAT IS ABOVE IS NOT THIS
+	// RUN'S TO OVERWRITE. recordUpgradedVersion refuses a declaration reading
+	// Destroying, and a deferred stamp registered before it would answer that
+	// refusal by writing Failed over the Destroying that caused it — erasing the
+	// record of a teardown that has not finished, which is the one phase value
+	// something else acts on.
+	//
+	// From this line on the declaration may say Upgrading, and a phase that is only
+	// ever entered is a phase that is never left: every exit below — the refusals,
+	// the rollout failures, the success at the bottom, and the first Ctrl+C, which
+	// cancels this context and unwinds rather than exiting (cmd.Execute; the SECOND
+	// signal does terminate the process, by design) — has to replace it with a
+	// terminal one. A deferred call is what makes that true of exits nobody has
+	// written yet.
+	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
+
 	manifests, err := dck8s.RenderOperator(image)
 	if err != nil {
 		return fmt.Errorf("rendering operator manifests: %w", err)
@@ -181,12 +208,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	// It is announced and not enforced, for the same reason destroy's is: an
 	// operator repairing a stuck instance must not be blocked by a lock held by
 	// the very run that got stuck.
-	upgradeClaim := beginUpgradeClaim(ctx, kubeContext, opts.Instance)
-	defer func() {
-		if upgradeClaim != nil {
-			upgradeClaim.Release(ctx)
-		}
-	}()
+	//
+	// It is given back by finishUpgradePhase rather than by a defer of its own, and
+	// that is ordering rather than tidiness: Release DELETES the Lease, and a
+	// deleted Lease reads as a LOST claim — so a release registered after the phase
+	// write would run before it (defers unwind backwards) and fence out the very
+	// stamp it is meant to permit.
+	upgradeClaim = beginUpgradeClaim(ctx, kubeContext, opts.Instance)
 
 	// Read what is running BEFORE anything is applied. An upgrade that reports
 	// only its destination cannot be told apart from a no-op, and "no-op" is the
@@ -389,7 +417,89 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 
 	spec := inst.Spec
 	spec.ImageRegistry, spec.ImageVersion = st.ImageRegistry, st.ImageVersion
-	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion)
+	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
+	// stamped Bootstrapping on every write, so every instance that had ever been
+	// upgraded declared a bootstrap in progress from then on — a phase that is not
+	// merely imprecise but names the wrong VERB, which is the one thing a reader
+	// uses it for. See finishUpgradePhase for the other half: a phase that is only
+	// ever entered is a phase that is never left.
+	return writeInstanceCR(ctx, dyn, instance, spec, st.DcctlVersion, dcv1beta1.PhaseUpgrading)
+}
+
+// finishUpgradePhase records how this upgrade ENDED on the declaration, and gives
+// the cluster lock back afterwards.
+//
+// 🔴 IT IS THE HALF THAT WAS MISSING, AND WITHOUT IT THE PHASE IS WRITE-ONLY.
+// `upgrade` wrote a phase on its way in and none on its way out, so the value an
+// instance was left holding was whatever the last write happened to be — which is
+// how every upgraded instance came to read Bootstrapping for good. A phase that is
+// only ever entered describes a run that never ended, over an instance that is
+// running fine.
+//
+// 🔴 A FENCED RUN WRITES NOTHING, for the reason finishClaim gives at the same
+// point in bootstrap: once the claim is lost the declaration belongs to whoever
+// reclaimed it, and stamping Failed would overwrite the phase of a run that is
+// live and doing well. CheckHeld is what establishes that — asked of the API
+// server here, not read from the renewal loop's cached flag, which can be a full
+// interval out of date at exactly this moment.
+//
+// 🔑 A run that never HELD the lock is the other case, and it DOES stamp.
+// beginUpgradeClaim warns and continues when it cannot take the lock, so such a
+// run has already rewritten this declaration's spec unfenced; refusing it the
+// terminal phase would buy no safety and would leave the instance reading
+// Upgrading for good — the exact defect this function exists to close.
+//
+// Reporting, not correctness: an upgrade that worked must not be reported as
+// failed because a courtesy annotation did not land.
+func finishUpgradePhase(ctx context.Context, dyn dynamic.Interface, instance string, st *State, claim *Claim, runErr error) {
+	// Detached from the caller's cancellation, like finishClaim's and Release's own:
+	// Ctrl+C is when the terminal phase matters most, and it is also when the run's
+	// context is already dead — so a cleanup that inherited it would fail its first
+	// call and leave the declaration mid-verb.
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	// A rehearsal recorded no Upgrading (recordUpgradedVersion returns early under
+	// --dry-run), so it has nothing to close out and must write nothing.
+	if !st.DryRun && (claim == nil || claim.CheckHeld(cleanup) == nil) {
+		phase := dcv1beta1.PhaseReady
+		if runErr != nil {
+			phase = dcv1beta1.PhaseFailed
+		}
+		// 🔴 AND NOT OVER A TEARDOWN. Destroying is the one phase value another command
+		// ACTS on — writeInstanceCR refuses a rebuild over it and hydrateUpgradeState
+		// refuses an upgrade over it — so stamping it out does not merely mislabel the
+		// instance, it removes the only cluster-side evidence that the cluster holds half
+		// of one, and hands the next bootstrap a green light onto it.
+		//
+		// 🔑 THE REFUSAL UPSTREAM SHOULD MEAN THIS NEVER FIRES, AND THAT IS EXACTLY WHY IT
+		// IS HERE. hydrateUpgradeState refuses a teardown before this defer is registered,
+		// but nothing in THIS function depends on that: it is an ordering two files apart
+		// that a reordering, or a future caller reaching finishUpgradePhase by another
+		// path, would break in silence. The guarantee is made local to the function that
+		// would do the damage.
+		//
+		// 🔑 A READ THAT FAILS NEEDS NO ARM OF ITS OWN, and giving it one would be a
+		// branch nothing could tell from the other. setInstancePhase reads the same
+		// declaration through the same client before it patches, so a read this could not
+		// make is a write that cannot happen either — and that already warns. What must
+		// not happen is the read failing and the phase being written anyway, which is not
+		// reachable from here.
+		current, readErr := readInstanceCR(cleanup, dyn, instance)
+		if readErr == nil && current != nil &&
+			current.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
+			fmt.Println(color.YellowString(
+				"warning: instance %q is part-way through being DESTROYED, so this upgrade left the "+
+					"declaration saying so rather than recording itself as %s.\n"+
+					"  Finish the teardown with `dcctl destroy %s`, which is resumable, and build it "+
+					"again with `dcctl bootstrap` afterwards.", instance, phase, instance))
+		} else if err := setInstancePhase(cleanup, dyn, instance, phase); err != nil {
+			fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
+		}
+	}
+	if claim != nil {
+		claim.Release(cleanup)
+	}
 }
 
 // deploymentRef names one Deployment in the rendered stream.
