@@ -129,7 +129,7 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		switch id.Name {
 		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "markInstallApplying",
 			"applyClusterPrereqs", "writeInstalled", "applyInstanceInfra", "splitVars",
-			"checkRelationalStoreOwner", "provisionInstanceDatabase":
+			"checkRelationalStoreOwner", "provisionInstanceDatabase", "ensureNamespaceForRelease":
 			// First occurrence wins, so a later reference cannot reorder the record.
 			if _, seen := positions[id.Name]; !seen {
 				positions[id.Name] = call.Pos()
@@ -149,6 +149,7 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		{"writeInstalled", "nothing would record that the cluster prerequisites are installed"},
 		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
 		{"provisionInstanceDatabase", "services would connect as a login that does not exist, to a database nothing created"},
+		{"ensureNamespaceForRelease", "the instance's credentials could not be written into its own namespace"},
 	} {
 		if _, ok := positions[want.name]; !ok {
 			t.Fatalf("applyInfra no longer calls %s — %s", want.name, want.why)
@@ -165,6 +166,10 @@ func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
 		{"openInstanceRoot", "applyClusterPrereqs",
 			"a pre-split instance fails the cluster apply on releases its own state owns, " +
 				"so the fence that explains why would never be reached"},
+		{"ensureNamespaceForRelease", "writeMintedSecrets",
+			"the instance's credentials are written into its own namespace, which has to exist first"},
+		{"openInstanceRoot", "ensureNamespaceForRelease",
+			"the fences must refuse before the instance namespace is created"},
 		{"ensureInfraNamespace", "writeMintedSecrets",
 			"a Secret cannot be written into a namespace that does not exist yet"},
 		{"writeMintedSecrets", "applyClusterPrereqs",

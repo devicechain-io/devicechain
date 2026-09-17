@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/fatih/color"
+
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,4 +91,47 @@ func refuseAHostAnotherInstanceServes(held clusterSingletons, instance, host str
 		"controller given two instances on one host serves only one of them — silently. Bootstrap %q "+
 		"on a host of its own with --host (for a local cluster, e.g. --host %s.localhost)",
 		host, held.HostHolder, instance, instance)
+}
+
+// stepCheckClusterSingletons asks what other instances on this cluster already hold, and
+// refuses a host one of them serves.
+//
+// 🔴 BEFORE ANYTHING IS WRITTEN. It sits right after the rebuild refusal, ahead of the
+// operator install and the instance declaration: a refusal after those would leave a
+// declaration for an instance that was never built, and the cluster would report holding
+// it. The node port is not refused — the instance is built without it — but it is decided
+// here, from the same read, and said.
+func stepCheckClusterSingletons(ctx context.Context, st *State) error {
+	if st.Values == nil {
+		st.Values = map[string]string{}
+	}
+	host := ingressHostFor(st)
+	if st.DryRun {
+		// A rehearsal is often aimed at a cluster that does not exist yet, so the read is
+		// best-effort — and what a real run would refuse is still said.
+		held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
+		switch {
+		case err != nil:
+			wouldDo(fmt.Sprintf("could not check whether another instance serves host %q (%v); a real run would", host, err))
+		case refuseAHostAnotherInstanceServes(held, st.Instance, host) != nil:
+			wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
+		}
+		return nil
+	}
+
+	doing("checking what other instances on this cluster hold")
+	held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
+	if err != nil {
+		return fail("checking what other instances on this cluster hold", err)
+	}
+	if err := refuseAHostAnotherInstanceServes(held, st.Instance, host); err != nil {
+		return err
+	}
+	done()
+	if held.MQTTNodePortHolder != "" {
+		st.Values[mqttNodePortHolderKey] = held.MQTTNodePortHolder
+		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by the instance in "+
+			"namespace %q, so this instance's broker is reachable in-cluster only", localMQTTNodePort, held.MQTTNodePortHolder)))
+	}
+	return nil
 }

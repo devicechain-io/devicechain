@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	pgx "github.com/jackc/pgx/v5"
 	corev1 "k8s.io/api/core/v1"
@@ -325,28 +324,29 @@ func refuseAPreIsolationOwner(cl *unstructured.Unstructured) error {
 //
 // A cluster whose install record is missing or from another dcctl has no store this
 // dcctl can find; that is said, and nothing is dropped.
-func removeInstanceRelationalLogin(ctx context.Context, typed kubernetes.Interface, kubeContext, instance string) error {
+//
+// It returns why the database was left behind, or "" when it was dropped: a destroy that
+// skipped the drop must not close by saying the instance is gone.
+func removeInstanceRelationalLogin(ctx context.Context, typed kubernetes.Interface, kubeContext, instance string) (string, error) {
 	clusterUID, err := ClusterUID(ctx, typed)
 	if err != nil {
-		return err
+		return "", err
 	}
 	rec, err := readInstallRecord(ctx, typed, clusterUID)
 	switch {
 	case errors.Is(err, ErrNotInstalled) || errors.Is(err, ErrInstallRecordSchema):
-		fmt.Println(color.YellowString("  instance %q's database, if it has one, was left on the shared "+
-			"store: %v", instance, err))
-		return nil
+		return err.Error(), nil
 	case err != nil:
-		return fmt.Errorf("finding the relational store through the install record: %w", err)
+		return "", fmt.Errorf("finding the relational store through the install record: %w", err)
 	}
 	if err := removeInstanceDatabase(ctx, kubeContext, instance, rec.Outputs.Rdb); err != nil {
-		return err
+		return "", err
 	}
 	name := instanceRdbSecretName(instance)
 	ns := instanceNamespace(instance)
 	if err := typed.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil &&
 		!apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting Secret %s/%s after dropping the login it held: %w", ns, name, err)
+		return "", fmt.Errorf("deleting Secret %s/%s after dropping the login it held: %w", ns, name, err)
 	}
-	return nil
+	return "", nil
 }

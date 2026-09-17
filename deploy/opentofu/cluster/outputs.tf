@@ -6,10 +6,8 @@
 # class, the operator namespaces and the archive contract below. The per-instance
 # half (the broker, the event store) is in the instance root's outputs.
 
-# These endpoints are what the DeviceChain services/Helm values point at. They
-# line up with the chart defaults (e.g. dc-nats.dc-system:4222,
-# dc-postgresql.dc-system:5432) so `deploy/helm/devicechain` works against this
-# infra out of the box.
+# These endpoints line up with the chart defaults (e.g. dc-postgresql.dc-system:5432)
+# so `deploy/helm/devicechain` works against this infra out of the box.
 
 output "namespace" {
   description = "Namespace the infrastructure was deployed into."

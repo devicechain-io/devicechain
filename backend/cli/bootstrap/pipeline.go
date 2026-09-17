@@ -293,6 +293,9 @@ func NewDefaultPipeline() Pipeline {
 		// below this one writes something to a cluster that may already be running
 		// the instance they would be writing over.
 		{Name: "Refuse a rebuild", Run: stepRefuseRebuild},
+		// What only one instance per cluster can hold — the ingress host, the local MQTT
+		// port. Before the first write, so a refusal leaves nothing behind.
+		{Name: "Check what other instances hold", Run: stepCheckClusterSingletons},
 		{Name: "Install core components", Run: stepInstallCore},
 		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},

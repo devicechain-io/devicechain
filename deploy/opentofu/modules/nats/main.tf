@@ -488,7 +488,7 @@ locals {
   # 🔴 THE ROUTE LISTENER DOES NOT USE THE CLIENT NAMES, and getting this wrong
   # does not degrade the cluster — it prevents one from forming at all.
   #
-  # Clients reach the broker through the ClusterIP Service (dc-nats.dc-system).
+  # Clients reach the broker through the ClusterIP Service (dc-nats.<namespace>).
   # The servers reach EACH OTHER by POD name through the chart's headless
   # Service — dc-nats-1.dc-nats-headless — because a route has to address one
   # specific peer, which a load-balanced Service name cannot do. With route TLS
@@ -498,7 +498,7 @@ locals {
   # client names fails EVERY route handshake:
   #
   #   TLS route handshake error: x509: certificate is valid for dc-nats,
-  #   dc-nats.dc-system, ... not dc-nats-1.dc-nats-headless
+  #   dc-nats.<namespace>, ... not dc-nats-1.dc-nats-headless
   #
   # and the result is three isolated servers that never elect a JetStream meta
   # leader. Not a degraded HA cluster — no cluster. Every stream creation then

@@ -55,6 +55,11 @@ const legacyHelmReleaseName = "dc"
 // a live-cluster question nobody has asked yet. The NAME is the half that has to move
 // for two instances to coexist; the record's home does not, because a release name is
 // unique per namespace and the names are now distinct.
+//
+// The instance's OTHER releases — the broker and the event store, which OpenTofu
+// installs — do keep their records in the instance's namespace, and so go with it when
+// it is deleted. Nothing uninstalls those through Helm; they are removed with the
+// namespace, which is what a destroy of the instance means.
 const helmReleaseNamespace = "default"
 
 // helmReleaseNameFor is the release name this instance's chart is installed under.

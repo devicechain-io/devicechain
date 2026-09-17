@@ -23,7 +23,10 @@ Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by th
 OpenTofu modules in
 [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu);
 this chart assumes it exists and points at it via
-`instance.config.infrastructure` / `.persistence`.
+`instance.config.infrastructure` / `.persistence`. The instance's own broker and event
+store run in the instance's namespace, beside the services this chart deploys; the
+relational database, ingress controller and cert-manager are shared by every instance on
+the cluster.
 
 Every release is one semver tag (`vX.Y.Z`) covering all images, the operator, the
 chart, and the `dcctl` CLI together. Images are public on `ghcr.io/devicechain-io`
@@ -335,7 +338,9 @@ re-opens every private address for every tenant.
 
 ## What it renders
 
-- A `Namespace` named `instance.id` (toggle with `instance.createNamespace`).
+- A `Namespace` named `instance.id` (toggle with `instance.createNamespace`). **The
+  instance's broker and event store live in this namespace too**, so uninstalling the
+  release deletes them — and the event store's data — along with the services.
 - `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`.
 - `dct-<id>-config` — per-area config mounted at `/etc/dct-config/<area>`.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`

@@ -58,8 +58,10 @@ func checkInstanceInItsOwnNamespace(ctx context.Context, tf stateLister, instanc
 			"runs outside namespace %q —\n  %s\n"+
 			"A Helm release cannot move between namespaces in place; OpenTofu would destroy and "+
 			"recreate it, which for the event store is its history. There is no in-place upgrade: "+
-			"destroy the instance and bootstrap it again (`dcctl destroy %s` then `dcctl bootstrap "+
-			"%s`). Back up anything you need first — a destroy takes the databases with it",
+			"the instance has to be rebuilt. On a cluster dcctl created, `dcctl destroy %s` deletes the "+
+			"cluster with it; then `dcctl bootstrap %s`. `--keep-cluster` is NOT enough: it leaves this "+
+			"infrastructure running in the shared namespace and this state in place, and this refusal "+
+			"returns. Back up anything you need first — rebuilding takes the instance's data with it",
 		instance, want, strings.Join(elsewhere, "\n  "), instance, instance)
 }
 

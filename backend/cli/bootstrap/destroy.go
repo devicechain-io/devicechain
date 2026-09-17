@@ -125,7 +125,8 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	// store is the cluster's, so uninstalling the instance leaves both behind — and a
 	// later instance by the same name would be refused over a database it did not create.
 	// After the uninstall, which ends the services' sessions on it.
-	if err := removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance); err != nil {
+	leftDatabase, err := removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance)
+	if err != nil {
 		return fail("removing the instance's database and login", err)
 	}
 	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
@@ -133,6 +134,14 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	}
 	done()
 
+	if leftDatabase != "" {
+		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
+		// closing line that says it is gone is the sentence this command keeps being
+		// fixed for.
+		fmt.Println(color.YellowString("\nInstance %q uninstalled; cluster %s left running. Its database, "+
+			"if it has one, was LEFT on the shared relational store: %s", opts.Instance, kubeContext, leftDatabase))
+		return nil
+	}
 	fmt.Println(color.HiGreenString("\nInstance %q uninstalled; cluster %s left running.", opts.Instance, kubeContext))
 	return nil
 }

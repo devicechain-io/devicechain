@@ -6,6 +6,9 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"slices"
 	"strings"
 	"testing"
@@ -138,5 +141,86 @@ func TestOnlyTheFirstLocalInstanceAsksForTheMQTTNodePort(t *testing.T) {
 		if strings.HasPrefix(v, "nats_mqtt_node_port=") {
 			t.Errorf("a second instance asks for a node port another instance holds: %s", v)
 		}
+	}
+}
+
+func stubSingletons(t *testing.T, held clusterSingletons, err error) {
+	t.Helper()
+	orig := readClusterSingletons
+	t.Cleanup(func() { readClusterSingletons = orig })
+	readClusterSingletons = func(context.Context, string, string, string) (clusterSingletons, error) {
+		return held, err
+	}
+}
+
+// The step, not just the decision: a host another instance serves stops the run, a node
+// port another instance holds is recorded for the apply, and "could not tell" stops the run.
+func TestTheSingletonStepRefusesAHostAndRecordsTheNodePort(t *testing.T) {
+	stubSingletons(t, clusterSingletons{HostHolder: "alpha"}, nil)
+	st := &State{Instance: "beta", IngressHost: "localhost", Values: map[string]string{}}
+	if err := stepCheckClusterSingletons(context.Background(), st); err == nil ||
+		!strings.Contains(err.Error(), "--host") {
+		t.Errorf("a host alpha serves was not refused: %v", err)
+	}
+
+	stubSingletons(t, clusterSingletons{MQTTNodePortHolder: "alpha"}, nil)
+	st = &State{Instance: "beta", IngressHost: "beta.localhost", KubeContext: "kind-alpha", Values: map[string]string{}}
+	if err := stepCheckClusterSingletons(context.Background(), st); err != nil {
+		t.Fatalf("a held node port refused the run instead of building without it: %v", err)
+	}
+	for _, v := range infraVars(st) {
+		if strings.HasPrefix(v, "nats_mqtt_node_port=") {
+			t.Errorf("the step did not reach the apply: beta still asks for %s", v)
+		}
+	}
+
+	stubSingletons(t, clusterSingletons{}, errors.New("forbidden"))
+	st = &State{Instance: "beta", Values: map[string]string{}}
+	if err := stepCheckClusterSingletons(context.Background(), st); err == nil {
+		t.Error("a cluster that would not say what it holds was read as holding nothing")
+	}
+}
+
+// 🔴 THE STEP COMES BEFORE THE FIRST WRITE. A refusal after the operator install or the
+// declaration leaves a declared instance that was never built.
+func TestTheSingletonStepRunsBeforeAnythingIsWritten(t *testing.T) {
+	var names []string
+	for _, s := range NewDefaultPipeline().Steps {
+		names = append(names, s.Name)
+	}
+	check := slices.Index(names, "Check what other instances hold")
+	core := slices.Index(names, "Install core components")
+	declare := slices.Index(names, "Declare the instance")
+	if check < 0 || check > core || check > declare {
+		t.Errorf("the singleton check is at %d, after the first write (core %d, declare %d): %v", check, core, declare, names)
+	}
+}
+
+// The namespace fence is only a fence if openInstanceRoot runs it — which needs a tofu
+// binary and state to reach, so the call is held by the source.
+func TestOpenInstanceRootRunsTheNamespaceFence(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "tofu.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, d := range file.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "openInstanceRoot" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "checkInstanceInItsOwnNamespace" {
+					found = true
+				}
+			}
+			return true
+		})
+	}
+	if !found {
+		t.Error("openInstanceRoot no longer runs checkInstanceInItsOwnNamespace, so an instance built in the " +
+			"shared namespace has its broker and event store replaced by the apply")
 	}
 }

@@ -32,7 +32,7 @@ type credentialPlacement struct {
 	Into  func(*credentialSet) *string
 	// WhenAbsent, if set, replaces the "it is gone" refusal for a credential whose
 	// absence has a more likely cause than deletion.
-	WhenAbsent func(instance string) error
+	WhenAbsent func(ctx context.Context, typed kubernetes.Interface, instance string) error
 }
 
 // credentialPlacements lists every credential this configuration has, and where.
@@ -68,11 +68,23 @@ func credentialPlacements(st *State) []credentialPlacement {
 			// a database login of its own never had this Secret, and restoring nothing
 			// is not a remedy. That instance's services connect as the store's shared
 			// owner, and the way to a login of its own is a rebuild.
-			WhenAbsent: func(instance string) error {
+			//
+			// 🔴 AND NOT "NEVER HAD ONE" EITHER, WHEN IT DID — in the shared namespace. An
+			// instance built after logins but before instances had namespaces of their own
+			// keeps its login Secret in dc-system; telling its operator the data belongs to
+			// the shared owner would be false. Asked, then said.
+			WhenAbsent: func(ctx context.Context, typed kubernetes.Interface, instance string) error {
+				name := instanceRdbSecretName(instance)
+				if _, err := typed.CoreV1().Secrets(infraNamespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
+					return fmt.Errorf("instance %q was built before each instance had a namespace of its own: "+
+						"its database login, broker and event store are in the shared %s namespace rather than "+
+						"in %q, and they cannot be moved in place. An upgrade cannot move it; recreate the "+
+						"instance (`dcctl destroy` then `dcctl bootstrap`)", instance, infraNamespace, instanceNamespace(instance))
+				}
 				return fmt.Errorf("instance %q has no database login of its own (no Secret %s/%s): it was "+
 					"built before each instance had one, and its data belongs to the shared owner. An "+
 					"upgrade cannot move it; recreate the instance (`dcctl destroy` then `dcctl bootstrap`) "+
-					"on a cluster built by this dcctl", instance, instanceNamespace(instance), instanceRdbSecretName(instance))
+					"on a cluster built by this dcctl", instance, instanceNamespace(instance), name)
 			},
 		},
 		{
@@ -174,7 +186,7 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 
 		default: // reuseAbsent
 			if p.WhenAbsent != nil {
-				return nil, p.WhenAbsent(st.Instance)
+				return nil, p.WhenAbsent(ctx, typed, st.Instance)
 			}
 			return nil, fmt.Errorf(
 				"instance %q is running but Secret %s/%s — which holds its %s — is gone. An "+

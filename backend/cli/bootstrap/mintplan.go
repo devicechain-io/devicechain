@@ -281,8 +281,10 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 // name and same keys, so the archive contract read back from the cluster root describes
 // the copy as exactly as it describes the original.
 //
-// Written from the same value on every run, so a rotated cluster credential reaches
-// every instance's copy the next time that instance is bootstrapped or upgraded.
+// 🔴 WRITTEN WHEN THE INSTANCE IS BUILT, AND NOT AGAIN. Credentials are written by the
+// bootstrap, and an upgrade writes none; so a cluster archive credential rotated later
+// does not reach an existing instance's copy on its own — the copy has to be rewritten
+// with it.
 func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 	copied := cluster
 	copied.Namespace = instanceNamespace(st.Instance)

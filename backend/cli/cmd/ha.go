@@ -226,7 +226,7 @@ func init() {
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
 
 	haVerifyCmd.Flags().StringVar(&haInstanceId, "instance", "default",
-		"instance id (also its namespace)")
+		"instance id — also the namespace its services and broker run in")
 	haVerifyCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
 	haVerifyCmd.Flags().IntVar(&haReplicas, "replicas", 0,
