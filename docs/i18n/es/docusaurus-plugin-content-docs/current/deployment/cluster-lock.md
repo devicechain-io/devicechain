@@ -71,25 +71,19 @@ ejecutando» forma parte de la respuesta a «qué haría esto».
 
 ## Qué cubre realmente el bloqueo {#scope}
 
-**Un bloqueo por clúster, no uno por instancia.** Casi todo lo que toca un arranque
-inicial es un singleton de ámbito de clúster: los releases de infraestructura que instalan
-el controlador de ingress, cert-manager y el operador CloudNativePG, y el propio
-Deployment del operador de DeviceChain. El release de Helm de la propia instancia es la
-única excepción —lleva el nombre de la instancia, así que `alpha` se instala como
-`dc-alpha`—, pero todo lo que lo rodea sigue siendo compartido, de modo que dos
-ejecuciones trabajando sobre dos instancias *distintas* se sobrescribirían mutuamente todo
-eso. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
+**Un bloqueo por clúster, no uno por instancia.** Un clúster puede alojar varias
+instancias, pero un arranque inicial también toca lo que comparten: los releases de
+infraestructura que instalan el controlador de ingress, cert-manager y el operador
+CloudNativePG, la base de datos relacional compartida y el propio Deployment del operador
+de DeviceChain. Dos ejecuciones trabajando a la vez sobre dos instancias *distintas*
+aplicarían ambas esa mitad compartida, así que el bloqueo las pone en fila. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
 qué instancia está trabajando el titular, pero no es la clave del bloqueo.
 
-:::caution Esto impone «una ejecución a la vez», no «una instancia por clúster»
-El bloqueo impide que dos procesos `dcctl` apliquen a la vez. No hace que un clúster sea
-apto para alojar dos instancias de DeviceChain: hoy un clúster aloja una, y eso sigue
-siendo cierto haya o no alguien reteniendo el bloqueo.
-
-De ese límite se encarga una comprobación distinta, un paso más tarde: el arranque
-inicial pregunta al clúster si ya aloja una instancia *distinta* y se niega si es así,
-diga lo que diga el bloqueo. Consulta [Una instancia por
-clúster](./bootstrap.md#what-it-does).
+:::note Esto impone «una ejecución a la vez»
+El bloqueo impide que dos procesos `dcctl` apliquen a la vez. No es lo que mantiene
+separadas las instancias: cada instancia tiene su propio namespace y su propio login de
+base de datos, haya o no alguien reteniendo el bloqueo. Consulta [Varias instancias en un
+mismo clúster](./bootstrap.md#what-it-does).
 :::
 
 El bloqueo es un `Lease` de Kubernetes llamado `dcctl`, en el namespace donde el operador

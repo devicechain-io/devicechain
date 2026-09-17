@@ -17,9 +17,9 @@ these modules, passing its cluster credentials to the providers.
 | Provisioned | How | Endpoint (defaults) |
 |---|---|---|
 | Namespace | `kubernetes_namespace_v1` | `dc-system` |
-| NATS (JetStream + MQTT) | `nats` Helm chart, pinned | `dc-nats.dc-system:4222` / `:1883` |
+| NATS (JetStream + MQTT) — instance root | `nats` Helm chart, pinned | `dc-nats.<instance-id>:4222` / `:1883` |
 | Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
-| TimescaleDB (event store) | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.dc-system:5432` |
+| TimescaleDB (event store) — instance root | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.<instance-id>:5432` |
 | NGINX ingress controller | `ingress-nginx` Helm chart, pinned | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart, pinned | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart, pinned | namespace `monitoring` |
@@ -81,7 +81,7 @@ now arrive together.
 
 | `backup_destination` | What you get |
 | --- | --- |
-| `in-cluster` (default) | A single-replica MinIO (**AGPL-3.0**, see below) in the instance's namespace, two buckets, WAL archiving and a daily base backup for each store. |
+| `in-cluster` (default) | A single-replica MinIO (**AGPL-3.0**, see below) in the shared `dc-system` namespace, two buckets, WAL archiving and a daily base backup for each store. |
 | `external` | The same archiving, pointed at `backup_endpoint_url` with `backup_access_key` / `backup_secret_key`. Nothing is provisioned in-cluster. |
 
 🔴 **An in-cluster destination is not off-site backup.** It shares the cluster's failure

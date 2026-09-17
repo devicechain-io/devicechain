@@ -302,12 +302,13 @@ would silently leave the network permitting what the code refuses.
 
 **Three things the policy does not do**, all worth knowing before relying on it:
 
-- The datastore rule permits the whole namespace on the NATS and PostgreSQL ports, not
-  the two workloads by name. So a second datastore living in that namespace on one of
-  those ports is reachable even though only NATS and PostgreSQL are intended. Narrowing
-  it needs a pod selector per datastore, and a way to express the labels of
-  bring-your-own infrastructure; until then, treat "the platform's datastores" as "that
-  namespace, on those two ports".
+- The relational database rule permits the whole infrastructure namespace on the
+  PostgreSQL port, not the database by name. So another datastore living in that namespace
+  on that port is reachable even though only PostgreSQL is intended. Narrowing it needs a
+  pod selector for the database, and a way to express the labels of bring-your-own
+  infrastructure; until then, treat "the platform's database" as "that namespace, on that
+  port". The broker is the instance's own and is selected by its pod labels in the
+  instance's namespace, so it is not affected.
 
 - It compares address prefixes, so it cannot look inside an IPv6 address that carries an
   IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address

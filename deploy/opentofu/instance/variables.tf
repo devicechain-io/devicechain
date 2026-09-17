@@ -464,8 +464,9 @@ variable "timescale_analytics_readers" {
       connection_limit   REQUIRED, above 0. These sessions come out of the same
                          max_connections event-management's pool draws on, so an
                          unlimited role can stall ingest without failing loudly.
-      password_secret    a kubernetes.io/basic-auth Secret in the platform
-                         namespace, holding `username` and `password`. YOU create
+      password_secret    a kubernetes.io/basic-auth Secret in the INSTANCE's own
+                         namespace (the event store's), holding `username` and
+                         `password`. YOU create
                          it; CloudNativePG reconciles the role to match. The
                          password is deliberately not a variable here -- putting
                          it in this file would put it in OpenTofu state.

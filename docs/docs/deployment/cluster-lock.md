@@ -68,24 +68,19 @@ running" is part of the answer to "what would this do".
 
 ## What the lock actually covers {#scope}
 
-**One lock per cluster — not one per instance.** Almost everything a bootstrap touches
-is a cluster-wide singleton: the infrastructure releases that install the ingress
-controller, cert-manager and the CloudNativePG operator, and the DeviceChain operator's
-own Deployment. The instance's own Helm release is the one exception — it is named after
-the instance, so `alpha` installs as `dc-alpha` — but everything standing around it is
-still shared, so two runs working on two *different* instances would overwrite each
-other's copies of all of that. The instance id is recorded on the lock so the refusal can
+**One lock per cluster — not one per instance.** A cluster can hold several instances,
+but a bootstrap also touches what they share: the infrastructure releases that install
+the ingress controller, cert-manager and the CloudNativePG operator, the shared relational
+database, and the DeviceChain operator's own Deployment. Two runs working on two
+*different* instances at once would both apply that shared half, so the lock serializes
+them. The instance id is recorded on the lock so the refusal can
 tell you which instance the holder is working on, but it is not what the lock is keyed
 by.
 
-:::caution This enforces "one run at a time", not "one instance per cluster"
-The lock stops two `dcctl` processes from applying at once. It does not make a cluster
-safe to host two DeviceChain instances — today a cluster holds one, and that remains
-true whether or not anyone is holding the lock.
-
-That boundary is held by a different check, one step later: the bootstrap asks the
-cluster whether it already holds a *different* instance and refuses if it does, whatever
-the lock says. See [One instance per
+:::note This enforces "one run at a time"
+The lock stops two `dcctl` processes from applying at once. It is not what keeps
+instances apart: each instance has its own namespace and its own database login, whether
+or not anyone is holding the lock. See [Several instances on one
 cluster](./bootstrap.md#what-it-does).
 :::
 
