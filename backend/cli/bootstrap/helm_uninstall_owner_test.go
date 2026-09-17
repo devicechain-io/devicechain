@@ -8,14 +8,15 @@ import (
 	"testing"
 )
 
-// The release name carries no instance, so `destroy` has to ask the release itself
-// whose it is. These tests pin the two halves of that: reading the id back out of a
-// rendered value map, and deciding what to do with the answer.
+// A release name is evidence of whose it is but not proof, so `destroy` asks the release
+// itself. These tests pin the two halves of that: reading the id back out of a rendered
+// value map, and deciding what to do with the answer.
 //
-// 🔴 The defect they exist for was measured on a live cluster: `dcctl destroy local b
-// --keep-cluster`, for an instance that had never been installed, uninstalled instance
-// "a"'s release — cascade-deleting its namespace and all ten of its deployments — and
-// printed a success line.
+// 🔴 The defect they exist for was measured on a live cluster, back when one constant
+// release name served every instance: a destroy of instance "b" that left the cluster
+// running, for an instance that had never been installed, uninstalled instance "a"'s
+// release — cascade-deleting its namespace and all ten of its deployments — and printed a
+// success line.
 
 func TestUninstallRefusesAReleaseBelongingToAnotherInstance(t *testing.T) {
 	err := uninstallRefusalReason("a", "b", "dc-release")

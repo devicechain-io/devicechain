@@ -148,7 +148,8 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 		}
 		return true
 	})
-	for _, name := range []string{"helmUninstall", "removeInstanceRelationalLogin", "removeInstanceNamespace"} {
+	for _, name := range []string{"helmUninstall", "destroyInstanceRoot", "removeInstanceRelationalLogin",
+		"removeInstanceNamespace", "waitForNamespaceGone"} {
 		if _, ok := pos[name]; !ok {
 			t.Fatalf("uninstallInstance no longer calls %s; an instance destroy would leave its "+
 				"database and login on the shared store", name)
@@ -156,6 +157,15 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	}
 	if pos["removeInstanceRelationalLogin"] < pos["helmUninstall"] {
 		t.Error("the database is dropped before the services that hold sessions on it are uninstalled")
+	}
+	// 🔴 The instance's own infrastructure goes after the services that use it and before
+	// the database, per the teardown order; and the namespace is waited on only after it
+	// is deleted.
+	if pos["destroyInstanceRoot"] < pos["helmUninstall"] || pos["removeInstanceRelationalLogin"] < pos["destroyInstanceRoot"] {
+		t.Error("tofu destroy is not between the chart uninstall and the database drop")
+	}
+	if pos["waitForNamespaceGone"] < pos["removeInstanceNamespace"] {
+		t.Error("the namespace is waited on before it is deleted")
 	}
 	if pos["removeInstanceNamespace"] < pos["removeInstanceRelationalLogin"] {
 		t.Error("the namespace is deleted before the drop, taking the login's Secret with it before the " +

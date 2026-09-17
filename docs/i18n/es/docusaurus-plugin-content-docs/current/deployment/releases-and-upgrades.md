@@ -996,8 +996,8 @@ destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas r
 derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
 
 :::note `dcctl destroy` ya no elimina clústeres
-En las versiones actuales `dcctl destroy` elimina solo una instancia —su release de Helm, su base
-de datos y su login, su namespace y su estado local— y nunca elimina un clúster ni los requisitos
+En las versiones actuales `dcctl destroy` elimina solo una instancia —su release de Helm, su broker
+NATS y su almacén de eventos, su base de datos y su login, su namespace y su estado local— y nunca elimina un clúster ni los requisitos
 previos que dejó `dcctl install`. Por tanto, `dcctl destroy --all` elimina todas las instancias y
 deja todos los clústeres en marcha. Para eliminar un clúster local, usa
 `kind delete cluster --name <name>`. Consulta [Eliminar una instancia](./bootstrap.md#destroy).

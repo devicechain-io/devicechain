@@ -933,8 +933,8 @@ guess the cluster`. Destroy still works on them, falling back to the old derivat
 caveat above continues to apply to them and only to them.
 
 :::note `dcctl destroy` no longer deletes clusters
-In current releases `dcctl destroy` removes an instance only — its Helm release, its database
-and login, its namespace and its local state — and never deletes a cluster or the prerequisites
+In current releases `dcctl destroy` removes an instance only — its Helm release, its NATS
+broker and event store, its database and login, its namespace and its local state — and never deletes a cluster or the prerequisites
 `dcctl install` put there. `dcctl destroy --all` therefore removes every instance and leaves
 every cluster running. To delete a local cluster, use `kind delete cluster --name <name>`. See
 [Removing an instance](./bootstrap.md#destroy).

@@ -280,7 +280,9 @@ dcctl destroy local devicechain
 ```
 
 `dcctl destroy` removes the instance and leaves the cluster installed, ready for the next
-bootstrap. To remove the cluster as well:
+bootstrap. It waits until the instance's namespace is fully gone, so bootstrapping again
+under the same name straight away is safe, and if it is interrupted, running it again
+finishes the job. To remove the cluster as well:
 
 ```bash
 kind delete cluster --name devicechain

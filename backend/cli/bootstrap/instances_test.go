@@ -364,6 +364,9 @@ func TestDestroyNeverTreatsARunningClusterAsItsToRemove(t *testing.T) {
 				KubeContext: "kind-devicechain-ha", Managed: managed, ClusterUID: destroyedClusterUID})
 			clusterState := plantClusterState(t, home, destroyedClusterUID)
 			p := &fakeProvider{name: "local", present: map[string]bool{"devicechain-ha": true}}
+			// Past the empty-state refusal, which asks the cluster first; the uninstall is
+			// what this test is about.
+			stubLiveInstanceInfrastructure(t, nil)
 
 			// The uninstall itself reaches a real cluster and fails here, which is correct
 			// and is asserted below: the instance is still deployed, so a failed uninstall
@@ -495,11 +498,11 @@ func TestDestroyClosingMessageMatchesWhatActuallyHappened(t *testing.T) {
 	// The uninstalling path's line cannot be reached without a cluster, so it is asserted
 	// directly: both variants say the cluster was left running, and the one that left a
 	// database behind never says the instance was destroyed.
-	full := destroyedLine("inst", "c", "")
+	full := destroyedLine("inst", "c", "", false)
 	if !strings.Contains(full, `Instance "inst" destroyed`) || !strings.Contains(full, "cluster c left running") {
 		t.Errorf("a complete destroy should say so and name the cluster left running, got %q", full)
 	}
-	partial := destroyedLine("inst", "c", "the store could not be reached")
+	partial := destroyedLine("inst", "c", "the store could not be reached", false)
 	if strings.Contains(partial, "destroyed") {
 		t.Errorf("a destroy that left the database behind claims the instance was destroyed: %q", partial)
 	}
@@ -635,6 +638,7 @@ func TestDecliningTheConfirmationChangesNothing(t *testing.T) {
 			home := fakeHome(t)
 			writeRecord(t, InstanceRecord{Instance: "harig", Provider: "local", Cluster: "devicechain-ha", KubeContext: "kind-devicechain-ha", Managed: managed})
 			p := &fakeProvider{name: "local", present: map[string]bool{"devicechain-ha": true}}
+			stubLiveInstanceInfrastructure(t, nil)
 
 			// confirm() reads stdin; an empty stdin is a decline, which is the default anyway.
 			stdin, w, err := os.Pipe()

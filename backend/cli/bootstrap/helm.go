@@ -497,8 +497,8 @@ func helmValues(st *State) map[string]interface{} {
 // say instance.id is "b" is a contradiction rather than a permission.
 //
 // Measured on a live cluster, 2026-09-12, back when one constant name served every
-// instance: `dcctl destroy local b --keep-cluster`, for an instance "b" that had never
-// been installed, removed instance "a" in its entirety — namespace, all ten deployments,
+// instance: a destroy of instance "b" that left the cluster running, for an instance "b"
+// that had never been installed, removed instance "a" in its entirety — namespace, all ten deployments,
 // the release — and closed with `Instance "b" uninstalled; cluster kind-a left running.`
 // The rename makes that particular lookup impossible; the check below is what makes the
 // claim true rather than merely likely.

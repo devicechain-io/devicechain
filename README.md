@@ -224,7 +224,9 @@ dcctl bootstrap local devicechain --host localhost --no-tls
 dcctl instances list
 
 # Remove the instance — same two arguments (or --all with no arguments to destroy every
-# instance on this machine). The cluster and what install put on it stay.
+# instance on this machine): its release, its NATS + TimescaleDB, its database and login,
+# its namespace, then its local state. Safe to re-run if interrupted. The cluster and what
+# install put on it stay.
 dcctl destroy local devicechain
 
 # Delete the local cluster too (there is no uninstall command yet)
