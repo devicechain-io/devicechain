@@ -43,20 +43,11 @@
    },
    {
     "name": "namespace",
-    "type": "query",
-    "datasource": {
-     "type": "prometheus",
-     "uid": "${datasource}"
-    },
-    "query": "label_values(devicechain_eventprocessing_detect_checkpoints_total, namespace)",
-    "current": {},
-    "hide": 0,
-    "label": "Instance (namespace)",
-    "refresh": 2,
-    "sort": 1,
-    "includeAll": false,
-    "multi": false,
-    "regex": ""
+    "type": "constant",
+    "label": "Instance",
+    "query": "",
+    "hide": 2,
+    "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
    }
   ]
  },

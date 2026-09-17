@@ -47,6 +47,13 @@ instance bootstrapped on that cluster is watched by it:
 - **Dashboards ship with the platform** — Grafana boards live in the Helm chart
   (`deploy/helm/devicechain/dashboards/`) and are auto-imported by Grafana's
   dashboard sidecar. A new dashboard is a chart change, not a manual import.
+- **One folder per instance** — each instance gets its own Grafana folder,
+  `devicechain-<instance>`, holding its own copy of every board. Each copy is scoped to
+  that instance and titled with its id; there is no instance picker to set. Instances
+  sharing a cluster never share a board, so removing or upgrading one leaves the others'
+  boards untouched. An instance still on an older chart, or a cluster whose monitoring
+  stack predates this layout, shows its boards outside any instance folder until
+  both are upgraded (re-running `dcctl install` updates the cluster side).
 
 ## Signing in to Grafana
 

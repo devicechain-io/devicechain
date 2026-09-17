@@ -1686,24 +1686,30 @@ jobs:
       # Self-test first, and it plants each defect ALONE: a self-test that plants
       # all of them at once is satisfied by a checker that finds any one.
       - name: dashboard guard self-test
-        run: hack/check-dashboards.sh --self-test
+        # PyYAML reads the rendered ConfigMaps; the script refuses to run without it.
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-dashboards.sh --self-test
 
       - name: dashboards parse and name real series
         # Two gaps nothing else covers, both silent.
         #
-        # templates/grafana-dashboard.yaml embeds each dashboard with
+        # templates/grafana-dashboard.yaml used to embed each dashboard with
         # `.Files.Get | indent`, which turns ANY bytes into a valid YAML block
-        # scalar — so helm lint, helm template, the profile render and kubectl
-        # apply all pass on malformed JSON, and it fails in the Grafana sidecar's
-        # log at runtime, on somebody else's cluster.
+        # scalar — so helm lint, helm template and kubectl apply all passed on
+        # malformed JSON, and it failed in the Grafana sidecar's log at runtime.
+        # The template now parses them, but this still names the file and why.
         #
         # And nothing checked that a series name exists. A misspelled metric in a
         # panel draws an empty graph; in an alert it never fires and never
         # complains.
         #
-        # It also pins the dashboard ConfigMap names, which became a real risk
-        # when that template stopped hardcoding one filename and became a glob.
-        run: hack/check-dashboards.sh
+        # It also pins the dashboard ConfigMap names and data keys, and renders
+        # two instances to fail on anything they would share in one Grafana: a
+        # uid, a sidecar file, a folder, or a board not scoped to its instance.
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          hack/check-dashboards.sh
 
       - name: cnpg-cluster chart vs the real CRD schemas
         # The one failure the chart cannot protect itself from.

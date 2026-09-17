@@ -7,13 +7,15 @@
 #
 # THREE GAPS, ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
 #
-# 1. NOTHING PARSES THE DASHBOARD JSON. templates/grafana-dashboard.yaml embeds
-#    each file with `.Files.Get | indent 4`, which turns ANY bytes into a valid
-#    YAML block scalar. A truncated file, a trailing comma, a stray backtick —
-#    `helm lint` passes, `helm template` passes, the profile render passes,
-#    `kubectl apply` passes, and the ConfigMap is created. The failure surfaces
-#    in the Grafana sidecar's log at runtime, on somebody else's cluster, as a
-#    dashboard that is simply not there. There is no local signal at all.
+# 1. NOTHING PARSED THE DASHBOARD JSON. templates/grafana-dashboard.yaml used to
+#    embed each file with `.Files.Get | indent 4`, which turns ANY bytes into a
+#    valid YAML block scalar. A truncated file, a trailing comma, a stray
+#    backtick — `helm lint` passed, `helm template` passed, `kubectl apply`
+#    passed, and the failure surfaced in the Grafana sidecar's log at runtime, on
+#    somebody else's cluster, as a dashboard that was simply not there. The
+#    template now parses each file (`mustFromJson`) to scope it per instance, so
+#    a render fails too — but the parse here stays, because it is what reports
+#    WHICH file and why, without a Helm render in the way.
 #
 # 2. NOTHING CHECKS THAT A SERIES NAME EXISTS. A misspelled metric in a panel
 #    draws an empty graph, which looks like a quiet system. A misspelled metric
@@ -45,6 +47,21 @@
 #    and became a glob: the glob had to reproduce `{instance}-event-processing-
 #    dashboard` byte for byte, and "I checked by eye" is not a gate.
 #
+# 4. NOTHING KEPT TWO INSTANCES' BOARDS APART. The Grafana sidecar is
+#    cluster-wide: it writes every labeled ConfigMap's data keys into one
+#    directory, and Grafana holds one board per uid. When every instance
+#    rendered the same data key (`event-processing.json`) and the same uid, two
+#    instances on a cluster were one file and one board — measured on kind:
+#    deleting one instance's ConfigMap took the file away, the SURVIVING
+#    instance's board went 404 until the sidecar's next watch restart, and came
+#    back as a new Grafana object. Grafana logged nothing. And a single-instance
+#    render cannot see any of it: every value is unique when there is one of it.
+#    So this renders the chart for TWO instances — one of them at the longest id
+#    the chart's schema accepts, because Grafana refuses a uid over 40 characters
+#    — and fails on a duplicate uid or data key across the pair, a uid too long,
+#    a board whose `namespace` variable is not a hidden constant naming its own
+#    instance, or a ConfigMap without that instance's `grafana_folder`.
+#
 # 🔴 IF A TOOL IS MISSING THIS HARD FAILS. A checker that cannot parse must not
 # report; "skipped because python3 was absent" and "no problems found" must
 # never reach CI wearing the same green tick.
@@ -59,25 +76,38 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 say() { printf '\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
 
-for tool in python3 helm; do
+for tool in python3 helm openssl; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "FAIL: $tool is required but is not on PATH." >&2
     echo "This check cannot run and will not pretend it passed." >&2
     exit 1
   }
 done
+python3 -c 'import yaml' 2>/dev/null || {
+  echo "FAIL: python3 cannot import yaml (PyYAML), which reads the rendered ConfigMaps." >&2
+  echo "This check cannot run and will not pretend it passed." >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
-# THE PINNED CONFIGMAP NAMES. Literal, not derived from the dashboards on disk:
-# deriving them would restate the template's own logic and assert nothing. A new
-# dashboard therefore has to be added here deliberately, which is the point —
-# that is the moment to notice a name is about to become an interface.
+# THE PINNED CONFIGMAP NAMES AND DATA KEYS. Literal, not derived from the
+# dashboards on disk: deriving them would restate the template's own logic and
+# assert nothing. A new dashboard therefore has to be added here deliberately,
+# which is the point — that is the moment to notice a name is about to become an
+# interface.
 #
-# `{instance}` is substituted with .Values.instance.id at check time.
+# The DATA KEY is the second published name: it is the file the Grafana sidecar
+# writes, so it has to carry the instance or two instances share one file.
+#
+# `{instance}` is substituted with the instance id each render uses.
 # ---------------------------------------------------------------------------
 EXPECTED_CONFIGMAPS=(
   "{instance}-command-delivery-dashboard"
   "{instance}-event-processing-dashboard"
+)
+EXPECTED_DATA_KEYS=(
+  "{instance}-command-delivery.json"
+  "{instance}-event-processing.json"
 )
 
 # ---------------------------------------------------------------------------
@@ -121,9 +151,8 @@ for path in dashboards:
     except (ValueError, UnicodeDecodeError) as exc:
         problems.append(
             "%s is not parseable JSON: %s\n"
-            "    The chart embeds it with `.Files.Get | indent`, which accepts ANY bytes as a\n"
-            "    YAML block scalar -- so helm lint, helm template and kubectl apply all pass and\n"
-            "    the dashboard silently fails to load in the Grafana sidecar at runtime."
+            "    The chart parses it to scope it per instance, so every render of the chart\n"
+            "    fails on this file."
             % (os.path.relpath(path, root), exc)
         )
 
@@ -247,14 +276,34 @@ PY
 # ---------------------------------------------------------------------------
 # check_configmaps <chart-dir>
 #
-# Gap 3. Renders the chart and compares the dashboard ConfigMaps it produces
-# against EXPECTED_CONFIGMAPS. Asserts the set both ways: a renamed ConfigMap
-# fails, and so does a dashboard that ships without being pinned here.
+# Gaps 3 and 4. Renders the chart for two instances and checks the dashboard
+# ConfigMaps both produce. The pinned sets are asserted both ways, per instance:
+# a renamed ConfigMap or data key fails, and so does a dashboard that ships
+# without being pinned here. Every problem found is reported, each under its own
+# code, so one render says everything that is wrong with it.
 # ---------------------------------------------------------------------------
 check_configmaps() {
-  local chart="$1" out
-  out="$(mktemp)"
-  # 🔑 The render goes to a FILE, not down a pipe. `python3 - <<'PY'` reads its
+  local chart="$1" dir rc=0 id
+  dir="$(mktemp -d)"
+
+  # The two instances. The second is exactly as long as the chart's schema
+  # allows, read from the schema rather than restated, so the render exercises
+  # the longest id a real install can carry whatever that limit becomes.
+  local short_id="dashcheck-a" long_id
+  if ! long_id="$(python3 - "$chart/values.schema.json" <<'PY'
+import json, sys
+spec = json.load(open(sys.argv[1]))["properties"]["instance"]["properties"]["id"]
+n = spec["maxLength"]
+prefix = "dashcheck-b-"
+print((prefix + "x" * n)[:n])
+PY
+  )"; then
+    rm -rf "$dir"
+    echo "FAIL: could not read the instance id's maxLength from $chart/values.schema.json" >&2
+    return 1
+  fi
+
+  # 🔑 The renders go to FILES, not down a pipe. `python3 - <<'PY'` reads its
   # PROGRAM from stdin, so piping the YAML in as well hands the interpreter the
   # heredoc and leaves sys.stdin.read() empty — which does not error, it just
   # finds no ConfigMaps and reports every pinned name as MISSING. Caught by the
@@ -262,57 +311,144 @@ check_configmaps() {
   #
   # Render-only, never leaves this script: any profile carrying a secret-store
   # area refuses to render without an instance root key.
-  if ! helm template dc "$chart" \
-    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >"$out"; then
-    rm -f "$out"
-    echo "FAIL: rendering $chart failed, so nothing was checked" >&2
-    return 1
-  fi
+  for id in "$short_id" "$long_id"; do
+    if ! helm template dc "$chart" --set "instance.id=$id" \
+      --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >"$dir/$id.yaml"; then
+      rm -rf "$dir"
+      echo "FAIL: rendering $chart for instance $id failed, so nothing was checked" >&2
+      return 1
+    fi
+  done
 
-  local rc=0
-  python3 - "$chart" "$out" "${EXPECTED_CONFIGMAPS[@]}" <<'PY' || rc=$?
-import re, subprocess, sys
+  EXPECTED_NAMES="$(printf '%s\n' "${EXPECTED_CONFIGMAPS[@]}")" \
+    EXPECTED_KEYS="$(printf '%s\n' "${EXPECTED_DATA_KEYS[@]}")" \
+    python3 - "$dir" "$short_id" "$long_id" <<'PY' || rc=$?
+import json, os, sys
 
-chart = sys.argv[1]
-rendered = open(sys.argv[2], encoding="utf-8").read()
-expected_patterns = sys.argv[3:]
+try:
+    import yaml
+except ImportError:
+    sys.exit("PyYAML is required to read the rendered ConfigMaps and is not installed.\n"
+             "This check cannot run and will not pretend it passed.")
 
-instance = subprocess.run(
-    ["helm", "show", "values", chart], capture_output=True, text=True, check=True
-).stdout
-m = re.search(r"^instance:\s*$.*?^  id:\s*(\S+)\s*$", instance, re.M | re.S)
-if not m:
-    sys.exit("could not read instance.id out of the chart's values")
-expected = {p.replace("{instance}", m.group(1)) for p in expected_patterns}
+render_dir, ids = sys.argv[1], sys.argv[2:]
+names = [p for p in os.environ["EXPECTED_NAMES"].split("\n") if p]
+keys = [p for p in os.environ["EXPECTED_KEYS"].split("\n") if p]
+if not names or not keys:
+    sys.exit("no pinned ConfigMap names or data keys were passed -- this check would pass over nothing")
 
-# The dashboard ConfigMaps, identified by the sidecar label rather than by a
-# name pattern -- matching on the name would make this assertion circular.
-found = set()
-for doc in rendered.split("\n---"):
-    if re.search(r"^kind: ConfigMap\s*$", doc, re.M) and re.search(r'^\s+grafana_dashboard: "1"\s*$', doc, re.M):
-        name = re.search(r"^\s+name:\s*(\S+)\s*$", doc, re.M)
-        if name:
-            found.add(name.group(1))
+# Grafana's own limit on a dashboard uid.
+UID_MAX = 40
 
-if found == expected:
-    print("    %d Grafana dashboard ConfigMap(s), all named as pinned" % len(found))
+problems = []
+uids = {}      # uid -> [(instance, key)]
+all_keys = {}  # data key -> [instance]
+boards = 0
+
+for inst in ids:
+    folder = "devicechain-%s" % inst
+    found_names, found_keys = set(), set()
+    with open(os.path.join(render_dir, inst + ".yaml"), encoding="utf-8") as fh:
+        docs = [d for d in yaml.safe_load_all(fh) if d]
+    for doc in docs:
+        # The dashboard ConfigMaps, identified by the sidecar label rather than by
+        # a name pattern -- matching on the name would make this circular.
+        meta = doc.get("metadata") or {}
+        if doc.get("kind") != "ConfigMap" or (meta.get("labels") or {}).get("grafana_dashboard") != "1":
+            continue
+        name = meta.get("name")
+        found_names.add(name)
+        got_folder = (meta.get("annotations") or {}).get("grafana_folder")
+        if got_folder != folder:
+            problems.append(
+                "FOLDER: ConfigMap %s carries grafana_folder=%r, want %r.\n"
+                "    The sidecar files a board under that annotation; without this instance's own\n"
+                "    value its boards land in a folder shared with every other instance."
+                % (name, got_folder, folder))
+        for key, body in (doc.get("data") or {}).items():
+            found_keys.add(key)
+            all_keys.setdefault(key, []).append(inst)
+            boards += 1
+            where = "%s (instance %s)" % (key, inst)
+            try:
+                board = json.loads(body)
+            except ValueError as exc:
+                problems.append("JSON: %s does not parse as rendered: %s" % (where, exc))
+                continue
+            uid = board.get("uid")
+            uids.setdefault(uid, []).append(where)
+            if not isinstance(uid, str) or not uid:
+                problems.append("UID-MISSING: %s has no uid" % where)
+            elif len(uid) > UID_MAX:
+                problems.append(
+                    "UID-TOO-LONG: %s has uid %r, %d characters. Grafana refuses a uid over %d,\n"
+                    "    so this board would never load."
+                    % (where, uid, len(uid), UID_MAX))
+            ns = [v for v in (board.get("templating") or {}).get("list") or []
+                  if isinstance(v, dict) and v.get("name") == "namespace"]
+            ok = (len(ns) == 1 and ns[0].get("type") == "constant" and ns[0].get("hide") == 2
+                  and ns[0].get("query") == inst
+                  and (ns[0].get("current") or {}).get("value") == inst)
+            if not ok:
+                problems.append(
+                    "NAMESPACE: %s does not scope itself to its instance. Want exactly one\n"
+                    "    `namespace` template variable, a hidden constant (type constant, hide 2) whose\n"
+                    "    query and current value are %r; found %s.\n"
+                    "    Every panel filters namespace=\"$namespace\", so this is what decides which\n"
+                    "    instance's series the board reads."
+                    % (where, inst, json.dumps(ns)))
+
+    want_names = {p.replace("{instance}", inst) for p in names}
+    want_keys = {p.replace("{instance}", inst) for p in keys}
+    for n in sorted(want_names - found_names):
+        problems.append("NAME-MISSING: %s (instance %s)" % (n, inst))
+    for n in sorted(found_names - want_names):
+        problems.append("NAME-UNPINNED: %s (instance %s)" % (n, inst))
+    for k in sorted(want_keys - found_keys):
+        problems.append("KEY-MISSING: %s (instance %s)" % (k, inst))
+    for k in sorted(found_keys - want_keys):
+        problems.append("KEY-UNPINNED: %s (instance %s)" % (k, inst))
+
+for uid, where in sorted(uids.items(), key=lambda kv: str(kv[0])):
+    if len(where) > 1:
+        problems.append(
+            "DUPLICATE-UID: %r is the uid of %s.\n"
+            "    Grafana holds one board per uid, so these are one board: whichever file the\n"
+            "    sidecar loads last wins, and removing either removes it."
+            % (uid, ", ".join(where)))
+for key, insts in sorted(all_keys.items()):
+    if len(insts) > 1:
+        problems.append(
+            "DUPLICATE-KEY: data key %s is rendered by instances %s.\n"
+            "    The sidecar writes every data key to one directory, so these are one file:\n"
+            "    deleting either instance's ConfigMap deletes the other's board."
+            % (key, ", ".join(insts)))
+
+if boards == 0:
+    problems.append("NO-BOARDS: neither render produced a dashboard ConfigMap with data")
+
+if not problems:
+    print("    %d dashboard ConfigMap(s) across 2 instances (ids of %s characters): names and\n"
+          "    data keys as pinned, every uid and file distinct, every board scoped and foldered"
+          % (boards, " and ".join(str(len(i)) for i in ids)))
     sys.exit(0)
 
-print("the Grafana dashboard ConfigMap names are not what this repository pins.\n", file=sys.stderr)
-for name in sorted(expected - found):
-    print("  MISSING: %s" % name, file=sys.stderr)
-for name in sorted(found - expected):
-    print("  UNPINNED: %s" % name, file=sys.stderr)
-print("""
-A dashboard ConfigMap name is a published interface: a Grafana sidecar has
-already loaded it and operators pin it in their own tooling, so renaming one
-orphans the dashboard on every existing install with nothing to say so.
+print("the rendered Grafana dashboard ConfigMaps do not hold up:\n", file=sys.stderr)
+for p in problems:
+    print("  - %s" % p, file=sys.stderr)
+if any(p.startswith(("NAME-", "KEY-")) for p in problems):
+    print("""
+A dashboard ConfigMap name and its data key are published interfaces: a Grafana
+sidecar has already loaded them and operators pin the names in their own tooling,
+so renaming one orphans the dashboard on every existing install with nothing to
+say so.
 
-If a name genuinely has to change, or a new dashboard is being added, update
-EXPECTED_CONFIGMAPS in hack/check-dashboards.sh in the same commit.""", file=sys.stderr)
+If one genuinely has to change, or a new dashboard is being added, update
+EXPECTED_CONFIGMAPS / EXPECTED_DATA_KEYS in hack/check-dashboards.sh in the same
+commit.""", file=sys.stderr)
 sys.exit(1)
 PY
-  rm -f "$out"
+  rm -rf "$dir"
   return "$rc"
 }
 
@@ -474,47 +610,105 @@ EOF
   echo "  ok: a series carrying a character illegal in a metric name is caught"
 
   # -------------------------------------------------------------------------
-  # The ConfigMap-name cases DO run against a copy of the real chart, and can:
-  # they depend on the chart alone, not on the Go tree, so their clean baseline
-  # is not hostage to a branch mid-landing.
+  # The ConfigMap cases DO run against a copy of the real chart, and can: they
+  # depend on the chart alone, not on the Go tree, so their clean baseline is not
+  # hostage to a branch mid-landing.
+  #
+  # 🔴 EACH OF THESE ALSO NAMES THE PROBLEM IT EXPECTS. The render is checked as
+  # a whole and several of its checks overlap — a data key that stops carrying
+  # the instance is both unpinned AND duplicated — so "it failed" alone could be
+  # any check firing. A case passes only when the checker exits non-zero AND
+  # reports the planted problem's code.
   # -------------------------------------------------------------------------
   chart="$tmp/chart"
   cp -r "$ROOT/deploy/helm/devicechain" "$chart"
+  tpl="$chart/templates/grafana-dashboard.yaml"
+  cp "$tpl" "$tmp/keep-tmpl.yaml"
 
-  # Case 7 — A RENAMED CONFIGMAP, alone. The exact regression the glob rewrite
+  # plant <file> <old> <new> — exactly one occurrence, or the case is void.
+  plant() {
+    python3 - "$1" "$2" "$3" <<'PY' || fail "a mutation did not apply: $2"
+import sys
+path, old, new = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+if text.count(old) != 1:
+    sys.exit(1)
+open(path, "w", encoding="utf-8").write(text.replace(old, new))
+PY
+  }
+  # expect_configmaps <code> <description> — the case's verdict.
+  expect_configmaps() {
+    local out rc=0
+    out="$(check_configmaps "$chart" 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || fail "did not flag $2"
+    grep -q -- "- $1:" <<<"$out" || {
+      echo "$out" >&2
+      fail "flagged something while planting $2, but not as $1"
+    }
+    cp "$tmp/keep-tmpl.yaml" "$tpl"
+    echo "  ok: $2 is caught ($1)"
+  }
+
+  # Case 7 — THE COUNTERWEIGHT for everything below: the untouched chart passes.
+  check_configmaps "$chart" >/dev/null ||
+    fail "the untouched chart's dashboard ConfigMaps did not pass"
+  echo "  ok: the untouched chart's dashboard ConfigMaps pass across two instances"
+
+  # Case 8 — A RENAMED CONFIGMAP, alone. The exact regression the glob rewrite
   # could have introduced: everything renders, everything parses, every series
   # is real, and an existing install's dashboard is orphaned with nothing to say
   # so.
-  check_configmaps "$chart" >/dev/null ||
-    fail "the untouched chart's ConfigMap names did not match the pinned set"
-  cp "$chart/templates/grafana-dashboard.yaml" "$tmp/keep-tmpl.yaml"
-  sed -i 's/-dashboard$/-grafana-dashboard/' "$chart/templates/grafana-dashboard.yaml"
-  grep -q -- '-grafana-dashboard' "$chart/templates/grafana-dashboard.yaml" ||
-    fail "the ConfigMap-name mutation did not apply"
-  if check_configmaps "$chart" >/dev/null 2>&1; then
-    fail "did not flag a renamed dashboard ConfigMap"
-  fi
-  cp "$tmp/keep-tmpl.yaml" "$chart/templates/grafana-dashboard.yaml"
-  echo "  ok: a renamed dashboard ConfigMap is caught"
+  plant "$tpl" '{{ $stem }}-dashboard' '{{ $stem }}-grafana-dashboard'
+  expect_configmaps NAME-UNPINNED "a renamed dashboard ConfigMap"
 
-  # Case 8 — AN UNPINNED NEW DASHBOARD, alone. The set is asserted both ways, so
-  # adding a dashboard without recording its ConfigMap name here fails too —
-  # which is what makes the pinned list a decision rather than a formality.
-  printf '{"title": "scratch", "uid": "scratch", "panels": []}\n' >"$chart/dashboards/scratch-board.json"
-  if check_configmaps "$chart" >/dev/null 2>&1; then
-    fail "did not flag a dashboard whose ConfigMap name is not pinned"
-  fi
+  # Case 9 — AN UNPINNED NEW DASHBOARD, alone. The set is asserted both ways, so
+  # adding a dashboard without recording its name here fails too — which is what
+  # makes the pinned list a decision rather than a formality. The board carries
+  # a `namespace` variable because the template refuses to render one without.
+  printf '%s\n' '{"title": "scratch", "uid": "scratch", "panels": [], "templating": {"list": [{"name": "namespace", "type": "constant", "query": ""}]}}' \
+    >"$chart/dashboards/scratch-board.json"
+  expect_configmaps NAME-UNPINNED "a dashboard whose ConfigMap name is not pinned"
   rm -f "$chart/dashboards/scratch-board.json"
-  echo "  ok: an unpinned new dashboard is caught"
 
-  echo "self-test passed: 8 defects, each planted alone, each caught; a clean tree passes"
+  # Case 10 — ONE UID FOR EVERY INSTANCE, alone. Today's-shape regression on the
+  # uid only: every file is still distinct, so nothing but the cross-instance
+  # comparison can see that Grafana will hold one board for both.
+  plant "$tpl" '(printf "dc-%s" (sha256sum (printf "%s/%s" $id $stem) | trunc 20))' '(printf "dc-%s-ops" $stem)'
+  expect_configmaps DUPLICATE-UID "one dashboard uid shared across instances"
+
+  # Case 11 — ONE DATA KEY FOR EVERY INSTANCE, alone. The bare file name the
+  # chart used to render — WITH the pinned list "fixed" to match in the same
+  # commit, which is exactly how this regression would arrive past the pin. Only
+  # the cross-instance comparison is left to see that it is one file.
+  plant "$tpl" '{{ $id }}-{{ $stem }}.json: |-' '{{ $stem }}.json: |-'
+  (
+    EXPECTED_DATA_KEYS=("command-delivery.json" "event-processing.json")
+    expect_configmaps DUPLICATE-KEY "one data key (one sidecar file) shared across instances"
+  ) || exit 1
+
+  # Case 12 — A UID GRAFANA WILL REFUSE, alone. Still unique per instance, so
+  # only the length check sees it: `dc-` plus 40 hex characters is 43.
+  plant "$tpl" '| trunc 20))' '| trunc 40))'
+  expect_configmaps UID-TOO-LONG "a dashboard uid over Grafana's 40-character limit"
+
+  # Case 13 — A BOARD THAT IS NOT SCOPED TO ITS INSTANCE, alone. The template
+  # keeps the file's own `namespace` entry instead of replacing it: every uid,
+  # key and folder is still right, and the board reads no instance's series.
+  plant "$tpl" '{{- $vars = append $vars $namespaceVar }}' '{{- $vars = append $vars . }}'
+  expect_configmaps NAMESPACE "a board whose namespace variable does not name its instance"
+
+  # Case 14 — ONE FOLDER FOR EVERY INSTANCE, alone.
+  plant "$tpl" 'grafana_folder: devicechain-{{ $id }}' 'grafana_folder: devicechain'
+  expect_configmaps FOLDER "a grafana_folder annotation shared across instances"
+
+  echo "self-test passed: 13 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
 say "parsing the chart's Grafana dashboards and resolving their series"
 check_content "$ROOT"
 
-say "checking the dashboard ConfigMap names against the pinned set"
+say "rendering two instances: pinned names and keys, and nothing the two share"
 check_configmaps "$ROOT/deploy/helm/devicechain"
 
-note "dashboards parse, every series they and the alert rules name is registered, names are pinned"
+note "dashboards parse, every series they and the alert rules name is registered, names and keys are pinned, instances share no board"

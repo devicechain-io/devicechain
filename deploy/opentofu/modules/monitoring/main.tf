@@ -318,6 +318,25 @@ locals {
         # The DeviceChain dashboard ConfigMaps live in the per-instance namespace,
         # not Grafana's — search every namespace so they auto-import.
         searchNamespace = "ALL"
+        # One Grafana folder per instance. Each instance's dashboard ConfigMaps carry a
+        # `grafana_folder: devicechain-<instance>` annotation; the sidecar writes each
+        # board into that subdirectory (folderAnnotation -> FOLDER_ANNOTATION) and the
+        # provider turns each subdirectory into a folder (foldersFromFilesStructure,
+        # which also drops the provider's single fixed `folder`). Without the first the
+        # sidecar ignores the annotation and every instance's boards land in one flat
+        # directory -- measured: FOLDER_ANNOTATION was unset on a live cluster.
+        #
+        # The per-instance file name and uid, which are what stop two instances
+        # replacing each other's board, come from the instance chart and do not
+        # depend on this. What does depend on it: a board from an instance still on an
+        # older chart carries no annotation (and the old shared file name and uid), so
+        # it lands in the root folder and still collides with any other such instance.
+        # The fix is complete once every instance on the cluster is upgraded.
+        # Re-running `dcctl install` converges this cluster-side half.
+        folderAnnotation = "grafana_folder"
+        provider = {
+          foldersFromFilesStructure = true
+        }
       }
       datasources = { enabled = true }
     }

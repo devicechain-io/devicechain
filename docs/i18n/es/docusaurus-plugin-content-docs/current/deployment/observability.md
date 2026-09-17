@@ -47,6 +47,14 @@ instancias arrancadas en ese clúster:
 - **Los paneles se distribuyen con la plataforma** — los paneles de Grafana viven en el chart de Helm
   (`deploy/helm/devicechain/dashboards/`) y son importados automáticamente por el sidecar de
   paneles de Grafana. Un panel nuevo es un cambio de chart, no una importación manual.
+- **Una carpeta por instancia** — cada instancia tiene su propia carpeta de Grafana,
+  `devicechain-<instancia>`, con su propia copia de cada panel. Cada copia está acotada a
+  esa instancia y lleva su id en el título; no hay selector de instancia que ajustar. Las
+  instancias que comparten un clúster nunca comparten un panel, así que eliminar o
+  actualizar una deja intactos los paneles de las demás. Una instancia que aún usa un chart
+  anterior, o un clúster cuya pila de monitoreo es anterior a esta organización, muestra sus
+  paneles fuera de cualquier carpeta de instancia hasta que ambos se actualicen (volver a
+  ejecutar `dcctl install` actualiza el lado del clúster).
 
 ## Iniciar sesión en Grafana
 

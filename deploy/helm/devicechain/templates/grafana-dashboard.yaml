@@ -3,8 +3,50 @@ Grafana operations dashboards, one ConfigMap per file in dashboards/*.json.
 Each is labeled grafana_dashboard: "1" so the Grafana sidecar (kube-prometheus-stack)
 auto-imports it — the same operator-based assumption the ServiceMonitor already makes.
 Skipped when metrics are off or dashboards are opted out (clusters with the Prometheus
-Operator but no Grafana sidecar). Every dashboard is scoped per-instance by its own
-$namespace template var.
+Operator but no Grafana sidecar).
+
+🔴 EVERY INSTANCE SHIPS ITS OWN COPY OF EVERY BOARD, AND THE COPY IS SCOPED BY
+CONSTRUCTION, NOT BY A PICKER. The sidecar is cluster-wide (searchNamespace ALL) and
+writes every labeled ConfigMap's data keys into ONE directory, and Grafana holds one
+board per uid. Before this template rendered per-instance values, every instance's
+ConfigMap carried the same data key (`event-processing.json`), the same uid and the
+same title, so two instances on a cluster were one file and one board. Measured on kind
+with two instances: deleting one instance's ConfigMap made the sidecar delete the shared
+file, and the SURVIVING instance's board returned 404 until the sidecar's next watch
+restart (a fixed ~60s cycle; 3s–20s of 404 observed), then came back as a NEW Grafana
+object (new numeric id, `created` reset). Grafana never logged a duplicate uid. The
+instance picker the boards used to carry could not help — it scoped the queries of a
+board that was not there.
+
+So each ConfigMap now differs per instance in four places, and nowhere else:
+
+  - the DATA KEY, `{instance}-<file>.json`. This is the file name the sidecar writes, so
+    it is what keeps two instances' files apart. The sidecar's UNIQUE_FILENAMES option
+    would do the same on the cluster side, but only on a cluster configured for it; a
+    distinct key is distinct on any sidecar.
+  - the `grafana_folder` ANNOTATION, `devicechain-{instance}`. A sidecar started with
+    FOLDER_ANNOTATION=grafana_folder writes the file into that subdirectory, and a
+    provider with foldersFromFilesStructure turns the subdirectory into a Grafana folder
+    — one folder per instance (the cluster root's monitoring module sets both). ASCII,
+    a fixed prefix plus a DNS label, because it becomes a directory name and a folder
+    title. A sidecar without the option ignores it and the boards land flat, still apart.
+  - the board `uid`, `dc-` + the first 20 hex characters of
+    sha256("{instance}/<file stem>"). Grafana refuses a uid over 40 characters and an
+    instance id may be 50 (values.schema.json), so the id cannot be spelled into it; a
+    hash is fixed-length (23) whatever the id or file name, and 80 bits puts a collision
+    between two instances on one cluster out of reach. It is a pure function of
+    (instance, file), so a board keeps its uid — and every bookmark to it — across
+    upgrades and reinstalls. `/` can occur in neither part (the id is a DNS label, the
+    stem a file name), so no two pairs hash the same input.
+  - the `title`, the file's own title with `[{instance}]` appended, so a search across
+    folders still says which instance a board reads.
+
+And the `namespace` template variable is REPLACED with a hidden constant naming the
+instance (the instance id IS its namespace — metadata.namespace below). Every panel
+already filters `namespace="$namespace"`, so the queries are untouched and a board can
+only ever read its own instance's series. The files on disk carry that entry as an empty
+constant; the whole entry is replaced here, so nothing in the file can leave a board
+unscoped, and a board with no `namespace` entry at all fails the render.
 
 🔴 THE CONFIGMAP NAME IS A PUBLISHED INTERFACE, not an implementation detail. It was
 `{instance}-event-processing-dashboard` when this template hardcoded one filename, and
@@ -12,26 +54,54 @@ $namespace template var.
 that byte-for-byte for dashboards/event-processing.json. Renaming it would orphan the
 old ConfigMap on every existing install — Helm deletes what it no longer renders, but a
 sidecar that has already loaded the dashboard, and anyone who pinned the name in their
-own tooling, would not follow. hack/check-dashboards.sh pins the rendered names.
+own tooling, would not follow. The DATA KEY is a second published name — it is the file
+the sidecar writes — changed here once, deliberately, from `<file>.json`.
+hack/check-dashboards.sh pins both, and renders two instances to prove they stay apart.
 
-🔑 The JSON is embedded, never validated, by anything Helm does: `.Files.Get | indent`
-turns ANY bytes into a valid YAML block scalar, so `helm lint`, `helm template` and the
-profile render all pass on malformed JSON and the failure surfaces only in the Grafana
-sidecar at runtime. hack/check-dashboards.sh is what parses them.
+🔑 `mustFromJson`, not `fromJson`: Sprig's fromJson answers a parse error with an EMPTY
+MAP, which would render an empty board under a valid uid and title. The strict form fails
+the render. `toPrettyJson` re-emits the parsed document with sorted keys and with `<`,
+`>` and `&` \u-escaped, which is the same JSON. hack/check-dashboards.sh still parses the
+files directly, because a board that is valid JSON can still name a series that does not
+exist.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.grafanaDashboards }}
+{{- $id := .Values.instance.id }}
 {{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $stem := base $path | trimSuffix ".json" }}
+{{- $board := $.Files.Get $path | mustFromJson }}
+{{- $_ := set $board "uid" (printf "dc-%s" (sha256sum (printf "%s/%s" $id $stem) | trunc 20)) }}
+{{- $_ := set $board "title" (printf "%s [%s]" (get $board "title") $id) }}
+{{- $scope := dict "text" $id "value" $id "selected" true }}
+{{- $namespaceVar := dict "type" "constant" "name" "namespace" "label" "Instance" "query" $id "hide" 2 "current" $scope "options" (list $scope) }}
+{{- $templating := get $board "templating" | default dict }}
+{{- $vars := list }}
+{{- $scoped := false }}
+{{- range (get $templating "list" | default list) }}
+{{- if eq (get . "name") "namespace" }}
+{{- $vars = append $vars $namespaceVar }}
+{{- $scoped = true }}
+{{- else }}
+{{- $vars = append $vars . }}
+{{- end }}
+{{- end }}
+{{- if not $scoped }}
+{{- fail (printf "dashboard %s has no \"namespace\" template variable. Each board is scoped to its instance by replacing that variable with a constant; without one, its namespace=\"$namespace\" selectors would match nothing." $path) }}
+{{- end }}
+{{- $_ := set $templating "list" $vars }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ $.Values.instance.id }}-{{ base $path | trimSuffix ".json" }}-dashboard
-  namespace: {{ $.Values.instance.id }}
+  name: {{ $id }}-{{ $stem }}-dashboard
+  namespace: {{ $id }}
   labels:
     grafana_dashboard: "1"
     {{- include "devicechain.instanceLabels" $ | nindent 4 }}
+  annotations:
+    grafana_folder: devicechain-{{ $id }}
 data:
-  {{ base $path }}: |-
-{{ $.Files.Get $path | indent 4 }}
+  {{ $id }}-{{ $stem }}.json: |-
+{{ toPrettyJson $board | indent 4 }}
 {{- end }}
 {{- end }}

@@ -449,8 +449,11 @@ metrics:
   # grafanaDashboards renders one ConfigMap per operations dashboard the chart carries
   # (dashboards/*.json — event-processing and command-delivery today), each labeled
   # grafana_dashboard: "1" for the Grafana sidecar (kube-prometheus-stack) to
-  # auto-import. Set false on clusters that have the Prometheus Operator but no Grafana
-  # sidecar. Ignored when metrics.enabled is false.
+  # auto-import. Each board is this instance's own copy — its own uid, file name and title,
+  # scoped to this instance, annotated grafana_folder: devicechain-<id> for a sidecar
+  # that files boards by folder (templates/grafana-dashboard.yaml). Set false on clusters
+  # that have the Prometheus Operator but no Grafana sidecar. Ignored when
+  # metrics.enabled is false.
   grafanaDashboards: true
   # alerts renders the PrometheusRules for the platform's own services: the
   # event-processing (DETECT + REACT) rules and the command-delivery rules. Requires
