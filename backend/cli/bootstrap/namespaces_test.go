@@ -13,11 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	tfjson "github.com/hashicorp/terraform-json"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // namespacedState is a state holding the broker and event store releases in given
@@ -222,5 +224,58 @@ func TestOpenInstanceRootRunsTheNamespaceFence(t *testing.T) {
 	if !found {
 		t.Error("openInstanceRoot no longer runs checkInstanceInItsOwnNamespace, so an instance built in the " +
 			"shared namespace has its broker and event store replaced by the apply")
+	}
+}
+
+// The broker's password hashes are read from the INSTANCE's namespace — and the render
+// step asks for exactly that one. A decoy in the shared namespace, where the broker used
+// to run, is what reading the wrong one would return.
+func TestBrokerHashesAreReadFromTheInstanceNamespace(t *testing.T) {
+	cm := func(ns, hash string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: natsStatefulSetName + "-config"},
+			Data: map[string]string{"nats.conf": `{"password": "` + hash + `", "user": "` + natsauth.ServiceUser + `"}`}}
+	}
+	c := fake.NewSimpleClientset(cm("acme", "$2a$11$instance"), cm(infraNamespace, "$2a$11$decoy"))
+	got := deployedBrokerHashesIn(context.Background(), c, instanceNamespace("acme"), natsStatefulSetName)
+	if got.Service != "$2a$11$instance" {
+		t.Errorf("the broker hashes were not read from the instance's namespace: %+v", got)
+	}
+
+	// A re-run against a deployed instance is what reads the hashes.
+	var asked string
+	cfg, _, _ := deployedInstance(t)
+	withDeployedInstance(t, cfg, nil)
+	lookupDeployedBrokerHashes = func(_ context.Context, _, namespace, _ string) natsauth.DeployedHashes {
+		asked = namespace
+		return natsauth.DeployedHashes{}
+	}
+	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	if err := stepRenderConfig(t.Context(), st); err != nil {
+		t.Fatalf("stepRenderConfig: %v", err)
+	}
+	if asked != "prod" {
+		t.Errorf("the render step asked for the broker's hashes in namespace %q, want the instance's own", asked)
+	}
+}
+
+func TestTheHAVerifierLooksForTheBrokerInTheInstanceNamespace(t *testing.T) {
+	if got := brokerNamespace(HaVerifyOptions{InstanceId: "acme"}); got != "acme" {
+		t.Errorf("the HA verifier looks for the broker in %q, want the instance's namespace", got)
+	}
+}
+
+func TestTheInstanceRootIsToldItsNamespace(t *testing.T) {
+	st := &State{Instance: "acme", KubeContext: "kind-acme", Values: map[string]string{}}
+	cluster, instance, err := splitVars(infraVars(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(instance, "instance_namespace=acme") {
+		t.Errorf("the instance root is not told its namespace: %v", instance)
+	}
+	for _, v := range cluster {
+		if strings.HasPrefix(v, "instance_namespace=") {
+			t.Errorf("the cluster root was given an instance's namespace: %s", v)
+		}
 	}
 }

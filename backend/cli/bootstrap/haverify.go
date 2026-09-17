@@ -122,7 +122,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 			"not a topology; nothing can be checked against it", declared)
 	}
 
-	ns := instanceNamespace(opts.InstanceId)
+	ns := brokerNamespace(opts)
 	pods, err := natsPods(ctx, typed, ns)
 	if err != nil {
 		return rep, err
@@ -295,6 +295,9 @@ func deployedAreas(ctx context.Context, typed *kubernetes.Clientset, instanceId 
 	}
 	return out, nil
 }
+
+// brokerNamespace is where the instance's broker runs: its own namespace.
+func brokerNamespace(opts HaVerifyOptions) string { return instanceNamespace(opts.InstanceId) }
 
 // natsPods lists the broker pods, for the placement half of the check.
 func natsPods(ctx context.Context, typed *kubernetes.Clientset, namespace string) ([]corev1.Pod, error) {

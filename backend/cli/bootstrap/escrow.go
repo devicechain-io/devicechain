@@ -654,6 +654,12 @@ func DeployedBrokerHashes(ctx context.Context, kubeContext, namespace, releaseNa
 	if err != nil {
 		return natsauth.DeployedHashes{}
 	}
+	return deployedBrokerHashesIn(ctx, typed, namespace, releaseName)
+}
+
+// deployedBrokerHashesIn is DeployedBrokerHashes against a given client, so which
+// namespace it reads can be exercised without a cluster.
+func deployedBrokerHashesIn(ctx context.Context, typed kubernetes.Interface, namespace, releaseName string) natsauth.DeployedHashes {
 	cm, err := typed.CoreV1().ConfigMaps(namespace).Get(ctx, releaseName+"-config", metav1.GetOptions{})
 	if err != nil {
 		return natsauth.DeployedHashes{}
