@@ -663,11 +663,8 @@ type foreignReleaseError struct {
 	// Absent says the named instance has NO release here and Release is simply another
 	// instance's — not a release whose name and values contradict each other.
 	//
-	// 🔴 THE TWO ARE DIFFERENT FINDINGS AND ONLY ONE MAY BE RESUMED OVER. An absent
-	// release is exactly what a destroy that got past its chart uninstall leaves, so on a
-	// cluster holding any other instance every resumed destroy lands here; an instance
-	// that still has its own footprint is resumed (resolveForeignRelease). A
-	// contradiction is never resumed over: something renamed or re-used a release.
+	// 🔴 ONLY AN ABSENT RELEASE MAY BE RESUMED OVER (see resolveForeignRelease); a
+	// contradiction never is: something renamed or re-used a release.
 	Absent bool
 }
 

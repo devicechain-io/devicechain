@@ -12,10 +12,10 @@ import (
 
 // --without-state reaches the options both destroy forms build.
 func TestWithoutStateReachesTheDestroyOptions(t *testing.T) {
-	orig := destroyNoState
-	t.Cleanup(func() { destroyNoState = orig })
+	orig := destroyWithoutState
+	t.Cleanup(func() { destroyWithoutState = orig })
 	for _, want := range []bool{true, false} {
-		destroyNoState = want
+		destroyWithoutState = want
 		if got := destroyOptionsFor("acme", "", false, true); got.WithoutState != want {
 			t.Errorf("--without-state=%v built options with WithoutState=%v", want, got.WithoutState)
 		}

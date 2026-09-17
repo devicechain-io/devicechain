@@ -543,7 +543,8 @@ func TestManagedResourceCount(t *testing.T) {
 			`{"mode":"managed","type":"helm_release","name":"nats","instances":[{}]}]}`: 1,
 		`{"resources":[{"mode":"managed","instances":[]}]}`: 0,
 	} {
-		if got, err := managedResourcesIn([]byte(doc)); err != nil || got != want {
+		parsed, err := parseStateDocument([]byte(doc))
+		if got := parsed.managed(); err != nil || got != want {
 			t.Errorf("%s: got %d (%v), want %d", doc, got, err, want)
 		}
 	}

@@ -167,8 +167,8 @@ func destroyedLine(instance, cluster, leftDatabase string, withoutState bool) st
 		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
 		// closing line that says it is gone is the sentence this command keeps being
 		// fixed for.
-		return color.YellowString("\nInstance %q uninstalled; cluster %s left running. Its database, "+
-			"if it has one, was LEFT on the shared relational store: %s", instance, cluster, leftDatabase)
+		return color.YellowString("\nInstance %q uninstalled; cluster %s left running.%s",
+			instance, cluster, leftDatabaseNote(leftDatabase))
 	}
 	return color.HiGreenString("\nInstance %q destroyed; cluster %s left running.", instance, cluster)
 }

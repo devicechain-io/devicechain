@@ -16,11 +16,11 @@ import (
 
 // Destroy command flags.
 var (
-	destroyKubeContext string
-	destroyDryRun      bool
-	destroyAssumeYes   bool
-	destroyAll         bool
-	destroyNoState     bool
+	destroyKubeContext  string
+	destroyDryRun       bool
+	destroyAssumeYes    bool
+	destroyAll          bool
+	destroyWithoutState bool
 )
 
 // destroyCmd removes a DeviceChain instance — the inverse of bootstrap.
@@ -84,7 +84,7 @@ func init() {
 	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 	destroyCmd.Flags().BoolVar(&destroyAll, "all", false, "destroy EVERY instance on this machine (takes no arguments)")
-	destroyCmd.Flags().BoolVar(&destroyNoState, "without-state", false,
+	destroyCmd.Flags().BoolVar(&destroyWithoutState, "without-state", false,
 		"skip tofu destroy and remove the instance by its release, database, login and namespace (for an instance whose infrastructure state is lost)")
 
 	rootCmd.AddCommand(destroyCmd)
@@ -122,7 +122,7 @@ func destroyEveryInstance(ctx context.Context) error {
 			"An instance with no record has its cluster GUESSED from its name; if that guess is\n" +
 			"wrong, the instance is looked for in the wrong cluster."))
 
-	if destroyNoState {
+	if destroyWithoutState {
 		fmt.Println(color.YellowString("\n--without-state: tofu destroy is SKIPPED for every instance above."))
 	}
 	if destroyDryRun {
@@ -176,6 +176,6 @@ func destroyOptionsFor(instance, kubeContext string, dryRun, assumeYes bool) boo
 			DryRun:      dryRun,
 			AssumeYes:   assumeYes,
 		},
-		WithoutState: destroyNoState,
+		WithoutState: destroyWithoutState,
 	}
 }

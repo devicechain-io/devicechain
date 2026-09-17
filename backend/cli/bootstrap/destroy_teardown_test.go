@@ -104,12 +104,12 @@ func newTeardownRig(t *testing.T, rels []*release.Release, namespaces []string, 
 	return r
 }
 
-func (r *teardownRig) destroy(t *testing.T) (string, error) {
+func (r *teardownRig) destroy(t *testing.T, withoutState bool) (string, error) {
 	t.Helper()
 	p := &fakeProvider{name: "local", present: map[string]bool{"c": true}}
 	var err error
 	out := captureOutput(t, func() {
-		err = Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}})
+		err = Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}, WithoutState: withoutState})
 	})
 	return out, err
 }
@@ -160,7 +160,7 @@ func TestUninstallInstanceRunsEveryStepInOrder(t *testing.T) {
 	r := newTeardownRig(t,
 		[]*release.Release{deviceChainRelease(helmReleaseNameFor("acme"), "acme"), deviceChainRelease(helmReleaseNameFor("b"), "b")},
 		[]string{"acme", "b"}, "acme", "b")
-	out, err := r.destroy(t)
+	out, err := r.destroy(t, false)
 	if err != nil {
 		t.Fatalf("destroy failed: %v\n%s", err, out)
 	}
@@ -197,11 +197,11 @@ func TestADestroyResumedAfterItsChartUninstallFinishesOnAMultiInstanceCluster(t 
 		t.Run(name, func(t *testing.T) {
 			r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("b"), "b")},
 				footprint.namespaces, footprint.declared...)
-			out, err := r.destroy(t)
+			out, err := r.destroy(t, false)
 			if err != nil {
 				t.Fatalf("the resumed destroy failed: %v\n%s", err, out)
 			}
-			if strings.Contains(out+err2s(err), "dcctl destroy <provider> b") {
+			if strings.Contains(out, "dcctl destroy <provider> b") {
 				t.Errorf("the resume told the operator to destroy the neighbour:\n%s", out)
 			}
 			if !slices.Contains(r.calls, "tofu destroy kind-c acme") {
@@ -223,20 +223,13 @@ func TestADestroyResumedAfterItsChartUninstallFinishesOnAMultiInstanceCluster(t 
 	}
 }
 
-func err2s(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
 // 🔴 THE NEGATIVE CONTROLS: the resume is for an instance that is HERE. A name with no
 // footprint beside another instance is still a stale record, removed without touching
 // anything; and a release whose name and values contradict is never resumed over.
 func TestOnlyAnInstanceWithAFootprintIsResumed(t *testing.T) {
 	t.Run("no footprint is a stale record", func(t *testing.T) {
 		r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("b"), "b")}, []string{"b"}, "b")
-		out, err := r.destroy(t)
+		out, err := r.destroy(t, false)
 		if err != nil {
 			t.Fatalf("err = %v\n%s", err, out)
 		}
@@ -249,7 +242,7 @@ func TestOnlyAnInstanceWithAFootprintIsResumed(t *testing.T) {
 	})
 	t.Run("a contradictory release is refused even with a footprint", func(t *testing.T) {
 		r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("acme"), "b")}, []string{"acme"}, "acme")
-		out, err := r.destroy(t)
+		out, err := r.destroy(t, false)
 		var foreign *foreignReleaseError
 		if !errors.As(err, &foreign) || foreign.Absent {
 			t.Fatalf("want the contradiction refusal, got %v\n%s", err, out)
@@ -288,7 +281,7 @@ func TestAPreSplitStateIsRefusedBeforeTheChartIsUninstalled(t *testing.T) {
 		probed = true
 		return nil, nil
 	}
-	out, err := r.destroy(t)
+	out, err := r.destroy(t, false)
 	if err == nil || !strings.Contains(err.Error(), "--without-state") ||
 		!strings.Contains(err.Error(), "module.cnpg_rdb.helm_release.cluster") ||
 		!strings.Contains(err.Error(), "Nothing has been removed.") {
@@ -306,11 +299,7 @@ func TestAPreSplitStateIsRefusedBeforeTheChartIsUninstalled(t *testing.T) {
 
 	// 🔑 ITS REMEDY WORKS: --without-state removes the instance, skips tofu destroy, and
 	// says what it left.
-	var werr error
-	wout := captureOutput(t, func() {
-		werr = Destroy(context.Background(), &fakeProvider{name: "local", present: map[string]bool{"c": true}},
-			DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}, WithoutState: true})
-	})
+	wout, werr := r.destroy(t, true)
 	if werr != nil {
 		t.Fatalf("--without-state over a pre-split state failed: %v\n%s", werr, wout)
 	}
@@ -353,11 +342,7 @@ func TestAPostSplitStateFileIsNotPreSplit(t *testing.T) {
 func TestWithoutStateWarnsAboutAnUnreadableState(t *testing.T) {
 	r := newTeardownRig(t, nil, []string{"acme"}, "acme")
 	writeInstanceRootState(t, r.home, "acme", "instance/terraform.tfstate", "{not json")
-	var err error
-	out := captureOutput(t, func() {
-		err = Destroy(context.Background(), &fakeProvider{name: "local", present: map[string]bool{"c": true}},
-			DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}, WithoutState: true})
-	})
+	out, err := r.destroy(t, true)
 	if err != nil {
 		t.Fatalf("err = %v\n%s", err, out)
 	}

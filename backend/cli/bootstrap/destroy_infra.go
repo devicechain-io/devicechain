@@ -192,13 +192,9 @@ func checkDestroyFences(ctx context.Context, tf stateLister, instance string) er
 // is already gone, because the sentence about what has been removed must be true at
 // the point it is printed.
 //
-// 🔑 WHAT --without-state DOES TO SUCH AN INSTANCE, said exactly. It skips tofu destroy,
-// so nothing that state describes is touched. It uninstalls the chart release, asks the
-// store for the instance's own database and login (a cluster `dcctl install` never
-// prepared has no install record, and the destroy says the database was left), deletes
-// the labelled instance namespace, and removes the local state — this state with it.
-// An instance this old also predates per-instance namespaces, so its broker and event
-// store are in the shared namespace and are left too.
+// 🔑 THE MESSAGE SAYS EXACTLY WHAT --without-state LEAVES, not merely that it exists: an
+// instance this old also predates per-instance namespaces, so its broker and event store
+// are in the shared namespace, outside anything the override removes.
 func preSplitDestroyRefusal(instance string, found []string, releaseUninstalled bool) error {
 	removed := "Nothing has been removed."
 	if releaseUninstalled {
@@ -287,8 +283,9 @@ func readInstanceRootState(instance string) (instanceRootState, error) {
 			return instanceRootState{}, fmt.Errorf("reading %s: %w", p, err)
 		}
 		out.Resources += doc.managed()
+		held := doc.addresses()
 		for _, address := range preSplitStateAddresses {
-			if slices.Contains(doc.addresses(), address) && !slices.Contains(out.PreSplit, address) {
+			if slices.Contains(held, address) && !slices.Contains(out.PreSplit, address) {
 				out.PreSplit = append(out.PreSplit, address)
 			}
 		}
@@ -363,16 +360,6 @@ func (d stateDocument) addresses() []string {
 	return out
 }
 
-// managedResourcesIn counts what `tofu destroy` would remove in a state document. See
-// stateDocument.managed.
-func managedResourcesIn(state []byte) (int, error) {
-	doc, err := parseStateDocument(state)
-	if err != nil {
-		return 0, err
-	}
-	return doc.managed(), nil
-}
-
 // liveInstanceInfrastructure reports what of the instance root is running — in the
 // instance's namespace, or for the broker and event store in the shared one — for a
 // destroy that has no state describing it.
@@ -442,7 +429,7 @@ func live(m *metav1.ObjectMeta) bool { return m.DeletionTimestamp == nil }
 // probeLiveInstanceInfrastructure is the seam Destroy reaches the cluster through for the
 // empty-state refusal.
 var probeLiveInstanceInfrastructure = func(ctx context.Context, kubeContext, instance string) ([]string, error) {
-	dyn, _, typed, err := kubeClients(kubeContext)
+	dyn, typed, err := teardownClients(kubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the cluster: %w", err)
 	}
@@ -611,10 +598,9 @@ func withoutStateWarning(instance string, st instanceRootState, readErr error) s
 				"this state, the only record of them, is removed with the instance.",
 			instance, strings.Join(st.PreSplit, ", "), infraNamespace)
 	}
-	resources := st.Resources
 	return color.YellowString(
 		"--without-state: tofu destroy will be SKIPPED, but the local infrastructure state of %q lists %d "+
 			"resource(s). They are removed only if they live in the instance namespace; anything elsewhere is "+
 			"left running, and this state — the only record of it — is removed with the instance.",
-		instance, resources)
+		instance, st.Resources)
 }
