@@ -340,9 +340,17 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //     archiver is handed them through a different object on a different schedule, so
 //     a new value opens a window in which the archiver cannot authenticate and the
 //     first visible symptom is that WAL stopped being shipped.
-//   - THE DASHBOARD PASSWORD IS MINTED EVERY RUN, deliberately. Both halves are
-//     written by the same run, so the cost is a rollout-length window of failing
-//     logins.
+//   - THE DASHBOARD PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT. A fresh
+//     value is not a rotation: Grafana reads it through admin.existingSecret as an
+//     environment variable, a changed Secret restarts nothing, and a Grafana whose
+//     database persists ignores a changed admin password after its first start
+//     anyway. So a new value lands in the Secret and nowhere else, and the Secret
+//     then names a password Grafana has never seen. To rotate it deliberately, delete
+//     Secret monitoring/dc-grafana-admin, re-run `dcctl install`, then restart
+//     Deployment monitoring/kube-prometheus-stack-grafana — which holds only while
+//     Grafana's persistence stays off, as the monitoring module leaves it at the
+//     chart's default; with a persistent database it would also need
+//     `grafana cli admin reset-admin-password`.
 //
 // 🔴 WHAT IS DELIBERATELY NOT HERE: an expiry-aware renewal for the broker's leaf
 // certificate. Reuse keeps a value; renewal replaces one on a clock, and the two
@@ -389,6 +397,13 @@ func resolveCredentials(
 		logins = append(logins, loginCredential{&set.RDBProvisionerPassword, mintedCredentialRef{
 			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
 		}, ownerCluster})
+		// Gated exactly as it is minted and placed: with monitoring off there is no
+		// Secret to read, and a cluster that turns it on later has none yet, so it mints.
+		if monitoringEnabled(st) {
+			logins = append(logins, loginCredential{&set.GrafanaAdminPassword, mintedCredentialRef{
+				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass,
+			}, ownerCluster})
+		}
 	}
 	if plansInstance(st) {
 		databases = append(databases, databaseCredential{&set.TSDBPassword, mintedCredentialRef{

@@ -572,7 +572,8 @@ func TestAnInstallMintsNoInstanceCredential(t *testing.T) {
 		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
 	}
 	for _, r := range *reads {
-		if !strings.HasPrefix(r, infraNamespace+"/") {
+		// The dashboard login is the cluster's too; it lives beside Grafana, not here.
+		if !strings.HasPrefix(r, infraNamespace+"/") && !strings.HasPrefix(r, monitoringNamespace+"/") {
 			t.Errorf("an install looked for %s to reuse; it has no instance", r)
 		}
 	}

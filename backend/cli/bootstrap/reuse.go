@@ -173,8 +173,8 @@ func reuseMintedCredential(
 	if v == "" {
 		return reuseAbsent, "", fmt.Errorf("Secret %s/%s was minted for %s but its %q entry is "+
 			"empty, so the credential it is running on cannot be recovered from it. Minting a "+
-			"replacement would leave the services holding a value the database was never told "+
-			"about", ref.Namespace, ref.Name, owner, ref.Key)
+			"replacement would write a value the workload it was minted for was never given",
+			ref.Namespace, ref.Name, owner, ref.Key)
 	}
 	return reuseRecovered, v, nil
 }
