@@ -91,6 +91,7 @@ func TestFlagUsageCarriesNoBackquotes(t *testing.T) {
 	mustReach := []string{
 		"dcctl bootstrap",
 		"dcctl destroy",
+		"dcctl install",
 		"dcctl ha verify",
 		"dcctl ha verify-db",
 		"dcctl presence demote",

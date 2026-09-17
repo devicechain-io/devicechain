@@ -347,12 +347,12 @@ func giveUpOnCNPGAdmission(ctx context.Context, timeout time.Duration, last erro
 	}
 	return fmt.Errorf("the CloudNativePG admission webhook was still unreachable after %s. "+
 		"The API server reported: %w. "+
-		"If this happens on every bootstrap it is not a race — the usual cause is a "+
+		"If this happens on every install or bootstrap it is not a race — the usual cause is a "+
 		"firewall between the control plane and the webhook's port (9443); on a GKE "+
 		"private cluster that rule has to be added by hand", timeout, last)
 }
 
-// reportCNPGAdmissionWait prints the banner explaining why the bootstrap paused.
+// reportCNPGAdmissionWait prints the banner explaining why the run paused.
 //
 // It says the database cluster STEP was refused, and it no longer says the
 // clusters "were created" or that "nothing was left behind". The API server words
@@ -365,7 +365,7 @@ func reportCNPGAdmissionWait() {
 	fmt.Println(color.YellowString("⚠  The API server could not reach the CloudNativePG admission webhook, so the"))
 	fmt.Println(color.YellowString("   database cluster step was refused and rolled itself back. Waiting for the"))
 	fmt.Println(color.YellowString("   API server to be able to admit a Cluster, then retrying once."))
-	fmt.Println(color.YellowString("   If you see this on EVERY bootstrap it is not a race and should be reported."))
+	fmt.Println(color.YellowString("   If you see this on EVERY install or bootstrap it is not a race and should be reported."))
 }
 
 // tofuApplier is the one method applyWithCNPGAdmissionRetry needs, so the retry

@@ -65,16 +65,60 @@ func (s pgxSession) QueryRow(ctx context.Context, sql string, args ...any) pgx.R
 // what dcctl would have made. A caller retrying on transient errors must not retry this.
 var errInstanceDatabaseNotOurs = errors.New("the instance's database or login is not dcctl's")
 
+// connectionAdmission is what one instance may hold on the shared store, and what the
+// store has to give.
+type connectionAdmission struct {
+	// Limit is this instance's login's CONNECTION LIMIT.
+	Limit int
+	// Budget is the store's max_connections.
+	Budget int
+}
+
+// rdbReservedConnections is what the budget keeps back from every instance: the
+// superuser reserve (3), the provisioner's own limit (3), and room for the metrics
+// exporter, the database operator and dcctl's own sessions.
+const rdbReservedConnections = 20
+
+// instanceAdmissionLock serialises admission across concurrent bootstraps of different
+// instances, which take different cluster claims. A session-level advisory lock, so it
+// is released when the provisioner's session ends however this returns.
+const instanceAdmissionLock = 0x6463_7264_6261_646d // "dcrdbadm"
+
+// errNoConnectionBudget marks an instance the store has no connections left for.
+var errNoConnectionBudget = errors.New("the relational store has no connection budget left for this instance")
+
 // ensureInstanceDatabase makes the instance's login and database exist, owned and
-// fenced as described above, with the login holding password. Safe to run again: a
-// re-run changes only the password, to the one given.
-func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, password string) error {
+// fenced as described above, with the login holding password and limited to
+// admit.Limit connections. Safe to run again: a re-run changes only the password and
+// the limit, to the ones given.
+//
+// 🔴 THE LIMIT IS THE ADMISSION, NOT A HINT. Every instance's services draw on one
+// store, and one instance's rollout that takes every slot locks out all the others while
+// the store reports itself healthy. So each login is capped, and an instance is admitted
+// only while the caps already granted plus its own fit in the budget. The count lives in
+// the store — the limits of the logins the provisioner administers — so it needs no
+// second record, and dropping a login gives its share back.
+func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, password string, admit connectionAdmission) error {
 	if err := ValidateInstanceName(instance); err != nil {
 		return err
+	}
+	if admit.Limit <= 0 || admit.Budget <= 0 {
+		return fmt.Errorf("no connection limit was settled for instance %q (limit %d, budget %d); an "+
+			"unlimited login could starve every other instance on the store", instance, admit.Limit, admit.Budget)
 	}
 	ident := pgx.Identifier{instance}.Sanitize()
 	verifier, err := scramSHA256Verifier(password)
 	if err != nil {
+		return err
+	}
+
+	if _, err := q.Exec(ctx, "select pg_advisory_lock($1)", int64(instanceAdmissionLock)); err != nil {
+		return fmt.Errorf("serialising admission to the relational store: %w", err)
+	}
+	defer func() {
+		_, _ = q.Exec(context.WithoutCancel(ctx), "select pg_advisory_unlock($1)", int64(instanceAdmissionLock))
+	}()
+	if err := admitInstance(ctx, q, instance, admit); err != nil {
 		return err
 	}
 
@@ -93,8 +137,8 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 		// log_statement and pg_stat_statements record. A verifier is what the server
 		// would have stored anyway, and it cannot be replayed as a login.
 		if _, err := q.Exec(ctx, fmt.Sprintf(
-			"CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION PASSWORD '%s'",
-			ident, verifier)); err != nil {
+			"CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION CONNECTION LIMIT %d PASSWORD '%s'",
+			ident, admit.Limit, verifier)); err != nil {
 			return fmt.Errorf("creating the login for instance %q: %w", instance, err)
 		}
 	case err != nil:
@@ -114,7 +158,7 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 				"instance's login never has — with any of them it could reach past its own database. "+
 				"Refusing to hand it to services", errInstanceDatabaseNotOurs, instance)
 		}
-		if _, err := q.Exec(ctx, fmt.Sprintf("ALTER ROLE %s PASSWORD '%s'", ident, verifier)); err != nil {
+		if _, err := q.Exec(ctx, fmt.Sprintf("ALTER ROLE %s CONNECTION LIMIT %d PASSWORD '%s'", ident, admit.Limit, verifier)); err != nil {
 			return fmt.Errorf("setting the password of the login for instance %q: %w", instance, err)
 		}
 	}
@@ -171,6 +215,48 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	if publicCanConnect {
 		return fmt.Errorf("database %q is still open to every login on the relational store after "+
 			"revoking PUBLIC's access, so any other instance could connect to it", instance)
+	}
+	return nil
+}
+
+// admitInstance refuses an instance whose connection limit does not fit in what the
+// store has left.
+func admitInstance(ctx context.Context, q instanceDBQuerier, instance string, admit connectionAdmission) error {
+	var granted int
+	var unlimited []string
+	rows := `
+		select r.rolname, r.rolconnlimit from pg_roles r
+		join pg_auth_members m on m.roleid = r.oid and m.admin_option
+		where m.member = (select oid from pg_roles where rolname = current_user)
+		  and r.rolcanlogin and r.rolname <> $1`
+	var names []string
+	var limits []int32
+	if err := q.QueryRow(ctx, "select coalesce(array_agg(rolname order by rolname), '{}'), "+
+		"coalesce(array_agg(rolconnlimit order by rolname), '{}') from ("+rows+") granted",
+		instance).Scan(&names, &limits); err != nil {
+		return fmt.Errorf("reading the connection limits already granted on the relational store: %w", err)
+	}
+	for i, n := range names {
+		if limits[i] < 0 {
+			unlimited = append(unlimited, n)
+			continue
+		}
+		granted += int(limits[i])
+	}
+	// 🔴 AN UNLIMITED LOGIN MAKES THE BUDGET MEANINGLESS, so it is refused rather than
+	// counted as zero. It is an instance built before logins were limited.
+	if len(unlimited) > 0 {
+		return fmt.Errorf("%w: the login(s) %s on the relational store have no connection limit — they "+
+			"were built before instances were admitted against a budget — so there is no telling what "+
+			"is left. Recreate them (`dcctl destroy` then `dcctl bootstrap`) first",
+			errNoConnectionBudget, strings.Join(unlimited, ", "))
+	}
+	usable := admit.Budget - rdbReservedConnections
+	if granted+admit.Limit > usable {
+		return fmt.Errorf("%w: instance %q needs %d connections, and the store's budget of %d (less %d "+
+			"reserved) has %d left after the %d already granted to %d other instance(s). Destroy an "+
+			"instance, or raise the budget by re-running `dcctl install` with a larger --max-connections", errNoConnectionBudget, instance, admit.Limit, admit.Budget,
+			rdbReservedConnections, max(usable-granted, 0), granted, len(names))
 	}
 	return nil
 }

@@ -788,6 +788,11 @@ run_assertions() {
   # WITH the source it names. The event store's block had no acceptance at all.
   accepts restore_rdb_target_time "2026-07-28 03:00:00+00" -var restore_rdb_from=dc-rdb
   accepts restore_tsdb_target_time "2026-07-26 01:02:03+00" -var restore_tsdb_from=dc-tsdb
+  # The relational store's connection budget: whole, and not below a store's own default.
+  rejects postgres_max_connections 99
+  rejects postgres_max_connections 600.5
+  accepts postgres_max_connections 100
+  accepts postgres_max_connections 800
 
   # --- chart version pins, the RUNTIME half -------------------------------------
   #

@@ -14,9 +14,16 @@ import (
 type Options struct {
 	Instance    string
 	KubeContext string
-	Profile     string
-	DryRun      bool
-	AssumeYes   bool
+	// Cluster names the local cluster: the kind cluster of that name. Empty means
+	// DefaultClusterName. Ignored when KubeContext is set.
+	Cluster string
+	// CreateCluster lets EnsureCluster create a missing local cluster. Only `dcctl
+	// install` sets it: a cluster is prepared once, and instances are built on one that
+	// has been.
+	CreateCluster bool
+	Profile       string
+	DryRun        bool
+	AssumeYes     bool
 	// ImageRegistry/ImageVersion select the published image source (defaults
 	// DefaultImageRegistry/DefaultImageVersion). BuildImages opts into building
 	// from source into a local registry instead (developer path).
@@ -29,39 +36,9 @@ type Options struct {
 	// self-signed cert — combined with localhost, a zero-config http://localhost/.
 	IngressHost string
 	NoTLS       bool
-	// NoMonitoring skips installing the kube-prometheus-stack observability stack
-	// (default-on). Set it when the cluster already has the Prometheus Operator, or
-	// to opt out of in-cluster metrics collection.
-	NoMonitoring bool
-	// NoCNPG skips installing the CloudNativePG operator and the Barman Cloud backup
-	// plugin (default-on, ADR-020 A2). Set it when the cluster ALREADY runs CNPG —
-	// which is not a corner case: the upstream `kubectl apply` manifest is the most
-	// common way to install it, and Helm cannot adopt objects it did not create, so
-	// without this flag such a cluster fails the infra apply with an ownership error
-	// and no way past it.
-	NoCNPG bool
 	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
 	// OpenTofu. See State for why it exists at all.
 	AllowLegacyDbRemoval bool
-	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047): it enables the
-	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
-	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.
-	GrafanaSSO bool
-	// Compact applies the small-footprint preset: lowered JetStream/KV ceilings, the
-	// smaller volumes those permit, and lowered scheduling requests. It is a preset
-	// over levers that already exist and does NOT change which services run (that
-	// stays on Profile). See compactSizing.
-	Compact bool
-	// HA provisions the ADR-020 topology: a 3-node NATS RAFT cluster spread one
-	// server per node, with every JetStream stream and KV bucket replicated across
-	// it, AND both database stores as replicated CloudNativePG Clusters — the
-	// relational one synchronously (A2.3), the event store at `preferred`
-	// durability (A2.4). It is ONE value driving both tools — see haTopology for
-	// why that matters; the database instance counts are derived inside OpenTofu
-	// from the same variable, so there is no second value to keep in step. It does
-	// not change how many DeviceChain services run: the stateful areas are pinned
-	// to one writer by the ADR-070 lease fence.
-	HA bool
 	// EnableAreas is the raw set of extra functional areas requested via
 	// --enable-area, deployed ADDITIVELY on top of the profile (e.g. lwm2m-ingest on
 	// a default/compact bring-up). Resolved+validated by ResolveEnabledAreas into the
@@ -74,7 +51,7 @@ type Options struct {
 type Provider interface {
 	Name() string
 	// EnsureCluster guarantees a usable cluster and returns the binding to record:
-	// which cluster, the context to reach it by, and whether it is dcctl's to delete.
+	// which cluster, the context to reach it by, and whether it is dcctl's own.
 	//
 	// 🔴 IT RETURNS THE CLUSTER NAME, NOT JUST THE CONTEXT, and that is the whole point of
 	// the type. The caller used to receive a context, and every later step re-derived the
@@ -83,21 +60,14 @@ type Provider interface {
 	// success while the cluster kept running. Only the provider knows this mapping;
 	// returning it is what stops everyone else guessing at it.
 	EnsureCluster(ctx context.Context, opts Options) (ClusterBinding, error)
-	// DestroyCluster deletes the cluster named by the BINDING (the inverse of
-	// EnsureCluster). For the local provider this deletes the kind cluster; a
-	// cloud provider would tofu-destroy it.
-	//
-	// Callers must only reach this with a binding they have checked is Managed. The
-	// implementation re-checks anyway, because the cost of being wrong is deleting
-	// somebody else's cluster.
-	DestroyCluster(ctx context.Context, binding ClusterBinding, opts Options) error
 	// ClusterExists reports whether the cluster the binding names is present right now.
 	//
-	// 🔴 IT EXISTS SO "ALREADY GONE" AND "DESTROYED" CAN BE DIFFERENT SENTENCES. kind's
-	// delete is idempotent: deleting a cluster that is not there exits 0, which is exactly
-	// how `destroy` used to report a successful teardown over a cluster it never touched.
-	// The delete stays idempotent — this is for the REPORT, and for the listing, which has
-	// no other way to tell a live instance from an orphaned state directory.
+	// 🔴 IT EXISTS SO "ALREADY GONE" IS A THING DESTROY CAN SAY. kind's delete is
+	// idempotent: deleting a cluster that is not there exits 0, which is exactly how
+	// `destroy` once reported a successful teardown over a cluster it never touched. Destroy
+	// asks this to tell an instance whose cluster was deleted by hand — nothing to uninstall,
+	// only local state to clear — from one it must uninstall; the listing asks it because it
+	// has no other way to tell a live instance from an orphaned state directory.
 	ClusterExists(ctx context.Context, binding ClusterBinding) (bool, error)
 }
 

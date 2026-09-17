@@ -12,8 +12,8 @@
 # compares `pg_dump --schema-only`, so it captures NO ROWS — a migration that
 # creates every table perfectly and then truncates the data inside them passes it
 # with every area green. The load harness seeds its own world on a FRESH install.
-# `dcctl destroy && bootstrap` is the INSTALL path, which structurally cannot see
-# an upgrade defect at all.
+# `dcctl destroy && bootstrap` is the FRESH-INSTALL path, which structurally cannot
+# see an upgrade defect at all.
 #
 # So this job installs the previous release, writes one of every entity through
 # its real API, upgrades the way the documentation tells an operator to, and reads

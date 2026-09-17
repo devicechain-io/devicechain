@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
@@ -22,7 +21,7 @@ import (
 const prereqStateSubdir = "infra"
 
 // ClusterArchive is the archive contract the cluster root hands to every instance
-// root applied against the same cluster.
+// root applied against the same cluster, as the install record stores it.
 //
 // 🔑 IT IS READ BACK, NOT RE-DERIVED. dcctl knows what it asked the cluster root
 // for, and that is precisely the thing not worth passing on: the endpoint is a
@@ -30,42 +29,39 @@ const prereqStateSubdir = "infra"
 // destination the store turned out to be. Recomputing either here would be a second
 // copy of the cluster root's logic, free to disagree with the store that exists.
 type ClusterArchive struct {
-	EndpointURL       string
-	CredentialsSecret string
-	AccessKeyIDKey    string
-	SecretAccessKey   string
-	BucketTsdb        string
+	EndpointURL       string `json:"endpointUrl,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	AccessKeyIDKey    string `json:"accessKeyIdKey,omitempty"`
+	SecretAccessKey   string `json:"secretAccessKeyKey,omitempty"`
+	BucketTsdb        string `json:"bucketTsdb,omitempty"`
 }
 
 // applyClusterPrereqs applies the cluster prerequisite root — the CloudNativePG
 // operator and its backup plugin, cert-manager, ingress-nginx, monitoring, the
 // shared infrastructure namespace, the shared relational store and the backup object
-// store — and returns the archive contract an instance root needs.
+// store — and returns what it built, for the install record.
 //
 // 🔴 IT IS KEYED ON THE CLUSTER'S IDENTITY, NOT ON AN INSTANCE. That is what makes
-// it convergent: every instance bootstrapped against one cluster drives the same
-// state, so the second bootstrap re-applies it as a no-op instead of building a
-// second copy of the prerequisites. Keying it on the instance would put one
-// operator's ingress controller inside another instance's state and destroy it with
-// that instance.
+// it convergent: every install of one cluster drives the same state, so a re-install
+// re-applies it as a no-op instead of building a second copy of the prerequisites.
+// Keying it on an instance would put one operator's ingress controller inside that
+// instance's state and destroy it with that instance.
 //
 // 🔴 AND THE IDENTITY IS THE kube-system NAMESPACE UID, NOT THE CONTEXT NAME. A
 // `kind delete cluster` followed by `kind create cluster` produces a NEW cluster
 // wearing the SAME context name; state keyed on the name would be inherited by a
 // cluster that has none of these resources, and the apply would plan updates to
 // things that do not exist.
-func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []string, namespace string) (_ ClusterArchive, _ ClusterRdb, err error) {
-	var archive ClusterArchive
-	var rdb ClusterRdb
+func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []string, namespace string) (_ InstallOutputs, err error) {
 
 	tofuBin, err := findTofu()
 	if err != nil {
-		return archive, rdb, err
+		return InstallOutputs{}, err
 	}
 
 	workdir, err := clusterStateDir(uid, prereqStateSubdir)
 	if err != nil {
-		return archive, rdb, err
+		return InstallOutputs{}, err
 	}
 	// The extracted tree holds THIS root plus the shared modules, and a root reaches
 	// those as "../modules/<x>" — so tofu runs one level down, in the root's own
@@ -80,32 +76,32 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 		}
 	}()
 	if err := extractRoot(assets.OpenTofu(), assets.ClusterRootDir, workdir); err != nil {
-		return archive, rdb, fmt.Errorf("extracting cluster prerequisite config: %w", err)
+		return InstallOutputs{}, fmt.Errorf("extracting cluster prerequisite config: %w", err)
 	}
 
 	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
 	if err != nil {
-		return archive, rdb, err
+		return InstallOutputs{}, err
 	}
 	tf.SetStdout(os.Stdout)
 	tf.SetStderr(os.Stderr)
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {
-		return archive, rdb, fmt.Errorf("tofu init (cluster prerequisites): %w", err)
+		return InstallOutputs{}, fmt.Errorf("tofu init (cluster prerequisites): %w", err)
 	}
 
 	// The shared infrastructure namespace is IMPORTED into this root's state rather
 	// than switched off in its configuration.
 	//
 	// 🔴 AND IT IS THIS ROOT THAT ADOPTS IT, WHICH IS THE WHOLE POINT OF THE SPLIT.
-	// dcctl creates the namespace before either apply, so something has to reconcile
+	// dcctl creates the namespace before this apply, so something has to reconcile
 	// the object with the declaration that manages it; before the split that was the
 	// instance root, which meant one instance's teardown could plan the destruction
 	// of a namespace holding every other instance's data. The namespace is a cluster
 	// prerequisite, so it belongs to the cluster's state and outlives every instance.
 	if err := adoptInfraNamespace(ctx, tf, namespace, vars); err != nil {
-		return archive, rdb, err
+		return InstallOutputs{}, err
 	}
 
 	opts := make([]tfexec.ApplyOption, 0, len(vars))
@@ -118,101 +114,74 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
 		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
 	}); err != nil {
-		return archive, rdb, err
+		return InstallOutputs{}, err
 	}
 
 	outputs, err := tf.Output(ctx)
 	if err != nil {
-		return archive, rdb, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
+		return InstallOutputs{}, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
 	}
-	archive, err = archiveFromOutputs(outputs)
-	if err != nil {
-		return archive, rdb, err
-	}
-	rdb, err = rdbFromOutputs(outputs)
-	if err != nil {
-		return archive, rdb, err
-	}
-	recordClusterOutputs(st, outputs)
-	return archive, rdb, nil
+	return clusterOutputs(outputs)
 }
 
-// recordClusterOutputs stashes what the cluster root built for the steps after the
-// applies: the Helm values that gate monitoring and alerting, and the report.
+// clusterOutputs decodes what the cluster root built into the install record's outputs.
 //
 // 🔴 THESE WERE READ FROM THE INSTANCE ROOT AFTER THE SPLIT, WHICH DECLARES NONE OF
-// THEM. Every read below is `if meta, ok := outputs[...]; ok`, so an output the root
-// does not export is indistinguishable from one that is null — and the split turned
-// four live reads into four permanent no-ops without a single failure. The CNPG
+// THEM. Every optional read below is `if meta, ok := outputs[...]; ok`, so an output the
+// root does not export is indistinguishable from one that is null — and the split
+// turned four live reads into four permanent no-ops without a single failure. The CNPG
 // operator's PodMonitor and control-plane alerts stopped rendering on every fresh
 // install, the Grafana access line vanished from the report, and an off-site backup
 // was reported as in-cluster. Found in review, not by a test; which root each key is
 // read from is now held against each root's outputs.tf by
 // TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom.
-func recordClusterOutputs(st *State, outputs map[string]tfexec.OutputMeta) {
+//
+// Each of the four is null when what it describes was not installed, and null decodes
+// as empty — which is what a bootstrap reads as "not there".
+func clusterOutputs(outputs map[string]tfexec.OutputMeta) (InstallOutputs, error) {
+	archive, err := archiveFromOutputs(outputs)
+	if err != nil {
+		return InstallOutputs{}, err
+	}
+	rdb, err := rdbFromOutputs(outputs)
+	if err != nil {
+		return InstallOutputs{}, err
+	}
+	out := InstallOutputs{Rdb: rdb, Archive: archive}
 	// Whether those backups survive losing the cluster, which is a different
 	// question from whether they exist and the one an operator is most likely to
-	// get wrong. Null when backups are off; "false" for the default in-cluster
+	// get wrong. Null when backups are off; false for the default in-cluster
 	// destination.
 	if meta, ok := outputs["database_backup_survives_cluster_loss"]; ok {
-		var offsite bool
-		if err := json.Unmarshal(meta.Value, &offsite); err == nil {
-			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(offsite)
-		}
+		_ = json.Unmarshal(meta.Value, &out.BackupSurvivesClusterLoss)
 	}
 	// The namespace the CloudNativePG OPERATOR runs in — the database CONTROL
 	// PLANE, which is a different tier from the databases and a different
 	// namespace: dc-system holds the Clusters, cnpg-system holds the operator that
 	// drives them. It gates the operator's PodMonitor and the control-plane
 	// alerting rules together (ADR-020 A1.5).
-	//
-	// 🔑 CLEARED FIRST, like databaseBackups above and for the same reason. This
-	// map is persisted state, so a value written by an earlier apply outlives the
-	// condition that produced it: take CloudNativePG out of an instance that once
-	// had it and, without this line, the next install still renders a PodMonitor
-	// and three alerts against a namespace with no operator in it.
-	//
-	// The damage is SILENCE rather than noise, which is the worse of the two and
-	// the reason this is worth a line of code. CNPGControlPlaneUnavailable would
-	// select deployments in a namespace that has none — an empty vector, so no
-	// alert, forever — while the whole group would render and look present.
-	// `kubectl get prometheusrule` shows three healthy rules and one of them can
-	// no longer fire. Clearing the value instead removes the group outright, which
-	// is a visible absence.
-	//
-	// The output is null when enable_cnpg is false, and json.Unmarshal of a null
-	// into a string is a silent no-op rather than an error — so "" is reached by
-	// leaving it cleared, not by trusting the decode to report anything.
-	// The namespace the SHARED relational store runs in, where its metrics are exported
-	// from. The event store's are exported from the instance's own namespace, which the
-	// chart knows as the instance id; the alerts select both.
-	if meta, ok := outputs["namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values[databaseNamespaceKey] = ns
-		}
-	}
-	st.Values[cnpgNamespaceKey] = ""
 	if meta, ok := outputs["cnpg_namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values[cnpgNamespaceKey] = ns
-		}
+		out.CNPGNamespace = optionalStringOutput(meta)
 	}
-	// Grafana access (when monitoring was installed): stash the namespace/service so
-	// the report step can print a port-forward hint. Null when --no-monitoring.
+	// Grafana access (when monitoring was installed), for the report's port-forward hint.
 	if meta, ok := outputs["grafana_service"]; ok {
-		var svc string
-		if err := json.Unmarshal(meta.Value, &svc); err == nil && svc != "" {
-			st.Values["grafanaService"] = svc
-		}
+		out.GrafanaService = optionalStringOutput(meta)
 	}
 	if meta, ok := outputs["grafana_namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values["grafanaNamespace"] = ns
-		}
+		out.GrafanaNamespace = optionalStringOutput(meta)
 	}
+	return out, nil
+}
+
+// optionalStringOutput is a string output that may be null. Anything that does not
+// decode as a string is empty too: validate refuses a record whose settings promise
+// what an empty output cannot deliver.
+func optionalStringOutput(meta tfexec.OutputMeta) string {
+	var v string
+	if json.Unmarshal(meta.Value, &v) != nil {
+		return ""
+	}
+	return v
 }
 
 // archiveFromOutputs decodes the archive contract out of the cluster root's outputs.

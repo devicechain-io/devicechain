@@ -139,13 +139,6 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	st.Compact = spec.Compact
 	st.NoMonitoring = !spec.Monitoring
 	st.NoCNPG = !spec.CNPG
-	// 🔴 GrafanaSSO is deliberately NOT written back. InstanceSpecFrom records the
-	// RESOLVED value (grafanaSSOEnabled), while st.GrafanaSSO holds what was
-	// REQUESTED — and stepRenderConfig compares the two to warn when SSO was asked
-	// for and could not be switched on. Copying the resolved value over the request
-	// makes them equal, which silences that warning by erasing its input rather
-	// than by fixing anything. The two fields mean different things; only one of
-	// them is a request.
 	st.IngressHost = spec.Host
 	st.NoTLS = !spec.TLS
 	if len(spec.ExtraFunctionalAreas) > 0 {

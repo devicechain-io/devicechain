@@ -66,11 +66,10 @@ type UpgradeOptions struct {
 //
 // What it deliberately does NOT do:
 //
-//   - It does not run the infrastructure apply. Two of that apply's inputs cannot
+//   - It does not run the infrastructure apply. Some of that apply's inputs cannot
 //     be recovered from the cluster — the endpoint and bucket names of an operator's
-//     own backup destination, and the Grafana SSO client secret's cleartext — so an
-//     upgrade that ran it would either demand them again every time or reconfigure
-//     the instance without them. The apply joins this verb when the chart becomes an
+//     own backup destination — so an upgrade that ran it would either demand them
+//     again every time or reconfigure the instance without them. The apply joins this verb when the chart becomes an
 //     OpenTofu release and the state lives in the cluster.
 //   - It does not change an instance's shape. Profile, topology and areas come from
 //     the declaration, not from flags here: this verb moves a version, and changing

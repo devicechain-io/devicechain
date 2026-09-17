@@ -72,10 +72,11 @@ ejecutando» forma parte de la respuesta a «qué haría esto».
 ## Qué cubre realmente el bloqueo {#scope}
 
 **Un bloqueo por clúster, no uno por instancia.** Un clúster puede alojar varias
-instancias, pero un arranque inicial también toca lo que comparten: los releases de
-infraestructura que instalan el controlador de ingress, cert-manager y el operador
-CloudNativePG, la base de datos relacional compartida y el propio Deployment del operador
-de DeviceChain. Dos ejecuciones trabajando a la vez sobre dos instancias *distintas*
+instancias, pero un arranque inicial también toca lo que comparten: la base de datos
+relacional compartida, donde crea el login y la base de datos de la instancia, y el propio
+Deployment del operador de DeviceChain. (El controlador de ingress, cert-manager y el
+operador CloudNativePG los instala una sola vez [`dcctl install`](./bootstrap.md#install),
+no cada arranque inicial.) Dos ejecuciones trabajando a la vez sobre dos instancias *distintas*
 aplicarían ambas esa mitad compartida, así que el bloqueo las pone en fila. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
 qué instancia está trabajando el titular, pero no es la clave del bloqueo.
 

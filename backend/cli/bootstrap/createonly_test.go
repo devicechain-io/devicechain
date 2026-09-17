@@ -65,7 +65,7 @@ func TestARestoreOverALiveInstanceIsStillAllowed(t *testing.T) {
 	}{
 		{"recovering a database", func() *State {
 			st := aBootstrapOf(testInstance)
-			st.Restore = RestorePlan{RdbFrom: "dc-rdb-20260101"}
+			st.Restore = RestorePlan{TsdbFrom: "dc-tsdb-20260101"}
 			return st
 		}()},
 		{"seeding the root key from an escrow artifact", func() *State {

@@ -120,37 +120,6 @@ func TestLwm2mProvisioningComposition(t *testing.T) {
 	}
 }
 
-// The clobber guard: Grafana SSO (user-management) and lwm2m identities (lwm2m-ingest)
-// each configure a functional area. Before mergeFunctionalArea one assigned the whole
-// functionalAreas map and silently dropped the other. Both must survive together.
-func TestHelmValuesLwm2mAndGrafanaCoexist(t *testing.T) {
-	st := &State{
-		Instance:      "dctest",
-		Profile:       "default",
-		ImageRegistry: DefaultImageRegistry,
-		ImageVersion:  "v0.0.0-test",
-		GrafanaSSO:    true,
-		Lwm2mIdentities: []Lwm2mIdentity{
-			{Identity: "h1", PSK: b64PSK(16), Tenant: "acme", ExternalID: "plant-a/s1", DeviceTypeToken: "sensor", AutoRegister: true},
-		},
-		Values: map[string]string{
-			"ingressHost":              "localhost",
-			"scheme":                   "http",
-			"grafanaOAuthSecretBcrypt": "$2a$10$abcdefghijklmnopqrstuv",
-		},
-	}
-	fa, ok := helmValues(st)["functionalAreas"].(map[string]interface{})
-	if !ok {
-		t.Fatal("functionalAreas missing")
-	}
-	if _, ok := fa["user-management"]; !ok {
-		t.Error("grafana-sso user-management config was clobbered by the lwm2m block")
-	}
-	if _, ok := fa["lwm2m-ingest"]; !ok {
-		t.Error("lwm2m-ingest config was clobbered by the grafana-sso block")
-	}
-}
-
 // renderDocs renders the embedded chart through helmValues and returns every manifest
 // as a decoded map, so a test can pick out the Secret/ConfigMap/Deployment the
 // provisioning produced.

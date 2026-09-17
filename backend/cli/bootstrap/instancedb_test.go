@@ -118,7 +118,7 @@ func TestInstanceDatabaseLoginsCannotReachEachOthersDatabases(t *testing.T) {
 	q := pgxSession{p}
 
 	for _, i := range []string{"alpha", "beta"} {
-		if err := ensureInstanceDatabase(ctx, q, i, i+"-pw"); err != nil {
+		if err := ensureInstanceDatabase(ctx, q, i, i+"-pw", testAdmission); err != nil {
 			t.Fatalf("provisioning %s: %v", i, err)
 		}
 	}
@@ -165,10 +165,10 @@ func TestInstanceDatabaseRerunTakesTheNewPassword(t *testing.T) {
 	ctx := context.Background()
 	p, base := withProvisioner(t, "gamma")
 	q := pgxSession{p}
-	if err := ensureInstanceDatabase(ctx, q, "gamma", "first-pw"); err != nil {
+	if err := ensureInstanceDatabase(ctx, q, "gamma", "first-pw", testAdmission); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureInstanceDatabase(ctx, q, "gamma", "second-pw"); err != nil {
+	if err := ensureInstanceDatabase(ctx, q, "gamma", "second-pw", testAdmission); err != nil {
 		t.Fatalf("a re-run over its own login and database was refused: %v", err)
 	}
 	if c, err := connectAs(t, base, "gamma", "second-pw", "gamma"); err != nil {
@@ -199,7 +199,7 @@ func TestInstanceDatabaseRefusesADatabaseItDidNotCreate(t *testing.T) {
 	if _, err := su.Exec(ctx, `CREATE DATABASE delta`); err != nil {
 		t.Fatal(err)
 	}
-	err := ensureInstanceDatabase(ctx, pgxSession{p}, "delta", "pw")
+	err := ensureInstanceDatabase(ctx, pgxSession{p}, "delta", "pw", testAdmission)
 	if !errors.Is(err, errInstanceDatabaseNotOurs) {
 		t.Fatalf("a database owned by someone else must be refused as not ours; got %v", err)
 	}
@@ -216,7 +216,7 @@ func TestInstanceDatabaseRefusesARoleItDidNotCreate(t *testing.T) {
 	if _, err := su.Exec(ctx, `CREATE ROLE epsilon LOGIN PASSWORD 'theirs'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureInstanceDatabase(ctx, pgxSession{p}, "epsilon", "pw"); !errors.Is(err, errInstanceDatabaseNotOurs) {
+	if err := ensureInstanceDatabase(ctx, pgxSession{p}, "epsilon", "pw", testAdmission); !errors.Is(err, errInstanceDatabaseNotOurs) {
 		t.Fatalf("a role another identity created must be refused; got %v", err)
 	}
 }
@@ -227,7 +227,7 @@ func TestInstanceDatabaseDropRemovesBothAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	p, base := withProvisioner(t, "zeta", "eta")
 	q := pgxSession{p}
-	if err := ensureInstanceDatabase(ctx, q, "zeta", "pw"); err != nil {
+	if err := ensureInstanceDatabase(ctx, q, "zeta", "pw", testAdmission); err != nil {
 		t.Fatal(err)
 	}
 	// A live session on the database, as a running service would hold.
@@ -264,7 +264,7 @@ func TestInstanceDatabaseDropRemovesBothAndIsIdempotent(t *testing.T) {
 // A name that is not an instance name never reaches SQL.
 func TestInstanceDatabaseRefusesANameThatIsNotAnInstanceName(t *testing.T) {
 	for _, bad := range []string{`a"; DROP ROLE dc_provisioner; --`, "Alpha", "postgres", ""} {
-		if err := ensureInstanceDatabase(context.Background(), nil, bad, "pw"); err == nil {
+		if err := ensureInstanceDatabase(context.Background(), nil, bad, "pw", testAdmission); err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
 		if err := dropInstanceDatabase(context.Background(), nil, bad); err == nil {
@@ -362,7 +362,7 @@ func TestADropBlockedByASuperuserSessionIsRetryable(t *testing.T) {
 	ctx := context.Background()
 	p, base := withProvisioner(t, "theta")
 	q := pgxSession{p}
-	if err := ensureInstanceDatabase(ctx, q, "theta", "pw"); err != nil {
+	if err := ensureInstanceDatabase(ctx, q, "theta", "pw", testAdmission); err != nil {
 		t.Fatal(err)
 	}
 	su := *base
@@ -387,5 +387,95 @@ func TestADropBlockedByASuperuserSessionIsRetryable(t *testing.T) {
 	}
 	if dropErr != nil {
 		t.Errorf("the drop did not succeed once the session ended: %v", dropErr)
+	}
+}
+
+// testAdmission is a limit and budget every other test here fits in comfortably.
+var testAdmission = connectionAdmission{Limit: 40, Budget: 600}
+
+// 🔴 THE BUDGET IS ENFORCED BY THE STORE'S OWN COUNT. Admitted while the granted limits
+// fit, refused when the next would not, and a dropped login gives its share back — the
+// last is what makes the count a count rather than a ratchet.
+func TestInstanceDatabaseAdmitsOnlyWhatTheBudgetHolds(t *testing.T) {
+	ctx := context.Background()
+	p, _ := withProvisioner(t, "adm-a", "adm-b", "adm-c")
+	q := pgxSession{p}
+	// 100 less the 20 reserved leaves 80: two logins of 40, and not a third.
+	tight := connectionAdmission{Limit: 40, Budget: 100}
+
+	for _, i := range []string{"adm-a", "adm-b"} {
+		if err := ensureInstanceDatabase(ctx, q, i, "pw", tight); err != nil {
+			t.Fatalf("admitting %s: %v", i, err)
+		}
+	}
+	var limit int
+	if err := p.QueryRow(ctx, `select rolconnlimit from pg_roles where rolname = 'adm-a'`).Scan(&limit); err != nil {
+		t.Fatal(err)
+	}
+	if limit != tight.Limit {
+		t.Fatalf("adm-a's login has CONNECTION LIMIT %d, want %d", limit, tight.Limit)
+	}
+
+	err := ensureInstanceDatabase(ctx, q, "adm-c", "pw", tight)
+	if !errors.Is(err, errNoConnectionBudget) {
+		t.Fatalf("a third login over a full budget was not refused for the budget: %v", err)
+	}
+	var exists bool
+	if err := p.QueryRow(ctx, `select exists(select 1 from pg_roles where rolname = 'adm-c')`).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("the refused instance's login was created anyway")
+	}
+
+	// A re-run of an admitted instance does not count against itself.
+	if err := ensureInstanceDatabase(ctx, q, "adm-a", "pw2", tight); err != nil {
+		t.Fatalf("re-running an admitted instance on a full budget was refused: %v", err)
+	}
+
+	if err := dropInstanceDatabase(ctx, q, "adm-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureInstanceDatabase(ctx, q, "adm-c", "pw", tight); err != nil {
+		t.Fatalf("a dropped login did not give its share back: %v", err)
+	}
+}
+
+// An administered login with no limit is an instance from before the budget, and the
+// count cannot say what it may take — so admission refuses rather than counting it as 0.
+func TestInstanceDatabaseRefusesAdmissionBesideAnUnlimitedLogin(t *testing.T) {
+	ctx := context.Background()
+	p, _ := withProvisioner(t, "unlimited", "adm-d")
+	if _, err := p.Exec(ctx, `CREATE ROLE unlimited LOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	err := ensureInstanceDatabase(ctx, pgxSession{p}, "adm-d", "pw", testAdmission)
+	if !errors.Is(err, errNoConnectionBudget) || !strings.Contains(err.Error(), "unlimited") {
+		t.Fatalf("admission beside an unlimited login was not refused naming it: %v", err)
+	}
+}
+
+func TestInstanceDatabaseRefusesAnUnsizedAdmission(t *testing.T) {
+	for _, a := range []connectionAdmission{{Limit: 0, Budget: 600}, {Limit: 40, Budget: 0}} {
+		if err := ensureInstanceDatabase(context.Background(), nil, "sized", "pw", a); err == nil {
+			t.Fatalf("admission %+v was accepted", a)
+		}
+	}
+}
+
+// A store not yet running with the budget the install asked for is NOT READY, so the
+// install waits through the restart instead of recording connections the store lacks.
+func TestTheInstallWaitsForTheStoreToRunWithItsBudget(t *testing.T) {
+	ctx := context.Background()
+	su, _ := superuserConn(t)
+	var running int
+	if err := su.QueryRow(ctx, "select setting::int from pg_settings where name = 'max_connections'").Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeRunsWithBudget(ctx, pgxSession{su}, running); err != nil {
+		t.Fatalf("a store running with the asked budget was not ready: %v", err)
+	}
+	if err := storeRunsWithBudget(ctx, pgxSession{su}, running+100); !errors.Is(err, errStoreNotReady) {
+		t.Fatalf("a store still on %d connections was reported ready for %d: %v", running, running+100, err)
 	}
 }

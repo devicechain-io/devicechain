@@ -104,8 +104,6 @@ type State struct {
 	// nowhere to set it. On a local cluster the other branch works (destroy and
 	// rebuild); on a real one there was no route past the guard at all.
 	AllowLegacyDbRemoval bool
-	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047). See Options.
-	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.
 	Compact bool
 	// HA applies the ADR-020 messaging topology (haTopology). See Options.
@@ -182,6 +180,16 @@ type State struct {
 	// BackupDestination is an off-site archive the operator already owns, read from
 	// --backup-credentials-file. Nil means the in-cluster object store.
 	BackupDestination *BackupDestination
+	// Install is the cluster's install record, which a bootstrap FOLLOWS: the cluster's
+	// shape (HA, sizing, monitoring, backups) and what the cluster apply built. Nil for
+	// the install itself, which writes it, and for an upgrade.
+	Install *InstallRecord
+	// InstanceArchive is the cluster's archive credential as a bootstrap read it back,
+	// for the instance's own copy. Nil when the cluster archives nothing.
+	InstanceArchive *ownedSecret
+	// MaxConnections is the relational store's connection budget an install asks for.
+	// Zero keeps what the cluster was installed with.
+	MaxConnections int
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.

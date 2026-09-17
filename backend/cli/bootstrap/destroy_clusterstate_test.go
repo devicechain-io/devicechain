@@ -13,9 +13,9 @@ import (
 
 // The cluster prerequisite state lives under ~/.devicechain/clusters/<uid>, outside the
 // instance tree that destroy has always removed. Before the prerequisites had a root of
-// their own, a full teardown took all of the infrastructure state with the instance
-// directory; after it, the prerequisite half survived every teardown and one more
-// accumulated with each rebuild — found live, on the first round-trip, not by a test.
+// their own, a teardown took all of the infrastructure state with the instance directory;
+// after it, the prerequisite half outlived its cluster and one more accumulated with each
+// rebuild — found live, on the first round-trip, not by a test.
 //
 // 🔑 THE RULE IS ABOUT THE CLUSTER, NOT THE COMMAND. State describing a cluster that no
 // longer exists describes nothing, and the UID it is filed under can never come back. State
@@ -52,7 +52,6 @@ func TestAClusterThatIsGoneTakesItsPrerequisiteStateWithIt(t *testing.T) {
 		managed bool
 		present bool
 	}{
-		{"managed, deleted by destroy", true, true},
 		{"managed, already gone", true, false},
 		{"adopted, already gone", false, false},
 	} {
@@ -97,6 +96,12 @@ func TestAClusterThatIsStillRunningKeepsItsPrerequisiteState(t *testing.T) {
 		{
 			// The uninstall reaches a real cluster and fails under test, which is the
 			// point: the cluster is there, so nothing about it may be cleared.
+			name: "managed, cluster present",
+			opts: Options{Instance: "inst", AssumeYes: true},
+			rec: InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c",
+				Managed: true, ClusterUID: destroyedClusterUID},
+		},
+		{
 			name: "adopted, cluster present",
 			opts: Options{Instance: "inst", AssumeYes: true},
 			rec: InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c",
@@ -126,26 +131,6 @@ func TestAClusterThatIsStillRunningKeepsItsPrerequisiteState(t *testing.T) {
 	}
 }
 
-// A cluster that could not be removed must not be reported as removed. Here the delete
-// fails, so the cluster is still there, and so is everything describing it.
-func TestAFailedClusterDeleteKeepsThePrerequisiteState(t *testing.T) {
-	home := fakeHome(t)
-	writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c",
-		Managed: true, ClusterUID: destroyedClusterUID})
-	dir := plantClusterState(t, home, destroyedClusterUID)
-	p := &fakeProvider{name: "local", present: map[string]bool{"c": true}, destroyErr: errors.New("kind: delete failed")}
-
-	captureOutput(t, func() {
-		if err := Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "inst", AssumeYes: true}}); err == nil {
-			t.Error("a failed cluster delete was reported as success")
-		}
-	})
-
-	if _, err := os.Stat(filepath.Join(dir, "infra", "cluster", "terraform.tfstate")); err != nil {
-		t.Errorf("the prerequisite state was removed although the cluster delete failed: %v", err)
-	}
-}
-
 // 🔴 NO UID, NOTHING TO NAME. An instance recorded before the identity existed must still
 // destroy cleanly, and must not reach for the clusters directory with an empty key — which
 // joins to the clusters directory ITSELF.
@@ -153,7 +138,8 @@ func TestAnInstanceWithNoRecordedIdentityLeavesEveryClusterStateAlone(t *testing
 	home := fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
 	kept := plantClusterState(t, home, bystanderClusterUID)
-	p := &fakeProvider{name: "local", present: map[string]bool{"c": true}}
+	// Gone, so the destroy reaches removeGoneClusterState — with an empty UID.
+	p := &fakeProvider{name: "local", present: map[string]bool{}}
 
 	captureOutput(t, func() {
 		if err := Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "inst", AssumeYes: true}}); err != nil {

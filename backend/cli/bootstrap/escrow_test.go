@@ -938,8 +938,8 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return cfg, err
 	}
-	// The OTHER thing stepRenderConfig asks the cluster: what the two database
-	// Clusters are already archiving under. Stubbed HERE, with this, because it
+	// The OTHER thing stepRenderConfig asks the cluster: what the instance's event
+	// store is already archiving under. Stubbed HERE, with this, because it
 	// answers the same question ("what is already deployed") and every caller of
 	// this helper drives stepRenderConfig.
 	//
@@ -949,7 +949,7 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// that only passes next to a cluster is testing the cluster.
 	// TestDeployedInstanceStubCoversEveryOutsideRead is the standing check that
 	// this line is still here.
-	withArchiveState(t, liveArchiveState{}, nil)
+	withArchiveState(t, clusterArchiveState{}, nil)
 	// And the THIRD cluster read: the broker's existing password hashes. Defaults to
 	// "none deployed", which is the honest answer for a fake instance that has no
 	// broker — and which exercises the fallback, so the tests below assert against a
@@ -1018,14 +1018,14 @@ func withDeployedBrokerHashes(t *testing.T, h natsauth.DeployedHashes) {
 	}
 }
 
-// withArchiveState stubs what the two database Clusters are currently archiving
-// under. The zero state is a cluster where neither exists — the disaster case, and
-// the right default for a test that is not about backups.
-func withArchiveState(t *testing.T, live liveArchiveState, err error) {
+// withArchiveState stubs what the instance's event store is currently archiving under.
+// The zero state is a cluster where it does not exist — the disaster case, and the
+// right default for a test that is not about backups.
+func withArchiveState(t *testing.T, live clusterArchiveState, err error) {
 	t.Helper()
 	orig := readLiveArchiveState
 	t.Cleanup(func() { readLiveArchiveState = orig })
-	readLiveArchiveState = func(context.Context, string, string) (liveArchiveState, error) {
+	readLiveArchiveState = func(context.Context, string, string) (clusterArchiveState, error) {
 		return live, err
 	}
 }

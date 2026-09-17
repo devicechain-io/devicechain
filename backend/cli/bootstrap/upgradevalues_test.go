@@ -8,8 +8,7 @@ import (
 )
 
 // A release as the previous install would have recorded it: monitoring wired to the
-// namespaces an infrastructure apply reported, an SSO client seeded with the hash of
-// a secret whose cleartext went to Grafana, and a provisioned device credential.
+// namespaces an infrastructure apply reported, and a provisioned device credential.
 func aPreviousRelease() map[string]interface{} {
 	return map[string]interface{}{
 		"metrics": map[string]interface{}{
@@ -22,19 +21,6 @@ func aPreviousRelease() map[string]interface{} {
 			map[string]interface{}{"name": "dci-devicechain-lwm2m-psk"},
 		},
 		"functionalAreas": map[string]interface{}{
-			"user-management": map[string]interface{}{
-				"config": map[string]interface{}{
-					"auth": map[string]interface{}{
-						"issuerUrl": "https://devicechain.local",
-						"seedClients": []interface{}{
-							map[string]interface{}{
-								"clientId":   "grafana",
-								"secretHash": "$2a$10$thehashgrafanasecretmapsto",
-							},
-						},
-					},
-				},
-			},
 			"lwm2m-ingest": map[string]interface{}{
 				"config": map[string]interface{}{
 					"security": map[string]interface{}{
@@ -79,37 +65,6 @@ func TestAnUpgradeDoesNotInventMonitoringTheInstanceNeverHad(t *testing.T) {
 		if got, ok := st.Values[key]; ok {
 			t.Errorf("%s was invented as %q for an instance whose release records none", key, got)
 		}
-	}
-}
-
-// 🔴 THE ONE CREDENTIAL THAT CANNOT BE RE-MINTED, BECAUSE ONLY ONE HALF OF IT IS
-// RECOVERABLE. The cleartext went to the Grafana subchart and nothing else keeps it;
-// user-management holds the hash. Minting a fresh pair on an upgrade would update
-// user-management alone and break the login permanently — the failure is silent until
-// somebody tries to sign in.
-func TestTheGrafanaClientHashIsCarriedRatherThanReminted(t *testing.T) {
-	st := &State{Values: map[string]string{}}
-	carryForwardFromRelease(st, aPreviousRelease())
-
-	if got := st.Values["grafanaOAuthSecretBcrypt"]; got != "$2a$10$thehashgrafanasecretmapsto" {
-		t.Errorf("the seeded Grafana client's hash did not come across (%q), so an upgrade "+
-			"would seed a client whose secret Grafana does not hold", got)
-	}
-}
-
-// The hash is found by client id, not by position. A release that seeds more than one
-// client is ordinary, and taking the first entry would carry some other client's hash
-// into Grafana's seat.
-func TestTheGrafanaHashIsFoundByClientRatherThanByPosition(t *testing.T) {
-	previous := aPreviousRelease()
-	auth := previous["functionalAreas"].(map[string]interface{})["user-management"].(map[string]interface{})["config"].(map[string]interface{})["auth"].(map[string]interface{})
-	auth["seedClients"] = []interface{}{
-		map[string]interface{}{"clientId": "something-else", "secretHash": "not-grafanas"},
-		map[string]interface{}{"clientId": "grafana", "secretHash": "grafanas"},
-	}
-
-	if got := seededGrafanaClientHash(previous); got != "grafanas" {
-		t.Errorf("picked %q: an upgrade would seed Grafana with another client's secret", got)
 	}
 }
 

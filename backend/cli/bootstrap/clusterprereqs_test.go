@@ -79,126 +79,188 @@ func TestTheArchiveContractNamesOnlyInstanceRootVariables(t *testing.T) {
 	}
 }
 
-// 🔴🔴 THE ORDERING GUARD, AND IT IS THE ONLY THING ENFORCING A DEPENDENCY OPENTOFU
-// USED TO ENFORCE FOR US.
-//
-// One root and one graph ordered "install the operator" before "create a database
-// Cluster", and "create the namespace" before "write a Secret into it". Two roots are
-// two graphs, so the edge between them is applyInfra's SEQUENCE and nothing else.
-// applyInfra reaches a real tofu binary and a real cluster, so no unit test can run
-// it — which is exactly the case leg 3 met and answered the same way: read the source.
-//
-// 🔑 IT PINS ORDER, NOT PRESENCE. All four calls being present in the wrong order is
-// the defect: prerequisites applied after the instance means the event store is
-// created before the operator that reconciles it, and credentials written after the
-// namespace apply means CloudNativePG mints its own password while every service
-// holds the one dcctl minted. Both come up green and silently wrong.
-func TestApplyInfraAppliesThePrerequisitesBeforeTheInstance(t *testing.T) {
+// callPositions parses file and records where fn first calls each of names. A
+// function declared nowhere is fatal: an order read off a function that no longer
+// exists is an order nothing enforces.
+func callPositions(t *testing.T, file, fn string, names ...string) (*token.FileSet, map[string]token.Pos) {
+	t.Helper()
 	fset := token.NewFileSet()
-	src, err := os.ReadFile(filepath.Join("tofu.go"))
+	src, err := os.ReadFile(filepath.Join(file))
 	if err != nil {
-		t.Fatalf("reading tofu.go: %v", err)
+		t.Fatalf("reading %s: %v", file, err)
 	}
-	file, err := parser.ParseFile(fset, "tofu.go", src, 0)
+	parsed, err := parser.ParseFile(fset, file, src, 0)
 	if err != nil {
-		t.Fatalf("parsing tofu.go: %v", err)
+		t.Fatalf("parsing %s: %v", file, err)
 	}
 
-	var fn *ast.FuncDecl
-	ast.Inspect(file, func(n ast.Node) bool {
-		if d, ok := n.(*ast.FuncDecl); ok && d.Name.Name == "applyInfra" {
-			fn = d
+	var decl *ast.FuncDecl
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		if d, ok := n.(*ast.FuncDecl); ok && d.Recv == nil && d.Name.Name == fn {
+			decl = d
 		}
 		return true
 	})
-	if fn == nil {
-		t.Fatal("tofu.go no longer declares applyInfra; the two applies are no longer " +
-			"sequenced by one function and nothing orders them")
+	if decl == nil {
+		t.Fatalf("%s no longer declares %s; nothing orders the calls this test pins", file, fn)
 	}
 
+	wanted := map[string]bool{}
+	for _, n := range names {
+		wanted[n] = true
+	}
 	positions := map[string]token.Pos{}
-	ast.Inspect(fn, func(n ast.Node) bool {
+	// Descends into function literals too: Install runs the cluster apply inside the
+	// closure it streams.
+	ast.Inspect(decl, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		id, ok := call.Fun.(*ast.Ident)
-		if !ok {
+		if !ok || !wanted[id.Name] {
 			return true
 		}
-		switch id.Name {
-		case "openInstanceRoot", "ensureInfraNamespace", "writeMintedSecrets", "markInstallApplying",
-			"applyClusterPrereqs", "writeInstalled", "applyInstanceInfra", "splitVars",
-			"checkRelationalStoreOwner", "provisionInstanceDatabase", "ensureNamespaceForRelease":
-			// First occurrence wins, so a later reference cannot reorder the record.
-			if _, seen := positions[id.Name]; !seen {
-				positions[id.Name] = call.Pos()
-			}
+		// First occurrence wins, so a later reference cannot reorder the record.
+		if _, seen := positions[id.Name]; !seen {
+			positions[id.Name] = call.Pos()
 		}
 		return true
 	})
+	return fset, positions
+}
+
+type callOrder struct{ first, then, why string }
+
+func assertCallOrder(t *testing.T, fn string, fset *token.FileSet, positions map[string]token.Pos, pairs []callOrder) {
+	t.Helper()
+	for _, pair := range pairs {
+		if positions[pair.first] > positions[pair.then] {
+			t.Errorf("%s calls %s at %s, AFTER %s at %s — %s", fn,
+				pair.first, fset.Position(positions[pair.first]),
+				pair.then, fset.Position(positions[pair.then]), pair.why)
+		}
+	}
+}
+
+// 🔴🔴 THE ORDERING GUARD FOR AN INSTANCE, AND IT IS THE ONLY THING ENFORCING A
+// DEPENDENCY OPENTOFU USED TO ENFORCE FOR US.
+//
+// One root and one graph ordered "create the namespace" before "write a Secret into
+// it", and "write the credential" before "create the database Cluster that reads it".
+// A bootstrap now applies only the instance root, on a cluster `dcctl install` already
+// prepared, so the edges between its steps are applyInfra's SEQUENCE and nothing else.
+// applyInfra reaches a real tofu binary and a real cluster, so no unit test can run it —
+// which is exactly the case leg 3 met and answered the same way: read the source.
+//
+// 🔑 IT PINS ORDER, NOT PRESENCE. Every call present in the wrong order is the defect:
+// credentials written after the instance apply means CloudNativePG mints its own event
+// store password while every service holds the one dcctl minted. It comes up green and
+// silently wrong.
+func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
+	fset, positions := callPositions(t, "tofu.go", "applyInfra",
+		"splitVars", "openInstanceRoot", "kubeClients", "ensureNamespaceForRelease", "writeMintedSecrets",
+		"provisionInstanceDatabase", "applyInstanceInfra",
+		// The cluster half, which must NOT be here.
+		"applyClusterPrereqs", "markInstallApplying", "writeInstalled", "writeClusterSecrets")
 
 	for _, want := range []struct{ name, why string }{
-		{"splitVars", "every -var would go to both roots, and each would refuse the other's"},
+		{"splitVars", "every -var would go to the instance root, and it would refuse the cluster root's"},
 		{"openInstanceRoot", "nothing would run the fences that refuse an instance this build would damage"},
-		{"ensureInfraNamespace", "the credentials below cannot be written into a namespace that is not there"},
-		{"writeMintedSecrets", "CloudNativePG would mint its own password and no service would hold it"},
-		{"applyClusterPrereqs", "the cluster would have no operator, no ingress and no shared database"},
-		{"applyInstanceInfra", "the instance's own broker and event store would never be applied"},
-		{"markInstallApplying", "a failed re-install would leave the previous record reading as installed"},
-		{"writeInstalled", "nothing would record that the cluster prerequisites are installed"},
-		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
-		{"provisionInstanceDatabase", "services would connect as a login that does not exist, to a database nothing created"},
+		{"kubeClients", "there would be no client to create the instance namespace or write its credentials with"},
 		{"ensureNamespaceForRelease", "the instance's credentials could not be written into its own namespace"},
+		{"writeMintedSecrets", "CloudNativePG would mint its own password and no service would hold it"},
+		{"provisionInstanceDatabase", "services would connect as a login that does not exist, to a database nothing created"},
+		{"applyInstanceInfra", "the instance's own broker and event store would never be applied"},
 	} {
 		if _, ok := positions[want.name]; !ok {
 			t.Fatalf("applyInfra no longer calls %s — %s", want.name, want.why)
 		}
 	}
 
-	for _, pair := range []struct{ first, then, why string }{
-		// 🔴 The fences refuse before ANYTHING is written. An instance built before the
-		// split holds the operator, ingress and shared database as releases its own
-		// state owns; with the cluster root applied first, the run dies on a Helm
-		// "name still in use" error and the fence's explanation is never printed.
-		{"openInstanceRoot", "ensureInfraNamespace",
-			"the fences must refuse before the first write to the cluster"},
-		{"openInstanceRoot", "applyClusterPrereqs",
-			"a pre-split instance fails the cluster apply on releases its own state owns, " +
-				"so the fence that explains why would never be reached"},
-		{"ensureNamespaceForRelease", "writeMintedSecrets",
-			"the instance's credentials are written into its own namespace, which has to exist first"},
+	// 🔴 THE CLUSTER HALF IS THE INSTALL'S. A bootstrap that re-applied it, re-wrote its
+	// credentials, or re-marked its record would be a second writer of what every other
+	// instance on the cluster runs on — and one whose flags no longer exist.
+	for _, name := range []string{"applyClusterPrereqs", "markInstallApplying", "writeInstalled", "writeClusterSecrets"} {
+		if _, ok := positions[name]; ok {
+			t.Errorf("applyInfra calls %s at %s; the cluster prerequisites are `dcctl install`'s, "+
+				"and a bootstrap follows its record rather than re-applying or re-recording them",
+				name, fset.Position(positions[name]))
+		}
+	}
+
+	assertCallOrder(t, "applyInfra", fset, positions, []callOrder{
+		{"openInstanceRoot", "kubeClients",
+			"the fences must refuse before anything connects to write to the cluster"},
 		{"openInstanceRoot", "ensureNamespaceForRelease",
 			"the fences must refuse before the instance namespace is created"},
-		{"ensureInfraNamespace", "writeMintedSecrets",
-			"a Secret cannot be written into a namespace that does not exist yet"},
-		{"writeMintedSecrets", "applyClusterPrereqs",
-			"CloudNativePG reads the credentials Secret when it CREATES the shared relational " +
-				"Cluster and never again, so a Secret written afterwards leaves the role on one " +
-				"password and every service on another"},
-		{"markInstallApplying", "applyClusterPrereqs",
-			"the record must say an apply is under way BEFORE one is, or a failure mid-apply " +
-				"leaves the previous record reading as a finished install"},
-		{"applyClusterPrereqs", "writeInstalled",
-			"the record may say installed only after the apply that installs has succeeded"},
-		{"checkRelationalStoreOwner", "ensureInfraNamespace",
-			"a store that cannot isolate instances must be refused before the first write"},
-		{"writeInstalled", "provisionInstanceDatabase",
-			"the login is created on the store the cluster apply just built, and a destroy finds " +
-				"the store through the record — which must exist before there is a login to remove"},
+		{"kubeClients", "ensureNamespaceForRelease",
+			"the namespace is created through the client, which has to exist first"},
+		{"ensureNamespaceForRelease", "writeMintedSecrets",
+			"the instance's credentials are written into its own namespace, which has to exist first"},
+		{"writeMintedSecrets", "provisionInstanceDatabase",
+			"the login is created with the password in its Secret, which has to be written first"},
+		{"writeMintedSecrets", "applyInstanceInfra",
+			"CloudNativePG reads the event store's credentials Secret when it CREATES the Cluster " +
+				"and never again, so a Secret written afterwards leaves the role on one password " +
+				"and every service on another"},
 		{"provisionInstanceDatabase", "applyInstanceInfra",
 			"a database by this name owned by someone else must be refused before anything of " +
 				"this instance's is built on top of it"},
-		{"applyClusterPrereqs", "applyInstanceInfra",
-			"the instance root's event store needs the operator and the backup plugin the " +
-				"cluster root installs, and it is handed the archive contract that apply RETURNS"},
+	})
+}
+
+// 🔴🔴 THE SAME GUARD FOR THE CLUSTER HALF, which moved into Install with the edges
+// between its steps. Install needs a provider, a tofu binary and a live cluster, so it
+// is held by its source the same way.
+func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
+	fset, positions := callPositions(t, "install.go", "Install",
+		"refuseAReinstallThatWouldHurt", "resolveCredentials", "splitVars", "checkRelationalStoreOwner",
+		"ensureInfraNamespace", "writeClusterSecrets", "markInstallApplying", "applyClusterPrereqs",
+		"withProvisionerSession", "writeInstalled")
+
+	for _, want := range []struct{ name, why string }{
+		{"refuseAReinstallThatWouldHurt", "a re-install from another machine, or one that changes the cluster under running instances, would go ahead"},
+		{"resolveCredentials", "a re-install would mint fresh passwords over the ones the live store runs on"},
+		{"splitVars", "every -var would go to the cluster root, and it would refuse the instance root's"},
+		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
+		{"ensureInfraNamespace", "the credentials below cannot be written into a namespace that is not there"},
+		{"writeClusterSecrets", "CloudNativePG would mint its own password for the shared store and nothing would hold it"},
+		{"markInstallApplying", "a failed re-install would leave the previous record reading as installed"},
+		{"applyClusterPrereqs", "the cluster would have no operator, no ingress and no shared database"},
+		{"withProvisionerSession", "the base identity every instance's login is created as would not exist"},
+		{"writeInstalled", "nothing would record that the cluster prerequisites are installed, and every bootstrap would refuse"},
 	} {
-		if positions[pair.first] > positions[pair.then] {
-			t.Errorf("applyInfra calls %s at %s, AFTER %s at %s — %s",
-				pair.first, fset.Position(positions[pair.first]),
-				pair.then, fset.Position(positions[pair.then]), pair.why)
+		if _, ok := positions[want.name]; !ok {
+			t.Fatalf("Install no longer calls %s — %s", want.name, want.why)
 		}
 	}
+
+	assertCallOrder(t, "Install", fset, positions, []callOrder{
+		{"refuseAReinstallThatWouldHurt", "checkRelationalStoreOwner",
+			"a re-install that would hurt the cluster must be refused before anything is checked or written"},
+		{"refuseAReinstallThatWouldHurt", "markInstallApplying",
+			"a refused re-install must not leave the record reading as applying, which every bootstrap refuses"},
+		{"resolveCredentials", "writeClusterSecrets",
+			"the credentials written are the ones this run settled, reusing what the live store holds"},
+		{"checkRelationalStoreOwner", "ensureInfraNamespace",
+			"a store that cannot isolate instances must be refused before the first write"},
+		{"ensureInfraNamespace", "writeClusterSecrets",
+			"a Secret cannot be written into a namespace that does not exist yet"},
+		{"writeClusterSecrets", "applyClusterPrereqs",
+			"CloudNativePG reads the credentials Secret when it CREATES the shared relational " +
+				"Cluster and never again, so a Secret written afterwards leaves the role on one " +
+				"password and every instance's provisioning on another"},
+		{"markInstallApplying", "applyClusterPrereqs",
+			"the record must say an apply is under way BEFORE one is, or a failure mid-apply " +
+				"leaves the previous record reading as a finished install"},
+		{"applyClusterPrereqs", "withProvisionerSession",
+			"the base identity is created on the store the cluster apply builds"},
+		{"withProvisionerSession", "writeInstalled",
+			"a cluster recorded as installed without its base identity refuses the first bootstrap"},
+		{"applyClusterPrereqs", "writeInstalled",
+			"the record may say installed only after the apply that installs has succeeded"},
+	})
 }
 
 // 🔴 A MISSING OUTPUT MUST STOP THE RUN, and the mutation round is why this test

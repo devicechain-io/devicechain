@@ -154,7 +154,6 @@ func TestNoPathReachesTheInstanceDeclaration(t *testing.T) {
 	const (
 		escrowPath  = "/home/someone/secrets/prod.escrow"
 		restoredKey = "cm9vdC1rZXktYnl0ZXM="
-		rdbArchive  = "/mnt/backups/rdb-2026"
 		tsdbArchive = "s3://private-bucket/tsdb"
 	)
 	st := &State{
@@ -170,8 +169,6 @@ func TestNoPathReachesTheInstanceDeclaration(t *testing.T) {
 			RestoredFrom:    escrowPath,
 		},
 		Restore: RestorePlan{
-			RdbFrom:        rdbArchive,
-			RdbTargetTime:  "2026-09-01T00:00:00Z",
 			TsdbFrom:       tsdbArchive,
 			TsdbTargetTime: "2026-09-01T00:00:00Z",
 		},
@@ -188,7 +185,6 @@ func TestNoPathReachesTheInstanceDeclaration(t *testing.T) {
 		{"the escrow artifact path", escrowPath},
 		{"the escrow passphrase", "correct-horse"},
 		{"the restored root key", restoredKey},
-		{"the relational archive", rdbArchive},
 		{"the event-store archive", tsdbArchive},
 	} {
 		if strings.Contains(doc, leak.value) {

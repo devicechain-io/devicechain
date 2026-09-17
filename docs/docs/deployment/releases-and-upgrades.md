@@ -337,9 +337,14 @@ take on while every install is still an early one.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+With the current `dcctl` the cluster is recreated too, not just the instance: see
+[why](#pre-declaration-recreate).
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm` operation,
@@ -384,9 +389,14 @@ upgrade path that preserves the existing rows.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+With the current `dcctl` the cluster is recreated too, not just the instance: see
+[why](#pre-declaration-recreate).
 
 The same caution applies as above: recreation discards your telemetry, device definitions
 and dashboards. Export anything you need before you start.
@@ -922,6 +932,14 @@ Instances created before this release have no such record and list as `no record
 guess the cluster`. Destroy still works on them, falling back to the old derivation, so the
 caveat above continues to apply to them and only to them.
 
+:::note `dcctl destroy` no longer deletes clusters
+In current releases `dcctl destroy` removes an instance only — its Helm release, its database
+and login, its namespace and its local state — and never deletes a cluster or the prerequisites
+`dcctl install` put there. `dcctl destroy --all` therefore removes every instance and leaves
+every cluster running. To delete a local cluster, use `kind delete cluster --name <name>`. See
+[Removing an instance](./bootstrap.md#destroy).
+:::
+
 ### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
 
 `v0.15.0` is an ordinary in-place upgrade from `v0.14.x`. The new migrations run themselves as the
@@ -1236,13 +1254,24 @@ There is no compatibility shim, and before `v1.0.0` there will not be one. What 
 instance was configured with was never written down in a form this release can read, so a
 declaration invented after the fact would be a guess applied over a live instance.
 
-**To move onto this release, recreate the instance:**
+**To move onto this release, recreate the instance — and the cluster under it.** The
+releases that built these instances had no `dcctl install`: they installed the cluster's
+shared prerequisites as part of the instance, and recorded no install. So `dcctl destroy`
+leaves those prerequisites behind, `dcctl bootstrap` refuses a cluster with no install
+record, and `dcctl install` would collide with what the older release left. Start from a
+fresh cluster in between:
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain            # removes the instance
+kind delete cluster --name devicechain     # and the cluster the older release prepared
+dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
+
+For a cluster reached with `--kube-context`, which `dcctl` never deletes, delete and
+recreate it with whatever created it, then pass the same `--kube-context` to `install` and
+`bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm`
@@ -1312,9 +1341,12 @@ Do not edit the database out of the infrastructure configuration as a way of rep
 
 Upgrading an instance created before the databases moved onto the operator is the one case
 where this comes up, and it is refused at plan time rather than left to chance. Dump both
-databases first, then re-run the bootstrap with `--allow-legacy-db-removal` — which asserts
-you have handled the data, and verifies nothing. For a local instance, `dcctl destroy`
-followed by a fresh bootstrap is simpler and discards the data deliberately.
+databases first, then re-run `dcctl install` with `--allow-legacy-db-removal` for the
+relational database, and the bootstrap with it for the event store — which asserts you have
+handled the data, and verifies nothing. For a local instance, recreating it is simpler and
+discards the data deliberately — destroy it, recreate the cluster, then install and
+bootstrap, as described under
+[Instances built by v0.16.0 and earlier](#pre-declaration-recreate).
 :::
 
 This is durability of the running volumes — it is not a substitute for scheduled backups and

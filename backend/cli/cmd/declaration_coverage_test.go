@@ -59,20 +59,16 @@ const (
 // 🔑 A list cannot see the entry nobody wrote. Ask the registry instead.
 var dispositions = map[string]disposition{
 	// --- recorded in the declaration ---
-	"kube-context":  declared, // resolves the cluster binding, which is recorded
-	"profile":       declared,
-	"registry":      declared,
-	"version":       declared,
-	"build":         declared, // decides the image source, and that is recorded
-	"host":          declared,
-	"no-tls":        declared,
-	"no-monitoring": declared,
-	"no-cnpg":       declared,
-	"grafana-sso":   declared,
-	"compact":       declared,
-	"ha":            declared,
-	"enable-area":   declared,
-	"dev":           declared, // a preset; every flag it expands to is itself declared
+	"kube-context": declared, // resolves the cluster binding, which is recorded
+	"cluster":      declared, // likewise
+	"profile":      declared,
+	"registry":     declared,
+	"version":      declared,
+	"build":        declared, // decides the image source, and that is recorded
+	"host":         declared,
+	"no-tls":       declared,
+	"enable-area":  declared,
+	"dev":          declared, // a preset; every flag it expands to is itself declared
 
 	// --- properties of the run ---
 	"dry-run":                 runScoped,
@@ -89,21 +85,11 @@ var dispositions = map[string]disposition{
 	// "that a restore happened belongs to anyone reading this, while WHERE the
 	// archive was is one operator's command line." Restored + RestoredAt record the
 	// fact; the coordinates are not recorded on purpose.
-	"restore-rdb-from":  excluded,
-	"restore-rdb-at":    excluded,
 	"restore-tsdb-from": excluded,
 	"restore-tsdb-at":   excluded,
 
 	// --- known gaps ---
 	//
-	// backup-credentials-file carries BOTH halves in one file. The access key and
-	// secret key are secretHalf and already have a home (dc-backup-credentials, an
-	// owned Secret). The endpoint URL and the two bucket names are not secrets, they
-	// decide where every WAL segment is shipped, and nothing dcctl reads records
-	// them — so a run that omits the flag reverts the destination to in-cluster and
-	// retargets both live archivers at an empty bucket.
-	"backup-credentials-file": gap,
-
 	// lwm2m-identities is two halves too. The pre-shared keys are secretHalf. The
 	// tenancy binding beside them — tenant, externalId, deviceTypeToken,
 	// autoRegister — is provisioning state, not secret, and equally unrecorded. Both
@@ -115,7 +101,6 @@ var dispositions = map[string]disposition{
 // means deleting it from here, which is a deliberate edit; opening a new one means
 // adding it, which is a sentence somebody has to write.
 var knownGaps = []string{
-	"backup-credentials-file",
 	"lwm2m-identities",
 }
 

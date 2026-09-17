@@ -39,45 +39,37 @@ const (
 // kill lands in the middle of exactly the slow operation it was sized for.
 const tofuGracefulStopBudget = 20 * time.Minute
 
-// applyInfra brings the cluster's shared prerequisites and this instance's own
-// infrastructure up, in that order.
+// applyInfra brings this instance's own infrastructure up on a cluster `dcctl install`
+// has already prepared.
 //
-// 🔴 THE ORDER IS THE ONLY THING ENFORCING A DEPENDENCY OPENTOFU USED TO ENFORCE
-// FOR US. One root and one graph used to order "install the operator" before
-// "create a database Cluster", and "install cert-manager" before "install the backup
-// plugin that renders an Issuer". Two roots are two graphs, so the edge between them
-// is this function's sequence and nothing else. That is why the two applies live
-// behind one call rather than being two pipeline steps a future edit could reorder
-// or run selectively.
-//
-// 🔑 AND IT IS WHAT MAKES A SECOND INSTANCE CHEAP RATHER THAN DANGEROUS. The
-// prerequisite root is keyed on the CLUSTER, so the second bootstrap against one
-// cluster re-applies the same state convergently — a no-op — instead of building a
-// second ingress controller and a second relational database.
+// 🔴 IT APPLIES NO CLUSTER PREREQUISITE, AND THAT IS THE SPLIT, NOT AN OMISSION. The
+// shared prerequisites — the database operator, ingress, cert-manager, monitoring, the
+// relational store and the object store — are the install's, applied once per cluster
+// and recorded; every bootstrap FOLLOWS that record (st.Install) rather than re-applying
+// them with its own flags, which is how two instances could once each re-apply the
+// cluster with different settings and the second silently win.
 func applyInfra(ctx context.Context, st *State) (err error) {
 	if st.ClusterUID == "" {
-		return fmt.Errorf("the cluster's identity is not known, so dcctl cannot tell which " +
-			"cluster's shared prerequisite state to use. Refusing rather than falling back to " +
-			"the kube-context name: a cluster deleted and recreated wears the same context name, " +
-			"and state filed under it would be inherited by a cluster holding none of those " +
-			"resources")
+		return fmt.Errorf("the cluster's identity is not known, so dcctl cannot check this " +
+			"cluster's install record. Refusing rather than falling back to the kube-context name: " +
+			"a cluster deleted and recreated wears the same context name")
+	}
+	if st.Install == nil {
+		return fmt.Errorf("refusing to apply infrastructure for instance %q: the cluster's install "+
+			"record was never read, so nothing says where its relational store is or whether it "+
+			"archives. The bootstrap command reads it before the pipeline runs", st.Instance)
 	}
 
 	// Every value dcctl decides, computed ONCE and then routed by which root declares
 	// it. See splitVars for why this is computed rather than two hand-kept lists.
-	clusterVars, instanceVars, err := splitVars(infraVars(st))
+	_, instanceVars, err := splitVars(infraVars(st))
 	if err != nil {
 		return err
 	}
 
 	// 🔴 THE INSTANCE ROOT IS OPENED, AND ITS FENCES RUN, BEFORE ANYTHING IS WRITTEN.
-	// The fences refuse an instance whose state this build would damage — and the
-	// most important of them, the pre-split fence, guards against exactly the state
-	// in which the CLUSTER apply below cannot succeed: an instance built before the
-	// split already runs the operator, ingress and shared database as Helm releases
-	// its own state owns, so a cluster root applied first dies on "cannot re-use a
-	// name that is still in use" and the operator is handed a Helm error instead of
-	// the explanation. A refusal has to come before the first thing it refuses.
+	// The fences refuse an instance whose state this build would damage, and a refusal
+	// has to come before the first thing it refuses.
 	inst, err := openInstanceRoot(ctx, st)
 	if err != nil {
 		return err
@@ -88,31 +80,16 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		}
 	}()
 
-	// The shared infrastructure namespace and every minted credential, BEFORE either
-	// apply.
-	//
-	// 🔴 IT HAS TO EXIST BEFORE THE APPLIES BECAUSE THE CREDENTIALS DO. CloudNativePG
-	// builds a database role from a Secret when it CREATES the Cluster, so a Secret
-	// written afterwards leaves the role on one password and every service on another
-	// — and a Secret cannot be written into a namespace that is not there.
-	//
-	// 🔑 IT MOVED UP HERE RATHER THAN INTO ONE OF THE APPLIES, because after the
-	// split BOTH roots need it: the shared relational store is created by the cluster
-	// root and the event store by the instance root, and each reads its credentials
-	// Secret out of this one namespace.
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
-		return fmt.Errorf("connecting to the cluster to prepare the infrastructure namespace: %w", err)
+		return fmt.Errorf("connecting to the cluster to prepare the instance namespace: %w", err)
 	}
-	if err := checkRelationalStoreOwner(ctx, st.KubeContext); err != nil {
-		return err
-	}
-	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
-		return err
-	}
-	// 🔴 AND THE INSTANCE'S OWN NAMESPACE, for the same reason: its credentials, and the
-	// broker and event store built from them, live there. Created carrying the metadata
-	// the instance's Helm release adopts it with, exactly as the Helm step would have.
+	// 🔴 THE INSTANCE'S NAMESPACE AND ITS CREDENTIALS BEFORE THE APPLY. CloudNativePG
+	// builds the event store's role from a Secret when it CREATES the Cluster, so a
+	// Secret written afterwards leaves the role on one password and every service on
+	// another — and a Secret cannot be written into a namespace that is not there.
+	// Created carrying the metadata the instance's Helm release adopts it with, exactly
+	// as the Helm step would have.
 	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseNameFor(st.Instance), helmReleaseNamespace); err != nil {
 		return err
 	}
@@ -120,37 +97,19 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
-	// 🔴 THE RECORD BRACKETS THE APPLY: "applying" before it, "installed" only after it
-	// succeeds. See installrecord.go for why a record written once, at the end, reads a
-	// failed re-install as a finished one.
-	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
-		return err
-	}
-	archive, rdb, err := applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
-	if err != nil {
-		return err
-	}
-	if err := writeInstalled(ctx, typed, InstallRecord{
-		ClusterUID:   st.ClusterUID,
-		DcctlVersion: st.DcctlVersion,
-		Settings:     installSettingsFor(st),
-		Outputs:      installOutputsFrom(st, archive, rdb),
-	}, time.Now); err != nil {
+	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE: the
+	// refusals it can raise — a database by this name that some other identity owns, or
+	// no connection budget left on the shared store — have to come before the broker and
+	// event store are built on top of it. (The budget is also checked before anything is
+	// written, in stepCheckClusterSingletons; this is the admission that holds the lock.)
+	if err := provisionInstanceDatabase(ctx, st, st.Install.Outputs.Rdb); err != nil {
 		return err
 	}
 
-	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE. After the
-	// shared store exists, because it is created on it; before the instance root, because
-	// the refusal it can raise — a database by this name that some other identity owns —
-	// has to come before anything of this instance's is built on top of it.
-	if err := provisionInstanceDatabase(ctx, st, rdb); err != nil {
-		return err
-	}
-
-	// The archive contract, READ BACK from the root that owns the object store rather
-	// than recomputed here. Appended after the instance's own variables so that what
-	// the cluster actually built wins over anything derived from this run's flags.
-	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, archive.archiveVars()...))
+	// The archive contract, READ BACK from the install record rather than recomputed
+	// here. Appended after the instance's own variables so that what the cluster
+	// actually built wins over anything derived from this run's flags.
+	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, st.Install.Outputs.Archive.archiveVars()...))
 }
 
 // instanceRoot is the instance root, extracted, initialised and fenced — ready to apply.
@@ -490,7 +449,22 @@ func infraVars(st *State) []string {
 		)
 	}
 	if st.NoCNPG {
-		vars = append(vars, "enable_cnpg=false", "enable_database_backups=false")
+		vars = append(vars, "enable_cnpg=false")
+	}
+	// 🔴 FROM THE PREDICATES, NOT FROM THIS RUN'S FLAGS. Both roots declare
+	// enable_database_backups, and a bootstrap follows the install: an instance serving
+	// plain HTTP on a cluster that kept cert-manager must not switch its event store's
+	// archiving off because `--no-tls` once meant that. databaseBackupsEnabled and
+	// certManagerEnabled read the install record when there is one, and the flags when
+	// this run IS the install.
+	if !certManagerEnabled(st) {
+		vars = append(vars, "enable_cert_manager=false")
+	}
+	if !databaseBackupsEnabled(st) {
+		vars = append(vars, "enable_database_backups=false")
+	}
+	if st.MaxConnections > 0 {
+		vars = append(vars, fmt.Sprintf("postgres_max_connections=%d", st.MaxConnections))
 	}
 	// The compact preset's volumes (compactSizing). The JetStream PV is DERIVED from
 	// the stream ceilings helmInstall states, not chosen alongside them: every
@@ -526,40 +500,8 @@ func infraVars(st *State) []string {
 			// stream replication is lost here.
 			"nats_prom_exporter=false",
 		)
-		// cert-manager exists to issue the ingress certificate. Dropping it is only
-		// safe because compact serves plain HTTP; an instance that still terminates
-		// TLS needs it. With the chart's default self-signed issuer the chart renders
-		// a cert-manager Issuer, so the install fails outright against a CRD that is
-		// not installed; with selfSigned=false and a clusterIssuer it renders only an
-		// annotation, so the install SUCCEEDS and the certificate is simply never
-		// issued — quieter, and worse. Keyed on NoTLS rather than on Compact so
-		// `--compact --no-tls=false` keeps a working cert either way.
-		if st.NoTLS {
-			vars = append(vars,
-				"enable_cert_manager=false",
-				// 🔴 SAME APPEND, DELIBERATELY. The Barman Cloud plugin (ADR-020 A2 /
-				// ADR-028) renders a cert-manager Issuer and two Certificates, so it
-				// inherits the failure above exactly: without the CRDs the release
-				// fails outright and takes the whole bootstrap with it. These two vars
-				// are emitted from one statement rather than two so that a later edit
-				// cannot re-enable one without seeing the other — the same
-				// by-construction shape the A8 credential fix landed on, and the
-				// alternative is a coupling that exists only in a comment.
-				//
-				// The consequence is real and is the accepted trade, not an oversight:
-				// `--compact --no-tls` gets the CNPG operator and NO point-in-time
-				// recovery. Compact is the footprint preset, cert-manager is three more
-				// workloads, and PITR additionally needs object storage; an install
-				// that wants backups should not be asking for the smallest possible
-				// one. TestCompactDropsCertManagerOnlyWhenTLSIsOff pins BOTH halves —
-				// including that `--compact` WITH TLS keeps backups, which is the one
-				// configuration hack/dr-rig.sh can run and still have something to
-				// restore. (An earlier version of this comment cited a test by a name
-				// nothing in the tree carried, so the coupling it promised rested
-				// entirely on these two lines staying adjacent.)
-				"enable_database_backups=false",
-			)
-		}
+		// cert-manager and database backups are dropped by --compact --no-tls; see
+		// certManagerEnabled and databaseBackupsEnabled, which the emission above reads.
 	}
 	// The archive path each store OWNS (ADR-020 A2.5 / ADR-028), settled in
 	// stepRenderConfig. Empty is the OpenTofu default — the Cluster's own name — and
@@ -579,8 +521,6 @@ func infraVars(st *State) []string {
 	// when it CREATES a Cluster, so these do nothing to a store that already exists
 	// — stepRenderConfig says so out loud when it finds one.
 	for _, v := range []struct{ name, value string }{
-		{"restore_rdb_from", st.Restore.RdbFrom},
-		{"restore_rdb_target_time", st.Restore.RdbTargetTime},
 		{"restore_tsdb_from", st.Restore.TsdbFrom},
 		{"restore_tsdb_target_time", st.Restore.TsdbTargetTime},
 	} {
@@ -606,23 +546,6 @@ func infraVars(st *State) []string {
 		if h := st.Values["natsSysPasswordBcrypt"]; h != "" {
 			vars = append(vars, "nats_sys_password_bcrypt="+h)
 		}
-	}
-	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
-	// against the minted client secret and the computed URLs. The browser-facing
-	// authorize URL uses the public host; token/userinfo are in-cluster (Grafana's pod
-	// can't reach the public ingress). user-management gets the matching issuer + the
-	// bcrypt hash of this same secret in helmInstall.
-	if grafanaSSOEnabled(st) {
-		u := grafanaSSOURLsFor(st)
-		vars = append(vars,
-			"monitoring_grafana_oauth_enabled=true",
-			"monitoring_grafana_oauth_client_secret="+st.Values["grafanaOAuthSecret"],
-			"monitoring_grafana_oauth_auth_url="+u.AuthURL,
-			"monitoring_grafana_oauth_token_url="+u.TokenURL,
-			"monitoring_grafana_oauth_api_url="+u.APIURL,
-			"monitoring_grafana_root_url="+u.RootURL,
-			"monitoring_grafana_ingress_host="+u.Host,
-		)
 	}
 	return vars
 }

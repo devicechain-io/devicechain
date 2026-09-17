@@ -555,16 +555,11 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 			"no cert at all")
 	}
 
-	// THE OTHER HALF OF THE SAME APPEND, and until now it was pinned by nothing.
-	//
-	// tofu.go emits `enable_cert_manager=false` and `enable_database_backups=false`
-	// from ONE statement, on purpose: the Barman Cloud plugin renders a cert-manager
-	// Issuer and two Certificates, so dropping cert-manager necessarily drops
-	// point-in-time recovery, and splitting the two appends would let a later edit
-	// re-enable one without seeing the other. That comment cited a test by name.
-	// The test did not exist — the citation was written and never followed — so the
-	// coupling it claimed to guarantee rested entirely on the two lines staying
-	// adjacent.
+	// THE OTHER HALF OF THE SAME CONDITION. The Barman Cloud plugin renders a
+	// cert-manager Issuer and two Certificates, so dropping cert-manager necessarily
+	// drops point-in-time recovery; certManagerEnabled and databaseBackupsEnabled
+	// both key on --compact --no-tls, and an edit that re-enabled one without the
+	// other would split them.
 	//
 	// 🔴 The failure it guards against is not an install error. Re-enable
 	// cert-manager here and the backup plugin comes back with no CRDs to render its
@@ -577,8 +572,8 @@ func TestCompactDropsCertManagerOnlyWhenTLSIsOff(t *testing.T) {
 		t.Error("--compact --no-tls dropped cert-manager but kept database backups on. " +
 			"The Barman Cloud plugin needs cert-manager to render its Issuer and " +
 			"Certificates, so this is an instance whose bootstrap report claims " +
-			"point-in-time recovery it cannot have. Both vars come from one append " +
-			"in tofu.go; keep them there")
+			"point-in-time recovery it cannot have. Keep the two predicates on " +
+			"the same condition")
 	}
 	if slices.Contains(infraVars(tlsOn), backupsOff) {
 		t.Error("--compact with TLS ON disabled database backups. cert-manager is " +

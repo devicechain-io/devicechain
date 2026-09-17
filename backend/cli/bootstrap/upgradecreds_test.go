@@ -53,8 +53,8 @@ func settleStringDataLikeAnAPIServer(t *testing.T, c *fake.Clientset) {
 }
 
 // The round trip, and it is the test that matters: write an instance's credentials
-// the way bootstrap writes them, then recover them the way an upgrade recovers them,
-// and require every single one to come back.
+// the way an install and its bootstrap write them — each its own half — then recover
+// them the way an upgrade recovers them, and require every single one to come back.
 //
 // 🔴 IT WALKS THE STRUCT RATHER THAN A LIST OF FIELDS TYPED HERE. A list is exactly
 // the artifact that cannot see the failure this is guarding against — a credential
@@ -67,9 +67,7 @@ func settleStringDataLikeAnAPIServer(t *testing.T, c *fake.Clientset) {
 func TestEveryCredentialTheInstanceRunsOnIsRecoveredFromWhatWasWritten(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
-		t.Fatalf("writing the credentials an instance would be built with: %v", err)
-	}
+	writeInstallThenBootstrapSecrets(t, c, st)
 	settleStringDataLikeAnAPIServer(t, c)
 
 	got, err := readInstanceCredentials(context.Background(), c, st)
@@ -187,9 +185,7 @@ func TestThePlacementsAreWhereThePlanActuallyPutsThem(t *testing.T) {
 func TestAMissingCredentialIsRefusedRatherThanMinted(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
-		t.Fatalf("writing the credentials: %v", err)
-	}
+	writeInstallThenBootstrapSecrets(t, c, st)
 	settleStringDataLikeAnAPIServer(t, c)
 	// Take away exactly one, leaving everything else healthy.
 	if err := c.CoreV1().Secrets(infraNamespace).Delete(context.Background(),
@@ -217,9 +213,7 @@ func TestAMissingCredentialIsRefusedRatherThanMinted(t *testing.T) {
 func TestACredentialThatIsNotOursIsNamedAsOwnershipNotAbsence(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
-		t.Fatalf("writing the credentials: %v", err)
-	}
+	writeInstallThenBootstrapSecrets(t, c, st)
 	settleStringDataLikeAnAPIServer(t, c)
 	// Replace one with a Secret that is present, populated, and somebody else's —
 	// the shape every instance built before dcctl owned these credentials has.

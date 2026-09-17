@@ -181,7 +181,7 @@ func TestAReleaseThatNamesNoInstanceIsRefusedRatherThanIgnored(t *testing.T) {
 }
 
 // uninstalls drives the whole destroy-side path through the seam, exactly as
-// destroyInstanceOnly does, and reports which releases survive.
+// uninstallInstance does, and reports which releases survive.
 func uninstalls(t *testing.T, instance string, rels ...*release.Release) ([]string, error) {
 	t.Helper()
 	cfg, store := inMemoryHelm(t, rels...)
@@ -245,7 +245,7 @@ func TestWhoseReleaseItIsDecidesDifferentlyUnderEachName(t *testing.T) {
 		// 🔴 SURVIVING IS HALF THE CLAIM. Leaving the release alone and then closing with
 		// `Instance "alpha" uninstalled` is the defect this command has been fixed for
 		// twice (#862, #1065): the operator is told their destroy worked when the cluster
-		// was never touched. The refusal is what routes destroyInstanceOnly into
+		// was never touched. The refusal is what routes uninstallInstance into
 		// resolveForeignRelease, which checks the footprint, clears the stale record and
 		// says what actually happened.
 		var foreign *foreignReleaseError

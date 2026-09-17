@@ -467,34 +467,12 @@ func helmValues(st *State) map[string]interface{} {
 		vals["resources"] = compact.resourceValues()
 	}
 
-	// Grafana SSO (ADR-047): turn on user-management's OAuth AS (the issuer) and seed
-	// the confidential Grafana client. The bcrypt hash is the SAME secret whose
-	// cleartext went to Grafana's config in the tofu step (one mint, both sides). The
-	// redirect URI matches the /grafana ingress path. Deep-merges into the chart's
-	// functionalAreas.user-management.config, preserving the other areas' config.
-	if grafanaSSOEnabled(st) {
-		u := grafanaSSOURLsFor(st)
-		mergeFunctionalArea(vals, "user-management", map[string]interface{}{
-			"config": map[string]interface{}{
-				"auth": map[string]interface{}{
-					"issuerUrl": u.Issuer,
-					"seedClients": []map[string]interface{}{{
-						"clientId":     "grafana",
-						"redirectUris": []string{u.Redirect},
-						"scopes":       []string{"read-only"},
-						"secretHash":   st.Values["grafanaOAuthSecretBcrypt"],
-					}},
-				},
-			},
-		})
-	}
-
 	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a
 	// chart-owned Secret (extraSecrets) and bind each into lwm2m-ingest's config
 	// (security.identities[]) + an extraEnv secretKeyRef that projects it. The area is
 	// turned on separately via EnabledAreas (the flag implies --enable-area
 	// lwm2m-ingest); this only supplies its config, merged so it coexists with any
-	// other functionalAreas block (e.g. Grafana SSO) rather than overwriting it.
+	// other functionalAreas block rather than overwriting it.
 	if len(st.Lwm2mIdentities) > 0 {
 		secret, areaConfig := lwm2mProvisioning(st.Instance, st.Lwm2mIdentities)
 		// Append rather than assign, so a future second writer of extraSecrets doesn't
@@ -553,7 +531,7 @@ func helmUninstall(ctx context.Context, kubeContext, instance string) error {
 // foreignReleaseRefusal answers "nothing of this instance was here" by asking what IS.
 //
 // 🔴 WITHOUT IT THE RENAME SILENTLY UNDOES #862 AND #1065. Those fixes turned a destroy
-// that found somebody else's release into a refusal, which destroyInstanceOnly routes
+// that found somebody else's release into a refusal, which uninstallInstance routes
 // through uninstallOutcome to resolveForeignRelease: that checks the named instance has
 // no footprint here, removes its stale local record, and closes with a line saying the
 // installed instance was LEFT ALONE. Naming releases after instances removes the
@@ -639,7 +617,7 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, releaseNam
 // 🔴 SKIPPING IT IS NOT THE END OF THE MATTER, AND AN EARLIER VERSION OF THIS COMMENT
 // CLAIMED IT WAS. It argued that refusing here "would fail the very destroy that exists
 // to clear a stale local record", which has the caller exactly backwards: the refusal is
-// the MECHANISM by which such a record is cleared. destroyInstanceOnly routes a
+// the MECHANISM by which such a record is cleared. uninstallInstance routes a
 // foreignReleaseError through uninstallOutcome to resolveForeignRelease, which proves the
 // named instance has no footprint here, removes its record, and returns a success the
 // caller recognises. Skipping and saying nothing cleared the record too — on one path,
@@ -667,7 +645,7 @@ func uninstallLegacyRelease(ctx context.Context, cfg *action.Configuration, inst
 // foreignReleaseError is the refusal below, as a value the CALLER can recognise.
 //
 // 🔴 A TYPE RATHER THAN A MESSAGE, BECAUSE ONE CALLER HAS TO ACT ON THIS PARTICULAR
-// REFUSAL AND ON NO OTHER. destroyInstanceOnly answers it by asking whether the instance
+// REFUSAL AND ON NO OTHER. uninstallInstance answers it by asking whether the instance
 // it was told to destroy has anything in this cluster at all, and that question ends in
 // removing local state — see resolveForeignRelease. A caller that recognised the refusal
 // by matching words in its message would start clearing state the day the wording
@@ -690,7 +668,7 @@ func (e *foreignReleaseError) Error() string {
 			"instance.id disagree has been renamed, re-used, or installed by hand — which is "+
 			"exactly when guessing is worst.\n\n"+
 			"  To remove the instance that is actually installed here:\n"+
-			"      dcctl destroy <provider> %s --keep-cluster\n\n"+
+			"      dcctl destroy <provider> %s\n\n"+
 			"  Inspect the release itself with:\n"+
 			"      helm get values %s -n %s\n\n"+
 			"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
@@ -866,7 +844,7 @@ func (e *ErrLegacyNamedRelease) Error() string {
 			"objects that belong to another release, so continuing would stand a second set of "+
 			"workloads beside the ones that are running.\n\n"+
 			"  The supported path is to destroy the instance and build it again:\n\n"+
-			"      dcctl destroy <provider> %s --keep-cluster\n"+
+			"      dcctl destroy <provider> %s\n"+
 			"      dcctl bootstrap <provider> %s\n\n"+
 			"That takes %q's data with it. Before v1.0.0 an instance may be recreated; this is "+
 			"one of the changes that requires it.",

@@ -19,34 +19,27 @@ import (
 
 // Bootstrap command flags.
 var (
-	bootstrapKubeContext       string
-	bootstrapProfile           string
-	bootstrapDryRun            bool
-	bootstrapAssumeYes         bool
-	bootstrapSkipPreflight     bool
-	bootstrapRegistry          string
-	bootstrapVersion           string
-	bootstrapBuild             bool
-	bootstrapHost              string
-	bootstrapNoTLS             bool
-	bootstrapNoMonitoring      bool
-	bootstrapNoCNPG            bool
-	bootstrapAllowLegacyDb     bool
-	bootstrapGrafanaSSO        bool
-	bootstrapDev               bool
-	bootstrapCompact           bool
-	bootstrapHA                bool
-	bootstrapEnableAreas       []string
-	bootstrapLwm2mIdentities   string
-	bootstrapBackupCredentials string
-	bootstrapEscrowFile        string
-	bootstrapEscrowPassFile    string
-	bootstrapNoEscrow          bool
-	bootstrapRestoreRootKey    string
-	bootstrapRestoreRdbFrom    string
-	bootstrapRestoreRdbAt      string
-	bootstrapRestoreTsdbFrom   string
-	bootstrapRestoreTsdbAt     string
+	bootstrapKubeContext     string
+	bootstrapCluster         string
+	bootstrapProfile         string
+	bootstrapDryRun          bool
+	bootstrapAssumeYes       bool
+	bootstrapSkipPreflight   bool
+	bootstrapRegistry        string
+	bootstrapVersion         string
+	bootstrapBuild           bool
+	bootstrapHost            string
+	bootstrapNoTLS           bool
+	bootstrapAllowLegacyDb   bool
+	bootstrapDev             bool
+	bootstrapEnableAreas     []string
+	bootstrapLwm2mIdentities string
+	bootstrapEscrowFile      string
+	bootstrapEscrowPassFile  string
+	bootstrapNoEscrow        bool
+	bootstrapRestoreRootKey  string
+	bootstrapRestoreTsdbFrom string
+	bootstrapRestoreTsdbAt   string
 )
 
 // devModeResolution is the set of flag values the --dev preset settles on.
@@ -108,111 +101,33 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscr
 // "acceptable" would quietly widen what the published compact number claims to
 // cover. TestEveryShippedProfileIsClassifiedForCompact reads the chart's own
 // catalog and fails on a profile in neither list.
+//
+// A larger profile is refused on a compact cluster for the FOOTPRINT CLAIM, not the
+// storage budget: the JetStream reservation sums streams.Suffixes() and kv.All
+// unconditionally, so the budget holds for every profile. What `full` breaks is the
+// published compact number, measured on `default`, which would not describe an
+// instance running three more services. The smaller two are accepted: asking for the
+// smallest thing the platform ships is the one request a small-footprint preset must
+// not refuse.
 var (
 	profilesLargerThanDefault  = []string{"full"}
 	profilesSmallerThanDefault = []string{"telemetry", "ingest-only"}
 )
 
-// compactModeResolution is the set of flag values the --compact preset settles on.
-type compactModeResolution struct {
-	NoTLS        bool
-	NoMonitoring bool
-}
-
-// resolveCompactMode expands the --compact small-footprint preset on top of the
-// user's explicit flags.
+// restoreFlagsFromArgv assembles the event-store restore inputs from the parsed
+// flags.
 //
-// Two of its levers live on flags that already exist, so they are resolved here
-// rather than buried in the pipeline: the monitoring stack (~5 pods, the single
-// largest consumer) is skipped, and TLS is off — which is what makes dropping
-// cert-manager safe, since cert-manager is what issues the ingress certificate.
-//
-// The interactions are treated DIFFERENTLY on purpose, according to whether the
-// two requests can both be honoured:
-//
-//   - A profile LARGER than `default` is REJECTED — which today means only `full`.
-//     `telemetry` and `ingest-only` are strict subsets of `default` and are
-//     accepted: asking for the smallest thing the platform ships is the one request
-//     a small-footprint preset must not refuse.
-//
-//     The reason is NOT the storage budget, though that is the reason the first
-//     draft gave. The JetStream reservation sums streams.Suffixes() and kv.All
-//     unconditionally — the whole inventory, including the streams `full`'s extra
-//     areas create — so the budget holds for every profile and the stated
-//     justification was simply false. What `full` actually breaks is the FOOTPRINT
-//     CLAIM: it adds three more services, and the published compact numbers are
-//     measured on `default`, so the figure would not describe the instance.
-//
-//   - --grafana-sso is REJECTED, but with its escape hatch named. It is not
-//     contradictory in principle — it just needs the monitoring stack compact
-//     removes — and the failure mode without this check is silence, not breakage.
-//
-//   - --no-tls=false is HONOURED. It is not a contradiction, it is a dependency:
-//     TLS stays on, cert-manager stays installed to issue the cert, and every other
-//     compact lever still applies. Erroring here would cost real functionality to
-//     no benefit.
-//
-// `changed` reports whether the user set a given flag explicitly.
-func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring, grafanaSSO bool) (compactModeResolution, error) {
-	if changed("profile") && slices.Contains(profilesLargerThanDefault, profile) {
-		return compactModeResolution{}, fmt.Errorf(
-			"--compact publishes a footprint measured on the `default` profile, and "+
-				"profile %q deploys more than that, so the number would not describe the "+
-				"instance. Use --profile default (or a smaller profile: %s), or drop "+
-				"--compact",
-			profile, strings.Join(profilesSmallerThanDefault, ", "))
-	}
-	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
-	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
-	// --no-monitoring=false keeps the observability stack. Both cost footprint, and
-	// both are the operator's call to make.
-	if changed("no-tls") {
-		res.NoTLS = noTLS
-	}
-	if changed("no-monitoring") {
-		res.NoMonitoring = noMonitoring
-	}
-	// Grafana lives IN the monitoring stack compact removes, and the SSO wiring is
-	// silently skipped when that stack is absent — including the warning, which is
-	// itself gated on monitoring being on. Before compact you could only reach that
-	// by typing --no-monitoring --grafana-sso together, which reads as a
-	// contradiction; compact turns monitoring off on the user's behalf, so the
-	// request would be swallowed with nothing printed at all.
-	if grafanaSSO && res.NoMonitoring {
-		return compactModeResolution{}, fmt.Errorf(
-			"--grafana-sso wires login for the Grafana in the monitoring stack, which " +
-				"--compact removes. Add --no-monitoring=false to keep the stack (and pay " +
-				"its footprint), or drop --grafana-sso")
-	}
-	return res, nil
-}
-
-// restoreFlagsFromArgv assembles the database-restore inputs from the parsed
-// flags and the already-settled escrow plan.
-//
-// Extracted from RunE so the wiring itself is testable. It is four string
-// copies and two derivations, which is exactly the kind of code that looks too
-// trivial to test and then transposes rdb and tsdb — a mistake with no symptom
-// at all until an operator recovers telemetry into the relational store's
-// timeline during an incident. The tests drive real argv through the real flag
-// set, so a rename on either side is a failure rather than a silent no-op.
-func restoreFlagsFromArgv(escrowPlan bootstrap.EscrowPlan) bootstrap.RestoreFlags {
+// Extracted from RunE so the wiring itself is testable. It is two string copies
+// and a derivation, which is exactly the kind of code that looks too trivial to
+// test and then copies the source into the target — a mistake with no symptom at
+// all until an operator's recovery stops at the wrong moment during an incident.
+// The tests drive real argv through the real flag set, so a rename on either side
+// is a failure rather than a silent no-op.
+func restoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 	return bootstrap.RestoreFlags{
-		RdbFrom:        bootstrapRestoreRdbFrom,
-		RdbTargetTime:  bootstrapRestoreRdbAt,
 		TsdbFrom:       bootstrapRestoreTsdbFrom,
 		TsdbTargetTime: bootstrapRestoreTsdbAt,
-		BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
-		// Read off the SETTLED escrow plan rather than the raw flag, so this
-		// refusal and the thing it protects cannot disagree.
-		//
-		// 🔴 RestoringRootKey(), NOT RestoredRootKey != "". The key field is only
-		// populated once the artifact has actually been opened, which a DRY RUN
-		// deliberately never does — so keying on it refused
-		// `--dry-run --restore-rdb-from=X --restore-root-key=F` with a message
-		// telling the operator to pass --restore-root-key, which they had passed.
-		// A dry run is precisely how you rehearse a restore before you need it.
-		RootKeyRestored: escrowPlan.RestoringRootKey(),
+		BackupsEnabled: backupsEnabled,
 	}
 }
 
@@ -254,67 +169,12 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Println("dev mode: --build --host localhost --no-tls --yes " + escrowNote)
 		}
 
-		// --compact expands to the small-footprint preset. Resolved here, before
-		// preflight, for the same reason as --dev: the pipeline should see settled
-		// values rather than flags that still need interpreting.
-		if bootstrapCompact {
-			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring, bootstrapGrafanaSSO)
-			if err != nil {
-				return err
-			}
-			bootstrapNoTLS, bootstrapNoMonitoring = res.NoTLS, res.NoMonitoring
-			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
-		}
-
-		// --ha names a TOPOLOGY, and unlike --dev/--compact there is nothing to
-		// expand: the two levers it sets live in the pipeline, in one struct, for
-		// exactly the reason that they must not be settable apart. What is echoed
-		// here is what an operator would otherwise have to infer from two files in
-		// two tools.
-		if bootstrapHA {
-			fmt.Printf("ha mode: %s\n", bootstrap.HaSummary(true))
-			// --compact --ha is allowed: compact is a SIZING preset and HA is a
-			// topology, so they are orthogonal — a 3-node cluster of small nodes is a
-			// real deployment. But the published compact footprint is measured on a
-			// single-node default, and HA adds two more NATS servers each with their
-			// own volume, so the number stops describing the instance. Noted rather
-			// than refused, matching how --enable-area is handled: the same reasoning
-			// that REJECTS --compact --profile full applies with less force here,
-			// because unlike an extra profile this adds no DeviceChain services.
-			if bootstrapCompact {
-				fmt.Println("note: --ha adds two more NATS servers and their volumes; the printed compact footprint is measured single-node and is a floor, not the total")
-			}
-		}
-
 		// Parse + validate --lwm2m-identities up front (a short PSK or a missing tenancy
 		// field must fail here, not as a ten-minute helm-timeout when lwm2m-ingest
 		// crash-loops on a bad credential). An empty flag yields no identities.
 		lwm2mIdentities, err := bootstrap.ParseLwm2mIdentities(bootstrapLwm2mIdentities)
 		if err != nil {
 			return fmt.Errorf("--lwm2m-identities: %w", err)
-		}
-
-		// Parse + validate --backup-credentials-file up front, for a sharper version of
-		// the same reason: a bad object-store credential does not crash anything. WAL
-		// archiving simply stops, the databases stay healthy, and the first symptom is
-		// an archive-lag alert — or a restore that finds no base backup.
-		backupDestination, err := bootstrap.ParseBackupDestination(bootstrapBackupCredentials)
-		if err != nil {
-			return fmt.Errorf("--backup-credentials-file: %w", err)
-		}
-		// 🔴 AN OFF-SITE ARCHIVE IS MEANINGLESS WITHOUT THE BACKUPS IT ARCHIVES. The
-		// flags that switch the backup subsystem off do so as a CONSEQUENCE of other
-		// choices (--no-cnpg removes the operator the plugin extends; --compact --no-tls
-		// drops the cert-manager the plugin needs for its own Issuer), so an operator
-		// can reach this combination without ever having asked for it — and the silent
-		// outcome is a destination that is configured, believed, and never written to.
-		if backupDestination.Configured() &&
-			!bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS) {
-			return fmt.Errorf("--backup-credentials-file names an off-site archive, but this " +
-				"combination of flags leaves the instance with no database backups to send there " +
-				"(--no-cnpg removes the operator the backup plugin extends; --compact with " +
-				"--no-tls drops the cert-manager it needs). Drop the flag, or drop whichever of " +
-				"those turned backups off")
 		}
 
 		// Normalize --enable-area (trim, drop blanks) ONCE, so the deployment selection
@@ -343,12 +203,6 @@ var bootstrapCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("resolving deployment areas (--profile/--enable-area): %w", err)
 		}
-		// --compact publishes a footprint measured on the default profile; extra areas
-		// add workloads beyond that, so the printed compact figure understates the real
-		// instance. Flag it rather than silently contradict the number.
-		if bootstrapCompact && len(enableAreas) > 0 {
-			fmt.Printf("note: --enable-area adds %s beyond the compact-measured default; the printed footprint is a floor, not the total\n", strings.Join(enableAreas, ", "))
-		}
 
 		// Diagnose the local system up front so a run fails fast on a missing
 		// tool / low limit / unreachable docker rather than midway through.
@@ -376,20 +230,16 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
-		// Settle the database restore alongside it, and for the same reason: both
-		// failure modes here — a recovery target with nothing to recover, a restore on
-		// a run whose other flags disable the plugin that reads the archive — are
-		// knowable from argv, and an incident is the wrong time to learn either.
-		// Resolved AFTER the presets, so it sees the --compact/--dev values that decide
-		// whether this instance has a backup destination at all.
-		restorePlan, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(escrowPlan))
-		if err != nil {
+		// The restore's own shape is checkable from argv alone; whether the cluster
+		// archives at all is the install's answer, checked once the record is read.
+		if _, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(true)); err != nil {
 			return err
 		}
 
 		opts := bootstrap.Options{
 			Instance:             args[1],
 			KubeContext:          bootstrapKubeContext,
+			Cluster:              bootstrapCluster,
 			Profile:              bootstrapProfile,
 			DryRun:               bootstrapDryRun,
 			AssumeYes:            bootstrapAssumeYes,
@@ -398,12 +248,7 @@ var bootstrapCmd = &cobra.Command{
 			BuildImages:          bootstrapBuild,
 			IngressHost:          bootstrapHost,
 			NoTLS:                bootstrapNoTLS,
-			NoMonitoring:         bootstrapNoMonitoring,
-			NoCNPG:               bootstrapNoCNPG,
 			AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
-			GrafanaSSO:           bootstrapGrafanaSSO,
-			Compact:              bootstrapCompact,
-			HA:                   bootstrapHA,
 			EnableAreas:          enableAreas,
 		}
 
@@ -434,65 +279,80 @@ var bootstrapCmd = &cobra.Command{
 			return err
 		}
 
+		// The cluster's identity, and then its install record — both BEFORE anything of
+		// this instance is written, locally or in the cluster.
+		//
+		// 🔴 THE IDENTITY IS FATAL. It is what the install record is checked against: a
+		// record carried in from another cluster describes prerequisites this one may not
+		// have. A dry run reads both when it can and says so when it cannot, because it is
+		// often aimed at a cluster not installed yet and the rehearsal is still worth having.
+		installCommand := bootstrap.InstallCommand(provider.Name(), binding)
+		// 🔴 A CLUSTER THAT HAS NOT BEEN INSTALLED IS REFUSED HERE, naming the command
+		// that prepares it — never prepared on the way past.
+		clusterUID, installRec, err := bootstrap.ReadInstall(ctx, binding.KubeContext, installCommand)
+		switch {
+		case err == nil:
+		case !opts.DryRun && clusterUID == "":
+			return fmt.Errorf("reading the identity of cluster %s: %w\n"+
+				"  The identity is the kube-system namespace's UID; a context that cannot read it "+
+				"is one dcctl cannot build an instance on", binding.Describe(), err)
+		case !opts.DryRun:
+			return err
+		case clusterUID == "":
+			fmt.Println(color.YellowString("[dry-run] could not identify cluster %s (%v); the plan below "+
+				"assumes an installed cluster with default settings.", binding.Describe(), err))
+		default:
+			fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
+				"cluster with default settings.", err))
+		}
+		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
+		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
+		// writes it anywhere.
+		binding.ClusterUID = clusterUID
+
+		st := &bootstrap.State{
+			Instance:             opts.Instance,
+			KubeContext:          binding.KubeContext,
+			ClusterUID:           clusterUID,
+			Binding:              binding,
+			Provider:             provider.Name(),
+			DcctlVersion:         Version,
+			Profile:              opts.Profile,
+			DryRun:               opts.DryRun,
+			AssumeYes:            opts.AssumeYes,
+			ImageRegistry:        opts.ImageRegistry,
+			ImageVersion:         opts.ImageVersion,
+			BuildImages:          opts.BuildImages,
+			IngressHost:          opts.IngressHost,
+			NoTLS:                opts.NoTLS,
+			AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
+			EnableAreas:          opts.EnableAreas,
+			EnabledAreas:         enabledAreas,
+			Lwm2mIdentities:      lwm2mIdentities,
+			Escrow:               escrowPlan,
+			Values:               map[string]string{},
+		}
+		if installRec != nil {
+			bootstrap.FollowInstall(st, installRec)
+		}
+		if err := followClusterShape(cmd.Flags().Changed, st); err != nil {
+			return err
+		}
+		if st.Restore, err = bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(bootstrap.BackupsEnabledFor(st))); err != nil {
+			return err
+		}
 		// 🔴 RECORDED HERE, AND HERE IS THE ONLY PLACE IT CAN BE. This is the one moment
 		// the instance name and the cluster it was resolved to are both in hand; every
 		// later command used to re-derive the second from the first, and that derivation
 		// is wrong for any instance bootstrapped with --kube-context. Writing it BEFORE
-		// the pipeline is deliberate: a bootstrap that dies partway through has still created a
-		// cluster, and an instance that cannot be destroyed because its record was never
-		// written would be the same orphan this record exists to prevent.
+		// the pipeline is deliberate: a bootstrap that dies partway through has still
+		// written into the cluster, and an instance that cannot be destroyed because its
+		// record was never written would be the same orphan this record exists to prevent.
 		//
-		// A failure to record is a WARNING, not a stop. The cluster is already up; making
-		// a bookkeeping error abort a bring-up would trade a recoverable annoyance
-		// (destroy falls back to the guess, loudly) for a broken install.
-
-		// The cluster's identity is read HERE, in the same breath as the binding, because
-		// this is the last moment it is guaranteed readable. It lives in the cluster, and
-		// the paths that will need it most — anything clearing local state — run when the
-		// cluster is being deleted or is already gone. `dcctl destroy` deletes the cluster
-		// and THEN clears state, and has a whole branch for a cluster that had vanished
-		// before the command ran. So it is written down while it can be read, exactly as
-		// the cluster NAME is, and for the same reason.
+		// A failure to record is a WARNING, not a stop: making a bookkeeping error abort a
+		// bring-up would trade a recoverable annoyance (destroy falls back to the guess,
+		// loudly) for a broken install.
 		//
-		// A failure is a WARNING for the same reason a failed record is: the cluster is up
-		// by now, and refusing to finish a bring-up over a bookkeeping read would trade a
-		// loud degradation for a broken install. What is lost is knowing this cluster from
-		// the next one to wear its name — which is what dcctl had for every cluster until
-		// now, so the degradation is to the status quo rather than below it.
-		var clusterUID string
-		if !opts.DryRun {
-			// 🔴 FATAL NOW, WHERE IT USED TO BE A WARNING, AND THE ROOT SPLIT IS WHY.
-			// The identity was a nicety while it only annotated a local record: an
-			// instance whose record lacked it was merely indistinguishable from one on
-			// a rebuilt cluster. It is now the KEY THE CLUSTER PREREQUISITE STATE IS
-			// FILED UNDER, so without it there is nowhere for that state to live —
-			// and the two ways to carry on are both worse than stopping. Falling back
-			// to the context name would file this cluster's state under a name the
-			// next cluster inherits; skipping the prerequisite apply would bootstrap
-			// an instance onto a cluster with no operator, no ingress and no database.
-			if uid, err := bootstrap.IdentifyCluster(ctx, binding.KubeContext); err != nil {
-				return fmt.Errorf("reading the identity of cluster %s: %w\n"+
-					"  dcctl files this cluster's shared prerequisite state under that identity, so it "+
-					"cannot install them without it.\n"+
-					"  The identity is the kube-system namespace's UID; a context that cannot read it "+
-					"is one dcctl cannot install onto", binding.Describe(), err)
-			} else {
-				clusterUID = uid
-				binding.ClusterUID = uid
-				rec := bootstrap.ClusterRecord{
-					UID:          uid,
-					Cluster:      binding.Cluster,
-					KubeContext:  binding.KubeContext,
-					FirstSeenAt:  time.Now().UTC(),
-					DcctlVersion: Version,
-				}
-				if err := bootstrap.WriteClusterRecord(rec); err != nil {
-					fmt.Println(color.YellowString(
-						"warning: could not record what is known about cluster %s (%v).", binding.Describe(), err))
-				}
-			}
-		}
-
 		// 🔴 What was here first is captured before it is replaced: on the one refusal that
 		// fires before anything is written — a host another instance serves — the record
 		// this run writes describes nothing. See PriorLocalState.
@@ -515,41 +375,50 @@ var bootstrapCmd = &cobra.Command{
 			}
 		}
 
-		st := &bootstrap.State{
-			Instance:             opts.Instance,
-			KubeContext:          binding.KubeContext,
-			ClusterUID:           clusterUID,
-			Binding:              binding,
-			Provider:             provider.Name(),
-			DcctlVersion:         Version,
-			Profile:              opts.Profile,
-			DryRun:               opts.DryRun,
-			AssumeYes:            opts.AssumeYes,
-			ImageRegistry:        opts.ImageRegistry,
-			ImageVersion:         opts.ImageVersion,
-			BuildImages:          opts.BuildImages,
-			IngressHost:          opts.IngressHost,
-			NoTLS:                opts.NoTLS,
-			NoMonitoring:         opts.NoMonitoring,
-			NoCNPG:               opts.NoCNPG,
-			AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-			GrafanaSSO:           opts.GrafanaSSO,
-			Compact:              opts.Compact,
-			HA:                   opts.HA,
-			EnableAreas:          opts.EnableAreas,
-			EnabledAreas:         enabledAreas,
-			Lwm2mIdentities:      lwm2mIdentities,
-			BackupDestination:    backupDestination,
-			Escrow:               escrowPlan,
-			Restore:              restorePlan,
-			Values:               map[string]string{},
-		}
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
 		unwindLocalRecordOnHostTaken(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
+}
+
+// followClusterShape settles what this instance takes from the cluster it is built on,
+// and refuses what the cluster cannot give it.
+//
+// 🔴 THE CLUSTER'S SHAPE IS NOT RESTATED HERE, IT IS CHECKED AGAINST. HA, compact sizing,
+// monitoring and backups came from the install record (FollowInstall); what is left for a
+// bootstrap to decide is whether its own requests fit them.
+func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
+	if st.Compact {
+		// A compact cluster publishes a footprint measured on the default profile, and a
+		// larger profile deploys more than that number describes.
+		if slices.Contains(profilesLargerThanDefault, st.Profile) {
+			return fmt.Errorf("this cluster was installed --compact, which publishes a footprint "+
+				"measured on the `default` profile, and profile %q deploys more than that. Use --profile "+
+				"default (or a smaller profile: %s), or build it on a cluster installed without --compact",
+				st.Profile, strings.Join(profilesSmallerThanDefault, ", "))
+		}
+		fmt.Printf("compact cluster: %s\n", bootstrap.CompactSummary())
+		if len(st.EnableAreas) > 0 {
+			fmt.Printf("note: --enable-area adds %s beyond the compact-measured default; the printed footprint is a floor, not the total\n", strings.Join(st.EnableAreas, ", "))
+		}
+	}
+	if st.HA {
+		fmt.Printf("ha cluster: %s\n", bootstrap.HaSummary(true))
+	}
+	// 🔴 TLS NEEDS cert-manager, AND AN INSTALL WITHOUT IT HAS NONE TO GIVE. Serving
+	// TLS there either fails the chart outright against a missing CRD or — with a
+	// cluster issuer configured — succeeds and never issues the certificate.
+	if st.Install != nil && !st.Install.Settings.CertManager {
+		if changed("no-tls") && !st.NoTLS {
+			return fmt.Errorf("--no-tls=false asks for TLS, but this cluster was installed without " +
+				"cert-manager (--compact --no-tls), so nothing would issue the certificate. Re-install " +
+				"the cluster with --compact --no-tls=false, or serve this instance over plain HTTP")
+		}
+		st.NoTLS = true
+	}
+	return nil
 }
 
 // unwindLocalRecordOnHostTaken puts the local record back after the one refusal
@@ -566,8 +435,9 @@ var bootstrapCmd = &cobra.Command{
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
 func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
-	var refusal *bootstrap.ErrHostTaken
-	if opts.DryRun || !errors.As(runErr, &refusal) {
+	var hostTaken *bootstrap.ErrHostTaken
+	var noBudget *bootstrap.ErrConnectionBudget
+	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget)) {
 		return
 	}
 	removed, err := prior.Restore()
@@ -585,7 +455,8 @@ func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorL
 }
 
 func init() {
-	bootstrapCmd.Flags().StringVar(&bootstrapKubeContext, "kube-context", "", "kube-context to target (default: auto-detect)")
+	bootstrapCmd.Flags().StringVar(&bootstrapKubeContext, "kube-context", "", "build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'")
+	bootstrapCmd.Flags().StringVar(&bootstrapCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster 'dcctl install local' prepared")
 	bootstrapCmd.Flags().StringVar(&bootstrapProfile, "profile", "", "configuration profile to apply")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDryRun, "dry-run", false, "print what would happen without applying changes")
 	bootstrapCmd.Flags().BoolVarP(&bootstrapAssumeYes, "yes", "y", false, "assume yes for prompts")
@@ -594,21 +465,15 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapVersion, "version", "", "image version/tag to deploy (default: the published release version, or 'dev' with --build)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapBuild, "build", false, "build images from source into a local registry (developer path; requires source + ko)")
 	bootstrapCmd.Flags().StringVar(&bootstrapHost, "host", "", "ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)")
-	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/)")
-	bootstrapCmd.Flags().BoolVar(&bootstrapNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana) AND the chart's ServiceMonitors/alerts — for a minimal install or a cluster where you wire metrics separately")
+	bootstrapCmd.Flags().BoolVar(&bootstrapNoTLS, "no-tls", false, "serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/). On by default on a cluster installed without cert-manager, where --no-tls=false is refused")
 	bootstrapCmd.Flags().BoolVar(&bootstrapAllowLegacyDb, "allow-legacy-db-removal", false,
-		"proceed even though this cluster still runs the pre-CloudNativePG database "+
-			"StatefulSets (dc-postgresql / dc-timescaledb-single). 🔴 This ASSERTS THAT YOU "+
-			"HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying "+
-			"with it set destroys those StatefulSets and brings up empty databases on the same "+
-			"hostnames. Dump first, or use it deliberately to discard a local instance")
-	bootstrapCmd.Flags().StringVar(&bootstrapBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the instance provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. The credentials are written to a Secret before the apply and never reach the infrastructure state — keep the file readable only by you")
-	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
-	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
-	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
+		"proceed even though this cluster still runs the pre-CloudNativePG event-store "+
+			"StatefulSet (dc-timescaledb-single). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — "+
+			"it is not a migration, nothing verifies it, and applying with it set destroys that "+
+			"StatefulSet and brings up an empty database on the same hostname. Dump first, or use "+
+			"it deliberately to discard a local instance")
+	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags")
 
-	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
-	bootstrapCmd.Flags().BoolVar(&bootstrapHA, "ha", false, "ADR-020 HA: a 3-node NATS RAFT cluster spread one server per node, with every JetStream stream and KV bucket replicated across it, AND both databases as replicated CloudNativePG Clusters -- the relational store synchronously, the event store at 'preferred' durability so a lost standby degrades rather than stalling ingest (ADR-020 A2.3/A2.4). Sets every half from one value (the OpenTofu server count, the chart's streamReplicas, both instance counts), and refuses to install if the cluster cannot host the topology. Needs at least 3 schedulable nodes. Database volumes are sized PER INSTANCE, so this triples their disk. Does not change how many services run")
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with --compact; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
@@ -622,22 +487,15 @@ func init() {
 	// archives INTO by itself, and it is deliberately not a flag: it must stay put
 	// across every later re-run, so it is read back off the live cluster rather than
 	// re-derived from argv.
-	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbFrom, "restore-rdb-from", "",
-		"disaster recovery: recover the RELATIONAL store from this archive path (the serverName "+
-			"inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. "+
-			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
-			"and rebuilding it with this set, not by re-running against a live one. Pair with "+
-			"--restore-root-key, or the restored secrets cannot be decrypted")
-	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbAt, "restore-rdb-at", "",
-		"stop the relational store's recovery at this RFC3339 timestamp instead of replaying the "+
-			"whole archive. For the disaster where the data was destroyed correctly — a bad migration, "+
-			"a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbFrom, "restore-tsdb-from", "",
-		"disaster recovery: recover the EVENT store from this archive path (e.g. dc-tsdb). The two "+
-			"stores keep independent timelines and are restored separately: rewinding telemetry to "+
-			"yesterday does not mean the control plane should be rewound with it")
+		"disaster recovery: recover the EVENT store from this archive path (the serverName inside "+
+			"the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. "+
+			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
+			"and rebuilding it with this set, not by re-running against a live one")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbAt, "restore-tsdb-at", "",
-		"stop the event store's recovery at this RFC3339 timestamp. Needs --restore-tsdb-from")
+		"stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole "+
+			"archive. For the disaster where the data was destroyed correctly — a mistaken delete — so "+
+			"pick a moment strictly before the damage. Needs --restore-tsdb-from")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

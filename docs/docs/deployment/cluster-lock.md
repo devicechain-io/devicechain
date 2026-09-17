@@ -69,9 +69,10 @@ running" is part of the answer to "what would this do".
 ## What the lock actually covers {#scope}
 
 **One lock per cluster — not one per instance.** A cluster can hold several instances,
-but a bootstrap also touches what they share: the infrastructure releases that install
-the ingress controller, cert-manager and the CloudNativePG operator, the shared relational
-database, and the DeviceChain operator's own Deployment. Two runs working on two
+but a bootstrap also touches what they share: the shared relational database, where it
+creates the instance's login and database, and the DeviceChain operator's own Deployment.
+(The ingress controller, cert-manager and the CloudNativePG operator are installed once by
+[`dcctl install`](./bootstrap.md#install), not by each bootstrap.) Two runs working on two
 *different* instances at once would both apply that shared half, so the lock serializes
 them. The instance id is recorded on the lock so the refusal can
 tell you which instance the holder is working on, but it is not what the lock is keyed

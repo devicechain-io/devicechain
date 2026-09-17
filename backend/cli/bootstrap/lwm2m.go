@@ -168,9 +168,9 @@ func lwm2mProvisioning(instance string, ids []Lwm2mIdentity) (secret map[string]
 
 // mergeFunctionalArea sets one functional area's config into vals["functionalAreas"],
 // getting-or-creating that map rather than ASSIGNING it. Assigning the whole map is
-// the bug this exists to prevent: two features that each configure an area (Grafana
-// SSO → user-management, lwm2m identities → lwm2m-ingest) would each overwrite the
-// map, and whichever ran last would silently drop the other's block. Distinct areas
+// the bug this exists to prevent: two features that each configure an area would
+// each overwrite the map, and whichever ran last would silently drop the other's
+// block. Distinct areas
 // merge cleanly; if the same area is written twice, its top-level keys are merged in.
 func mergeFunctionalArea(vals map[string]interface{}, area string, cfg map[string]interface{}) {
 	fa, _ := vals["functionalAreas"].(map[string]interface{})

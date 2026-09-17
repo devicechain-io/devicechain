@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -59,7 +60,7 @@ func TestAnInstanceBuiltInTheSharedNamespaceIsRefused(t *testing.T) {
 		{nats: "acme", tsdb: "dc-system"},
 	} {
 		err := checkInstanceInItsOwnNamespace(ctx, tc, "acme")
-		if err == nil || !strings.Contains(err.Error(), "dcctl destroy acme") {
+		if err == nil || !strings.Contains(err.Error(), "dcctl destroy <provider> acme") {
 			t.Errorf("nats=%s tsdb=%s: want a refusal naming the rebuild, got %v", tc.nats, tc.tsdb, err)
 		}
 	}
@@ -277,5 +278,80 @@ func TestTheInstanceRootIsToldItsNamespace(t *testing.T) {
 		if strings.HasPrefix(v, "instance_namespace=") {
 			t.Errorf("the cluster root was given an instance's namespace: %s", v)
 		}
+	}
+}
+
+// stubConnectionBudget replaces the budget precheck and counts the asks.
+func stubConnectionBudget(t *testing.T, err error) *int {
+	t.Helper()
+	orig := precheckConnectionBudget
+	t.Cleanup(func() { precheckConnectionBudget = orig })
+	calls := 0
+	precheckConnectionBudget = func(context.Context, *State) error {
+		calls++
+		return err
+	}
+	return &calls
+}
+
+// 🔴 THE CONNECTION BUDGET IS REFUSED BEFORE ANYTHING IS WRITTEN, like the host — and
+// typed like it, so the command layer unwinds the local record.
+func TestTheSingletonStepRefusesAnInstanceTheStoreHasNoBudgetFor(t *testing.T) {
+	stubSingletons(t, clusterSingletons{MQTTNodePortHolder: "alpha"}, nil)
+	noBudget := &ErrConnectionBudget{Err: fmt.Errorf("admitting beta: %w", errNoConnectionBudget)}
+	calls := stubConnectionBudget(t, noBudget)
+	st := &State{Instance: "beta", IngressHost: "beta.localhost", Values: map[string]string{}}
+	err := stepCheckClusterSingletons(context.Background(), st)
+	var typed *ErrConnectionBudget
+	if !errors.As(err, &typed) || !errors.Is(err, errNoConnectionBudget) {
+		t.Errorf("an instance with no budget left was not refused with the typed refusal: %v", err)
+	}
+	if *calls != 1 {
+		t.Errorf("the budget was checked %d time(s), want once", *calls)
+	}
+	if _, ok := st.Values[mqttNodePortHolderKey]; ok {
+		t.Error("a refused run still decided the node port, as though it would be built")
+	}
+
+	// A dry run reads no store: it may be aimed at a cluster that does not exist.
+	calls = stubConnectionBudget(t, noBudget)
+	st = &State{Instance: "beta", IngressHost: "beta.localhost", DryRun: true, Values: map[string]string{}}
+	if err := stepCheckClusterSingletons(context.Background(), st); err != nil || *calls != 0 {
+		t.Errorf("a dry run checked the budget (%d call(s)) or failed: %v", *calls, err)
+	}
+
+	// The host refusal comes first: a run refused for its host never opens a database session.
+	stubSingletons(t, clusterSingletons{HostHolder: "alpha"}, nil)
+	calls = stubConnectionBudget(t, noBudget)
+	st = &State{Instance: "beta", IngressHost: "localhost", Values: map[string]string{}}
+	var host *ErrHostTaken
+	if err := stepCheckClusterSingletons(context.Background(), st); !errors.As(err, &host) || *calls != 0 {
+		t.Errorf("a taken host was not refused before the budget (%d call(s)): %v", *calls, err)
+	}
+}
+
+// With no install on the state there is no store to ask: the real precheck answers nil
+// without touching a cluster.
+func TestTheBudgetPrecheckNeedsAnInstall(t *testing.T) {
+	if err := precheckConnectionBudget(context.Background(), &State{Instance: "beta"}); err != nil {
+		t.Errorf("a state with no install was checked against a store: %v", err)
+	}
+}
+
+// Only the store's budget refusal is typed: the command layer unwinds the local record on
+// the type, and a connection failure typed the same way would clear the record of an
+// instance whose check never ran.
+func TestOnlyABudgetRefusalIsTypedAsOne(t *testing.T) {
+	refusal := fmt.Errorf("session: %w", errNoConnectionBudget)
+	var typed *ErrConnectionBudget
+	if err := asBudgetRefusal(refusal); !errors.As(err, &typed) || !errors.Is(err, errNoConnectionBudget) {
+		t.Fatalf("a budget refusal was not typed (or lost its cause): %v", err)
+	}
+	other := errors.New("port-forward failed")
+	if err := asBudgetRefusal(other); errors.As(err, &typed) || err != other {
+		t.Fatalf("an unrelated failure was typed as a budget refusal: %v", err)
+	}
+	if asBudgetRefusal(nil) != nil {
+		t.Fatal("a successful check became an error")
 	}
 }

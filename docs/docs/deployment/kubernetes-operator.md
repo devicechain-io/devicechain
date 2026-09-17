@@ -113,8 +113,8 @@ a recreated object has no old version to compare against: delete-then-re-apply w
 repoint the cluster binding in two steps that each look legitimate on their own.
 
 **`dcctl destroy` clears the finalizer itself**, as its last step, once the instance is
-actually gone — so in the ordinary case there is nothing to do by hand. (When `destroy`
-deletes the whole cluster, the declaration goes with it.)
+actually gone — so in the ordinary case there is nothing to do by hand. `destroy` never
+deletes the cluster itself, so this is the step that removes the declaration.
 
 :::note A destroy that fails leaves the declaration behind on purpose
 It still records which cluster the instance lives in, which is what a re-run needs, and
@@ -155,4 +155,4 @@ DeviceChain deliberately splits each layer:
 | Lifecycle | **Operator** | `Instance` status aggregation and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 
-OpenTofu runs once at cluster creation; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).
+OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).

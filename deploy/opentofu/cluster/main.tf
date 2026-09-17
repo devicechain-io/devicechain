@@ -184,8 +184,9 @@ resource "terraform_data" "cutover_guard" {
 
           To DISCARD the old data (local/dev instances, the usual case):
 
-            dcctl destroy <instance>     # or delete the cluster entirely
-            dcctl bootstrap ...          # rebuild on the new storage tier
+            delete the cluster entirely, then
+            dcctl install ...            # rebuild the cluster on the new storage tier
+            dcctl bootstrap ...          # and each instance on top of it
 
           To KEEP it, dump before cutting over:
 
@@ -264,8 +265,8 @@ module "object_store" {
 # The paths that do it are ordinary, not exotic:
 #   - enable_database_backups = false
 #   - backup_destination flipped to "external"
-#   - `dcctl bootstrap <existing-instance> --compact --no-tls`, which emits
-#     enable_database_backups=false on its own
+#   - `dcctl install --compact` (or `--compact --no-tls`) over an existing
+#     install, which emits enable_database_backups=false on its own
 #
 # 🔴 AND prevent_destroy ON THE PVC WOULD NOT HELP, which is why this is a
 # precondition in the ROOT instead. Dropping a module's count to zero ORPHANS its
@@ -315,7 +316,7 @@ resource "terraform_data" "backup_removal_guard" {
 
           enable_database_backups = false
           backup_destination      = "external"
-          dcctl bootstrap <instance> --compact --no-tls   (turns backups off)
+          dcctl install --compact          (turns backups off)
 
         If the backups are already safe elsewhere, or you do not want them:
 
@@ -562,6 +563,12 @@ module "cnpg_rdb" {
   # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
   # full profile (8x4 + 1 = 33 pods = 660); re-derive before going there.
   #
+  # 🔴 THAT IS ONE INSTANCE'S DEMAND, AND THE STORE IS SHARED BY EVERY INSTANCE ON THE
+  # CLUSTER. Each instance's login carries a CONNECTION LIMIT sized the same way (its
+  # relational areas x 20 x 2), and dcctl admits a new instance only while the limits
+  # already granted plus its own fit under this value — so the default admits two
+  # default-profile instances, and `dcctl install --max-connections` is the knob.
+  #
   # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing
   # it is applied by CNPG as a rolling in-place restart (~2.5 min on the rig), not a
   # reload.
@@ -579,7 +586,7 @@ module "cnpg_rdb" {
   # (500 worst case above), not by this value. Raising it does not raise
   # steady-state memory; it removes a cliff.
   parameters = {
-    max_connections = "600"
+    max_connections = tostring(var.postgres_max_connections)
   }
 
   # `required` durability for this store specifically: it holds the audit

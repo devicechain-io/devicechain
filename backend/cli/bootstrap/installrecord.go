@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,9 +36,10 @@ import (
 // It holds no credential. The shared credentials are cluster-owned Secrets; this names
 // where they are, never what they hold.
 const (
-	installRecordName   = "dc-install"
-	installRecordKey    = "install.json"
-	installRecordSchema = 2
+	installRecordName = "dc-install"
+	installRecordKey  = "install.json"
+	// 3: outputs.rdb.maxConnections, the budget every instance is admitted against.
+	installRecordSchema = 3
 
 	installPhaseApplying  = "applying"
 	installPhaseInstalled = "installed"
@@ -54,6 +54,34 @@ type InstallRecord struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 	Settings     InstallSettings `json:"settings"`
 	Outputs      InstallOutputs  `json:"outputs"`
+	// LastInstalled is the most recent COMPLETED install, kept while a re-install is
+	// applying. Nil on an installed record, which is its own last completed install.
+	LastInstalled *CompletedInstall `json:"lastInstalled,omitempty"`
+}
+
+// CompletedInstall is what a finished install applied and built.
+type CompletedInstall struct {
+	DcctlVersion string          `json:"dcctlVersion,omitempty"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+	Settings     InstallSettings `json:"settings"`
+	Outputs      InstallOutputs  `json:"outputs"`
+}
+
+// lastCompleted is the most recent install that finished on this cluster, or nil.
+//
+// 🔴 A RE-INSTALL THAT FAILED MUST NOT FORGET WHAT THE CLUSTER RUNS. The instances on it
+// were built to the last completed install, and a re-run deciding its defaults and its
+// refusals from an `applying` record's empty settings would lower the budget, or change
+// the cluster's shape, under them — on a green run.
+func (r *InstallRecord) lastCompleted() *CompletedInstall {
+	switch {
+	case r == nil:
+		return nil
+	case r.Phase == installPhaseInstalled:
+		return &CompletedInstall{DcctlVersion: r.DcctlVersion, UpdatedAt: r.UpdatedAt, Settings: r.Settings, Outputs: r.Outputs}
+	default:
+		return r.LastInstalled
+	}
 }
 
 // InstallSettings is what the cluster prerequisites were APPLIED WITH — the half of an
@@ -75,20 +103,11 @@ type InstallOutputs struct {
 	// Rdb is the shared relational store: where it runs and which Secret holds the
 	// identity that gives each instance a login and database of its own. Schema 2.
 	Rdb                       ClusterRdb     `json:"rdb"`
-	Archive                   InstallArchive `json:"archive"`
+	Archive                   ClusterArchive `json:"archive"`
 	BackupSurvivesClusterLoss bool           `json:"backupSurvivesClusterLoss"`
 	CNPGNamespace             string         `json:"cnpgNamespace,omitempty"`
 	GrafanaService            string         `json:"grafanaService,omitempty"`
 	GrafanaNamespace          string         `json:"grafanaNamespace,omitempty"`
-}
-
-// InstallArchive is the archive contract an instance's event store is built against.
-type InstallArchive struct {
-	EndpointURL       string `json:"endpointUrl,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-	AccessKeyIDKey    string `json:"accessKeyIdKey,omitempty"`
-	SecretAccessKey   string `json:"secretAccessKeyKey,omitempty"`
-	BucketTsdb        string `json:"bucketTsdb,omitempty"`
 }
 
 // installSettingsFor is what this run applies the cluster root with. Every field comes
@@ -106,25 +125,6 @@ func installSettingsFor(st *State) InstallSettings {
 	}
 }
 
-// installOutputsFrom collects what the cluster apply returned and recorded.
-func installOutputsFrom(st *State, archive ClusterArchive, rdb ClusterRdb) InstallOutputs {
-	offsite, _ := strconv.ParseBool(st.Values[databaseBackupOffsiteKey])
-	return InstallOutputs{
-		Rdb: rdb,
-		Archive: InstallArchive{
-			EndpointURL:       archive.EndpointURL,
-			CredentialsSecret: archive.CredentialsSecret,
-			AccessKeyIDKey:    archive.AccessKeyIDKey,
-			SecretAccessKey:   archive.SecretAccessKey,
-			BucketTsdb:        archive.BucketTsdb,
-		},
-		BackupSurvivesClusterLoss: offsite,
-		CNPGNamespace:             st.Values[cnpgNamespaceKey],
-		GrafanaService:            st.Values["grafanaService"],
-		GrafanaNamespace:          st.Values["grafanaNamespace"],
-	}
-}
-
 // markInstallApplying records that the cluster prerequisites are being applied, before
 // anything is.
 func markInstallApplying(ctx context.Context, typed kubernetes.Interface, clusterUID, dcctlVersion string,
@@ -133,22 +133,31 @@ func markInstallApplying(ctx context.Context, typed kubernetes.Interface, cluste
 	if err != nil {
 		return err
 	}
+	var last *CompletedInstall
 	if prev != nil {
 		// 🔴 A NEWER dcctl'S RECORD IS NOT OURS TO REWRITE. Marking it would downgrade its
 		// schema to this one's and discard whatever it recorded that this build cannot
 		// name. A record that does not parse at all is overwritten: it describes nothing.
 		var old InstallRecord
-		if json.Unmarshal([]byte(prev.Data[installRecordKey]), &old) == nil && old.Schema > installRecordSchema {
-			return fmt.Errorf("this cluster was installed by a newer dcctl (install record schema "+
-				"%d; this build writes %d). Use that dcctl", old.Schema, installRecordSchema)
+		if json.Unmarshal([]byte(prev.Data[installRecordKey]), &old) == nil {
+			if old.Schema > installRecordSchema {
+				return fmt.Errorf("this cluster was installed by a newer dcctl (install record schema "+
+					"%d; this build writes %d). Use that dcctl", old.Schema, installRecordSchema)
+			}
+			// Only this schema's: an older record's settings do not mean what these do.
+			if old.Schema == installRecordSchema {
+				last = old.lastCompleted()
+			}
 		}
 	}
-	// Nothing is carried from a previous record. Settings and outputs describe a
-	// COMPLETED apply, and showing the last one's beside this run's version would tell
-	// anyone reading it mid-apply that those are what is being applied.
+	// Settings and outputs are left EMPTY. They describe a COMPLETED apply, and showing
+	// the last one's beside this run's version would tell anyone reading it mid-apply
+	// that those are what is being applied. The last completed install is kept apart,
+	// under its own name, for the next re-run to decide from.
 	return putInstallRecord(ctx, typed, InstallRecord{
 		Schema: installRecordSchema, Phase: installPhaseApplying,
 		ClusterUID: clusterUID, DcctlVersion: dcctlVersion, UpdatedAt: now().UTC(),
+		LastInstalled: last,
 	})
 }
 
@@ -208,11 +217,15 @@ func readInstallRecord(ctx context.Context, typed kubernetes.Interface, liveClus
 // reader.
 func (r InstallRecord) validate(liveClusterUID string) error {
 	switch {
-	case r.Schema != installRecordSchema:
-		// Newer or older than this dcctl knows. Guessing at the fields would read a
-		// record whose meaning changed as if it had not.
+	case r.Schema > installRecordSchema:
+		// Newer than this dcctl knows. Guessing at the fields would read a record whose
+		// meaning changed as if it had not.
 		return fmt.Errorf("%w: the install record is schema %d and this dcctl reads schema %d; "+
 			"use the dcctl that installed this cluster", ErrInstallRecordSchema, r.Schema, installRecordSchema)
+	case r.Schema != installRecordSchema:
+		return fmt.Errorf("%w: the install record is schema %d, written by an older dcctl, and this dcctl "+
+			"reads schema %d. Re-run `dcctl install` with this dcctl to bring the record up to date",
+			ErrInstallRecordSchema, r.Schema, installRecordSchema)
 	case r.Phase == installPhaseApplying:
 		return fmt.Errorf("%w: an install of this cluster started and did not finish, so the "+
 			"prerequisites may be half-applied. Re-run the install", ErrNotInstalled)
@@ -232,9 +245,10 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 	// instance would silently build without.
 	// The relational store is not optional, so neither is knowing where it is: without
 	// it no instance can be given a login, and none can be destroyed cleanly.
-	if d := r.Outputs.Rdb; d.Namespace == "" || d.ClusterName == "" || d.ProvisionerSecret == "" {
-		return fmt.Errorf("the install record does not say where the relational store is or which "+
-			"Secret holds its provisioner (%+v); no instance could be given a database login", d)
+	if d := r.Outputs.Rdb; d.Namespace == "" || d.ClusterName == "" || d.ProvisionerSecret == "" || d.MaxConnections <= 0 {
+		return fmt.Errorf("the install record does not say where the relational store is, which "+
+			"Secret holds its provisioner, or what connection budget it has (%+v); no instance could "+
+			"be given a database login", d)
 	}
 	a := r.Outputs.Archive
 	if r.Settings.DatabaseBackups && (a.EndpointURL == "" || a.CredentialsSecret == "" ||

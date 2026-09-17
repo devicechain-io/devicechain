@@ -22,7 +22,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
-	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -138,7 +137,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 
-	// SETTLE THE ARCHIVE PATH EACH DATABASE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
+	// SETTLE THE ARCHIVE PATH THE EVENT STORE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
 	// UNDER — not from this run's flags (ADR-020 A2.5 / ADR-028).
 	//
 	// Same shape, same reason as the credentials above: the path is permanent
@@ -161,13 +160,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// and failing it on an unreachable API server would break the rehearsal for the
 	// case it serves best. Acting on a wrong answer costs nothing when nothing is
 	// applied.
-	var live liveArchiveState
+	var live clusterArchiveState
 	live, err = readLiveArchiveState(ctx, st.KubeContext, st.Instance)
 	switch {
 	case err != nil && !st.DryRun:
 		return fail("reading the database archive state", err)
 	case err != nil:
-		live = liveArchiveState{}
+		live = clusterArchiveState{}
 		notes = append(notes, fmt.Sprintf(
 			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
 	}
@@ -185,7 +184,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	//
 	// resolveCredentials decides which of them a live instance keeps; see the reuse
 	// policy there for why that answer differs per credential.
-	st.Credentials, err = settleCredentials(ctx, st, live)
+	st.Credentials, err = settleCredentials(ctx, st, liveArchiveState{Tsdb: live})
 	if err != nil {
 		return fail("settling this instance's credentials", err)
 	}
@@ -201,21 +200,12 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	}
 	st.Values["natsCA"] = st.NATSTLS.CACertPEM
 
-	paths := resolveArchivePaths(live, st.Restore,
-		archivePaths{Tsdb: freshTsdbArchivePath(st.Instance, st.InstanceUID)}, time.Now().UTC())
-	st.Values["backupServerNameRdb"] = paths.Rdb
+	paths := resolveArchivePaths(live, st.Restore, freshTsdbArchivePath(st.Instance, st.InstanceUID), time.Now().UTC())
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.Active() {
-		for _, p := range []struct{ store, from, path string }{
-			{"relational store", st.Restore.RdbFrom, paths.Rdb},
-			{"event store", st.Restore.TsdbFrom, paths.Tsdb},
-		} {
-			if p.from != "" {
-				notes = append(notes, fmt.Sprintf(
-					"%s recovering from archive %q, and will archive under %q",
-					p.store, p.from, p.path))
-			}
-		}
+		notes = append(notes, fmt.Sprintf(
+			"event store recovering from archive %q, and will archive under %q",
+			st.Restore.TsdbFrom, paths.Tsdb))
 	}
 	// 🔴 A restore aimed at a store that already exists does NOTHING — CloudNativePG
 	// reads `spec.bootstrap` when it CREATES a Cluster. The apply is green, the
@@ -458,42 +448,6 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				return fail("escrowing the secret-store root key", err)
 			}
 		}
-	}
-
-	// Mint the Grafana OAuth client secret (ADR-047 SSO) when SSO is wired: one mint,
-	// both sides — the cleartext goes to Grafana's generic_oauth config (the monitoring
-	// tofu module) and the bcrypt hash is seeded into user-management (helmInstall), so
-	// the two can't drift. Skipped (with a note) when SSO was requested but the issuer
-	// would be invalid — http on a non-localhost host.
-	//
-	// THIS IS THE ONE GENERATED CREDENTIAL ABOVE THAT A RE-RUN STILL ROTATES, and it
-	// is left that way on purpose rather than overlooked. The reuse the rest of this
-	// step does works because the value is in DeviceChain's own instance config, which
-	// dcctl can read back; this one is not. The cleartext goes only into the Grafana
-	// subchart's envRenderSecret and user-management stores only its hash, so
-	// recovering it would mean depending on an upstream chart's secret-naming
-	// convention — a worse failure mode than what it fixes. The blast radius is also
-	// different in kind: both halves are written by the same run, so a rotation costs
-	// a window of failing logins during the rollout rather than a broker that rejects
-	// every service. Closing it properly means giving the secret a home dcctl owns,
-	// which is a design change, not a reuse. Tracked on the roadmap with this slice.
-	if st.GrafanaSSO && st.NoMonitoring {
-		fmt.Println(color.YellowString("  Grafana SSO skipped: it needs the monitoring stack, which --no-monitoring disables."))
-	}
-	if grafanaSSORequestedButInvalid(st) {
-		fmt.Println(color.YellowString("  Grafana SSO skipped: an http issuer needs a localhost host. Re-run with --host localhost (and --no-tls) or enable TLS."))
-	}
-	if grafanaSSOEnabled(st) {
-		secret, err := randomSecret(32)
-		if err != nil {
-			return fail("minting Grafana OAuth secret", err)
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-		if err != nil {
-			return fail("hashing Grafana OAuth secret", err)
-		}
-		st.Values["grafanaOAuthSecret"] = secret
-		st.Values["grafanaOAuthSecretBcrypt"] = string(hash)
 	}
 
 	// Re-settle the image source. The command layer resolves this before the
@@ -762,12 +716,6 @@ func dockerBuildNetwork() (string, error) {
 // name moving, which is precisely how the split this function closes would reopen.
 const dockerBuildNetEnv = "DOCKER_BUILD_NET"
 
-// removeLocalRegistry force-removes the shared local registry container. Used by
-// destroy --purge-registry; best-effort (a missing container is fine).
-func removeLocalRegistry(ctx context.Context) error {
-	return run(ctx, "docker", "rm", "-f", registryContainerName)
-}
-
 // stepInfraApply deploys the shared data/infra stack via OpenTofu, driving the
 // tofu/terraform binary through terraform-exec.
 func stepInfraApply(ctx context.Context, st *State) error {
@@ -782,21 +730,11 @@ func stepInfraApply(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
-		monitoring := "monitoring (Prometheus/Grafana)"
-		if st.NoMonitoring {
-			monitoring = "monitoring SKIPPED (--no-monitoring)"
-		}
-		// TWO applies, named separately, because that is what a dry run is FOR. The
-		// operator reading this is deciding whether to let dcctl touch a cluster, and
-		// the thing worth knowing is that one of these applies is CLUSTER-WIDE and
-		// shared with every other instance while the other is this instance's alone.
-		// Describing them as one line would hide exactly the distinction the split
-		// exists to make.
-		wouldDo("tofu init+apply deploy/opentofu/cluster — shared, once per cluster " +
-			"(CloudNativePG operator + backup plugin, ingress, cert-manager, " + monitoring +
-			", the shared relational database, the backup object store)")
+		// The cluster prerequisites are named as NOT applied, because an operator
+		// reading a rehearsal is deciding whether to let dcctl touch a shared cluster.
+		wouldDo("create this instance's own login and database on the shared relational store")
 		wouldDo("tofu init+apply deploy/opentofu/instance — this instance only " +
-			"(NATS, Timescale)")
+			"(NATS, Timescale), on the prerequisites `dcctl install` put in place")
 		return nil
 	}
 	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
@@ -997,6 +935,34 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 	}
 }
 
+// printBackups is the report's backups line, for an install and a bootstrap alike.
+//
+// 🔴 THE DEFAULT BRANCH IS THE ONE THAT MATTERS MOST. The in-cluster destination is
+// real backups — WAL archived continuously, a base backup taken on schedule — and it
+// is not disaster recovery, because it dies with the cluster it lives in. Those two
+// facts are easy to hold at once and almost impossible to infer, so the report says
+// both.
+func printBackups(subject string, enabled, offsite bool) {
+	switch {
+	case !enabled:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.YellowString("NONE — no WAL archiving and no base backups for %s, so no point-in-time restore is possible", subject))
+	case offsite:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
+	default:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
+		fmt.Printf("           %s\n",
+			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
+		fmt.Printf("           %s\n",
+			color.YellowString("failure domain and are lost with it. Off-site backups are set by `dcctl install --backup-credentials-file`."))
+	}
+}
+
 // stepReport prints an access-info summary from State. This step is real.
 func stepReport(ctx context.Context, st *State) error {
 	fmt.Println(color.HiGreenString("\nDeviceChain bootstrap summary"))
@@ -1032,49 +998,33 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
 	}
 	if svc := st.Values["grafanaService"]; svc != "" {
-		if grafanaSSOEnabled(st) {
-			u := grafanaSSOURLsFor(st)
-			fmt.Printf("  %s %s\n",
-				color.WhiteString("Grafana:"),
-				color.GreenString("%s  (sign in with DeviceChain SSO — operators/superusers only)", u.RootURL))
-			fmt.Printf("           %s\n", color.YellowString("cross-tenant metrics are operator-tier only; the native admin login stays available as break-glass"))
-		} else {
-			// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
-			// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
-			// and offered `monitoring_grafana_admin_password` as the way to change it
-			// — a shared literal, and an infrastructure variable that has since been
-			// retired. Both were true when the dashboard's password was the same value
-			// on every installation anyone had ever built. Neither survived that
-			// change, and nothing failed: the report simply kept saying it, so an
-			// operator following it was told the wrong password and pointed at a knob
-			// that no longer exists. Measured on a live instance, by comparing the
-			// digest of the stored credential against the digest of the old literal.
-			//
-			// It now says where the password IS rather than what it is, which is also
-			// the only form that stays true when it is rotated.
-			ns := st.Values["grafanaNamespace"]
-			fmt.Printf("  %s %s\n",
-				color.WhiteString("Grafana:"),
-				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
-			fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
-				"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
-				grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
-			fmt.Printf("           %s\n", color.GreenString(
-				"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
-				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
-			fmt.Printf("           %s\n", color.YellowString(
-				"or wire it to DeviceChain SSO with --grafana-sso (ADR-047)"))
-		}
+		// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
+		// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
+		// and offered `monitoring_grafana_admin_password` as the way to change it
+		// — a shared literal, and an infrastructure variable that has since been
+		// retired. Both were true when the dashboard's password was the same value
+		// on every installation anyone had ever built. Neither survived that
+		// change, and nothing failed: the report simply kept saying it, so an
+		// operator following it was told the wrong password and pointed at a knob
+		// that no longer exists. Measured on a live instance, by comparing the
+		// digest of the stored credential against the digest of the old literal.
+		//
+		// It now says where the password IS rather than what it is, which is also
+		// the only form that stays true when it is rotated.
+		ns := st.Values["grafanaNamespace"]
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Grafana:"),
+			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
+		fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+			"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
+			grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
+		fmt.Printf("           %s\n", color.GreenString(
+			"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
+			monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
 	}
 	// Database backups, printed here for exactly the reason the escrow line below
 	// is: this is the screen an operator actually reads, and every branch of it
-	// says something they need.
-	//
-	// 🔴 UNCONDITIONAL, and the branch that matters most is the DEFAULT one. The
-	// in-cluster destination is real backups — WAL archived continuously, a base
-	// backup taken on schedule — and it is not disaster recovery, because it dies
-	// with the cluster it lives in. Those two facts are easy to hold at once and
-	// almost impossible to infer, so the only honest thing is to say both.
+	// says something they need. Unconditional — see printBackups.
 	//
 	// Before this existed, the only surfaces stating it were the OpenTofu README
 	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
@@ -1085,43 +1035,24 @@ func stepReport(ctx context.Context, st *State) error {
 	// "Backups: NONE", including one that had just been handed an off-site
 	// destination. Same rule, and the same fix, as the archive-path read above.
 	//
-	// Predicted from what THIS RUN decided, not from a default: the flags settle
-	// whether backups exist at all, and --backup-credentials-file settles whether
-	// they leave the cluster.
+	// Predicted from what THIS RUN decided, not from a default: the install record
+	// settles whether backups exist at all, and whether they leave the cluster.
 	if st.DryRun {
 		if databaseBackupsEnabled(st) {
 			st.Values[databaseBackupsKey] = "true"
 			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(backupsAreExternal(st))
 		}
 	}
-	switch {
-	case st.Values[databaseBackupsKey] != "true":
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.YellowString("NONE — this instance archives no WAL and takes no base backups, so it cannot be restored to any point in time"))
-	case st.Values[databaseBackupOffsiteKey] == "true":
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
-	default:
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
-		fmt.Printf("           %s\n",
-			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
-		fmt.Printf("           %s\n",
-			color.YellowString("failure domain and are lost with it. Pass --backup-credentials-file for off-site."))
-	}
+	printBackups("this instance", st.Values[databaseBackupsKey] == "true", st.Values[databaseBackupOffsiteKey] == "true")
 	// The archive path each store OWNS — which is the INPUT to the next restore.
 	//
 	// Printed only when it is not the default, because that is exactly when an
 	// operator cannot work it out: after a recovery the paths are stamped names
-	// nobody chose, and `--restore-rdb-from dc-rdb` — the obvious guess — points at
+	// nobody chose, and `--restore-tsdb-from dc-tsdb` — the obvious guess — points at
 	// the archive of the instance that already died. Alongside it, the escrow line
 	// below completes the pair a restore actually needs.
 	if st.Values[databaseBackupsKey] == "true" {
 		for _, p := range []struct{ label, path string }{
-			{"Relational archive:", st.Values["backupServerNameRdb"]},
 			{"Event archive:", st.Values["backupServerNameTsdb"]},
 		} {
 			if p.path != "" {

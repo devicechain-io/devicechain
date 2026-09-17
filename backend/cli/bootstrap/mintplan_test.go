@@ -4,54 +4,93 @@
 package bootstrap
 
 import (
+	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
-// 🔴 THE CROSS-CHECK THAT STOPS TWO COPIES OF ONE DECISION DRIFTING. infraVars decides
-// whether backups are on by appending a variable from two separate branches;
-// databaseBackupsEnabled decides the same thing directly. If either moves without the
-// other, the mint writes an object-store credential nothing reads — or, in the
-// direction that breaks an install, does not write one the store needs.
+// planOwnedSecrets is every Secret a run of this State plans: the cluster half and the
+// instance half together.
 //
-// The matrix is every combination of the flags that reach either decision, so a new
-// branch in infraVars that this predicate does not know about shows up here rather
-// than in an install.
+// 🔴 THE INSTANCE CONFIG DOCUMENT IS NOT HERE. The credentials services read travel
+// inside one JSON document rather than one Secret each, and that document cannot be
+// composed until the values that are derived from an apply are known. It is written
+// by the composition step, through the same writer.
+func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
+	cluster, archive := planClusterSecrets(st, set)
+	return append(cluster, planInstanceSecrets(st, set, archive)...)
+}
+
+// 🔴 THE VARIABLES MUST SAY WHAT THE CLUSTER WAS INSTALLED WITH. infraVars emits
+// `enable_database_backups` and `enable_cert_manager` from the predicates, so comparing
+// the emission with the predicates proves nothing; this compares both with an answer
+// stated here instead. On an install that answer is the flags. On a bootstrap it is
+// the install record — and every record below DISAGREES with the State's own flags, so
+// an emission that read the flags instead of the record fails here rather than
+// switching an instance's archiving off on a cluster whose store is archiving.
 func TestTheBackupPredicateMatchesTheVariablesEmitted(t *testing.T) {
+	check := func(t *testing.T, label string, st *State, backupsOn, certManagerOn bool) {
+		t.Helper()
+		vars := infraVars(st)
+		if got := databaseBackupsEnabled(st); got != backupsOn {
+			t.Errorf("%s: the backup predicate says on=%v, want %v", label, got, backupsOn)
+		}
+		if off := slices.Contains(vars, "enable_database_backups=false"); off == backupsOn {
+			t.Errorf("%s: the variables say backups off=%v, want on=%v", label, off, backupsOn)
+		}
+		if got := certManagerEnabled(st); got != certManagerOn {
+			t.Errorf("%s: the cert-manager predicate says on=%v, want %v", label, got, certManagerOn)
+		}
+		if off := slices.Contains(vars, "enable_cert_manager=false"); off == certManagerOn {
+			t.Errorf("%s: the variables say cert-manager off=%v, want on=%v", label, off, certManagerOn)
+		}
+	}
+
+	compared := 0
 	for _, noCNPG := range []bool{false, true} {
 		for _, compact := range []bool{false, true} {
 			for _, noTLS := range []bool{false, true} {
 				for _, noMonitoring := range []bool{false, true} {
-					st := &State{
-						Instance: "acme", NoCNPG: noCNPG, Compact: compact,
-						NoTLS: noTLS, NoMonitoring: noMonitoring,
+					flags := func() *State {
+						return &State{
+							Instance: "acme", NoCNPG: noCNPG, Compact: compact,
+							NoTLS: noTLS, NoMonitoring: noMonitoring,
+						}
 					}
-					vars := infraVars(st)
-					emittedOff := slices.Contains(vars, "enable_database_backups=false")
-					if got := databaseBackupsEnabled(st); got == emittedOff {
-						t.Errorf("no-cnpg=%v compact=%v no-tls=%v: the predicate says backups on=%v "+
-							"while the variables say off=%v — the two have drifted",
-							noCNPG, compact, noTLS, got, emittedOff)
+					label := fmt.Sprintf("no-cnpg=%v compact=%v no-tls=%v no-monitoring=%v",
+						noCNPG, compact, noTLS, noMonitoring)
+
+					install := flags()
+					flagBackups := !noCNPG && !(compact && noTLS)
+					flagCertManager := !(compact && noTLS)
+					check(t, "install "+label, install, flagBackups, flagCertManager)
+					if off := slices.Contains(infraVars(install), "enable_monitoring=false"); off != noMonitoring {
+						t.Errorf("install %s: the variables say monitoring off=%v", label, off)
+					}
+					if got := DatabaseBackupsEnabled(noCNPG, compact, noTLS); got != flagBackups {
+						t.Errorf("%s: DatabaseBackupsEnabled says %v, want %v", label, got, flagBackups)
 					}
 
-					cmOff := slices.Contains(vars, "enable_cert_manager=false")
-					if got := certManagerEnabled(st); got == cmOff {
-						t.Errorf("compact=%v no-tls=%v: cert-manager predicate says on=%v, "+
-							"variables say off=%v", compact, noTLS, got, cmOff)
-					}
-
-					monOff := slices.Contains(vars, "enable_monitoring=false")
-					if got := monitoringEnabled(st); got == monOff {
-						t.Errorf("no-monitoring=%v: predicate says on=%v, variables say off=%v",
-							noMonitoring, got, monOff)
-					}
+					boot := flags()
+					boot.Install = &InstallRecord{Settings: InstallSettings{
+						DatabaseBackups: !flagBackups, CertManager: !flagCertManager,
+					}}
+					check(t, "bootstrap "+label, boot, !flagBackups, !flagCertManager)
+					compared++
 				}
 			}
 		}
+	}
+	if compared != 16 {
+		t.Fatalf("the matrix compared %d of 16 combinations", compared)
 	}
 }
 
@@ -450,5 +489,107 @@ func TestTheDashboardCredentialLandsWhereGrafanaReadsIt(t *testing.T) {
 	}
 	if found.Data["admin-user"] == "" {
 		t.Error("no user is carried, so admin.userKey resolves to nothing")
+	}
+}
+
+// secretReads records the namespace/name of every Secret a client is asked for.
+func secretReads(c *fake.Clientset) *[]string {
+	var reads []string
+	c.PrependReactor("get", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		reads = append(reads, a.GetNamespace()+"/"+a.(k8stesting.GetAction).GetName())
+		return false, nil, nil
+	})
+	return &reads
+}
+
+// 🔴 A BOOTSTRAP FOLLOWING AN INSTALL MINTS NOTHING THE CLUSTER OWNS, AND READS NONE OF
+// IT TO REUSE. The cluster's credentials are what every instance on it already runs on;
+// a bootstrap that minted them would be proposing new values for a store it does not
+// apply, and one that went on to write them would rotate every other instance's.
+//
+// The record turns on everything that gates a cluster credential — monitoring, an
+// in-cluster archive — so an empty field here is the half-split and not a switched-off
+// feature.
+func TestABootstrapMintsNoClusterOwnedCredential(t *testing.T) {
+	st := &State{Instance: "acme", InstanceUID: testUID, ClusterUID: testClusterUID, Values: map[string]string{}}
+	rec := aCompleteInstall()
+	FollowInstall(st, &rec)
+
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, got := range map[string]string{
+		"RDBPassword": set.RDBPassword, "RDBProvisionerPassword": set.RDBProvisionerPassword,
+		"ObjectStoreUser": set.ObjectStoreUser, "ObjectStoreSecret": set.ObjectStoreSecret,
+		"GrafanaAdminPassword": set.GrafanaAdminPassword,
+	} {
+		if got != "" {
+			t.Errorf("a bootstrap minted the cluster's %s", field)
+		}
+	}
+	if set.RDBInstancePassword == "" || set.TSDBPassword == "" {
+		t.Errorf("a bootstrap minted no credential for its own instance: %+v", set)
+	}
+
+	c := fake.NewSimpleClientset()
+	reads := secretReads(c)
+	if _, err := resolveCredentials(context.Background(), c, st, liveArchiveState{}); err != nil {
+		t.Fatalf("settling a bootstrap's credentials: %v", err)
+	}
+	if len(*reads) == 0 {
+		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
+	}
+	for _, r := range *reads {
+		if !strings.HasPrefix(r, instanceNamespace(st.Instance)+"/") {
+			t.Errorf("a bootstrap looked for %s to reuse; only its own instance's credentials are its to settle", r)
+		}
+	}
+}
+
+// ...and an install, which has no instance, mints and reads nothing an instance owns.
+func TestAnInstallMintsNoInstanceCredential(t *testing.T) {
+	st := &State{ClusterUID: testClusterUID, Values: map[string]string{}}
+
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.RDBInstancePassword != "" || set.TSDBPassword != "" {
+		t.Errorf("an install minted an instance's credential: instance login set=%t, event store set=%t",
+			set.RDBInstancePassword != "", set.TSDBPassword != "")
+	}
+	if set.RDBPassword == "" || set.RDBProvisionerPassword == "" || set.ObjectStoreSecret == "" || set.GrafanaAdminPassword == "" {
+		t.Errorf("an install left a cluster credential unminted: %+v", set)
+	}
+
+	c := fake.NewSimpleClientset()
+	reads := secretReads(c)
+	if _, err := resolveCredentials(context.Background(), c, st, liveArchiveState{}); err != nil {
+		t.Fatalf("settling an install's credentials: %v", err)
+	}
+	if len(*reads) == 0 {
+		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
+	}
+	for _, r := range *reads {
+		if !strings.HasPrefix(r, infraNamespace+"/") {
+			t.Errorf("an install looked for %s to reuse; it has no instance", r)
+		}
+	}
+}
+
+// 🔴 AN INSTALL OVER A LIVE RELATIONAL STORE WHOSE OWNER SECRET IS GONE IS REFUSED. The
+// store's liveness reaches resolveCredentials only through the install, which reads it
+// itself; a fresh owner password would be one the running role was never told about.
+func TestAnInstallOverALiveRelationalStoreWithNoOwnerSecretIsRefused(t *testing.T) {
+	st := &State{ClusterUID: testClusterUID, Values: map[string]string{}}
+	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true}}
+
+	_, err := resolveCredentials(context.Background(), fake.NewSimpleClientset(), st, live)
+	if err == nil || !strings.Contains(err.Error(), rdbClusterName+"-app-credentials") {
+		t.Fatalf("an install minted a fresh owner password over a live relational store: %v", err)
+	}
+	if _, err := resolveCredentials(context.Background(), fake.NewSimpleClientset(), st, liveArchiveState{}); err != nil {
+		t.Fatalf("an install with no relational store yet was refused: %v", err)
 	}
 }

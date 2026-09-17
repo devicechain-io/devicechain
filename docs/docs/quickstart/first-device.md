@@ -13,7 +13,7 @@ Budget about half an hour, most of it waiting for the bootstrap.
 :::note What this page assumes
 **`dcctl`, plus five tools on your `PATH`:** `docker`, `kubectl`, `helm`,
 [`kind`](https://kind.sigs.k8s.io/), and [OpenTofu](https://opentofu.org/) (the `tofu` binary;
-`terraform` also works). Every bootstrap runs a preflight first and **stops** if one of them is
+`terraform` also works). `dcctl install` and `dcctl bootstrap` each run a preflight first and **stop** if one of them is
 missing, so a gap costs you the first ten seconds rather than ten minutes.
 
 `helm` is on that list even though `dcctl` carries the chart inside itself and installs it
@@ -21,9 +21,10 @@ through Helm's Go library rather than the command — the preflight checks for t
 regardless, so treat it as required. `ko` and `cloud-provider-kind` are only warnings: you need
 `ko` solely to build images from source (`--build`).
 
-You do **not** need a cluster in advance. `dcctl bootstrap local` looks for a kind cluster named
-after the instance and offers to create one if there is none; `--kube-context <name>` points it
-at a cluster you already run, which it will never create or delete. Kubernetes **1.29 or newer**
+You do **not** need a cluster in advance. `dcctl install local` looks for a kind cluster named
+`devicechain` (or the name given with `--cluster`) and offers to create one if there is none;
+`--kube-context <name>` points it at a cluster you already run, which it will never create or
+delete. Kubernetes **1.29 or newer**
 either way — older is refused, because the database charts refuse it.
 
 `dcctl preflight local` runs exactly these checks without bootstrapping anything, and the
@@ -35,9 +36,17 @@ the flags in step 1 produce.
 
 ## 1. Bring up an instance
 
+Prepare the cluster once, then create the instance on it:
+
 ```bash
+dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`dcctl install` creates the kind cluster and installs what every instance on it shares — the
+relational database, the CloudNativePG operator, cert-manager, monitoring and ingress. It is
+done once per cluster; `dcctl bootstrap` refuses on a cluster where it has not completed. See
+[Install the cluster](../deployment/bootstrap.md#install).
 
 The instance id — `devicechain` here — is not decoration. It becomes the namespace, and it is
 the first segment of every device topic and ingest path on this page. If you choose a
@@ -268,4 +277,11 @@ That is a device, end to end: registered, credentialed, reporting, and queryable
 ```bash
 dcctl sim destroy demo
 dcctl destroy local devicechain
+```
+
+`dcctl destroy` removes the instance and leaves the cluster installed, ready for the next
+bootstrap. To remove the cluster as well:
+
+```bash
+kind delete cluster --name devicechain
 ```

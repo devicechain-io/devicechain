@@ -7,13 +7,12 @@ title: Observability & Metrics
 
 DeviceChain ships with observability built in, not bolted on: every service is
 instrumented with **Prometheus metrics** and standard Kubernetes health probes, and
-`dcctl bootstrap` deploys a complete **Prometheus + Grafana + Alertmanager** stack
-alongside the instance — so a fresh install is watchable from its first minute,
+`dcctl install` deploys a complete **Prometheus + Grafana + Alertmanager** stack
+on the cluster, for every instance on it — so a fresh install is watchable from its first minute,
 with no separate monitoring project to assemble.
 
 :::note Status
-The monitoring stack (kube-prometheus-stack via `dcctl bootstrap`), Grafana SSO
-through the platform's own OAuth 2.1 authorization server, and the
+The monitoring stack (kube-prometheus-stack via `dcctl install`) and the
 event-processing operations dashboard are implemented and validated end-to-end. A
 command-delivery dashboard and its alert rules ship alongside them. Dashboards for
 the remaining functional areas and OTLP distributed tracing are planned follow-ups.
@@ -34,43 +33,29 @@ whole instance uniformly — there is no per-service integration work.
 
 ## The monitoring stack
 
-[`dcctl bootstrap`](./bootstrap.md) provisions monitoring as one of its embedded
-OpenTofu modules, **on by default** — the same layer that provisions NATS,
-PostgreSQL, and ingress also stands up
+[`dcctl install`](./bootstrap.md#install) provisions monitoring as one of its embedded
+OpenTofu modules, **on by default** (`--no-monitoring` leaves it out, and so does
+`--compact`) — the same layer that provisions the relational database, cert-manager and
+ingress also stands up
 [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
-(Prometheus, Grafana, and Alertmanager):
+(Prometheus, Grafana, and Alertmanager). It is installed once per cluster, and every
+instance bootstrapped on that cluster is watched by it:
 
 - **Cross-namespace scrape** — Prometheus runs in its own namespace and scrapes
-  the instance's services across namespaces, so one stack watches the whole
+  each instance's services across namespaces, so one stack watches the whole
   deployment.
 - **Dashboards ship with the platform** — Grafana boards live in the Helm chart
   (`deploy/helm/devicechain/dashboards/`) and are auto-imported by Grafana's
   dashboard sidecar. A new dashboard is a chart change, not a manual import.
-- **A break-glass admin login** — Grafana keeps a native admin credential
-  available alongside SSO, so an operator is never locked out of metrics by an
-  auth outage.
 
-## Grafana SSO
+## Signing in to Grafana
 
-Grafana can log operators in through DeviceChain's own identity system instead of
-a separate Grafana account. Enable it at bootstrap:
+Grafana uses its own **admin login**. Signing in to Grafana through DeviceChain's
+single sign-on is not currently available.
 
-```bash
-dcctl bootstrap local my-instance --grafana-sso
-```
-
-This registers Grafana as a **confidential OAuth client** of `user-management`'s
-OAuth 2.1 authorization server — the same server that secures
-[AI access over MCP](../concepts/mcp.md) — and configures Grafana to send users
-through it. Signing in to Grafana is signing in to DeviceChain.
-
-Two things to know about the model:
-
-- **Operator-tier only.** Metrics are instance-level and cross-tenant, so Grafana
-  is an *operator* surface, not something tenant users can reach. Tenants see
-  their own data through the console and dashboards, never through Grafana.
-- **Linked from the console.** The superuser console shows a **Metrics** link
-  that takes an operator straight to Grafana.
+Metrics are instance-level and cross-tenant, so Grafana is an *operator* surface, not
+something tenant users can reach. Tenants see their own data through the console and
+dashboards, never through Grafana.
 
 ## The event-processing operations board
 
@@ -83,9 +68,7 @@ is it doing?" is answerable at a glance.
 
 ## Related
 
-- **[Bootstrap an Instance](./bootstrap.md)** — the command that deploys the
-  monitoring stack, and its flags.
+- **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command
+  that deploys the monitoring stack, and its flags.
 - **[Deployment & Operator](./kubernetes-operator.md)** — how the chart renders
   per-service workloads with their health probes.
-- **[AI Access (MCP)](../concepts/mcp.md)** — the OAuth 2.1 authorization server
-  that Grafana SSO rides on.

@@ -39,9 +39,8 @@ func TestEveryVariableDcctlPassesIsDeclaredBySomeRoot(t *testing.T) {
 		{"legacy removal allowed", &State{KubeContext: "kind-dc", Instance: "a", AllowLegacyDbRemoval: true}},
 		{"local context", &State{KubeContext: "kind-local", Instance: "a"}},
 		{
-			"restoring both stores",
+			"restoring the event store",
 			&State{KubeContext: "kind-dc", Instance: "a", Restore: RestorePlan{
-				RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28 03:00:00+00",
 				TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-26 01:02:03+00",
 			}},
 		},

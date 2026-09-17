@@ -49,7 +49,7 @@ variable "ha" {
     config (instance.config.infrastructure.nats.streamReplicas), rendered by the
     DeviceChain Helm chart, which this root does not install. Both halves must be
     raised together or the instance runs a 3-node broker holding single-replica
-    streams — replicated servers, unreplicated data. `dcctl bootstrap --ha` sets
+    streams — replicated servers, unreplicated data. `dcctl install --ha` sets
     both from one value and preflights that they agree; a direct tofu user must set
     the Helm value themselves.
   EOT
@@ -148,6 +148,17 @@ variable "postgres_storage" {
   description = "PersistentVolume size for the relational Postgres, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times postgres_instances — three times this under --ha. It sized a single StatefulSet before A2.3."
   type        = string
   default     = "8Gi"
+}
+
+variable "postgres_max_connections" {
+  description = "max_connections on the shared relational store: the connection budget every instance on this cluster is admitted against. Each instance's login is limited to (its relational areas x 20 x 2), so 600 admits two default-profile instances. Changing it restarts the store's instances one at a time."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.postgres_max_connections >= 100 && floor(var.postgres_max_connections) == var.postgres_max_connections
+    error_message = "postgres_max_connections must be a whole number of at least 100."
+  }
 }
 
 variable "postgres_storage_class" {
@@ -531,7 +542,7 @@ variable "backup_object_store_storage" {
     🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
     StorageClass with allowVolumeExpansion — kind's default local-path has none,
     and every provisioner refuses a SHRINK. That last one bites a real path:
-    re-running bootstrap on an existing instance with `--compact` asks for a
+    re-running `dcctl install --compact` over an existing install asks for a
     smaller value than the default and the apply fails.
   EOT
   type        = string

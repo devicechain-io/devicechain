@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,7 +32,7 @@ func aCompleteInstall() InstallRecord {
 		},
 		Outputs: InstallOutputs{
 			Rdb: aRelationalStore(),
-			Archive: InstallArchive{
+			Archive: ClusterArchive{
 				EndpointURL:       "http://dc-object-store.dc-system:9000",
 				CredentialsSecret: "dc-object-store-credentials",
 				AccessKeyIDKey:    "MINIO_ROOT_USER",
@@ -46,7 +47,8 @@ func aCompleteInstall() InstallRecord {
 }
 
 func aRelationalStore() ClusterRdb {
-	return ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "dc-rdb-provisioner-credentials"}
+	return ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "dc-rdb-provisioner-credentials",
+		MaxConnections: 600}
 }
 
 // The contract, by literal: where a bootstrap on any machine looks.
@@ -192,6 +194,8 @@ func TestARecordMissingWhatItsSettingsPromiseIsRefused(t *testing.T) {
 		"relational store namespace":   func(r *InstallRecord) { r.Outputs.Rdb.Namespace = "" },
 		"relational store cluster":     func(r *InstallRecord) { r.Outputs.Rdb.ClusterName = "" },
 		"relational store provisioner": func(r *InstallRecord) { r.Outputs.Rdb.ProvisionerSecret = "" },
+		// Every instance's login is admitted against it; a zero budget admits nothing.
+		"relational store connection budget": func(r *InstallRecord) { r.Outputs.Rdb.MaxConnections = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := aCompleteInstall()
@@ -258,9 +262,8 @@ func TestTheRecordedSettingsFollowTheAppliedVariables(t *testing.T) {
 func TestTheInstallRecordHoldsNoCredential(t *testing.T) {
 	st := aWritableState()
 	st.ClusterUID = testClusterUID
-	recordClusterOutputs(st, nil)
-	rec := InstallRecord{ClusterUID: testClusterUID, Settings: installSettingsFor(st),
-		Outputs: installOutputsFrom(st, ClusterArchive{}, ClusterRdb{})}
+	rec := aCompleteInstall()
+	rec.Settings = installSettingsFor(st)
 	body, _ := json.Marshal(rec)
 	for _, secret := range []string{"rdb-pw", "tsdb-pw", "os-user", "os-secret", "grafana-pw"} {
 		if strings.Contains(string(body), secret) {
@@ -291,20 +294,60 @@ func TestAnExternalDestinationIsNotRecordedWhenBackupsAreOff(t *testing.T) {
 
 // The outputs are what the cluster apply RETURNED, carried field for field.
 func TestTheRecordedOutputsAreWhatTheClusterApplyReturned(t *testing.T) {
-	st := &State{Values: map[string]string{
-		cnpgNamespaceKey: "cnpg-system", "grafanaService": "svc", "grafanaNamespace": "monitoring",
-		databaseBackupOffsiteKey: "true",
-	}}
-	got := installOutputsFrom(st, ClusterArchive{
-		EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b",
-	}, ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"})
+	got, err := clusterOutputs(map[string]tfexec.OutputMeta{
+		"backup_endpoint_url":                   {Value: []byte(`"http://e"`)},
+		"backup_credentials_secret":             {Value: []byte(`"s"`)},
+		"backup_access_key_id_key":              {Value: []byte(`"a"`)},
+		"backup_secret_access_key_key":          {Value: []byte(`"k"`)},
+		"backup_bucket_tsdb":                    {Value: []byte(`"b"`)},
+		"namespace":                             {Value: []byte(`"dc-system"`)},
+		"postgres_cluster_name":                 {Value: []byte(`"dc-rdb"`)},
+		"postgres_max_connections":              {Value: []byte(`600`)},
+		"cnpg_namespace":                        {Value: []byte(`"cnpg-system"`)},
+		"grafana_service":                       {Value: []byte(`"svc"`)},
+		"grafana_namespace":                     {Value: []byte(`"monitoring"`)},
+		"database_backup_survives_cluster_loss": {Value: []byte(`true`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := InstallOutputs{
-		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"},
-		Archive:                   InstallArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
+		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: rdbProvisionerSecretName, MaxConnections: 600},
+		Archive:                   ClusterArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
 		BackupSurvivesClusterLoss: true,
 		CNPGNamespace:             "cnpg-system", GrafanaService: "svc", GrafanaNamespace: "monitoring",
 	}
 	if got != want {
 		t.Errorf("recorded outputs\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// Newer and older records are refused for opposite reasons, with opposite remedies: a
+// newer record needs the dcctl that wrote it, an older one needs this dcctl to re-install.
+func TestASchemaRefusalSendsTheOperatorTheRightWay(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		schema      int
+		want, wrong string
+	}{
+		{"newer", installRecordSchema + 1, "use the dcctl that installed this cluster", "Re-run `dcctl install`"},
+		{"older", installRecordSchema - 1, "Re-run `dcctl install` with this dcctl", "use the dcctl that installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewSimpleClientset()
+			if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
+				t.Fatal(err)
+			}
+			rec := storedInstallRecord(t, c)
+			rec.Schema = tc.schema
+			replaceStoredInstallRecord(t, c, rec)
+			_, err := readInstallRecord(context.Background(), c, testClusterUID)
+			if !errors.Is(err, ErrInstallRecordSchema) {
+				t.Fatalf("a %s record was not refused as another schema: %v", tc.name, err)
+			}
+			if !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tc.wrong) {
+				t.Errorf("a %s record's refusal does not say %q (or says %q): %v", tc.name, tc.want, tc.wrong, err)
+			}
+		})
 	}
 }

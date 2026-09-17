@@ -18,7 +18,7 @@
 # the rig is built around one rule — a check is worth nothing until it has been
 # shown to fail.
 #
-#   hack/ha-rig.sh up        create the 4-node kind cluster and bootstrap --ha
+#   hack/ha-rig.sh up        create the 4-node kind cluster, install --ha, bootstrap
 #   hack/ha-rig.sh verify    assert the HA claim from live broker (A) and
 #                            relational-database (B) state
 #   hack/ha-rig.sh control   THE NEGATIVE CONTROLS: the same two checks against a
@@ -62,7 +62,9 @@ control_cluster="devicechain-ha-control"
 # miss: dcctl keeps OpenTofu state per INSTANCE (~/.devicechain/instances/<instance>/infra),
 # not per cluster. Two instances of the same name on two clusters share one state
 # directory, so bootstrapping the control would reconcile the rig cluster's
-# recorded infrastructure against a different cluster entirely. Distinct names
+# recorded infrastructure against a different cluster entirely. (The install's own
+# state is per cluster, keyed by the cluster's kube-system UID, so the two rig
+# clusters never share that half.) Distinct names
 # also keep the rig clear of any `default` instance already on this machine.
 instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
@@ -208,7 +210,11 @@ create_cluster() {
 # `dcctl bootstrap` BUILDS an instance and refuses to run against one that already
 # exists -- it mints every credential, and handing a running instance new ones is
 # not an update. This rig's create_cluster deliberately reuses an existing kind
-# cluster, so `up` twice without `down` in between reaches that refusal.
+# cluster, so `up` twice without `down` in between reaches that refusal. (`dcctl
+# install` is re-runnable and would not stop it; the bootstrap after it would.)
+#
+# It runs BEFORE the install, so a rig that is going to refuse does not first
+# re-apply the cluster's prerequisites for nothing.
 #
 # It is caught here rather than left to dcctl for the reason dr-rig catches it: the
 # rig knows what the operator meant, and can say `down` first. dcctl can only say
@@ -238,6 +244,12 @@ cmd_up() {
   # shell is a second place for it to be wrong, and the first draft of this script
   # proved the point: it counted 0 schedulable nodes on a cluster with 3.
 
+  # --ha goes to the INSTALL, not the bootstrap. HA is chosen once per cluster — the
+  # relational store is provisioned there — and a bootstrap follows the install it
+  # lands on rather than choosing again.
+  # --kube-context rather than --cluster: the cluster above was created from the
+  # rig's own 4-node config, which a dcctl-created cluster would not have.
+  #
   # --no-escrow: this rig's instances exist to be torn down, so there is no root
   # key worth a second copy. Bootstrap escrows by default and REFUSES to run
   # non-interactively without a passphrase, which is the correct default for an
@@ -246,8 +258,10 @@ cmd_up() {
   # substrate to assert on at all. See ensure_lease_identities.
   ensure_lease_identities
   require_no_instance "$ha_cluster" "$instance" "kind-$ha_cluster"
-  say "bootstrapping --ha"
-  "$dcctl" bootstrap local "$instance" --ha --yes --no-escrow \
+  say "installing --ha"
+  "$dcctl" install local --yes --ha --kube-context "kind-$ha_cluster"
+  say "bootstrapping onto the HA install"
+  "$dcctl" bootstrap local "$instance" --yes --no-escrow \
     --kube-context "kind-$ha_cluster" --host localhost --no-tls \
     --lwm2m-identities "$lease_identities_file" \
     "${image_args[@]}"
@@ -325,7 +339,8 @@ cmd_control() {
   build_dcctl
   create_cluster "$control_cluster" "$repo_root/deploy/local/kind-cluster-ha-control.yaml"
 
-  # --compact, and it does NOT weaken the control.
+  # --compact (on the install, where it now lives), and it does NOT weaken the
+  # control.
   #
   # It lowers JetStream/KV ceilings and volume sizes and drops the monitoring stack
   # and cert-manager. None of that touches a replica factor, which is the only
@@ -344,10 +359,15 @@ cmd_control() {
   # dc_leases bucket at 1 replica while claiming 3 — so A2 is not merely exercised
   # on the HA side, it is shown to FAIL on an instance that does not hold the
   # claim. That is the difference between an assertion and a decoration.
-  say "bootstrapping the negative control (no --ha, single node)"
+  #
+  # --no-tls on the install states what --compact already implies (no cert-manager),
+  # so the control's install and the bootstrap's --no-tls below say the same thing.
   ensure_lease_identities
   require_no_instance "$control_cluster" "$control_instance" "kind-$control_cluster"
-  "$dcctl" bootstrap local "$control_instance" --yes --compact --no-escrow \
+  say "installing the negative control (no --ha, --compact)"
+  "$dcctl" install local --yes --compact --no-tls --kube-context "kind-$control_cluster"
+  say "bootstrapping the negative control (no --ha, single node)"
+  "$dcctl" bootstrap local "$control_instance" --yes --no-escrow \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \
     --lwm2m-identities "$lease_identities_file" \
     "${image_args[@]}"

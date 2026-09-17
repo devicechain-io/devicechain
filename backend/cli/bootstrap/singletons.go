@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fatih/color"
@@ -90,6 +91,41 @@ func refuseAHostAnotherInstanceServes(held clusterSingletons, instance, host str
 	return &ErrHostTaken{Instance: instance, Host: host, Holder: held.HostHolder}
 }
 
+// ErrConnectionBudget is the refusal of an instance the shared relational store has no
+// connections left for, raised before anything is written. Typed for the same reason as
+// ErrHostTaken.
+type ErrConnectionBudget struct{ Err error }
+
+func (e *ErrConnectionBudget) Error() string { return e.Err.Error() }
+func (e *ErrConnectionBudget) Unwrap() error { return e.Err }
+
+// precheckConnectionBudget asks the shared store whether this instance's connection
+// limit would be admitted, without admitting it. Indirected so the step can be driven
+// without a cluster.
+var precheckConnectionBudget = func(ctx context.Context, st *State) error {
+	if st.Install == nil {
+		return nil
+	}
+	limit, err := instanceConnectionLimit(st)
+	if err != nil {
+		return fmt.Errorf("sizing this instance's connection limit: %w", err)
+	}
+	rdb := st.Install.Outputs.Rdb
+	err = withProvisionerSession(ctx, st.KubeContext, rdb, func(q instanceDBQuerier) error {
+		return admitInstance(ctx, q, st.Instance, connectionAdmission{Limit: limit, Budget: rdb.MaxConnections})
+	})
+	return asBudgetRefusal(err)
+}
+
+// asBudgetRefusal types an admission refusal so the command layer can tell it from
+// every other failure; anything else passes through unchanged.
+func asBudgetRefusal(err error) error {
+	if errors.Is(err, errNoConnectionBudget) {
+		return &ErrConnectionBudget{Err: err}
+	}
+	return err
+}
+
 // ErrHostTaken is the refusal of a host another instance serves. Typed, because the
 // command layer undoes the local record this run wrote on exactly this refusal: it fires
 // before anything is written, so that record describes an instance that was never built.
@@ -139,6 +175,13 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		return fail("checking what other instances on this cluster hold", err)
 	}
 	if err := refuseAHostAnotherInstanceServes(held, st.Instance, host); err != nil {
+		return err
+	}
+	// 🔴 AND THE CONNECTION BUDGET, FOR THE SAME REASON: on a shared store it is the refusal
+	// an operator is likeliest to meet, and meeting it at the apply would leave a declared,
+	// namespaced, credentialed instance behind. The apply admits again, under a lock —
+	// this is the early answer, not the enforcement.
+	if err := precheckConnectionBudget(ctx, st); err != nil {
 		return err
 	}
 	done()
