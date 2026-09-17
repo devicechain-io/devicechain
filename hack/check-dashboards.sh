@@ -424,9 +424,6 @@ for key, insts in sorted(all_keys.items()):
             "    deleting either instance's ConfigMap deletes the other's board."
             % (key, ", ".join(insts)))
 
-if boards == 0:
-    problems.append("NO-BOARDS: neither render produced a dashboard ConfigMap with data")
-
 if not problems:
     print("    %d dashboard ConfigMap(s) across 2 instances (ids of %s characters): names and\n"
           "    data keys as pinned, every uid and file distinct, every board scoped and foldered"
@@ -701,7 +698,39 @@ PY
   plant "$tpl" 'grafana_folder: devicechain-{{ $id }}' 'grafana_folder: devicechain'
   expect_configmaps FOLDER "a grafana_folder annotation shared across instances"
 
-  echo "self-test passed: 13 defects, each planted alone, each caught; a clean tree and chart pass"
+  # Case 15 — A PINNED DASHBOARD THAT NO LONGER RENDERS, alone. The template's
+  # glob is narrowed so event-processing.json is skipped: every board that does
+  # render is right, and only the pinned sets notice the one that is gone.
+  plant "$tpl" '.Files.Glob "dashboards/*.json"' '.Files.Glob "dashboards/c*.json"'
+  expect_configmaps KEY-MISSING "a pinned dashboard that no longer renders"
+
+  # Case 16 — A BOARD WITH NO `namespace` VARIABLE, alone. This one is refused
+  # by the TEMPLATE, not by the checker above: without the variable there is
+  # nothing to replace with the instance's constant, and every panel's
+  # namespace="$namespace" selector would match nothing. The render must fail,
+  # and fail with the template's own message rather than for an unrelated reason.
+  python3 - "$chart/dashboards/command-delivery.json" "$chart/dashboards/unscoped-board.json" <<'FIXTURE' ||
+import json, sys
+board = json.load(open(sys.argv[1]))
+before = len(board["templating"]["list"])
+board["templating"]["list"] = [v for v in board["templating"]["list"] if v.get("name") != "namespace"]
+if len(board["templating"]["list"]) != before - 1:
+    sys.exit(1)
+json.dump(board, open(sys.argv[2], "w"), indent=2)
+FIXTURE
+    fail "the unscoped-board fixture could not be built"
+  unscoped_rc=0
+  unscoped_err="$(helm template dc "$chart" \
+    --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" 2>&1 >/dev/null)" || unscoped_rc=$?
+  [ "$unscoped_rc" -ne 0 ] || fail "rendered a dashboard that has no namespace variable"
+  grep -qF 'dashboard dashboards/unscoped-board.json has no "namespace" template variable' <<<"$unscoped_err" || {
+    echo "$unscoped_err" >&2
+    fail "the render of an unscoped dashboard failed, but not with the template's own refusal"
+  }
+  rm -f "$chart/dashboards/unscoped-board.json"
+  echo "  ok: a dashboard with no namespace variable is refused by the template"
+
+  echo "self-test passed: 15 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

@@ -49,11 +49,21 @@ instance bootstrapped on that cluster is watched by it:
   dashboard sidecar. A new dashboard is a chart change, not a manual import.
 - **One folder per instance** — each instance gets its own Grafana folder,
   `devicechain-<instance>`, holding its own copy of every board. Each copy is scoped to
-  that instance and titled with its id; there is no instance picker to set. Instances
-  sharing a cluster never share a board, so removing or upgrading one leaves the others'
-  boards untouched. An instance still on an older chart, or a cluster whose monitoring
-  stack predates this layout, shows its boards outside any instance folder until
-  both are upgraded (re-running `dcctl install` updates the cluster side).
+  that instance and titled with its id; there is no instance picker to set. The files
+  under `dashboards/` are templates the chart renders per instance, not boards to
+  import by hand.
+- **Instances on a cluster keep their boards apart** — once every instance on a cluster
+  runs a chart with per-instance folders, removing or upgrading one leaves the others'
+  boards untouched. Until then, instances still on an older chart share one board per
+  dashboard outside any instance folder, and upgrading any instance removes that shared
+  board file: an older instance's board is missing until Grafana's dashboard sidecar next
+  rescans. A cluster whose monitoring stack predates this layout shows every instance's
+  boards outside their folders until `dcctl install` is re-run.
+- **Old board links retire** — the boards' former shared ids (`dc-event-processing-ops`,
+  `dc-command-delivery-ops`) are not used by any upgraded instance, so bookmarks to them
+  stop working once every instance is upgraded.
+- **Destroying an instance leaves an empty folder** — its boards are removed, but its
+  now-empty `devicechain-<instance>` folder stays in Grafana; delete it by hand.
 
 ## Signing in to Grafana
 

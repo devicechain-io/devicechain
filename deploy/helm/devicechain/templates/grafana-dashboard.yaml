@@ -18,7 +18,7 @@ object (new numeric id, `created` reset). Grafana never logged a duplicate uid. 
 instance picker the boards used to carry could not help — it scoped the queries of a
 board that was not there.
 
-So each ConfigMap now differs per instance in four places, and nowhere else:
+So each ConfigMap now differs per instance in five places, and nowhere else:
 
   - the DATA KEY, `{instance}-<file>.json`. This is the file name the sidecar writes, so
     it is what keeps two instances' files apart. The sidecar's UNIQUE_FILENAMES option
@@ -40,8 +40,9 @@ So each ConfigMap now differs per instance in four places, and nowhere else:
     stem a file name), so no two pairs hash the same input.
   - the `title`, the file's own title with `[{instance}]` appended, so a search across
     folders still says which instance a board reads.
+  - the `namespace` template variable, below.
 
-And the `namespace` template variable is REPLACED with a hidden constant naming the
+The `namespace` template variable is REPLACED with a hidden constant naming the
 instance (the instance id IS its namespace — metadata.namespace below). Every panel
 already filters `namespace="$namespace"`, so the queries are untouched and a board can
 only ever read its own instance's series. The files on disk carry that entry as an empty
