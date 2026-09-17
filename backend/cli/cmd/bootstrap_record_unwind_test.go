@@ -130,7 +130,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 
 	// Where each of the four calls appears in the command's source. NoPos means "never
 	// called", which is the mutant this exists for.
-	var capture, write, run, unwind, identify, writeCluster token.Pos
+	var capture, write, run, unwind, identify, readInstall token.Pos
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -151,8 +151,8 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			write = call.Pos()
 		case "IdentifyCluster":
 			identify = call.Pos()
-		case "WriteClusterRecord":
-			writeCluster = call.Pos()
+		case "ReadInstall":
+			readInstall = call.Pos()
 		case "Run":
 			// NewDefaultPipeline().Run(...), matched through its receiver rather than by
 			// a name as common as "Run".
@@ -189,13 +189,21 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 		pos  token.Pos
 	}{
 		{"bootstrap.IdentifyCluster", identify},
-		{"bootstrap.WriteClusterRecord", writeCluster},
+		{"bootstrap.ReadInstall", readInstall},
 	} {
 		if c.pos == token.NoPos {
-			t.Fatalf("the bootstrap command no longer calls %s, so nothing records which "+
-				"cluster this is — and a cluster rebuilt under the same name cannot be told "+
-				"from the one it replaced", c.what)
+			t.Fatalf("the bootstrap command no longer calls %s, so an instance is built on a "+
+				"cluster nobody checked was installed — or one whose install record came from "+
+				"another cluster", c.what)
 		}
+	}
+	// 🔴 THE INSTALL IS CHECKED BEFORE ANYTHING IS WRITTEN. A refusal after the local
+	// record is written leaves an instance `dcctl instances list` shows on a cluster that
+	// holds nothing of it.
+	if readInstall > write {
+		t.Errorf("the install record is read at %s, after the instance record is written at %s "+
+			"— an uninstalled cluster's refusal would leave a record behind",
+			fset.Position(readInstall), fset.Position(write))
 	}
 	if capture > write {
 		t.Errorf("the record is captured at %s, after it is replaced at %s — the rollback "+

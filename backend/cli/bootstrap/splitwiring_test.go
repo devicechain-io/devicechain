@@ -432,35 +432,52 @@ func TestEachApplyExtractsOnlyItsOwnRoot(t *testing.T) {
 }
 
 // The relational store's contract decodes from exactly what the cluster root declares —
-// and a missing or empty value is an error, never a store at an empty address.
+// and a missing or empty value is an error, never a store at an empty address or with
+// no connections to give out.
 func TestTheRelationalStoreContractReadsOnlyWhatTheClusterRootDeclares(t *testing.T) {
 	declared := rootDeclaredOutputs(t, assets.OpenTofuCluster(), "cluster")
 	full := map[string]tfexec.OutputMeta{}
 	for k := range declared {
 		full[k] = tfexec.OutputMeta{Value: []byte(`"x"`)}
 	}
+	// The budget is a number, and the one output here that is not a name.
+	if _, ok := declared["postgres_max_connections"]; !ok {
+		t.Fatal("the cluster root no longer declares postgres_max_connections; no instance can be " +
+			"admitted against a budget nothing exports")
+	}
+	full["postgres_max_connections"] = tfexec.OutputMeta{Value: []byte(`600`)}
 	got, err := rdbFromOutputs(full)
 	if err != nil {
 		t.Fatalf("the relational store decoder needs an output the cluster root does not declare: %v", err)
 	}
-	if got != (ClusterRdb{Namespace: "x", ClusterName: "x", ProvisionerSecret: rdbProvisionerSecretName}) {
+	if got != (ClusterRdb{Namespace: "x", ClusterName: "x", ProvisionerSecret: rdbProvisionerSecretName, MaxConnections: 600}) {
 		t.Errorf("decoded %+v", got)
 	}
-	for _, k := range []string{"namespace", "postgres_cluster_name"} {
+	for k, bad := range map[string][]string{
+		"namespace":             {`""`},
+		"postgres_cluster_name": {`""`},
+		// A budget of nothing admits nothing, and one that is not a number is not a budget
+		// at all — a root that began exporting it as a string must not decode as zero.
+		"postgres_max_connections": {`0`, `-1`, `"600"`},
+	} {
 		missing := map[string]tfexec.OutputMeta{}
-		empty := map[string]tfexec.OutputMeta{}
 		for kk, v := range full {
-			empty[kk] = v
 			if kk != k {
 				missing[kk] = v
 			}
 		}
-		empty[k] = tfexec.OutputMeta{Value: []byte(`""`)}
 		if _, err := rdbFromOutputs(missing); err == nil {
 			t.Errorf("a cluster root that stopped exporting %q decoded as a store", k)
 		}
-		if _, err := rdbFromOutputs(empty); err == nil {
-			t.Errorf("an empty %q decoded as a store", k)
+		for _, value := range bad {
+			wrong := map[string]tfexec.OutputMeta{}
+			for kk, v := range full {
+				wrong[kk] = v
+			}
+			wrong[k] = tfexec.OutputMeta{Value: []byte(value)}
+			if _, err := rdbFromOutputs(wrong); err == nil {
+				t.Errorf("%q exported as %s decoded as a store", k, value)
+			}
 		}
 	}
 }

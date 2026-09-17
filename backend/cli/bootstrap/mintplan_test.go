@@ -4,12 +4,16 @@
 package bootstrap
 
 import (
+	"context"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // 🔴 THE CROSS-CHECK THAT STOPS TWO COPIES OF ONE DECISION DRIFTING. infraVars decides
@@ -450,5 +454,91 @@ func TestTheDashboardCredentialLandsWhereGrafanaReadsIt(t *testing.T) {
 	}
 	if found.Data["admin-user"] == "" {
 		t.Error("no user is carried, so admin.userKey resolves to nothing")
+	}
+}
+
+// secretReads records the namespace/name of every Secret a client is asked for.
+func secretReads(c *fake.Clientset) *[]string {
+	var reads []string
+	c.PrependReactor("get", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		reads = append(reads, a.GetNamespace()+"/"+a.(k8stesting.GetAction).GetName())
+		return false, nil, nil
+	})
+	return &reads
+}
+
+// 🔴 A BOOTSTRAP FOLLOWING AN INSTALL MINTS NOTHING THE CLUSTER OWNS, AND READS NONE OF
+// IT TO REUSE. The cluster's credentials are what every instance on it already runs on;
+// a bootstrap that minted them would be proposing new values for a store it does not
+// apply, and one that went on to write them would rotate every other instance's.
+//
+// The record turns on everything that gates a cluster credential — monitoring, an
+// in-cluster archive — so an empty field here is the half-split and not a switched-off
+// feature.
+func TestABootstrapMintsNoClusterOwnedCredential(t *testing.T) {
+	st := &State{Instance: "acme", InstanceUID: testUID, ClusterUID: testClusterUID, Values: map[string]string{}}
+	rec := aCompleteInstall()
+	FollowInstall(st, &rec)
+
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, got := range map[string]string{
+		"RDBPassword": set.RDBPassword, "RDBProvisionerPassword": set.RDBProvisionerPassword,
+		"ObjectStoreUser": set.ObjectStoreUser, "ObjectStoreSecret": set.ObjectStoreSecret,
+		"GrafanaAdminPassword": set.GrafanaAdminPassword,
+	} {
+		if got != "" {
+			t.Errorf("a bootstrap minted the cluster's %s", field)
+		}
+	}
+	if set.RDBInstancePassword == "" || set.TSDBPassword == "" {
+		t.Errorf("a bootstrap minted no credential for its own instance: %+v", set)
+	}
+
+	c := fake.NewSimpleClientset()
+	reads := secretReads(c)
+	if _, err := resolveCredentials(context.Background(), c, st, liveArchiveState{}); err != nil {
+		t.Fatalf("settling a bootstrap's credentials: %v", err)
+	}
+	if len(*reads) == 0 {
+		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
+	}
+	for _, r := range *reads {
+		if !strings.HasPrefix(r, instanceNamespace(st.Instance)+"/") {
+			t.Errorf("a bootstrap looked for %s to reuse; only its own instance's credentials are its to settle", r)
+		}
+	}
+}
+
+// ...and an install, which has no instance, mints and reads nothing an instance owns.
+func TestAnInstallMintsNoInstanceCredential(t *testing.T) {
+	st := &State{ClusterUID: testClusterUID, Values: map[string]string{}}
+
+	set, err := mintNewCredentials(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.RDBInstancePassword != "" || set.TSDBPassword != "" {
+		t.Errorf("an install minted an instance's credential: instance login set=%t, event store set=%t",
+			set.RDBInstancePassword != "", set.TSDBPassword != "")
+	}
+	if set.RDBPassword == "" || set.RDBProvisionerPassword == "" || set.ObjectStoreSecret == "" || set.GrafanaAdminPassword == "" {
+		t.Errorf("an install left a cluster credential unminted: %+v", set)
+	}
+
+	c := fake.NewSimpleClientset()
+	reads := secretReads(c)
+	if _, err := resolveCredentials(context.Background(), c, st, liveArchiveState{}); err != nil {
+		t.Fatalf("settling an install's credentials: %v", err)
+	}
+	if len(*reads) == 0 {
+		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
+	}
+	for _, r := range *reads {
+		if !strings.HasPrefix(r, infraNamespace+"/") {
+			t.Errorf("an install looked for %s to reuse; it has no instance", r)
+		}
 	}
 }

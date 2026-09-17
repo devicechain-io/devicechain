@@ -582,31 +582,30 @@ func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 // reads the values the OpenTofu apply will actually consume.
 //
 // It is the same shape as the flagless-rerun test, run through the whole of
-// stepRenderConfig: a live instance archiving under a restored path, re-bootstrapped
-// with no restore flags.
+// stepRenderConfig: a live instance whose event store archives under a restored path,
+// re-bootstrapped with no restore flags.
+//
+// 🔑 ONLY THE EVENT STORE'S PATH IS A BOOTSTRAP'S. The relational store is the
+// cluster's, and `dcctl install` settles its path from the live store — a bootstrap
+// applies no cluster root to hand one to.
 func TestRenderConfigKeepsTheLiveArchivePath(t *testing.T) {
-	const owned = "dc-rdb-restored-20260728T140506Z"
+	const owned = "dc-tsdb-restored-20260728T140506Z"
 	withExistingInstance(t, "3q2+796tvu/erb7v3q2+796tvu/erb7v3q0=", nil)
 	withArchiveState(t, liveArchiveState{
-		Rdb:  clusterArchiveState{Exists: true, Path: owned},
-		Tsdb: clusterArchiveState{Exists: true},
+		Rdb:  clusterArchiveState{Exists: true},
+		Tsdb: clusterArchiveState{Exists: true, Path: owned},
 	}, nil)
 
-	st := &State{Instance: "prod", BuildImages: true, Values: map[string]string{}}
+	st := &State{Instance: "prod", InstanceUID: "4f979c6f-0000-4000-8000-000000000000",
+		BuildImages: true, Values: map[string]string{}}
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.Values["backupServerNameRdb"]; got != owned {
-		t.Fatalf("stepRenderConfig settled the relational archive path as %q, want %q — a "+
+	if got := st.Values["backupServerNameTsdb"]; got != owned {
+		t.Fatalf("stepRenderConfig settled the event store's archive path as %q, want %q — a "+
 			"flagless re-run must not move it", got, owned)
 	}
-	if got := st.Values["backupServerNameTsdb"]; got != "" {
-		t.Fatalf("the event store archives under its own name; want no explicit path, got %q", got)
-	}
-	if slices.Contains(infraVars(st), "backup_server_name_tsdb=") {
-		t.Error("an empty archive path must be omitted, not passed as an empty var")
-	}
-	if !slices.Contains(infraVars(st), "backup_server_name_rdb="+owned) {
+	if !slices.Contains(infraVars(st), "backup_server_name_tsdb="+owned) {
 		t.Errorf("the settled path never reached OpenTofu: %v", infraVars(st))
 	}
 }

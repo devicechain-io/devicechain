@@ -106,9 +106,7 @@ func TestTheDropAsksTheStoreAndNeedsARecord(t *testing.T) {
 func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
-		t.Fatal(err)
-	}
+	writeInstallThenBootstrapSecrets(t, c, st)
 	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
@@ -246,9 +244,7 @@ func TestAProvisionerFailureDoesNotEchoTheStatement(t *testing.T) {
 func TestAnUpgradeOfAnInstanceStillInTheSharedNamespaceSaysSo(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
-		t.Fatal(err)
-	}
+	writeInstallThenBootstrapSecrets(t, c, st)
 	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)

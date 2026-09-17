@@ -510,8 +510,8 @@ func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorL
 }
 
 func init() {
-	bootstrapCmd.Flags().StringVar(&bootstrapKubeContext, "kube-context", "", "build the instance on the cluster this context reaches, installed with `dcctl install --kube-context`")
-	bootstrapCmd.Flags().StringVar(&bootstrapCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster `dcctl install local` prepared")
+	bootstrapCmd.Flags().StringVar(&bootstrapKubeContext, "kube-context", "", "build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'")
+	bootstrapCmd.Flags().StringVar(&bootstrapCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster 'dcctl install local' prepared")
 	bootstrapCmd.Flags().StringVar(&bootstrapProfile, "profile", "", "configuration profile to apply")
 	bootstrapCmd.Flags().BoolVar(&bootstrapDryRun, "dry-run", false, "print what would happen without applying changes")
 	bootstrapCmd.Flags().BoolVarP(&bootstrapAssumeYes, "yes", "y", false, "assume yes for prompts")

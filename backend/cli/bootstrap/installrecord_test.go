@@ -46,7 +46,8 @@ func aCompleteInstall() InstallRecord {
 }
 
 func aRelationalStore() ClusterRdb {
-	return ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "dc-rdb-provisioner-credentials"}
+	return ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "dc-rdb-provisioner-credentials",
+		MaxConnections: 600}
 }
 
 // The contract, by literal: where a bootstrap on any machine looks.
@@ -192,6 +193,8 @@ func TestARecordMissingWhatItsSettingsPromiseIsRefused(t *testing.T) {
 		"relational store namespace":   func(r *InstallRecord) { r.Outputs.Rdb.Namespace = "" },
 		"relational store cluster":     func(r *InstallRecord) { r.Outputs.Rdb.ClusterName = "" },
 		"relational store provisioner": func(r *InstallRecord) { r.Outputs.Rdb.ProvisionerSecret = "" },
+		// Every instance's login is admitted against it; a zero budget admits nothing.
+		"relational store connection budget": func(r *InstallRecord) { r.Outputs.Rdb.MaxConnections = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := aCompleteInstall()
@@ -297,9 +300,9 @@ func TestTheRecordedOutputsAreWhatTheClusterApplyReturned(t *testing.T) {
 	}}
 	got := installOutputsFrom(st, ClusterArchive{
 		EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b",
-	}, ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"})
+	}, ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p", MaxConnections: 600})
 	want := InstallOutputs{
-		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p"},
+		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p", MaxConnections: 600},
 		Archive:                   InstallArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
 		BackupSurvivesClusterLoss: true,
 		CNPGNamespace:             "cnpg-system", GrafanaService: "svc", GrafanaNamespace: "monitoring",

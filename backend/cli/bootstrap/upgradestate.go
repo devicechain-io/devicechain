@@ -112,9 +112,16 @@ func hydrateUpgradeState(
 	// 🔴 AN UPGRADE MOVES AN INSTANCE ON A CLUSTER `dcctl install` PREPARED, and refuses
 	// one that was not: an instance built before the install existed is a
 	// recreate, not an upgrade, and the refusal says what prepares the cluster.
-	if _, err := readInstallRecord(ctx, typed, st.ClusterUID); err != nil {
+	rec, err := readInstallRecord(ctx, typed, st.ClusterUID)
+	if err != nil {
 		return nil, refuseUninstalled(err, InstallCommand(provider.Name(), binding.Cluster, opts.KubeContext))
 	}
+	// 🔴 AND WHICH SHARED CREDENTIALS EXIST IS THE INSTALL'S ANSWER, NOT THE DECLARATION'S.
+	// The declaration does not record where the cluster archives, so read from it an
+	// off-site archive looks like the in-cluster store, and the upgrade would refuse
+	// over an object-store credential that never existed. The instance's own shape still
+	// comes from its declaration: only the predicates read this.
+	st.Install = rec
 	if st.Credentials, err = readInstanceCredentials(ctx, typed, st); err != nil {
 		return nil, err
 	}

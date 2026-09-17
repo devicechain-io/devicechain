@@ -31,9 +31,8 @@ const barmanPluginName = "barman-cloud.cloudnative-pg.io"
 type RestoreFlags struct {
 	TsdbFrom       string
 	TsdbTargetTime string
-	// BackupsEnabled is what this run's OTHER flags settled about the backup
-	// destination — see DatabaseBackupsEnabled. Passed in rather than recomputed so
-	// there is one derivation of it in the CLI.
+	// BackupsEnabled is whether the cluster archives at all — the install's answer.
+	// Passed in rather than recomputed so there is one derivation of it in the CLI.
 	BackupsEnabled bool
 }
 
@@ -130,10 +129,11 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	// plan time, and the operator is told to set a variable dcctl does not expose.
 	if plan.Active() && !f.BackupsEnabled {
 		return RestorePlan{}, fmt.Errorf(
-			"--restore-tsdb-from needs the database backup plugin, and this " +
-				"run disables it: --no-cnpg skips the CloudNativePG operator the plugin extends, " +
-				"and --compact --no-tls drops cert-manager, which the plugin needs for its own " +
-				"Issuer and Certificates. Restore with neither (--compact WITH TLS keeps backups)")
+			"--restore-tsdb-from needs the database backup plugin, and this cluster was " +
+				"installed without it: `dcctl install --no-cnpg` skips the CloudNativePG operator " +
+				"the plugin extends, and `dcctl install --compact --no-tls` drops cert-manager, which " +
+				"the plugin needs for its own Issuer and Certificates. Restore onto a cluster " +
+				"installed with neither (--compact --no-tls=false keeps backups)")
 	}
 
 	return plan, nil

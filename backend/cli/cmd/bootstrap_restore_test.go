@@ -87,10 +87,10 @@ func TestRestoreFlagsReachTheResolverUnshuffled(t *testing.T) {
 // combination that is knowable before anything is built.
 func TestArgvThatCannotWorkIsRefusedFromArgv(t *testing.T) {
 	cases := []struct {
-		name    string
-		argv    []string
-		noCNPG  bool
-		wantErr string
+		name      string
+		argv      []string
+		noBackups bool
+		wantErr   string
 	}{
 		{
 			name:    "a recovery target with nothing to recover",
@@ -106,21 +106,19 @@ func TestArgvThatCannotWorkIsRefusedFromArgv(t *testing.T) {
 			wantErr: "RFC3339",
 		},
 		{
-			// --no-cnpg skips the operator the Barman plugin extends, so there is no
-			// plugin to read the archive the restore names.
-			name:    "restoring on a run with no database operator",
-			argv:    []string{"--restore-tsdb-from=dc-tsdb"},
-			noCNPG:  true,
-			wantErr: "--no-cnpg",
+			// A cluster installed without backups has no plugin to read the archive the
+			// restore names.
+			name:      "restoring on a cluster installed without backups",
+			argv:      []string{"--restore-tsdb-from=dc-tsdb"},
+			noBackups: true,
+			wantErr:   "installed without it",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			parseBootstrapFlags(t, tc.argv...)
-			bootstrapNoCNPG = tc.noCNPG
-
-			_, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv())
+			_, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(!tc.noBackups))
 			if err == nil {
 				t.Fatalf("dcctl bootstrap %s was accepted", strings.Join(tc.argv, " "))
 			}

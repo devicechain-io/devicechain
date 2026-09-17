@@ -289,15 +289,17 @@ func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
 		return &config.InstanceConfiguration{}, nil
 	}
 
-	// What a bootstrap wrote, into a cluster with a real identity.
+	// What an install and a bootstrap wrote, into a cluster with a real identity.
 	written := aWritableState()
 	written.Instance = "prod"
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: "kube-system", UID: types.UID(testClusterUID)}})
-	if err := writeMintedSecrets(context.Background(), c, written); err != nil {
+	writeInstallThenBootstrapSecrets(t, c, written)
+	settleStringDataLikeAnAPIServer(t, c)
+	// ...on a cluster `dcctl install` prepared, which an upgrade refuses without.
+	if err := writeInstalled(context.Background(), c, aCompleteInstall(), installClock); err != nil {
 		t.Fatal(err)
 	}
-	settleStringDataLikeAnAPIServer(t, c)
 
 	st, err := hydrateUpgradeState(context.Background(), c, provider,
 		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
@@ -387,9 +389,7 @@ func TestAPreKindSharedSecretIsNamedWithItsRemedy(t *testing.T) {
 
 	st := aWritableState()
 	w := fake.NewSimpleClientset()
-	if err := writeMintedSecrets(context.Background(), w, st); err != nil {
-		t.Fatal(err)
-	}
+	writeInstallThenBootstrapSecrets(t, w, st)
 	settleStringDataLikeAnAPIServer(t, w)
 	if err := w.CoreV1().Secrets(infraNamespace).Delete(context.Background(), spec.Name, metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
