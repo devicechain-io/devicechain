@@ -462,3 +462,20 @@ func TestInstanceDatabaseRefusesAnUnsizedAdmission(t *testing.T) {
 		}
 	}
 }
+
+// A store not yet running with the budget the install asked for is NOT READY, so the
+// install waits through the restart instead of recording connections the store lacks.
+func TestTheInstallWaitsForTheStoreToRunWithItsBudget(t *testing.T) {
+	ctx := context.Background()
+	su, _ := superuserConn(t)
+	var running int
+	if err := su.QueryRow(ctx, "select setting::int from pg_settings where name = 'max_connections'").Scan(&running); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeRunsWithBudget(ctx, pgxSession{su}, running); err != nil {
+		t.Fatalf("a store running with the asked budget was not ready: %v", err)
+	}
+	if err := storeRunsWithBudget(ctx, pgxSession{su}, running+100); !errors.Is(err, errStoreNotReady) {
+		t.Fatalf("a store still on %d connections was reported ready for %d: %v", running, running+100, err)
+	}
+}

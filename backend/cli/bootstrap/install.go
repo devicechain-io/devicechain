@@ -188,8 +188,16 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 
 	// 🔴 THE BASE IDENTITY BEFORE THE RECORD. Every instance's login is created as it, so
 	// a cluster recorded as installed without it would refuse the first bootstrap.
+	//
+	// 🔴 AND THE BUDGET THE STORE RUNS WITH, NOT THE ONE IT WAS ASKED FOR. A changed
+	// max_connections is applied by restarting the store's instances, after the apply has
+	// returned; recording the new budget before then would admit instances against
+	// connections the store does not have yet. Measured: the apply finished with the
+	// store still on the old value.
 	doing("creating the base database identity")
-	if err := withProvisionerSession(ctx, st.KubeContext, outputs.Rdb, func(instanceDBQuerier) error { return nil }); err != nil {
+	if err := withProvisionerSession(ctx, st.KubeContext, outputs.Rdb, func(q instanceDBQuerier) error {
+		return storeRunsWithBudget(ctx, q, outputs.Rdb.MaxConnections)
+	}); err != nil {
 		return fail("creating the base database identity", err)
 	}
 	done()
@@ -416,4 +424,20 @@ func clusterTargetFlag(b ClusterBinding) string {
 		return " --cluster " + b.Cluster
 	}
 	return ""
+}
+
+// storeRunsWithBudget answers not-ready until the store is running with the budget the
+// cluster root asked for, so the session that asks is retried through the restart.
+func storeRunsWithBudget(ctx context.Context, q instanceDBQuerier, want int) error {
+	var running int
+	var pending bool
+	if err := q.QueryRow(ctx, `select setting::int, pending_restart from pg_settings
+		where name = 'max_connections'`).Scan(&running, &pending); err != nil {
+		return notReady("reading the relational store's max_connections: %v", err)
+	}
+	if running != want || pending {
+		return notReady("the relational store runs with max_connections %d (restart pending: %t), "+
+			"and is being restarted onto %d", running, pending, want)
+	}
+	return nil
 }
