@@ -60,26 +60,29 @@ because the WebGL path was learned the expensive way.
 
 ## 0. Prerequisites
 
-- A local DeviceChain cluster (`deploy/local/`), bootstrapped. **A full `dcctl bootstrap` is all you
-  need — there is no separate step and no port-forward.** On a context matching the local heuristic
+- A local DeviceChain cluster (`deploy/local/`), installed and bootstrapped. **`dcctl install local`
+  followed by `dcctl bootstrap local <instance>` is all you need — there is no separate step and no
+  port-forward.** On a context matching the local heuristic
   (`kind-`, `minikube`, `k3d-`, `docker-desktop`, `rancher-desktop`) `dcctl` passes
   `nats_mqtt_node_port=31883`, which creates a NodePort Service alongside the chart's ClusterIP one,
   and the kind config it embeds maps host `1883` → node `31883`. The broker answers at
   **`ssl://localhost:1883`**.
 
-  > 🔴 **The one way this breaks is a kind cluster that predates the host map.** `dcctl bootstrap`
-  > *reuses* an existing `kind-<instance>` cluster ("Using existing kind cluster") rather than
-  > recreating it, and **kind fixes `extraPortMappings` at cluster-create time — they cannot be added
+  > 🔴 **The one way this breaks is a kind cluster that predates the host map.** `dcctl install local`
+  > *reuses* an existing kind cluster of the name it is given (`--cluster`, default `devicechain`,
+  > so context `kind-devicechain`) rather than recreating it, and **kind fixes `extraPortMappings` at cluster-create time — they cannot be added
   > to a running cluster.** So the NodePort Service appears, `kubectl get svc` looks perfect, and
   > host `:1883` is still a dead route. The symptom is a connection reset / EOF, not a refusal. Check
   > the binding itself rather than the Service:
   >
   > ```bash
-  > docker inspect <instance>-control-plane --format '{{json .NetworkSettings.Ports}}' | grep 31883
+  > docker inspect devicechain-control-plane --format '{{json .NetworkSettings.Ports}}' | grep 31883
   > # want: "31883/tcp":[{"HostIp":"0.0.0.0","HostPort":"1883"}]
   > ```
   >
-  > If it is absent, `kind delete cluster --name <instance>` and let `dcctl bootstrap` recreate it.
+  > If it is absent, `kind delete cluster --name devicechain`, let `dcctl install local` recreate it,
+  > and bootstrap the instance again. The cluster is named after `--cluster`, not after the
+  > instance, so substitute your `--cluster` value if you gave one.
 
   Then confirm the route end to end — it answers TLS, not plaintext:
 

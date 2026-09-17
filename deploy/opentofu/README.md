@@ -69,7 +69,7 @@ because there is no cert-manager at all, set `enable_database_backups = false` t
 
 `enable_cnpg = false` is the escape hatch for a cluster that already runs CNPG — Helm
 cannot adopt objects installed by the upstream `kubectl apply` manifest, so without it
-the apply fails with an ownership error. `dcctl bootstrap --no-cnpg` sets it.
+the apply fails with an ownership error. `dcctl install --no-cnpg` sets it.
 
 ### Where the backups go
 
@@ -222,7 +222,8 @@ fast-follow.
   a cluster that survives no node loss while looking like it would. The services
   clamp down to 1 against an unclustered broker rather than crashloop, and export
   `devicechain_*_jetstream_replicas_desired` / `_actual` / `_peers_current` so the
-  disagreement alerts. `dcctl bootstrap --ha` sets both from one value; a direct
+  disagreement alerts. `dcctl install --ha` sets both from one value — every instance
+  bootstrapped on the cluster follows it; a direct
   tofu user must set the Helm value themselves. `nats_cluster_replicas` is
   published as an output for exactly that check.
 - **TimescaleDB extension.** The Timescale image preloads the `timescaledb`
@@ -266,7 +267,7 @@ fast-follow.
   rolls itself back and leaves **no residue**: without it the failed create was
   tainted, the next plan wanted to replace it, and `prevent_destroy` refused —
   wedging the root permanently against every later apply. With it, **re-running
-  the apply is safe and is the fix**. And `dcctl bootstrap` does that re-run for
+  the apply is safe and is the fix**. And `dcctl install` does that re-run for
   you: it recognises this one error class, waits for the API server to actually
   admit a `Cluster` (a server-side dry-run create — the only probe that travels
   the API server's own network path, and therefore the only one that works the

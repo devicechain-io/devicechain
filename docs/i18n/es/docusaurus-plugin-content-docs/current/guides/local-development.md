@@ -11,7 +11,7 @@ DeviceChain está diseñado para ejecutarse localmente con solo dos dependencias
 DeviceChain es pre-release. Esta guía trata sobre trabajar en el árbol de código: compilar el
 workspace de Go y ejecutar un único servicio contra dependencias que tú mismo has iniciado.
 Si lo que quieres es una **instancia completa en ejecución**, usa `dcctl` y la
-[Guía rápida](../quickstart/first-device.md); levanta todo con un solo comando.
+[Guía rápida](../quickstart/first-device.md); levanta todo con dos comandos, `dcctl install` y `dcctl bootstrap`.
 :::
 
 ## Requisitos previos

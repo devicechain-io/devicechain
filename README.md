@@ -175,8 +175,8 @@ without needing that passphrase. Without it, a database backup restored into a n
 cluster rehydrates secrets that nothing can decrypt — with no error at restore
 time. See [Disaster Recovery](docs/docs/deployment/disaster-recovery.md).
 
-**High availability, stated precisely.** The `--ha` flag on `dcctl bootstrap`
-replicates both tiers from one flag. The message broker runs as a 3-node RAFT cluster with every
+**High availability, stated precisely.** The `--ha` flag on `dcctl install`
+replicates both tiers from one flag, for every instance on the cluster. The message broker runs as a 3-node RAFT cluster with every
 JetStream stream and KV bucket replicated across it — and `dcctl ha verify`
 asserts that from **live broker state** rather than from the rendered
 configuration, because a three-node cluster whose every stream is single-replica
@@ -195,18 +195,26 @@ required to fail, and the restore drill is repeated with the escrowed key withhe
 and required to fail *at the decrypt* — because a check nobody has watched fail is
 not yet evidence. Not proven: MQTT session continuity across a broker failover, and
 graceful-drain behavior. And the restore story covers the **two databases** —
-JetStream stream state and object storage have not been through a restore drill.
+JetStream stream state and object storage have not been through a restore drill. Restoring
+the relational database is not currently available through `dcctl`: that database is now
+shared by every instance on a cluster, so its restore is a cluster-level operation that has
+not shipped yet.
 
 ## Running locally
 
-`dcctl` — the platform CLI — bootstraps a complete instance with one command. It
+`dcctl` — the platform CLI — prepares a cluster with one command and bootstraps a complete
+instance on it with another. It
 is self-contained: the operator manifests, Helm chart, and OpenTofu config are
 embedded in the binary, so no source checkout, `kubectl`, `helm`, or `kustomize`
 is required. The single host prerequisites are **Docker**, **kind**, and
 **OpenTofu** (the CLI's preflight checks guide you through any that are missing).
 
 ```bash
-# Stand up a full instance on a local kind cluster at http://localhost/.
+# Prepare a local kind cluster (named "devicechain", created if it does not exist) once:
+# the relational database, CloudNativePG, cert-manager, monitoring and ingress.
+dcctl install local
+
+# Stand up a full instance on it at http://localhost/.
 # Both positional arguments are required: the provider, then a name for the instance.
 dcctl bootstrap local devicechain --host localhost --no-tls
 
@@ -215,13 +223,16 @@ dcctl bootstrap local devicechain --host localhost --no-tls
 # See what is on this machine, and which cluster each instance lives in
 dcctl instances list
 
-# Tear it all back down — same two arguments (use --keep-cluster to uninstall only
-# the instance, or --all with no arguments to destroy every instance on this machine)
+# Remove the instance — same two arguments (or --all with no arguments to destroy every
+# instance on this machine). The cluster and what install put on it stay.
 dcctl destroy local devicechain
+
+# Delete the local cluster too (there is no uninstall command yet)
+kind delete cluster --name devicechain
 ```
 
-The bootstrap pipeline renders config → `tofu apply` (NATS + TimescaleDB + ingress)
-→ installs the CRDs/operator → `helm install`s the instance → seeds the initial
+The bootstrap pipeline renders config → `tofu apply` (the instance's NATS + TimescaleDB,
+and its login and database on the shared relational database) → installs the CRDs/operator → `helm install`s the instance → seeds the initial
 superuser → waits for readiness → reports the access URL — and is idempotent on
 re-run: it reads back every credential the instance is already running (root key,
 broker auth, service auth) and reuses it rather than minting a replacement, and

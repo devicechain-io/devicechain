@@ -49,7 +49,7 @@ backend/
                               telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
-  cli/                        dcctl — bootstrap/destroy + admin tooling
+  cli/                        dcctl — install/bootstrap/destroy + admin tooling
   tools/                      maintainer-only Go tools, in the workspace but not shipped:
     migrationdiff/            golden-schema differ behind `hack/migration-diff.sh` (CI gate)
     drdrill/                  the ADR-028 restore drill's measuring instrument — seeds a secret

@@ -13,7 +13,7 @@ Calcule alrededor de media hora, la mayor parte esperando al arranque inicial.
 :::note Qué da por supuesto esta página
 **`dcctl`, más cinco herramientas en su `PATH`:** `docker`, `kubectl`, `helm`,
 [`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) (el binario `tofu`;
-`terraform` también sirve). Todo arranque inicial ejecuta primero una comprobación previa y **se
+`terraform` también sirve). `dcctl install` y `dcctl bootstrap` ejecutan primero cada uno una comprobación previa y **se
 detiene** si falta alguna, así que una carencia le cuesta los diez primeros segundos y no diez
 minutos.
 
@@ -22,9 +22,9 @@ Helm en vez de con el comando — la comprobación previa busca el binario igual
 como obligatorio. `ko` y `cloud-provider-kind` son solo advertencias: `ko` hace falta únicamente
 para compilar imágenes desde el código (`--build`).
 
-**No** necesita un clúster de antemano. `dcctl bootstrap local` busca un clúster de kind con el
-nombre de la instancia y se ofrece a crear uno si no lo hay; `--kube-context <nombre>` lo apunta a
-un clúster que ya opere, y ese nunca lo crea ni lo borra. Kubernetes **1.29 o posterior** en
+**No** necesita un clúster de antemano. `dcctl install local` busca un clúster de kind llamado
+`devicechain` (o el nombre indicado con `--cluster`) y se ofrece a crear uno si no lo hay;
+`--kube-context <nombre>` lo apunta a un clúster que ya opere, y ese nunca lo crea ni lo borra. Kubernetes **1.29 o posterior** en
 cualquier caso — se rechaza uno más antiguo, porque los charts de la base de datos lo rechazan.
 
 `dcctl preflight local` ejecuta exactamente estas comprobaciones sin arrancar nada, y la
@@ -36,9 +36,17 @@ es lo que producen las opciones del paso 1.
 
 ## 1. Levantar una instancia
 
+Prepare el clúster una vez y después cree la instancia en él:
+
 ```bash
+dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
+
+`dcctl install` crea el clúster de kind e instala lo que comparten todas sus instancias: la base
+de datos relacional, el operador CloudNativePG, cert-manager, la monitorización y el ingress. Se
+hace una vez por clúster; `dcctl bootstrap` se niega en un clúster donde no ha terminado.
+Consulte [Instalar el clúster](../deployment/bootstrap.md#install).
 
 El id de instancia —aquí `devicechain`— no es decorativo. Pasa a ser el namespace, y es el primer
 segmento de todos los topics de dispositivo y rutas de ingesta de esta página. Si elige otro,
@@ -270,4 +278,11 @@ Eso es un dispositivo de principio a fin: registrado, con credencial, reportando
 ```bash
 dcctl sim destroy demo
 dcctl destroy local devicechain
+```
+
+`dcctl destroy` elimina la instancia y deja el clúster instalado, listo para el siguiente arranque
+inicial. Para eliminar también el clúster:
+
+```bash
+kind delete cluster --name devicechain
 ```

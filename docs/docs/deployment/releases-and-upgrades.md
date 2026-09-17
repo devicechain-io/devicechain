@@ -337,7 +337,7 @@ take on while every install is still an early one.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # removes the instance; the cluster stays installed
 dcctl bootstrap local devicechain
 ```
 
@@ -384,7 +384,7 @@ upgrade path that preserves the existing rows.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # removes the instance; the cluster stays installed
 dcctl bootstrap local devicechain
 ```
 
@@ -922,6 +922,14 @@ Instances created before this release have no such record and list as `no record
 guess the cluster`. Destroy still works on them, falling back to the old derivation, so the
 caveat above continues to apply to them and only to them.
 
+:::note `dcctl destroy` no longer deletes clusters
+In current releases `dcctl destroy` removes an instance only — its Helm release, its database
+and login, its namespace and its local state — and never deletes a cluster or the prerequisites
+`dcctl install` put there. `dcctl destroy --all` therefore removes every instance and leaves
+every cluster running. To delete a local cluster, use `kind delete cluster --name <name>`. See
+[Removing an instance](./bootstrap.md#destroy).
+:::
+
 ### v0.15.0 — updates stop erasing what you did not send {#v0150-upgrade}
 
 `v0.15.0` is an ordinary in-place upgrade from `v0.14.x`. The new migrations run themselves as the
@@ -1240,7 +1248,7 @@ declaration invented after the fact would be a guess applied over a live instanc
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # removes the instance; the cluster stays installed
 dcctl bootstrap local devicechain
 ```
 
@@ -1312,8 +1320,9 @@ Do not edit the database out of the infrastructure configuration as a way of rep
 
 Upgrading an instance created before the databases moved onto the operator is the one case
 where this comes up, and it is refused at plan time rather than left to chance. Dump both
-databases first, then re-run the bootstrap with `--allow-legacy-db-removal` — which asserts
-you have handled the data, and verifies nothing. For a local instance, `dcctl destroy`
+databases first, then re-run `dcctl install` with `--allow-legacy-db-removal` for the
+relational database, and the bootstrap with it for the event store — which asserts you have
+handled the data, and verifies nothing. For a local instance, `dcctl destroy`
 followed by a fresh bootstrap is simpler and discards the data deliberately.
 :::
 
