@@ -123,7 +123,6 @@ func hydrateUpgradeState(
 // path simply never set.
 func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
 	applyDeclaration(st, inst.Spec)
-	st.GrafanaSSO = inst.Spec.GrafanaSSO
 	st.InstanceUID = string(inst.GetUID())
 	if st.InstanceUID == "" {
 		// The same refusal the bootstrap path makes, for the same reason: every

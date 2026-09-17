@@ -104,8 +104,6 @@ type State struct {
 	// nowhere to set it. On a local cluster the other branch works (destroy and
 	// rebuild); on a real one there was no route past the guard at all.
 	AllowLegacyDbRemoval bool
-	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047). See Options.
-	GrafanaSSO bool
 	// Compact applies the small-footprint preset (compactSizing). See Options.
 	Compact bool
 	// HA applies the ADR-020 messaging topology (haTopology). See Options.

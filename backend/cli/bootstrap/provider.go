@@ -43,10 +43,6 @@ type Options struct {
 	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
 	// OpenTofu. See State for why it exists at all.
 	AllowLegacyDbRemoval bool
-	// GrafanaSSO wires Grafana login to DeviceChain SSO (ADR-047): it enables the
-	// OAuth AS (sets the issuer), seeds a confidential Grafana client, and configures
-	// Grafana's generic_oauth + /grafana ingress — operator/superuser-tier only.
-	GrafanaSSO bool
 	// Compact applies the small-footprint preset: lowered JetStream/KV ceilings, the
 	// smaller volumes those permit, and lowered scheduling requests. It is a preset
 	// over levers that already exist and does NOT change which services run (that

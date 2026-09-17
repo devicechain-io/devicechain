@@ -68,7 +68,6 @@ var dispositions = map[string]disposition{
 	"no-tls":        declared,
 	"no-monitoring": declared,
 	"no-cnpg":       declared,
-	"grafana-sso":   declared,
 	"compact":       declared,
 	"ha":            declared,
 	"enable-area":   declared,
@@ -89,8 +88,6 @@ var dispositions = map[string]disposition{
 	// "that a restore happened belongs to anyone reading this, while WHERE the
 	// archive was is one operator's command line." Restored + RestoredAt record the
 	// fact; the coordinates are not recorded on purpose.
-	"restore-rdb-from":  excluded,
-	"restore-rdb-at":    excluded,
 	"restore-tsdb-from": excluded,
 	"restore-tsdb-at":   excluded,
 

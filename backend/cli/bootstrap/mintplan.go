@@ -319,8 +319,7 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //     first visible symptom is that WAL stopped being shipped.
 //   - THE DASHBOARD PASSWORD IS MINTED EVERY RUN, deliberately. Both halves are
 //     written by the same run, so the cost is a rollout-length window of failing
-//     logins — the same trade the Grafana SSO client secret already makes, and named
-//     the same way in the operations document rather than quietly differing from it.
+//     logins.
 //
 // 🔴 WHAT IS DELIBERATELY NOT HERE: an expiry-aware renewal for the broker's leaf
 // certificate. Reuse keeps a value; renewal replaces one on a clock, and the two

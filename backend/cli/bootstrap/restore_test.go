@@ -31,7 +31,7 @@ var testNow = time.Date(2026, 7, 28, 14, 5, 6, 0, time.UTC)
 // live cluster instead of deriving from argv.
 //
 // The failure it prevents is quiet and delayed. An operator recovers with
-// --restore-rdb-from, the restored cluster takes a fresh archive path, and weeks
+// --restore-tsdb-from, the restored cluster takes a fresh archive path, and weeks
 // later an ordinary `dcctl bootstrap` re-run — no restore flag, nothing unusual —
 // would re-derive the path from a flag that is now empty and hand OpenTofu the
 // default. The helm upgrade retargets the LIVE cluster's WAL archiver at a
@@ -88,7 +88,7 @@ func TestOrdinaryInstallKeepsTheDefaultArchivePath(t *testing.T) {
 // An ordinary install renders no serverName, so the live path is "" while the
 // cluster is very much alive and archiving. The first version of resolveArchivePaths
 // keyed on `live.Path != ""` where it meant `live.Exists`, so this — a healthy
-// instance plus `--restore-rdb-from dc-rdb`, the obvious wrong guess a
+// instance plus `--restore-tsdb-from dc-tsdb`, the obvious wrong guess a
 // half-followed runbook produces — fell through to the derived branch.
 //
 // The restore itself correctly does nothing (spec.bootstrap is CREATE-only) and is
@@ -100,18 +100,18 @@ func TestOrdinaryInstallKeepsTheDefaultArchivePath(t *testing.T) {
 func TestARestoreAimedAtALiveClusterNeverMovesItsArchive(t *testing.T) {
 	for name, live := range map[string]clusterArchiveState{
 		"archiving under its own name": {Exists: true, Path: ""},
-		"archiving under a set path":   {Exists: true, Path: "dc-rdb-2026"},
+		"archiving under a set path":   {Exists: true, Path: "dc-tsdb-2026"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := resolveArchivePaths(
-				liveArchiveState{Rdb: live}, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow)
-			if got.Rdb != live.Path {
+				liveArchiveState{Tsdb: live}, RestorePlan{TsdbFrom: TsdbClusterName}, archivePaths{}, testNow)
+			if got.Tsdb != live.Path {
 				t.Fatalf("a restore aimed at a LIVE cluster moved its archive path from %q to %q.\n"+
 					"  The restore cannot run (spec.bootstrap is read at CREATE only), so the only\n"+
 					"  thing this achieves is retargeting a running archiver at a prefix with no\n"+
-					"  base backup in it. Key this branch on Exists, not on Path.", live.Path, got.Rdb)
+					"  base backup in it. Key this branch on Exists, not on Path.", live.Path, got.Tsdb)
 			}
-			if !slices.Contains(got.AlreadyLive, RdbClusterName) {
+			if !slices.Contains(got.AlreadyLive, TsdbClusterName) {
 				t.Errorf("the ineffective restore was not reported: %v", got.AlreadyLive)
 			}
 		})
@@ -124,18 +124,18 @@ func TestARestoreAimedAtALiveClusterNeverMovesItsArchive(t *testing.T) {
 // just read, and CloudNativePG does not fail that cleanly — it hangs in `Setting up
 // primary` logging `Expected empty archive`.
 func TestRestoreIntoADefaultInstallTakesAFreshPath(t *testing.T) {
-	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow)
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{TsdbFrom: TsdbClusterName}, archivePaths{}, testNow)
 
-	if got.Rdb == "" {
+	if got.Tsdb == "" {
 		t.Fatal("restoring into a store with no explicit archive path kept the default, which " +
 			"means the recovered cluster archives back over the path it recovered FROM. " +
 			"CloudNativePG hangs in `Setting up primary` on that, it does not fail.")
 	}
-	if got.Rdb == RdbClusterName {
-		t.Fatalf("the recovered cluster's archive path equals the source %q", RdbClusterName)
+	if got.Tsdb == TsdbClusterName {
+		t.Fatalf("the recovered cluster's archive path equals the source %q", TsdbClusterName)
 	}
-	if !strings.HasPrefix(got.Rdb, RdbClusterName+"-restored-") {
-		t.Errorf("archive path %q is not recognisable as a restore of %q", got.Rdb, RdbClusterName)
+	if !strings.HasPrefix(got.Tsdb, TsdbClusterName+"-restored-") {
+		t.Errorf("archive path %q is not recognisable as a restore of %q", got.Tsdb, TsdbClusterName)
 	}
 }
 
@@ -143,9 +143,9 @@ func TestRestoreIntoADefaultInstallTakesAFreshPath(t *testing.T) {
 // archive is not — must not reuse that path, or the rebuilt cluster archives
 // straight back over the WAL it is recovering from.
 func TestRestoreFromAnArchiveTheDeadInstanceOwnedTakesAFreshPath(t *testing.T) {
-	const owned = "dc-rdb-2026"
-	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{RdbFrom: owned}, archivePaths{}, testNow)
-	if got.Rdb == owned {
+	const owned = "dc-tsdb-2026"
+	got := resolveArchivePaths(liveArchiveState{}, RestorePlan{TsdbFrom: owned}, archivePaths{}, testNow)
+	if got.Tsdb == owned {
 		t.Fatalf("recovering from %q kept it as the archive path, so the restored cluster "+
 			"archives back over the WAL it recovered from — `Setting up primary`, forever", owned)
 	}
@@ -155,14 +155,14 @@ func TestRestoreFromAnArchiveTheDeadInstanceOwnedTakesAFreshPath(t *testing.T) {
 // again) must not invent a second path. The Cluster is already there carrying the
 // path it took on the first attempt; keeping it is what makes the retry idempotent.
 func TestRerunningARestoreKeepsThePathItAlreadyTook(t *testing.T) {
-	const taken = "dc-rdb-restored-20260728T140506Z"
-	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true, Path: taken}}
+	const taken = "dc-tsdb-restored-20260728T140506Z"
+	live := liveArchiveState{Tsdb: clusterArchiveState{Exists: true, Path: taken}}
 
-	got := resolveArchivePaths(live, RestorePlan{RdbFrom: RdbClusterName}, archivePaths{}, testNow.Add(time.Hour))
-	if got.Rdb != taken {
-		t.Fatalf("re-running the same restore moved the archive path from %q to %q", taken, got.Rdb)
+	got := resolveArchivePaths(live, RestorePlan{TsdbFrom: TsdbClusterName}, archivePaths{}, testNow.Add(time.Hour))
+	if got.Tsdb != taken {
+		t.Fatalf("re-running the same restore moved the archive path from %q to %q", taken, got.Tsdb)
 	}
-	if !slices.Contains(got.AlreadyLive, RdbClusterName) {
+	if !slices.Contains(got.AlreadyLive, TsdbClusterName) {
 		t.Errorf("the Cluster already exists, so this restore will NOT run (spec.bootstrap is "+
 			"read at CREATE only) — that has to be reported, and %v does not name it", got.AlreadyLive)
 	}
@@ -174,22 +174,21 @@ func TestRerunningARestoreKeepsThePathItAlreadyTook(t *testing.T) {
 // trying to recover.
 func TestTwoRestoresFromOneSourceTakeDifferentPaths(t *testing.T) {
 	fresh := liveArchiveState{} // both stores gone: this is the disaster case
-	plan := RestorePlan{RdbFrom: RdbClusterName}
+	plan := RestorePlan{TsdbFrom: TsdbClusterName}
 
 	first := resolveArchivePaths(fresh, plan, archivePaths{}, testNow)
 	second := resolveArchivePaths(fresh, plan, archivePaths{}, testNow.Add(time.Second))
 
-	if first.Rdb == second.Rdb {
+	if first.Tsdb == second.Tsdb {
 		t.Fatalf("two restores from %q both took archive path %q. The first cluster archived "+
 			"into it, so the second recovers and then hangs in `Setting up primary` — during "+
-			"a recovery.", RdbClusterName, first.Rdb)
+			"a recovery.", TsdbClusterName, first.Tsdb)
 	}
 }
 
-// The stores are restored independently, because their timelines are independent:
-// rewinding telemetry to yesterday does not mean the control plane should be
-// rewound with it. Restoring one must not disturb the other's archive path.
-func TestRestoringOneStoreLeavesTheOtherAlone(t *testing.T) {
+// Restoring the event store must not disturb the relational store's archive path:
+// that store is the cluster's, and nothing this command restores reaches it.
+func TestRestoringTheEventStoreLeavesTheRelationalStoreAlone(t *testing.T) {
 	live := liveArchiveState{
 		Rdb:  clusterArchiveState{Exists: true, Path: "dc-rdb-owned"},
 		Tsdb: clusterArchiveState{Exists: true, Path: "dc-tsdb-owned"},
@@ -248,9 +247,9 @@ func TestAFreshEventStoreArchivesUnderItsInstanceAndGeneration(t *testing.T) {
 // destroy instruction for the data they have just recovered.
 func TestARestoreIntoNothingIsNotReportedAsIneffective(t *testing.T) {
 	got := resolveArchivePaths(liveArchiveState{},
-		RestorePlan{RdbFrom: RdbClusterName, TsdbFrom: TsdbClusterName}, archivePaths{}, testNow)
+		RestorePlan{TsdbFrom: TsdbClusterName}, archivePaths{}, testNow)
 	if len(got.AlreadyLive) != 0 {
-		t.Fatalf("neither Cluster exists, so both restores WILL run; reporting %v tells the "+
+		t.Fatalf("the Cluster does not exist, so the restore WILL run; reporting %v tells the "+
 			"operator to destroy and rebuild the instance they are in the middle of recovering",
 			got.AlreadyLive)
 	}
@@ -645,22 +644,22 @@ func TestRenderConfigDerivesAPathForARestoreIntoNothing(t *testing.T) {
 	st := &State{
 		Instance:    "prod",
 		BuildImages: true,
-		Restore:     RestorePlan{RdbFrom: RdbClusterName, RdbTargetTime: "2026-07-28T12:00:00Z"},
+		Restore:     RestorePlan{TsdbFrom: TsdbClusterName, TsdbTargetTime: "2026-07-28T12:00:00Z"},
 		Values:      map[string]string{},
 	}
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
-	got := st.Values["backupServerNameRdb"]
-	if got == "" || got == RdbClusterName {
+	got := st.Values["backupServerNameTsdb"]
+	if got == "" || got == TsdbClusterName {
 		t.Fatalf("recovering into an empty cluster settled on archive path %q; it must differ "+
-			"from the source %q", got, RdbClusterName)
+			"from the source %q", got, TsdbClusterName)
 	}
 	vars := infraVars(st)
 	for _, want := range []string{
-		"restore_rdb_from=" + RdbClusterName,
-		"restore_rdb_target_time=2026-07-28T12:00:00Z",
-		"backup_server_name_rdb=" + got,
+		"restore_tsdb_from=" + TsdbClusterName,
+		"restore_tsdb_target_time=2026-07-28T12:00:00Z",
+		"backup_server_name_tsdb=" + got,
 	} {
 		if !slices.Contains(vars, want) {
 			t.Errorf("the restore never reached OpenTofu: %q missing from %v", want, vars)
@@ -673,17 +672,11 @@ func TestRenderConfigDerivesAPathForARestoreIntoNothing(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveRestorePlanRefusesATargetWithNoSource(t *testing.T) {
-	for name, f := range map[string]RestoreFlags{
-		"rdb":  {RdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true},
-		"tsdb": {TsdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := ResolveRestorePlan(f); err == nil {
-				t.Fatal("a recovery target with nothing to recover was accepted. The whole point " +
-					"of the target is to stop replay before a known-bad moment; ignoring it " +
-					"silently gives a full-archive restore and says nothing.")
-			}
-		})
+	f := RestoreFlags{TsdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true}
+	if _, err := ResolveRestorePlan(f); err == nil {
+		t.Fatal("a recovery target with nothing to recover was accepted. The whole point " +
+			"of the target is to stop replay before a known-bad moment; ignoring it " +
+			"silently gives a full-archive restore and says nothing.")
 	}
 }
 
@@ -692,7 +685,7 @@ func TestResolveRestorePlanRefusesATargetWithNoSource(t *testing.T) {
 // rather than at OpenTofu plan time, where the message tells the operator to set a
 // variable dcctl does not expose.
 func TestResolveRestorePlanRefusesARestoreWithNoBackupPlugin(t *testing.T) {
-	_, err := ResolveRestorePlan(RestoreFlags{RdbFrom: "dc-rdb", BackupsEnabled: false})
+	_, err := ResolveRestorePlan(RestoreFlags{TsdbFrom: "dc-tsdb", BackupsEnabled: false})
 	if err == nil {
 		t.Fatal("a restore was accepted on a run with no backup plugin")
 	}
@@ -719,11 +712,10 @@ func TestResolveRestorePlanRefusesAnAmbiguousRecoveryTarget(t *testing.T) {
 	} {
 		t.Run(target, func(t *testing.T) {
 			_, err := ResolveRestorePlan(RestoreFlags{
-				RdbFrom: "dc-rdb", RdbTargetTime: target,
-				BackupsEnabled: true, RootKeyRestored: true,
+				TsdbFrom: "dc-tsdb", TsdbTargetTime: target, BackupsEnabled: true,
 			})
 			if err == nil {
-				t.Fatalf("--restore-rdb-at %q was accepted; without an explicit offset the "+
+				t.Fatalf("--restore-tsdb-at %q was accepted; without an explicit offset the "+
 					"recovery stops at a different moment than the operator named, and says "+
 					"nothing", target)
 			}
@@ -737,58 +729,22 @@ func TestResolveRestorePlanRefusesAnAmbiguousRecoveryTarget(t *testing.T) {
 func TestResolveRestorePlanAcceptsAnUnambiguousRecoveryTarget(t *testing.T) {
 	for _, target := range []string{"2026-07-27T13:59:00Z", "2026-07-27T09:59:00-04:00"} {
 		if _, err := ResolveRestorePlan(RestoreFlags{
-			RdbFrom: "dc-rdb", RdbTargetTime: target,
-			BackupsEnabled: true, RootKeyRestored: true,
+			TsdbFrom: "dc-tsdb", TsdbTargetTime: target, BackupsEnabled: true,
 		}); err != nil {
 			t.Errorf("%s was rejected: %v", target, err)
 		}
 	}
 }
 
-// 🔴 A RESTORED RELATIONAL STORE UNDER A FRESH ROOT KEY IS PERMANENT DATA LOSS.
-//
-// Every stored secret is a DEK wrapped by the instance's secret-store root key.
-// The ciphertext comes back with the database; the key lives in etcd, which is in
-// no backup the platform takes. Recovering without --restore-root-key mints a new
-// key and makes every one of those secrets permanently unreadable — on a bootstrap
-// that reports success, surfacing later as connectors and notifications failing at
-// first use, with nothing pointing back at the flags.
-//
-// The flag help said "pair with --restore-root-key". Help text is not a guard.
-func TestResolveRestorePlanRefusesARelationalRestoreWithNoRootKey(t *testing.T) {
-	_, err := ResolveRestorePlan(RestoreFlags{
-		RdbFrom: "dc-rdb", BackupsEnabled: true, RootKeyRestored: false,
-	})
-	if err == nil {
-		t.Fatal("the relational store was restored without its root key. Every secret it " +
-			"holds is now unreadable, and the run reported success.")
-	}
-	if !strings.Contains(err.Error(), "--restore-root-key") {
-		t.Errorf("the refusal must name the flag that fixes it; got: %v", err)
-	}
-}
-
-// The EVENT store carries telemetry, not wrapped secrets, so recovering it alone
-// under a fresh key loses nothing. Refusing it too would block the one restore an
-// operator can safely do without an escrow artifact.
-func TestAnEventStoreRestoreNeedsNoRootKey(t *testing.T) {
-	if _, err := ResolveRestorePlan(RestoreFlags{
-		TsdbFrom: "dc-tsdb", BackupsEnabled: true, RootKeyRestored: false,
-	}); err != nil {
-		t.Fatalf("restoring only the event store was refused: %v", err)
-	}
-}
-
 func TestResolveRestorePlanPassesAValidRestoreThrough(t *testing.T) {
 	f := RestoreFlags{
-		RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z",
-		TsdbFrom: "dc-tsdb", BackupsEnabled: true, RootKeyRestored: true,
+		TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true,
 	}
 	plan, err := ResolveRestorePlan(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan != (RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z", TsdbFrom: "dc-tsdb"}) {
+	if plan != (RestorePlan{TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-28T12:00:00Z"}) {
 		t.Fatalf("the plan did not carry the flags through: %+v", plan)
 	}
 	if !plan.Active() {
@@ -845,17 +801,12 @@ func TestDatabaseBackupsEnabledMatchesWhatIsEmitted(t *testing.T) {
 
 func TestInfraVarsCarriesTheRestoreAndTheArchivePaths(t *testing.T) {
 	st := compactState(false)
-	st.Restore = RestorePlan{
-		RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z",
-		TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-28T13:00:00Z",
-	}
+	st.Restore = RestorePlan{TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-28T13:00:00Z"}
 	st.Values["backupServerNameRdb"] = "dc-rdb-restored-20260728T140506Z"
 	st.Values["backupServerNameTsdb"] = "dc-tsdb-restored-20260728T140506Z"
 
 	vars := infraVars(st)
 	for _, want := range []string{
-		"restore_rdb_from=dc-rdb",
-		"restore_rdb_target_time=2026-07-28T12:00:00Z",
 		"restore_tsdb_from=dc-tsdb",
 		"restore_tsdb_target_time=2026-07-28T13:00:00Z",
 		"backup_server_name_rdb=dc-rdb-restored-20260728T140506Z",

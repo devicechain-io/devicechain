@@ -29,22 +29,16 @@ const barmanPluginName = "barman-cloud.cloudnative-pg.io"
 
 // RestoreFlags is the raw --restore-* input, before validation.
 type RestoreFlags struct {
-	RdbFrom        string
-	RdbTargetTime  string
 	TsdbFrom       string
 	TsdbTargetTime string
 	// BackupsEnabled is what this run's OTHER flags settled about the backup
 	// destination — see DatabaseBackupsEnabled. Passed in rather than recomputed so
 	// there is one derivation of it in the CLI.
 	BackupsEnabled bool
-	// RootKeyRestored reports whether --restore-root-key is bringing the instance's
-	// secret-store KEK back from an escrow artifact. Restoring the RELATIONAL store
-	// without it is a silent, permanent data loss — see ResolveRestorePlan.
-	RootKeyRestored bool
 }
 
 // RestorePlan is the settled database-restore intent for one bootstrap run: which
-// archive each store recovers FROM, and how far it replays.
+// archive the event store recovers FROM, and how far it replays.
 //
 // 🔴 REBUILD-TIME ONLY. `spec.bootstrap` is read when CloudNativePG CREATES a
 // Cluster, so a plan aimed at a store that already exists does nothing at all — no
@@ -52,14 +46,12 @@ type RestoreFlags struct {
 // the Cluster already there, because "it ran and restored nothing" and "it declined
 // to run" are indistinguishable from the outside.
 type RestorePlan struct {
-	RdbFrom        string
-	RdbTargetTime  string
 	TsdbFrom       string
 	TsdbTargetTime string
 }
 
 // Active reports whether this run restores anything.
-func (p RestorePlan) Active() bool { return p.RdbFrom != "" || p.TsdbFrom != "" }
+func (p RestorePlan) Active() bool { return p.TsdbFrom != "" }
 
 // DatabaseBackupsEnabled reports whether this combination of flags leaves the
 // instance with a backup destination — i.e. whether OpenTofu will be told
@@ -87,8 +79,6 @@ func DatabaseBackupsEnabled(noCNPG, compact, noTLS bool) bool {
 // time to find out.
 func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	plan := RestorePlan{
-		RdbFrom:        f.RdbFrom,
-		RdbTargetTime:  f.RdbTargetTime,
 		TsdbFrom:       f.TsdbFrom,
 		TsdbTargetTime: f.TsdbTargetTime,
 	}
@@ -98,15 +88,10 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	// a known-bad moment: the operator would get a full-archive restore and be told
 	// nothing. (The root refuses this too — this refusal is here so it lands before
 	// the rebuild rather than at plan time.)
-	for _, c := range []struct{ target, source, flag, sourceFlag string }{
-		{f.RdbTargetTime, f.RdbFrom, "--restore-rdb-at", "--restore-rdb-from"},
-		{f.TsdbTargetTime, f.TsdbFrom, "--restore-tsdb-at", "--restore-tsdb-from"},
-	} {
-		if c.target != "" && c.source == "" {
-			return RestorePlan{}, fmt.Errorf(
-				"%s is set but %s is empty, so nothing is being restored and the recovery "+
-					"target would be silently ignored", c.flag, c.sourceFlag)
-		}
+	if f.TsdbTargetTime != "" && f.TsdbFrom == "" {
+		return RestorePlan{}, fmt.Errorf(
+			"--restore-tsdb-at is set but --restore-tsdb-from is empty, so nothing is being " +
+				"restored and the recovery target would be silently ignored")
 	}
 
 	// A recovery target is a moment, and a moment with no timezone is a different
@@ -124,20 +109,14 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	// is a general lever for someone driving OpenTofu directly, and this is the
 	// operator surface, where an unambiguous instant is worth more than a permissive
 	// grammar.
-	for _, c := range []struct{ target, flag string }{
-		{plan.RdbTargetTime, "--restore-rdb-at"},
-		{plan.TsdbTargetTime, "--restore-tsdb-at"},
-	} {
-		if c.target == "" {
-			continue
-		}
-		if _, err := time.Parse(time.RFC3339, c.target); err != nil {
+	if plan.TsdbTargetTime != "" {
+		if _, err := time.Parse(time.RFC3339, plan.TsdbTargetTime); err != nil {
 			return RestorePlan{}, fmt.Errorf(
-				"%s %q is not an RFC3339 timestamp. It needs an explicit offset — "+
+				"--restore-tsdb-at %q is not an RFC3339 timestamp. It needs an explicit offset — "+
 					"2026-07-27T13:59:00Z, or 2026-07-27T09:59:00-04:00. Without one PostgreSQL "+
 					"reads it in the recovering server's own timezone, and recovery stops at a "+
 					"different moment than you named and reports success",
-				c.flag, c.target)
+				plan.TsdbTargetTime)
 		}
 	}
 
@@ -147,39 +126,10 @@ func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	// plan time, and the operator is told to set a variable dcctl does not expose.
 	if plan.Active() && !f.BackupsEnabled {
 		return RestorePlan{}, fmt.Errorf(
-			"--restore-rdb-from/--restore-tsdb-from need the database backup plugin, and this " +
+			"--restore-tsdb-from needs the database backup plugin, and this " +
 				"run disables it: --no-cnpg skips the CloudNativePG operator the plugin extends, " +
 				"and --compact --no-tls drops cert-manager, which the plugin needs for its own " +
 				"Issuer and Certificates. Restore with neither (--compact WITH TLS keeps backups)")
-	}
-
-	// 🔴 A RESTORED RELATIONAL STORE IS UNREADABLE UNDER A FRESH ROOT KEY.
-	//
-	// Every secret the platform holds — connector credentials, SMTP passwords, AI
-	// provider key handles — is a per-secret DEK wrapped by the instance's
-	// secret-store root key. The ciphertext lives in the relational store and comes
-	// back with it; the key lives in a Kubernetes Secret, in etcd, which is in no
-	// backup the platform takes. Recovering the database without --restore-root-key
-	// mints a NEW key, and every one of those secrets becomes permanently
-	// undecryptable — on a bootstrap that reports success, with the loss surfacing
-	// later as connectors and notifications failing at first use, detached from the
-	// run that caused it.
-	//
-	// The flag help said "pair with --restore-root-key" and nothing enforced it,
-	// which is the same weight as a comment. It is knowable from argv, so it is
-	// refused from argv.
-	//
-	// The EVENT store is deliberately not covered: telemetry carries no wrapped
-	// secrets, so recovering it alone under a fresh key loses nothing.
-	if plan.RdbFrom != "" && !f.RootKeyRestored {
-		return RestorePlan{}, fmt.Errorf(
-			"--restore-rdb-from recovers the relational store, which holds every secret this "+
-				"instance has stored — each one encrypted under a secret-store root key that "+
-				"lives in the cluster and is in NO database backup. Without --restore-root-key "+
-				"this run mints a fresh key, and every restored secret becomes permanently "+
-				"unreadable on a bootstrap that reports success. Re-run with --restore-root-key "+
-				"<artifact>, or restore only the event store with --restore-tsdb-from %q",
-			plan.TsdbFrom)
 	}
 
 	return plan, nil
@@ -407,54 +357,49 @@ type archivePaths struct {
 // The one exception is a restore aimed at a store with no explicit path (an
 // ordinary install, archiving under its own name). Keeping "" there would send the
 // restored cluster back over the archive it just recovered from — the wedge — so a
-// fresh path is derived instead.
+// fresh path is derived instead. Only the event store can be restored by this
+// command; the relational store is the cluster's, and a path it is already
+// archiving under — including one an earlier restore gave it — is kept all the same.
 //
 // fresh is what a store that neither exists nor is being restored archives under.
 // The relational store's is "" (its own name — it is the cluster's, and there is one).
 // The event store's is freshTsdbArchivePath: every instance's event store archives into
 // the SAME bucket, so its own name would be every instance's path.
 func resolveArchivePaths(live liveArchiveState, plan RestorePlan, fresh archivePaths, now time.Time) archivePaths {
-	out := archivePaths{}
-	for _, s := range []struct {
-		live    clusterArchiveState
-		from    string
-		target  *string
-		fresh   string
-		cluster string
-	}{
-		{live.Rdb, plan.RdbFrom, &out.Rdb, fresh.Rdb, RdbClusterName},
-		{live.Tsdb, plan.TsdbFrom, &out.Tsdb, fresh.Tsdb, TsdbClusterName},
-	} {
-		switch {
-		case s.live.Exists:
-			// 🔴 A CLUSTER THAT EXISTS KEEPS ITS PATH, unconditionally — including the
-			// empty one, which means "archiving under its own name". There is no case
-			// in which moving it is right: a restore cannot run against an existing
-			// Cluster at all (`spec.bootstrap` is CREATE-only), so the only thing a
-			// new path could do here is retarget a LIVE archiver.
-			//
-			// This branch keyed on Path rather than Exists in its first version, and
-			// the difference is the whole defect: an ordinary install renders no
-			// serverName, so Path is "" while the cluster is alive and archiving. A
-			// `--restore-rdb-from dc-rdb` against it — the obvious wrong guess, and
-			// what a half-followed runbook produces — fell through to the derived
-			// branch and emitted a fresh path for a running instance. The archive with
-			// the base backup would stop receiving WAL, and the prefix now receiving
-			// WAL would have no base backup until the next scheduled one: a window,
-			// up to a day wide, in which the database is restorable to no point at
-			// all. Green apply, no error, on the run that was trying to recover.
-			*s.target = s.live.Path
-		case s.from != "":
-			// The real restore: nothing is there, so this Cluster is about to be
-			// CREATED and needs a path of its own to archive into.
-			*s.target = RestoredArchivePath(s.from, now)
-		default:
-			// A fresh ordinary install.
-			*s.target = s.fresh
+	out := archivePaths{Rdb: fresh.Rdb}
+	if live.Rdb.Exists {
+		out.Rdb = live.Rdb.Path
+	}
+
+	switch {
+	case live.Tsdb.Exists:
+		// 🔴 A CLUSTER THAT EXISTS KEEPS ITS PATH, unconditionally — including the
+		// empty one, which means "archiving under its own name". There is no case
+		// in which moving it is right: a restore cannot run against an existing
+		// Cluster at all (`spec.bootstrap` is CREATE-only), so the only thing a
+		// new path could do here is retarget a LIVE archiver.
+		//
+		// This branch keyed on Path rather than Exists in its first version, and
+		// the difference is the whole defect: a store archiving under its own name
+		// renders no serverName, so Path is "" while the cluster is alive and
+		// archiving. A restore naming that very archive — the obvious wrong guess,
+		// and what a half-followed runbook produces — fell through to the derived
+		// branch and emitted a fresh path for a running instance. The archive with
+		// the base backup would stop receiving WAL, and the prefix now receiving
+		// WAL would have no base backup until the next scheduled one: a window,
+		// up to a day wide, in which the database is restorable to no point at
+		// all. Green apply, no error, on the run that was trying to recover.
+		out.Tsdb = live.Tsdb.Path
+		if plan.TsdbFrom != "" {
+			out.AlreadyLive = append(out.AlreadyLive, TsdbClusterName)
 		}
-		if s.from != "" && s.live.Exists {
-			out.AlreadyLive = append(out.AlreadyLive, s.cluster)
-		}
+	case plan.TsdbFrom != "":
+		// The real restore: nothing is there, so this Cluster is about to be
+		// CREATED and needs a path of its own to archive into.
+		out.Tsdb = RestoredArchivePath(plan.TsdbFrom, now)
+	default:
+		// A fresh ordinary install.
+		out.Tsdb = fresh.Tsdb
 	}
 	return out
 }

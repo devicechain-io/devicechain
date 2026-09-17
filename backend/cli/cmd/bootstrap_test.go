@@ -73,7 +73,7 @@ func TestResolveDevMode(t *testing.T) {
 
 func TestResolveCompactMode(t *testing.T) {
 	t.Run("bare --compact turns off TLS and monitoring", func(t *testing.T) {
-		res, err := resolveCompactMode(changedSet(), "", false, false, false)
+		res, err := resolveCompactMode(changedSet(), "", false, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -87,7 +87,7 @@ func TestResolveCompactMode(t *testing.T) {
 		// reservation sums the whole stream/KV inventory regardless of profile, so
 		// the budget holds for `full` too. What does not hold is a published number
 		// measured on `default` describing an instance running three more services.
-		_, err := resolveCompactMode(changedSet("profile"), "full", false, false, false)
+		_, err := resolveCompactMode(changedSet("profile"), "full", false, false)
 		if err == nil {
 			t.Fatal("--compact --profile full was accepted: the published footprint " +
 				"would describe fewer services than the instance runs")
@@ -103,7 +103,7 @@ func TestResolveCompactMode(t *testing.T) {
 		// thing the platform ships is the one request a small-footprint preset must
 		// not turn down.
 		for _, p := range profilesSmallerThanDefault {
-			if _, err := resolveCompactMode(changedSet("profile"), p, false, false, false); err != nil {
+			if _, err := resolveCompactMode(changedSet("profile"), p, false, false); err != nil {
 				t.Errorf("--compact --profile %s was rejected, but it deploys FEWER areas "+
 					"than default: %v", p, err)
 			}
@@ -111,7 +111,7 @@ func TestResolveCompactMode(t *testing.T) {
 	})
 
 	t.Run("an explicitly redundant --profile default is fine", func(t *testing.T) {
-		if _, err := resolveCompactMode(changedSet("profile"), "default", false, false, false); err != nil {
+		if _, err := resolveCompactMode(changedSet("profile"), "default", false, false); err != nil {
 			t.Fatalf("--compact --profile default was rejected: %v", err)
 		}
 	})
@@ -120,7 +120,7 @@ func TestResolveCompactMode(t *testing.T) {
 		// Keeping TLS is a DEPENDENCY, not a contradiction: cert-manager stays
 		// installed to issue the certificate and every other compact lever still
 		// applies. Erroring here would cost real functionality for no benefit.
-		res, err := resolveCompactMode(changedSet("no-tls"), "", false, false, false)
+		res, err := resolveCompactMode(changedSet("no-tls"), "", false, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestResolveCompactMode(t *testing.T) {
 	})
 
 	t.Run("an explicit --no-monitoring=false is honoured", func(t *testing.T) {
-		res, err := resolveCompactMode(changedSet("no-monitoring"), "", false, false, false)
+		res, err := resolveCompactMode(changedSet("no-monitoring"), "", false, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -142,31 +142,6 @@ func TestResolveCompactMode(t *testing.T) {
 			t.Error("--compact overrode an explicit --no-monitoring=false")
 		}
 	})
-}
-
-// --compact --grafana-sso must not silently do nothing.
-//
-// grafanaSSOEnabled returns false when monitoring is off, and so does the
-// "requested but invalid" warning that would otherwise say so — meaning the SSO
-// request is dropped with no output whatsoever. That was tolerable while reaching
-// it required typing --no-monitoring alongside --grafana-sso; --compact turns
-// monitoring off on the user's behalf, so the silence became reachable by
-// accident.
-func TestCompactRejectsGrafanaSSOItWouldSilentlySwallow(t *testing.T) {
-	_, err := resolveCompactMode(changedSet(), "", false, false, true)
-	if err == nil {
-		t.Fatal("--compact --grafana-sso was accepted: the monitoring stack Grafana " +
-			"lives in is removed, so the SSO request is dropped and nothing says so")
-	}
-	if !strings.Contains(err.Error(), "--no-monitoring=false") {
-		t.Errorf("error %q does not name the escape hatch, which is the only thing "+
-			"that turns a refusal into an actionable one", err)
-	}
-
-	// Keeping the stack explicitly makes the combination coherent again.
-	if _, err := resolveCompactMode(changedSet("no-monitoring"), "", false, false, true); err != nil {
-		t.Errorf("--compact --grafana-sso --no-monitoring=false was rejected: %v", err)
-	}
 }
 
 // Every profile the chart ships must be classified relative to `default`.

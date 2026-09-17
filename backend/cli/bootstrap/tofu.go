@@ -579,8 +579,6 @@ func infraVars(st *State) []string {
 	// when it CREATES a Cluster, so these do nothing to a store that already exists
 	// — stepRenderConfig says so out loud when it finds one.
 	for _, v := range []struct{ name, value string }{
-		{"restore_rdb_from", st.Restore.RdbFrom},
-		{"restore_rdb_target_time", st.Restore.RdbTargetTime},
 		{"restore_tsdb_from", st.Restore.TsdbFrom},
 		{"restore_tsdb_target_time", st.Restore.TsdbTargetTime},
 	} {
@@ -606,23 +604,6 @@ func infraVars(st *State) []string {
 		if h := st.Values["natsSysPasswordBcrypt"]; h != "" {
 			vars = append(vars, "nats_sys_password_bcrypt="+h)
 		}
-	}
-	// Grafana SSO (ADR-047): configure Grafana's generic_oauth + the /grafana ingress
-	// against the minted client secret and the computed URLs. The browser-facing
-	// authorize URL uses the public host; token/userinfo are in-cluster (Grafana's pod
-	// can't reach the public ingress). user-management gets the matching issuer + the
-	// bcrypt hash of this same secret in helmInstall.
-	if grafanaSSOEnabled(st) {
-		u := grafanaSSOURLsFor(st)
-		vars = append(vars,
-			"monitoring_grafana_oauth_enabled=true",
-			"monitoring_grafana_oauth_client_secret="+st.Values["grafanaOAuthSecret"],
-			"monitoring_grafana_oauth_auth_url="+u.AuthURL,
-			"monitoring_grafana_oauth_token_url="+u.TokenURL,
-			"monitoring_grafana_oauth_api_url="+u.APIURL,
-			"monitoring_grafana_root_url="+u.RootURL,
-			"monitoring_grafana_ingress_host="+u.Host,
-		)
 	}
 	return vars
 }

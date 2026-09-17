@@ -32,7 +32,6 @@ var (
 	bootstrapNoMonitoring      bool
 	bootstrapNoCNPG            bool
 	bootstrapAllowLegacyDb     bool
-	bootstrapGrafanaSSO        bool
 	bootstrapDev               bool
 	bootstrapCompact           bool
 	bootstrapHA                bool
@@ -43,8 +42,6 @@ var (
 	bootstrapEscrowPassFile    string
 	bootstrapNoEscrow          bool
 	bootstrapRestoreRootKey    string
-	bootstrapRestoreRdbFrom    string
-	bootstrapRestoreRdbAt      string
 	bootstrapRestoreTsdbFrom   string
 	bootstrapRestoreTsdbAt     string
 )
@@ -143,17 +140,13 @@ type compactModeResolution struct {
 //     CLAIM: it adds three more services, and the published compact numbers are
 //     measured on `default`, so the figure would not describe the instance.
 //
-//   - --grafana-sso is REJECTED, but with its escape hatch named. It is not
-//     contradictory in principle — it just needs the monitoring stack compact
-//     removes — and the failure mode without this check is silence, not breakage.
-//
 //   - --no-tls=false is HONOURED. It is not a contradiction, it is a dependency:
 //     TLS stays on, cert-manager stays installed to issue the cert, and every other
 //     compact lever still applies. Erroring here would cost real functionality to
 //     no benefit.
 //
 // `changed` reports whether the user set a given flag explicitly.
-func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring, grafanaSSO bool) (compactModeResolution, error) {
+func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring bool) (compactModeResolution, error) {
 	if changed("profile") && slices.Contains(profilesLargerThanDefault, profile) {
 		return compactModeResolution{}, fmt.Errorf(
 			"--compact publishes a footprint measured on the `default` profile, and "+
@@ -172,47 +165,23 @@ func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMoni
 	if changed("no-monitoring") {
 		res.NoMonitoring = noMonitoring
 	}
-	// Grafana lives IN the monitoring stack compact removes, and the SSO wiring is
-	// silently skipped when that stack is absent — including the warning, which is
-	// itself gated on monitoring being on. Before compact you could only reach that
-	// by typing --no-monitoring --grafana-sso together, which reads as a
-	// contradiction; compact turns monitoring off on the user's behalf, so the
-	// request would be swallowed with nothing printed at all.
-	if grafanaSSO && res.NoMonitoring {
-		return compactModeResolution{}, fmt.Errorf(
-			"--grafana-sso wires login for the Grafana in the monitoring stack, which " +
-				"--compact removes. Add --no-monitoring=false to keep the stack (and pay " +
-				"its footprint), or drop --grafana-sso")
-	}
 	return res, nil
 }
 
-// restoreFlagsFromArgv assembles the database-restore inputs from the parsed
-// flags and the already-settled escrow plan.
+// restoreFlagsFromArgv assembles the event-store restore inputs from the parsed
+// flags.
 //
-// Extracted from RunE so the wiring itself is testable. It is four string
-// copies and two derivations, which is exactly the kind of code that looks too
-// trivial to test and then transposes rdb and tsdb — a mistake with no symptom
-// at all until an operator recovers telemetry into the relational store's
-// timeline during an incident. The tests drive real argv through the real flag
-// set, so a rename on either side is a failure rather than a silent no-op.
-func restoreFlagsFromArgv(escrowPlan bootstrap.EscrowPlan) bootstrap.RestoreFlags {
+// Extracted from RunE so the wiring itself is testable. It is two string copies
+// and a derivation, which is exactly the kind of code that looks too trivial to
+// test and then copies the source into the target — a mistake with no symptom at
+// all until an operator's recovery stops at the wrong moment during an incident.
+// The tests drive real argv through the real flag set, so a rename on either side
+// is a failure rather than a silent no-op.
+func restoreFlagsFromArgv() bootstrap.RestoreFlags {
 	return bootstrap.RestoreFlags{
-		RdbFrom:        bootstrapRestoreRdbFrom,
-		RdbTargetTime:  bootstrapRestoreRdbAt,
 		TsdbFrom:       bootstrapRestoreTsdbFrom,
 		TsdbTargetTime: bootstrapRestoreTsdbAt,
 		BackupsEnabled: bootstrap.DatabaseBackupsEnabled(bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS),
-		// Read off the SETTLED escrow plan rather than the raw flag, so this
-		// refusal and the thing it protects cannot disagree.
-		//
-		// 🔴 RestoringRootKey(), NOT RestoredRootKey != "". The key field is only
-		// populated once the artifact has actually been opened, which a DRY RUN
-		// deliberately never does — so keying on it refused
-		// `--dry-run --restore-rdb-from=X --restore-root-key=F` with a message
-		// telling the operator to pass --restore-root-key, which they had passed.
-		// A dry run is precisely how you rehearse a restore before you need it.
-		RootKeyRestored: escrowPlan.RestoringRootKey(),
 	}
 }
 
@@ -258,7 +227,7 @@ var bootstrapCmd = &cobra.Command{
 		// preflight, for the same reason as --dev: the pipeline should see settled
 		// values rather than flags that still need interpreting.
 		if bootstrapCompact {
-			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring, bootstrapGrafanaSSO)
+			res, err := resolveCompactMode(cmd.Flags().Changed, bootstrapProfile, bootstrapNoTLS, bootstrapNoMonitoring)
 			if err != nil {
 				return err
 			}
@@ -382,7 +351,7 @@ var bootstrapCmd = &cobra.Command{
 		// knowable from argv, and an incident is the wrong time to learn either.
 		// Resolved AFTER the presets, so it sees the --compact/--dev values that decide
 		// whether this instance has a backup destination at all.
-		restorePlan, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv(escrowPlan))
+		restorePlan, err := bootstrap.ResolveRestorePlan(restoreFlagsFromArgv())
 		if err != nil {
 			return err
 		}
@@ -401,7 +370,6 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:         bootstrapNoMonitoring,
 			NoCNPG:               bootstrapNoCNPG,
 			AllowLegacyDbRemoval: bootstrapAllowLegacyDb,
-			GrafanaSSO:           bootstrapGrafanaSSO,
 			Compact:              bootstrapCompact,
 			HA:                   bootstrapHA,
 			EnableAreas:          enableAreas,
@@ -533,7 +501,6 @@ var bootstrapCmd = &cobra.Command{
 			NoMonitoring:         opts.NoMonitoring,
 			NoCNPG:               opts.NoCNPG,
 			AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-			GrafanaSSO:           opts.GrafanaSSO,
 			Compact:              opts.Compact,
 			HA:                   opts.HA,
 			EnableAreas:          opts.EnableAreas,
@@ -604,8 +571,7 @@ func init() {
 			"hostnames. Dump first, or use it deliberately to discard a local instance")
 	bootstrapCmd.Flags().StringVar(&bootstrapBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the instance provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. The credentials are written to a Secret before the apply and never reach the infrastructure state — keep the file readable only by you")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
-	bootstrapCmd.Flags().BoolVar(&bootstrapGrafanaSSO, "grafana-sso", false, "wire Grafana login to DeviceChain SSO (ADR-047), operator/superuser-tier only; enables the OAuth AS (needs https, or --host localhost --no-tls for local http)")
-	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags. Compose with --grafana-sso for local SSO")
+	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags")
 
 	bootstrapCmd.Flags().BoolVar(&bootstrapCompact, "compact", false, "small-footprint preset: lowered JetStream/KV ceilings with the smaller volumes they permit, lowered scheduling requests, and no monitoring stack. Keeps --profile default (it does not change which services run); rejects a conflicting --profile")
 	bootstrapCmd.Flags().BoolVar(&bootstrapHA, "ha", false, "ADR-020 HA: a 3-node NATS RAFT cluster spread one server per node, with every JetStream stream and KV bucket replicated across it, AND both databases as replicated CloudNativePG Clusters -- the relational store synchronously, the event store at 'preferred' durability so a lost standby degrades rather than stalling ingest (ADR-020 A2.3/A2.4). Sets every half from one value (the OpenTofu server count, the chart's streamReplicas, both instance counts), and refuses to install if the cluster cannot host the topology. Needs at least 3 schedulable nodes. Database volumes are sized PER INSTANCE, so this triples their disk. Does not change how many services run")
@@ -622,22 +588,15 @@ func init() {
 	// archives INTO by itself, and it is deliberately not a flag: it must stay put
 	// across every later re-run, so it is read back off the live cluster rather than
 	// re-derived from argv.
-	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbFrom, "restore-rdb-from", "",
-		"disaster recovery: recover the RELATIONAL store from this archive path (the serverName "+
-			"inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. "+
-			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
-			"and rebuilding it with this set, not by re-running against a live one. Pair with "+
-			"--restore-root-key, or the restored secrets cannot be decrypted")
-	bootstrapCmd.Flags().StringVar(&bootstrapRestoreRdbAt, "restore-rdb-at", "",
-		"stop the relational store's recovery at this RFC3339 timestamp instead of replaying the "+
-			"whole archive. For the disaster where the data was destroyed correctly — a bad migration, "+
-			"a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbFrom, "restore-tsdb-from", "",
-		"disaster recovery: recover the EVENT store from this archive path (e.g. dc-tsdb). The two "+
-			"stores keep independent timelines and are restored separately: rewinding telemetry to "+
-			"yesterday does not mean the control plane should be rewound with it")
+		"disaster recovery: recover the EVENT store from this archive path (the serverName inside "+
+			"the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. "+
+			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
+			"and rebuilding it with this set, not by re-running against a live one")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbAt, "restore-tsdb-at", "",
-		"stop the event store's recovery at this RFC3339 timestamp. Needs --restore-tsdb-from")
+		"stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole "+
+			"archive. For the disaster where the data was destroyed correctly — a mistaken delete — so "+
+			"pick a moment strictly before the damage. Needs --restore-tsdb-from")
 
 	rootCmd.AddCommand(bootstrapCmd)
 }

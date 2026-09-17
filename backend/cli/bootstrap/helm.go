@@ -467,34 +467,12 @@ func helmValues(st *State) map[string]interface{} {
 		vals["resources"] = compact.resourceValues()
 	}
 
-	// Grafana SSO (ADR-047): turn on user-management's OAuth AS (the issuer) and seed
-	// the confidential Grafana client. The bcrypt hash is the SAME secret whose
-	// cleartext went to Grafana's config in the tofu step (one mint, both sides). The
-	// redirect URI matches the /grafana ingress path. Deep-merges into the chart's
-	// functionalAreas.user-management.config, preserving the other areas' config.
-	if grafanaSSOEnabled(st) {
-		u := grafanaSSOURLsFor(st)
-		mergeFunctionalArea(vals, "user-management", map[string]interface{}{
-			"config": map[string]interface{}{
-				"auth": map[string]interface{}{
-					"issuerUrl": u.Issuer,
-					"seedClients": []map[string]interface{}{{
-						"clientId":     "grafana",
-						"redirectUris": []string{u.Redirect},
-						"scopes":       []string{"read-only"},
-						"secretHash":   st.Values["grafanaOAuthSecretBcrypt"],
-					}},
-				},
-			},
-		})
-	}
-
 	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a
 	// chart-owned Secret (extraSecrets) and bind each into lwm2m-ingest's config
 	// (security.identities[]) + an extraEnv secretKeyRef that projects it. The area is
 	// turned on separately via EnabledAreas (the flag implies --enable-area
 	// lwm2m-ingest); this only supplies its config, merged so it coexists with any
-	// other functionalAreas block (e.g. Grafana SSO) rather than overwriting it.
+	// other functionalAreas block rather than overwriting it.
 	if len(st.Lwm2mIdentities) > 0 {
 		secret, areaConfig := lwm2mProvisioning(st.Instance, st.Lwm2mIdentities)
 		// Append rather than assign, so a future second writer of extraSecrets doesn't

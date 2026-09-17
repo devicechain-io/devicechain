@@ -61,7 +61,6 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 		Compact:       st.Compact,
 		Monitoring:    !st.NoMonitoring,
 		CNPG:          !st.NoCNPG,
-		GrafanaSSO:    grafanaSSOEnabled(st),
 		Host:          host,
 		TLS:           !st.NoTLS,
 		ImageRegistry: st.ImageRegistry,

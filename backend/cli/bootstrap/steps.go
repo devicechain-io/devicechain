@@ -22,7 +22,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
-	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -206,16 +205,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	st.Values["backupServerNameRdb"] = paths.Rdb
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.Active() {
-		for _, p := range []struct{ store, from, path string }{
-			{"relational store", st.Restore.RdbFrom, paths.Rdb},
-			{"event store", st.Restore.TsdbFrom, paths.Tsdb},
-		} {
-			if p.from != "" {
-				notes = append(notes, fmt.Sprintf(
-					"%s recovering from archive %q, and will archive under %q",
-					p.store, p.from, p.path))
-			}
-		}
+		notes = append(notes, fmt.Sprintf(
+			"event store recovering from archive %q, and will archive under %q",
+			st.Restore.TsdbFrom, paths.Tsdb))
 	}
 	// 🔴 A restore aimed at a store that already exists does NOTHING — CloudNativePG
 	// reads `spec.bootstrap` when it CREATES a Cluster. The apply is green, the
@@ -458,42 +450,6 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				return fail("escrowing the secret-store root key", err)
 			}
 		}
-	}
-
-	// Mint the Grafana OAuth client secret (ADR-047 SSO) when SSO is wired: one mint,
-	// both sides — the cleartext goes to Grafana's generic_oauth config (the monitoring
-	// tofu module) and the bcrypt hash is seeded into user-management (helmInstall), so
-	// the two can't drift. Skipped (with a note) when SSO was requested but the issuer
-	// would be invalid — http on a non-localhost host.
-	//
-	// THIS IS THE ONE GENERATED CREDENTIAL ABOVE THAT A RE-RUN STILL ROTATES, and it
-	// is left that way on purpose rather than overlooked. The reuse the rest of this
-	// step does works because the value is in DeviceChain's own instance config, which
-	// dcctl can read back; this one is not. The cleartext goes only into the Grafana
-	// subchart's envRenderSecret and user-management stores only its hash, so
-	// recovering it would mean depending on an upstream chart's secret-naming
-	// convention — a worse failure mode than what it fixes. The blast radius is also
-	// different in kind: both halves are written by the same run, so a rotation costs
-	// a window of failing logins during the rollout rather than a broker that rejects
-	// every service. Closing it properly means giving the secret a home dcctl owns,
-	// which is a design change, not a reuse. Tracked on the roadmap with this slice.
-	if st.GrafanaSSO && st.NoMonitoring {
-		fmt.Println(color.YellowString("  Grafana SSO skipped: it needs the monitoring stack, which --no-monitoring disables."))
-	}
-	if grafanaSSORequestedButInvalid(st) {
-		fmt.Println(color.YellowString("  Grafana SSO skipped: an http issuer needs a localhost host. Re-run with --host localhost (and --no-tls) or enable TLS."))
-	}
-	if grafanaSSOEnabled(st) {
-		secret, err := randomSecret(32)
-		if err != nil {
-			return fail("minting Grafana OAuth secret", err)
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-		if err != nil {
-			return fail("hashing Grafana OAuth secret", err)
-		}
-		st.Values["grafanaOAuthSecret"] = secret
-		st.Values["grafanaOAuthSecretBcrypt"] = string(hash)
 	}
 
 	// Re-settle the image source. The command layer resolves this before the
@@ -1032,39 +988,29 @@ func stepReport(ctx context.Context, st *State) error {
 			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
 	}
 	if svc := st.Values["grafanaService"]; svc != "" {
-		if grafanaSSOEnabled(st) {
-			u := grafanaSSOURLsFor(st)
-			fmt.Printf("  %s %s\n",
-				color.WhiteString("Grafana:"),
-				color.GreenString("%s  (sign in with DeviceChain SSO — operators/superusers only)", u.RootURL))
-			fmt.Printf("           %s\n", color.YellowString("cross-tenant metrics are operator-tier only; the native admin login stays available as break-glass"))
-		} else {
-			// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
-			// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
-			// and offered `monitoring_grafana_admin_password` as the way to change it
-			// — a shared literal, and an infrastructure variable that has since been
-			// retired. Both were true when the dashboard's password was the same value
-			// on every installation anyone had ever built. Neither survived that
-			// change, and nothing failed: the report simply kept saying it, so an
-			// operator following it was told the wrong password and pointed at a knob
-			// that no longer exists. Measured on a live instance, by comparing the
-			// digest of the stored credential against the digest of the old literal.
-			//
-			// It now says where the password IS rather than what it is, which is also
-			// the only form that stays true when it is rotated.
-			ns := st.Values["grafanaNamespace"]
-			fmt.Printf("  %s %s\n",
-				color.WhiteString("Grafana:"),
-				color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
-			fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
-				"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
-				grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
-			fmt.Printf("           %s\n", color.GreenString(
-				"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
-				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
-			fmt.Printf("           %s\n", color.YellowString(
-				"or wire it to DeviceChain SSO with --grafana-sso (ADR-047)"))
-		}
+		// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
+		// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`
+		// and offered `monitoring_grafana_admin_password` as the way to change it
+		// — a shared literal, and an infrastructure variable that has since been
+		// retired. Both were true when the dashboard's password was the same value
+		// on every installation anyone had ever built. Neither survived that
+		// change, and nothing failed: the report simply kept saying it, so an
+		// operator following it was told the wrong password and pointed at a knob
+		// that no longer exists. Measured on a live instance, by comparing the
+		// digest of the stored credential against the digest of the old literal.
+		//
+		// It now says where the password IS rather than what it is, which is also
+		// the only form that stays true when it is rotated.
+		ns := st.Values["grafanaNamespace"]
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Grafana:"),
+			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
+		fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
+			"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
+			grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
+		fmt.Printf("           %s\n", color.GreenString(
+			"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",
+			monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass))
 	}
 	// Database backups, printed here for exactly the reason the escrow line below
 	// is: this is the screen an operator actually reads, and every branch of it
@@ -1116,7 +1062,7 @@ func stepReport(ctx context.Context, st *State) error {
 	//
 	// Printed only when it is not the default, because that is exactly when an
 	// operator cannot work it out: after a recovery the paths are stamped names
-	// nobody chose, and `--restore-rdb-from dc-rdb` — the obvious guess — points at
+	// nobody chose, and `--restore-tsdb-from dc-tsdb` — the obvious guess — points at
 	// the archive of the instance that already died. Alongside it, the escrow line
 	// below completes the pair a restore actually needs.
 	if st.Values[databaseBackupsKey] == "true" {
