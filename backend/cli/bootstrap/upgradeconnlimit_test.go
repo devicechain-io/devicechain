@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,13 +38,19 @@ func TestTheLoginMovesOnlyTowardsWhatTheReleaseNeeds(t *testing.T) {
 }
 
 // fakeLoginStore answers the two reads the re-size makes — the login's own row and the
-// admission count — and records what was run. Only what these tests need: the SQL itself
-// is PostgreSQL's to judge, against a real server.
+// admission count — and records, in order, every statement run. Only what these tests
+// need: the SQL itself is PostgreSQL's to judge, against a real server.
+//
+// It routes on the exact statements the code sends, never on a fragment of one, so a
+// query it does not know is an error rather than a guess.
 type fakeLoginStore struct {
-	limit     int32
-	others    int32 // the limits already granted to other logins, as one
-	admitted  int   // how many times admission was asked
-	statement []string
+	limit    int32
+	others   int32 // the limits already granted to other logins, as one
+	admitted int   // how many times admission was asked
+	alterErr error // what an ALTER ROLE answers, when set
+	// log is every call, in order: "lock", "unlock", "login", "admission", "alter", or the
+	// statement itself for anything else.
+	log []string
 }
 
 type fakeRow func(dest ...any) error
@@ -51,15 +58,17 @@ type fakeRow func(dest ...any) error
 func (r fakeRow) Scan(dest ...any) error { return r(dest...) }
 
 func (f *fakeLoginStore) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	switch {
-	case strings.Contains(sql, "array_agg"):
+	switch sql {
+	case grantedLimitsSQL:
+		f.log = append(f.log, "admission")
 		f.admitted++
 		return fakeRow(func(dest ...any) error {
 			*dest[0].(*[]string) = []string{"other"}
 			*dest[1].(*[]int32) = []int32{f.others}
 			return nil
 		})
-	case strings.Contains(sql, "r.rolconnlimit"):
+	case instanceLoginSQL:
+		f.log = append(f.log, "login")
 		return fakeRow(func(dest ...any) error {
 			*dest[0].(*bool), *dest[1].(*bool), *dest[2].(*bool) = false, false, false
 			*dest[3].(*int32) = f.limit
@@ -67,26 +76,35 @@ func (f *fakeLoginStore) QueryRow(_ context.Context, sql string, _ ...any) pgx.R
 			return nil
 		})
 	}
+	f.log = append(f.log, sql)
 	return fakeRow(func(...any) error { return fmt.Errorf("unexpected query: %s", sql) })
 }
 
-func (f *fakeLoginStore) Exec(_ context.Context, sql string, _ ...any) (pgconnCommandTag, error) {
-	f.statement = append(f.statement, sql)
+func (f *fakeLoginStore) Exec(_ context.Context, sql string, args ...any) (pgconnCommandTag, error) {
+	switch sql {
+	case "select pg_advisory_lock($1)":
+		f.log = append(f.log, "lock")
+		return nil, nil
+	case "select pg_advisory_unlock($1)":
+		f.log = append(f.log, "unlock")
+		return nil, nil
+	}
 	var name string
 	var limit int32
 	if n, _ := fmt.Sscanf(sql, "ALTER ROLE %s CONNECTION LIMIT %d", &name, &limit); n == 2 {
+		f.log = append(f.log, "alter")
+		if f.alterErr != nil {
+			return nil, f.alterErr
+		}
 		f.limit = limit
+		return nil, nil
 	}
-	return nil, nil
+	f.log = append(f.log, sql)
+	return nil, fmt.Errorf("unexpected statement: %s", sql)
 }
 
 func (f *fakeLoginStore) altered() bool {
-	for _, s := range f.statement {
-		if strings.HasPrefix(s, "ALTER ROLE") {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.log, "alter")
 }
 
 // 🔴 AN UNCHANGED NEED ASKS THE BUDGET NOTHING. The budget here is already over-granted —
@@ -131,9 +149,8 @@ func TestTheGrowIsAdmittedUnderTheLock(t *testing.T) {
 	if store.altered() {
 		t.Fatal("a refused grow altered the login anyway")
 	}
-	if store.admitted != 1 || !strings.Contains(strings.Join(store.statement, ";"), "pg_advisory_lock") {
-		t.Fatalf("the grow was admitted %d time(s) with statements %v; want once, under the advisory lock",
-			store.admitted, store.statement)
+	if got := strings.Join(store.log, ","); got != "lock,login,admission,unlock" {
+		t.Fatalf("a refused grow ran %s; want the login read and admission under the lock, and no ALTER", got)
 	}
 
 	store = &fakeLoginStore{limit: 40, others: 20}
@@ -143,6 +160,9 @@ func TestTheGrowIsAdmittedUnderTheLock(t *testing.T) {
 	if store.limit != 80 {
 		t.Fatalf("an admitted grow left the login at %d, want 80", store.limit)
 	}
+	if got := strings.Join(store.log, ","); got != "lock,login,admission,alter,unlock" {
+		t.Fatalf("an admitted grow ran %s; want the lock taken before the login read, the admission and the ALTER", got)
+	}
 }
 
 // 🔴 THE SHRINK READS WHAT THE LOGIN HOLDS. A re-run after a failed rollout grew nothing,
@@ -150,7 +170,7 @@ func TestTheGrowIsAdmittedUnderTheLock(t *testing.T) {
 func TestTheShrinkComparesAgainstWhatTheLoginHolds(t *testing.T) {
 	ctx := context.Background()
 	store := &fakeLoginStore{limit: 320}
-	if have, err := shrinkInstanceLogin(ctx, store, "prod", 280); err != nil || have != 320 {
+	if have, err := shrinkInstanceLogin(ctx, store, "prod", connectionAdmission{Limit: 280, Budget: 600}); err != nil || have != 320 {
 		t.Fatalf("shrink returned (%d, %v), want (320, nil)", have, err)
 	}
 	if store.limit != 280 {
@@ -159,8 +179,8 @@ func TestTheShrinkComparesAgainstWhatTheLoginHolds(t *testing.T) {
 
 	// Never upwards: raising is the grow's, and only with admission.
 	store = &fakeLoginStore{limit: 200}
-	if _, err := shrinkInstanceLogin(ctx, store, "prod", 280); err != nil || store.altered() {
-		t.Fatalf("a shrink below the need raised the login (err %v, statements %v)", err, store.statement)
+	if _, err := shrinkInstanceLogin(ctx, store, "prod", connectionAdmission{Limit: 280, Budget: 600}); err != nil || store.altered() {
+		t.Fatalf("a shrink below the need raised the login (err %v, calls %v)", err, store.log)
 	}
 }
 
@@ -280,6 +300,7 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 	}
 
 	var bracket *ast.CallExpr
+	everywhere := map[string]int{}
 	_, files := packageFiles(t)
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -289,8 +310,11 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 			}
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok {
-					if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "rolloutWithLoginResize" {
-						bracket = call
+					if id, ok := call.Fun.(*ast.Ident); ok {
+						everywhere[id.Name]++
+						if id.Name == "rolloutWithLoginResize" {
+							bracket = call
+						}
 					}
 				}
 				return true
@@ -300,18 +324,56 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 	if bracket == nil || len(bracket.Args) == 0 {
 		t.Fatal("Upgrade does not call rolloutWithLoginResize")
 	}
-	inside := map[string]bool{}
+	inside := map[string]int{}
 	ast.Inspect(bracket.Args[len(bracket.Args)-1], func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			if id, ok := call.Fun.(*ast.Ident); ok {
-				inside[id.Name] = true
+				inside[id.Name]++
 			}
 		}
 		return true
 	})
 	for _, fn := range []string{"helmInstall", "waitForAreas"} {
-		if !inside[fn] {
-			t.Errorf("Upgrade calls %s outside the rollout the login is sized around", fn)
+		if inside[fn] == 0 {
+			t.Errorf("Upgrade does not call %s inside the rollout the login is sized around", fn)
 		}
+		if everywhere[fn] != inside[fn] {
+			t.Errorf("Upgrade calls %s %d time(s), %d of them outside the rollout the login is sized "+
+				"around", fn, everywhere[fn], everywhere[fn]-inside[fn])
+		}
+	}
+}
+
+// 🔴 A FAILED SHRINK WARNS AND LETS THE UPGRADE FINISH. The services are already on the new
+// release; failing here would skip the report and the escrow check, and call a working
+// upgrade a failed one. A failed GROW still fails: the rollout has not started.
+func TestAFailedShrinkWarnsAndDoesNotFailTheUpgrade(t *testing.T) {
+	restore := upgradeLoginSession
+	t.Cleanup(func() { upgradeLoginSession = restore })
+	st := &State{
+		Instance:     "prod",
+		EnabledAreas: []string{"user-management", "device-management"}, // 80
+		Install:      &InstallRecord{Outputs: InstallOutputs{Rdb: ClusterRdb{MaxConnections: 600}}},
+	}
+	alterErr := errors.New("connection reset")
+
+	store := &fakeLoginStore{limit: 120, alterErr: alterErr}
+	upgradeLoginSession = func(_ context.Context, _ *State, fn func(instanceDBQuerier) error) error { return fn(store) }
+	var err error
+	out := captureStdout(t, func() { err = resizeUpgradeLogin(context.Background(), st, loginResizeShrink) })
+	if err != nil {
+		t.Fatalf("a failed shrink failed the upgrade: %v", err)
+	}
+	for _, want := range []string{"warning", "from 120 to 80 failed", "connection reset", "re-run `dcctl upgrade`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning does not say %q:\n%s", want, out)
+		}
+	}
+
+	// The control: the same failure on the grow is an error.
+	store = &fakeLoginStore{limit: 40, alterErr: alterErr}
+	captureStdout(t, func() { err = resizeUpgradeLogin(context.Background(), st, loginResizeGrow) })
+	if !errors.Is(err, alterErr) {
+		t.Fatalf("a failed grow did not fail the upgrade: %v", err)
 	}
 }

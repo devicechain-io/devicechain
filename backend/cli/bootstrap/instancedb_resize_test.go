@@ -73,7 +73,7 @@ func TestInstanceDatabaseResizeShrinkGivesConnectionsBack(t *testing.T) {
 	if err := ensureInstanceDatabase(ctx, q, "rs-d", "pw", connectionAdmission{Limit: 40, Budget: 100}); !errors.Is(err, errNoConnectionBudget) {
 		t.Fatalf("the budget was not full before the shrink, so the test proves nothing: %v", err)
 	}
-	if have, err := shrinkInstanceLogin(ctx, q, "rs-c", 40); err != nil || have != 60 {
+	if have, err := shrinkInstanceLogin(ctx, q, "rs-c", connectionAdmission{Limit: 40, Budget: 100}); err != nil || have != 60 {
 		t.Fatalf("shrinking returned (%d, %v), want (60, nil)", have, err)
 	}
 	if got := loginLimit(t, q, "rs-c"); got != 40 {
@@ -106,11 +106,35 @@ func TestInstanceDatabaseResizeOfAnUnchangedNeedIgnoresALoweredBudget(t *testing
 	if _, err := growInstanceLogin(ctx, q, "rs-e", lowered); err != nil {
 		t.Fatalf("growing to an unchanged need on a lowered budget was refused: %v", err)
 	}
-	if _, err := shrinkInstanceLogin(ctx, q, "rs-e", 40); err != nil {
+	if _, err := shrinkInstanceLogin(ctx, q, "rs-e", lowered); err != nil {
 		t.Fatal(err)
 	}
 	if got := loginLimit(t, q, "rs-e"); got != 40 {
 		t.Fatalf("an unchanged need moved the login to %d", got)
+	}
+}
+
+// 🔴 A LOGIN OF ITS OWN WITH NO LIMIT IS LIMITED, THROUGH ADMISSION. It is counted in no
+// budget, so giving it one is entering the count.
+func TestInstanceDatabaseResizeLimitsAnUnlimitedOwnLogin(t *testing.T) {
+	ctx := context.Background()
+	p, _ := withProvisioner(t, "rs-u")
+	q := pgxSession{p}
+	if err := ensureInstanceDatabase(ctx, q, "rs-u", "pw", testAdmission); err != nil {
+		t.Fatal(err)
+	}
+	su, _ := superuserConn(t)
+	if _, err := su.Exec(ctx, `ALTER ROLE "rs-u" CONNECTION LIMIT -1`); err != nil {
+		t.Fatal(err)
+	}
+	if have, err := checkInstanceLoginResize(ctx, q, "rs-u", testAdmission); err != nil || have != -1 {
+		t.Fatalf("checking an unlimited login returned (%d, %v), want (-1, nil)", have, err)
+	}
+	if have, err := growInstanceLogin(ctx, q, "rs-u", testAdmission); err != nil || have != -1 {
+		t.Fatalf("growing an unlimited login returned (%d, %v), want (-1, nil)", have, err)
+	}
+	if got := loginLimit(t, q, "rs-u"); got != testAdmission.Limit {
+		t.Fatalf("the unlimited login holds %d after the grow, want %d", got, testAdmission.Limit)
 	}
 }
 

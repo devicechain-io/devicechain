@@ -56,14 +56,19 @@ func TestAnInterruptedUninstallIsAcknowledgedOnceAndStillAwaited(t *testing.T) {
 		err error
 	}
 	got := make(chan answer, 1)
+	started := make(chan struct{})
 	go func() {
 		v, err := awaitUninstall(ctx, out, "kind-prod", func() (bool, error) {
+			close(started)
 			<-release
 			return true, helmErr
 		})
 		got <- answer{v, err}
 	}()
 
+	// Interrupted once Helm is under way, not before: an uninstall cancelled before it
+	// began is never started.
+	<-started
 	cancel()
 	select {
 	case <-out.written:
@@ -115,6 +120,28 @@ func TestAnUninterruptedUninstallSaysNothing(t *testing.T) {
 	}
 	if s := out.String(); s != "" {
 		t.Fatalf("an uninterrupted uninstall printed %q", s)
+	}
+}
+
+// An uninstall interrupted before it began is not begun: nothing was asked of Helm, so
+// there is nothing to wait for and no "interrupt received" to print over it.
+func TestAnUninstallInterruptedBeforeItBeganIsNotStarted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out := newSignallingWriter()
+	ran := false
+	_, err := awaitUninstall(ctx, out, "kind-prod", func() (bool, error) {
+		ran = true
+		return true, nil
+	})
+	if ran {
+		t.Fatal("an uninstall was started on a context already cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want the cancellation", err)
+	}
+	if s := out.String(); s != "" {
+		t.Fatalf("an uninstall that never started printed %q", s)
 	}
 }
 

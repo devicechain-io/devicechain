@@ -68,15 +68,11 @@ func loginResizeFor(have, want int) loginResize {
 // readInstanceLoginLimit reads the CONNECTION LIMIT of the instance's login, refusing a
 // login that is missing or that dcctl's provisioner did not make.
 func readInstanceLoginLimit(ctx context.Context, q instanceDBQuerier, instance string) (int, error) {
-	var super, createdb, createrole, admin bool
-	var limit int32
-	err := q.QueryRow(ctx, `
-		select r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolconnlimit,
-		       coalesce((select bool_or(m.admin_option) from pg_auth_members m
-		                 where m.roleid = r.oid and m.member = (select oid from pg_roles where rolname = current_user)), false)
-		from pg_roles r where r.rolname = $1`, instance).Scan(&super, &createdb, &createrole, &limit, &admin)
+	login, found, err := readInstanceLogin(ctx, q, instance)
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return 0, err
+	case !found:
 		// 🔴 AN INCONSISTENCY, NOT A LOGIN TO CREATE. The upgrade read this login's password
 		// out of its Secret a moment ago, so the instance was given one; the store not
 		// having it means something removed it outside dcctl, or the store was replaced
@@ -85,20 +81,18 @@ func readInstanceLoginLimit(ctx context.Context, q instanceDBQuerier, instance s
 			"login named %q — the two disagree, so the login was removed outside dcctl or the store was "+
 			"replaced under the instance. Nothing has been changed; find out which before upgrading",
 			errInstanceDatabaseNotOurs, instance, instance)
-	case err != nil:
-		return 0, fmt.Errorf("looking up the login for instance %q: %w", instance, err)
 	}
-	if err := refuseALoginDcctlDidNotMake(instance, admin, super, createdb, createrole); err != nil {
+	if err := login.refuseIfNotDcctls(instance); err != nil {
 		return 0, err
 	}
-	return int(limit), nil
+	return login.limit, nil
 }
 
 // checkInstanceLoginResize reads the login's limit and, when the release needs more,
 // asks whether the store would admit it — without changing anything. It returns the limit
 // the login holds now.
 func checkInstanceLoginResize(ctx context.Context, q instanceDBQuerier, instance string, admit connectionAdmission) (int, error) {
-	if err := validLoginResize(instance, admit.Limit); err != nil {
+	if err := validateAdmission(instance, admit); err != nil {
 		return 0, err
 	}
 	have, err := readInstanceLoginLimit(ctx, q, instance)
@@ -115,7 +109,7 @@ func checkInstanceLoginResize(ctx context.Context, q instanceDBQuerier, instance
 // the larger limit under the same lock bootstrap admits under. It returns the limit the
 // login held before.
 func growInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string, admit connectionAdmission) (int, error) {
-	if err := validLoginResize(instance, admit.Limit); err != nil {
+	if err := validateAdmission(instance, admit); err != nil {
 		return 0, err
 	}
 	if _, err := q.Exec(ctx, "select pg_advisory_lock($1)", int64(instanceAdmissionLock)); err != nil {
@@ -148,10 +142,11 @@ func growInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string
 //
 // No admission and no lock: a smaller limit can only make an admission running beside it
 // count more than is granted, never less.
-func shrinkInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string, limit int) (int, error) {
-	if err := validLoginResize(instance, limit); err != nil {
+func shrinkInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string, admit connectionAdmission) (int, error) {
+	if err := validateAdmission(instance, admit); err != nil {
 		return 0, err
 	}
+	limit := admit.Limit
 	have, err := readInstanceLoginLimit(ctx, q, instance)
 	if err != nil {
 		return 0, err
@@ -172,17 +167,6 @@ func alterInstanceLoginLimit(ctx context.Context, q instanceDBQuerier, instance 
 	return nil
 }
 
-func validLoginResize(instance string, limit int) error {
-	if err := ValidateInstanceName(instance); err != nil {
-		return err
-	}
-	if limit <= 0 {
-		return fmt.Errorf("no connection limit was settled for instance %q (limit %d); an unlimited "+
-			"login could starve every other instance on the store", instance, limit)
-	}
-	return nil
-}
-
 // upgradeLoginSession opens a session on the shared store as the provisioner. Indirected
 // so the steps below can be driven against a real PostgreSQL without a cluster, and so a
 // dry run can prove it opens none.
@@ -190,12 +174,18 @@ var upgradeLoginSession = func(ctx context.Context, st *State, fn func(instanceD
 	return withProvisionerSession(ctx, st.KubeContext, st.Install.Outputs.Rdb, fn)
 }
 
-// upgradeLoginAdmission is this release's need, admitted against the store's budget.
-func upgradeLoginAdmission(st *State) (connectionAdmission, error) {
+// upgradeLoginNeed is how many connections this release needs the instance's login to hold.
+func upgradeLoginNeed(st *State) (int, error) {
 	limit, err := instanceConnectionLimit(st)
 	if err != nil {
-		return connectionAdmission{}, fmt.Errorf("sizing this instance's connection limit: %w", err)
+		return 0, fmt.Errorf("sizing this instance's connection limit: %w", err)
 	}
+	return limit, nil
+}
+
+// upgradeLoginAdmission is limit, admitted against the budget of the store the install
+// record names.
+func upgradeLoginAdmission(st *State, limit int) (connectionAdmission, error) {
 	if st.Install == nil {
 		return connectionAdmission{}, errors.New("no install record was read for this cluster, so the " +
 			"relational store holding this instance's login cannot be found")
@@ -213,9 +203,9 @@ func upgradeLoginAdmission(st *State) (connectionAdmission, error) {
 // line. So a rehearsal says what the real run checks, the way the bootstrap's budget
 // check does under --dry-run.
 func precheckUpgradeLogin(ctx context.Context, st *State) error {
-	limit, err := instanceConnectionLimit(st)
+	limit, err := upgradeLoginNeed(st)
 	if err != nil {
-		return fmt.Errorf("sizing this instance's connection limit: %w", err)
+		return err
 	}
 	if st.DryRun {
 		wouldDo(fmt.Sprintf("check the instance's database login against this release's need of %d "+
@@ -223,7 +213,7 @@ func precheckUpgradeLogin(ctx context.Context, st *State) error {
 			"relational store has no budget for", limit))
 		return nil
 	}
-	admit, err := upgradeLoginAdmission(st)
+	admit, err := upgradeLoginAdmission(st, limit)
 	if err != nil {
 		return err
 	}
@@ -249,7 +239,11 @@ func precheckUpgradeLogin(ctx context.Context, st *State) error {
 // Indirected so the rollout's bracket can be driven without a store; the SQL is
 // growInstanceLogin and shrinkInstanceLogin, tested against a real PostgreSQL.
 var resizeUpgradeLogin = func(ctx context.Context, st *State, dir loginResize) error {
-	admit, err := upgradeLoginAdmission(st)
+	limit, err := upgradeLoginNeed(st)
+	if err != nil {
+		return err
+	}
+	admit, err := upgradeLoginAdmission(st, limit)
 	if err != nil {
 		return err
 	}
@@ -261,7 +255,7 @@ var resizeUpgradeLogin = func(ctx context.Context, st *State, dir loginResize) e
 	var have int
 	err = upgradeLoginSession(ctx, st, func(q instanceDBQuerier) (err error) {
 		if dir == loginResizeShrink {
-			have, err = shrinkInstanceLogin(ctx, q, st.Instance, admit.Limit)
+			have, err = shrinkInstanceLogin(ctx, q, st.Instance, admit)
 		} else {
 			have, err = growInstanceLogin(ctx, q, st.Instance, admit)
 		}
@@ -275,6 +269,23 @@ var resizeUpgradeLogin = func(ctx context.Context, st *State, dir loginResize) e
 			"and the room it had when this upgrade started has been taken since. The operator has been "+
 			"upgraded and the instance's services have NOT; make room and re-run `dcctl upgrade` to finish: %w",
 			st.Instance, admit.Limit, describeLoginLimit(have), err)
+	}
+	if err != nil && dir == loginResizeShrink {
+		// 🔴 A FAILED SHRINK WARNS; IT DOES NOT FAIL THE UPGRADE. By now the services are on
+		// the new release and running, and all a limit left too high costs is budget
+		// reserved that nothing uses — no instance is broken by it. Failing here would skip
+		// the report of what moved and the escrow check that follow, and tell an operator
+		// with a working upgrade that it failed. So it is said, loudly, with the remedy:
+		// the shrink compares against what the login holds, so a re-run finishes it.
+		fmt.Println(color.YellowString("failed."))
+		from := ""
+		if have > 0 {
+			from = fmt.Sprintf(" from %d", have)
+		}
+		fmt.Println(color.YellowString("warning: the services are on the new release; trimming the "+
+			"instance's database login's connection limit%s to %d failed: %v\n  it holds more of the "+
+			"store's budget than it needs; re-run `dcctl upgrade` to finish it", from, admit.Limit, err))
+		return nil
 	}
 	if err != nil {
 		return fail(what, asBudgetRefusal(err))

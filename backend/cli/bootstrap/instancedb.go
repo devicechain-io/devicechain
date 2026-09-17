@@ -99,12 +99,8 @@ var errNoConnectionBudget = errors.New("the relational store has no connection b
 // the store — the limits of the logins the provisioner administers — so it needs no
 // second record, and dropping a login gives its share back.
 func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, password string, admit connectionAdmission) error {
-	if err := ValidateInstanceName(instance); err != nil {
+	if err := validateAdmission(instance, admit); err != nil {
 		return err
-	}
-	if admit.Limit <= 0 || admit.Budget <= 0 {
-		return fmt.Errorf("no connection limit was settled for instance %q (limit %d, budget %d); an "+
-			"unlimited login could starve every other instance on the store", instance, admit.Limit, admit.Budget)
 	}
 	ident := pgx.Identifier{instance}.Sanitize()
 	verifier, err := scramSHA256Verifier(password)
@@ -123,14 +119,11 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	}
 
 	// THE LOGIN.
-	var exists, super, createdb, createrole, admin bool
-	err = q.QueryRow(ctx, `
-		select true, r.rolsuper, r.rolcreatedb, r.rolcreaterole,
-		       coalesce((select bool_or(m.admin_option) from pg_auth_members m
-		                 where m.roleid = r.oid and m.member = (select oid from pg_roles where rolname = current_user)), false)
-		from pg_roles r where r.rolname = $1`, instance).Scan(&exists, &super, &createdb, &createrole, &admin)
+	login, found, err := readInstanceLogin(ctx, q, instance)
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return err
+	case !found:
 		// 🔴 THE PASSWORD TRAVELS AS A SCRAM VERIFIER, NEVER AS ITSELF. A role's
 		// password cannot be a bind parameter — CREATE ROLE is a utility statement — so
 		// whatever is written here is statement text, which is exactly what
@@ -141,10 +134,8 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 			ident, admit.Limit, verifier)); err != nil {
 			return fmt.Errorf("creating the login for instance %q: %w", instance, err)
 		}
-	case err != nil:
-		return fmt.Errorf("looking up the login for instance %q: %w", instance, err)
 	default:
-		if err := refuseALoginDcctlDidNotMake(instance, admin, super, createdb, createrole); err != nil {
+		if err := login.refuseIfNotDcctls(instance); err != nil {
 			return err
 		}
 		if _, err := q.Exec(ctx, fmt.Sprintf("ALTER ROLE %s CONNECTION LIMIT %d PASSWORD '%s'", ident, admit.Limit, verifier)); err != nil {
@@ -208,20 +199,65 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	return nil
 }
 
-// refuseALoginDcctlDidNotMake refuses a role by the instance's name that is not the login
-// dcctl's provisioner made for it. Both writers of that login — the bootstrap that
-// passwords it and the upgrade that re-sizes it — ask this before changing it.
+// validateAdmission refuses an instance name that is not one, and a limit or budget that
+// was never settled. Both writers of an instance's login ask it first.
+func validateAdmission(instance string, admit connectionAdmission) error {
+	if err := ValidateInstanceName(instance); err != nil {
+		return err
+	}
+	if admit.Limit <= 0 || admit.Budget <= 0 {
+		return fmt.Errorf("no connection limit was settled for instance %q (limit %d, budget %d); an "+
+			"unlimited login could starve every other instance on the store", instance, admit.Limit, admit.Budget)
+	}
+	return nil
+}
+
+// instanceLogin is what the store says about the role named after an instance.
+type instanceLogin struct {
+	super, createdb, createrole bool
+	// admin is whether the provisioner holds ADMIN on it — whether it created it.
+	admin bool
+	// limit is its CONNECTION LIMIT; negative is none.
+	limit int
+}
+
+// instanceLoginSQL reads the role named after an instance, as the provisioner sees it.
+const instanceLoginSQL = `
+		select r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolconnlimit,
+		       coalesce((select bool_or(m.admin_option) from pg_auth_members m
+		                 where m.roleid = r.oid and m.member = (select oid from pg_roles where rolname = current_user)), false)
+		from pg_roles r where r.rolname = $1`
+
+// readInstanceLogin reads the role named after an instance, reporting whether there is
+// one. The one reader both writers of the login — the bootstrap that passwords it and the
+// upgrade that re-sizes it — decide from.
+func readInstanceLogin(ctx context.Context, q instanceDBQuerier, instance string) (instanceLogin, bool, error) {
+	var l instanceLogin
+	var limit int32
+	err := q.QueryRow(ctx, instanceLoginSQL, instance).Scan(&l.super, &l.createdb, &l.createrole, &limit, &l.admin)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return instanceLogin{}, false, nil
+	case err != nil:
+		return instanceLogin{}, false, fmt.Errorf("looking up the login for instance %q: %w", instance, err)
+	}
+	l.limit = int(limit)
+	return l, true, nil
+}
+
+// refuseIfNotDcctls refuses a role by the instance's name that is not the login dcctl's
+// provisioner made for it. Both writers of that login ask this before changing it.
 //
 // 🔴 A ROLE BY THIS NAME THAT THE PROVISIONER DID NOT CREATE IS NOT REUSED. ADMIN is what
 // creating it granted, so its absence means somebody else made it — and re-passwording a
 // stranger's role would hand this instance's services whatever that role can reach.
-func refuseALoginDcctlDidNotMake(instance string, admin, super, createdb, createrole bool) error {
-	if !admin {
+func (l instanceLogin) refuseIfNotDcctls(instance string) error {
+	if !l.admin {
 		return fmt.Errorf("%w: a role named %q already exists on the relational store and was "+
 			"not created by dcctl's provisioner, so it may be something else's login. Refusing to "+
 			"take it over; remove it, or choose another instance name", errInstanceDatabaseNotOurs, instance)
 	}
-	if super || createdb || createrole {
+	if l.super || l.createdb || l.createrole {
 		return fmt.Errorf("%w: the login %q holds SUPERUSER, CREATEDB or CREATEROLE, which an "+
 			"instance's login never has — with any of them it could reach past its own database. "+
 			"Refusing to hand it to services", errInstanceDatabaseNotOurs, instance)
@@ -229,21 +265,23 @@ func refuseALoginDcctlDidNotMake(instance string, admin, super, createdb, create
 	return nil
 }
 
+// grantedLimitsSQL reads the limits of every login the provisioner administers but one.
+const grantedLimitsSQL = `
+		select coalesce(array_agg(rolname order by rolname), '{}'),
+		       coalesce(array_agg(rolconnlimit order by rolname), '{}')
+		from (select r.rolname, r.rolconnlimit from pg_roles r
+		      join pg_auth_members m on m.roleid = r.oid and m.admin_option
+		      where m.member = (select oid from pg_roles where rolname = current_user)
+		        and r.rolcanlogin and r.rolname <> $1) granted`
+
 // admitInstance refuses an instance whose connection limit does not fit in what the
 // store has left.
 func admitInstance(ctx context.Context, q instanceDBQuerier, instance string, admit connectionAdmission) error {
 	var granted int
 	var unlimited []string
-	rows := `
-		select r.rolname, r.rolconnlimit from pg_roles r
-		join pg_auth_members m on m.roleid = r.oid and m.admin_option
-		where m.member = (select oid from pg_roles where rolname = current_user)
-		  and r.rolcanlogin and r.rolname <> $1`
 	var names []string
 	var limits []int32
-	if err := q.QueryRow(ctx, "select coalesce(array_agg(rolname order by rolname), '{}'), "+
-		"coalesce(array_agg(rolconnlimit order by rolname), '{}') from ("+rows+") granted",
-		instance).Scan(&names, &limits); err != nil {
+	if err := q.QueryRow(ctx, grantedLimitsSQL, instance).Scan(&names, &limits); err != nil {
 		return fmt.Errorf("reading the connection limits already granted on the relational store: %w", err)
 	}
 	for i, n := range names {

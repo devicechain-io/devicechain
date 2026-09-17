@@ -614,8 +614,9 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, kubeContex
 //
 // 🔴 HELM'S UNINSTALL CANNOT BE CANCELLED, SO AN INTERRUPT IS ACKNOWLEDGED, NOT OBEYED.
 // Uninstall.Run (Helm v3.21.4) takes no context: it runs the pre-delete hooks, deletes
-// the release's resources and then waits for them to go — WaitForDelete on a background
-// context — for up to helmTimeout. Returning early on ctx.Done would not stop any of that;
+// the release's resources, waits for them to go — WaitForDelete on a background context —
+// and runs the post-delete hooks, giving each of those three phases up to helmTimeout of
+// its own. Returning early on ctx.Done would not stop any of that;
 // it would only abandon a goroutine still deleting things while the destroy reported
 // itself interrupted and moved on to giving back its lock. And saying NOTHING is worse
 // than either: an operator who pressed Ctrl-C and sees no reaction for minutes presses it
@@ -631,6 +632,12 @@ func uninstallRelease(ctx context.Context, cfg *action.Configuration, kubeContex
 // The notice starts on a fresh line: it lands while a doing() line is still open, and the
 // done() or failure that closes that line comes after it.
 func awaitUninstall[T any](ctx context.Context, out io.Writer, kubeContext string, run func() (T, error)) (T, error) {
+	// Interrupted before it began: nothing has been asked of Helm, so there is nothing to
+	// wait for and nothing to acknowledge.
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
 	type result struct {
 		v   T
 		err error
@@ -658,11 +665,13 @@ func awaitUninstall[T any](ctx context.Context, out io.Writer, kubeContext strin
 // uninstall. See awaitUninstall.
 func uninstallInterruptNotice(kubeContext string) string {
 	return fmt.Sprintf("  interrupt received: Helm cannot be stopped part-way through an uninstall, so dcctl "+
-		"is waiting for it to finish — deleting the release's resources and waiting for them to go, "+
-		"for up to %s — and will then stop and give back its lock on the cluster.\n"+
-		"  Pressing Ctrl-C again stops waiting immediately, but exits WITHOUT giving back this "+
-		"destroy's lock; take it back with `dcctl instances reclaim --kube-context %s`. Either way, "+
-		"re-running `dcctl destroy` resumes where this one stopped.", helmTimeout, kubeContext)
+		"is waiting for it to finish — its pre-delete hooks, the deletes and its post-delete hooks, each "+
+		"allowed up to %s — and will then stop and give back its lock on the cluster.\n"+
+		"  Pressing Ctrl-C again stops waiting immediately, but exits WITHOUT giving back this destroy's "+
+		"lock. Re-running `dcctl destroy` resumes where this one stopped either way, since a destroy or "+
+		"upgrade only warns about a held lock; a bootstrap on this cluster is refused until it is taken "+
+		"back, which you can do if you need to with `dcctl instances reclaim --kube-context %s`.",
+		helmTimeout, kubeContext)
 }
 
 // uninstallLegacyRelease removes the pre-v0.17.0 constant-named release when it belongs
