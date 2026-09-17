@@ -345,7 +345,7 @@ func TestAnUpgradeOnAnOffSiteArchivedClusterDemandsNoObjectStoreCredential(t *te
 	}
 	rec := aCompleteInstall()
 	rec.Settings.BackupsExternal = true
-	rec.Outputs.Archive = InstallArchive{EndpointURL: "https://s3.example.invalid", CredentialsSecret: "dc-backup-credentials",
+	rec.Outputs.Archive = ClusterArchive{EndpointURL: "https://s3.example.invalid", CredentialsSecret: "dc-backup-credentials",
 		AccessKeyIDKey: "ACCESS_KEY_ID", SecretAccessKey: "ACCESS_SECRET_KEY", BucketTsdb: "tsdb-archive"}
 	if err := writeInstalled(context.Background(), c, rec, installClock); err != nil {
 		t.Fatal(err)

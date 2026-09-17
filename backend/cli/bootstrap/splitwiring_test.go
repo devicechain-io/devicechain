@@ -107,7 +107,7 @@ func TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom(t *testing.T) {
 		floor              int
 	}{
 		{"tofu.go", "applyInstanceInfra", "instance", assets.OpenTofuInstance(), 4},
-		{"clusterprereqs.go", "recordClusterOutputs", "cluster", assets.OpenTofuCluster(), 5},
+		{"clusterprereqs.go", "clusterOutputs", "cluster", assets.OpenTofuCluster(), 4},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {
 			declared := rootDeclaredOutputs(t, tc.root, tc.rootName)
@@ -142,32 +142,44 @@ func TestTheArchiveDecoderReadsOnlyWhatTheClusterRootDeclares(t *testing.T) {
 }
 
 // The behaviour the four reads exist for, end to end through the decoder.
-func TestTheClusterRootsMonitoringAndReportOutputsReachTheState(t *testing.T) {
-	st := &State{Values: map[string]string{cnpgNamespaceKey: "stale"}}
-	recordClusterOutputs(st, map[string]tfexec.OutputMeta{
+func TestTheClusterRootsMonitoringAndReportOutputsReachTheRecord(t *testing.T) {
+	outputs := map[string]tfexec.OutputMeta{
+		"backup_endpoint_url":                   {Value: []byte(`""`)},
+		"backup_credentials_secret":             {Value: []byte(`""`)},
+		"backup_access_key_id_key":              {Value: []byte(`""`)},
+		"backup_secret_access_key_key":          {Value: []byte(`""`)},
+		"backup_bucket_tsdb":                    {Value: []byte(`""`)},
+		"namespace":                             {Value: []byte(`"dc-system"`)},
+		"postgres_cluster_name":                 {Value: []byte(`"dc-rdb"`)},
+		"postgres_max_connections":              {Value: []byte(`600`)},
 		"cnpg_namespace":                        {Value: []byte(`"cnpg-system"`)},
 		"grafana_service":                       {Value: []byte(`"kube-prometheus-stack-grafana"`)},
 		"grafana_namespace":                     {Value: []byte(`"monitoring"`)},
 		"database_backup_survives_cluster_loss": {Value: []byte(`true`)},
-	})
-	for key, want := range map[string]string{
-		cnpgNamespaceKey:         "cnpg-system",
-		"grafanaService":         "kube-prometheus-stack-grafana",
-		"grafanaNamespace":       "monitoring",
-		databaseBackupOffsiteKey: "true",
-	} {
-		if got := st.Values[key]; got != want {
-			t.Errorf("%s = %q, want %q", key, got, want)
-		}
+	}
+	got, err := clusterOutputs(outputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CNPGNamespace != "cnpg-system" || got.GrafanaService != "kube-prometheus-stack-grafana" ||
+		got.GrafanaNamespace != "monitoring" || !got.BackupSurvivesClusterLoss {
+		t.Errorf("the cluster root's outputs did not reach the record: %+v", got)
+	}
+	if got.Rdb.Namespace != "dc-system" || got.Rdb.MaxConnections != 600 {
+		t.Errorf("the relational store's contract did not reach the record: %+v", got.Rdb)
 	}
 
-	// The clearing half: a cluster with no operator reports null, and a value an
-	// earlier apply wrote must not survive it.
-	st = &State{Values: map[string]string{cnpgNamespaceKey: "cnpg-system"}}
-	recordClusterOutputs(st, map[string]tfexec.OutputMeta{"cnpg_namespace": {Value: []byte(`null`)}})
-	if got := st.Values[cnpgNamespaceKey]; got != "" {
-		t.Errorf("a null cnpg_namespace left %q behind; the PodMonitor would select an "+
-			"operator that is not there", got)
+	// A cluster with no operator reports null, and null is empty: a bootstrap reading
+	// anything else would render a PodMonitor selecting an operator that is not there.
+	outputs["cnpg_namespace"] = tfexec.OutputMeta{Value: []byte(`null`)}
+	if got, err := clusterOutputs(outputs); err != nil || got.CNPGNamespace != "" {
+		t.Errorf("a null cnpg_namespace decoded as %q (err %v)", got.CNPGNamespace, err)
+	}
+
+	// ...and a required output that is missing is still an error, not an empty record.
+	delete(outputs, "backup_bucket_tsdb")
+	if _, err := clusterOutputs(outputs); err == nil {
+		t.Error("an output set missing part of the archive contract decoded")
 	}
 }
 
@@ -345,7 +357,7 @@ func TestAMissingRootIsAnErrorNotAnEmptyDirectory(t *testing.T) {
 }
 
 // 🔴 CONSTRUCTED CORRECTLY, CONNECTED TO NOTHING. The decoder test above calls
-// recordClusterOutputs directly, so it passes just as well if the apply never does —
+// clusterOutputs directly, so it passes just as well if the apply never does —
 // and the apply needs a tofu binary, so no test can run it. Read the source.
 func TestTheClusterApplyRecordsItsOutputs(t *testing.T) {
 	fset := token.NewFileSet()
@@ -361,7 +373,7 @@ func TestTheClusterApplyRecordsItsOutputs(t *testing.T) {
 		}
 		ast.Inspect(fd, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok {
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "recordClusterOutputs" {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "clusterOutputs" {
 					found = true
 				}
 			}
@@ -369,7 +381,7 @@ func TestTheClusterApplyRecordsItsOutputs(t *testing.T) {
 		})
 	}
 	if !found {
-		t.Error("applyClusterPrereqs never calls recordClusterOutputs; the CNPG operator's " +
+		t.Error("applyClusterPrereqs never calls clusterOutputs; the CNPG operator's " +
 			"PodMonitor and control-plane alerts would stop rendering on every install")
 	}
 }

@@ -14,8 +14,8 @@ import (
 // credentialPlacement says where one field of credentialSet lives once it has been
 // written.
 //
-// 🔴 IT EXISTS SO THE WRITER AND THE READER CANNOT DRIFT. planOwnedSecrets decides
-// where a minted value goes; readInstanceCredentials has to look in exactly those
+// 🔴 IT EXISTS SO THE WRITER AND THE READER CANNOT DRIFT. planClusterSecrets and
+// planInstanceSecrets decide where a minted value goes; readInstanceCredentials has to look in exactly those
 // places, and a second hand-written list of names and keys is a list that goes stale
 // the first time a Secret is renamed — silently, because a reader looking in the
 // wrong place finds nothing and "nothing" is a word this package is careful never to
@@ -27,7 +27,7 @@ type credentialPlacement struct {
 	Field string
 	Ref   mintedCredentialRef
 	// Scope is the owner the value was written under — the same as the Secret's in
-	// planOwnedSecrets, which the placement test holds this against.
+	// planClusterSecrets or planInstanceSecrets, which the placement test holds this against.
 	Scope ownerKind
 	Into  func(*credentialSet) *string
 	// WhenAbsent, if set, replaces the "it is gone" refusal for a credential whose
@@ -37,7 +37,7 @@ type credentialPlacement struct {
 
 // credentialPlacements lists every credential this configuration has, and where.
 //
-// The conditions mirror planOwnedSecrets exactly — monitoring decides the dashboard
+// The conditions mirror planClusterSecrets and planInstanceSecrets exactly — monitoring decides the dashboard
 // login, and the object store's root credential exists only when this instance
 // stands one up rather than archiving to somebody else's. They mirror it rather than
 // re-deciding it: TestThePlacementsAreWhereThePlanActuallyPutsThem renders both and

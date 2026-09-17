@@ -52,16 +52,14 @@ type RestorePlan struct {
 // Active reports whether this run restores anything.
 func (p RestorePlan) Active() bool { return p.TsdbFrom != "" }
 
-// DatabaseBackupsEnabled reports whether this combination of flags leaves the
-// instance with a backup destination — i.e. whether OpenTofu will be told
+// DatabaseBackupsEnabled reports whether this combination of install flags leaves the
+// cluster with a backup destination — i.e. whether OpenTofu will be told
 // enable_database_backups=true.
 //
-// 🔴 This is a SECOND statement of what infraVars emits, and the two are pinned
-// against each other over the whole flag matrix by
-// TestDatabaseBackupsEnabledMatchesWhatIsEmitted. It exists separately because the
-// emitter builds a var LIST inside two unrelated conditional blocks, and the
-// restore path needs the same answer as a boolean, in the first second of the run,
-// before any cluster — not after parsing argv it has not built yet.
+// It is the flag half of databaseBackupsEnabled, which infraVars emits from, exported
+// because `dcctl install` needs the answer from argv alone, before any State exists.
+// A bootstrap does not ask it: it follows the install record, through
+// BackupsEnabledFor.
 //
 // Both halves are consequences, not choices: --no-cnpg skips the operator the
 // plugin extends, and --compact --no-tls drops cert-manager, which the plugin needs
@@ -167,57 +165,43 @@ type clusterArchiveState struct {
 	Path   string
 }
 
-// liveArchiveState is both database Clusters' current state, read from the cluster.
+// liveArchiveState is what resolveCredentials is told about the database Clusters a
+// run's credentials were built into. Each half is filled by the run that owns that
+// store: the install reads the relational store, a bootstrap the event store.
 type liveArchiveState struct {
 	Rdb  clusterArchiveState
 	Tsdb clusterArchiveState
 }
 
-// readLiveArchiveState is the seam stepRenderConfig uses to ask what the two
-// database Clusters are ALREADY archiving under. Indirected for the same reason as
+// readLiveArchiveState is the seam stepRenderConfig uses to ask what this instance's
+// event store is ALREADY archiving under. Indirected for the same reason as
 // lookupDeployedInstance: the branch behind it decides between "keep the path this
 // instance owns" and "retarget a live cluster's WAL archive", and that decision has
 // to be testable without standing up CloudNativePG.
-var readLiveArchiveState = func(ctx context.Context, kubeContext, instance string) (liveArchiveState, error) {
+var readLiveArchiveState = func(ctx context.Context, kubeContext, instance string) (clusterArchiveState, error) {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
-		return liveArchiveState{}, fmt.Errorf("building kube config to read the database archive state: %w", err)
+		return clusterArchiveState{}, fmt.Errorf("building kube config to read the database archive state: %w", err)
 	}
 	dyn, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
-		return liveArchiveState{}, err
+		return clusterArchiveState{}, err
 	}
 	return readArchiveState(ctx, dyn, instance)
 }
 
 // readArchiveState is the half of readLiveArchiveState that has no cluster in it:
-// which Cluster's state lands in which field.
+// which Cluster, in which namespace, is this instance's event store.
 //
 // 🔴 SPLIT OUT SO THAT WIRING IS TESTABLE AT ALL. readLiveArchiveState is the seam
-// every stepRenderConfig test stubs, so the mapping below is the one part of the
-// restore path that no test in this package could reach — and a swap here is
-// invisible in exactly the way that costs the most: each store would be handed the
-// OTHER's archive path, so an ordinary re-run retargets the relational archiver at
-// the event store's WAL and vice versa. Both clusters keep archiving, to the wrong
-// prefixes, with no base backup under either.
-func readArchiveState(ctx context.Context, dyn dynamic.Interface, instance string) (liveArchiveState, error) {
-	var out liveArchiveState
-	for _, s := range []struct {
-		namespace string
-		name      string
-		into      *clusterArchiveState
-	}{
-		// The relational store is the cluster's; the event store is the instance's.
-		{infraNamespace, RdbClusterName, &out.Rdb},
-		{instanceNamespace(instance), TsdbClusterName, &out.Tsdb},
-	} {
-		st, err := clusterArchivePath(ctx, dyn, s.namespace, s.name)
-		if err != nil {
-			return liveArchiveState{}, err
-		}
-		*s.into = st
-	}
-	return out, nil
+// every stepRenderConfig test stubs, so the lookup below is the one part of the
+// restore path that no test in this package could otherwise reach — and reading the
+// wrong Cluster is invisible in exactly the way that costs the most: the instance is
+// handed another store's archive path, and an ordinary re-run retargets its archiver
+// at a prefix holding no base backup of it.
+func readArchiveState(ctx context.Context, dyn dynamic.Interface, instance string) (clusterArchiveState, error) {
+	// The event store is the instance's, in the instance's namespace.
+	return clusterArchivePath(ctx, dyn, instanceNamespace(instance), TsdbClusterName)
 }
 
 // clusterArchivePath reads one Cluster's archiver serverName.
@@ -333,11 +317,9 @@ func freshTsdbArchivePath(instance, instanceUID string) string {
 	return p
 }
 
-// archivePaths is what resolveArchivePaths settles: the serverName each store
-// should archive under for the rest of this instance's life. "" means "the
-// Cluster's own name", which is the OpenTofu default and every ordinary install.
+// archivePaths is what resolveArchivePaths settles: the serverName the event store
+// should archive under for the rest of this instance's life.
 type archivePaths struct {
-	Rdb  string
 	Tsdb string
 	// AlreadyLive names the Clusters that already exist while a restore was
 	// requested for them. Those restores will NOT happen: `spec.bootstrap` is read
@@ -345,7 +327,7 @@ type archivePaths struct {
 	AlreadyLive []string
 }
 
-// resolveArchivePaths decides what each store archives under, given what it is
+// resolveArchivePaths decides what the event store archives under, given what it is
 // already archiving under and what this run is restoring.
 //
 // 🔴 THE POINT OF THIS FUNCTION IS THAT THE ANSWER MUST NOT MOVE. The archive path
@@ -361,22 +343,16 @@ type archivePaths struct {
 // The one exception is a restore aimed at a store with no explicit path (an
 // ordinary install, archiving under its own name). Keeping "" there would send the
 // restored cluster back over the archive it just recovered from — the wedge — so a
-// fresh path is derived instead. Only the event store can be restored by this
-// command; the relational store is the cluster's, and a path it is already
-// archiving under — including one an earlier restore gave it — is kept all the same.
+// fresh path is derived instead. The relational store is the cluster's, and
+// `dcctl install` keeps its path from the live store the same way.
 //
-// fresh is what a store that neither exists nor is being restored archives under.
-// The relational store's is "" (its own name — it is the cluster's, and there is one).
-// The event store's is freshTsdbArchivePath: every instance's event store archives into
-// the SAME bucket, so its own name would be every instance's path.
-func resolveArchivePaths(live liveArchiveState, plan RestorePlan, fresh archivePaths, now time.Time) archivePaths {
-	out := archivePaths{Rdb: fresh.Rdb}
-	if live.Rdb.Exists {
-		out.Rdb = live.Rdb.Path
-	}
-
+// fresh is what an event store that neither exists nor is being restored archives
+// under: freshTsdbArchivePath, because every instance's event store archives into the
+// SAME bucket, so its own name would be every instance's path.
+func resolveArchivePaths(live clusterArchiveState, plan RestorePlan, fresh string, now time.Time) archivePaths {
+	var out archivePaths
 	switch {
-	case live.Tsdb.Exists:
+	case live.Exists:
 		// 🔴 A CLUSTER THAT EXISTS KEEPS ITS PATH, unconditionally — including the
 		// empty one, which means "archiving under its own name". There is no case
 		// in which moving it is right: a restore cannot run against an existing
@@ -393,7 +369,7 @@ func resolveArchivePaths(live liveArchiveState, plan RestorePlan, fresh archiveP
 		// WAL would have no base backup until the next scheduled one: a window,
 		// up to a day wide, in which the database is restorable to no point at
 		// all. Green apply, no error, on the run that was trying to recover.
-		out.Tsdb = live.Tsdb.Path
+		out.Tsdb = live.Path
 		if plan.TsdbFrom != "" {
 			out.AlreadyLive = append(out.AlreadyLive, TsdbClusterName)
 		}
@@ -403,7 +379,7 @@ func resolveArchivePaths(live liveArchiveState, plan RestorePlan, fresh archiveP
 		out.Tsdb = RestoredArchivePath(plan.TsdbFrom, now)
 	default:
 		// A fresh ordinary install.
-		out.Tsdb = fresh.Tsdb
+		out.Tsdb = fresh
 	}
 	return out
 }

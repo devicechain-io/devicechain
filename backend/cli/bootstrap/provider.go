@@ -36,35 +36,9 @@ type Options struct {
 	// self-signed cert — combined with localhost, a zero-config http://localhost/.
 	IngressHost string
 	NoTLS       bool
-	// NoMonitoring skips installing the kube-prometheus-stack observability stack
-	// (default-on). Set it when the cluster already has the Prometheus Operator, or
-	// to opt out of in-cluster metrics collection.
-	NoMonitoring bool
-	// NoCNPG skips installing the CloudNativePG operator and the Barman Cloud backup
-	// plugin (default-on, ADR-020 A2). Set it when the cluster ALREADY runs CNPG —
-	// which is not a corner case: the upstream `kubectl apply` manifest is the most
-	// common way to install it, and Helm cannot adopt objects it did not create, so
-	// without this flag such a cluster fails the infra apply with an ownership error
-	// and no way past it.
-	NoCNPG bool
 	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
 	// OpenTofu. See State for why it exists at all.
 	AllowLegacyDbRemoval bool
-	// Compact applies the small-footprint preset: lowered JetStream/KV ceilings, the
-	// smaller volumes those permit, and lowered scheduling requests. It is a preset
-	// over levers that already exist and does NOT change which services run (that
-	// stays on Profile). See compactSizing.
-	Compact bool
-	// HA provisions the ADR-020 topology: a 3-node NATS RAFT cluster spread one
-	// server per node, with every JetStream stream and KV bucket replicated across
-	// it, AND both database stores as replicated CloudNativePG Clusters — the
-	// relational one synchronously (A2.3), the event store at `preferred`
-	// durability (A2.4). It is ONE value driving both tools — see haTopology for
-	// why that matters; the database instance counts are derived inside OpenTofu
-	// from the same variable, so there is no second value to keep in step. It does
-	// not change how many DeviceChain services run: the stateful areas are pinned
-	// to one writer by the ADR-070 lease fence.
-	HA bool
 	// EnableAreas is the raw set of extra functional areas requested via
 	// --enable-area, deployed ADDITIVELY on top of the profile (e.g. lwm2m-ingest on
 	// a default/compact bring-up). Resolved+validated by ResolveEnabledAreas into the

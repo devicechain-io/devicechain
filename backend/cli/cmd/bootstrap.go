@@ -101,68 +101,18 @@ func resolveDevMode(changed func(string) bool, host string, noTLS, build, noEscr
 // "acceptable" would quietly widen what the published compact number claims to
 // cover. TestEveryShippedProfileIsClassifiedForCompact reads the chart's own
 // catalog and fails on a profile in neither list.
+//
+// A larger profile is refused on a compact cluster for the FOOTPRINT CLAIM, not the
+// storage budget: the JetStream reservation sums streams.Suffixes() and kv.All
+// unconditionally, so the budget holds for every profile. What `full` breaks is the
+// published compact number, measured on `default`, which would not describe an
+// instance running three more services. The smaller two are accepted: asking for the
+// smallest thing the platform ships is the one request a small-footprint preset must
+// not refuse.
 var (
 	profilesLargerThanDefault  = []string{"full"}
 	profilesSmallerThanDefault = []string{"telemetry", "ingest-only"}
 )
-
-// compactModeResolution is the set of flag values the --compact preset settles on.
-type compactModeResolution struct {
-	NoTLS        bool
-	NoMonitoring bool
-}
-
-// resolveCompactMode expands the --compact small-footprint preset on top of the
-// user's explicit flags.
-//
-// Two of its levers live on flags that already exist, so they are resolved here
-// rather than buried in the pipeline: the monitoring stack (~5 pods, the single
-// largest consumer) is skipped, and TLS is off — which is what makes dropping
-// cert-manager safe, since cert-manager is what issues the ingress certificate.
-//
-// The interactions are treated DIFFERENTLY on purpose, according to whether the
-// two requests can both be honoured:
-//
-//   - A profile LARGER than `default` is REJECTED — which today means only `full`.
-//     `telemetry` and `ingest-only` are strict subsets of `default` and are
-//     accepted: asking for the smallest thing the platform ships is the one request
-//     a small-footprint preset must not refuse.
-//
-//     The reason is NOT the storage budget, though that is the reason the first
-//     draft gave. The JetStream reservation sums streams.Suffixes() and kv.All
-//     unconditionally — the whole inventory, including the streams `full`'s extra
-//     areas create — so the budget holds for every profile and the stated
-//     justification was simply false. What `full` actually breaks is the FOOTPRINT
-//     CLAIM: it adds three more services, and the published compact numbers are
-//     measured on `default`, so the figure would not describe the instance.
-//
-//   - --no-tls=false is HONOURED. It is not a contradiction, it is a dependency:
-//     TLS stays on, cert-manager stays installed to issue the cert, and every other
-//     compact lever still applies. Erroring here would cost real functionality to
-//     no benefit.
-//
-// `changed` reports whether the user set a given flag explicitly.
-func resolveCompactMode(changed func(string) bool, profile string, noTLS, noMonitoring bool) (compactModeResolution, error) {
-	if changed("profile") && slices.Contains(profilesLargerThanDefault, profile) {
-		return compactModeResolution{}, fmt.Errorf(
-			"--compact publishes a footprint measured on the `default` profile, and "+
-				"profile %q deploys more than that, so the number would not describe the "+
-				"instance. Use --profile default (or a smaller profile: %s), or drop "+
-				"--compact",
-			profile, strings.Join(profilesSmallerThanDefault, ", "))
-	}
-	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
-	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
-	// --no-monitoring=false keeps the observability stack. Both cost footprint, and
-	// both are the operator's call to make.
-	if changed("no-tls") {
-		res.NoTLS = noTLS
-	}
-	if changed("no-monitoring") {
-		res.NoMonitoring = noMonitoring
-	}
-	return res, nil
-}
 
 // restoreFlagsFromArgv assembles the event-store restore inputs from the parsed
 // flags.
@@ -336,36 +286,29 @@ var bootstrapCmd = &cobra.Command{
 		// record carried in from another cluster describes prerequisites this one may not
 		// have. A dry run reads both when it can and says so when it cannot, because it is
 		// often aimed at a cluster not installed yet and the rehearsal is still worth having.
-		var clusterUID string
-		var installRec *bootstrap.InstallRecord
-		installCommand := bootstrap.InstallCommand(provider.Name(), binding.Cluster, bootstrapKubeContext)
-		if uid, err := bootstrap.IdentifyCluster(ctx, binding.KubeContext); err != nil {
-			if !opts.DryRun {
-				return fmt.Errorf("reading the identity of cluster %s: %w\n"+
-					"  The identity is the kube-system namespace's UID; a context that cannot read it "+
-					"is one dcctl cannot build an instance on", binding.Describe(), err)
-			}
+		installCommand := bootstrap.InstallCommand(provider.Name(), binding)
+		// 🔴 A CLUSTER THAT HAS NOT BEEN INSTALLED IS REFUSED HERE, naming the command
+		// that prepares it — never prepared on the way past.
+		clusterUID, installRec, err := bootstrap.ReadInstall(ctx, binding.KubeContext, installCommand)
+		switch {
+		case err == nil:
+		case !opts.DryRun && clusterUID == "":
+			return fmt.Errorf("reading the identity of cluster %s: %w\n"+
+				"  The identity is the kube-system namespace's UID; a context that cannot read it "+
+				"is one dcctl cannot build an instance on", binding.Describe(), err)
+		case !opts.DryRun:
+			return err
+		case clusterUID == "":
 			fmt.Println(color.YellowString("[dry-run] could not identify cluster %s (%v); the plan below "+
 				"assumes an installed cluster with default settings.", binding.Describe(), err))
-		} else {
-			// 🔴 A CLUSTER THAT HAS NOT BEEN INSTALLED IS REFUSED HERE, naming the command
-			// that prepares it — never prepared on the way past.
-			rec, err := bootstrap.ReadInstall(ctx, binding.KubeContext, uid, installCommand)
-			switch {
-			case err == nil:
-				installRec = rec
-			case !opts.DryRun:
-				return err
-			default:
-				fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
-					"cluster with default settings.", err))
-			}
-			// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and
-			// asks whether each is THIS cluster's, which needs its identity. Nothing a dry
-			// run does writes it anywhere.
-			clusterUID = uid
-			binding.ClusterUID = uid
+		default:
+			fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
+				"cluster with default settings.", err))
 		}
+		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
+		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
+		// writes it anywhere.
+		binding.ClusterUID = clusterUID
 
 		st := &bootstrap.State{
 			Instance:             opts.Instance,

@@ -30,6 +30,32 @@ const defaultMaxConnections = 600
 // InstallOptions drives `dcctl install`.
 type InstallOptions struct {
 	Options
+	// NoMonitoring skips installing the kube-prometheus-stack observability stack
+	// (default-on). Set it when the cluster already has the Prometheus Operator, or
+	// to opt out of in-cluster metrics collection; instances on the cluster then render
+	// no ServiceMonitors or alerts.
+	NoMonitoring bool
+	// NoCNPG skips installing the CloudNativePG operator and the Barman Cloud backup
+	// plugin (default-on, ADR-020 A2). Set it when the cluster ALREADY runs CNPG —
+	// which is not a corner case: the upstream `kubectl apply` manifest is the most
+	// common way to install it, and Helm cannot adopt objects it did not create, so
+	// without this flag such a cluster fails the cluster apply with an ownership error
+	// and no way past it.
+	NoCNPG bool
+	// Compact applies the small-footprint preset to the cluster and every instance
+	// built on it: lowered JetStream/KV ceilings, the smaller volumes those permit, and
+	// lowered scheduling requests. It is a preset over levers that already exist and
+	// does NOT change which services run; a bootstrap on a compact cluster keeps the
+	// default profile or a smaller one. See compactSizing.
+	Compact bool
+	// HA provisions the ADR-020 topology: a replicated relational store (synchronous,
+	// A2.3) for the cluster, and for every instance built on it a 3-node NATS RAFT
+	// cluster spread one server per node, with every JetStream stream and KV bucket
+	// replicated across it, and a replicated event store at `preferred` durability
+	// (A2.4). It is ONE value driving both tools — see haTopology for why that
+	// matters. It does not change how many DeviceChain services run: the stateful
+	// areas are pinned to one writer by the ADR-070 lease fence.
+	HA bool
 	// BackupDestination is an off-site archive the operator already owns. Nil means
 	// the in-cluster object store.
 	BackupDestination *BackupDestination
@@ -152,10 +178,9 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
 		return err
 	}
-	var archive ClusterArchive
-	var rdb ClusterRdb
+	var outputs InstallOutputs
 	if err := runStreamed("applying cluster prerequisites (OpenTofu)", "cluster prerequisites", func() error {
-		archive, rdb, err = applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
+		outputs, err = applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
 		return err
 	}); err != nil {
 		return err
@@ -164,7 +189,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// 🔴 THE BASE IDENTITY BEFORE THE RECORD. Every instance's login is created as it, so
 	// a cluster recorded as installed without it would refuse the first bootstrap.
 	doing("creating the base database identity")
-	if err := withProvisionerSession(ctx, st.KubeContext, rdb, func(instanceDBQuerier) error { return nil }); err != nil {
+	if err := withProvisionerSession(ctx, st.KubeContext, outputs.Rdb, func(instanceDBQuerier) error { return nil }); err != nil {
 		return fail("creating the base database identity", err)
 	}
 	done()
@@ -173,7 +198,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
 		Settings:     settings,
-		Outputs:      installOutputsFrom(st, archive, rdb),
+		Outputs:      outputs,
 	}, time.Now); err != nil {
 		return err
 	}
@@ -329,18 +354,24 @@ func FollowInstall(st *State, rec *InstallRecord) {
 	st.Values[databaseBackupOffsiteKey] = fmt.Sprint(rec.Outputs.BackupSurvivesClusterLoss)
 }
 
-// ReadInstall reads the install record a bootstrap follows, refusing — with the command
-// that fixes it — a cluster that has not been installed.
-func ReadInstall(ctx context.Context, kubeContext, clusterUID, installCommand string) (*InstallRecord, error) {
+// ReadInstall identifies the cluster a context points at and reads the install record a
+// bootstrap follows, refusing — with the command that fixes it — a cluster that has not
+// been installed.
+//
+// An empty uid with an error means the cluster could not be identified; a uid with an
+// error means it was, and its install record is unusable.
+func ReadInstall(ctx context.Context, kubeContext, installCommand string) (uid string, rec *InstallRecord, err error) {
 	_, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to the cluster to read its install record: %w", err)
+		return "", nil, fmt.Errorf("building a client to identify the cluster: %w", err)
 	}
-	rec, err := readInstallRecord(ctx, typed, clusterUID)
-	if err != nil {
-		return nil, refuseUninstalled(err, installCommand)
+	if uid, err = ClusterUID(ctx, typed); err != nil {
+		return "", nil, err
 	}
-	return rec, nil
+	if rec, err = readInstallRecord(ctx, typed, uid); err != nil {
+		return uid, nil, refuseUninstalled(err, installCommand)
+	}
+	return uid, rec, nil
 }
 
 // refuseUninstalled turns an unusable install record into the refusal an operator can
@@ -356,47 +387,28 @@ func refuseUninstalled(err error, installCommand string) error {
 
 // InstallCommand is the `dcctl install` invocation that prepares the cluster a command
 // was aimed at, for refusals to print.
-func InstallCommand(provider, cluster, kubeContext string) string {
-	cmd := "dcctl install " + provider
-	switch {
-	case kubeContext != "":
-		cmd += " --kube-context " + kubeContext
-	case cluster != "" && cluster != DefaultClusterName:
-		cmd += " --cluster " + cluster
-	}
-	return cmd
+func InstallCommand(provider string, b ClusterBinding) string {
+	return "dcctl install " + provider + clusterTargetFlag(b)
 }
 
 // reportInstall prints what the install left in place.
 func reportInstall(st *State, provider string) {
-	rec := st.Values
 	fmt.Println(color.HiGreenString("\nDeviceChain prerequisites installed"))
 	fmt.Printf("  %s %s\n", color.WhiteString("Cluster:"), color.GreenString(st.Binding.Describe()))
 	fmt.Printf("  %s %s\n", color.WhiteString("Kube context:"), color.GreenString(st.KubeContext))
 	fmt.Printf("  %s %s\n", color.WhiteString("Connection budget:"),
 		color.GreenString("%d (each instance reserves its own share when it is bootstrapped)", st.MaxConnections))
-	switch {
-	case !databaseBackupsEnabled(st):
-		fmt.Printf("  %s %s\n", color.WhiteString("Backups:"),
-			color.YellowString("NONE — instances on this cluster archive no WAL and take no base backups"))
-	case backupsAreExternal(st):
-		fmt.Printf("  %s %s\n", color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
-	default:
-		fmt.Printf("  %s %s\n", color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
-		fmt.Printf("           %s\n", color.YellowString(
-			"point-in-time recovery, NOT disaster recovery — lost with the cluster. Pass --backup-credentials-file for off-site."))
-	}
-	if p := rec["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
+	printBackups("instances on this cluster", databaseBackupsEnabled(st), backupsAreExternal(st))
+	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
 		fmt.Printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
 	}
 	fmt.Println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
-		provider, bootstrapTargetFlag(st.Binding)))
+		provider, clusterTargetFlag(st.Binding)))
 }
 
-// bootstrapTargetFlag is what a bootstrap needs to be told to land on this cluster.
-func bootstrapTargetFlag(b ClusterBinding) string {
+// clusterTargetFlag is what a command needs to be told to land on this cluster: a
+// context named by hand, or a kind cluster dcctl names that is not the default.
+func clusterTargetFlag(b ClusterBinding) string {
 	switch {
 	case !b.Managed:
 		return " --kube-context " + b.KubeContext

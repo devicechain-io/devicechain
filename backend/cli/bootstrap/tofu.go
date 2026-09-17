@@ -109,7 +109,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	// The archive contract, READ BACK from the install record rather than recomputed
 	// here. Appended after the instance's own variables so that what the cluster
 	// actually built wins over anything derived from this run's flags.
-	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, st.Install.Outputs.Archive.clusterArchive().archiveVars()...))
+	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, st.Install.Outputs.Archive.archiveVars()...))
 }
 
 // instanceRoot is the instance root, extracted, initialised and fenced — ready to apply.

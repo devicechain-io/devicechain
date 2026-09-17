@@ -87,12 +87,12 @@ type credentialSet struct {
 
 // databaseBackupsEnabled reports whether this run provisions a backup destination.
 //
-// 🔴 ONE DEFINITION, CROSS-CHECKED AGAINST THE VARIABLES THAT CARRY IT. infraVars
-// decides the same thing by appending `enable_database_backups=false` from two
-// separate branches, and a second copy of that reasoning here would drift the day
-// either branch moves — minting an object-store credential nothing reads, or worse,
-// not minting one the store needs. TestTheBackupPredicateMatchesTheVariablesEmitted
-// holds the two together.
+// 🔴 ONE DEFINITION, READ BY EVERYTHING THAT NEEDS IT. infraVars emits
+// `enable_database_backups` from this predicate, the mint decides the object-store
+// credential from it, and the install record stores it — so a second reading of the
+// flags anywhere would be free to disagree with the store that exists, minting a
+// credential nothing reads, or not minting one the store needs.
+// TestTheBackupPredicateMatchesTheVariablesEmitted holds the emission to it.
 //
 // 🔑 A BOOTSTRAP ASKS THE INSTALL, NOT ITS OWN FLAGS. Backups, monitoring and
 // cert-manager are what the cluster was installed with; an instance built on it
@@ -102,15 +102,7 @@ func databaseBackupsEnabled(st *State) bool {
 	if st.Install != nil {
 		return st.Install.Settings.DatabaseBackups
 	}
-	if st.NoCNPG {
-		return false
-	}
-	// The compact preset drops cert-manager when it is also serving plain HTTP, and
-	// the backup plugin renders a cert-manager Issuer, so backups go with it.
-	if st.Compact && st.NoTLS {
-		return false
-	}
-	return true
+	return DatabaseBackupsEnabled(st.NoCNPG, st.Compact, st.NoTLS)
 }
 
 // monitoringEnabled reports whether the observability stack is part of this run, and
@@ -161,22 +153,6 @@ const rdbProvisionerSecretName = rdbClusterName + "-provisioner-credentials"
 // instanceRdbSecretName is where an instance's own relational login is kept.
 func instanceRdbSecretName(instance string) string {
 	return "dci-" + instance + "-rdb-credentials"
-}
-
-// planOwnedSecrets says which Secrets this run writes, and what goes in each.
-//
-// Deciding the whole set before writing any of it is deliberate: a plan can be shown
-// under --dry-run, counted in a test, and compared against what the apply expects to
-// find, none of which is possible if placement is a side effect of walking the
-// pipeline.
-//
-// 🔴 THE INSTANCE CONFIG DOCUMENT IS NOT HERE. The credentials services read travel
-// inside one JSON document rather than one Secret each, and that document cannot be
-// composed until the values that are derived from an apply are known. It is written
-// by the composition step, through the same writer.
-func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
-	cluster, archive := planClusterSecrets(st, set)
-	return append(cluster, planInstanceSecrets(st, set, archive)...)
 }
 
 // dbLabels are the labels the database operator keys a credentials Secret on.

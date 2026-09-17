@@ -9,8 +9,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
@@ -148,7 +150,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 
 	// Where each of the four calls appears in the command's source. NoPos means "never
 	// called", which is the mutant this exists for.
-	var capture, write, run, unwind, identify, readInstall token.Pos
+	var capture, write, run, unwind, readInstall token.Pos
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -167,8 +169,6 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 			capture = call.Pos()
 		case "WriteInstanceRecord":
 			write = call.Pos()
-		case "IdentifyCluster":
-			identify = call.Pos()
 		case "ReadInstall":
 			readInstall = call.Pos()
 		case "Run":
@@ -202,18 +202,10 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 	// RunE nothing can execute, so deleting the whole block compiles, passes every test in
 	// this module and changes no output an operator would notice — until something needs
 	// to know which cluster a record belongs to and the answer was never written down.
-	for _, c := range []struct {
-		what string
-		pos  token.Pos
-	}{
-		{"bootstrap.IdentifyCluster", identify},
-		{"bootstrap.ReadInstall", readInstall},
-	} {
-		if c.pos == token.NoPos {
-			t.Fatalf("the bootstrap command no longer calls %s, so an instance is built on a "+
-				"cluster nobody checked was installed — or one whose install record came from "+
-				"another cluster", c.what)
-		}
+	if readInstall == token.NoPos {
+		t.Fatal("the bootstrap command no longer calls bootstrap.ReadInstall, so an instance is " +
+			"built on a cluster nobody identified or checked was installed — or one whose install " +
+			"record came from another cluster")
 	}
 	// 🔴 THE INSTALL IS CHECKED BEFORE ANYTHING IS WRITTEN. A refusal after the local
 	// record is written leaves an instance `dcctl instances list` shows on a cluster that
@@ -233,9 +225,9 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 	// from a variable that is still empty, which produces exactly the pre-identity record
 	// this is meant to replace — and nothing downstream can tell that apart from an
 	// instance that genuinely predates the field.
-	if identify > write {
+	if readInstall > write {
 		t.Errorf("the cluster is identified at %s, after the instance record is written at "+
-			"%s — the record would carry no identity", fset.Position(identify), fset.Position(write))
+			"%s — the record would carry no identity", fset.Position(readInstall), fset.Position(write))
 	}
 	if unwind < run {
 		t.Errorf("the rollback is decided at %s, before the pipeline runs at %s, so it cannot "+
@@ -256,8 +248,11 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 // 🔑 THIS IS A SOURCE-LEVEL ASSERTION BECAUSE THE BRANCH IS IN A RunE. It creates
 // clusters and talks to a live API, so no unit test can execute it — the same case leg
 // 3 met and answered the same way. A mutation round proved the gap: turning the refusal
-// back into a warning SURVIVED, because the ordering guard above checks that
-// IdentifyCluster is CALLED and says nothing about what happens when it fails.
+// back into a warning SURVIVED, because the ordering guard above checks that the
+// identity is READ and says nothing about what happens when it fails.
+//
+// So: in the switch over ReadInstall's error, every arm that does not return is either
+// the success arm or reachable only on a dry run — an earlier `!opts.DryRun` arm returns.
 func TestAnUnidentifiableClusterStopsTheBootstrap(t *testing.T) {
 	fset := token.NewFileSet()
 	src, err := os.ReadFile("bootstrap.go")
@@ -271,47 +266,71 @@ func TestAnUnidentifiableClusterStopsTheBootstrap(t *testing.T) {
 
 	var checked bool
 	ast.Inspect(file, func(n ast.Node) bool {
-		stmt, ok := n.(*ast.IfStmt)
-		if !ok || stmt.Init == nil {
-			return true
-		}
-		// The shape `if uid, err := bootstrap.IdentifyCluster(...); err != nil {`.
-		assign, ok := stmt.Init.(*ast.AssignStmt)
-		if !ok || len(assign.Rhs) != 1 {
-			return true
-		}
-		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		block, ok := n.(*ast.BlockStmt)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "IdentifyCluster" {
-			return true
-		}
-		checked = true
-
-		// The failure arm must RETURN. A branch that prints and falls through leaves
-		// clusterUID empty, and everything downstream then behaves as though the
-		// operator had asked for an unidentified cluster.
-		var returns bool
-		ast.Inspect(stmt.Body, func(inner ast.Node) bool {
-			if _, ok := inner.(*ast.ReturnStmt); ok {
-				returns = true
+		for i, stmt := range block.List {
+			// The shape `clusterUID, installRec, err := bootstrap.ReadInstall(...)`, and the
+			// switch straight after it.
+			assign, ok := stmt.(*ast.AssignStmt)
+			if !ok || len(assign.Rhs) != 1 || i+1 >= len(block.List) {
+				continue
 			}
-			return true
-		})
-		if !returns {
-			t.Errorf("the IdentifyCluster failure branch at %s does not return.\n"+
-				"  A warning leaves clusterUID empty, and the shared prerequisite state then has\n"+
-				"  no key: dcctl would either file it under the kube-context name (which the next\n"+
-				"  cluster inherits) or skip the prerequisite apply entirely.",
-				fset.Position(stmt.Pos()))
+			call, ok := assign.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "ReadInstall" {
+				continue
+			}
+			sw, ok := block.List[i+1].(*ast.SwitchStmt)
+			if !ok {
+				t.Fatalf("the ReadInstall call at %s is not followed by the switch that settles "+
+					"its failures", fset.Position(call.Pos()))
+			}
+			checked = true
+
+			var realRunRefused, identityRefused bool
+			for _, c := range sw.Body.List {
+				clause := c.(*ast.CaseClause)
+				cond := "default"
+				for _, e := range clause.List {
+					cond = types.ExprString(e)
+				}
+				returns := len(clause.Body) > 0
+				if returns {
+					_, returns = clause.Body[len(clause.Body)-1].(*ast.ReturnStmt)
+				}
+				switch {
+				case cond == "err == nil":
+				case returns:
+					if strings.Contains(cond, "!opts.DryRun") && strings.Contains(cond, `clusterUID == ""`) {
+						identityRefused = true
+					}
+					if cond == "!opts.DryRun" {
+						realRunRefused = true
+					}
+				case !realRunRefused:
+					t.Errorf("the arm `%s` at %s warns instead of returning, and a real run "+
+						"reaches it.\n"+
+						"  A warning leaves clusterUID empty, and the shared prerequisite state then has\n"+
+						"  no key: dcctl would either file it under the kube-context name (which the next\n"+
+						"  cluster inherits) or skip the prerequisite apply entirely.",
+						cond, fset.Position(clause.Pos()))
+				}
+			}
+			if !identityRefused {
+				t.Error("no arm refuses a real run on a cluster that could not be identified " +
+					"(`case !opts.DryRun && clusterUID == \"\":` returning), so the refusal no longer " +
+					"says it was the identity that failed")
+			}
 		}
 		return true
 	})
 
 	if !checked {
-		t.Fatal("bootstrap.go no longer has an `if ...IdentifyCluster(...); err != nil` branch, " +
+		t.Fatal("bootstrap.go no longer has a `... := bootstrap.ReadInstall(...)` followed by a switch, " +
 			"so nothing here can say what happens when a cluster cannot be identified")
 	}
 }

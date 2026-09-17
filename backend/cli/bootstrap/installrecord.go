@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -104,32 +103,11 @@ type InstallOutputs struct {
 	// Rdb is the shared relational store: where it runs and which Secret holds the
 	// identity that gives each instance a login and database of its own. Schema 2.
 	Rdb                       ClusterRdb     `json:"rdb"`
-	Archive                   InstallArchive `json:"archive"`
+	Archive                   ClusterArchive `json:"archive"`
 	BackupSurvivesClusterLoss bool           `json:"backupSurvivesClusterLoss"`
 	CNPGNamespace             string         `json:"cnpgNamespace,omitempty"`
 	GrafanaService            string         `json:"grafanaService,omitempty"`
 	GrafanaNamespace          string         `json:"grafanaNamespace,omitempty"`
-}
-
-// InstallArchive is the archive contract an instance's event store is built against.
-type InstallArchive struct {
-	EndpointURL       string `json:"endpointUrl,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-	AccessKeyIDKey    string `json:"accessKeyIdKey,omitempty"`
-	SecretAccessKey   string `json:"secretAccessKeyKey,omitempty"`
-	BucketTsdb        string `json:"bucketTsdb,omitempty"`
-}
-
-// clusterArchive is the recorded archive contract in the shape an instance root is
-// handed it.
-func (a InstallArchive) clusterArchive() ClusterArchive {
-	return ClusterArchive{
-		EndpointURL:       a.EndpointURL,
-		CredentialsSecret: a.CredentialsSecret,
-		AccessKeyIDKey:    a.AccessKeyIDKey,
-		SecretAccessKey:   a.SecretAccessKey,
-		BucketTsdb:        a.BucketTsdb,
-	}
 }
 
 // installSettingsFor is what this run applies the cluster root with. Every field comes
@@ -144,25 +122,6 @@ func installSettingsFor(st *State) InstallSettings {
 		CertManager:     certManagerEnabled(st),
 		DatabaseBackups: databaseBackupsEnabled(st),
 		BackupsExternal: databaseBackupsEnabled(st) && backupsAreExternal(st),
-	}
-}
-
-// installOutputsFrom collects what the cluster apply returned and recorded.
-func installOutputsFrom(st *State, archive ClusterArchive, rdb ClusterRdb) InstallOutputs {
-	offsite, _ := strconv.ParseBool(st.Values[databaseBackupOffsiteKey])
-	return InstallOutputs{
-		Rdb: rdb,
-		Archive: InstallArchive{
-			EndpointURL:       archive.EndpointURL,
-			CredentialsSecret: archive.CredentialsSecret,
-			AccessKeyIDKey:    archive.AccessKeyIDKey,
-			SecretAccessKey:   archive.SecretAccessKey,
-			BucketTsdb:        archive.BucketTsdb,
-		},
-		BackupSurvivesClusterLoss: offsite,
-		CNPGNamespace:             st.Values[cnpgNamespaceKey],
-		GrafanaService:            st.Values["grafanaService"],
-		GrafanaNamespace:          st.Values["grafanaNamespace"],
 	}
 }
 

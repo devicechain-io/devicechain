@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,7 +32,7 @@ func aCompleteInstall() InstallRecord {
 		},
 		Outputs: InstallOutputs{
 			Rdb: aRelationalStore(),
-			Archive: InstallArchive{
+			Archive: ClusterArchive{
 				EndpointURL:       "http://dc-object-store.dc-system:9000",
 				CredentialsSecret: "dc-object-store-credentials",
 				AccessKeyIDKey:    "MINIO_ROOT_USER",
@@ -261,9 +262,8 @@ func TestTheRecordedSettingsFollowTheAppliedVariables(t *testing.T) {
 func TestTheInstallRecordHoldsNoCredential(t *testing.T) {
 	st := aWritableState()
 	st.ClusterUID = testClusterUID
-	recordClusterOutputs(st, nil)
-	rec := InstallRecord{ClusterUID: testClusterUID, Settings: installSettingsFor(st),
-		Outputs: installOutputsFrom(st, ClusterArchive{}, ClusterRdb{})}
+	rec := aCompleteInstall()
+	rec.Settings = installSettingsFor(st)
 	body, _ := json.Marshal(rec)
 	for _, secret := range []string{"rdb-pw", "tsdb-pw", "os-user", "os-secret", "grafana-pw"} {
 		if strings.Contains(string(body), secret) {
@@ -294,16 +294,26 @@ func TestAnExternalDestinationIsNotRecordedWhenBackupsAreOff(t *testing.T) {
 
 // The outputs are what the cluster apply RETURNED, carried field for field.
 func TestTheRecordedOutputsAreWhatTheClusterApplyReturned(t *testing.T) {
-	st := &State{Values: map[string]string{
-		cnpgNamespaceKey: "cnpg-system", "grafanaService": "svc", "grafanaNamespace": "monitoring",
-		databaseBackupOffsiteKey: "true",
-	}}
-	got := installOutputsFrom(st, ClusterArchive{
-		EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b",
-	}, ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p", MaxConnections: 600})
+	got, err := clusterOutputs(map[string]tfexec.OutputMeta{
+		"backup_endpoint_url":                   {Value: []byte(`"http://e"`)},
+		"backup_credentials_secret":             {Value: []byte(`"s"`)},
+		"backup_access_key_id_key":              {Value: []byte(`"a"`)},
+		"backup_secret_access_key_key":          {Value: []byte(`"k"`)},
+		"backup_bucket_tsdb":                    {Value: []byte(`"b"`)},
+		"namespace":                             {Value: []byte(`"dc-system"`)},
+		"postgres_cluster_name":                 {Value: []byte(`"dc-rdb"`)},
+		"postgres_max_connections":              {Value: []byte(`600`)},
+		"cnpg_namespace":                        {Value: []byte(`"cnpg-system"`)},
+		"grafana_service":                       {Value: []byte(`"svc"`)},
+		"grafana_namespace":                     {Value: []byte(`"monitoring"`)},
+		"database_backup_survives_cluster_loss": {Value: []byte(`true`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := InstallOutputs{
-		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: "p", MaxConnections: 600},
-		Archive:                   InstallArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
+		Rdb:                       ClusterRdb{Namespace: "dc-system", ClusterName: "dc-rdb", ProvisionerSecret: rdbProvisionerSecretName, MaxConnections: 600},
+		Archive:                   ClusterArchive{EndpointURL: "http://e", CredentialsSecret: "s", AccessKeyIDKey: "a", SecretAccessKey: "k", BucketTsdb: "b"},
 		BackupSurvivesClusterLoss: true,
 		CNPGNamespace:             "cnpg-system", GrafanaService: "svc", GrafanaNamespace: "monitoring",
 	}

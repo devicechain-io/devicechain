@@ -28,6 +28,41 @@ var (
 	installMaxConnections    int
 )
 
+// compactModeResolution is the set of flag values the --compact preset settles on.
+type compactModeResolution struct {
+	NoTLS        bool
+	NoMonitoring bool
+}
+
+// resolveCompactMode expands the --compact small-footprint preset on top of the
+// user's explicit flags.
+//
+// Two of its levers live on flags that already exist, so they are resolved here
+// rather than buried in the pipeline: the monitoring stack (~5 pods, the single
+// largest consumer) is skipped, and TLS is off — which is what makes dropping
+// cert-manager safe, since cert-manager is what issues the ingress certificate.
+//
+// An explicit --no-tls=false is HONOURED. It is not a contradiction, it is a
+// dependency: TLS stays on, cert-manager stays installed to issue the cert, and every
+// other compact lever still applies. Erroring here would cost real functionality to
+// no benefit. Which profiles fit a compact cluster is a bootstrap's question, settled
+// by followClusterShape.
+//
+// `changed` reports whether the user set a given flag explicitly.
+func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) compactModeResolution {
+	res := compactModeResolution{NoTLS: true, NoMonitoring: true}
+	// An explicit --no-tls=false keeps TLS (and therefore cert-manager); an explicit
+	// --no-monitoring=false keeps the observability stack. Both cost footprint, and
+	// both are the operator's call to make.
+	if changed("no-tls") {
+		res.NoTLS = noTLS
+	}
+	if changed("no-monitoring") {
+		res.NoMonitoring = noMonitoring
+	}
+	return res
+}
+
 // installCmd prepares a cluster for DeviceChain instances.
 var installCmd = &cobra.Command{
 	Use:   "install <provider>",
@@ -66,10 +101,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 				"instance with dcctl bootstrap --no-tls")
 		}
 		if installCompact {
-			res, err := resolveCompactMode(cmd.Flags().Changed, "", installNoTLS, installNoMonitoring)
-			if err != nil {
-				return err
-			}
+			res := resolveCompactMode(cmd.Flags().Changed, installNoTLS, installNoMonitoring)
 			installNoTLS, installNoMonitoring = res.NoTLS, res.NoMonitoring
 			fmt.Printf("compact mode: %s\n", bootstrap.CompactSummary())
 		}
@@ -115,12 +147,12 @@ the cluster, with one exception: the connection budget may be raised.`,
 				DryRun:               installDryRun,
 				AssumeYes:            installAssumeYes,
 				NoTLS:                installNoTLS,
-				NoMonitoring:         installNoMonitoring,
-				NoCNPG:               installNoCNPG,
 				AllowLegacyDbRemoval: installAllowLegacyDb,
-				Compact:              installCompact,
-				HA:                   installHA,
 			},
+			NoMonitoring:      installNoMonitoring,
+			NoCNPG:            installNoCNPG,
+			Compact:           installCompact,
+			HA:                installHA,
 			BackupDestination: backupDestination,
 			MaxConnections:    installMaxConnections,
 			DcctlVersion:      Version,

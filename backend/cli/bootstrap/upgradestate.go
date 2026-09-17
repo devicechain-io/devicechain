@@ -114,7 +114,7 @@ func hydrateUpgradeState(
 	// recreate, not an upgrade, and the refusal says what prepares the cluster.
 	rec, err := readInstallRecord(ctx, typed, st.ClusterUID)
 	if err != nil {
-		return nil, refuseUninstalled(err, InstallCommand(provider.Name(), binding.Cluster, opts.KubeContext))
+		return nil, refuseUninstalled(err, InstallCommand(provider.Name(), binding))
 	}
 	// 🔴 AND WHICH SHARED CREDENTIALS EXIST IS THE INSTALL'S ANSWER, NOT THE DECLARATION'S.
 	// The declaration does not record where the cluster archives, so read from it an

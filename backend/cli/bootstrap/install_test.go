@@ -125,7 +125,7 @@ func TestAFailedReinstallStillProtectsTheInstancesOfTheLastCompletedOne(t *testi
 func externallyArchived() (*InstallRecord, *State, InstallSettings) {
 	rec := installed()
 	rec.Settings.BackupsExternal = true
-	rec.Outputs.Archive = InstallArchive{
+	rec.Outputs.Archive = ClusterArchive{
 		EndpointURL: "https://s3.example.invalid", CredentialsSecret: "dc-backup-credentials",
 		AccessKeyIDKey: "ACCESS_KEY_ID", SecretAccessKey: "ACCESS_SECRET_KEY", BucketTsdb: "tsdb-archive",
 	}
@@ -293,16 +293,19 @@ func TestABootstrapFollowsEveryFieldOfTheInstall(t *testing.T) {
 // The command a refusal prints is the one that prepares the cluster the refused command
 // was aimed at.
 func TestTheInstallCommandNamesTheClusterItPrepares(t *testing.T) {
-	for _, tc := range []struct{ cluster, kubeContext, want string }{
-		{"", "", "dcctl install local"},
-		{DefaultClusterName, "", "dcctl install local"},
-		{"edge", "", "dcctl install local --cluster edge"},
-		// A kube-context names the cluster exactly; a cluster name alongside it is not
-		// what selected it.
-		{"edge", "kind-other", "dcctl install local --kube-context kind-other"},
+	for _, tc := range []struct {
+		binding ClusterBinding
+		want    string
+	}{
+		{ClusterBinding{KubeContext: "kind-devicechain", Managed: true}, "dcctl install local"},
+		{ClusterBinding{Cluster: DefaultClusterName, KubeContext: "kind-devicechain", Managed: true}, "dcctl install local"},
+		{ClusterBinding{Cluster: "edge", KubeContext: "kind-edge", Managed: true}, "dcctl install local --cluster edge"},
+		// A context named by hand names the cluster exactly; a cluster name alongside it is
+		// not what selected it.
+		{ClusterBinding{Cluster: "edge", KubeContext: "kind-other"}, "dcctl install local --kube-context kind-other"},
 	} {
-		if got := InstallCommand("local", tc.cluster, tc.kubeContext); got != tc.want {
-			t.Errorf("InstallCommand(local, %q, %q) = %q, want %q", tc.cluster, tc.kubeContext, got, tc.want)
+		if got := InstallCommand("local", tc.binding); got != tc.want {
+			t.Errorf("InstallCommand(local, %+v) = %q, want %q", tc.binding, got, tc.want)
 		}
 	}
 }

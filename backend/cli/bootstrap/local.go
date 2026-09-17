@@ -78,7 +78,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 	// cluster nobody installed — which it would then refuse anyway, minutes later.
 	if !opts.CreateCluster {
 		return ClusterBinding{}, fmt.Errorf("there is no kind cluster %q (context %s). Prepare one "+
-			"first:\n\n    %s\n", clusterName, kubeContext, InstallCommand("local", clusterName, ""))
+			"first:\n\n    %s\n", clusterName, kubeContext, InstallCommand("local", binding))
 	}
 	if opts.DryRun {
 		fmt.Println(color.YellowString("[dry-run] would create kind cluster %q (context %s)", clusterName, kubeContext))

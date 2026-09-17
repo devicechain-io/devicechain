@@ -19,11 +19,11 @@ import (
 // not leave one out. Replacing that with writes scattered through the bring-up would
 // trade a guarantee for a habit — and the failure mode of a forgotten write is not a
 // missing Secret, it is a workload that starts with a credential nobody chose. So
-// placement stays a plan (planOwnedSecrets), this walks it, and
+// placement stays a plan (planClusterSecrets, planInstanceSecrets), this walks it, and
 // TestEveryMintedCredentialIsPlacedSomewhere holds the plan against the struct.
 //
 // 🔑 THE BROKER'S TLS IS APPENDED HERE RATHER THAN LIVING IN THE PLAN, because it is
-// not made of the same stuff: planOwnedSecrets places values from credentialSet, and
+// not made of the same stuff: the plans place values from credentialSet, and
 // a certificate is material with a lifetime rather than entropy with a length.
 // Keeping it out of that struct is what stops the reflection test above from
 // reporting a certificate as an unplaced password.

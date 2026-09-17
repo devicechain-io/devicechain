@@ -137,7 +137,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 
-	// SETTLE THE ARCHIVE PATH EACH DATABASE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
+	// SETTLE THE ARCHIVE PATH THE EVENT STORE OWNS, FROM WHAT IT IS ALREADY ARCHIVING
 	// UNDER — not from this run's flags (ADR-020 A2.5 / ADR-028).
 	//
 	// Same shape, same reason as the credentials above: the path is permanent
@@ -160,13 +160,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// and failing it on an unreachable API server would break the rehearsal for the
 	// case it serves best. Acting on a wrong answer costs nothing when nothing is
 	// applied.
-	var live liveArchiveState
+	var live clusterArchiveState
 	live, err = readLiveArchiveState(ctx, st.KubeContext, st.Instance)
 	switch {
 	case err != nil && !st.DryRun:
 		return fail("reading the database archive state", err)
 	case err != nil:
-		live = liveArchiveState{}
+		live = clusterArchiveState{}
 		notes = append(notes, fmt.Sprintf(
 			"could not read the database archive state (%v); the plan below assumes a fresh cluster", err))
 	}
@@ -184,7 +184,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	//
 	// resolveCredentials decides which of them a live instance keeps; see the reuse
 	// policy there for why that answer differs per credential.
-	st.Credentials, err = settleCredentials(ctx, st, live)
+	st.Credentials, err = settleCredentials(ctx, st, liveArchiveState{Tsdb: live})
 	if err != nil {
 		return fail("settling this instance's credentials", err)
 	}
@@ -200,8 +200,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	}
 	st.Values["natsCA"] = st.NATSTLS.CACertPEM
 
-	paths := resolveArchivePaths(live, st.Restore,
-		archivePaths{Tsdb: freshTsdbArchivePath(st.Instance, st.InstanceUID)}, time.Now().UTC())
+	paths := resolveArchivePaths(live, st.Restore, freshTsdbArchivePath(st.Instance, st.InstanceUID), time.Now().UTC())
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.Active() {
 		notes = append(notes, fmt.Sprintf(
@@ -936,6 +935,34 @@ func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, ti
 	}
 }
 
+// printBackups is the report's backups line, for an install and a bootstrap alike.
+//
+// 🔴 THE DEFAULT BRANCH IS THE ONE THAT MATTERS MOST. The in-cluster destination is
+// real backups — WAL archived continuously, a base backup taken on schedule — and it
+// is not disaster recovery, because it dies with the cluster it lives in. Those two
+// facts are easy to hold at once and almost impossible to infer, so the report says
+// both.
+func printBackups(subject string, enabled, offsite bool) {
+	switch {
+	case !enabled:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.YellowString("NONE — no WAL archiving and no base backups for %s, so no point-in-time restore is possible", subject))
+	case offsite:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
+	default:
+		fmt.Printf("  %s %s\n",
+			color.WhiteString("Backups:"),
+			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
+		fmt.Printf("           %s\n",
+			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
+		fmt.Printf("           %s\n",
+			color.YellowString("failure domain and are lost with it. Off-site backups are set by `dcctl install --backup-credentials-file`."))
+	}
+}
+
 // stepReport prints an access-info summary from State. This step is real.
 func stepReport(ctx context.Context, st *State) error {
 	fmt.Println(color.HiGreenString("\nDeviceChain bootstrap summary"))
@@ -997,13 +1024,7 @@ func stepReport(ctx context.Context, st *State) error {
 	}
 	// Database backups, printed here for exactly the reason the escrow line below
 	// is: this is the screen an operator actually reads, and every branch of it
-	// says something they need.
-	//
-	// 🔴 UNCONDITIONAL, and the branch that matters most is the DEFAULT one. The
-	// in-cluster destination is real backups — WAL archived continuously, a base
-	// backup taken on schedule — and it is not disaster recovery, because it dies
-	// with the cluster it lives in. Those two facts are easy to hold at once and
-	// almost impossible to infer, so the only honest thing is to say both.
+	// says something they need. Unconditional — see printBackups.
 	//
 	// Before this existed, the only surfaces stating it were the OpenTofu README
 	// and terraform.tfvars.example. A `dcctl bootstrap` user reads neither.
@@ -1014,33 +1035,15 @@ func stepReport(ctx context.Context, st *State) error {
 	// "Backups: NONE", including one that had just been handed an off-site
 	// destination. Same rule, and the same fix, as the archive-path read above.
 	//
-	// Predicted from what THIS RUN decided, not from a default: the flags settle
-	// whether backups exist at all, and --backup-credentials-file settles whether
-	// they leave the cluster.
+	// Predicted from what THIS RUN decided, not from a default: the install record
+	// settles whether backups exist at all, and whether they leave the cluster.
 	if st.DryRun {
 		if databaseBackupsEnabled(st) {
 			st.Values[databaseBackupsKey] = "true"
 			st.Values[databaseBackupOffsiteKey] = strconv.FormatBool(backupsAreExternal(st))
 		}
 	}
-	switch {
-	case st.Values[databaseBackupsKey] != "true":
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.YellowString("NONE — this instance archives no WAL and takes no base backups, so it cannot be restored to any point in time"))
-	case st.Values[databaseBackupOffsiteKey] == "true":
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to storage outside this cluster"))
-	default:
-		fmt.Printf("  %s %s\n",
-			color.WhiteString("Backups:"),
-			color.GreenString("WAL archiving + scheduled base backups, to an object store IN THIS CLUSTER"))
-		fmt.Printf("           %s\n",
-			color.YellowString("this is point-in-time recovery, NOT disaster recovery — the backups share the cluster's"))
-		fmt.Printf("           %s\n",
-			color.YellowString("failure domain and are lost with it. Pass --backup-credentials-file for off-site."))
-	}
+	printBackups("this instance", st.Values[databaseBackupsKey] == "true", st.Values[databaseBackupOffsiteKey] == "true")
 	// The archive path each store OWNS — which is the INPUT to the next restore.
 	//
 	// Printed only when it is not the default, because that is exactly when an

@@ -73,12 +73,13 @@ type ClusterBinding struct {
 	// Managed reports whether this is dcctl's OWN cluster. It is a recorded fact about the
 	// binding and nothing more: destroy never deletes a cluster, managed or not.
 	//
-	// 🔴 IT IS NOT "dcctl created it". EnsureCluster REUSES an existing `kind-<instance>`
-	// cluster when it finds one, and a kind cluster created from
-	// deploy/local/kind-cluster.yaml is exactly that cluster, and it exists before
-	// bootstrap runs. So Managed means "this is the kind-<instance> cluster dcctl names
-	// by convention", created or reused, and it is false only when the operator pointed
-	// dcctl somewhere BY NAME with --kube-context. That is the rig case.
+	// 🔴 IT IS NOT "dcctl created it". EnsureCluster REUSES an existing `kind-<cluster>`
+	// cluster when it finds one (`kind-devicechain` unless --cluster names another), and
+	// a kind cluster created from deploy/local/kind-cluster.yaml is exactly that cluster,
+	// and it exists before dcctl runs. So Managed means "this is the kind-<cluster>
+	// cluster dcctl names by convention", created or reused, and it is false only when
+	// the operator pointed dcctl somewhere BY NAME with --kube-context. That is the rig
+	// case.
 	Managed bool
 	// ClusterUID is the cluster's identity — the kube-system namespace UID, read by
 	// ClusterUID(). EMPTY where it was never read: a guessed binding knows nothing, and
