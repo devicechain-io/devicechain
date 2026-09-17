@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/kube"
+	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage"
 	corev1 "k8s.io/api/core/v1"
@@ -106,12 +109,65 @@ func newTeardownRig(t *testing.T, rels []*release.Release, namespaces []string, 
 
 func (r *teardownRig) destroy(t *testing.T, withoutState bool) (string, error) {
 	t.Helper()
+	return r.destroyWith(t, context.Background(), withoutState)
+}
+
+func (r *teardownRig) destroyWith(t *testing.T, ctx context.Context, withoutState bool) (string, error) {
+	t.Helper()
 	p := &fakeProvider{name: "local", present: map[string]bool{"c": true}}
 	var err error
 	out := captureOutput(t, func() {
-		err = Destroy(context.Background(), p, DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}, WithoutState: withoutState})
+		err = Destroy(ctx, p, DestroyOptions{Options: Options{Instance: "acme", AssumeYes: true}, WithoutState: withoutState})
 	})
 	return out, err
+}
+
+// interruptingKubeClient cancels the run once Helm's uninstall is under way: Build is
+// what the uninstall calls to turn the release's manifest into objects to delete.
+type interruptingKubeClient struct {
+	*kubefake.PrintingKubeClient
+	interrupt context.CancelFunc
+}
+
+func (c interruptingKubeClient) Build(r io.Reader, validate bool) (kube.ResourceList, error) {
+	c.interrupt()
+	return c.PrintingKubeClient.Build(r, validate)
+}
+
+// 🔴 A CTRL-C DURING THE CHART UNINSTALL STOPS THE DESTROY RIGHT AFTER IT, AS AN
+// INTERRUPT. The uninstall is waited out, so the next step used to be the first to see
+// the cancelled context — `tofu init` — and the destroy failed as "tofu init: context
+// canceled", which reads as a broken infrastructure root. Nothing after the uninstall may
+// run, and the error has to say what happened while still being a cancellation.
+func TestADestroyInterruptedDuringTheUninstallStopsAfterItAsAnInterrupt(t *testing.T) {
+	r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("acme"), "acme")}, []string{"acme"}, "acme")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg, err := helmActionConfigFor("kind-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.KubeClient = interruptingKubeClient{PrintingKubeClient: &kubefake.PrintingKubeClient{Out: io.Discard}, interrupt: cancel}
+
+	out, err := r.destroyWith(t, ctx, false)
+	if ctx.Err() == nil {
+		t.Fatal("the uninstall never ran, so the interrupt was never delivered and this test proves nothing")
+	}
+	if len(r.releases(t)) != 0 {
+		t.Fatalf("the uninstall did not finish before the destroy stopped: %v", r.releases(t))
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("an interrupted destroy returned %v, want a cancellation", err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") || strings.Contains(err.Error(), "tofu") {
+		t.Fatalf("the error does not say the destroy was interrupted: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("steps after the uninstall ran on an interrupted destroy: %v\n%s", r.calls, out)
+	}
+	if r.stateRemoved() {
+		t.Fatal("an interrupted destroy removed the instance's local state")
+	}
 }
 
 func (r *teardownRig) releases(t *testing.T) []string {

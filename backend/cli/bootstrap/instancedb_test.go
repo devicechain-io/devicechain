@@ -465,7 +465,7 @@ func TestInstanceDatabaseRefusesAnUnsizedAdmission(t *testing.T) {
 
 // A store not yet running with the budget the install asked for is NOT READY, so the
 // install waits through the restart instead of recording connections the store lacks.
-func TestTheInstallWaitsForTheStoreToRunWithItsBudget(t *testing.T) {
+func TestInstanceDatabaseInstallWaitsForTheStoreToRunWithItsBudget(t *testing.T) {
 	ctx := context.Background()
 	su, _ := superuserConn(t)
 	var running int

@@ -1011,12 +1011,17 @@ func stepReport(ctx context.Context, st *State) error {
 		//
 		// It now says where the password IS rather than what it is, which is also
 		// the only form that stays true when it is rotated.
+		//
+		// 🔴 AND WHOSE IT IS. Grafana runs once per cluster, so its admin login and the
+		// Secret holding it are the CLUSTER's, shared by every instance on it. Calling it
+		// "this instance's own" told an operator of a second instance they had a password
+		// nobody else held — and that rotating it touched only their own instance.
 		ns := st.Values["grafanaNamespace"]
 		fmt.Printf("  %s %s\n",
 			color.WhiteString("Grafana:"),
 			color.GreenString("kubectl -n %s port-forward svc/%s 3000:80  → http://localhost:3000/", ns, svc))
 		fmt.Printf("           %s\n", color.WhiteString(fmt.Sprintf(
-			"sign in as %q; this instance's own password is in Secret %s/%s, key %s:",
+			"sign in as %q; the cluster's Grafana admin password, shared by every instance on this cluster, is in Secret %s/%s, key %s:",
 			grafanaAdminUser, monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass)))
 		fmt.Printf("           %s\n", color.GreenString(
 			"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d",

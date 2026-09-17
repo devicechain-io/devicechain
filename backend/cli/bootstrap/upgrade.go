@@ -130,6 +130,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 
+	// 🔴 THE CONNECTION BUDGET IS ASKED BEFORE THE FIRST WRITE, while a refusal still
+	// means nothing has moved. See upgradeconnlimit.go.
+	if err := precheckUpgradeLogin(ctx, st); err != nil {
+		return err
+	}
+
 	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
 	// ARE DELIBERATE. See recordUpgradedVersion.
 	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
@@ -234,17 +240,23 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) error 
 	}
 	done()
 
-	if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
-		return helmInstall(ctx, st)
+	// Grown before the release, shrunk once its services have rolled over: see
+	// rolloutWithLoginResize.
+	if err := rolloutWithLoginResize(ctx, st, func() error {
+		if err := runStreamed("Upgrading the instance's services", "helm upgrade", func() error {
+			return helmInstall(ctx, st)
+		}); err != nil {
+			return err
+		}
+		doing("waiting for the services to roll over")
+		if err := waitForAreas(ctx, typed, st.Instance, areaReadyTimeout, areaReadyPollInterval); err != nil {
+			return fail("waiting for the services", err)
+		}
+		done()
+		return nil
 	}); err != nil {
 		return err
 	}
-
-	doing("waiting for the services to roll over")
-	if err := waitForAreas(ctx, typed, st.Instance, areaReadyTimeout, areaReadyPollInterval); err != nil {
-		return fail("waiting for the services", err)
-	}
-	done()
 
 	fmt.Println(color.HiGreenString("\nInstance upgraded."))
 	for _, t := range targets {

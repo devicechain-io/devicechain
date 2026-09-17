@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-exec/tfexec"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/release"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -234,7 +235,11 @@ func uninstallProviderRelease(ctx context.Context, kubeContext, namespace, name 
 	un.Timeout = helmTimeout
 	// A release already gone is a resumed destroy, not a failure.
 	un.IgnoreNotFound = true
-	res, err := un.Run(name)
+	// Interruptible only in what it SAYS, for the reason the chart release's is: see
+	// awaitUninstall.
+	res, err := awaitUninstall(ctx, os.Stdout, kubeContext, func() (*release.UninstallReleaseResponse, error) {
+		return un.Run(name)
+	})
 	if err != nil {
 		return false, err
 	}

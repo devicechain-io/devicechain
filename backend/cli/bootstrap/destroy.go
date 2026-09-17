@@ -243,6 +243,17 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 		done()
 	}
 
+	// 🔴 AN INTERRUPT DURING THE UNINSTALL STOPS HERE, AND SAYS SO. Helm's uninstall cannot
+	// be cancelled, so it was waited out (see awaitUninstall) and reported done — and the
+	// next step to honour the cancelled context is `tofu init`, which failed with "tofu
+	// init: context canceled". That reads as a broken infrastructure root, not as the
+	// operator's own Ctrl-C. Still a context.Canceled underneath, for anything that asks.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("stopped after uninstalling the instance's chart release because the command "+
+			"was interrupted; nothing after it has been removed, and re-running `dcctl destroy` resumes "+
+			"from here: %w", err)
+	}
+
 	// 🔴 THE INSTANCE'S OWN INFRASTRUCTURE, AFTER THE CHART AND BEFORE THE DATABASE. The
 	// services are gone, so nothing is publishing to the broker or writing to the event
 	// store while they are destroyed; and the namespace delete below stays as the
