@@ -87,10 +87,24 @@ func refuseAHostAnotherInstanceServes(held clusterSingletons, instance, host str
 	if held.HostHolder == "" {
 		return nil
 	}
-	return fmt.Errorf("host %q is already served by the instance in namespace %q, and an ingress "+
+	return &ErrHostTaken{Instance: instance, Host: host, Holder: held.HostHolder}
+}
+
+// ErrHostTaken is the refusal of a host another instance serves. Typed, because the
+// command layer undoes the local record this run wrote on exactly this refusal: it fires
+// before anything is written, so that record describes an instance that was never built.
+// See PriorLocalState.
+type ErrHostTaken struct {
+	Instance string
+	Host     string
+	Holder   string
+}
+
+func (e *ErrHostTaken) Error() string {
+	return fmt.Sprintf("host %q is already served by the instance in namespace %q, and an ingress "+
 		"controller given two instances on one host serves only one of them — silently. Bootstrap %q "+
 		"on a host of its own with --host (for a local cluster, e.g. --host %s.localhost)",
-		host, held.HostHolder, instance, instance)
+		e.Host, e.Holder, e.Instance, e.Instance)
 }
 
 // stepCheckClusterSingletons asks what other instances on this cluster already hold, and

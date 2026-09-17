@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -492,6 +493,10 @@ var bootstrapCmd = &cobra.Command{
 			}
 		}
 
+		// 🔴 What was here first is captured before it is replaced: on the one refusal that
+		// fires before anything is written — a host another instance serves — the record
+		// this run writes describes nothing. See PriorLocalState.
+		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
 				Instance:     opts.Instance,
@@ -541,9 +546,42 @@ var bootstrapCmd = &cobra.Command{
 		}
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
+		unwindLocalRecordOnHostTaken(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
+}
+
+// unwindLocalRecordOnHostTaken puts the local record back after the one refusal
+// that makes it describe nothing.
+//
+// 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
+// cluster that may be half-built and MUST keep its record, which is the whole reason the
+// record is written before the pipeline. This one cannot: it fires before anything is
+// written, on a cluster already holding another instance — one EnsureCluster adopted,
+// never one it created — so there is nothing for the record to name. Widening this to "any error" would restore the orphan
+// the record exists to prevent.
+//
+// It reports and moves on. The refusal is what the operator is about to read, and
+// failing differently because the cleanup failed would replace a message they can act on
+// with one they cannot.
+func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+	var refusal *bootstrap.ErrHostTaken
+	if opts.DryRun || !errors.As(runErr, &refusal) {
+		return
+	}
+	removed, err := prior.Restore()
+	if err != nil {
+		fmt.Println(color.YellowString(
+			"warning: could not undo the local record this run wrote for %q (%v).\n"+
+				"  `dcctl instances list` will show it even though nothing was installed; "+
+				"remove ~/.devicechain/instances/%s by hand.", opts.Instance, err, opts.Instance))
+		return
+	}
+	if removed {
+		fmt.Println(color.WhiteString(
+			"Nothing was installed, so the local record for %q has been removed again.", opts.Instance))
+	}
 }
 
 func init() {
