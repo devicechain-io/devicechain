@@ -93,12 +93,10 @@ func destroyInstanceRoot(ctx context.Context, kubeContext, instance string) (err
 	if err := removeSupersededRootConfig(workdir); err != nil {
 		return err
 	}
-	tf, err := tfexec.NewTerraform(rootdir, tofuBin)
+	tf, err := newTofuExec(rootdir, tofuBin)
 	if err != nil {
 		return err
 	}
-	tf.SetStdout(os.Stdout)
-	tf.SetStderr(os.Stderr)
 	// See openInstanceRoot: an interrupted destroy of a slow release must get to write
 	// its state, or the resume has nothing true to read.
 	tf.SetWaitDelay(tofuGracefulStopBudget)
