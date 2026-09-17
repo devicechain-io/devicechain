@@ -385,6 +385,8 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
 		mintedSecret("acme", "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
+		inMonitoring(clusterOwnedSecret("dc-grafana-admin", testClusterUID, map[string][]byte{
+			"admin-user": []byte("admin"), "admin-password": []byte("grafana-in-use")})),
 	)
 	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true}, Tsdb: clusterArchiveState{Exists: true}}
 
@@ -399,9 +401,66 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 		"TSDBPassword":           set.TSDBPassword,
 		"ObjectStoreUser":        set.ObjectStoreUser,
 		"ObjectStoreSecret":      set.ObjectStoreSecret,
+		"GrafanaAdminPassword":   set.GrafanaAdminPassword,
 	} {
 		if !strings.HasSuffix(got, "-in-use") {
 			t.Errorf("%s was re-minted rather than reused; the live store still holds the old value", field)
+		}
+	}
+}
+
+// inMonitoring moves a fixture into the monitoring namespace, where the dashboard
+// login's Secret lives.
+func inMonitoring(s *corev1.Secret) *corev1.Secret {
+	s.Namespace = monitoringNamespace
+	return s
+}
+
+// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise that the
+// same run rolls Grafana onto it. It does not: Grafana reads the Secret as an environment
+// variable, nothing restarts it when the Secret changes, and a persistent Grafana database
+// would ignore the change regardless. Every re-run left the Secret naming a password the
+// running Grafana had never been given. The reuse is held by the re-run case above; these
+// are the other two answers the reuse can give.
+func TestTheDashboardPasswordIsMintedOnlyWhenTheClusterHasNone(t *testing.T) {
+	st := &State{ClusterUID: testClusterUID, Values: map[string]string{}}
+
+	// Absent — a first install, or monitoring switched on after an install without it.
+	set, err := resolveCredentials(context.Background(), fake.NewSimpleClientset(), st, liveArchiveState{})
+	if err != nil {
+		t.Fatalf("an install with no dashboard Secret yet was refused: %v", err)
+	}
+	if set.GrafanaAdminPassword == "" {
+		t.Error("no dashboard password was minted for a cluster that has none, so Grafana gets an empty login")
+	}
+
+	// Present but not dcctl's: kept out of reuse, the way every other login is. The writer
+	// refuses that Secret by name, so reading a value out of it would only hide the refusal.
+	notOurs := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dc-grafana-admin", Namespace: monitoringNamespace},
+		Data:       map[string][]byte{"admin-user": []byte("admin"), "admin-password": []byte("grafana-not-ours")},
+	}
+	set, err = resolveCredentials(context.Background(), fake.NewSimpleClientset(notOurs), st, liveArchiveState{})
+	if err != nil {
+		t.Fatalf("resolving over a dashboard Secret dcctl did not write: %v", err)
+	}
+	if set.GrafanaAdminPassword == "" || set.GrafanaAdminPassword == "grafana-not-ours" {
+		t.Error("the dashboard password was taken from a Secret dcctl did not write, rather than minted")
+	}
+
+	// Monitoring off: there is no dashboard, so there is nothing to look for.
+	off := &State{ClusterUID: testClusterUID, Values: map[string]string{}, NoMonitoring: true}
+	c := fake.NewSimpleClientset()
+	reads := secretReads(c)
+	if set, err = resolveCredentials(context.Background(), c, off, liveArchiveState{}); err != nil {
+		t.Fatalf("an install without monitoring was refused: %v", err)
+	}
+	if set.GrafanaAdminPassword != "" {
+		t.Error("a dashboard password was settled for a cluster with no dashboard")
+	}
+	for _, r := range *reads {
+		if strings.HasPrefix(r, monitoringNamespace+"/") {
+			t.Errorf("an install without monitoring looked for %s", r)
 		}
 	}
 }
