@@ -410,12 +410,18 @@ func TestReadArchiveStateKeepsTheTwoStoresApart(t *testing.T) {
 			"parameters":    map[string]any{"serverName": serverName},
 		}
 	}
+	// Each store in its own namespace — the relational store the cluster's, the event
+	// store the instance's — with a DECOY event store left in the cluster namespace, where
+	// it lived before instances had namespaces. Reading the wrong namespace reads the decoy.
+	tsdb := cnpgCluster(TsdbClusterName, archiver("tsdb-owns-this"))
+	tsdb.SetNamespace("acme")
 	dyn := fakeDyn(
 		cnpgCluster(RdbClusterName, archiver("rdb-owns-this")),
-		cnpgCluster(TsdbClusterName, archiver("tsdb-owns-this")),
+		tsdb,
+		cnpgCluster(TsdbClusterName, archiver("a-decoy-in-the-cluster-namespace")),
 	)
 
-	got, err := readArchiveState(context.Background(), dyn)
+	got, err := readArchiveState(context.Background(), dyn, "acme")
 	if err != nil {
 		t.Fatal(err)
 	}

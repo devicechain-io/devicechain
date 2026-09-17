@@ -253,12 +253,9 @@ func WriteInstanceRecord(rec InstanceRecord) error {
 // of a partial write is exactly the defect this file exists to prevent, reached by a
 // power cut. writeBrokerRecord in this same directory already does it this way.
 //
-// Split out because PriorLocalState.Restore puts a record BACK, and a rollback written
-// the non-atomic way would reintroduce the torn-write failure on the one path whose
-// whole job is leaving the disk in a state somebody can trust. The cluster record in
-// cluster_identity.go is written through it too — every local record dcctl keeps is one
-// a half-write turns into a refusal, and a refusal is what sends a caller back to
-// guessing.
+// Split out because the cluster record in cluster_identity.go is written through it too —
+// every local record dcctl keeps is one a half-write turns into a refusal, and a refusal
+// is what sends a caller back to guessing.
 func writeRecordFile(dir, name string, contents []byte) error {
 	path := filepath.Join(dir, name)
 	tmp, err := os.CreateTemp(dir, name+".*.tmp")
@@ -286,112 +283,6 @@ func writeRecordFile(dir, name string, contents []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
-}
-
-// PriorLocalState is what ~/.devicechain/instances/<instance>/ held before a run wrote its record
-// into it.
-//
-// 🔴 IT EXISTS FOR ONE FAILURE, AND THE REASON IS AN ORDERING NOBODY CAN CHANGE.
-// `dcctl bootstrap` records the instance→cluster binding BEFORE the pipeline starts, and
-// deliberately keeps it on every failure: the cluster may already be up by then, and a
-// cluster nothing can name is the orphan the record exists to prevent. That reasoning
-// holds for every failure except one. The second-instance refusal (ErrSecondInstance)
-// can only fire against a cluster that ALREADY held an instance, and a cluster that
-// already held an instance is one EnsureCluster adopted rather than created — it creates
-// only when no context of that name exists, and a cluster it has just created holds
-// nothing to refuse over. So on that one refusal the record this run wrote describes
-// nothing, and left behind it is a phantom: `dcctl instances list` prints it, and
-// `dcctl destroy` cannot clear it, because a destroy refusal returns before
-// removeInstanceState.
-//
-// 🔴 IT RESTORES RATHER THAN DELETES, AND THE DIFFERENCE IS A REAL INSTANCE.
-// WriteInstanceRecord REPLACES, so a run that names an instance which already exists
-// somewhere else — the shape of a mistyped --kube-context — has already overwritten that
-// instance's binding by the time the refusal fires. Deleting would take a live
-// instance's record away; putting back exactly what was there leaves both instances
-// describable. The bytes are kept verbatim, not re-marshalled from a parsed record, so a
-// record this build cannot parse survives too.
-type PriorLocalState struct {
-	instance string
-	// dirExisted says whether ~/.devicechain/instances/<instance> was there before the run. When
-	// it was not, the whole directory is this run's and goes back with the record.
-	dirExisted bool
-	// record is the record file's contents, or nil when there was no record file.
-	record []byte
-	// readable is false when the state could not be captured at all (no home
-	// directory). Restore then does NOTHING rather than guess, because every action it
-	// could take would be taken on an unknown starting point.
-	readable bool
-}
-
-// CapturePriorLocalState reads what is on disk for an instance, before a run replaces
-// it. Every failure is folded into "not readable": this is a rollback aid, and failing a
-// bootstrap because its rollback aid could not be prepared would be the tail wagging the
-// dog. Restore's own failures are reported, because by then something HAS been written.
-func CapturePriorLocalState(instance string) PriorLocalState {
-	prior := PriorLocalState{instance: instance}
-	dir, err := instanceRoot(instance)
-	if err != nil {
-		return prior
-	}
-	prior.readable = true
-	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-		prior.dirExisted = true
-	}
-	if b, err := os.ReadFile(filepath.Join(dir, instanceRecordFile)); err == nil {
-		prior.record = b
-	}
-	return prior
-}
-
-// Restore puts the instance's local state back the way CapturePriorLocalState found it,
-// reporting whether it removed the directory outright so the caller can say so.
-//
-// It is deliberately narrow: it restores the RECORD and, when this run created the
-// directory, removes the directory. It does not attempt to undo anything else, because
-// at the point its one caller fires — a refusal three steps into the pipeline, before
-// the first operator write — the record is the only thing on disk that this run put
-// there.
-func (p PriorLocalState) Restore() (removed bool, err error) {
-	if !p.readable {
-		return false, nil
-	}
-	dir, err := instanceRoot(p.instance)
-	if err != nil {
-		return false, err
-	}
-
-	if p.record != nil {
-		// There was a record before this run. Put it back byte for byte.
-		if _, err := os.Stat(dir); err != nil {
-			// The directory went away under us. Recreating it to hold a record for an
-			// instance whose state is gone would invent the phantom this removes.
-			return false, nil
-		}
-		return false, writeRecordFile(dir, instanceRecordFile, p.record)
-	}
-
-	if p.dirExisted {
-		// The directory was already there and held no record — an instance from before
-		// records existed, or a tree destroy left behind. Take away only what this run
-		// added, and leave the directory, which is not ours to remove.
-		if err := os.Remove(filepath.Join(dir, instanceRecordFile)); err != nil && !os.IsNotExist(err) {
-			return false, err
-		}
-		return false, nil
-	}
-
-	// This run created the directory, so the whole thing goes — through the escrow-
-	// sparing walk rather than a RemoveAll. Nothing dcctl writes should have put root-key
-	// material under here (resolveEscrowPath refuses to), but the walk is the one place
-	// that judgement is already written down, and a rollback is not the place to take a
-	// second opinion on it. removeStatePreservingEscrow collapses the directory itself
-	// only when nothing was spared, which is exactly the condition for the phantom to go.
-	kept, err := removeStatePreservingEscrow(dir)
-	if err != nil {
-		return false, err
-	}
-	return len(kept) == 0, nil
 }
 
 // ReadInstanceRecord returns the recorded binding, or ErrNoInstanceRecord when the

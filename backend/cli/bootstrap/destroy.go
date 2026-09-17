@@ -121,14 +121,15 @@ func destroyInstanceOnly(ctx context.Context, opts DestroyOptions) (err error) {
 	if err != nil {
 		return fail("connecting to the cluster to remove the instance namespace", err)
 	}
-	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
-		return fail("removing the instance namespace", err)
-	}
 	// 🔴 AND ITS DATABASE AND LOGIN ON THE SHARED STORE, which nothing above reaches: the
 	// store is the cluster's, so uninstalling the instance leaves both behind — and a
 	// later instance by the same name would be refused over a database it did not create.
+	// After the uninstall, which ends the services' sessions on it.
 	if err := removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance); err != nil {
 		return fail("removing the instance's database and login", err)
+	}
+	if err := removeInstanceNamespace(ctx, typed, opts.Instance); err != nil {
+		return fail("removing the instance namespace", err)
 	}
 	done()
 

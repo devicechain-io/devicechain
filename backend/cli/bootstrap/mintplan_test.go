@@ -172,8 +172,13 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 			t.Errorf("%s lacks the reload label, so a credential change would land in the "+
 				"Secret while the database kept the old password", name)
 		}
-		if s.Namespace != infraNamespace {
-			t.Errorf("%s is planned for namespace %q, want %q", name, s.Namespace, infraNamespace)
+		// The shared store's credentials are the cluster's; the event store's, the instance's.
+		wantNS := infraNamespace
+		if name == "dc-tsdb-app-credentials" {
+			wantNS = "acme"
+		}
+		if s.Namespace != wantNS {
+			t.Errorf("%s is planned for namespace %q, want %q", name, s.Namespace, wantNS)
 		}
 	}
 
@@ -182,6 +187,9 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 	login, ok := byName["dci-acme-rdb-credentials"]
 	if !ok {
 		t.Fatal("the instance's own relational login is missing from the plan")
+	}
+	if login.Namespace != "acme" {
+		t.Errorf("the instance's login Secret is planned for namespace %q, want the instance's own", login.Namespace)
 	}
 	if login.Data[secretKeyUsername] != "acme" || login.Data[secretKeyPassword] == "" {
 		t.Errorf("the instance login Secret must carry username %q and a password; got username %q",
@@ -256,7 +264,7 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 	}
 	byName := map[string]ownedSecret{}
 	for _, s := range planOwnedSecrets(st, set) {
-		byName[s.Name] = s
+		byName[s.Namespace+"/"+s.Name] = s
 	}
 
 	want := map[string]struct {
@@ -266,18 +274,27 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 	}{
 		// Named by the Cluster resources as "<cluster>-app-credentials"; the operator
 		// reads username and password out of a basic-auth Secret.
-		"dc-rdb-app-credentials": {
+		// The shared relational store is the cluster's, in the cluster's namespace.
+		"dc-system/dc-rdb-app-credentials": {
 			keys: []string{"username", "password"}, namespace: "dc-system",
 			typ: "kubernetes.io/basic-auth",
 		},
-		"dc-tsdb-app-credentials": {
-			keys: []string{"username", "password"}, namespace: "dc-system",
+		// The event store is the instance's, and CloudNativePG reads a Cluster's
+		// credentials from the Cluster's own namespace.
+		"acme/dc-tsdb-app-credentials": {
+			keys: []string{"username", "password"}, namespace: "acme",
 			typ: "kubernetes.io/basic-auth",
 		},
-		// Read twice: by the object store's own container, and by the backup
-		// plugin's credential reference, which names these keys explicitly.
-		"dc-object-store-credentials": {
+		// Read by the object store's own container, and by the relational store's
+		// backup plugin, which names these keys explicitly...
+		"dc-system/dc-object-store-credentials": {
 			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: "dc-system",
+			typ: "Opaque",
+		},
+		// ...and by the event store's backup plugin, which resolves the same name in
+		// the event store's namespace.
+		"acme/dc-object-store-credentials": {
+			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: "acme",
 			typ: "Opaque",
 		},
 	}
@@ -305,7 +322,7 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 	}
 
 	// The reload label is likewise a literal the database operator matches on.
-	for _, name := range []string{"dc-rdb-app-credentials", "dc-tsdb-app-credentials"} {
+	for _, name := range []string{"dc-system/dc-rdb-app-credentials", "acme/dc-tsdb-app-credentials"} {
 		if byName[name].Labels["cnpg.io/reload"] != "true" {
 			t.Errorf("%s does not carry cnpg.io/reload=true", name)
 		}
@@ -367,8 +384,14 @@ func TestEveryMintedCredentialIsPlacedSomewhere(t *testing.T) {
 // ...and the counterweight, because "place everything" is only safe while nothing is
 // placed TWICE under a name a different consumer reads. Two Secrets holding one value
 // is two things to rotate and one of them to forget.
+//
+// 🔑 ONE PLACEMENT IS ALLOWED TWICE, BY CONSTRUCTION: the archive credential and the
+// instance's copy of it (instanceArchiveCredential) — same name, same keys, the instance's
+// namespace, written from the same value on every run. The archiver cannot read across
+// namespaces, and a copy derived in the same call cannot be forgotten. Anything else
+// carrying a minted value twice is still refused.
 func TestNoMintedCredentialIsPlacedInTwoSecrets(t *testing.T) {
-	st := &State{}
+	st := &State{Instance: "acme"}
 	set, err := mintNewCredentials(st)
 	if err != nil {
 		t.Fatal(err)
@@ -387,9 +410,13 @@ func TestNoMintedCredentialIsPlacedInTwoSecrets(t *testing.T) {
 		if field == "" {
 			continue
 		}
-		if len(where[field]) > 1 {
-			t.Errorf("one minted value is carried by %v: rotating it means finding all of them",
-				where[field])
+		places := where[field]
+		if len(places) == 2 && strings.HasPrefix(places[1], "acme/") &&
+			strings.TrimPrefix(places[0], "dc-system/") == strings.TrimPrefix(places[1], "acme/") {
+			continue // the cluster's archive credential and the instance's copy of it
+		}
+		if len(places) > 1 {
+			t.Errorf("one minted value is carried by %v: rotating it means finding all of them", places)
 		}
 	}
 }

@@ -122,7 +122,8 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 			"not a topology; nothing can be checked against it", declared)
 	}
 
-	pods, err := natsPods(ctx, typed)
+	ns := instanceNamespace(opts.InstanceId)
+	pods, err := natsPods(ctx, typed, ns)
 	if err != nil {
 		return rep, err
 	}
@@ -132,9 +133,9 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		if len(pods) == 0 {
 			return rep, fmt.Errorf("no NATS pods matched %q in namespace %s, so there is "+
 				"nothing to port-forward to. Pass --nats-url if the broker is reachable "+
-				"another way", natsPodSelector, infraNamespace)
+				"another way", natsPodSelector, ns)
 		}
-		local, stop, err := forwardPort(restCfg, infraNamespace, pods[0].Name, int(cfg.Infrastructure.Nats.Port))
+		local, stop, err := forwardPort(restCfg, ns, pods[0].Name, int(cfg.Infrastructure.Nats.Port))
 		if err != nil {
 			return rep, fmt.Errorf("opening a port-forward to broker pod %s: %w", pods[0].Name, err)
 		}
@@ -146,7 +147,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		if len(pods) == 0 {
 			return rep, fmt.Errorf("--probe-mqtt needs a broker pod to forward to and none was found")
 		}
-		if err := probeMqttVia(restCfg, pods[0].Name, cfg.Infrastructure.Nats); err != nil {
+		if err := probeMqttVia(restCfg, ns, pods[0].Name, cfg.Infrastructure.Nats); err != nil {
 			return rep, err
 		}
 	}
@@ -175,7 +176,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		if err != nil {
 			return replication.Report{}, err
 		}
-		fresh, err := natsPods(ctx, typed)
+		fresh, err := natsPods(ctx, typed, ns)
 		if err != nil {
 			return replication.Report{}, err
 		}
@@ -296,8 +297,8 @@ func deployedAreas(ctx context.Context, typed *kubernetes.Clientset, instanceId 
 }
 
 // natsPods lists the broker pods, for the placement half of the check.
-func natsPods(ctx context.Context, typed *kubernetes.Clientset) ([]corev1.Pod, error) {
-	list, err := typed.CoreV1().Pods(infraNamespace).List(ctx, metav1.ListOptions{
+func natsPods(ctx context.Context, typed *kubernetes.Clientset, namespace string) ([]corev1.Pod, error) {
+	list, err := typed.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: natsPodSelector,
 	})
 	if err != nil {
@@ -343,8 +344,8 @@ const mqttListenerPort = 1883
 // on the same pod, and the probe's tunnel is closed the moment the connection is
 // done, so the broker's MQTT accounting is not left holding a session while the
 // rest of the check runs.
-func probeMqttVia(restCfg *rest.Config, pod string, natscfg config.NatsConfiguration) error {
-	local, stop, err := forwardPort(restCfg, infraNamespace, pod, mqttListenerPort)
+func probeMqttVia(restCfg *rest.Config, namespace, pod string, natscfg config.NatsConfiguration) error {
+	local, stop, err := forwardPort(restCfg, namespace, pod, mqttListenerPort)
 	if err != nil {
 		return fmt.Errorf("opening a port-forward to the MQTT listener on %s: %w", pod, err)
 	}

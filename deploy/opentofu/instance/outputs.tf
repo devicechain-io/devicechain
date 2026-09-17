@@ -1,22 +1,16 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# These endpoints are what the DeviceChain services/Helm values point at. They
-# line up with the chart defaults (e.g. dc-nats.dc-system:4222) so
-# `deploy/helm/devicechain` works against this infra out of the box.
+# These endpoints are what the DeviceChain services/Helm values point at.
 #
-# This is the PER-INSTANCE half — the broker and the event store. The shared half
-# (the relational store, ingress, the operator namespaces) is in the cluster
-# root's outputs, and dcctl reads both.
+# This is the PER-INSTANCE half — the broker and the event store, in the instance's own
+# namespace, so services reach them by short in-namespace names (dc-nats,
+# dc-timescaledb-single). The shared half (the relational store, ingress, the operator
+# namespaces) is in the cluster root's outputs, and dcctl reads both.
 
-# These endpoints are what the DeviceChain services/Helm values point at. They
-# line up with the chart defaults (e.g. dc-nats.dc-system:4222,
-# dc-postgresql.dc-system:5432) so `deploy/helm/devicechain` works against this
-# infra out of the box.
-
-output "namespace" {
-  description = "Namespace the infrastructure was deployed into."
-  value       = var.namespace
+output "instance_namespace" {
+  description = "The instance's own namespace, where its broker and event store run and export their metrics from."
+  value       = var.instance_namespace
 }
 
 output "nats_client_url" {

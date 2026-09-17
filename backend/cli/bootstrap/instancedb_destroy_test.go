@@ -27,7 +27,7 @@ func stubRemoveInstanceDatabase(t *testing.T, fn func(ctx context.Context, kubeC
 }
 
 func anInstanceLoginSecret() *corev1.Secret {
-	return mintedSecret(infraNamespace, "dci-acme-rdb-credentials", testUID,
+	return mintedSecret("acme", "dci-acme-rdb-credentials", testUID,
 		map[string]string{"username": "acme", "password": "pw"})
 }
 
@@ -50,7 +50,7 @@ func TestAnInstanceDestroyDropsItsLoginThroughTheRecordedStore(t *testing.T) {
 	if gotInstance != "acme" || got != aRelationalStore() {
 		t.Errorf("dropped %q through %+v, want acme through the recorded store", gotInstance, got)
 	}
-	if _, err := c.CoreV1().Secrets(infraNamespace).Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the login's Secret survived a successful drop: %v", err)
 	}
@@ -68,27 +68,34 @@ func TestAFailedDropKeepsTheLoginsSecret(t *testing.T) {
 	if err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err == nil {
 		t.Fatal("a failed drop was reported as success")
 	}
-	if _, err := c.CoreV1().Secrets(infraNamespace).Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); err != nil {
 		t.Errorf("the login's Secret was removed although its login was not: %v", err)
 	}
 }
 
-// No login Secret means no login was ever made; the store is not touched. With a Secret
-// but no readable record, the destroy fails rather than guessing where the store is.
-func TestTheDropNeedsALoginAndARecord(t *testing.T) {
+// 🔴 THE STORE IS ASKED WHETHER THERE IS ANYTHING TO DROP, NOT THE SECRET. The Secret is
+// in the instance's namespace, which the uninstall before this deletes — so a destroy
+// re-run after a failed drop finds no Secret, and must still drop. And a cluster whose
+// install record this dcctl cannot read is said and skipped, not guessed at.
+func TestTheDropAsksTheStoreAndNeedsARecord(t *testing.T) {
 	called := false
 	stubRemoveInstanceDatabase(t, func(context.Context, string, string, ClusterRdb) error {
 		called = true
 		return nil
 	})
-	if err := removeInstanceRelationalLogin(context.Background(),
-		fake.NewSimpleClientset(kubeSystem(testClusterUID)), "kind-x", "acme"); err != nil || called {
-		t.Errorf("an instance with no login: err=%v, store touched=%t", err, called)
+	withRecord := fake.NewSimpleClientset(kubeSystem(testClusterUID)) // no login Secret
+	if err := writeInstalled(context.Background(), withRecord, aCompleteInstall(), installClock); err != nil {
+		t.Fatal(err)
 	}
+	if err := removeInstanceRelationalLogin(context.Background(), withRecord, "kind-x", "acme"); err != nil || !called {
+		t.Errorf("an instance whose login Secret is already gone: err=%v, store asked=%t", err, called)
+	}
+
+	called = false
 	if err := removeInstanceRelationalLogin(context.Background(),
-		fake.NewSimpleClientset(kubeSystem(testClusterUID), anInstanceLoginSecret()), "kind-x", "acme"); err == nil || called {
-		t.Errorf("a login with no install record: err=%v, store touched=%t", err, called)
+		fake.NewSimpleClientset(kubeSystem(testClusterUID), anInstanceLoginSecret()), "kind-x", "acme"); err != nil || called {
+		t.Errorf("a cluster with no install record: err=%v, store touched=%t", err, called)
 	}
 }
 
@@ -100,7 +107,7 @@ func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.CoreV1().Secrets(infraNamespace).Delete(context.Background(),
+	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}

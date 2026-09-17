@@ -6,7 +6,7 @@
 module "nats" {
   source = "../modules/nats"
 
-  namespace                = var.namespace
+  namespace                = var.instance_namespace
   chart_version            = var.nats_chart_version
   jetstream_storage        = var.nats_jetstream_storage
   jetstream_max_file_store = var.nats_jetstream_max_file_store
@@ -169,7 +169,7 @@ data "kubernetes_resources" "legacy_db_statefulsets" {
 
   api_version    = "apps/v1"
   kind           = "StatefulSet"
-  namespace      = var.namespace
+  namespace      = var.legacy_namespace
   field_selector = "metadata.name=${each.value.statefulset}"
 }
 
@@ -183,7 +183,7 @@ resource "terraform_data" "cutover_guard" {
       condition     = length(data.kubernetes_resources.legacy_db_statefulsets[each.key].objects) == 0 || each.value.allow
       error_message = <<-EOT
         This cluster still runs the OLD ${each.value.store} StatefulSet
-        (${each.value.statefulset} in ${var.namespace}), and this configuration
+        (${each.value.statefulset} in ${var.legacy_namespace}), and this configuration
         replaces it with a CloudNativePG Cluster.
 
         That store holds ${each.value.holds}.
@@ -205,7 +205,7 @@ resource "terraform_data" "cutover_guard" {
 
           To KEEP it, dump before cutting over:
 
-            kubectl -n ${var.namespace} exec ${each.value.statefulset}-0 -- \
+            kubectl -n ${var.legacy_namespace} exec ${each.value.statefulset}-0 -- \
               ${each.value.dump}
             # then remove the old objects, apply this configuration, and restore
             # into the new Cluster through its service.
@@ -344,7 +344,7 @@ resource "terraform_data" "backup_prerequisite_guard" {
 module "cnpg_tsdb" {
   source = "../modules/cnpg-cluster"
 
-  namespace          = var.namespace
+  namespace          = var.instance_namespace
   name               = "dc-tsdb"
   alias_service_name = "dc-timescaledb-single"
   image              = var.timescale_image

@@ -110,6 +110,12 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
 		return err
 	}
+	// 🔴 AND THE INSTANCE'S OWN NAMESPACE, for the same reason: its credentials, and the
+	// broker and event store built from them, live there. Created carrying the metadata
+	// the instance's Helm release adopts it with, exactly as the Helm step would have.
+	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseNameFor(st.Instance), helmReleaseNamespace); err != nil {
+		return err
+	}
 	if err := writeMintedSecrets(ctx, typed, st); err != nil {
 		return err
 	}
@@ -257,6 +263,12 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 		return openedInstanceRoot{}, err
 	}
 
+	// 🔴 AND THE THIRD: an instance whose broker and event store were built in the
+	// shared namespace, before each instance had its own. Moving them is a replacement.
+	if err := checkInstanceInItsOwnNamespace(ctx, tf, st.Instance); err != nil {
+		return openedInstanceRoot{}, err
+	}
+
 	// Refuse to shrink a broker cluster that is already carrying replicated data.
 	// Reads the CURRENT state, so it must run after Init and before Apply — this is
 	// the only point where both the applied topology and the requested one are known.
@@ -343,15 +355,6 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tfexec.Terraform, va
 			st.Values[databaseBackupsKey] = "true"
 		}
 	}
-	// The namespace the database Clusters run in, which is where their metrics are
-	// exported from. NOT the instance namespace — an alert scoped to the instance's
-	// own namespace selects no series at all.
-	if meta, ok := outputs["namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values[databaseNamespaceKey] = ns
-		}
-	}
 	return nil
 }
 
@@ -366,7 +369,7 @@ const (
 	cnpgNamespaceKey         = "cnpgNamespace"
 )
 
-// databaseNamespaceFor is where the database Clusters export their metrics from.
+// databaseNamespaceFor is where the SHARED relational store exports its metrics from.
 //
 // It falls back to infraNamespace rather than to the empty string, and the
 // difference matters more than a default usually does: an empty namespace label
@@ -395,6 +398,8 @@ func infraVars(st *State) []string {
 		// creates it: every service connects to the database named after the instance
 		// and none of them creates it.
 		"timescale_database=" + st.Instance,
+		// The broker and the event store run in the instance's own namespace.
+		"instance_namespace=" + instanceNamespace(st.Instance),
 	}
 	// The broker's certificate authority, PUBLIC HALF ONLY.
 	//

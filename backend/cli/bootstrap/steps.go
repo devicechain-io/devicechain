@@ -162,7 +162,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// case it serves best. Acting on a wrong answer costs nothing when nothing is
 	// applied.
 	var live liveArchiveState
-	live, err = readLiveArchiveState(ctx, st.KubeContext)
+	live, err = readLiveArchiveState(ctx, st.KubeContext, st.Instance)
 	switch {
 	case err != nil && !st.DryRun:
 		return fail("reading the database archive state", err)
@@ -195,7 +195,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// kept forever expires a year after bootstrap with nothing to re-issue it. That
 	// belongs to the verb that evolves an instance rather than the one that creates
 	// it, and the two answer opposite questions.
-	st.NATSTLS, err = mintNATSTLS(natsReleaseName, infraNamespace, haFor(st.HA).ServerReplicas, time.Now().UTC())
+	st.NATSTLS, err = mintNATSTLS(natsReleaseName, instanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC())
 	if err != nil {
 		return fail("minting the broker's certificate authority", err)
 	}
@@ -262,7 +262,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword,
-			lookupDeployedBrokerHashes(ctx, st.KubeContext, natsStatefulSetName))
+			lookupDeployedBrokerHashes(ctx, st.KubeContext, instanceNamespace(st.Instance), natsStatefulSetName))
 		if err != nil {
 			return fail("reusing the running instance's NATS auth credentials", err)
 		}
@@ -292,7 +292,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := natsauth.CredentialsFromDeployed(
 				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword,
-				lookupDeployedBrokerHashes(ctx, st.KubeContext, natsStatefulSetName))
+				lookupDeployedBrokerHashes(ctx, st.KubeContext, instanceNamespace(st.Instance), natsStatefulSetName))
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")

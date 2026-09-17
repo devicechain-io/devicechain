@@ -16,8 +16,18 @@ variable "kubeconfig_context" {
   default     = ""
 }
 
-variable "namespace" {
-  description = "Namespace for the DeviceChain infrastructure dependencies. Services default to reaching them at <name>.<namespace> (e.g. dc-nats.dc-system)."
+variable "instance_namespace" {
+  description = "The instance's own namespace — the instance id. The broker, the event store and their Secrets live here, so two instances on one cluster share no names and a destroyed instance leaves nothing of its own behind. 🔴 Deliberately NOT named `namespace`: dcctl routes each variable to every root that declares it, and the cluster root's `namespace` is the shared one."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.instance_namespace)) && length(var.instance_namespace) <= 50
+    error_message = "instance_namespace must be the instance id: a DNS-1123 label of at most 50 characters."
+  }
+}
+
+variable "legacy_namespace" {
+  description = "Where an instance built before the CloudNativePG cutover ran its database StatefulSets. Read only by the cutover guard, which refuses to orphan them."
   type        = string
   default     = "dc-system"
 }

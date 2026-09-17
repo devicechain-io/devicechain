@@ -90,7 +90,7 @@ func TestAMalformedAssignmentIsRefused(t *testing.T) {
 // A variable BOTH roots declare goes to both, deliberately — they are two halves of
 // one instance, and a value reaching only one of them means the halves disagree.
 func TestAVariableBothRootsDeclareReachesBoth(t *testing.T) {
-	cluster, instance, err := splitVars([]string{"namespace=dc-system"})
+	cluster, instance, err := splitVars([]string{"kubeconfig_context=kind-acme"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,9 +98,9 @@ func TestAVariableBothRootsDeclareReachesBoth(t *testing.T) {
 		root string
 		got  []string
 	}{{"cluster", cluster}, {"instance", instance}} {
-		if len(tc.got) != 1 || tc.got[0] != "namespace=dc-system" {
-			t.Errorf("the %s root was passed %v, want the shared namespace; the two halves "+
-				"of one instance would disagree about where the infrastructure is", tc.root, tc.got)
+		if len(tc.got) != 1 || tc.got[0] != "kubeconfig_context=kind-acme" {
+			t.Errorf("the %s root was passed %v, want the kube-context; the two halves "+
+				"of one instance would be applied to different clusters", tc.root, tc.got)
 		}
 	}
 }
@@ -215,5 +215,22 @@ func TestARootThatParsesToNoVariablesIsRefused(t *testing.T) {
 func TestARootWithNoVariablesFileIsRefused(t *testing.T) {
 	if _, err := rootDeclaredVars(fstest.MapFS{}); err == nil {
 		t.Error("a root with no variables.tf was accepted as declaring nothing")
+	}
+}
+
+// 🔴 THE TWO NAMESPACES MUST NEVER CROSS. The cluster root's `namespace` is the shared one
+// and the instance root's `instance_namespace` is the instance's; a variable routed by
+// name to both would put the broker and the event store back in the shared namespace, or
+// the shared store in one instance's.
+func TestTheSharedAndInstanceNamespacesGoToTheirOwnRoots(t *testing.T) {
+	cluster, instance, err := splitVars([]string{"namespace=dc-system", "instance_namespace=acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cluster) != 1 || cluster[0] != "namespace=dc-system" {
+		t.Errorf("the cluster root was passed %v, want only the shared namespace", cluster)
+	}
+	if len(instance) != 1 || instance[0] != "instance_namespace=acme" {
+		t.Errorf("the instance root was passed %v, want only its own namespace", instance)
 	}
 }

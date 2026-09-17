@@ -63,7 +63,7 @@ const natsAuthoritySecretName = natsReleaseName + "-ca-keypair"
 func natsAuthoritySecret(releaseName string, m *natsTLSMaterial) ownedSecret {
 	return ownedSecret{
 		Name:      releaseName + "-ca-keypair",
-		Namespace: infraNamespace,
+		Namespace: m.Namespace,
 		Type:      corev1.SecretTypeTLS,
 		Labels: map[string]string{
 			"app.kubernetes.io/name":      releaseName,
@@ -82,7 +82,7 @@ func readNATSAuthority(
 	typed kubernetes.Interface,
 	instance, instanceUID string,
 ) (*x509.Certificate, *rsa.PrivateKey, error) {
-	ref := mintedCredentialRef{infraNamespace, natsAuthoritySecretName, "tls.key"}
+	ref := mintedCredentialRef{instanceNamespace(instance), natsAuthoritySecretName, "tls.key"}
 
 	foundKey, keyPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID), ref)
 	if err != nil {
@@ -98,7 +98,7 @@ func readNATSAuthority(
 	}
 
 	foundCert, certPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID),
-		mintedCredentialRef{infraNamespace, natsAuthoritySecretName, "tls.crt"})
+		mintedCredentialRef{instanceNamespace(instance), natsAuthoritySecretName, "tls.crt"})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +107,7 @@ func readNATSAuthority(
 		// something wrote this object and left it unusable.
 		return nil, nil, fmt.Errorf(
 			"Secret %s/%s holds the broker authority's private key but not its certificate, so "+
-				"no certificate can be signed under it", infraNamespace, natsAuthoritySecretName)
+				"no certificate can be signed under it", instanceNamespace(instance), natsAuthoritySecretName)
 	}
 
 	cert, err := parseFirstCertificate(certPEM)
@@ -201,7 +201,7 @@ func namesMissingFrom(have, wanted []string) []string {
 // happens to roll the StatefulSet, which on a healthy instance may be never, and the
 // certificate would expire anyway with a green renewal in the log.
 func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st *State) error {
-	current, err := typed.CoreV1().Secrets(infraNamespace).Get(
+	current, err := typed.CoreV1().Secrets(instanceNamespace(st.Instance)).Get(
 		ctx, natsReleaseName+"-tls", metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		fmt.Println(color.YellowString(
@@ -214,7 +214,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	replicas := haFor(st.HA).ServerReplicas
-	wanted := natsServerDNSNames(natsReleaseName, infraNamespace, replicas)
+	wanted := natsServerDNSNames(natsReleaseName, instanceNamespace(st.Instance), replicas)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {
 		return err
@@ -244,11 +244,12 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(
-		caCert, caKey, natsReleaseName, infraNamespace, replicas, time.Now().UTC())
+		caCert, caKey, natsReleaseName, instanceNamespace(st.Instance), replicas, time.Now().UTC())
 	if err != nil {
 		return err
 	}
 	material := &natsTLSMaterial{
+		Namespace:   instanceNamespace(st.Instance),
 		CACertPEM:   encodePEM("CERTIFICATE", caCert.Raw),
 		LeafCertPEM: leafCertPEM,
 		LeafKeyPEM:  leafKeyPEM,
@@ -258,7 +259,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return err
 	}
 
-	if err := restartBroker(ctx, typed); err != nil {
+	if err := restartBroker(ctx, typed, instanceNamespace(st.Instance)); err != nil {
 		return err
 	}
 	fmt.Println(color.WhiteString(
@@ -272,16 +273,16 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 // A template annotation, which is what `kubectl rollout restart` does: it changes the
 // pod template, so the StatefulSet controller replaces the pods in order and waits for
 // each to be ready, rather than the pods all going at once.
-func restartBroker(ctx context.Context, typed kubernetes.Interface) error {
+func restartBroker(ctx context.Context, typed kubernetes.Interface, namespace string) error {
 	patch := fmt.Sprintf(
 		`{"spec":{"template":{"metadata":{"annotations":{"devicechain.io/restarted-at":%q}}}}}`,
 		time.Now().UTC().Format(time.RFC3339))
-	_, err := typed.AppsV1().StatefulSets(infraNamespace).Patch(
+	_, err := typed.AppsV1().StatefulSets(namespace).Patch(
 		ctx, natsStatefulSetName, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("restarting the broker so it presents its new certificate: %w. The "+
 			"certificate was written, so restarting %s/%s by hand completes the renewal",
-			err, infraNamespace, natsStatefulSetName)
+			err, namespace, natsStatefulSetName)
 	}
 	return nil
 }
