@@ -138,6 +138,9 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 		{"the instance declarations in this cluster", func() ([]string, error) {
 			return declaredInstances(ctx, dyn)
 		}},
+		// 🔑 Only instances built before each had a namespace of its own left credentials
+		// here; every instance-owned Secret is now in the instance's namespace. Kept, so
+		// such an instance is still named rather than missed.
 		{fmt.Sprintf("the credentials dcctl minted in %s", infraNamespace), func() ([]string, error) {
 			return ownedSecretInstances(ctx, typed)
 		}},

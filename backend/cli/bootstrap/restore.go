@@ -224,7 +224,7 @@ type liveArchiveState struct {
 // lookupDeployedInstance: the branch behind it decides between "keep the path this
 // instance owns" and "retarget a live cluster's WAL archive", and that decision has
 // to be testable without standing up CloudNativePG.
-var readLiveArchiveState = func(ctx context.Context, kubeContext string) (liveArchiveState, error) {
+var readLiveArchiveState = func(ctx context.Context, kubeContext, instance string) (liveArchiveState, error) {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
 		return liveArchiveState{}, fmt.Errorf("building kube config to read the database archive state: %w", err)
@@ -233,7 +233,7 @@ var readLiveArchiveState = func(ctx context.Context, kubeContext string) (liveAr
 	if err != nil {
 		return liveArchiveState{}, err
 	}
-	return readArchiveState(ctx, dyn)
+	return readArchiveState(ctx, dyn, instance)
 }
 
 // readArchiveState is the half of readLiveArchiveState that has no cluster in it:
@@ -246,16 +246,18 @@ var readLiveArchiveState = func(ctx context.Context, kubeContext string) (liveAr
 // OTHER's archive path, so an ordinary re-run retargets the relational archiver at
 // the event store's WAL and vice versa. Both clusters keep archiving, to the wrong
 // prefixes, with no base backup under either.
-func readArchiveState(ctx context.Context, dyn dynamic.Interface) (liveArchiveState, error) {
+func readArchiveState(ctx context.Context, dyn dynamic.Interface, instance string) (liveArchiveState, error) {
 	var out liveArchiveState
 	for _, s := range []struct {
-		name string
-		into *clusterArchiveState
+		namespace string
+		name      string
+		into      *clusterArchiveState
 	}{
-		{RdbClusterName, &out.Rdb},
-		{TsdbClusterName, &out.Tsdb},
+		// The relational store is the cluster's; the event store is the instance's.
+		{infraNamespace, RdbClusterName, &out.Rdb},
+		{instanceNamespace(instance), TsdbClusterName, &out.Tsdb},
 	} {
-		st, err := clusterArchivePath(ctx, dyn, infraNamespace, s.name)
+		st, err := clusterArchivePath(ctx, dyn, s.namespace, s.name)
 		if err != nil {
 			return liveArchiveState{}, err
 		}

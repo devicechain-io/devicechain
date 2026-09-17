@@ -203,10 +203,11 @@ missing is the background work. That store answers queries perfectly for as long
 takes the disk to fill.
 
 Open a shell on the event store's primary — under the operator, `psql` needs no
-password there:
+password there. The event store runs in the instance's own namespace, and its database is
+named after the instance:
 
 ```bash
-kubectl -n dc-system exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d devicechain
+kubectl -n <instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
 Ask it two questions. **First, are the event tables still hypertables?**
@@ -248,8 +249,11 @@ sits waiting rather than failing, so check the database itself before you believ
 restore:
 
 ```bash
-kubectl -n dc-system get clusters.postgresql.cnpg.io
+kubectl get clusters.postgresql.cnpg.io --all-namespaces
 ```
+
+The relational database (`dc-rdb`) is in `dc-system`; the event store (`dc-tsdb`) is in the
+instance's own namespace.
 
 You are looking for `Cluster in healthy state`. A cluster stuck in `Setting up
 primary` has not recovered — most often the archive is unreachable, or

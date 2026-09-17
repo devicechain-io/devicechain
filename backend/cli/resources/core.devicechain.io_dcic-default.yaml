@@ -8,7 +8,7 @@ spec:
       Metrics:
         Enabled: true
       Nats:
-        Hostname: dc-nats.dc-system
+        Hostname: dc-nats
         Port: 4222
         StreamReplicas: 1
       UserManagement:
@@ -28,7 +28,7 @@ spec:
         Type: postgres95
       Tsdb:
         Configuration:
-          hostname: dc-timescaledb-single.dc-system
+          hostname: dc-timescaledb-single
           maxConnections: 5
           password: devicechain
           port: 5432

@@ -971,7 +971,8 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 	return &InstanceConfiguration{
 		Infrastructure: InfrastructureConfiguration{
 			Nats: NatsConfiguration{
-				Hostname:           "dc-nats.dc-system",
+				// In the instance's own namespace, beside the services that dial it.
+				Hostname:           "dc-nats",
 				Port:               4222,
 				StreamReplicas:     1,
 				StreamMaxBytes:     DefaultStreamMaxBytes,
@@ -1033,7 +1034,8 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			Tsdb: DatastoreConfiguration{
 				Type: "timescaledb",
 				Configuration: map[string]interface{}{
-					"hostname": "dc-timescaledb-single.dc-system",
+					// The instance's own event store, in its namespace.
+					"hostname": "dc-timescaledb-single",
 					"port":     5432,
 					// The event store runs as a CloudNativePG Cluster (ADR-020
 					// A2.4), where the application role is distinct from the

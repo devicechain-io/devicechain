@@ -110,6 +110,12 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
 		return err
 	}
+	// 🔴 AND THE INSTANCE'S OWN NAMESPACE, for the same reason: its credentials, and the
+	// broker and event store built from them, live there. Created carrying the metadata
+	// the instance's Helm release adopts it with, exactly as the Helm step would have.
+	if err := ensureNamespaceForRelease(ctx, typed, st.Instance, helmReleaseNameFor(st.Instance), helmReleaseNamespace); err != nil {
+		return err
+	}
 	if err := writeMintedSecrets(ctx, typed, st); err != nil {
 		return err
 	}
@@ -257,6 +263,12 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 		return openedInstanceRoot{}, err
 	}
 
+	// 🔴 AND THE THIRD: an instance whose broker and event store were built in the
+	// shared namespace, before each instance had its own. Moving them is a replacement.
+	if err := checkInstanceInItsOwnNamespace(ctx, tf, st.Instance); err != nil {
+		return openedInstanceRoot{}, err
+	}
+
 	// Refuse to shrink a broker cluster that is already carrying replicated data.
 	// Reads the CURRENT state, so it must run after Init and before Apply — this is
 	// the only point where both the applied topology and the requested one are known.
@@ -343,15 +355,6 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tfexec.Terraform, va
 			st.Values[databaseBackupsKey] = "true"
 		}
 	}
-	// The namespace the database Clusters run in, which is where their metrics are
-	// exported from. NOT the instance namespace — an alert scoped to the instance's
-	// own namespace selects no series at all.
-	if meta, ok := outputs["namespace"]; ok {
-		var ns string
-		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
-			st.Values[databaseNamespaceKey] = ns
-		}
-	}
 	return nil
 }
 
@@ -364,9 +367,12 @@ const (
 	databaseNamespaceKey     = "databaseNamespace"
 	databaseBackupOffsiteKey = "databaseBackupOffsite"
 	cnpgNamespaceKey         = "cnpgNamespace"
+	// mqttNodePortHolderKey is the namespace of another instance already holding the
+	// local MQTT node port, set by the render step. Empty means this instance may take it.
+	mqttNodePortHolderKey = "mqttNodePortHolder"
 )
 
-// databaseNamespaceFor is where the database Clusters export their metrics from.
+// databaseNamespaceFor is where the SHARED relational store exports its metrics from.
 //
 // It falls back to infraNamespace rather than to the empty string, and the
 // difference matters more than a default usually does: an empty namespace label
@@ -395,6 +401,8 @@ func infraVars(st *State) []string {
 		// creates it: every service connects to the database named after the instance
 		// and none of them creates it.
 		"timescale_database=" + st.Instance,
+		// The broker and the event store run in the instance's own namespace.
+		"instance_namespace=" + instanceNamespace(st.Instance),
 	}
 	// The broker's certificate authority, PUBLIC HALF ONLY.
 	//
@@ -437,19 +445,25 @@ func infraVars(st *State) []string {
 		vars = append(vars,
 			"ingress_use_host_port=true",
 			"monitoring_slim=true",
-			// Expose MQTT as a NodePort on the port the embedded kind config maps
-			// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),
-			// so a device/tool on the host reaches the broker at ssl://127.0.0.1:1883
-			// out of the box — the same host-port treatment :80/:443 already get.
-			// Cloud leaves this 0 (ClusterIP only); a NodePort there would publish
-			// MQTT on every node IP. The gate is looksLocal — the same context-NAME
-			// heuristic that already sets ingress_use_host_port above, so a
-			// false-positive here also visibly breaks ingress (a louder signal); and
-			// the broker still terminates TLS + runs the auth callout, so an exposed
-			// listener is not an open relay. A provider-based gate would be a stronger
-			// signal than the name if this heuristic is ever tightened.
-			"nats_mqtt_node_port=31883",
 		)
+		// Expose MQTT as a NodePort on the port the embedded kind config maps
+		// host 1883 to (deploy/local/kind-cluster.yaml: host 1883 -> node 31883),
+		// so a device/tool on the host reaches the broker at ssl://127.0.0.1:1883
+		// out of the box — the same host-port treatment :80/:443 already get.
+		// Cloud leaves this 0 (ClusterIP only); a NodePort there would publish
+		// MQTT on every node IP. The gate is looksLocal — the same context-NAME
+		// heuristic that already sets ingress_use_host_port above, so a
+		// false-positive here also visibly breaks ingress (a louder signal); and
+		// the broker still terminates TLS + runs the auth callout, so an exposed
+		// listener is not an open relay. A provider-based gate would be a stronger
+		// signal than the name if this heuristic is ever tightened.
+		//
+		// 🔴 ONLY ONE INSTANCE PER CLUSTER CAN HAVE IT: a node port is cluster-wide, and
+		// an apply asking for one another Service holds fails. The first instance keeps
+		// it; the others get none, and the render step says so.
+		if st.Values[mqttNodePortHolderKey] == "" {
+			vars = append(vars, fmt.Sprintf("nats_mqtt_node_port=%d", localMQTTNodePort))
+		}
 	}
 	// The observability stack is default-on (like Postgres/Timescale); --no-monitoring
 	// skips it for a cluster that already has the Prometheus Operator.

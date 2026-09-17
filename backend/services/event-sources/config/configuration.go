@@ -239,7 +239,7 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 				Id:   "mqtt1",
 				Type: "mqtt",
 				Configuration: map[string]string{
-					"host": "dc-nats.dc-system",
+					"host": "dc-nats",
 					"port": "1883",
 					// Device-plane topic (ADR-006): "{instanceId}/{tenant}/...". The
 					// first level is the instance id and the second carries the tenant

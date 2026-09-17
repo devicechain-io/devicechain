@@ -78,6 +78,11 @@ rules` would both pass this file with every rule silently wrong.
 {{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.databaseBackups }}
 {{- $ns := .Values.instance.id }}
 {{- $dbns := .Values.metrics.databaseNamespace }}
+{{- /* The relational store is the cluster's, in the shared namespace; the event store is
+this instance's own, in the instance namespace. Every database series is selected across
+both — and only both, so another instance's event store never raises this instance's
+alerts. The object store stays in the shared namespace alone. */}}
+{{- $dbsel := printf "%s|%s" $dbns .Values.instance.id }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -110,11 +115,11 @@ spec:
         - alert: PostgresWALArchivingNotConfigured
           expr: |
             group by (namespace, pod) (
-              cnpg_pg_stat_archiver_archived_count{namespace="{{ $dbns }}"}
+              cnpg_pg_stat_archiver_archived_count{namespace=~"{{ $dbsel }}"}
             )
             unless
             group by (namespace, pod) (
-              barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="{{ $dbns }}"}
+              barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"{{ $dbsel }}"}
             )
           for: 15m
           labels:
@@ -143,9 +148,9 @@ spec:
         - alert: PostgresWALArchivingFailing
           expr: |
             (
-              cnpg_pg_stat_archiver_last_failed_time{namespace="{{ $dbns }}"}
+              cnpg_pg_stat_archiver_last_failed_time{namespace=~"{{ $dbsel }}"}
               -
-              cnpg_pg_stat_archiver_last_archived_time{namespace="{{ $dbns }}"}
+              cnpg_pg_stat_archiver_last_archived_time{namespace=~"{{ $dbsel }}"}
             ) > 1
           for: 5m
           labels:
@@ -175,7 +180,7 @@ spec:
         # in it means the first archive never happened.
         - alert: PostgresHasNeverArchivedWAL
           expr: |
-            cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="{{ $dbns }}"} == -1
+            cnpg_pg_stat_archiver_seconds_since_last_archival{namespace=~"{{ $dbsel }}"} == -1
           for: 1h
           labels:
             severity: critical
@@ -203,7 +208,7 @@ spec:
             (
               time()
               -
-              barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="{{ $dbns }}"}
+              barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"{{ $dbsel }}"}
             ) > 129600
           for: 30m
           labels:

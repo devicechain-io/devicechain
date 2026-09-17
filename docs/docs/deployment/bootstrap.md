@@ -59,36 +59,31 @@ already live, so `--allow-legacy-db-removal` is carved out of the refusal in ste
 as this one. Nothing else is.
 :::
 
-**One instance per cluster.** `dcctl` installs one DeviceChain instance into a cluster,
-and step 4 is what says so. Almost everything a bootstrap applies is a cluster-wide
-singleton — the operator's own Deployment and the infrastructure releases behind the
-ingress controller, cert-manager and the CloudNativePG operator — so a second instance
-does not sit beside the first one. Its own Helm release is named after the instance and
-would not collide; everything around that release would. It installs this run's operator
-over the one already running, adopts the shared infrastructure into a second OpenTofu
-state, and mints database, broker and root-key credentials over the ones the instance
-that is there is authenticating with. Step 4 asks the cluster what it already holds and
-stops before any of that, naming the instance it found and the artifact it read that from.
-There are three things to do instead:
+**Several instances on one cluster.** A cluster can hold more than one DeviceChain
+instance. Each instance's services, its broker (NATS), its event store (TimescaleDB) and
+its credentials live in a namespace named after the instance, and each instance connects
+to the shared relational database with a login of its own that owns exactly one database —
+so no instance can reach another's data. What instances share are the cluster's
+prerequisites: the ingress controller, cert-manager, the CloudNativePG operator,
+monitoring, the relational database and the backup object store. The first bootstrap on a
+cluster installs them; later ones reuse them.
 
-- **Move the instance that is there onto a new version** — `dcctl upgrade` is the verb for
-  an instance that already exists, and it mints nothing.
-- **Build this one in a cluster of its own** — bootstrap it into a new local cluster, or
-  point it at a different one with `--kube-context`.
-- **Replace what is there with this one** — `dcctl destroy` the instance that is holding
-  the cluster, then bootstrap again. That takes its data with it.
+Two things on a cluster can belong to only one instance, and the bootstrap handles both:
 
-The refusal prints all three as commands, with your own instance and provider names
-filled in, so it can be acted on without coming back here.
+- **The ingress host.** An ingress controller given two instances on one host serves only
+  one of them, silently. A bootstrap whose host another instance already serves is
+  refused; give each instance its own `--host` (on a local cluster, for example
+  `--host beta.localhost`).
+- **The local MQTT port.** On a local cluster, port 1883 on your machine reaches the broker
+  of the first instance only. Later instances' brokers are reachable from inside the
+  cluster, and the bootstrap says so when it happens.
 
-It is not the step 3 refusal and the two do not overlap. That one recognises *this*
-instance and stops a rebuild of it; this one asks whether anything **else** is here, so a
-re-run aimed at the instance that is already there keeps meeting the message written for
-it. A cluster that cannot say what it holds is an error rather than an empty cluster.
-And because this refusal can only fire against a cluster `dcctl` did not create, it is
-the one bootstrap failure that leaves nothing behind at all: the local record the run
-wrote before it started is put back the way it was, so `dcctl instances list` does not
-grow an entry for an instance that was never installed.
+Instance names are lowercase letters, digits and `-`, at most 50 characters, because the
+name is also the instance's namespace, its database and that database's login.
+
+An instance built before instances had namespaces of their own runs its broker and event
+store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
+refuses such an instance and says to destroy it and bootstrap it again.
 
 The steps below are the ones the run prints as it goes (`[5/12] Install core
 components`), so a failure names a step you can find here:
@@ -109,17 +104,11 @@ components`), so a failure names a step you can find here:
    this one writes to a cluster that may already be running the instance it would be writing
    over.
    A dry run says what a real run would refuse rather than hiding it.
-4. **Refuse a second instance** — ask the cluster whether it is already holding a
-   *different* instance, and stop if it is. It is the other half of the same edge as the
-   step above, asking the opposite question: not "is this instance already here" but "is
-   anything else here". The two read different artifacts and cannot both fire — one keys
-   on finding this instance, the other on finding another. This one takes the first
-   answer it gets from the instance declarations in the cluster, then the credentials
-   `dcctl` minted into `dc-system`, then the DeviceChain Helm releases the cluster holds,
-   asked in that order because it is the order a bootstrap writes them: a run that died
-   partway through is answered by whatever it did get to. A dry run says what a real run
-   would refuse, and says so even when it could not reach the cluster to ask. See **One
-   instance per cluster** above.
+4. **Check what other instances hold** — ask the cluster which ingress host and local MQTT
+   port other instances already hold, and stop if this instance's host is one of them. It
+   runs before anything is written, so a refusal leaves nothing behind; a local MQTT port
+   another instance holds does not stop the run, and is reported. A dry run says what a real
+   run would refuse. See **Several instances on one cluster** above.
 5. **Install core components** — render the operator (CRDs + RBAC + controller) and
    apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
    because the definition of an instance has to exist in the cluster before anything can
@@ -142,19 +131,23 @@ components`), so a failure names a step you can find here:
    simply running it again — the broker is configured before the instance is, and its
    credentials cannot be recovered from the cluster once they are in it. The root key is additionally escrowed to an encrypted file you keep;
    see [Disaster Recovery](./disaster-recovery.md).
-8. **Apply infrastructure** — `tofu apply` the embedded OpenTofu config (NATS,
-   PostgreSQL, TimescaleDB, NGINX ingress, cert-manager, the CloudNativePG
-   operator and its Barman Cloud backup plugin, and the object store the backup
-   plugin archives to) via
-   [terraform-exec](https://github.com/hashicorp/terraform-exec). State is kept in
-   `~/.devicechain/instances/<instance>/infra`, so subsequent runs are incremental.
+8. **Apply infrastructure** — `tofu apply` the embedded OpenTofu configuration via
+   [terraform-exec](https://github.com/hashicorp/terraform-exec), in two parts. First the
+   cluster's shared prerequisites — NGINX ingress, cert-manager, the CloudNativePG operator
+   and its Barman Cloud backup plugin, monitoring, the relational database and the object
+   store the backup plugin archives to — with state kept in
+   `~/.devicechain/clusters/<cluster-id>/infra`, so a second instance on the same cluster
+   reuses them rather than installing them again. Then this instance's own login and
+   database on the relational database, and its own broker (NATS) and event store
+   (TimescaleDB) in its namespace, with state kept in
+   `~/.devicechain/instances/<instance>/infra`. Subsequent runs are incremental.
 9. **Install instance (Helm)** — write the instance's **configuration document** — the one
    every service reads its credentials and endpoints from — and then deploy the Helm chart
    via the Helm Go SDK, blocking until the workloads are ready. That document is what makes
    the instance live, and what step 3 looks for on any later run.
 10. **Seed admin credential** — the superuser credential is seeded by the
-    user-management service on first start; this step settles the values the final report
-    prints.
+   user-management service on first start; this step settles the values the final report
+   prints.
 11. **Wait for readiness** — poll each enabled area's Deployment until it has finished
     rolling onto the configuration this run produced, as an explicit confirmation gate
     rather than trusting the Helm step's own wait. Having replicas available is not

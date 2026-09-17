@@ -167,6 +167,9 @@ func writeInstalled(ctx context.Context, typed kubernetes.Interface, rec Install
 // ErrNotInstalled is returned when a cluster has no usable install record.
 var ErrNotInstalled = errors.New("the cluster prerequisites are not installed")
 
+// ErrInstallRecordSchema is a record written by a dcctl that reads a different schema.
+var ErrInstallRecordSchema = errors.New("the install record is from a different dcctl")
+
 // readInstallRecord returns this cluster's install record, or an error saying exactly
 // why there is not a usable one.
 //
@@ -208,8 +211,8 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 	case r.Schema != installRecordSchema:
 		// Newer or older than this dcctl knows. Guessing at the fields would read a
 		// record whose meaning changed as if it had not.
-		return fmt.Errorf("the install record is schema %d and this dcctl reads schema %d; "+
-			"use the dcctl that installed this cluster", r.Schema, installRecordSchema)
+		return fmt.Errorf("%w: the install record is schema %d and this dcctl reads schema %d; "+
+			"use the dcctl that installed this cluster", ErrInstallRecordSchema, r.Schema, installRecordSchema)
 	case r.Phase == installPhaseApplying:
 		return fmt.Errorf("%w: an install of this cluster started and did not finish, so the "+
 			"prerequisites may be half-applied. Re-run the install", ErrNotInstalled)

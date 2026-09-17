@@ -62,15 +62,18 @@ apply rather than a surprise — but it is why the limit exists.
 **1. Create a Kubernetes Secret with the password.** The platform never mints or stores this
 credential; you own it, and the database is reconciled to match it.
 
+The Secret goes in the instance's own namespace — the instance id — beside the event store
+that reads it:
+
 ```bash
 kubectl create secret generic analytics-acme-credentials \
-  --namespace dc-system \
+  --namespace <instance-id> \
   --type kubernetes.io/basic-auth \
   --from-literal=username=analytics_acme \
   --from-literal=password="$(openssl rand -base64 24)"
 
 kubectl label secret analytics-acme-credentials \
-  --namespace dc-system cnpg.io/reload=true
+  --namespace <instance-id> cnpg.io/reload=true
 ```
 
 :::warning The label is what makes rotation work
@@ -171,7 +174,7 @@ From outside the cluster, expose the store the way you expose any other database
 for a one-off, or a proper ingress with TLS for a standing connection. For a quick check:
 
 ```bash
-kubectl port-forward -n dc-system svc/dc-timescaledb-single 5432:5432
+kubectl port-forward -n <instance-id> svc/dc-timescaledb-single 5432:5432
 psql "postgres://analytics_acme@localhost:5432/<instance-id>" \
   -c "SELECT device_token, name, bucket, sum_value / count_value AS avg
       FROM analytics.measurement_rollups

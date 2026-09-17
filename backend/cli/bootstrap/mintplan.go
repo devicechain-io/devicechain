@@ -193,7 +193,7 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			// This instance's own login. No database operator reads it — dcctl sets
 			// the role's password from it — so it carries no reload label.
 			Name:      instanceRdbSecretName(st.Instance),
-			Namespace: infraNamespace,
+			Namespace: instanceNamespace(st.Instance),
 			Type:      corev1.SecretTypeBasicAuth,
 			Labels: map[string]string{
 				"app.kubernetes.io/component": "database",
@@ -204,8 +204,10 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			},
 		},
 		{
+			// The event store is the instance's, in the instance's namespace, and
+			// CloudNativePG reads a Cluster's credentials from its own namespace.
 			Name:      tsdbClusterName + "-app-credentials",
-			Namespace: infraNamespace,
+			Namespace: instanceNamespace(st.Instance),
 			Type:      corev1.SecretTypeBasicAuth,
 			Labels:    dbLabels(tsdbClusterName),
 			Data: map[string]string{
@@ -243,11 +245,12 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 	if databaseBackupsEnabled(st) && backupsAreExternal(st) {
 		// Supplied, not minted — see BackupDestination. It is written through the same
 		// writer as everything else, because ownership is about who writes the object.
-		out = append(out, backupCredentialsSecret(st.BackupDestination))
+		archive := backupCredentialsSecret(st.BackupDestination)
+		out = append(out, archive, instanceArchiveCredential(st, archive))
 	}
 
 	if databaseBackupsEnabled(st) && !backupsAreExternal(st) {
-		out = append(out, ownedSecret{
+		archive := ownedSecret{
 			Name:      objectStoreName + "-credentials",
 			Namespace: infraNamespace,
 			Type:      corev1.SecretTypeOpaque,
@@ -261,10 +264,36 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 				keyMinioUser:     set.ObjectStoreUser,
 				keyMinioPassword: set.ObjectStoreSecret,
 			},
-		})
+		}
+		out = append(out, archive, instanceArchiveCredential(st, archive))
 	}
 
 	return out
+}
+
+// instanceArchiveCredential is the instance's own copy of the cluster's archive
+// credential, in the instance's namespace.
+//
+// 🔴 A COPY, BECAUSE THE ARCHIVER CANNOT READ ACROSS NAMESPACES. The event store's
+// backup object names its credentials Secret by name alone, and resolves it in the
+// namespace the event store runs in — the instance's. The destination is the cluster's
+// and so is the credential; this is where the instance's archiver can reach it. Same
+// name and same keys, so the archive contract read back from the cluster root describes
+// the copy as exactly as it describes the original.
+//
+// 🔴 WRITTEN WHEN THE INSTANCE IS BUILT, AND NOT AGAIN. Credentials are written by the
+// bootstrap, and an upgrade writes none; so a cluster archive credential rotated later
+// does not reach an existing instance's copy on its own — the copy has to be rewritten
+// with it.
+func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
+	copied := cluster
+	copied.Namespace = instanceNamespace(st.Instance)
+	copied.Scope = ownerInstance
+	copied.Data = make(map[string]string, len(cluster.Data))
+	for k, v := range cluster.Data {
+		copied.Data[k] = v
+	}
+	return copied
 }
 
 // resolveCredentials settles every credential this run needs: REUSED where the
@@ -328,14 +357,14 @@ func resolveCredentials(
 			infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword,
 		}, ownerCluster, rdbClusterName, live.Rdb.Exists},
 		{&set.TSDBPassword, mintedCredentialRef{
-			infraNamespace, tsdbClusterName + "-app-credentials", secretKeyPassword,
+			instanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword,
 		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists},
 	} {
 		found, reused, err := reuseMintedCredential(ctx, typed, ownerFor(c.scope, st), c.ref)
 		if err != nil {
 			return nil, err
 		}
-		if err := refuseUnrecoverableDatabaseCredential(c.exists, found, c.cluster, c.ref.Name); err != nil {
+		if err := refuseUnrecoverableDatabaseCredential(c.exists, found, c.cluster, c.ref); err != nil {
 			return nil, err
 		}
 		if found == reuseRecovered {
@@ -352,7 +381,7 @@ func resolveCredentials(
 			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
 		}, ownerCluster},
 		{&set.RDBInstancePassword, mintedCredentialRef{
-			infraNamespace, instanceRdbSecretName(st.Instance), secretKeyPassword,
+			instanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
 		}, ownerInstance},
 	} {
 		// reuseForeign keeps the minted value: the writer refuses that Secret by name.

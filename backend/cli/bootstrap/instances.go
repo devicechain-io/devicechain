@@ -256,9 +256,9 @@ func WriteInstanceRecord(rec InstanceRecord) error {
 // Split out because PriorLocalState.Restore puts a record BACK, and a rollback written
 // the non-atomic way would reintroduce the torn-write failure on the one path whose
 // whole job is leaving the disk in a state somebody can trust. The cluster record in
-// cluster_identity.go is written through it too — every local record dcctl keeps is one
-// a half-write turns into a refusal, and a refusal is what sends a caller back to
-// guessing.
+// cluster_identity.go is written through it too —
+// every local record dcctl keeps is one a half-write turns into a refusal, and a refusal
+// is what sends a caller back to guessing.
 func writeRecordFile(dir, name string, contents []byte) error {
 	path := filepath.Join(dir, name)
 	tmp, err := os.CreateTemp(dir, name+".*.tmp")
@@ -295,14 +295,13 @@ func writeRecordFile(dir, name string, contents []byte) error {
 // `dcctl bootstrap` records the instance→cluster binding BEFORE the pipeline starts, and
 // deliberately keeps it on every failure: the cluster may already be up by then, and a
 // cluster nothing can name is the orphan the record exists to prevent. That reasoning
-// holds for every failure except one. The second-instance refusal (ErrSecondInstance)
-// can only fire against a cluster that ALREADY held an instance, and a cluster that
-// already held an instance is one EnsureCluster adopted rather than created — it creates
-// only when no context of that name exists, and a cluster it has just created holds
-// nothing to refuse over. So on that one refusal the record this run wrote describes
-// nothing, and left behind it is a phantom: `dcctl instances list` prints it, and
-// `dcctl destroy` cannot clear it, because a destroy refusal returns before
-// removeInstanceState.
+// holds for every failure except one. The refusal of a host another instance already
+// serves (ErrHostTaken) can only fire against a cluster that ALREADY held an instance, and
+// a cluster that already held an instance is one EnsureCluster adopted rather than created
+// — it creates only when no context of that name exists, and a cluster it has just created
+// holds nothing to refuse over. It also fires before anything is written. So on that one
+// refusal the record this run wrote describes nothing, and left behind it is a phantom:
+// `dcctl instances list` prints an instance that was never built.
 //
 // 🔴 IT RESTORES RATHER THAN DELETES, AND THE DIFFERENCE IS A REAL INSTANCE.
 // WriteInstanceRecord REPLACES, so a run that names an instance which already exists

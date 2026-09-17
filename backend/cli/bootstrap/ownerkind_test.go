@@ -42,7 +42,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"dc-system/dc-tsdb-app-credentials", "dc-system/dci-acme-rdb-credentials"},
+			[]string{"acme/dc-object-store-credentials", "acme/dc-tsdb-app-credentials", "acme/dci-acme-rdb-credentials"},
 		},
 		{
 			"backups to an object store the operator owns",
@@ -60,7 +60,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"dc-system/dc-tsdb-app-credentials", "dc-system/dci-acme-rdb-credentials"},
+			[]string{"acme/dc-backup-credentials", "acme/dc-tsdb-app-credentials", "acme/dci-acme-rdb-credentials"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -327,11 +327,11 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("devicechain"), "password": []byte("rdb-in-use")}),
 		clusterOwnedSecret("dc-object-store-credentials", testClusterUID, map[string][]byte{
 			"MINIO_ROOT_USER": []byte("os-user-in-use"), "MINIO_ROOT_PASSWORD": []byte("os-secret-in-use")}),
-		mintedSecret(infraNamespace, "dc-tsdb-app-credentials", testUID, map[string]string{
+		mintedSecret("acme", "dc-tsdb-app-credentials", testUID, map[string]string{
 			"username": "devicechain", "password": "tsdb-in-use"}),
 		clusterOwnedSecret("dc-rdb-provisioner-credentials", testClusterUID, map[string][]byte{
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
-		mintedSecret(infraNamespace, "dci-acme-rdb-credentials", testUID, map[string]string{
+		mintedSecret("acme", "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
 	)
 	live := liveArchiveState{Rdb: clusterArchiveState{Exists: true}, Tsdb: clusterArchiveState{Exists: true}}

@@ -1,0 +1,151 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package bootstrap
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/fatih/color"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// localMQTTNodePort is the node port the local kind configuration maps host 1883 to
+// (deploy/local/kind-cluster.yaml). One cluster has one of it.
+const localMQTTNodePort = 31883
+
+// clusterSingletons are the things on a cluster only one instance can hold: the local MQTT
+// node port, and an ingress host. Everything else an instance runs is in its own
+// namespace; these are cluster-wide by Kubernetes' own rules.
+type clusterSingletons struct {
+	// MQTTNodePortHolder is the namespace of a Service already holding localMQTTNodePort,
+	// other than this instance's own. Empty when the port is free for this instance.
+	MQTTNodePortHolder string
+	// HostHolder is the namespace of an Ingress already serving this instance's host,
+	// other than this instance's own. Empty when no other instance serves it.
+	HostHolder string
+}
+
+// readClusterSingletons is the render step's read of what other instances already hold.
+// Indirected, like the step's other cluster reads, so the decision can be exercised
+// without one.
+var readClusterSingletons = func(ctx context.Context, kubeContext, instance, host string) (clusterSingletons, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return clusterSingletons{}, fmt.Errorf("connecting to the cluster to see what other instances hold: %w", err)
+	}
+	svcs, err := typed.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return clusterSingletons{}, fmt.Errorf("listing Services to see whether the MQTT node port is taken: %w", err)
+	}
+	ings, err := typed.NetworkingV1().Ingresses(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return clusterSingletons{}, fmt.Errorf("listing Ingresses to see whether host %q is taken: %w", host, err)
+	}
+	return singletonsFrom(svcs.Items, ings.Items, instance, host), nil
+}
+
+// singletonsFrom is readClusterSingletons' decision, with no cluster in it.
+func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, instance, host string) clusterSingletons {
+	var out clusterSingletons
+	own := instanceNamespace(instance)
+	for _, s := range svcs {
+		if s.Namespace == own {
+			continue
+		}
+		for _, p := range s.Spec.Ports {
+			if p.NodePort == localMQTTNodePort {
+				out.MQTTNodePortHolder = s.Namespace
+			}
+		}
+	}
+	for _, ing := range ings {
+		if ing.Namespace == own {
+			continue
+		}
+		for _, r := range ing.Spec.Rules {
+			if r.Host == host {
+				out.HostHolder = ing.Namespace
+			}
+		}
+	}
+	return out
+}
+
+// refuseAHostAnotherInstanceServes stops a bootstrap whose ingress host is already
+// another instance's.
+//
+// 🔴 THE INGRESS CONTROLLER DOES NOT REFUSE THIS; IT PICKS ONE. Two Ingress objects
+// claiming the same host on one class are both accepted, and the controller serves one
+// of them — so the second instance's console and API routes quietly never answer, or
+// quietly replace the first's. Neither instance reports anything wrong.
+func refuseAHostAnotherInstanceServes(held clusterSingletons, instance, host string) error {
+	if held.HostHolder == "" {
+		return nil
+	}
+	return &ErrHostTaken{Instance: instance, Host: host, Holder: held.HostHolder}
+}
+
+// ErrHostTaken is the refusal of a host another instance serves. Typed, because the
+// command layer undoes the local record this run wrote on exactly this refusal: it fires
+// before anything is written, so that record describes an instance that was never built.
+// See PriorLocalState.
+type ErrHostTaken struct {
+	Instance string
+	Host     string
+	Holder   string
+}
+
+func (e *ErrHostTaken) Error() string {
+	return fmt.Sprintf("host %q is already served by the instance in namespace %q, and an ingress "+
+		"controller given two instances on one host serves only one of them — silently. Bootstrap %q "+
+		"on a host of its own with --host (for a local cluster, e.g. --host %s.localhost)",
+		e.Host, e.Holder, e.Instance, e.Instance)
+}
+
+// stepCheckClusterSingletons asks what other instances on this cluster already hold, and
+// refuses a host one of them serves.
+//
+// 🔴 BEFORE ANYTHING IS WRITTEN. It sits right after the rebuild refusal, ahead of the
+// operator install and the instance declaration: a refusal after those would leave a
+// declaration for an instance that was never built, and the cluster would report holding
+// it. The node port is not refused — the instance is built without it — but it is decided
+// here, from the same read, and said.
+func stepCheckClusterSingletons(ctx context.Context, st *State) error {
+	if st.Values == nil {
+		st.Values = map[string]string{}
+	}
+	host := ingressHostFor(st)
+	if st.DryRun {
+		// A rehearsal is often aimed at a cluster that does not exist yet, so the read is
+		// best-effort — and what a real run would refuse is still said.
+		held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
+		switch {
+		case err != nil:
+			wouldDo(fmt.Sprintf("could not check whether another instance serves host %q (%v); a real run would", host, err))
+		case refuseAHostAnotherInstanceServes(held, st.Instance, host) != nil:
+			wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
+		}
+		return nil
+	}
+
+	doing("checking what other instances on this cluster hold")
+	held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
+	if err != nil {
+		return fail("checking what other instances on this cluster hold", err)
+	}
+	if err := refuseAHostAnotherInstanceServes(held, st.Instance, host); err != nil {
+		return err
+	}
+	done()
+	if held.MQTTNodePortHolder != "" {
+		st.Values[mqttNodePortHolderKey] = held.MQTTNodePortHolder
+		fmt.Printf("  %s\n", color.WhiteString(fmt.Sprintf("MQTT node port %d is held by the instance in "+
+			"namespace %q, so this instance's broker is reachable in-cluster only", localMQTTNodePort, held.MQTTNodePortHolder)))
+	}
+	return nil
+}

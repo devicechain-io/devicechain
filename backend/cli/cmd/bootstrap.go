@@ -445,13 +445,7 @@ var bootstrapCmd = &cobra.Command{
 		// A failure to record is a WARNING, not a stop. The cluster is already up; making
 		// a bookkeeping error abort a bring-up would trade a recoverable annoyance
 		// (destroy falls back to the guess, loudly) for a broken install.
-		//
-		// 🔴 AND THERE IS EXACTLY ONE FAILURE THE REASONING ABOVE DOES NOT COVER, so what
-		// was here first is captured before it is replaced. The refusal of a SECOND
-		// instance can only fire on a cluster this run did not create, so the record it
-		// is about to write describes nothing — and nothing else can clear it, because a
-		// `dcctl destroy` refusal returns before removeInstanceState. See PriorLocalState
-		// for why this restores rather than deletes.
+
 		// The cluster's identity is read HERE, in the same breath as the binding, because
 		// this is the last moment it is guaranteed readable. It lives in the cluster, and
 		// the paths that will need it most — anything clearing local state — run when the
@@ -499,6 +493,9 @@ var bootstrapCmd = &cobra.Command{
 			}
 		}
 
+		// 🔴 What was here first is captured before it is replaced: on the one refusal that
+		// fires before anything is written — a host another instance serves — the record
+		// this run writes describes nothing. See PriorLocalState.
 		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
@@ -549,27 +546,27 @@ var bootstrapCmd = &cobra.Command{
 		}
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
-		unwindLocalRecordOnSecondInstance(opts, prior, runErr)
+		unwindLocalRecordOnHostTaken(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
 }
 
-// unwindLocalRecordOnSecondInstance puts the local record back after the one refusal
+// unwindLocalRecordOnHostTaken puts the local record back after the one refusal
 // that makes it describe nothing.
 //
 // 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
 // cluster that may be half-built and MUST keep its record, which is the whole reason the
-// record is written before the pipeline. This one cannot: a cluster already holding
-// another instance is one EnsureCluster adopted, never one it created, so there is
-// nothing for the record to name. Widening this to "any error" would restore the orphan
+// record is written before the pipeline. This one cannot: it fires before anything is
+// written, on a cluster already holding another instance — one EnsureCluster adopted,
+// never one it created — so there is nothing for the record to name. Widening this to "any error" would restore the orphan
 // the record exists to prevent.
 //
 // It reports and moves on. The refusal is what the operator is about to read, and
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
-func unwindLocalRecordOnSecondInstance(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
-	var refusal *bootstrap.ErrSecondInstance
+func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+	var refusal *bootstrap.ErrHostTaken
 	if opts.DryRun || !errors.As(runErr, &refusal) {
 		return
 	}

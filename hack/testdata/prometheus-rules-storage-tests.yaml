@@ -59,9 +59,9 @@ tests:
         values: "12000000000+0x180"
       - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
         values: "21474836480+0x180"
-      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="devicechain", persistentvolumeclaim="dc-tsdb-1"}'
         values: "60000000000+0x180"
-      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="devicechain", persistentvolumeclaim="dc-tsdb-1"}'
         values: "107374182400+0x180"
     alert_rule_test:
       - eval_time: 150m
@@ -226,9 +226,9 @@ tests:
     interval: 1m
     input_series:
       # 2 GiB free of 20 GiB for two hours, then expanded to 200 GiB.
-      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="devicechain", persistentvolumeclaim="dc-tsdb-1"}'
         values: "2000000000+0x120 182000000000+0x120"
-      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-tsdb-1"}'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="devicechain", persistentvolumeclaim="dc-tsdb-1"}'
         values: "21474836480+0x120 214748364800+0x120"
     alert_rule_test:
       # Before: both firing.
@@ -238,7 +238,7 @@ tests:
           - exp_labels:
               severity: critical
               devicechain_instance: devicechain
-              namespace: dc-system
+              namespace: devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
               description: >-
@@ -312,4 +312,26 @@ tests:
         exp_alerts: []
       - eval_time: 150m
         alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 ANOTHER INSTANCE'S EVENT STORE IS NOT THIS INSTANCE'S ALERT. Each instance
+  # runs its event store in its own namespace, and every instance renders these
+  # rules — so a selector that matched every namespace would raise the same full
+  # volume once per instance on the cluster, each naming the wrong owner. The
+  # rules select the shared namespace and THIS instance's alone.
+  # -------------------------------------------------------------------------
+  - name: a full event-store volume in another instance's namespace raises nothing here
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="some-other-instance", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "1000000000+0x120"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="some-other-instance", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "21474836480+0x120"
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: DatabaseVolumeFillingUp
         exp_alerts: []

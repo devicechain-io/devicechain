@@ -306,7 +306,7 @@ cmd_verify() {
   say "CHECK B2 — asserting the EVENT store replication claim and background-job health"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 3 --require-synchronous --durability preferred --timescale-jobs \
-    --kube-context "kind-$ha_cluster" \
+    --namespace "$instance" --kube-context "kind-$ha_cluster" \
     || fail "the event store does not hold the replication it declares, or its background jobs are not healthy (see the findings above)"
   say "CHECK B2 PASSED"
 }
@@ -403,7 +403,7 @@ control never ran and the result is inconclusive."
   say "NEGATIVE CONTROL — the same check, against an event store that is NOT replicated"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 3 --require-synchronous --durability preferred \
-    --kube-context "kind-$control_cluster" --expect-fail \
+    --namespace "$control_instance" --kube-context "kind-$control_cluster" --expect-fail \
     || fail "THE EVENT-STORE NEGATIVE CONTROL DID NOT HOLD, or could not run. Read the output
 above: a PASS where a failure was expected means CHECK B2 proves nothing."
   say "NEGATIVE CONTROL HELD (event store)"
@@ -452,7 +452,7 @@ above may still be holding on the instance-count assertions."
   say "JOB-AXIS COVERAGE — the background-job checks must RUN and see real jobs"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 1 --timescale-jobs \
-    --kube-context "kind-$control_cluster" \
+    --namespace "$control_instance" --kube-context "kind-$control_cluster" \
     || fail "THE BACKGROUND-JOB CHECKS FAILED on a healthy single-node event store. Either the
 event store is genuinely broken, or (B9) no database carries the timescaledb extension, which
 would mean the checks examined nothing and CHECK B2's job half proves nothing."

@@ -48,6 +48,9 @@ const (
 
 // natsTLSMaterial is one authority and the single leaf it signs.
 type natsTLSMaterial struct {
+	// Namespace is the instance namespace the broker runs in — the one the leaf names,
+	// and so the one its Secrets belong in.
+	Namespace   string
 	CACertPEM   string
 	CAKeyPEM    string
 	LeafCertPEM string
@@ -128,6 +131,7 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 	}
 
 	return &natsTLSMaterial{
+		Namespace:   namespace,
 		CACertPEM:   encodePEM("CERTIFICATE", caDER),
 		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
 		LeafCertPEM: leafCertPEM,
@@ -205,7 +209,7 @@ const certClockSkewAllowance = 5 * time.Minute
 func natsTLSSecret(releaseName string, m *natsTLSMaterial) ownedSecret {
 	return ownedSecret{
 		Name:      releaseName + "-tls",
-		Namespace: infraNamespace,
+		Namespace: m.Namespace,
 		Type:      corev1.SecretTypeTLS,
 		Labels: map[string]string{
 			"app.kubernetes.io/name":      releaseName,

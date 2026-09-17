@@ -17,7 +17,7 @@ variable "kubeconfig_context" {
 }
 
 variable "namespace" {
-  description = "Namespace for the DeviceChain infrastructure dependencies. Services default to reaching them at <name>.<namespace> (e.g. dc-nats.dc-system)."
+  description = "The cluster's shared namespace: the relational database, the object store, the install record and the cluster-owned credentials. Each instance's broker and event store run in the instance's own namespace instead. Services reach the relational database at <name>.<namespace> (e.g. dc-postgresql.dc-system)."
   type        = string
   default     = "dc-system"
 }

@@ -446,7 +446,7 @@ a gate ends up trusted for something it never checked.
     {{- fail "networkPolicy.enabled with instance.existingSecret needs networkPolicy.externalConfigPorts set (keys `nats` and `rdb`). The egress ports are normally read from instance.config, which under an external Secret is the chart's DEFAULTS rather than the document the pods mount — and a port that does not match silently blocks the services' own egress, which looks like a broker or database outage. Restate them, or set networkPolicy.enabled=false." -}}
   {{- end -}}
   {{- if and .Values.metrics.enabled .Values.metrics.natsPodMonitor (not .Values.metrics.natsBrokerHost) -}}
-    {{- fail "metrics.natsPodMonitor with instance.existingSecret needs metrics.natsBrokerHost set (the broker's <service>.<namespace> hostname). The PodMonitor's target namespace is normally derived from instance.config.infrastructure.nats.hostname, which under an external Secret is the chart's DEFAULT rather than the broker the pods use — and a wrong namespace monitors nothing, silently. Restate it, or set metrics.natsPodMonitor=false." -}}
+    {{- fail "metrics.natsPodMonitor with instance.existingSecret needs metrics.natsBrokerHost set (the broker's hostname: the short Service name for a broker in this instance's namespace, or <service>.<namespace> for one elsewhere). The PodMonitor's target namespace is normally derived from instance.config.infrastructure.nats.hostname, which under an external Secret is the chart's DEFAULT rather than the broker the pods use — and a wrong namespace monitors nothing, silently. Restate it, or set metrics.natsPodMonitor=false." -}}
   {{- end -}}
 {{- else -}}
   {{- include "devicechain.validateSecretsRootKey" . -}}

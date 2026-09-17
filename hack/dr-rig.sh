@@ -234,6 +234,11 @@ store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s
 store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) tsdb_source ;; *) return 1 ;; esac; }
 store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) return 1 ;; esac; }
 store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) return 1 ;; esac; }
+# store_namespace is where each store's Cluster, pods, backups and Services live: the
+# relational store is the CLUSTER's, in the shared namespace; the event store is the
+# INSTANCE's, in the instance's own. Every kubectl call about a store goes through it —
+# a store looked for in the wrong namespace reads as a store that is not there.
+store_namespace() { case "$1" in rdb) printf '%s' "dc-system" ;; tsdb) printf '%s' "$instance" ;; *) return 1 ;; esac; }
 
 # The stores the drill seeds, archives, destroys and restores. Written as a list
 # so that adding a third store is one entry rather than an audit of every loop.
@@ -260,7 +265,7 @@ tsdb_source() {
 # record_tsdb_source reads the serverName the live event store's WAL archiver uses.
 record_tsdb_source() {
   local path
-  path="$(kubectl --context "$kube_context" -n dc-system get clusters.postgresql.cnpg.io "$tsdb_cluster" -o json |
+  path="$(kubectl --context "$kube_context" -n "$(store_namespace tsdb)" get clusters.postgresql.cnpg.io "$tsdb_cluster" -o json |
     jq -r '[.spec.plugins[]? | select(.isWALArchiver == true) | .parameters.serverName // empty][0] // empty')" ||
     fail "could not read the event store's archive path from Cluster $tsdb_cluster"
   [[ -n "$path" ]] || fail "Cluster $tsdb_cluster names no archive path of its own; the restore
@@ -321,7 +326,7 @@ bucket_tsdb="$instance-tsdb"
 # adding a third entry, which is exactly the action that arms it, so the list is
 # checked against the lookups once, here, in the main shell where `fail` works.
 for _store in "${stores[@]}"; do
-  for _lookup in store_bucket store_source store_cluster store_service; do
+  for _lookup in store_bucket store_source store_cluster store_service store_namespace; do
     "$_lookup" "$_store" >/dev/null ||
       fail "store \"$_store\" is in \$stores but $_lookup does not know it. Add it to that
 case statement: left as it is, the lookup fails inside a command substitution,
@@ -660,7 +665,7 @@ tsdb_password() { cfg_get '.persistence.tsdb.configuration.password'; }
 pg_pod() {
   local store="${1:-rdb}" svc slices pod
   svc="$(store_service "$store")"
-  slices="$(kubectl --context "$kube_context" -n dc-system get endpointslices \
+  slices="$(kubectl --context "$kube_context" -n "$(store_namespace "$store")" get endpointslices \
     -l "kubernetes.io/service-name=$svc" -o json)" ||
     fail "could not list endpointslices for the $svc service"
 
@@ -682,7 +687,7 @@ pg_pod() {
   # Same refusal as cfg_get: an empty answer here is a broken instance, not a
   # pod named "". Say which of the two it is, because they are fixed differently.
   if [[ -z "$pod" || "$pod" == "null" ]]; then
-    fail "no READY pod backs the $svc service in dc-system.$(
+    fail "no READY pod backs the $svc service in $(store_namespace "$store").$(
       printf '\n  endpointslices found: %s' \
         "$(printf '%s' "$slices" | jq -r '.items | length')"
     )"
@@ -701,10 +706,11 @@ pg_pod() {
 # that cannot reach its archive sits in `Setting up primary` indefinitely, and
 # that is precisely the failure this drill is supposed to catch.
 wait_for_cluster_healthy() {
-  local name="$1" phase="" waited=0
+  local store="$1" name phase="" waited=0
+  name="$(store_cluster "$store")"
   say "waiting for CNPG Cluster $name to reach a healthy phase"
   while true; do
-    phase="$(kubectl --context "$kube_context" -n dc-system \
+    phase="$(kubectl --context "$kube_context" -n "$(store_namespace "$store")" \
       get clusters.postgresql.cnpg.io "$name" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
     [[ "$phase" == "Cluster in healthy state" ]] && {
       note "$name: $phase"
@@ -795,7 +801,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Backup
 metadata:
   name: $name
-  namespace: dc-system
+  namespace: $(store_namespace "$store")
 spec:
   cluster:
     name: $pgcluster
@@ -805,14 +811,14 @@ spec:
 YAML
 
   while true; do
-    phase="$(kubectl --context "$kube_context" -n dc-system get backup "$name" \
+    phase="$(kubectl --context "$kube_context" -n "$(store_namespace "$store")" get backup "$name" \
       -o jsonpath='{.status.phase}' 2>/dev/null || true)"
     case "$phase" in
       completed) break ;;
       failed)
         fail "the base backup $name FAILED. Without it there is nothing to recover
 from, and every phase after this one would be testing an empty archive.
-  $(kubectl --context "$kube_context" -n dc-system get backup "$name" -o jsonpath='{.status.error}' 2>/dev/null)"
+  $(kubectl --context "$kube_context" -n "$(store_namespace "$store")" get backup "$name" -o jsonpath='{.status.error}' 2>/dev/null)"
         ;;
     esac
     waited=$((waited + 1))
@@ -862,7 +868,7 @@ force_wal_archive() {
   say "forcing the $store seed into the WAL archive"
   # `_` rather than `i`: the body does not use the counter, it just runs twice.
   for _ in 1 2; do
-    kubectl --context "$kube_context" -n dc-system exec -i "$pod" -- \
+    kubectl --context "$kube_context" -n "$(store_namespace "$store")" exec -i "$pod" -- \
       psql -U postgres -d postgres -q -c 'checkpoint' -c 'select pg_switch_wal()' >/dev/null ||
       fail "could not force a WAL switch on $pod ($store)"
   done
@@ -926,12 +932,14 @@ restore rather than as a backup that was never taken."
 quiesce_base_backups() {
   local sb names running waited=0 store
   say "suspending scheduled base backups for the seed window"
-  names="$(kubectl --context "$kube_context" -n dc-system \
-    get scheduledbackups.postgresql.cnpg.io -o name 2>/dev/null || true)"
-  for sb in $names; do
-    kubectl --context "$kube_context" -n dc-system patch "$sb" \
-      --type=merge -p '{"spec":{"suspend":true}}' >/dev/null ||
-      fail "could not suspend $sb; a base backup landing after the seed would make this drill vacuous"
+  for store in "${stores[@]}"; do
+    names="$(kubectl --context "$kube_context" -n "$(store_namespace "$store")" \
+      get scheduledbackups.postgresql.cnpg.io -o name 2>/dev/null || true)"
+    for sb in $names; do
+      kubectl --context "$kube_context" -n "$(store_namespace "$store")" patch "$sb" \
+        --type=merge -p '{"spec":{"suspend":true}}' >/dev/null ||
+        fail "could not suspend $sb; a base backup landing after the seed would make this drill vacuous"
+    done
   done
 
   # Suspending stops new ones; it does not stop one already in flight. A backup
@@ -946,11 +954,11 @@ quiesce_base_backups() {
   # The wait is the price, and it is now buying something.
   local backups
   while true; do
-    backups="$(kubectl --context "$kube_context" -n dc-system \
-      get backups.postgresql.cnpg.io -o json 2>/dev/null)" ||
-      fail "could not read the backups in dc-system"
     running=0
     for store in "${stores[@]}"; do
+      backups="$(kubectl --context "$kube_context" -n "$(store_namespace "$store")" \
+        get backups.postgresql.cnpg.io -o json 2>/dev/null)" ||
+        fail "could not read the backups in $(store_namespace "$store")"
       # Captured into a variable and defaulted before the arithmetic. Inlining the
       # substitution would make a jq failure expand to nothing, and `$((n + ))` is
       # an arithmetic SYNTAX error rather than a zero — so a broken query would
@@ -1048,8 +1056,8 @@ drill against an artifact that belongs to a cluster that no longer exists."
 
   [[ -s "$escrow_file" ]] || fail "bootstrap reported success but wrote no escrow artifact at $escrow_file"
 
-  wait_for_cluster_healthy "$rdb_cluster"
-  wait_for_cluster_healthy "$tsdb_cluster"
+  wait_for_cluster_healthy rdb
+  wait_for_cluster_healthy tsdb
   record_tsdb_source
   for store in "${stores[@]}"; do take_base_backup "$store"; done
   quiesce_base_backups
@@ -1240,8 +1248,8 @@ below this point would be evidence."
   # wait_for_cluster_healthy. BOTH are waited on: a recovering cluster that cannot
   # reach its archive sits in `Setting up primary` indefinitely, and the event
   # store is now half the claim.
-  wait_for_cluster_healthy "$rdb_cluster"
-  wait_for_cluster_healthy "$tsdb_cluster"
+  wait_for_cluster_healthy rdb
+  wait_for_cluster_healthy tsdb
 }
 
 # run_verify runs the drill and echoes drdrill's exit code. It does NOT decide
@@ -1317,7 +1325,7 @@ testing nothing."
   # indistinguishable, which is the exact false control this rig exists to avoid.
   stop_port_forward
   pf_port="$pg_local_port"
-  kubectl --context "$kube_context" -n dc-system port-forward \
+  kubectl --context "$kube_context" -n "$(store_namespace rdb)" port-forward \
     --address 127.0.0.1 "svc/$(store_service rdb)" "$pg_local_port":5432 >/dev/null 2>&1 &
   pf_pid=$!
 
@@ -1393,7 +1401,7 @@ reason that has nothing to do with the restore."
 
   stop_port_forward
   pf_port="$event_pg_port"
-  kubectl --context "$kube_context" -n dc-system port-forward \
+  kubectl --context "$kube_context" -n "$(store_namespace tsdb)" port-forward \
     --address 127.0.0.1 "svc/$(store_service tsdb)" "$event_pg_port":5432 >/dev/null 2>&1 &
   pf_pid=$!
 

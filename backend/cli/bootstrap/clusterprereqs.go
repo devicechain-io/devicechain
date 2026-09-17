@@ -183,6 +183,15 @@ func recordClusterOutputs(st *State, outputs map[string]tfexec.OutputMeta) {
 	// The output is null when enable_cnpg is false, and json.Unmarshal of a null
 	// into a string is a silent no-op rather than an error — so "" is reached by
 	// leaving it cleared, not by trusting the decode to report anything.
+	// The namespace the SHARED relational store runs in, where its metrics are exported
+	// from. The event store's are exported from the instance's own namespace, which the
+	// chart knows as the instance id; the alerts select both.
+	if meta, ok := outputs["namespace"]; ok {
+		var ns string
+		if err := json.Unmarshal(meta.Value, &ns); err == nil && ns != "" {
+			st.Values[databaseNamespaceKey] = ns
+		}
+	}
 	st.Values[cnpgNamespaceKey] = ""
 	if meta, ok := outputs["cnpg_namespace"]; ok {
 		var ns string

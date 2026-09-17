@@ -293,13 +293,9 @@ func NewDefaultPipeline() Pipeline {
 		// below this one writes something to a cluster that may already be running
 		// the instance they would be writing over.
 		{Name: "Refuse a rebuild", Run: stepRefuseRebuild},
-		// The second half of the same edge, and it asks the OPPOSITE question: not "is
-		// this instance already here" but "is anything ELSE here". Both edges matter
-		// for the same reason as above, and this one sits after the rebuild check so a
-		// re-run of the instance that IS here keeps meeting the message written for
-		// it. They cannot both fire: one keys on finding this instance, the other on
-		// finding another.
-		{Name: "Refuse a second instance", Run: stepRefuseSecondInstance},
+		// What only one instance per cluster can hold — the ingress host, the local MQTT
+		// port. Before the first write, so a refusal leaves nothing behind.
+		{Name: "Check what other instances hold", Run: stepCheckClusterSingletons},
 		{Name: "Install core components", Run: stepInstallCore},
 		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},

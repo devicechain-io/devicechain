@@ -47,15 +47,15 @@ func recordDirExists(t *testing.T, home, instance string) bool {
 	return err == nil
 }
 
-func TestTheCommandLayerClearsTheRecordAfterASecondInstanceRefusal(t *testing.T) {
+func TestTheCommandLayerClearsTheRecordAfterAHostRefusal(t *testing.T) {
 	home, prior := refusedHome(t, "bravo")
 
 	// Wrapped the way Pipeline.Run wraps every step error — an unwrapped fixture would
 	// pass while the real path never matched.
-	refusal := fmt.Errorf("step %q: %w", "Refuse a second instance", &bootstrap.ErrSecondInstance{
-		Holds: []string{"alpha"}, Wanted: "bravo", Provider: "local",
+	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrHostTaken{
+		Instance: "bravo", Host: "localhost", Holder: "alpha",
 	})
-	unwindLocalRecordOnSecondInstance(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, refusal)
 
 	if recordDirExists(t, home, "bravo") {
 		t.Fatal("`dcctl instances list` would still show an instance that was refused before " +
@@ -79,7 +79,7 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, prior := refusedHome(t, "bravo")
-			unwindLocalRecordOnSecondInstance(bootstrap.Options{Instance: "bravo"}, prior, tc.err)
+			unwindLocalRecordOnHostTaken(bootstrap.Options{Instance: "bravo"}, prior, tc.err)
 			if !recordDirExists(t, home, "bravo") {
 				t.Fatal("the record was cleared after a failure that may have left a cluster " +
 					"behind, so nothing can name the cluster to destroy it")
@@ -101,9 +101,9 @@ func TestADryRunIsNotUnwound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refusal := fmt.Errorf("step %q: %w", "Refuse a second instance",
-		&bootstrap.ErrSecondInstance{Holds: []string{"alpha"}, Wanted: "bravo"})
-	unwindLocalRecordOnSecondInstance(
+	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold",
+		&bootstrap.ErrHostTaken{Instance: "bravo", Host: "localhost", Holder: "alpha"})
+	unwindLocalRecordOnHostTaken(
 		bootstrap.Options{Instance: "bravo", DryRun: true}, prior, refusal)
 
 	if !recordDirExists(t, home, "bravo") {
@@ -136,7 +136,7 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 		if !ok {
 			return true
 		}
-		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "unwindLocalRecordOnSecondInstance" {
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "unwindLocalRecordOnHostTaken" {
 			unwind = call.Pos()
 			return true
 		}
@@ -172,10 +172,10 @@ func TestTheBootstrapCommandStillCarriesBothHalvesOfTheRecordRollback(t *testing
 		{"bootstrap.CapturePriorLocalState", capture},
 		{"bootstrap.WriteInstanceRecord", write},
 		{"NewDefaultPipeline().Run", run},
-		{"unwindLocalRecordOnSecondInstance", unwind},
+		{"unwindLocalRecordOnHostTaken", unwind},
 	} {
 		if c.pos == token.NoPos {
-			t.Fatalf("the bootstrap command no longer calls %s, so a refused second instance "+
+			t.Fatalf("the bootstrap command no longer calls %s, so a refused host "+
 				"leaves a record `dcctl instances list` shows and no dcctl path can clear", c.what)
 		}
 	}

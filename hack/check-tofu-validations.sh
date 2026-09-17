@@ -130,6 +130,12 @@ done
 
 failures=0
 
+# The instance root's namespace is REQUIRED — it is the instance id, and a default would
+# put every instance in one namespace. The console needs a value to evaluate anything in
+# that root, so every assertion runs as one instance. A TF_VAR_ for a variable a root does
+# not declare is ignored, so the cluster root is unaffected.
+export TF_VAR_instance_namespace=harness
+
 # Assertion keys seen as applicable in at least one root, and keys seen at all. The
 # difference between them is the set of assertions that evaluated NOWHERE.
 declare -A assertion_ran=()
@@ -493,7 +499,7 @@ run_assertions() {
   # and not any single-node install, which never opens a route. Only the live 3-node
   # rig did. These lines are what move it back into a gate that runs on every PR.
   evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var ha=true
-  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.dc-system.svc.cluster.local")])' -var ha=true
+  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.harness.svc.cluster.local")])' -var ha=true
   # Scaled explicitly: a 5-server cluster needs five peers named, and a SAN list
   # built for three would leave servers 3 and 4 unable to join.
   evaluates true 'alltrue([for i in range(5) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var nats_cluster_replicas=5
@@ -504,7 +510,10 @@ run_assertions() {
   evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats-0.dc-nats-headless")' -var ha=false
   # And the client names survive. A route-name change that dropped them would break
   # every service connection instead — the same failure, pointed the other way.
-  evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
+  evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.harness")' -var ha=true
+  # The broker is in the INSTANCE's namespace, so its names carry the instance id — and
+  # two instances' certificates never name each other's broker.
+  evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
 
   # The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
   # helm_release precondition, which only runs during a plan and which nothing in CI
@@ -829,6 +838,12 @@ run_assertions() {
   #                  them since position became its own grant, and the second is the
   #                  one an edit will forget: `analytics_location_reader` with LOGIN
   #                  resolves to a tenant called `location_reader`.
+  # The instance namespace is the instance id, so it has the id's grammar.
+  rejects instance_namespace "Acme"
+  rejects instance_namespace "dc_system"
+  rejects instance_namespace "-acme"
+  rejects instance_namespace "a2345678901234567890123456789012345678901234567890x"
+  accepts instance_namespace "acme-2"
   rejects timescale_analytics_readers '[{name="bi_acme",connection_limit=5}]'
   rejects timescale_analytics_readers '[{name="analytics_",connection_limit=5}]'
   rejects timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",connection_limit=5}]'

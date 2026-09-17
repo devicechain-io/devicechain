@@ -63,37 +63,35 @@ está viva, así que `--allow-legacy-db-removal` queda exceptuado tanto de la ne
 3 como de esta. Nada más lo está.
 :::
 
-**Una instancia por clúster.** `dcctl` instala una sola instancia de DeviceChain en un
-clúster, y el paso 4 es lo que lo establece. Casi todo lo que aplica un arranque inicial
-es un singleton de ámbito de clúster —el propio Deployment del operador y los releases de
-infraestructura que hay detrás del controlador de ingress, cert-manager y el operador
-CloudNativePG—, así que una segunda instancia no se coloca al lado de la primera. Su
-propio release de Helm lleva el nombre de la instancia y no colisionaría; todo lo que
-rodea a ese release sí. Instala el operador de esta ejecución por encima del que ya está
-en marcha, adopta la infraestructura compartida en un segundo estado de OpenTofu y acuña
-credenciales de base de datos, de bróker y de clave raíz por encima de aquellas con las
-que se está autenticando la instancia que ya está ahí. El paso 4 pregunta al clúster qué
-aloja ya y se detiene antes de todo eso, nombrando la instancia que encontró y el
-artefacto del que lo leyó. Hay tres cosas que hacer en su lugar:
+**Varias instancias en un mismo clúster.** Un clúster puede alojar más de una instancia de
+DeviceChain. Los servicios de cada instancia, su bróker (NATS), su almacén de eventos
+(TimescaleDB) y sus credenciales viven en un namespace que lleva el nombre de la instancia,
+y cada instancia se conecta a la base de datos relacional compartida con un login propio
+que es dueño de exactamente una base de datos, de modo que ninguna instancia puede llegar a
+los datos de otra. Lo que comparten las instancias son los requisitos previos del clúster:
+el controlador de ingress, cert-manager, el operador CloudNativePG, la monitorización, la
+base de datos relacional y el almacén de objetos de los respaldos. El primer arranque
+inicial en un clúster los instala; los siguientes los reutilizan.
 
-- **Mover a una versión nueva la instancia que ya está ahí** —`dcctl upgrade` es el verbo
-  para una instancia que ya existe, y no acuña nada.
-- **Construir esta en un clúster propio** —arráncala en un clúster local nuevo, o apúntala
-  a otro distinto con `--kube-context`.
-- **Sustituir lo que hay por esta** —ejecuta `dcctl destroy` sobre la instancia que ocupa
-  el clúster y vuelve a arrancar. Eso se lleva sus datos por delante.
+Dos cosas de un clúster solo pueden pertenecer a una instancia, y el arranque inicial se
+ocupa de ambas:
 
-La negativa imprime las tres como comandos, con tus propios nombres de instancia y de
-proveedor ya puestos, de modo que se puede actuar sobre ella sin volver aquí.
+- **El host del ingress.** Un controlador de ingress al que se le dan dos instancias en un
+  mismo host solo sirve una de ellas, en silencio. Un arranque inicial cuyo host ya sirve
+  otra instancia se rechaza; dale a cada instancia su propio `--host` (en un clúster local,
+  por ejemplo `--host beta.localhost`).
+- **El puerto MQTT local.** En un clúster local, el puerto 1883 de tu máquina llega solo al
+  bróker de la primera instancia. Los brókeres de las instancias posteriores son
+  alcanzables desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
 
-No es la negativa del paso 3 y las dos no se solapan. Aquella reconoce *esta* instancia y
-detiene su reconstrucción; esta pregunta si hay algo **más** aquí, así que una nueva
-ejecución dirigida a la instancia que ya está ahí sigue encontrando el mensaje escrito
-para ella. Un clúster que no puede decir qué aloja es un error, no un clúster vacío. Y
-como esta negativa solo puede dispararse contra un clúster que `dcctl` no creó, es el
-único fallo del arranque inicial que no deja nada detrás: el registro local que la
-ejecución escribió antes de empezar se deja tal como estaba, de modo que `dcctl instances
-list` no gana una entrada para una instancia que nunca se instaló.
+Los nombres de instancia son letras minúsculas, dígitos y `-`, de 50 caracteres como
+máximo, porque el nombre es también el namespace de la instancia, su base de datos y el
+login de esa base de datos.
+
+Una instancia construida antes de que cada instancia tuviera su propio namespace ejecuta su
+bróker y su almacén de eventos en el namespace compartido `dc-system`, y no se pueden mover
+en sitio. El arranque inicial rechaza una instancia así e indica que hay que destruirla y
+volver a arrancarla.
 
 Los pasos de abajo son los que la ejecución va imprimiendo (`[5/12] Install core
 components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
@@ -116,18 +114,12 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    la instancia, porque todos los pasos que vienen debajo escriben en un clúster que puede
    estar ejecutando ya la instancia sobre la que escribirían. Una ejecución en seco dice qué
    rechazaría una ejecución real, en lugar de ocultarlo.
-4. **Rechazar una segunda instancia** (*Refuse a second instance*) — pregunta al clúster
-   si ya aloja una instancia *distinta* y se detiene si es así. Es la otra mitad del mismo
-   borde que el paso anterior, y hace la pregunta opuesta: no «¿está ya aquí esta
-   instancia?» sino «¿hay algo más aquí?». Las dos leen artefactos distintos y no pueden
-   dispararse a la vez: una se basa en encontrar esta instancia, la otra en encontrar otra.
-   Esta toma la primera respuesta que obtiene de las declaraciones de instancia del
-   clúster, luego de las credenciales que `dcctl` acuñó en `dc-system`, y luego de los
-   releases de Helm de DeviceChain que aloja el clúster, preguntados en ese orden porque es
-   el orden en que los escribe un arranque inicial: así, una ejecución que murió a mitad de
-   camino queda respondida por lo que sí llegó a dejar. Una ejecución en seco dice qué rechazaría una ejecución real, y lo dice
-   incluso cuando no pudo llegar al clúster para preguntárselo. Consulta **Una instancia
-   por clúster** más arriba.
+4. **Comprobar lo que tienen otras instancias** (*Check what other instances hold*) — pregunta
+   al clúster qué host de ingress y qué puerto MQTT local tienen ya otras instancias, y se
+   detiene si el host de esta instancia es uno de ellos. Se ejecuta antes de escribir nada,
+   así que una negativa no deja nada detrás; un puerto MQTT local que tiene otra instancia no
+   detiene la ejecución, y se indica. Una ejecución en seco dice qué rechazaría una ejecución
+   real. Consulta **Varias instancias en un mismo clúster** más arriba.
 5. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
    operador (CRDs + RBAC + controlador) y lo aplica directamente con la API de
    Kubernetes. Va por delante de la aplicación de infraestructura porque la definición de
@@ -155,11 +147,16 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    una vez están en él. Además, la clave raíz se deposita en un archivo cifrado que tú
    conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
 8. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
-   configuración de OpenTofu incrustada (NATS, PostgreSQL, TimescaleDB, ingress de NGINX,
-   cert-manager, el operador CloudNativePG y su plugin de respaldo Barman Cloud, y el
-   almacén de objetos al que ese plugin archiva) vía
-   [terraform-exec](https://github.com/hashicorp/terraform-exec). El estado se guarda en
-   `~/.devicechain/instances/<instance>/infra`, de modo que las ejecuciones posteriores son
+   configuración de OpenTofu incrustada vía
+   [terraform-exec](https://github.com/hashicorp/terraform-exec), en dos partes. Primero los
+   requisitos previos compartidos del clúster —ingress de NGINX, cert-manager, el operador
+   CloudNativePG y su plugin de respaldo Barman Cloud, la monitorización, la base de datos
+   relacional y el almacén de objetos al que archiva el plugin—, con el estado guardado en
+   `~/.devicechain/clusters/<cluster-id>/infra`, de modo que una segunda instancia en el
+   mismo clúster los reutiliza en lugar de volver a instalarlos. Después, el login y la base
+   de datos propios de esta instancia en la base de datos relacional, y su propio bróker
+   (NATS) y almacén de eventos (TimescaleDB) en su namespace, con el estado guardado en
+   `~/.devicechain/instances/<instance>/infra`. Las ejecuciones posteriores son
    incrementales.
 9. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
    configuración** de la instancia —del que cada servicio lee sus credenciales y sus
@@ -167,8 +164,8 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    hasta que las cargas de trabajo estén listas. Ese documento es lo que hace que la instancia
    esté viva, y lo que el paso 3 busca en cualquier ejecución posterior.
 10. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
-    de superusuario la siembra el servicio user-management en el primer arranque; este paso
-    fija los valores que imprimirá el informe final.
+   de superusuario la siembra el servicio user-management en el primer arranque; este paso
+   fija los valores que imprimirá el informe final.
 11. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
     área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
     producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en

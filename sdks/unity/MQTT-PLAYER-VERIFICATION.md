@@ -86,18 +86,18 @@ because the WebGL path was learned the expensive way.
   ```bash
   timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/1883' && echo "TCP reachable"
   timeout 8 openssl s_client -connect localhost:1883 </dev/null 2>&1 | grep -E "subject=|Cipher is"
-  # want: subject=... CN = dc-nats.dc-system   and a negotiated cipher
+  # want: subject=... CN = dc-nats.<instance-id>   and a negotiated cipher
   ```
 
 - **The broker's CA**, so the player can pin it. The bring-up mints a private CA; extract it once:
 
   ```bash
-  kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > nats-ca.pem
+  kubectl -n <instance-id> get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > nats-ca.pem
   ```
 
   > 🔑 **Use `localhost`, never `127.0.0.1`.** Measured against a live bring-up: the broker leaf
-  > carries `DNS:dc-nats`, `DNS:dc-nats.dc-system`, `DNS:dc-nats.dc-system.svc`,
-  > `DNS:dc-nats.dc-system.svc.cluster.local`, `DNS:localhost` — and **no IP SAN at all.** An IP
+  > carries `DNS:dc-nats`, `DNS:dc-nats.<instance-id>`, `DNS:dc-nats.<instance-id>.svc`,
+  > `DNS:dc-nats.<instance-id>.svc.cluster.local`, `DNS:localhost` — and **no IP SAN at all.** An IP
   > literal is matched only against IP SANs, so `ssl://127.0.0.1:1883` is a hostname mismatch that
   > `PinnedCa` correctly refuses (`ANameMismatchIsRefusedEvenUnderThePinnedRoot` pins that
   > behaviour). Verified both ways against the extracted CA:
@@ -133,7 +133,7 @@ export PATH="$HOME/.dotnet:$PATH"
 # --project is relative to the CWD, so run this from the repository root.
 cd /path/to/devicechain
 
-kubectl -n dc-system get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.pem
+kubectl -n <instance-id> get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.pem
 dotnet run --project sdks/csharp/tools/DeviceChain.Sdk.TrustProbe -- /tmp/ca.pem
 ```
 

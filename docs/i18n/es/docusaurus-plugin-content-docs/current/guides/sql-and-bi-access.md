@@ -68,15 +68,18 @@ rechazado y no una sorpresa — pero es la razón por la que existe el límite.
 **1. Cree un Secret de Kubernetes con la contraseña.** La plataforma nunca genera ni almacena esta
 credencial; es suya, y la base de datos se reconcilia para coincidir con ella.
 
+El Secret va en el namespace propio de la instancia —el id de la instancia—, junto al almacén
+de eventos que lo lee:
+
 ```bash
 kubectl create secret generic analytics-acme-credentials \
-  --namespace dc-system \
+  --namespace <id-de-instancia> \
   --type kubernetes.io/basic-auth \
   --from-literal=username=analytics_acme \
   --from-literal=password="$(openssl rand -base64 24)"
 
 kubectl label secret analytics-acme-credentials \
-  --namespace dc-system cnpg.io/reload=true
+  --namespace <id-de-instancia> cnpg.io/reload=true
 ```
 
 :::warning La etiqueta es lo que hace que la rotación funcione
@@ -182,7 +185,7 @@ port-forward para algo puntual, o un ingress con TLS para una conexión permanen
 comprobación rápida:
 
 ```bash
-kubectl port-forward -n dc-system svc/dc-timescaledb-single 5432:5432
+kubectl port-forward -n <id-de-instancia> svc/dc-timescaledb-single 5432:5432
 psql "postgres://analytics_acme@localhost:5432/<id-de-instancia>" \
   -c "SELECT device_token, name, bucket, sum_value / count_value AS avg
       FROM analytics.measurement_rollups

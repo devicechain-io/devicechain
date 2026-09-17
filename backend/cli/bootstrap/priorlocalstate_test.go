@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Tests for the local record a refused second instance must not leave behind.
+// Tests for the local record a refused run must not leave behind.
 //
 // 🔴 THE PHANTOM IS A MEASURED FAILURE, NOT A TIDINESS POINT. `dcctl bootstrap` writes
 // ~/.devicechain/instances/<instance>/instance.json BEFORE the pipeline runs, so a run refused
@@ -51,7 +51,7 @@ func listed(t *testing.T, instance string) bool {
 
 // 🔴 THE ACCEPTANCE CRITERION, STATED AS THE OPERATOR EXPERIENCES IT. After the refusal,
 // `dcctl instances list` shows nothing and no directory has to be removed by hand.
-func TestARefusedSecondInstanceLeavesNothingForTheListingToShow(t *testing.T) {
+func TestARefusedRunLeavesNothingForTheListingToShow(t *testing.T) {
 	fakeHome(t)
 
 	prior := CapturePriorLocalState("bravo")

@@ -645,7 +645,7 @@ var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*"u
 // for a bare `$2a$` so the two accounts cannot be transposed — handing the system
 // account's hash to the service login would simply fail to verify and re-hash, but
 // silently doing the right thing for the wrong reason is not worth the ambiguity.
-func DeployedBrokerHashes(ctx context.Context, kubeContext, releaseName string) natsauth.DeployedHashes {
+func DeployedBrokerHashes(ctx context.Context, kubeContext, namespace, releaseName string) natsauth.DeployedHashes {
 	restCfg, err := RestConfig(kubeContext)
 	if err != nil {
 		return natsauth.DeployedHashes{}
@@ -654,7 +654,13 @@ func DeployedBrokerHashes(ctx context.Context, kubeContext, releaseName string) 
 	if err != nil {
 		return natsauth.DeployedHashes{}
 	}
-	cm, err := typed.CoreV1().ConfigMaps(infraNamespace).Get(ctx, releaseName+"-config", metav1.GetOptions{})
+	return deployedBrokerHashesIn(ctx, typed, namespace, releaseName)
+}
+
+// deployedBrokerHashesIn is DeployedBrokerHashes against a given client, so which
+// namespace it reads can be exercised without a cluster.
+func deployedBrokerHashesIn(ctx context.Context, typed kubernetes.Interface, namespace, releaseName string) natsauth.DeployedHashes {
+	cm, err := typed.CoreV1().ConfigMaps(namespace).Get(ctx, releaseName+"-config", metav1.GetOptions{})
 	if err != nil {
 		return natsauth.DeployedHashes{}
 	}

@@ -23,7 +23,10 @@ Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by th
 OpenTofu modules in
 [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu);
 this chart assumes it exists and points at it via
-`instance.config.infrastructure` / `.persistence`.
+`instance.config.infrastructure` / `.persistence`. The instance's own broker and event
+store run in the instance's namespace, beside the services this chart deploys; the
+relational database, ingress controller and cert-manager are shared by every instance on
+the cluster.
 
 Every release is one semver tag (`vX.Y.Z`) covering all images, the operator, the
 chart, and the `dcctl` CLI together. Images are public on `ghcr.io/devicechain-io`
@@ -302,12 +305,13 @@ would silently leave the network permitting what the code refuses.
 
 **Three things the policy does not do**, all worth knowing before relying on it:
 
-- The datastore rule permits the whole namespace on the NATS and PostgreSQL ports, not
-  the two workloads by name. So a second datastore living in that namespace on one of
-  those ports is reachable even though only NATS and PostgreSQL are intended. Narrowing
-  it needs a pod selector per datastore, and a way to express the labels of
-  bring-your-own infrastructure; until then, treat "the platform's datastores" as "that
-  namespace, on those two ports".
+- The relational database rule permits the whole infrastructure namespace on the
+  PostgreSQL port, not the database by name. So another datastore living in that namespace
+  on that port is reachable even though only PostgreSQL is intended. Narrowing it needs a
+  pod selector for the database, and a way to express the labels of bring-your-own
+  infrastructure; until then, treat "the platform's database" as "that namespace, on that
+  port". The broker is the instance's own and is selected by its pod labels in the
+  instance's namespace, so it is not affected.
 
 - It compares address prefixes, so it cannot look inside an IPv6 address that carries an
   IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address
@@ -334,7 +338,9 @@ re-opens every private address for every tenant.
 
 ## What it renders
 
-- A `Namespace` named `instance.id` (toggle with `instance.createNamespace`).
+- A `Namespace` named `instance.id` (toggle with `instance.createNamespace`). **The
+  instance's broker and event store live in this namespace too**, so uninstalling the
+  release deletes them — and the event store's data — along with the services.
 - `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`.
 - `dct-<id>-config` — per-area config mounted at `/etc/dct-config/<area>`.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`

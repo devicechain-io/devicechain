@@ -464,8 +464,9 @@ jobs:
         run: |
           # The alias Service, not a pod: the store is a CloudNativePG Cluster whose
           # pods are dc-tsdb-N and whose primary moves on failover, while the alias
-          # follows it.
-          kubectl port-forward -n dc-system svc/dc-timescaledb-single 5432:5432 \
+          # follows it. In the INSTANCE's namespace — the event store is the instance's
+          # own, where the relational store is the cluster's.
+          kubectl port-forward -n devicechain svc/dc-timescaledb-single 5432:5432 \
             >"$RUNNER_TEMP/pf-tsdb.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"

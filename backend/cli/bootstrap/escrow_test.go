@@ -1013,7 +1013,7 @@ func withDeployedBrokerHashes(t *testing.T, h natsauth.DeployedHashes) {
 	t.Helper()
 	orig := lookupDeployedBrokerHashes
 	t.Cleanup(func() { lookupDeployedBrokerHashes = orig })
-	lookupDeployedBrokerHashes = func(context.Context, string, string) natsauth.DeployedHashes {
+	lookupDeployedBrokerHashes = func(context.Context, string, string, string) natsauth.DeployedHashes {
 		return h
 	}
 }
@@ -1025,7 +1025,7 @@ func withArchiveState(t *testing.T, live liveArchiveState, err error) {
 	t.Helper()
 	orig := readLiveArchiveState
 	t.Cleanup(func() { readLiveArchiveState = orig })
-	readLiveArchiveState = func(context.Context, string) (liveArchiveState, error) {
+	readLiveArchiveState = func(context.Context, string, string) (liveArchiveState, error) {
 		return live, err
 	}
 }

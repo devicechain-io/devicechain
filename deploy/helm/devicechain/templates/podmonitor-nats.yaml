@@ -21,9 +21,11 @@ one — and on a broker that is not clustered at all, the stream gauges are the 
 half that says anything, since there is no cluster to be unhealthy.
 
 It selects pods in the NATS namespace, which is derived from the broker hostname
-the services are configured with (infrastructure.nats.hostname, e.g.
-"dc-nats.dc-system") — the same value everything else in this instance dials, so
-the monitor cannot end up pointed at a different broker than the one in use.
+the services are configured with (infrastructure.nats.hostname) — the same value
+everything else in this instance dials, so the monitor cannot end up pointed at a
+different broker than the one in use. The default is the short in-namespace name
+"dc-nats", which resolves to this instance's own namespace; a qualified
+"<release>.<namespace>" names another.
 
 Harmless when the exporter is off: `port` names a CONTAINER port, so with no
 prom-exporter container the operator generates no targets at all, rather than a
@@ -45,10 +47,11 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 spec:
-  # The broker usually runs OUTSIDE this instance's namespace (dc-system by
-  # default), which is why this is a cross-namespace selector. Prometheus is
-  # configured to select monitors cluster-wide (podMonitorSelectorNilUsesHelmValues
-  # is false in the monitoring module), so no release label is needed here.
+  # The broker runs in this instance's own namespace by default; a broker named with a
+  # qualified hostname may run elsewhere, which is why this is still an explicit
+  # namespace selector. Prometheus is configured to select monitors cluster-wide
+  # (podMonitorSelectorNilUsesHelmValues is false in the monitoring module), so no
+  # release label is needed here.
   namespaceSelector:
     matchNames:
       - {{ $natsNamespace | quote }}

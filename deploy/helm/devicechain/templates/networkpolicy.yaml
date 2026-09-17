@@ -173,13 +173,43 @@ spec:
     # are restated in networkPolicy.externalConfigPorts — required there by
     # devicechain.validateInstanceConfigSource, because falling back to the
     # defaults would render a policy that blocks the very egress it is scoping.
+    #
+    # 🔴 TWO PEERS IN TWO PLACES. The relational store is the cluster's, in the shared
+    # infrastructure namespace. The broker is, by default, this instance's own, in THIS
+    # namespace — and a namespaceSelector rule would not reach it: a pod in the same
+    # namespace is not selected by a selector naming a different namespace's labels, so
+    # NATS would blackhole. It is selected by the broker's own pod labels, which also
+    # keeps this instance's connectors off every other instance's broker.
+    #
+    # A broker named with a QUALIFIED hostname (<release>.<namespace>) runs in the
+    # namespace that names, so that is the one selected — the same derivation the NATS
+    # PodMonitor makes, from the same value everything in this instance dials.
+    {{- $natsPort := $infra.nats.port }}
+    {{- if $np.externalConfigPorts }}{{ $natsPort = $np.externalConfigPorts.nats }}{{ end }}
+    {{- $natsHostParts := splitList "." ($root.Values.metrics.natsBrokerHost | default $infra.nats.hostname | default "dc-nats") }}
+    - to:
+        {{- if gt (len $natsHostParts) 1 }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ index $natsHostParts 1 | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+              app.kubernetes.io/component: nats
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+              app.kubernetes.io/component: nats
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $natsPort }}
     - to:
         - namespaceSelector:
             matchLabels:
               {{- toYaml $np.infrastructureNamespaceSelector | nindent 14 }}
       ports:
-        - protocol: TCP
-          port: {{ if $np.externalConfigPorts }}{{ $np.externalConfigPorts.nats }}{{ else }}{{ $infra.nats.port }}{{ end }}
         - protocol: TCP
           port: {{ if $np.externalConfigPorts }}{{ $np.externalConfigPorts.rdb }}{{ else }}{{ $root.Values.instance.config.persistence.rdb.configuration.port }}{{ end }}
 

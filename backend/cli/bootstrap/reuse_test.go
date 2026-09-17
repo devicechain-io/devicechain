@@ -146,7 +146,7 @@ func TestAForeignCredentialIsNotReused(t *testing.T) {
 // so it exists nowhere else; minting a replacement produces a healthy-looking
 // database that refuses every service.
 func TestARunningDatabaseWithNoCredentialsSecretIsRefused(t *testing.T) {
-	err := refuseUnrecoverableDatabaseCredential(true, reuseAbsent, rdbClusterName, rdbClusterName+"-app-credentials")
+	err := refuseUnrecoverableDatabaseCredential(true, reuseAbsent, rdbClusterName, mintedCredentialRef{infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword})
 	if err == nil {
 		t.Fatal("a live database with no recoverable credential was allowed to be re-minted")
 	}
@@ -159,14 +159,14 @@ func TestARunningDatabaseWithNoCredentialsSecretIsRefused(t *testing.T) {
 
 // The same absence on a cluster that does NOT exist is an ordinary fresh install.
 func TestAnAbsentCredentialIsFineWhenThereIsNoDatabaseYet(t *testing.T) {
-	if err := refuseUnrecoverableDatabaseCredential(false, reuseAbsent, rdbClusterName, "x"); err != nil {
+	if err := refuseUnrecoverableDatabaseCredential(false, reuseAbsent, rdbClusterName, mintedCredentialRef{infraNamespace, "x", secretKeyPassword}); err != nil {
 		t.Errorf("a first bootstrap was refused: %v", err)
 	}
 }
 
 // And a live cluster whose credential DID come back is the ordinary re-run.
 func TestALiveDatabaseWithItsCredentialIsNotRefused(t *testing.T) {
-	if err := refuseUnrecoverableDatabaseCredential(true, reuseRecovered, rdbClusterName, "x"); err != nil {
+	if err := refuseUnrecoverableDatabaseCredential(true, reuseRecovered, rdbClusterName, mintedCredentialRef{infraNamespace, "x", secretKeyPassword}); err != nil {
 		t.Errorf("an ordinary re-run was refused: %v", err)
 	}
 }
@@ -197,7 +197,7 @@ func TestAPreCutoverInstancesForeignSecretIsNotReportedAsMissing(t *testing.T) {
 	}
 	// The Cluster is live, which is precisely when the old code fired.
 	if err := refuseUnrecoverableDatabaseCredential(true, found, rdbClusterName,
-		rdbClusterName+"-app-credentials"); err != nil {
+		mintedCredentialRef{infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword}); err != nil {
 		t.Errorf("a present-but-foreign credential was reported as unrecoverable, which "+
 			"describes a cluster the operator is not looking at: %v", err)
 	}

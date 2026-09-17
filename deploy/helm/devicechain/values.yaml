@@ -72,7 +72,11 @@ instance:
   config:
     infrastructure:
       nats:
-        hostname: dc-nats.dc-system
+        # The broker runs in the INSTANCE's own namespace, beside the services, so it is
+        # reached by its in-namespace Service name — which also makes it impossible to
+        # dial another instance's broker by accident. (Was dc-nats.dc-system, from when
+        # every instance's broker shared that namespace.)
+        hostname: dc-nats
         port: 4222
         # How many copies JetStream keeps of every stream and KV bucket (ADR-020 A0).
         # ODD, and at most 5 — the services reject an even value at startup, because
@@ -381,7 +385,9 @@ instance:
       tsdb:
         type: timescaledb
         configuration:
-          hostname: dc-timescaledb-single.dc-system
+          # The event store is the instance's own, in its namespace — see nats above.
+          # The relational store above is the cluster's, shared, in dc-system.
+          hostname: dc-timescaledb-single
           port: 5432
           maxConnections: 5
           # Was `postgres` while this store was a plain StatefulSet, where

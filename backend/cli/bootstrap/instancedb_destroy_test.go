@@ -27,7 +27,7 @@ func stubRemoveInstanceDatabase(t *testing.T, fn func(ctx context.Context, kubeC
 }
 
 func anInstanceLoginSecret() *corev1.Secret {
-	return mintedSecret(infraNamespace, "dci-acme-rdb-credentials", testUID,
+	return mintedSecret("acme", "dci-acme-rdb-credentials", testUID,
 		map[string]string{"username": "acme", "password": "pw"})
 }
 
@@ -44,13 +44,13 @@ func TestAnInstanceDestroyDropsItsLoginThroughTheRecordedStore(t *testing.T) {
 		got, gotInstance = rdb, instance
 		return nil
 	})
-	if err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err != nil {
-		t.Fatalf("removing the instance's login: %v", err)
+	if left, err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err != nil || left != "" {
+		t.Fatalf("removing the instance's login: left=%q err=%v", left, err)
 	}
 	if gotInstance != "acme" || got != aRelationalStore() {
 		t.Errorf("dropped %q through %+v, want acme through the recorded store", gotInstance, got)
 	}
-	if _, err := c.CoreV1().Secrets(infraNamespace).Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the login's Secret survived a successful drop: %v", err)
 	}
@@ -65,30 +65,39 @@ func TestAFailedDropKeepsTheLoginsSecret(t *testing.T) {
 	stubRemoveInstanceDatabase(t, func(context.Context, string, string, ClusterRdb) error {
 		return errors.New("store unreachable")
 	})
-	if err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err == nil {
+	if _, err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err == nil {
 		t.Fatal("a failed drop was reported as success")
 	}
-	if _, err := c.CoreV1().Secrets(infraNamespace).Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); err != nil {
 		t.Errorf("the login's Secret was removed although its login was not: %v", err)
 	}
 }
 
-// No login Secret means no login was ever made; the store is not touched. With a Secret
-// but no readable record, the destroy fails rather than guessing where the store is.
-func TestTheDropNeedsALoginAndARecord(t *testing.T) {
+// 🔴 THE STORE IS ASKED WHETHER THERE IS ANYTHING TO DROP, NOT THE SECRET. The Secret is
+// in the instance's namespace, which the uninstall before this deletes — so a destroy
+// re-run after a failed drop finds no Secret, and must still drop. And a cluster whose
+// install record this dcctl cannot read is said and skipped, not guessed at.
+func TestTheDropAsksTheStoreAndNeedsARecord(t *testing.T) {
 	called := false
 	stubRemoveInstanceDatabase(t, func(context.Context, string, string, ClusterRdb) error {
 		called = true
 		return nil
 	})
-	if err := removeInstanceRelationalLogin(context.Background(),
-		fake.NewSimpleClientset(kubeSystem(testClusterUID)), "kind-x", "acme"); err != nil || called {
-		t.Errorf("an instance with no login: err=%v, store touched=%t", err, called)
+	withRecord := fake.NewSimpleClientset(kubeSystem(testClusterUID)) // no login Secret
+	if err := writeInstalled(context.Background(), withRecord, aCompleteInstall(), installClock); err != nil {
+		t.Fatal(err)
 	}
-	if err := removeInstanceRelationalLogin(context.Background(),
-		fake.NewSimpleClientset(kubeSystem(testClusterUID), anInstanceLoginSecret()), "kind-x", "acme"); err == nil || called {
-		t.Errorf("a login with no install record: err=%v, store touched=%t", err, called)
+	if left, err := removeInstanceRelationalLogin(context.Background(), withRecord, "kind-x", "acme"); err != nil || !called || left != "" {
+		t.Errorf("an instance whose login Secret is already gone: left=%q err=%v, store asked=%t", left, err, called)
+	}
+
+	called = false
+	left, err := removeInstanceRelationalLogin(context.Background(),
+		fake.NewSimpleClientset(kubeSystem(testClusterUID), anInstanceLoginSecret()), "kind-x", "acme")
+	if err != nil || called || left == "" {
+		t.Errorf("a cluster with no install record: left=%q err=%v, store touched=%t — the skip must be reported, "+
+			"so the destroy does not close by saying the database is gone", left, err, called)
 	}
 }
 
@@ -100,7 +109,7 @@ func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.CoreV1().Secrets(infraNamespace).Delete(context.Background(),
+	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +150,7 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 		}
 		return true
 	})
-	for _, name := range []string{"helmUninstall", "removeInstanceRelationalLogin"} {
+	for _, name := range []string{"helmUninstall", "removeInstanceRelationalLogin", "removeInstanceNamespace"} {
 		if _, ok := pos[name]; !ok {
 			t.Fatalf("destroyInstanceOnly no longer calls %s; an instance destroy would leave its "+
 				"database and login on the shared store", name)
@@ -149,6 +158,10 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	}
 	if pos["removeInstanceRelationalLogin"] < pos["helmUninstall"] {
 		t.Error("the database is dropped before the services that hold sessions on it are uninstalled")
+	}
+	if pos["removeInstanceNamespace"] < pos["removeInstanceRelationalLogin"] {
+		t.Error("the namespace is deleted before the drop, taking the login's Secret with it before the " +
+			"drop can report whether it succeeded")
 	}
 }
 
@@ -181,4 +194,32 @@ func TestAProvisionerFailureDoesNotEchoTheStatement(t *testing.T) {
 	if !strings.Contains(got, `ERROR:  role "x" is reserved`) || !strings.Contains(got, "FATAL:  terminating connection") {
 		t.Errorf("the verdict lines were lost: %q", got)
 	}
+}
+
+// An instance whose login Secret is in the SHARED namespace was built before namespaces,
+// not before logins — and is told so, not that its data belongs to the shared owner.
+func TestAnUpgradeOfAnInstanceStillInTheSharedNamespaceSaysSo(t *testing.T) {
+	st := aWritableState()
+	c := fake.NewSimpleClientset()
+	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
+		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CoreV1().Secrets(infraNamespace).Create(context.Background(),
+		anInstanceLoginSecretIn(infraNamespace), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	settleStringDataLikeAnAPIServer(t, c)
+	_, err := readInstanceCredentials(context.Background(), c, st)
+	if err == nil || !strings.Contains(err.Error(), "namespace of its own") || strings.Contains(err.Error(), "shared owner") {
+		t.Errorf("want the pre-namespace diagnosis, not the pre-login one; got %v", err)
+	}
+}
+
+func anInstanceLoginSecretIn(ns string) *corev1.Secret {
+	return mintedSecret(ns, "dci-acme-rdb-credentials", testUID,
+		map[string]string{"username": "acme", "password": "pw"})
 }

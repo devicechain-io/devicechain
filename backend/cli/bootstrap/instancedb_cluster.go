@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	pgx "github.com/jackc/pgx/v5"
 	corev1 "k8s.io/api/core/v1"
@@ -315,41 +314,39 @@ func refuseAPreIsolationOwner(cl *unstructured.Unstructured) error {
 }
 
 // removeInstanceRelationalLogin drops the instance's database and login from the shared
-// store and deletes the Secret holding the login's password — in that order, so a failed
-// drop leaves the credential a re-run needs to find the login it is removing.
+// store, verifies both are gone, and deletes the Secret that held the login's password.
 //
-// An instance with no login Secret was never given a login: it was built before
-// instances had their own, or its bootstrap stopped before the step that writes one. There
-// is nothing of that shape to remove, and that is said rather than skipped silently.
-func removeInstanceRelationalLogin(ctx context.Context, typed kubernetes.Interface, kubeContext, instance string) error {
-	name := instanceRdbSecretName(instance)
-	_, err := typed.CoreV1().Secrets(infraNamespace).Get(ctx, name, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		fmt.Println(color.YellowString("  instance %q has no database login of its own to remove "+
-			"(no Secret %s/%s); any database it created before instances had logins stays on the "+
-			"shared store until the cluster is recreated", instance, infraNamespace, name))
-		return nil
-	case err != nil:
-		return fmt.Errorf("reading Secret %s/%s: %w", infraNamespace, name, err)
-	}
-
-	// Where the store is, from the record the install wrote — not from constants, which
-	// would agree with this dcctl rather than with the cluster.
+// 🔴 IT ASKS THE STORE, NOT THE SECRET, WHETHER THERE IS ANYTHING TO DROP. The Secret
+// lives in the instance's namespace, which the uninstall before this takes with it — so
+// its absence says nothing, and a re-run after a failed drop would read it as "never had
+// a login" and leave the database behind. The drop itself is idempotent and refuses
+// anything dcctl's provisioner did not create, so it is always asked.
+//
+// A cluster whose install record is missing or from another dcctl has no store this
+// dcctl can find; that is said, and nothing is dropped.
+//
+// It returns why the database was left behind, or "" when it was dropped: a destroy that
+// skipped the drop must not close by saying the instance is gone.
+func removeInstanceRelationalLogin(ctx context.Context, typed kubernetes.Interface, kubeContext, instance string) (string, error) {
 	clusterUID, err := ClusterUID(ctx, typed)
 	if err != nil {
-		return err
+		return "", err
 	}
 	rec, err := readInstallRecord(ctx, typed, clusterUID)
-	if err != nil {
-		return fmt.Errorf("finding the relational store through the install record: %w", err)
+	switch {
+	case errors.Is(err, ErrNotInstalled) || errors.Is(err, ErrInstallRecordSchema):
+		return err.Error(), nil
+	case err != nil:
+		return "", fmt.Errorf("finding the relational store through the install record: %w", err)
 	}
 	if err := removeInstanceDatabase(ctx, kubeContext, instance, rec.Outputs.Rdb); err != nil {
-		return err
+		return "", err
 	}
-	if err := typed.CoreV1().Secrets(infraNamespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil &&
+	name := instanceRdbSecretName(instance)
+	ns := instanceNamespace(instance)
+	if err := typed.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil &&
 		!apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting Secret %s/%s after dropping the login it held: %w", infraNamespace, name, err)
+		return "", fmt.Errorf("deleting Secret %s/%s after dropping the login it held: %w", ns, name, err)
 	}
-	return nil
+	return "", nil
 }

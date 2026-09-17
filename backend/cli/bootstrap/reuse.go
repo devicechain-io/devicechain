@@ -140,7 +140,7 @@ func reuseMintedCredential(
 // database that is itself perfectly healthy. So this refuses instead, and says the
 // two things an operator in that position needs — that the value is unrecoverable,
 // and that the way out is a rebuild rather than another run.
-func refuseUnrecoverableDatabaseCredential(clusterExists bool, found reuseOutcome, cluster, secretName string) error {
+func refuseUnrecoverableDatabaseCredential(clusterExists bool, found reuseOutcome, cluster string, ref mintedCredentialRef) error {
 	// 🔴 ONLY reuseAbsent. A FOREIGN Secret is not a missing one, and saying it is
 	// describes a cluster the operator is not looking at. On every instance built
 	// before dcctl owned these credentials the Secret is present and belongs to
@@ -158,5 +158,5 @@ func refuseUnrecoverableDatabaseCredential(clusterExists bool, found reuseOutcom
 			"and minting a new one would leave this cluster refusing every service while looking "+
 			"healthy. Restore the Secret from a backup if you have one; otherwise this instance has "+
 			"to be rebuilt (`dcctl destroy` then `dcctl bootstrap`), taking its data with it",
-		cluster, infraNamespace, secretName)
+		cluster, ref.Namespace, ref.Name)
 }

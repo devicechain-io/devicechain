@@ -254,3 +254,12 @@ func TestARecipeWithNoProviderReadsAsAPlaceholder(t *testing.T) {
 		t.Errorf("a refusal with no source did not fall back to naming the cluster: %v", err)
 	}
 }
+
+func stubClusterInstances(t *testing.T, held clusterInstances, err error) {
+	t.Helper()
+	orig := readClusterInstances
+	t.Cleanup(func() { readClusterInstances = orig })
+	readClusterInstances = func(context.Context, string) (clusterInstances, error) {
+		return held, err
+	}
+}

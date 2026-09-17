@@ -214,10 +214,11 @@ responden, y lo que falta es el trabajo en segundo plano. Ese almacén responder
 consultas perfectamente el tiempo que tarde el disco en llenarse.
 
 Abra una sesión en el primario del almacén de eventos; bajo el operador, `psql` no
-necesita contraseña allí:
+necesita contraseña allí. El almacén de eventos se ejecuta en el namespace propio de la
+instancia, y su base de datos lleva el nombre de la instancia:
 
 ```bash
-kubectl -n dc-system exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d devicechain
+kubectl -n <id-de-instancia> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <id-de-instancia>
 ```
 
 Hágale dos preguntas. **Primero: ¿siguen siendo hypertables las tablas de eventos?**
@@ -260,8 +261,11 @@ en lugar de fallar, así que compruebe la propia base de datos antes de dar por 
 restauración:
 
 ```bash
-kubectl -n dc-system get clusters.postgresql.cnpg.io
+kubectl get clusters.postgresql.cnpg.io --all-namespaces
 ```
+
+La base de datos relacional (`dc-rdb`) está en `dc-system`; el almacén de eventos (`dc-tsdb`)
+está en el namespace propio de la instancia.
 
 Debe ver `Cluster in healthy state`. Un clúster atascado en `Setting up primary` no se
 ha recuperado: lo más habitual es que el archivo histórico sea inalcanzable, o que

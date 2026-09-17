@@ -199,8 +199,10 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 		return nil, fmt.Errorf("reading namespace %q: %w", instance, err)
 	}
 
-	// The Secrets dcctl mints live in the SHARED infrastructure namespace under names
-	// that carry no instance, so they are found by their ownership annotation. Matched on
+	// An instance built before each instance had its own namespace left the Secrets dcctl
+	// minted in the SHARED infrastructure namespace, under names that carry no instance,
+	// so they are found by their ownership annotation. (An instance's Secrets are now in
+	// its own namespace, which the check above already finds.) Matched on
 	// the owner NAME without requiring the managed-by stamp, for the same reason as the
 	// namespace: a Secret annotated as this instance's is evidence about this instance
 	// however it got there.
