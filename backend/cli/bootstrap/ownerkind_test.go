@@ -385,6 +385,11 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
 		mintedSecret("acme", "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
+		// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise
+		// that the same run rolls Grafana onto it. It does not: Grafana reads the Secret as
+		// an environment variable, nothing restarts it when the Secret changes, and a
+		// persistent Grafana database would ignore the change regardless. Every re-run
+		// left the Secret naming a password the running Grafana had never been given.
 		inMonitoring(clusterOwnedSecret("dc-grafana-admin", testClusterUID, map[string][]byte{
 			"admin-user": []byte("admin"), "admin-password": []byte("grafana-in-use")})),
 	)
@@ -416,12 +421,10 @@ func inMonitoring(s *corev1.Secret) *corev1.Secret {
 	return s
 }
 
-// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise that the
-// same run rolls Grafana onto it. It does not: Grafana reads the Secret as an environment
-// variable, nothing restarts it when the Secret changes, and a persistent Grafana database
-// would ignore the change regardless. Every re-run left the Secret naming a password the
-// running Grafana had never been given. The reuse is held by the re-run case above; these
-// are the other two answers the reuse can give.
+// The dashboard password is minted only when the cluster has no Secret of its own for it:
+// absent, it is minted; present but not dcctl's, it is not read; with monitoring off, it
+// is neither settled nor looked for. Reuse of an owned Secret is held by the re-run case
+// above.
 func TestTheDashboardPasswordIsMintedOnlyWhenTheClusterHasNone(t *testing.T) {
 	st := &State{ClusterUID: testClusterUID, Values: map[string]string{}}
 

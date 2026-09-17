@@ -345,8 +345,12 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //     environment variable, a changed Secret restarts nothing, and a Grafana whose
 //     database persists ignores a changed admin password after its first start
 //     anyway. So a new value lands in the Secret and nowhere else, and the Secret
-//     then names a password Grafana has never seen. Deliberately rotating it needs
-//     its own restart-and-reset step, which this function is not.
+//     then names a password Grafana has never seen. To rotate it deliberately, delete
+//     Secret monitoring/dc-grafana-admin, re-run `dcctl install`, then restart
+//     Deployment monitoring/kube-prometheus-stack-grafana — which holds only while
+//     Grafana's persistence stays off, as the monitoring module leaves it at the
+//     chart's default; with a persistent database it would also need
+//     `grafana cli admin reset-admin-password`.
 //
 // 🔴 WHAT IS DELIBERATELY NOT HERE: an expiry-aware renewal for the broker's leaf
 // certificate. Reuse keeps a value; renewal replaces one on a clock, and the two
