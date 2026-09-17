@@ -26,10 +26,6 @@ import (
 // cluster therefore writes NO phase at all, and the only evidence that a teardown ever
 // started is on this machine.
 //
-// Measured on a real cluster: a bootstrap refused at step 3 left ~/.devicechain state
-// behind and `dcctl instances list` printed `running` for an instance that existed
-// nowhere. The cluster could not have told that story, because the cluster held nothing.
-//
 // 🔴 AND IT IS A MARKER, NOT A STATE MACHINE. Its CONTENTS are for a human reading the
 // file; every decision anything makes on it is made on its EXISTENCE, by stat. A
 // teardown that started is a teardown that started whether or not the JSON in here

@@ -165,21 +165,22 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		held, err := readClusterSingletons(ctx, st.KubeContext, st.Instance, host)
 		switch {
 		case err != nil:
-			wouldDo(fmt.Sprintf("could not check whether another instance serves host %q (%v); a real run would", host, err))
+			wouldDo(fmt.Sprintf("check whether another instance already serves host %q — the read "+
+				"failed (%v), and a real run would stop here", host, err))
 		case refuseAHostAnotherInstanceServes(held, st.Instance, host) != nil:
 			wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
 		}
-		// The namespace half of the rehearsal, rehearsed separately because half of it
-		// needs no cluster at all: a name `dcctl install` owns is refused from the
-		// install's own constants, and saying so is still useful when the read above
-		// failed because the cluster is not there yet.
+		// The namespace half of the rehearsal, rehearsed separately because it is a second
+		// cluster read rather than a second reading of the one above: against a cluster
+		// that is not there yet NEITHER half can answer, and each says so about its own
+		// question instead of one failure standing in for both.
 		var refusal *ErrNamespaceUnavailable
 		switch err := precheckInstanceNamespace(ctx, st); {
 		case errors.As(err, &refusal):
 			wouldDo("REFUSE: " + refusal.Error())
 		case err != nil:
-			wouldDo(fmt.Sprintf("could not check whether namespace %q is this instance's to build in "+
-				"(%v); a real run would", instanceNamespace(st.Instance), err))
+			wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
+				"read failed (%v), and a real run would stop here", instanceNamespace(st.Instance), err))
 		}
 		return nil
 	}

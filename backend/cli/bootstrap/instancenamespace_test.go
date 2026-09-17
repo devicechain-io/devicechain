@@ -223,9 +223,10 @@ func TestAnUnreadableNamespaceStopsTheRunWithoutBeingARefusal(t *testing.T) {
 	}
 }
 
-// Each name dcctl's own install can create, refused by name. The list is built from the
-// same function the refusal reads, so a namespace that moves moves here too — what is
-// pinned is that every entry actually refuses and that the message says which one.
+// The step, not just the precheck: a namespace that is not this instance's stops the
+// bootstrap at step 4, and stops it TYPED — which is what the command layer takes the
+// local record back on. The precheck tests above prove the verdict; this proves the step
+// carries it out rather than reading it and going on.
 func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	stubSingletons(t, clusterSingletons{}, nil)
 	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
@@ -239,8 +240,64 @@ func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	}
 }
 
-// 🔴 MIRRORS deploy/opentofu/cluster/variables.tf, AND THIS IS WHAT MAKES THE MIRROR
-// SAFE. The three constants are hand-copied because an extractor that stops matching
-// returns "" and silently reserves nothing; that trade is only worth making if drift is
-// loud, which is this test. It reads the root shipped INSIDE the binary, so it is the
-// same bytes a real bootstrap applies.
+// 🔴 THE REHEARSAL IS WHERE AN OPERATOR FINDS OUT WHETHER THEIR ARGUMENTS ARE USABLE, SO
+// IT HAS TO SAY THE NAMESPACE REFUSAL IS COMING. Under --dry-run the step returns nil
+// whatever it found, so its OUTPUT is the whole of what it tells anybody — and a step
+// that stopped printing this would leave a rehearsal that reads clean in front of a real
+// run that stops dead at step 4. Nothing else can see it: the return value is nil in
+// every case below, which is why this asserts on what was printed.
+func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
+	// The host half is stubbed to "nothing held, read fine" throughout, so every line
+	// these cases see is the namespace half's.
+	stubSingletons(t, clusterSingletons{}, nil)
+	rehearse := func(t *testing.T) string {
+		t.Helper()
+		var err error
+		out := captureOutput(t, func() {
+			err = stepCheckClusterSingletons(context.Background(), &State{
+				Instance: "beta", IngressHost: "beta.localhost", DryRun: true, Values: map[string]string{}})
+		})
+		if err != nil {
+			t.Fatalf("a rehearsal returned an error instead of rehearsing one: %v", err)
+		}
+		return out
+	}
+
+	// A namespace that is not this instance's: the rehearsal does not refuse, it says what
+	// a real run would refuse over, in the refusal's own words.
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	foreign := rehearse(t)
+	if !strings.Contains(foreign, "REFUSE") || !strings.Contains(foreign, `namespace "beta" already exists`) {
+		t.Errorf("a rehearsal against a namespace this instance does not own printed:\n%s"+
+			"  It has to name the refusal a real run raises. A rehearsal that says nothing about "+
+			"the namespace sends an operator into a bootstrap that stops at step 4", foreign)
+	}
+
+	// 🔴 AND A READ THAT FAILED IS THE OTHER ARM, WHICH MUST NOT READ LIKE EITHER OF THE
+	// OTHER TWO. The cluster did not say the namespace is somebody else's — it said
+	// nothing — so calling it a refusal would be a claim nobody made, and saying nothing
+	// would make an unanswered question look like an answered one.
+	c := stubNamespacePrecheck(t)
+	c.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	unread := rehearse(t)
+	if strings.Contains(unread, "REFUSE") {
+		t.Errorf("a namespace read that failed was rehearsed as a refusal:\n%s"+
+			"  Nothing on the cluster said this namespace is taken", unread)
+	}
+	if !strings.Contains(unread, `namespace "beta"`) || !strings.Contains(unread, "forbidden") {
+		t.Errorf("a rehearsal whose namespace read failed printed:\n%s"+
+			"  It has to say which read failed and why. The line missing from the rehearsal is "+
+			"the one that would have explained the real run's stop", unread)
+	}
+
+	// 🔴 THE CONTROL FOR BOTH. Each assertion above is on a line being PRESENT, and a step
+	// that printed one unconditionally would satisfy them while rehearsing nothing. A
+	// namespace that is free is the ordinary case and has nothing to say.
+	stubNamespacePrecheck(t)
+	if free := rehearse(t); strings.Contains(free, "namespace") {
+		t.Errorf("a rehearsal against a free namespace talked about it anyway:\n%s"+
+			"  Then the two assertions above pass whatever the step actually decided", free)
+	}
+}

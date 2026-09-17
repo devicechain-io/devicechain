@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -110,14 +111,27 @@ func TestTheBootstrapCommandRefusesAHalfDestroyedInstanceBeforeItTouchesAnything
 	assertUnconditionalInRunE(t, "RefuseUnfinishedDestroy")
 }
 
-// assertUnconditionalInRunE checks that the named call is made from a statement at the TOP
-// LEVEL of the bootstrap command's RunE.
+// assertUnconditionalInRunE checks that the named call is made from the Init of an `if` at
+// the TOP LEVEL of the bootstrap command's RunE, and that neither that `if`'s condition nor
+// its body mentions the dry-run flag.
 //
 // 🔴 THIS IS THE --dry-run ASSERTION, AND POSITION ALONE DOES NOT MAKE IT. A call moved
 // inside `if !opts.DryRun { … }` keeps every ordering above intact and silently stops
 // refusing a rehearsal — which is the run an operator uses to find out whether their
-// arguments are usable, so it is the one that must answer soonest. Nesting depth is what
-// tells the two apart.
+// arguments are usable, so it is the one that must answer soonest.
+//
+// 🔴 NESTING DEPTH ALONE DOES NOT MAKE IT EITHER, AND THAT IS WHY THE CONDITION IS READ
+// TOO. `if err := X(); err != nil && !opts.DryRun { return err }` is at the top level,
+// with the call in the Init, and skips the refusal on exactly the run this exists for. The
+// depth check cannot see it, because what it tests is where the call sits and what changed
+// is what is done with its RESULT.
+//
+// 🔑 WHAT IT DOES NOT CHECK, SO THAT NOBODY READS MORE INTO IT. It is a source assertion
+// over one shape, not a proof that a rehearsal refuses: a dry-run branch anywhere ELSE in
+// the RunE that returns before this statement is reached would pass it. The ordering
+// assertions above are what bound where "before" is, and no unit test in this module can
+// execute the RunE to settle it directly. A legitimate future mention of the flag in this
+// statement therefore fails here on purpose — the shape is what is pinned.
 func assertUnconditionalInRunE(t *testing.T, call string) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -157,6 +171,23 @@ func assertUnconditionalInRunE(t *testing.T, call string) {
 		return found
 	}
 
+	// mentionsDryRun reports whether any identifier under n is a dry-run flag, by name.
+	// Matched on the identifier rather than on `opts.DryRun` specifically, because the
+	// command reads the flag under two spellings already (opts.DryRun and the
+	// bootstrapDryRun package var) and a third would otherwise walk straight past.
+	mentionsDryRun := func(n ast.Node) (found bool) {
+		if n == nil {
+			return false
+		}
+		ast.Inspect(n, func(inner ast.Node) bool {
+			if id, ok := inner.(*ast.Ident); ok && strings.Contains(strings.ToLower(id.Name), "dryrun") {
+				found = true
+			}
+			return true
+		})
+		return found
+	}
+
 	for _, stmt := range runE.Body.List {
 		ifStmt, ok := stmt.(*ast.IfStmt)
 		if !ok {
@@ -164,9 +195,18 @@ func assertUnconditionalInRunE(t *testing.T, call string) {
 		}
 		// The `if err := X(...); err != nil` shape: the call is in the Init, which makes
 		// it unconditional — the condition is about its RESULT, not about reaching it.
-		if ifStmt.Init != nil && names(ifStmt.Init) {
-			return
+		if ifStmt.Init == nil || !names(ifStmt.Init) {
+			continue
 		}
+		// …but only while the condition really is about the result alone. A dry-run term
+		// in it, or a dry-run branch in the body, turns the same statement back into one
+		// a rehearsal walks past.
+		if mentionsDryRun(ifStmt.Cond) || mentionsDryRun(ifStmt.Body) {
+			t.Fatalf("the statement calling %s in the bootstrap RunE reads the dry-run flag at %s, "+
+				"so a rehearsal does not get the refusal — and a rehearsal is the run an operator "+
+				"uses to find out whether their arguments are usable", call, fset.Position(ifStmt.Pos()))
+		}
+		return
 	}
 	t.Fatalf("%s is not called unconditionally from the top of the bootstrap RunE, so some "+
 		"runs — a --dry-run above all — skip the refusal entirely", call)
