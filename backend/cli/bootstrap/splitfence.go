@@ -170,13 +170,15 @@ func checkNoPreSplitInfrastructure(ctx context.Context, tf stateLister, instance
 			"OpenTofu's prevent_destroy does NOT stop this: removing a module block orphans "+
 			"its resources, and orphans are destroyed without consulting their lifecycle "+
 			"rules.\n"+
-			"There is no in-place upgrade for this: destroy the instance and bootstrap it "+
-			"again (`dcctl destroy %s` then `dcctl bootstrap %s`). Back up anything you need "+
-			"first — a destroy takes the databases with it.\n"+
-			"If dcctl did NOT create this cluster (it was bootstrapped with --kube-context), "+
-			"destroy leaves the cluster running and does not remove these prerequisites: "+
-			"uninstall them from the cluster yourself before bootstrapping again, or the next "+
-			"bootstrap will fail on releases that already exist",
+			"There is no in-place upgrade for this: destroy the instance WITHOUT tofu destroy "+
+			"(`dcctl destroy <provider> %s --without-state` — a plain destroy refuses this state "+
+			"for the same reason this apply does), delete and recreate the cluster, then "+
+			"`dcctl install` and `dcctl bootstrap %s`. Back up anything you need first — the "+
+			"instance's data goes with it.\n"+
+			"Destroy never removes a cluster or these prerequisites. If the cluster is not one "+
+			"you can recreate (it was bootstrapped with --kube-context), uninstall them from it "+
+			"yourself before installing again, or the install will fail on releases that "+
+			"already exist",
 		instance, len(found), strings.Join(found, "\n  "), instance, instance)
 }
 

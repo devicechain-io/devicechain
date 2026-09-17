@@ -52,7 +52,10 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	// entire promise is "print what would happen without destroying anything". A flag
 	// that destroys is worse than no flag.
 	if opts.DryRun {
-		infra := "run tofu destroy over the instance's infrastructure state (its broker and event store), "
+		infra := "run tofu destroy over the instance's infrastructure state (its broker and event store) — " +
+			"skipped when that state lists nothing, and refused before anything is changed when the state " +
+			"cannot be read, still holds the cluster prerequisites, or is missing or empty while a broker or " +
+			"event store is running — then "
 		if opts.WithoutState {
 			infra = "SKIP tofu destroy (--without-state), "
 		}
@@ -107,17 +110,24 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 
 	opts.KubeContext = binding.KubeContext
 
-	// 🔴 THE EMPTY-STATE REFUSAL COMES BEFORE THE FIRST CHANGE — before the prompt, the
-	// lock and the uninstall — because a refusal after any of them has already removed
-	// part of what it refuses to remove. See refuseStatelessLiveInstance.
+	// 🔴 THE STATE REFUSALS COME BEFORE THE FIRST CHANGE — before the prompt, the lock and
+	// the uninstall — because a refusal after any of them has already removed part of what
+	// it refuses to remove, and cannot truthfully say otherwise. See
+	// refuseUndestroyableInstance.
 	stateHasResources := false
 	if opts.WithoutState {
-		if n, err := instanceRootStateResources(opts.Instance); err == nil && n > 0 {
-			fmt.Println(withoutStateWarning(opts.Instance, n))
+		// 🔴 A STATE THAT CANNOT BE READ IS WARNED ABOUT TOO. The override exists for a
+		// state that is lost or unusable, and an unparseable one is exactly that — so it
+		// proceeds, but it does not proceed silently over a record it never looked into.
+		// (A pre-split state needs no clause of its own: every address it is fenced on is a
+		// managed resource, so it always counts one — withoutStateWarning names it.)
+		st, err := readInstanceRootState(opts.Instance)
+		if err != nil || st.Resources > 0 {
+			fmt.Println(withoutStateWarning(opts.Instance, st, err))
 		}
 	} else {
 		var err error
-		if stateHasResources, err = refuseStatelessLiveInstance(ctx, opts.KubeContext, opts.Instance); err != nil {
+		if stateHasResources, err = refuseUndestroyableInstance(ctx, opts.KubeContext, opts.Instance); err != nil {
 			return err
 		}
 	}
@@ -221,11 +231,17 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 
 	doing("uninstalling instance release (Helm)")
 	if err := helmUninstall(ctx, kubeContext, opts.Instance); err != nil {
-		return "", uninstallOutcome(err, func() error {
+		// nil from the outcome is the one non-failure a refusal can resolve to: this
+		// instance's release is already gone and the instance still has its footprint
+		// here, so this is a resumed destroy and the steps below finish it.
+		if err := uninstallOutcome(err, func() error {
 			return resolveForeignRelease(ctx, kubeContext, opts, err)
-		})
+		}); err != nil {
+			return "", err
+		}
+	} else {
+		done()
 	}
-	done()
 
 	// 🔴 THE INSTANCE'S OWN INFRASTRUCTURE, AFTER THE CHART AND BEFORE THE DATABASE. The
 	// services are gone, so nothing is publishing to the broker or writing to the event
@@ -238,7 +254,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 		fmt.Println(color.WhiteString("  the instance's infrastructure state lists nothing — no tofu destroy to run"))
 	default:
 		fmt.Println(color.WhiteString("destroying the instance's infrastructure (tofu destroy)..."))
-		if err := destroyInstanceRoot(ctx, kubeContext, opts.Instance); err != nil {
+		if err := destroyInstanceInfrastructure(ctx, kubeContext, opts.Instance); err != nil {
 			return "", fmt.Errorf("destroying the instance's infrastructure: %w", err)
 		}
 	}
@@ -248,7 +264,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	// uninstall, and the uninstall above reports that as success. See
 	// removeInstanceNamespace for why the leftover makes this very command the remedy
 	// that does not work.
-	_, _, typed, err := kubeClients(kubeContext)
+	_, typed, err := teardownClients(kubeContext)
 	if err != nil {
 		return "", fmt.Errorf("connecting to the cluster to remove the instance namespace: %w", err)
 	}

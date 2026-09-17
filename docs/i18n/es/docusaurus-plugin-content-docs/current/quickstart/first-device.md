@@ -281,9 +281,10 @@ dcctl destroy local devicechain
 ```
 
 `dcctl destroy` elimina la instancia y deja el clúster instalado, listo para el siguiente arranque
-inicial. Espera a que el namespace de la instancia desaparezca por completo, así que volver a
-arrancarla con el mismo nombre justo después es seguro, y si se interrumpe, ejecutarlo de nuevo
-termina el trabajo. Para eliminar también el clúster:
+inicial. Espera a que el namespace de la instancia desaparezca por completo, así que el clúster
+queda listo para un nuevo arranque con el mismo nombre de inmediato —pasa `--restore-root-key`
+con el artefacto de depósito que destroy nombra, o aparta ese archivo antes— y si se
+interrumpe, ejecutarlo de nuevo termina el trabajo. Para eliminar también el clúster:
 
 ```bash
 kind delete cluster --name devicechain

@@ -40,7 +40,8 @@ func destroyNeedsNoFurtherWork(err error) bool {
 }
 
 // uninstallOutcome routes a FAILED uninstall: the foreign-release refusal is the one
-// that may still leave this command a job to do, and everything else is a failure.
+// that may still leave this command a job to do, and everything else is a failure. A nil
+// return means resolveForeign found a resumed destroy, and the teardown carries on.
 //
 // 🔴 SEPARATE FROM uninstallInstance SO THE ROUTING CAN BE EXERCISED WITHOUT A CLUSTER,
 // which is the same reason uninstallRefusalReason is separate from helmUninstall — and
@@ -77,7 +78,7 @@ func uninstallOutcome(err error, resolveForeign func() error) error {
 // is a positive finding, not a missing one: see instanceFootprint for what is asked, and
 // keepRecordReason for the rule that anything unanswerable keeps the record.
 func resolveForeignRelease(ctx context.Context, kubeContext string, opts DestroyOptions, refusal error) error {
-	dyn, _, typed, err := kubeClients(kubeContext)
+	dyn, typed, err := teardownClients(kubeContext)
 	if err != nil {
 		// Reached the cluster well enough to read the release a moment ago, and cannot
 		// now. That is "we could not tell", so the refusal stands untouched.
@@ -87,6 +88,33 @@ func resolveForeignRelease(ctx context.Context, kubeContext string, opts Destroy
 		return fail("uninstalling release", refusal)
 	}
 	found, footprintErr := instanceFootprint(ctx, dyn, typed, opts.Instance)
+
+	// 🔴 A RELEASE THAT IS ALREADY GONE, FOR AN INSTANCE THAT IS STILL HERE, IS A RESUME.
+	// The chart uninstall is the FIRST thing a destroy removes, so every destroy that
+	// failed after it — tofu destroy, the database drop, a namespace that took too long —
+	// comes back to an absent release. On a cluster holding any other instance that
+	// absence reads as the foreign-release refusal, and before this branch the footprint
+	// check below then KEPT the record and failed, telling the operator to destroy the
+	// neighbour: a resumable destroy that could never be resumed.
+	//
+	// 🔑 THE FOOTPRINT IS WHAT TELLS THE TWO APART, AND A RESUME ALWAYS HAS ONE. A failed
+	// destroy keeps the declaration (endDestroy leaves it, reading Destroying) and the
+	// namespace (deleted last, and waited on); a mistyped name, or a bootstrap that died
+	// before writing either, has neither. LOCAL state is deliberately not counted: it is
+	// evidence about this machine, not this cluster, and a record bound to the wrong
+	// cluster would then run tofu destroy against a cluster that never held it.
+	//
+	// Only an ABSENT release: a release whose name and values contradict each other is
+	// never resumed over, and an unanswerable footprint keeps the refusal.
+	var foreign *foreignReleaseError
+	if errors.As(refusal, &foreign) && foreign.Absent && footprintErr == nil && len(found) > 0 {
+		fmt.Println(color.YellowString("already gone."))
+		fmt.Println(color.YellowString(
+			"  instance %q has no release left in this cluster but still has %s here — a previous destroy got "+
+				"past its chart uninstall. Resuming; instance %q's release %q is untouched.",
+			opts.Instance, strings.Join(found, " and "), foreign.Owner, foreign.Release))
+		return nil
+	}
 	if keep := keepRecordReason(opts.Instance, found, footprintErr); keep != nil {
 		fmt.Println(color.YellowString("  the local record for %q was KEPT: %v", opts.Instance, keep))
 		return fail("uninstalling release", refusal)

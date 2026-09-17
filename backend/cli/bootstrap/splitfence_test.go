@@ -145,9 +145,9 @@ func TestAnInstanceBuiltBeforeTheSplitIsRefused(t *testing.T) {
 			"accepted: the apply would destroy every instance's control-plane data")
 	}
 	for _, want := range []string{
-		"module.cnpg_rdb.helm_release.cluster", // which resource
-		"dcctl destroy prod",                   // what to do about it
-		"prevent_destroy",                      // why the guard they know about did not save them
+		"module.cnpg_rdb.helm_release.cluster",          // which resource
+		"dcctl destroy <provider> prod --without-state", // what to do about it
+		"prevent_destroy",                               // why the guard they know about did not save them
 		// ...and the case where that remedy is not enough: destroy leaves a cluster
 		// dcctl did not create running, prerequisites and all.
 		"--kube-context",

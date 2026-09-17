@@ -487,7 +487,9 @@ func helmValues(st *State) map[string]interface{} {
 
 // helmUninstall removes the named instance's chart release, deleting every resource
 // the chart created (workloads, services, ingress, and the instance namespace).
-// A missing release is treated as success so destroy is idempotent.
+// A missing release is success on a cluster holding no other DeviceChain release; on one
+// that holds another instance's, it is the typed refusal below, which the caller resolves
+// into either a resumed destroy or a stale record — see resolveForeignRelease.
 //
 // 🔴 IT STILL CHECKS WHOSE THE RELEASE IS, AND THE INSTANCE-DERIVED NAME IS NOT A
 // SUBSTITUTE FOR THAT. This function destroys data, and templates/namespace.yaml renders
@@ -551,7 +553,7 @@ func foreignReleaseRefusal(cfg *action.Configuration, instance string) error {
 	}
 	for _, h := range held {
 		if h.Instance != instance {
-			return &foreignReleaseError{Owner: h.Instance, Instance: instance, Release: h.Name}
+			return &foreignReleaseError{Owner: h.Instance, Instance: instance, Release: h.Name, Absent: true}
 		}
 	}
 	return nil
@@ -658,9 +660,29 @@ type foreignReleaseError struct {
 	// Release is the release whose values disagree with the instance, so the message
 	// names the object an operator can go and look at.
 	Release string
+	// Absent says the named instance has NO release here and Release is simply another
+	// instance's — not a release whose name and values contradict each other.
+	//
+	// 🔴 THE TWO ARE DIFFERENT FINDINGS AND ONLY ONE MAY BE RESUMED OVER. An absent
+	// release is exactly what a destroy that got past its chart uninstall leaves, so on a
+	// cluster holding any other instance every resumed destroy lands here; an instance
+	// that still has its own footprint is resumed (resolveForeignRelease). A
+	// contradiction is never resumed over: something renamed or re-used a release.
+	Absent bool
 }
 
 func (e *foreignReleaseError) Error() string {
+	if e.Absent {
+		// Not the contradiction message below: nothing here disagrees with itself, and
+		// telling the operator to destroy the instance that IS installed would send them
+		// to remove a neighbour.
+		return fmt.Sprintf(
+			"instance %q has no Helm release in this cluster; the DeviceChain release here, %q, belongs to "+
+				"instance %q and was left alone.\n\n"+
+				"  If %q is a stale local record — a bootstrap that failed part-way leaves one —\n"+
+				"  `dcctl instances list` shows what dcctl believes it has.",
+			e.Instance, e.Release, e.Owner, e.Instance)
+	}
 	return fmt.Sprintf(
 		"the Helm release %q in this cluster says it belongs to instance %q, not %q, so "+
 			"uninstalling it would destroy an instance this command did not name. dcctl installs "+

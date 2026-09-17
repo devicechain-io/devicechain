@@ -158,13 +158,13 @@ bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no
 `type: LoadBalancer` service has to resolve. Run it yourself only if you want real
 LoadBalancer IPs — and then stop it yourself (`pkill -x cloud-provider-kind`).
 
-`dcctl destroy local <instance>` removes the instance — its Helm release, its NATS and
-TimescaleDB (`tofu destroy` on the instance's own infrastructure), its database and login,
-its namespace (waiting until it is gone) and, once all that is verified, its local state —
-and **never** the cluster or what `dcctl install`
-put on it. If the instance's local infrastructure state is missing while the instance is
-still running, destroy refuses; `--without-state` removes it anyway and reports that the
-infrastructure destroy was skipped. There is no uninstall command yet; to tear everything
+`dcctl destroy local <instance>` removes the instance — its Helm release (which takes its
+namespace, NATS and TimescaleDB with it), its infrastructure state (`tofu destroy`), its
+database and login, and, once the namespace is verified gone, its local state — and
+**never** the cluster or what `dcctl install` put on it. If the instance's local
+infrastructure state is missing while the instance is still running, or predates the
+cluster/instance split, destroy refuses before changing anything; `--without-state` removes
+it anyway and reports that the infrastructure destroy was skipped. There is no uninstall command yet; to tear everything
 down, each is a one-liner:
 
 ```bash

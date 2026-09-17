@@ -37,10 +37,11 @@ store; its namespace, waiting until it is gone; and, last, its local state under
 fails part-way keeps the local state, and running it again resumes.
 
 If the instance's infrastructure state is missing or empty but its broker or event
-store is running, destroy refuses before changing anything. --without-state removes
-such an instance anyway: it skips "tofu destroy" and removes the instance by its
-Helm release, database and login, and namespace, saying that tofu destroy was
-skipped.
+store is running, or the state cannot be read, or it still holds the cluster's shared
+prerequisites (an instance built by an older dcctl), destroy refuses before changing
+anything. --without-state removes such an instance anyway: it skips "tofu destroy"
+and removes the instance by its Helm release, database and login, and namespace,
+saying that tofu destroy was skipped and what it left on the cluster.
 
 The cluster, and the shared prerequisites "dcctl install" put there, are never
 touched — other instances may be using them, and destroy leaves the cluster

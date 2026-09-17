@@ -119,9 +119,9 @@ func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 }
 
 // 🔴 A DESTROY THAT STOPPED CALLING THE DROP WOULD LEAVE EVERY INSTANCE'S DATABASE ON THE
-// SHARED STORE, and nothing a unit test drives reaches uninstallInstance — it needs a
-// cluster and a Helm release. So the call, and its place after the uninstall that ends
-// the services' sessions, is held by the source.
+// SHARED STORE. The call order in the source is held here; that the calls RUN, in that
+// order, is held by TestUninstallInstanceRunsEveryStepInOrder — a presence check alone let
+// a never-taken branch around the wait, and a seam that ran nothing, both survive.
 func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "destroy.go", nil, 0)
@@ -148,7 +148,7 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 		}
 		return true
 	})
-	for _, name := range []string{"helmUninstall", "destroyInstanceRoot", "removeInstanceRelationalLogin",
+	for _, name := range []string{"helmUninstall", "destroyInstanceInfrastructure", "removeInstanceRelationalLogin",
 		"removeInstanceNamespace", "waitForNamespaceGone"} {
 		if _, ok := pos[name]; !ok {
 			t.Fatalf("uninstallInstance no longer calls %s; an instance destroy would leave its "+
@@ -161,7 +161,7 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	// 🔴 The instance's own infrastructure goes after the services that use it and before
 	// the database, per the teardown order; and the namespace is waited on only after it
 	// is deleted.
-	if pos["destroyInstanceRoot"] < pos["helmUninstall"] || pos["removeInstanceRelationalLogin"] < pos["destroyInstanceRoot"] {
+	if pos["destroyInstanceInfrastructure"] < pos["helmUninstall"] || pos["removeInstanceRelationalLogin"] < pos["destroyInstanceInfrastructure"] {
 		t.Error("tofu destroy is not between the chart uninstall and the database drop")
 	}
 	if pos["waitForNamespaceGone"] < pos["removeInstanceNamespace"] {

@@ -192,8 +192,11 @@ accidental destroys (methodology §11). Three guards back this up:
   remove the databases (and therefore refuses to destroy this whole root).
 
   `dcctl destroy` is the one deliberate exception, for the **instance** root only: to
-  remove an instance it drops the event store's release from state and uninstalls it
-  directly, then runs a plain `tofu destroy` over the rest of the instance root. The
+  remove an instance it uninstalls the event store's release directly, then drops it
+  from state, then runs a plain `tofu destroy` over the rest of the instance root. By
+  then the instance's Helm release has been uninstalled, and the namespace — with NATS
+  and the event store in it — has gone with it, so this mostly clears the instance's
+  state. The
   cluster root — and with it the relational database — is never destroyed by `dcctl`.
 
   🔴 It protects a resource that is **in the configuration**. It does NOT protect one

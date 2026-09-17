@@ -575,10 +575,11 @@ simulados](../intro.md#probarlo-con-datos-simulados).
 dcctl destroy local my-instance
 ```
 
-`dcctl destroy` elimina **solo esa instancia**, en este orden: su release de Helm; su propia
-infraestructura —su broker NATS y su almacén de eventos— mediante `tofu destroy`; su base de
-datos y su login de base de datos en la base de datos relacional compartida; y su namespace,
-que espera a ver desaparecer por completo. Después comprueba que lo que eliminó ya no existe
+`dcctl destroy` elimina **solo esa instancia**, en este orden: su release de Helm, que
+elimina el namespace de la instancia y todo lo que contiene, incluidos su broker NATS y su
+almacén de eventos; su estado de infraestructura, mediante `tofu destroy`, que además elimina
+lo que ese estado aún contenga; su base de datos y su login de base de datos en la base de
+datos relacional compartida; y después espera a ver desaparecer el namespace por completo. Después comprueba que lo que eliminó ya no existe
 y, solo entonces, elimina su estado local en `~/.devicechain/instances/<instance>/`. El
 artefacto de depósito (escrow) de la clave raíz se conserva —consulta
 [Recuperación ante desastres](./disaster-recovery.md#after-destroy).
@@ -591,8 +592,10 @@ Si la instancia sigue en marcha pero falta su estado local de infraestructura �
 perdió, o porque la instancia se arrancó desde otra máquina—, destroy **se niega**, porque sin
 ese estado no puede ejecutar la destrucción de la infraestructura. `--without-state` elimina
 la instancia de todos modos, por su release de Helm, su base de datos y su login, y su
-namespace, e informa de que se omitió la destrucción de la infraestructura.
-`dcctl destroy --all` también acepta `--without-state`.
+namespace, e informa de que se omitió la destrucción de la infraestructura. Una instancia
+cuyo estado local es anterior a la división de la infraestructura en una parte de clúster y
+otra de instancia se rechaza del mismo modo, antes de cualquier cambio, y también necesita
+`--without-state`. `dcctl destroy --all` acepta `--without-state`.
 
 Nunca elimina el
 clúster ni los requisitos previos que dejó `dcctl install`, así que el siguiente

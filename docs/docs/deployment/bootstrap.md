@@ -566,10 +566,11 @@ data](../intro.md#trying-it-with-simulated-data).
 dcctl destroy local my-instance
 ```
 
-`dcctl destroy` removes **that instance only**, in this order: its Helm release; its own
-infrastructure — its NATS broker and its event store — through `tofu destroy`; its database
-and database login on the shared relational database; and its namespace, which it waits to
-see fully gone. It then checks that what it deleted is really absent, and only after that
+`dcctl destroy` removes **that instance only**, in this order: its Helm release, which
+removes the instance's namespace and everything in it, including its NATS broker and its
+event store; its infrastructure state, through `tofu destroy`, which also removes anything
+that state still holds; its database and database login on the shared relational database;
+and then it waits to see the namespace fully gone. It then checks that what it deleted is really absent, and only after that
 removes its local state under `~/.devicechain/instances/<instance>/`. The root-key escrow
 artifact is kept — see [Disaster Recovery](./disaster-recovery.md#after-destroy).
 
@@ -581,7 +582,9 @@ If the instance is still running but its local infrastructure state is missing �
 the instance was bootstrapped from another machine — destroy **refuses**, because it cannot
 run the infrastructure destroy without that state. `--without-state` removes the instance
 anyway, by its Helm release, database and login, and namespace, and reports that the
-infrastructure destroy was skipped. `dcctl destroy --all` accepts `--without-state` too.
+infrastructure destroy was skipped. An instance whose local state predates the split of
+the infrastructure into a cluster part and an instance part is refused the same way, before
+any change, and needs `--without-state` too. `dcctl destroy --all` accepts `--without-state`.
 
 It never deletes the cluster or
 the prerequisites `dcctl install` put there, so the next `dcctl bootstrap` on the cluster

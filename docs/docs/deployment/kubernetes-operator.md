@@ -112,12 +112,14 @@ immutability rules work by comparing the new version of the object against the o
 a recreated object has no old version to compare against: delete-then-re-apply would
 repoint the cluster binding in two steps that each look legitimate on their own.
 
-**`dcctl destroy` clears the finalizer itself**, as its last step, once the instance is
-actually gone — so in the ordinary case there is nothing to do by hand. `destroy` never
+**`dcctl destroy` clears the finalizer itself**, as its last step in the cluster, once the
+namespace is gone and before the local state is removed — so in the ordinary case there is
+nothing to do by hand. `destroy` never
 deletes the cluster itself, so this is the step that removes the declaration.
 
 :::note A destroy that fails leaves the declaration behind on purpose
-It still records which cluster the instance lives in, which is what a re-run needs, and
+Unless it fails only while removing the local state, after the declaration is already gone,
+it still records which cluster the instance lives in, which is what a re-run needs, and
 it reads `Destroying` rather than `Ready`, so the next reader can tell they are looking
 at a teardown in progress. `dcctl bootstrap` over such a declaration **refuses** rather
 than building half a new instance on top of half an old one; it tells you to finish the

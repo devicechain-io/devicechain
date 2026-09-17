@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,9 +110,11 @@ func destroyInstanceRoot(ctx context.Context, kubeContext, instance string) (err
 
 // destroyOpenedInstanceRoot is the teardown itself, over an initialised root.
 //
-// Every step tolerates having already happened, because a destroy is re-run precisely
-// when the last one died: the release may be gone, the state entry removed, the rest
-// destroyed.
+// Every step below tolerates having already happened, because a destroy is re-run
+// precisely when the last one died: the release may be gone (the uninstall ignores
+// not-found), the state entry removed (state rm runs only when listed), the rest
+// destroyed (a destroy over an emptied state is "No changes"). The chart uninstall
+// before this is resumable for the same reason — see resolveForeignRelease.
 func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext, instance string, uninstall providerReleaseUninstaller) error {
 	if err := checkDestroyFences(ctx, tf, instance); err != nil {
 		return err
@@ -166,6 +169,11 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 // checkDestroyFences runs the refusals that apply to a destroy — only the pre-split one.
 // See destroyInstanceRoot for why the other fences of the apply path are absent.
 //
+// 🔴 THE SECOND LAYER, NOT THE FIRST. refuseUndestroyableInstance reads the same
+// addresses from the state FILE before the prompt, the lock and the chart uninstall,
+// which is where a refusal can still say nothing has been removed. This one runs after
+// the chart is gone, over the state tofu actually reads, and says so.
+//
 // 🔴 A STATE-ONLY SIGNATURE ON PURPOSE. checkHaNotTornDown needs the requested topology
 // and the outputs; taking only a stateLister here means it cannot be added by accident.
 func checkDestroyFences(ctx context.Context, tf stateLister, instance string) error {
@@ -176,16 +184,40 @@ func checkDestroyFences(ctx context.Context, tf stateLister, instance string) er
 	if len(found) == 0 {
 		return nil
 	}
+	return preSplitDestroyRefusal(instance, found, true)
+}
+
+// preSplitDestroyRefusal is the refusal to run `tofu destroy` over a state that still
+// holds the cluster prerequisites. releaseUninstalled says whether the chart release
+// is already gone, because the sentence about what has been removed must be true at
+// the point it is printed.
+//
+// 🔑 WHAT --without-state DOES TO SUCH AN INSTANCE, said exactly. It skips tofu destroy,
+// so nothing that state describes is touched. It uninstalls the chart release, asks the
+// store for the instance's own database and login (a cluster `dcctl install` never
+// prepared has no install record, and the destroy says the database was left), deletes
+// the labelled instance namespace, and removes the local state — this state with it.
+// An instance this old also predates per-instance namespaces, so its broker and event
+// store are in the shared namespace and are left too.
+func preSplitDestroyRefusal(instance string, found []string, releaseUninstalled bool) error {
+	removed := "Nothing has been removed."
+	if releaseUninstalled {
+		removed = "The instance's chart release has already been uninstalled, but tofu destroy has NOT run: " +
+			"nothing this state describes has been removed."
+	}
 	return fmt.Errorf(
 		"instance %q was built by a dcctl that kept the cluster prerequisites in this instance's own "+
 			"infrastructure state, so `tofu destroy` over it would DESTROY them — %d such resource(s):\n  %s\n"+
 			"That includes the shared relational database, which holds data for every instance on this "+
 			"cluster, and the object store holding every backup archive.\n"+
-			"Nothing has been removed yet. To remove this instance WITHOUT running tofu destroy, re-run with "+
-			"--without-state: it uninstalls the instance release, drops its database and login, and deletes "+
-			"its namespace, leaving the prerequisites on the cluster (the local state that describes them is "+
-			"removed with the instance)",
-		instance, len(found), strings.Join(found, "\n  "))
+			"%s To remove this instance WITHOUT running tofu destroy, re-run with --without-state: it "+
+			"uninstalls the instance's chart release, drops its database and login where the cluster has "+
+			"a per-instance one (and says so where it does not), deletes its namespace, and removes its local "+
+			"state — including this infrastructure state, the only record of the resources above. Everything "+
+			"that state describes is LEFT on the cluster: the prerequisites, the shared relational database "+
+			"and, for an instance built before each instance had its own namespace, its broker and event "+
+			"store in %s. To remove those as well, delete and recreate the cluster",
+		instance, len(found), strings.Join(found, "\n  "), removed, infraNamespace)
 }
 
 // uninstallProviderRelease removes a release the instance root's Helm provider created.
@@ -215,8 +247,17 @@ func uninstallProviderRelease(ctx context.Context, kubeContext, namespace, name 
 	return res != nil, nil
 }
 
-// instanceRootStateResources counts the managed resources in the instance root's local
-// state. A missing state is zero.
+// instanceRootState is what the instance root's local state holds, read from the file.
+type instanceRootState struct {
+	// Resources counts what `tofu destroy` would remove from the cluster: managed
+	// resources with an instance, terraform_data excluded.
+	Resources int
+	// PreSplit lists the preSplitStateAddresses the state holds.
+	PreSplit []string
+}
+
+// readInstanceRootState reads the instance root's local state. A missing state is
+// empty.
 //
 // 🔑 READ FROM THE FILE, NOT THROUGH tofu, BECAUSE IT RUNS BEFORE ANYTHING IS CHANGED.
 // It decides whether a destroy may proceed at all, and extracting and initialising a
@@ -225,12 +266,12 @@ func uninstallProviderRelease(ctx context.Context, kubeContext, namespace, name 
 // roots moved down a directory keeps it one level up until the next tofu run moves it.
 //
 // Fails closed: a state that cannot be parsed is an error, never "empty".
-func instanceRootStateResources(instance string) (int, error) {
+func readInstanceRootState(instance string) (instanceRootState, error) {
+	var out instanceRootState
 	dir, err := instanceRoot(instance)
 	if err != nil {
-		return 0, err
+		return out, err
 	}
-	total := 0
 	for _, p := range []string{
 		filepath.Join(dir, "infra", assets.InstanceRootDir, "terraform.tfstate"),
 		filepath.Join(dir, "infra", "terraform.tfstate"),
@@ -239,44 +280,102 @@ func instanceRootStateResources(instance string) (int, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return 0, fmt.Errorf("reading %s: %w", p, err)
+			return instanceRootState{}, fmt.Errorf("reading %s: %w", p, err)
 		}
-		n, err := managedResourcesIn(b)
+		doc, err := parseStateDocument(b)
 		if err != nil {
-			return 0, fmt.Errorf("reading %s: %w", p, err)
+			return instanceRootState{}, fmt.Errorf("reading %s: %w", p, err)
 		}
-		total += n
+		out.Resources += doc.managed()
+		for _, address := range preSplitStateAddresses {
+			if slices.Contains(doc.addresses(), address) && !slices.Contains(out.PreSplit, address) {
+				out.PreSplit = append(out.PreSplit, address)
+			}
+		}
 	}
-	return total, nil
+	return out, nil
 }
 
-// managedResourcesIn counts managed resources with at least one instance in a state
-// document. Data sources are not infrastructure, and a resource with no instances is
-// nothing tofu would destroy.
-func managedResourcesIn(state []byte) (int, error) {
+// stateDocument is the part of a state file this package reads without tofu.
+type stateDocument struct {
+	Resources []struct {
+		Module    string `json:"module"`
+		Mode      string `json:"mode"`
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Instances []struct {
+			IndexKey json.RawMessage `json:"index_key"`
+		} `json:"instances"`
+	} `json:"resources"`
+}
+
+func parseStateDocument(state []byte) (stateDocument, error) {
+	var doc stateDocument
 	if len(strings.TrimSpace(string(state))) == 0 {
-		return 0, nil
-	}
-	var doc struct {
-		Resources []struct {
-			Mode      string            `json:"mode"`
-			Instances []json.RawMessage `json:"instances"`
-		} `json:"resources"`
+		return doc, nil
 	}
 	if err := json.Unmarshal(state, &doc); err != nil {
-		return 0, fmt.Errorf("parsing the state: %w", err)
+		return doc, fmt.Errorf("parsing the state: %w", err)
 	}
+	return doc, nil
+}
+
+// managed counts managed resources with at least one instance — what `tofu destroy`
+// would remove from the cluster.
+//
+// 🔴 terraform_data IS NOT COUNTED. It is a state-only resource with no object in the
+// cluster (see deliberatelyNotFenced), so a state holding nothing but the plan-time
+// guards describes nothing running — and counting them let such a state skip the
+// probe for a broker or event store nothing in state describes. Data sources are not
+// infrastructure either, and a resource with no instances is nothing tofu would destroy.
+func (d stateDocument) managed() int {
 	n := 0
-	for _, r := range doc.Resources {
-		if r.Mode == "managed" && len(r.Instances) > 0 {
+	for _, r := range d.Resources {
+		if r.Mode == "managed" && r.Type != "terraform_data" && len(r.Instances) > 0 {
 			n++
 		}
 	}
-	return n, nil
+	return n
 }
 
-// liveInstanceInfrastructure reports what of the instance root is running in the
-// instance's namespace, for a destroy that has no state describing it.
+// addresses renders every resource instance's address the way `tofu state list` and
+// preSplitStateAddresses spell it: module path, `data.` for data sources, and the index
+// key — `[0]` for count, `["key"]` for for_each.
+func (d stateDocument) addresses() []string {
+	var out []string
+	for _, r := range d.Resources {
+		base := r.Type + "." + r.Name
+		if r.Mode == "data" {
+			base = "data." + base
+		}
+		if r.Module != "" {
+			base = r.Module + "." + base
+		}
+		for _, inst := range r.Instances {
+			key := strings.TrimSpace(string(inst.IndexKey))
+			if key == "" || key == "null" {
+				out = append(out, base)
+				continue
+			}
+			out = append(out, base+"["+key+"]")
+		}
+	}
+	return out
+}
+
+// managedResourcesIn counts what `tofu destroy` would remove in a state document. See
+// stateDocument.managed.
+func managedResourcesIn(state []byte) (int, error) {
+	doc, err := parseStateDocument(state)
+	if err != nil {
+		return 0, err
+	}
+	return doc.managed(), nil
+}
+
+// liveInstanceInfrastructure reports what of the instance root is running — in the
+// instance's namespace, or for the broker and event store in the shared one — for a
+// destroy that has no state describing it.
 //
 // 🔴 WHY AN EMPTY STATE IS NOT PERMISSION. With nothing in state, `tofu destroy` removes
 // nothing and says so successfully; the namespace delete would then take the broker and
@@ -294,22 +393,30 @@ func liveInstanceInfrastructure(ctx context.Context, typed kubernetes.Interface,
 	ns := instanceNamespace(instance)
 	var found []string
 
-	sts, err := typed.AppsV1().StatefulSets(ns).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-	case err != nil:
-		return nil, fmt.Errorf("reading StatefulSet %s/%s: %w", ns, natsStatefulSetName, err)
-	case live(&sts.ObjectMeta):
-		found = append(found, fmt.Sprintf("StatefulSet %s/%s", ns, natsStatefulSetName))
-	}
+	// 🔴 AND THE SHARED NAMESPACE, FOR THE BROKER AND EVENT STORE THEMSELVES. An instance
+	// built before each instance had its own namespace runs both in it, under the same
+	// names, and only such an instance can put them there — the cluster root installs
+	// neither. Asked only in the instance's own namespace, a lost state over one of those
+	// instances found nothing, and the destroy closed green over a broker and event store
+	// it had never touched.
+	for _, where := range []string{ns, infraNamespace} {
+		sts, err := typed.AppsV1().StatefulSets(where).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return nil, fmt.Errorf("reading StatefulSet %s/%s: %w", where, natsStatefulSetName, err)
+		case live(&sts.ObjectMeta):
+			found = append(found, fmt.Sprintf("StatefulSet %s/%s", where, natsStatefulSetName))
+		}
 
-	cl, err := dyn.Resource(clusterGVR).Namespace(ns).Get(ctx, tsdbClusterName, metav1.GetOptions{})
-	switch {
-	case err != nil && (apierrors.IsNotFound(err) || meta.IsNoMatchError(err)):
-	case err != nil:
-		return nil, fmt.Errorf("reading Cluster %s/%s: %w", ns, tsdbClusterName, err)
-	case cl.GetDeletionTimestamp() == nil:
-		found = append(found, fmt.Sprintf("CloudNativePG Cluster %s/%s", ns, tsdbClusterName))
+		cl, err := dyn.Resource(clusterGVR).Namespace(where).Get(ctx, tsdbClusterName, metav1.GetOptions{})
+		switch {
+		case err != nil && (apierrors.IsNotFound(err) || meta.IsNoMatchError(err)):
+		case err != nil:
+			return nil, fmt.Errorf("reading Cluster %s/%s: %w", where, tsdbClusterName, err)
+		case cl.GetDeletionTimestamp() == nil:
+			found = append(found, fmt.Sprintf("CloudNativePG Cluster %s/%s", where, tsdbClusterName))
+		}
 	}
 
 	for _, release := range []string{natsReleaseName, tsdbClusterName} {
@@ -342,17 +449,44 @@ var probeLiveInstanceInfrastructure = func(ctx context.Context, kubeContext, ins
 	return liveInstanceInfrastructure(ctx, typed, dyn, instance)
 }
 
-// refuseStatelessLiveInstance is the empty-state refusal, and it runs before anything
-// is changed. It reports whether the instance root's state lists anything — which is
-// what decides whether `tofu destroy` has work to do.
-func refuseStatelessLiveInstance(ctx context.Context, kubeContext, instance string) (stateHasResources bool, err error) {
-	n, err := instanceRootStateResources(instance)
+// destroyInstanceInfrastructure and teardownClients are the seams uninstallInstance
+// reaches `tofu destroy` and the cluster through.
+//
+// 🔴 WITHOUT THEM THE ONLY THING UNDER TEST IS THE STEPS, NOT THE SEQUENCE. Each step is
+// a correct function whether or not uninstallInstance calls it, and a call behind a tofu
+// binary or a live API server is one no unit test reaches: a destroy that stopped
+// running tofu destroy, or stopped waiting for the namespace, broke nothing any test
+// could see. TestUninstallInstanceRunsEveryStepInOrder drives the sequence through these.
+var (
+	destroyInstanceInfrastructure = destroyInstanceRoot
+	teardownClients               = func(kubeContext string) (dynamic.Interface, kubernetes.Interface, error) {
+		dyn, _, typed, err := kubeClients(kubeContext)
+		if err != nil {
+			return nil, nil, err
+		}
+		return dyn, typed, nil
+	}
+)
+
+// refuseUndestroyableInstance runs every refusal a destroy can meet before anything is
+// changed, from one read of the state file, and reports whether that state lists
+// anything — which is what decides whether `tofu destroy` has work to do.
+//
+//   - a state that cannot be read: what tofu destroy would remove is unknown.
+//   - a state still holding the cluster prerequisites: tofu destroy would take them.
+//   - a missing or empty state over a running broker or event store: tofu destroy would
+//     remove nothing and the destroy would report a teardown it never performed.
+func refuseUndestroyableInstance(ctx context.Context, kubeContext, instance string) (stateHasResources bool, err error) {
+	st, err := readInstanceRootState(instance)
 	if err != nil {
 		return false, fmt.Errorf("%w\n  The instance's infrastructure state cannot be read, so what `tofu destroy` would "+
 			"remove is unknown. Nothing has been removed. If you know the state is lost, re-run with "+
 			"--without-state to remove the instance by its release, database, login and namespace instead", err)
 	}
-	if n > 0 {
+	if len(st.PreSplit) > 0 {
+		return false, preSplitDestroyRefusal(instance, st.PreSplit, false)
+	}
+	if st.Resources > 0 {
 		return true, nil
 	}
 	found, err := probeLiveInstanceInfrastructure(ctx, kubeContext, instance)
@@ -367,8 +501,10 @@ func refuseStatelessLiveInstance(ctx context.Context, kubeContext, instance stri
 			"`tofu destroy` over an empty state removes nothing, so this destroy would not be the teardown it "+
 			"reports. Nothing has been removed. If the state is lost — or this instance was built on another "+
 			"machine — re-run with --without-state: it removes the instance by its release, database, login "+
-			"and namespace, and says that tofu destroy was skipped",
-		instance, strings.Join(found, "\n  "))
+			"and namespace, and says that tofu destroy was skipped. Anything listed above outside namespace %s "+
+			"(an instance built before each instance had its own namespace runs its broker and event store in %s) "+
+			"is not in that namespace and is left running",
+		instance, strings.Join(found, "\n  "), instanceNamespace(instance), infraNamespace)
 }
 
 // namespaceGoneTimeout bounds the wait for an instance namespace to finish deleting.
@@ -389,24 +525,51 @@ var (
 // 🔑 THE INSTANCE CR CANNOT DEADLOCK THIS. It carries dcctl's finalizer, but it is
 // cluster-scoped, so it is not in the namespace and the namespace's deletion never waits
 // on it.
+//
+// 🔴 A FAILED READ IS NOT AN ANSWER EITHER WAY. An API server that blips mid-wait —
+// a leader election, a dropped connection — says nothing about the namespace, so the
+// error is recorded and the wait goes on to its deadline. Returning on it misreported a
+// one-second blip as a namespace "still terminating after 10m0s", and dropped the error
+// that said what actually happened.
 func waitForNamespaceGone(ctx context.Context, typed kubernetes.Interface, name string, timeout, every time.Duration) error {
-	var last *corev1.Namespace
+	start := time.Now()
+	var (
+		last    *corev1.Namespace
+		lastErr error
+	)
 	err := wait.PollUntilContextTimeout(ctx, every, timeout, true, func(ctx context.Context) (bool, error) {
 		ns, err := typed.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
+		switch {
+		case apierrors.IsNotFound(err):
 			return true, nil
+		case err != nil:
+			lastErr = err
+			return false, nil
 		}
-		if err != nil {
-			return false, err
-		}
-		last = ns
+		last, lastErr = ns, nil
 		return false, nil
 	})
 	if err == nil {
 		return nil
 	}
-	if last == nil || ctx.Err() != nil {
-		return fmt.Errorf("waiting for namespace %q to be deleted: %w", name, err)
+	elapsed := time.Since(start)
+	if elapsed >= time.Second {
+		elapsed = elapsed.Round(time.Second)
+	} else {
+		elapsed = elapsed.Round(time.Millisecond)
+	}
+	const kept = "Local state has been kept; once whatever holds the namespace is resolved, run the same destroy again"
+	// The CALLER's context ended — an interrupt, not a namespace that would not go.
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("waiting for namespace %q to be deleted was interrupted after %s: %w\n%s",
+			name, elapsed, cerr, kept)
+	}
+	if last == nil {
+		if lastErr == nil {
+			lastErr = err
+		}
+		return fmt.Errorf("namespace %q could not be confirmed deleted within %s: every read of it failed, "+
+			"the last with: %w\n%s", name, elapsed, lastErr, kept)
 	}
 	var why []string
 	for _, c := range last.Status.Conditions {
@@ -415,9 +578,12 @@ func waitForNamespaceGone(ctx context.Context, typed kubernetes.Interface, name 
 	if len(why) == 0 {
 		why = append(why, "no conditions reported")
 	}
-	return fmt.Errorf("namespace %q was still %s after %s:\n  %s\n"+
-		"Local state has been kept; once whatever holds the namespace is resolved, run the same destroy again",
-		name, namespacePhase(last), timeout, strings.Join(why, "\n  "))
+	if lastErr != nil {
+		return fmt.Errorf("namespace %q was still %s when last read, and after %s the latest read failed: %w\n  %s\n%s",
+			name, namespacePhase(last), elapsed, lastErr, strings.Join(why, "\n  "), kept)
+	}
+	return fmt.Errorf("namespace %q was still %s after %s:\n  %s\n%s",
+		name, namespacePhase(last), elapsed, strings.Join(why, "\n  "), kept)
 }
 
 // namespacePhase names a namespace's phase for an error, never as an empty string.
@@ -429,8 +595,23 @@ func namespacePhase(ns *corev1.Namespace) string {
 }
 
 // withoutStateWarning names what --without-state leaves unmanaged when the state it
-// skips was not in fact empty.
-func withoutStateWarning(instance string, resources int) string {
+// skips was not in fact empty — or could not be read at all.
+func withoutStateWarning(instance string, st instanceRootState, readErr error) string {
+	if readErr != nil {
+		return color.YellowString(
+			"--without-state: tofu destroy will be SKIPPED, and the local infrastructure state of %q cannot be "+
+				"read (%v), so what it describes is unknown. Anything of it outside the instance namespace is left "+
+				"running, and this state is removed with the instance.", instance, readErr)
+	}
+	if len(st.PreSplit) > 0 {
+		return color.YellowString(
+			"--without-state: tofu destroy will be SKIPPED. The local infrastructure state of %q still holds the "+
+				"cluster prerequisites (%s); they, the shared relational database and — for an instance built before "+
+				"each instance had its own namespace — its broker and event store in %s are LEFT on the cluster, and "+
+				"this state, the only record of them, is removed with the instance.",
+			instance, strings.Join(st.PreSplit, ", "), infraNamespace)
+	}
+	resources := st.Resources
 	return color.YellowString(
 		"--without-state: tofu destroy will be SKIPPED, but the local infrastructure state of %q lists %d "+
 			"resource(s). They are removed only if they live in the instance namespace; anything elsewhere is "+

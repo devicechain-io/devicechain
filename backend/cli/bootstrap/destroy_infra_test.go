@@ -114,6 +114,13 @@ func TestTheEmptyStateProbeFindsOnlyLiveInfrastructure(t *testing.T) {
 		// 🔴 NEVER PVCs: they outlive their workloads by design.
 		{name: "a leftover PVC", typed: []runtime.Object{&corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-js-dc-nats-0", Namespace: id}}}},
+		// 🔴 Built before each instance had its own namespace: the broker and event store
+		// run in the shared one, and only such an instance can put them there.
+		{name: "a pre-namespace broker", typed: []runtime.Object{natsStatefulSet(infraNamespace, false)},
+			want: []string{"StatefulSet dc-system/dc-nats"}},
+		{name: "a pre-namespace event store", dyn: []runtime.Object{tsdbCluster(infraNamespace, false)},
+			want: []string{"CloudNativePG Cluster dc-system/dc-tsdb"}},
+		{name: "a terminating pre-namespace broker", typed: []runtime.Object{natsStatefulSet(infraNamespace, true)}},
 		// The bystander: the same objects in another instance's namespace are not this one's.
 		{name: "another instance's infrastructure",
 			typed: []runtime.Object{natsStatefulSet("other", false), helmStorageSecret("other", "dc-tsdb", false)},
@@ -202,6 +209,9 @@ func TestTheEmptyStateRefusal(t *testing.T) {
 			live: running, wantErr: true, wantProbed: true},
 		{name: "data sources only, broker running", rel: "instance/terraform.tfstate", doc: stateWithDataOnly,
 			live: running, wantErr: true, wantProbed: true},
+		{name: "guards only, broker running", rel: "instance/terraform.tfstate",
+			doc:  `{"version":4,"resources":[{"mode":"managed","type":"terraform_data","name":"cutover_guard","instances":[{"index_key":"tsdb"}]}]}`,
+			live: running, wantErr: true, wantProbed: true},
 		// State lists something: tofu destroy has work, and the cluster is not asked.
 		{name: "state with resources", rel: "instance/terraform.tfstate", doc: stateWithAResource,
 			live: running, wantHas: true},
@@ -226,7 +236,7 @@ func TestTheEmptyStateRefusal(t *testing.T) {
 				return tc.live, nil
 			}
 
-			has, err := refuseStatelessLiveInstance(context.Background(), "kind-x", id)
+			has, err := refuseUndestroyableInstance(context.Background(), "kind-x", id)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
 			}
@@ -526,6 +536,11 @@ func TestManagedResourceCount(t *testing.T) {
 		stateAfterDestroy:  0,
 		stateWithDataOnly:  0,
 		stateWithAResource: 1,
+		// 🔴 terraform_data is state-only: guards alone describe nothing running, and
+		// counting them skipped the live probe.
+		`{"resources":[{"mode":"managed","type":"terraform_data","name":"cutover_guard","instances":[{"index_key":"tsdb"}]}]}`: 0,
+		`{"resources":[{"mode":"managed","type":"terraform_data","name":"g","instances":[{}]},` +
+			`{"mode":"managed","type":"helm_release","name":"nats","instances":[{}]}]}`: 1,
 		`{"resources":[{"mode":"managed","instances":[]}]}`: 0,
 	} {
 		if got, err := managedResourcesIn([]byte(doc)); err != nil || got != want {

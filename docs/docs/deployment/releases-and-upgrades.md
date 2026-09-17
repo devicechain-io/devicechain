@@ -337,7 +337,7 @@ take on while every install is still an early one.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain            # removes the instance
+dcctl destroy local devicechain --without-state   # removes the instance; the old cluster goes next
 kind delete cluster --name devicechain     # and the cluster the older release prepared
 dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
@@ -389,7 +389,7 @@ upgrade path that preserves the existing rows.
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain            # removes the instance
+dcctl destroy local devicechain --without-state   # removes the instance; the old cluster goes next
 kind delete cluster --name devicechain     # and the cluster the older release prepared
 dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
@@ -1257,13 +1257,14 @@ declaration invented after the fact would be a guess applied over a live instanc
 **To move onto this release, recreate the instance — and the cluster under it.** The
 releases that built these instances had no `dcctl install`: they installed the cluster's
 shared prerequisites as part of the instance, and recorded no install. So `dcctl destroy`
-leaves those prerequisites behind, `dcctl bootstrap` refuses a cluster with no install
+refuses to run `tofu destroy` over the state those releases wrote and needs `--without-state`, which still
+leaves those prerequisites behind; `dcctl bootstrap` refuses a cluster with no install
 record, and `dcctl install` would collide with what the older release left. Start from a
 fresh cluster in between:
 
 ```bash
 # Export anything you need first — this discards the databases.
-dcctl destroy local devicechain            # removes the instance
+dcctl destroy local devicechain --without-state   # removes the instance; the old cluster goes next
 kind delete cluster --name devicechain     # and the cluster the older release prepared
 dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
