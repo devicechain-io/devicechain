@@ -353,9 +353,10 @@ var bootstrapCmd = &cobra.Command{
 		// bring-up would trade a recoverable annoyance (destroy falls back to the guess,
 		// loudly) for a broken install.
 		//
-		// 🔴 What was here first is captured before it is replaced: on the one refusal that
-		// fires before anything is written — a host another instance serves — the record
-		// this run writes describes nothing. See PriorLocalState.
+		// 🔴 What was here first is captured before it is replaced: on the refusals that
+		// fire before this run has written anything to the cluster, the record this run
+		// writes describes an instance that was never built. See PriorLocalState and
+		// unwindLocalRecordWhenNothingWasWritten.
 		prior := bootstrap.CapturePriorLocalState(opts.Instance)
 		if !opts.DryRun {
 			rec := bootstrap.InstanceRecord{
@@ -377,7 +378,7 @@ var bootstrapCmd = &cobra.Command{
 
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
 		finishClaim(ctx, st, runErr)
-		unwindLocalRecordOnHostTaken(opts, prior, runErr)
+		unwindLocalRecordWhenNothingWasWritten(opts, prior, runErr)
 		return runErr
 	},
 	SilenceUsage: true,
@@ -421,23 +422,32 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 	return nil
 }
 
-// unwindLocalRecordOnHostTaken puts the local record back after the one refusal
-// that makes it describe nothing.
+// unwindLocalRecordWhenNothingWasWritten puts the local record back after a refusal that
+// makes it describe nothing.
 //
-// 🔴 KEYED ON THE REFUSAL, NOT ON FAILURE. Every other way a bootstrap can fail leaves a
-// cluster that may be half-built and MUST keep its record, which is the whole reason the
-// record is written before the pipeline. This one cannot: it fires before anything is
-// written, on a cluster already holding another instance — one EnsureCluster adopted,
-// never one it created — so there is nothing for the record to name. Widening this to "any error" would restore the orphan
-// the record exists to prevent.
+// 🔴 THE QUESTION IS "DID THIS RUN WRITE ANYTHING TO THE CLUSTER", NOT "IS THIS
+// ErrHostTaken". Every other way a bootstrap can fail may leave a cluster half-built,
+// which MUST keep its record — the record is the only thing that can name the cluster to
+// destroy, and it is written before the pipeline for exactly that reason. Widening this to
+// "any error" would restore the orphan the record exists to prevent. Naming the
+// discriminator after one of its members is how the list stopped tracking it once already:
+// the comment here read "the one refusal that fires before anything is written" while two
+// refusals already qualified, and a third was about to.
+//
+// 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. All three types below
+// are raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
+// holds ahead of the operator install and the declaration. The namespace refusal is raised
+// in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable.
 //
 // It reports and moves on. The refusal is what the operator is about to read, and
 // failing differently because the cleanup failed would replace a message they can act on
 // with one they cannot.
-func unwindLocalRecordOnHostTaken(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
+func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootstrap.PriorLocalState, runErr error) {
 	var hostTaken *bootstrap.ErrHostTaken
 	var noBudget *bootstrap.ErrConnectionBudget
-	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget)) {
+	var noNamespace *bootstrap.ErrNamespaceUnavailable
+	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget) ||
+		errors.As(runErr, &noNamespace)) {
 		return
 	}
 	removed, err := prior.Restore()

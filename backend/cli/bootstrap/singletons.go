@@ -143,14 +143,17 @@ func (e *ErrHostTaken) Error() string {
 		e.Host, e.Holder, e.Instance, e.Instance)
 }
 
-// stepCheckClusterSingletons asks what other instances on this cluster already hold, and
-// refuses a host one of them serves.
+// stepCheckClusterSingletons asks what this cluster already holds that this instance
+// would have to take from it, and refuses what is not free: a host another instance
+// serves, the namespace this instance is named after, and room on the shared store.
 //
 // 🔴 BEFORE ANYTHING IS WRITTEN. It sits right after the rebuild refusal, ahead of the
 // operator install and the instance declaration: a refusal after those would leave a
 // declaration for an instance that was never built, and the cluster would report holding
 // it. The node port is not refused — the instance is built without it — but it is decided
-// here, from the same read, and said.
+// here, from the same read, and said. TestTheSingletonStepRunsBeforeAnythingIsWritten is
+// what holds this step in that position, and the command layer's record rollback is keyed
+// on the refusals raised here because of it.
 func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	if st.Values == nil {
 		st.Values = map[string]string{}
@@ -166,6 +169,18 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		case refuseAHostAnotherInstanceServes(held, st.Instance, host) != nil:
 			wouldDo(fmt.Sprintf("REFUSE: host %q is already served by the instance in namespace %q", host, held.HostHolder))
 		}
+		// The namespace half of the rehearsal, rehearsed separately because half of it
+		// needs no cluster at all: a name `dcctl install` owns is refused from the
+		// install's own constants, and saying so is still useful when the read above
+		// failed because the cluster is not there yet.
+		var refusal *ErrNamespaceUnavailable
+		switch err := precheckInstanceNamespace(ctx, st); {
+		case errors.As(err, &refusal):
+			wouldDo("REFUSE: " + refusal.Error())
+		case err != nil:
+			wouldDo(fmt.Sprintf("could not check whether namespace %q is this instance's to build in "+
+				"(%v); a real run would", instanceNamespace(st.Instance), err))
+		}
 		return nil
 	}
 
@@ -175,6 +190,14 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		return fail("checking what other instances on this cluster hold", err)
 	}
 	if err := refuseAHostAnotherInstanceServes(held, st.Instance, host); err != nil {
+		return err
+	}
+	// 🔴 AND THE NAMESPACE THIS INSTANCE IS ABOUT TO BE BUILT IN, WHICH IS THE ONE WHERE
+	// BEING LATE COSTS A ROOT KEY. ensureNamespaceForRelease reaches the same verdict, but
+	// it reaches it inside the infrastructure apply — on a real cluster a bootstrap named
+	// after the monitoring namespace got that far having already written the secret-store
+	// root key, a TLS private key and four database credentials into it.
+	if err := precheckInstanceNamespace(ctx, st); err != nil {
 		return err
 	}
 	// 🔴 AND THE CONNECTION BUDGET, FOR THE SAME REASON: on a shared store it is the refusal

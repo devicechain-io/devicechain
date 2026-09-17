@@ -403,10 +403,21 @@ func adoptChartWrittenInstanceConfig(
 // `helm uninstall` still deletes it and everything in it. Without that metadata the
 // install refuses outright, which is Helm protecting a namespace it did not make.
 //
-// An existing namespace is left alone. Whether the chart may adopt it is Helm's
-// judgement and it already makes it, with a better message than anything this could
-// say; stamping our metadata onto a namespace somebody else is using would be
-// claiming it rather than checking it.
+// 🔴 AN EXISTING NAMESPACE IS NOT LEFT ALONE ANY MORE, AND THE OLD READING OF THAT WAS
+// MEASURABLY WRONG. Leaving it to Helm's ownership check does put a refusal in the
+// operator's hands with a better message than this could write — but it arrives EIGHT
+// STEPS LATER, and the line below this one writes the instance's credentials into that
+// namespace. On a real cluster a bootstrap named after the monitoring namespace put the
+// secret-store root key, the broker's TLS private key and four database credentials there
+// and was only then refused, leaving destroy correctly declining to clean up after it.
+// refuseANamespaceThisInstanceDoesNotOwn is that decision, taken before the first write.
+//
+// 🔑 AND A NAMESPACE THAT IS THIS INSTANCE'S GETS THE HELM METADATA IT LACKS. The label is
+// the escape hatch — an operator who wants an instance built into a namespace they made
+// labels it by hand — and a hand-made namespace has none of the adoption keys, so without
+// this it passes here and fails at Helm, which is the same eight-step strand in a
+// different coat. Only MISSING keys are filled: a key that is present and different is
+// another release's claim, and Helm's own check says more about that than this could.
 func ensureNamespaceForRelease(
 	ctx context.Context,
 	typed kubernetes.Interface,
@@ -416,18 +427,10 @@ func ensureNamespaceForRelease(
 	existing, err := api.Get(ctx, instance, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		// 🔑 A NAMESPACE ON ITS WAY OUT IS NOT A NAMESPACE. Kubernetes refuses new
-		// content in a terminating namespace, so the Secret write below would fail with
-		// "unable to create new content in namespace ... because it is being
-		// terminated" — which reads as a defect rather than as a destroy that has not
-		// finished. Teardown waits on finalizers and is not instant, so this is exactly
-		// what an operator who runs bootstrap straight after destroy hits.
-		if existing.DeletionTimestamp != nil {
-			return fmt.Errorf("namespace %q is still being deleted, so this instance cannot be "+
-				"built into it yet: a previous `dcctl destroy` has not finished. Wait for the "+
-				"namespace to go and run this again", instance)
+		if err := refuseANamespaceThisInstanceDoesNotOwn(instance, existing); err != nil {
+			return err
 		}
-		return nil
+		return stampHelmAdoptionMetadata(ctx, api, existing, releaseName, releaseNamespace)
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("reading namespace %q before writing the instance configuration: %w",
 			instance, err)
@@ -436,8 +439,8 @@ func ensureNamespaceForRelease(
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: instance,
 		Labels: map[string]string{
-			"devicechain.io/instance": instance,
-			helmManagedByLabel:        helmManagedByValue,
+			instanceNamespaceLabel: instance,
+			helmManagedByLabel:     helmManagedByValue,
 		},
 		Annotations: map[string]string{
 			helmReleaseNameAnno:      releaseName,
@@ -453,6 +456,57 @@ func ensureNamespaceForRelease(
 		return fmt.Errorf("creating namespace %q for the instance configuration: %w", instance, err)
 	}
 	return nil
+}
+
+// stampHelmAdoptionMetadata fills in whichever of Helm's three adoption keys a namespace
+// this instance already owns is missing.
+//
+// 🔴 ONLY THE MISSING ONES, AND NEVER OVER A DIFFERENT VALUE. A key that is present and
+// says something else is another release's claim on this namespace, and overwriting it
+// would make Helm's ownership check pass for a release that does not own it — turning a
+// loud refusal into a silent adoption, which is the one failure mode that metadata exists
+// to prevent. Left as it is, Helm refuses and names the key and both values.
+//
+// An Update is issued only when something actually changed, so the ordinary case — a
+// namespace dcctl or the chart created, which already carries all three — is a read.
+func stampHelmAdoptionMetadata(
+	ctx context.Context,
+	api typedNamespaces,
+	existing *corev1.Namespace,
+	releaseName, releaseNamespace string,
+) error {
+	adopted := existing.DeepCopy()
+	if adopted.Labels == nil {
+		adopted.Labels = map[string]string{}
+	}
+	if adopted.Annotations == nil {
+		adopted.Annotations = map[string]string{}
+	}
+	changed := false
+	fill := func(into map[string]string, key, value string) {
+		if into[key] == "" {
+			into[key] = value
+			changed = true
+		}
+	}
+	fill(adopted.Labels, helmManagedByLabel, helmManagedByValue)
+	fill(adopted.Annotations, helmReleaseNameAnno, releaseName)
+	fill(adopted.Annotations, helmReleaseNamespaceAnno, releaseNamespace)
+	if !changed {
+		return nil
+	}
+	if _, err := api.Update(ctx, adopted, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("giving namespace %q the metadata this instance's Helm release adopts "+
+			"it with: %w", existing.Name, err)
+	}
+	return nil
+}
+
+// typedNamespaces is the one call stampHelmAdoptionMetadata makes, narrowed so it takes
+// the handle its caller already holds rather than re-deriving one from the clientset —
+// and so its signature says it cannot create or delete a namespace.
+type typedNamespaces interface {
+	Update(ctx context.Context, ns *corev1.Namespace, opts metav1.UpdateOptions) (*corev1.Namespace, error)
 }
 
 // removeInstanceNamespace deletes the instance's namespace once its release is gone.
@@ -484,7 +538,7 @@ func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, in
 	} else if err != nil {
 		return false, fmt.Errorf("reading namespace %q: %w", instance, err)
 	}
-	if ns.Labels["devicechain.io/instance"] != instance {
+	if ns.Labels[instanceNamespaceLabel] != instance {
 		fmt.Println(color.YellowString(
 			"  namespace %q is not labelled as this instance's, so it was left alone; "+
 				"anything dcctl wrote inside it is still there", instance))
