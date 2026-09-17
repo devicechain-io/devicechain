@@ -89,8 +89,11 @@ type ClusterRecord struct {
 	// Cluster and KubeContext are the names a human uses for this cluster. 🔴 NOTHING
 	// MAY KEY ON EITHER — they are recorded for reading, and a rebuilt kind cluster
 	// carries the previous one's context name unchanged.
-	Cluster      string    `json:"cluster,omitempty"`
-	KubeContext  string    `json:"kubeContext"`
+	Cluster     string `json:"cluster,omitempty"`
+	KubeContext string `json:"kubeContext"`
+	// Managed records that dcctl created (or named by its own convention) this cluster,
+	// as opposed to being pointed at one with --kube-context.
+	Managed      bool      `json:"managed,omitempty"`
 	FirstSeenAt  time.Time `json:"firstSeenAt"`
 	DcctlVersion string    `json:"dcctlVersion,omitempty"`
 }

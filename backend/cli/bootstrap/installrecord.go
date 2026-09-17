@@ -37,9 +37,10 @@ import (
 // It holds no credential. The shared credentials are cluster-owned Secrets; this names
 // where they are, never what they hold.
 const (
-	installRecordName   = "dc-install"
-	installRecordKey    = "install.json"
-	installRecordSchema = 2
+	installRecordName = "dc-install"
+	installRecordKey  = "install.json"
+	// 3: outputs.rdb.maxConnections, the budget every instance is admitted against.
+	installRecordSchema = 3
 
 	installPhaseApplying  = "applying"
 	installPhaseInstalled = "installed"
@@ -89,6 +90,18 @@ type InstallArchive struct {
 	AccessKeyIDKey    string `json:"accessKeyIdKey,omitempty"`
 	SecretAccessKey   string `json:"secretAccessKeyKey,omitempty"`
 	BucketTsdb        string `json:"bucketTsdb,omitempty"`
+}
+
+// clusterArchive is the recorded archive contract in the shape an instance root is
+// handed it.
+func (a InstallArchive) clusterArchive() ClusterArchive {
+	return ClusterArchive{
+		EndpointURL:       a.EndpointURL,
+		CredentialsSecret: a.CredentialsSecret,
+		AccessKeyIDKey:    a.AccessKeyIDKey,
+		SecretAccessKey:   a.SecretAccessKey,
+		BucketTsdb:        a.BucketTsdb,
+	}
 }
 
 // installSettingsFor is what this run applies the cluster root with. Every field comes
@@ -232,9 +245,10 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 	// instance would silently build without.
 	// The relational store is not optional, so neither is knowing where it is: without
 	// it no instance can be given a login, and none can be destroyed cleanly.
-	if d := r.Outputs.Rdb; d.Namespace == "" || d.ClusterName == "" || d.ProvisionerSecret == "" {
-		return fmt.Errorf("the install record does not say where the relational store is or which "+
-			"Secret holds its provisioner (%+v); no instance could be given a database login", d)
+	if d := r.Outputs.Rdb; d.Namespace == "" || d.ClusterName == "" || d.ProvisionerSecret == "" || d.MaxConnections <= 0 {
+		return fmt.Errorf("the install record does not say where the relational store is, which "+
+			"Secret holds its provisioner, or what connection budget it has (%+v); no instance could "+
+			"be given a database login", d)
 	}
 	a := r.Outputs.Archive
 	if r.Settings.DatabaseBackups && (a.EndpointURL == "" || a.CredentialsSecret == "" ||

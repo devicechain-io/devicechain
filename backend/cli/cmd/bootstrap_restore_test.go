@@ -34,10 +34,6 @@ func parseBootstrapFlags(t *testing.T, argv ...string) {
 		}
 		saved[n] = f.Value.String()
 	}
-	// The booleans that decide whether backups (and therefore the restore path)
-	// exist at all. Saved as values rather than through the flag set because
-	// resolveCompactMode writes them directly.
-	noCNPG, compact, noTLS := bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS
 	t.Cleanup(func() {
 		for n, v := range saved {
 			if err := bootstrapCmd.Flags().Set(n, v); err != nil {
@@ -45,7 +41,6 @@ func parseBootstrapFlags(t *testing.T, argv ...string) {
 			}
 			bootstrapCmd.Flags().Lookup(n).Changed = false
 		}
-		bootstrapNoCNPG, bootstrapCompact, bootstrapNoTLS = noCNPG, compact, noTLS
 	})
 	if err := bootstrapCmd.Flags().Parse(argv); err != nil {
 		t.Fatalf("parsing %v: %v", argv, err)
@@ -64,7 +59,7 @@ func TestRestoreFlagsReachTheResolverUnshuffled(t *testing.T) {
 		"--restore-tsdb-at=2026-07-26T01:02:03Z",
 	)
 
-	got := restoreFlagsFromArgv()
+	got := restoreFlagsFromArgv(true)
 
 	for _, c := range []struct{ field, got, want string }{
 		{"TsdbFrom", got.TsdbFrom, "tsdb-source"},
@@ -76,7 +71,10 @@ func TestRestoreFlagsReachTheResolverUnshuffled(t *testing.T) {
 		}
 	}
 	if !got.BackupsEnabled {
-		t.Error("BackupsEnabled = false on a default run, which has the plugin")
+		t.Error("BackupsEnabled = false when the cluster archives")
+	}
+	if restoreFlagsFromArgv(false).BackupsEnabled {
+		t.Error("BackupsEnabled = true on a cluster installed without backups: the install's answer was dropped")
 	}
 }
 

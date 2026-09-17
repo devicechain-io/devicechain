@@ -71,6 +71,10 @@ func DatabaseBackupsEnabled(noCNPG, compact, noTLS bool) bool {
 	return !noCNPG && !(compact && noTLS)
 }
 
+// BackupsEnabledFor is DatabaseBackupsEnabled for a run whose shape is already settled,
+// including one following an install record.
+func BackupsEnabledFor(st *State) bool { return databaseBackupsEnabled(st) }
+
 // ResolveRestorePlan validates the --restore-* flags and settles them into a plan.
 //
 // It runs in the command layer, BEFORE any cluster exists, for the same reason the

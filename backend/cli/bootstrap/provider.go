@@ -14,9 +14,16 @@ import (
 type Options struct {
 	Instance    string
 	KubeContext string
-	Profile     string
-	DryRun      bool
-	AssumeYes   bool
+	// Cluster names the local cluster: the kind cluster of that name. Empty means
+	// DefaultClusterName. Ignored when KubeContext is set.
+	Cluster string
+	// CreateCluster lets EnsureCluster create a missing local cluster. Only `dcctl
+	// install` sets it: a cluster is prepared once, and instances are built on one that
+	// has been.
+	CreateCluster bool
+	Profile       string
+	DryRun        bool
+	AssumeYes     bool
 	// ImageRegistry/ImageVersion select the published image source (defaults
 	// DefaultImageRegistry/DefaultImageVersion). BuildImages opts into building
 	// from source into a local registry instead (developer path).

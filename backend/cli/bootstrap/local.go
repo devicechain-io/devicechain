@@ -26,11 +26,10 @@ type localProvider struct{}
 
 func (localProvider) Name() string { return "local" }
 
-// EnsureCluster resolves (and, if needed, creates) the kube-context to target
-// for a local install. The local provider deploys to kind, so by default it
-// targets a kind cluster named after the instance (context kind-<instance>):
-// it is used if it already exists, and created otherwise. An explicit
-// --kube-context overrides this and is never auto-created.
+// EnsureCluster resolves the kube-context to target on a local cluster. By default that
+// is a kind cluster named opts.Cluster (DefaultClusterName when empty); `dcctl install`
+// creates it when it is missing, and every other command refuses and names the install
+// that would. An explicit --kube-context overrides this and is never auto-created.
 func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBinding, error) {
 	names, _, err := KubeContexts()
 	if err != nil {
@@ -60,26 +59,36 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 		}, nil
 	}
 
-	// Default: a kind cluster named after the instance. Managed either way — see the
-	// note on ClusterBinding.Managed for why REUSING one still counts as ours.
-	clusterName := opts.Instance
+	// Default: a kind cluster named for the CLUSTER, never after an instance — one
+	// cluster holds any number of them. Managed either way — see the note on
+	// ClusterBinding.Managed for why REUSING one still counts as ours.
+	clusterName := opts.Cluster
+	if clusterName == "" {
+		clusterName = DefaultClusterName
+	}
 	kubeContext := kindContext(clusterName)
 	binding := ClusterBinding{Cluster: clusterName, KubeContext: kubeContext, Managed: true}
 	if containsString(names, kubeContext) {
-		fmt.Println(color.WhiteString("Using existing kind cluster %s.", color.GreenString(kubeContext)))
+		fmt.Println(color.WhiteString("Using kind cluster %s.", color.GreenString(kubeContext)))
 		return binding, nil
 	}
 
-	// Not present — create it.
+	// 🔴 ONLY AN INSTALL CREATES A CLUSTER. A bootstrap aimed at a cluster that is not
+	// there is aimed at the wrong name, and creating one would build an instance on a
+	// cluster nobody installed — which it would then refuse anyway, minutes later.
+	if !opts.CreateCluster {
+		return ClusterBinding{}, fmt.Errorf("there is no kind cluster %q (context %s). Prepare one "+
+			"first:\n\n    %s\n", clusterName, kubeContext, InstallCommand("local", clusterName, ""))
+	}
 	if opts.DryRun {
 		fmt.Println(color.YellowString("[dry-run] would create kind cluster %q (context %s)", clusterName, kubeContext))
 		return binding, nil
 	}
 	if !opts.AssumeYes &&
-		!confirm(fmt.Sprintf("No local cluster found. Create a kind cluster %q now?", clusterName)) {
+		!confirm(fmt.Sprintf("No kind cluster %q found. Create it now?", clusterName)) {
 		return ClusterBinding{}, fmt.Errorf(
-			"no local cluster and creation declined; create one (e.g. `kind create cluster`) " +
-				"or pass --kube-context, then re-run")
+			"no kind cluster %q and creation declined; create one, or pass --kube-context to "+
+				"install into an existing cluster, then re-run", clusterName)
 	}
 	if err := createKindCluster(ctx, clusterName); err != nil {
 		return ClusterBinding{}, err

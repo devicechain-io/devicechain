@@ -33,6 +33,9 @@ type ClusterRdb struct {
 	Namespace         string `json:"namespace"`
 	ClusterName       string `json:"clusterName"`
 	ProvisionerSecret string `json:"provisionerSecret"`
+	// MaxConnections is what the store runs with: the budget every instance's
+	// connection limit is admitted against.
+	MaxConnections int `json:"maxConnections"`
 }
 
 // rdbFromOutputs decodes the relational store's contract out of the cluster root's
@@ -57,6 +60,15 @@ func rdbFromOutputs(outputs map[string]tfexec.OutputMeta) (ClusterRdb, error) {
 			return rdb, fmt.Errorf("the cluster prerequisite root exported %q as %s, which names "+
 				"nothing; dcctl cannot give this instance its own login without it", field.name, out.Value)
 		}
+	}
+	out, ok := outputs["postgres_max_connections"]
+	if !ok {
+		return rdb, fmt.Errorf("the cluster prerequisite root did not export %q, so dcctl cannot "+
+			"tell how many connections the relational store has to give out", "postgres_max_connections")
+	}
+	if err := json.Unmarshal(out.Value, &rdb.MaxConnections); err != nil || rdb.MaxConnections <= 0 {
+		return rdb, fmt.Errorf("the cluster prerequisite root exported postgres_max_connections as %s, "+
+			"which is not a connection budget", out.Value)
 	}
 	return rdb, nil
 }
@@ -84,8 +96,13 @@ var provisionInstanceDatabase = func(ctx context.Context, st *State, rdb Cluster
 	if st.Credentials == nil || st.Credentials.RDBInstancePassword == "" {
 		return errors.New("no password was settled for this instance's own database login")
 	}
+	limit, err := instanceConnectionLimit(st)
+	if err != nil {
+		return fmt.Errorf("sizing this instance's connection limit: %w", err)
+	}
+	admit := connectionAdmission{Limit: limit, Budget: rdb.MaxConnections}
 	return withProvisionerSession(ctx, st.KubeContext, rdb, func(q instanceDBQuerier) error {
-		return ensureInstanceDatabase(ctx, q, st.Instance, st.Credentials.RDBInstancePassword)
+		return ensureInstanceDatabase(ctx, q, st.Instance, st.Credentials.RDBInstancePassword, admit)
 	})
 }
 

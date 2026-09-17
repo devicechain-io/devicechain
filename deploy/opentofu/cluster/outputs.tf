@@ -36,6 +36,11 @@ output "postgres_cluster_name" {
   value       = module.cnpg_rdb.cluster_name
 }
 
+output "postgres_max_connections" {
+  description = "max_connections the relational store runs with — the budget dcctl admits each instance's connection limit against."
+  value       = var.postgres_max_connections
+}
+
 output "ingress_class" {
   description = "IngressClass name to set on the Helm chart's ingress.className (null if the controller was not installed here)."
   value       = var.enable_ingress_nginx ? module.ingress_nginx[0].ingress_class : null

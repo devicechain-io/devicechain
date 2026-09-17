@@ -28,7 +28,57 @@ var settleCredentials = func(ctx context.Context, st *State, live liveArchiveSta
 		return nil, fmt.Errorf("connecting to the cluster to see which credentials this "+
 			"instance is already running on: %w", err)
 	}
-	return resolveCredentials(ctx, typed, st, live)
+	set, err := resolveCredentials(ctx, typed, st, live)
+	if err != nil {
+		return nil, err
+	}
+	if st.Install != nil {
+		if st.InstanceArchive, err = readClusterArchiveCredential(ctx, typed, st); err != nil {
+			return nil, err
+		}
+	}
+	return set, nil
+}
+
+// readClusterArchiveCredential reads back the archive credential the install wrote, for
+// a bootstrap to copy into the instance's namespace.
+//
+// 🔴 READ, NEVER MINTED OR RE-PARSED. The archive is the cluster's, and the credential
+// the store is already archiving with is the only one the instance's archiver may
+// present; a fresh value, or one re-read from a file this run was never given, would
+// archive the instance nowhere on a green run.
+func readClusterArchiveCredential(ctx context.Context, typed kubernetes.Interface, st *State) (*ownedSecret, error) {
+	if !databaseBackupsEnabled(st) {
+		return nil, nil
+	}
+	name := st.Install.Outputs.Archive.CredentialsSecret
+	s, err := typed.CoreV1().Secrets(infraNamespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil, fmt.Errorf("this cluster was installed with database backups, but their credential "+
+			"(Secret %s/%s) is gone, so this instance's event store would archive nowhere. Re-run "+
+			"`dcctl install` on this cluster to put it back", infraNamespace, name)
+	case err != nil:
+		return nil, fmt.Errorf("reading the cluster's archive credential %s/%s: %w", infraNamespace, name, err)
+	}
+	if reason := foreignReason(readOwnership(s), clusterOwner(st.ClusterUID)); reason != "" {
+		return nil, fmt.Errorf("Secret %s/%s is not this cluster's archive credential: %s. Re-run "+
+			"`dcctl install` on this cluster", infraNamespace, name, reason)
+	}
+	data := make(map[string]string, len(s.Data))
+	for k, v := range s.Data {
+		data[k] = string(v)
+	}
+	for _, key := range []string{st.Install.Outputs.Archive.AccessKeyIDKey, st.Install.Outputs.Archive.SecretAccessKey} {
+		if data[key] == "" {
+			return nil, fmt.Errorf("the cluster's archive credential %s/%s has no %q, which the archive "+
+				"contract says the archiver presents", infraNamespace, name, key)
+		}
+	}
+	return &ownedSecret{
+		Name: name, Namespace: infraNamespace, Type: s.Type,
+		Labels: s.Labels, Data: data, Scope: ownerCluster,
+	}, nil
 }
 
 // reuseOutcome says what was found where a previously minted credential would be.

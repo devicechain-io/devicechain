@@ -202,7 +202,6 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 
 	paths := resolveArchivePaths(live, st.Restore,
 		archivePaths{Tsdb: freshTsdbArchivePath(st.Instance, st.InstanceUID)}, time.Now().UTC())
-	st.Values["backupServerNameRdb"] = paths.Rdb
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.Active() {
 		notes = append(notes, fmt.Sprintf(
@@ -732,21 +731,11 @@ func stepInfraApply(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing("applying infrastructure stack (OpenTofu)")
 		fmt.Println()
-		monitoring := "monitoring (Prometheus/Grafana)"
-		if st.NoMonitoring {
-			monitoring = "monitoring SKIPPED (--no-monitoring)"
-		}
-		// TWO applies, named separately, because that is what a dry run is FOR. The
-		// operator reading this is deciding whether to let dcctl touch a cluster, and
-		// the thing worth knowing is that one of these applies is CLUSTER-WIDE and
-		// shared with every other instance while the other is this instance's alone.
-		// Describing them as one line would hide exactly the distinction the split
-		// exists to make.
-		wouldDo("tofu init+apply deploy/opentofu/cluster — shared, once per cluster " +
-			"(CloudNativePG operator + backup plugin, ingress, cert-manager, " + monitoring +
-			", the shared relational database, the backup object store)")
+		// The cluster prerequisites are named as NOT applied, because an operator
+		// reading a rehearsal is deciding whether to let dcctl touch a shared cluster.
+		wouldDo("create this instance's own login and database on the shared relational store")
 		wouldDo("tofu init+apply deploy/opentofu/instance — this instance only " +
-			"(NATS, Timescale)")
+			"(NATS, Timescale), on the prerequisites `dcctl install` put in place")
 		return nil
 	}
 	return runStreamed("applying infrastructure stack (OpenTofu)", "infrastructure stack",
@@ -1061,7 +1050,6 @@ func stepReport(ctx context.Context, st *State) error {
 	// below completes the pair a restore actually needs.
 	if st.Values[databaseBackupsKey] == "true" {
 		for _, p := range []struct{ label, path string }{
-			{"Relational archive:", st.Values["backupServerNameRdb"]},
 			{"Event archive:", st.Values["backupServerNameTsdb"]},
 		} {
 			if p.path != "" {

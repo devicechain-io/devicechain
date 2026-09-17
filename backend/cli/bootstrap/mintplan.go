@@ -93,7 +93,15 @@ type credentialSet struct {
 // either branch moves — minting an object-store credential nothing reads, or worse,
 // not minting one the store needs. TestTheBackupPredicateMatchesTheVariablesEmitted
 // holds the two together.
+//
+// 🔑 A BOOTSTRAP ASKS THE INSTALL, NOT ITS OWN FLAGS. Backups, monitoring and
+// cert-manager are what the cluster was installed with; an instance built on it
+// follows the record, and reading its own flags instead would let `--no-tls` on one
+// instance switch archiving off for a cluster whose store is archiving.
 func databaseBackupsEnabled(st *State) bool {
+	if st.Install != nil {
+		return st.Install.Settings.DatabaseBackups
+	}
 	if st.NoCNPG {
 		return false
 	}
@@ -107,12 +115,22 @@ func databaseBackupsEnabled(st *State) bool {
 
 // monitoringEnabled reports whether the observability stack is part of this run, and
 // therefore whether a dashboard credential is needed at all.
-func monitoringEnabled(st *State) bool { return !st.NoMonitoring }
+func monitoringEnabled(st *State) bool {
+	if st.Install != nil {
+		return st.Install.Settings.Monitoring
+	}
+	return !st.NoMonitoring
+}
 
 // certManagerEnabled reports whether cert-manager is part of this run. The compact
 // preset drops it only when it also serves plain HTTP — see infraVars, which
 // TestTheBackupPredicateMatchesTheVariablesEmitted holds this against.
-func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
+func certManagerEnabled(st *State) bool {
+	if st.Install != nil {
+		return st.Install.Settings.CertManager
+	}
+	return !(st.Compact && st.NoTLS)
+}
 
 // backupsAreExternal reports whether this run archives to an object store the
 // operator already owns rather than one it stands up.
@@ -123,7 +141,18 @@ func certManagerEnabled(st *State) bool { return !(st.Compact && st.NoTLS) }
 // MinIO to authenticate against — while `dc-backup-credentials`, the Secret the
 // archiver actually presents, goes unwritten. Measured as a real gap in this package
 // before the supplied path existed: dcctl knew only "backups on or off".
-func backupsAreExternal(st *State) bool { return st.BackupDestination.Configured() }
+func backupsAreExternal(st *State) bool {
+	if st.Install != nil {
+		return st.Install.Settings.BackupsExternal
+	}
+	return st.BackupDestination.Configured()
+}
+
+// plansCluster and plansInstance say which half of the credentials a run owns. The
+// install owns the cluster's and has no instance; a bootstrap owns its instance's and
+// follows an install; an upgrade names an instance and reads both halves back.
+func plansCluster(st *State) bool  { return st.Install == nil }
+func plansInstance(st *State) bool { return st.Instance != "" }
 
 // rdbProvisionerSecretName is the base identity's Secret. Only dcctl reads it: dcctl
 // creates the role and sets its password from it (see withProvisionerSession).
@@ -146,18 +175,26 @@ func instanceRdbSecretName(instance string) string {
 // composed until the values that are derived from an apply are known. It is written
 // by the composition step, through the same writer.
 func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
-	dbLabels := func(cluster string) map[string]string {
-		return map[string]string{
-			"app.kubernetes.io/name":      cluster,
-			"app.kubernetes.io/component": "database",
-			cnpgReloadLabel:               "true",
-		}
-	}
+	cluster, archive := planClusterSecrets(st, set)
+	return append(cluster, planInstanceSecrets(st, set, archive)...)
+}
 
-	// Both database stores, always. 🔴 Neither Cluster is gated on the flag that
-	// skips the operator install — that flag means "an operator is already here",
-	// and gating the stores on it would turn that into "this platform has no
-	// database". So a run that skips the operator still needs these credentials.
+// dbLabels are the labels the database operator keys a credentials Secret on.
+func dbLabels(cluster string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":      cluster,
+		"app.kubernetes.io/component": "database",
+		cnpgReloadLabel:               "true",
+	}
+}
+
+// planClusterSecrets is the install's half: the credentials the shared prerequisites
+// are built from, all cluster-owned. It also returns the archive credential, when
+// backups are on, for an instance's half to copy.
+func planClusterSecrets(st *State, set *credentialSet) (_ []ownedSecret, archive *ownedSecret) {
+	// 🔴 Neither store's credential is gated on the flag that skips the operator
+	// install — that flag means "an operator is already here", and gating the stores on
+	// it would turn that into "this platform has no database".
 	out := []ownedSecret{
 		{
 			Name:      rdbClusterName + "-app-credentials",
@@ -189,6 +226,65 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 				secretKeyPassword: set.RDBProvisionerPassword,
 			},
 		},
+	}
+
+	if monitoringEnabled(st) {
+		// 🔴 THIS WAS MINTED AND PLACED NOWHERE. mintNewCredentials generated a
+		// dashboard password whenever monitoring was on, and no Secret in this plan
+		// ever carried it — a credential produced on every run and dropped on the
+		// floor. What catches it now is TestEveryMintedCredentialIsPlacedSomewhere,
+		// which walks the struct rather than the cases anybody thought to list.
+		out = append(out, ownedSecret{
+			Name:      grafanaSecretName,
+			Namespace: monitoringNamespace,
+			Type:      corev1.SecretTypeOpaque,
+			// The monitoring stack is installed once per cluster.
+			Scope: ownerCluster,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "grafana",
+				"app.kubernetes.io/component": "monitoring",
+			},
+			Data: map[string]string{
+				keyGrafanaAdminUser: grafanaAdminUser,
+				keyGrafanaAdminPass: set.GrafanaAdminPassword,
+			},
+		})
+	}
+
+	switch {
+	case !databaseBackupsEnabled(st):
+	case backupsAreExternal(st):
+		// Supplied, not minted — see BackupDestination. It is written through the same
+		// writer as everything else, because ownership is about who writes the object.
+		a := backupCredentialsSecret(st.BackupDestination)
+		archive = &a
+	default:
+		archive = &ownedSecret{
+			Name:      objectStoreName + "-credentials",
+			Namespace: infraNamespace,
+			Type:      corev1.SecretTypeOpaque,
+			// The object store is a cluster prerequisite; both stores archive into it.
+			Scope: ownerCluster,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      objectStoreName,
+				"app.kubernetes.io/component": "object-store",
+			},
+			Data: map[string]string{
+				keyMinioUser:     set.ObjectStoreUser,
+				keyMinioPassword: set.ObjectStoreSecret,
+			},
+		}
+	}
+	if archive != nil {
+		out = append(out, *archive)
+	}
+	return out, archive
+}
+
+// planInstanceSecrets is a bootstrap's half: the instance's own login, its event store's
+// credentials, and — given the cluster's archive credential — the instance's copy of it.
+func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []ownedSecret {
+	out := []ownedSecret{
 		{
 			// This instance's own login. No database operator reads it — dcctl sets
 			// the role's password from it — so it carries no reload label.
@@ -216,58 +312,9 @@ func planOwnedSecrets(st *State, set *credentialSet) []ownedSecret {
 			},
 		},
 	}
-
-	if monitoringEnabled(st) {
-		// 🔴 THIS WAS MINTED AND PLACED NOWHERE. mintNewCredentials generated a
-		// dashboard password whenever monitoring was on, and no Secret in this plan
-		// ever carried it — a credential produced on every run and dropped on the
-		// floor. Nothing could see it: the mutation suite tests this code against the
-		// model behind it, and the model itself had forgotten the field. What catches
-		// it now is TestEveryMintedCredentialIsPlacedSomewhere, which walks the struct
-		// rather than the cases anybody thought to list.
-		out = append(out, ownedSecret{
-			Name:      grafanaSecretName,
-			Namespace: monitoringNamespace,
-			Type:      corev1.SecretTypeOpaque,
-			// The monitoring stack is installed once per cluster.
-			Scope: ownerCluster,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "grafana",
-				"app.kubernetes.io/component": "monitoring",
-			},
-			Data: map[string]string{
-				keyGrafanaAdminUser: grafanaAdminUser,
-				keyGrafanaAdminPass: set.GrafanaAdminPassword,
-			},
-		})
+	if archive != nil {
+		out = append(out, instanceArchiveCredential(st, *archive))
 	}
-
-	if databaseBackupsEnabled(st) && backupsAreExternal(st) {
-		// Supplied, not minted — see BackupDestination. It is written through the same
-		// writer as everything else, because ownership is about who writes the object.
-		archive := backupCredentialsSecret(st.BackupDestination)
-		out = append(out, archive, instanceArchiveCredential(st, archive))
-	}
-
-	if databaseBackupsEnabled(st) && !backupsAreExternal(st) {
-		archive := ownedSecret{
-			Name:      objectStoreName + "-credentials",
-			Namespace: infraNamespace,
-			Type:      corev1.SecretTypeOpaque,
-			// The object store is a cluster prerequisite; both stores archive into it.
-			Scope: ownerCluster,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      objectStoreName,
-				"app.kubernetes.io/component": "object-store",
-			},
-			Data: map[string]string{
-				keyMinioUser:     set.ObjectStoreUser,
-				keyMinioPassword: set.ObjectStoreSecret,
-			},
-		}
-		out = append(out, archive, instanceArchiveCredential(st, archive))
-	}
-
 	return out
 }
 
@@ -345,20 +392,38 @@ func resolveCredentials(
 		return set, nil
 	}
 
-	for _, c := range []struct {
+	type databaseCredential struct {
 		into    *string
 		ref     mintedCredentialRef
 		scope   ownerKind
 		cluster string
 		exists  bool
-	}{
-		{&set.RDBPassword, mintedCredentialRef{
+	}
+	type loginCredential struct {
+		into  *string
+		ref   mintedCredentialRef
+		scope ownerKind
+	}
+	var databases []databaseCredential
+	var logins []loginCredential
+	if plansCluster(st) {
+		databases = append(databases, databaseCredential{&set.RDBPassword, mintedCredentialRef{
 			infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword,
-		}, ownerCluster, rdbClusterName, live.Rdb.Exists},
-		{&set.TSDBPassword, mintedCredentialRef{
+		}, ownerCluster, rdbClusterName, live.Rdb.Exists})
+		logins = append(logins, loginCredential{&set.RDBProvisionerPassword, mintedCredentialRef{
+			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
+		}, ownerCluster})
+	}
+	if plansInstance(st) {
+		databases = append(databases, databaseCredential{&set.TSDBPassword, mintedCredentialRef{
 			instanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword,
-		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists},
-	} {
+		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists})
+		logins = append(logins, loginCredential{&set.RDBInstancePassword, mintedCredentialRef{
+			instanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
+		}, ownerInstance})
+	}
+
+	for _, c := range databases {
 		found, reused, err := reuseMintedCredential(ctx, typed, ownerFor(c.scope, st), c.ref)
 		if err != nil {
 			return nil, err
@@ -371,18 +436,7 @@ func resolveCredentials(
 		}
 	}
 
-	for _, c := range []struct {
-		into  *string
-		ref   mintedCredentialRef
-		scope ownerKind
-	}{
-		{&set.RDBProvisionerPassword, mintedCredentialRef{
-			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
-		}, ownerCluster},
-		{&set.RDBInstancePassword, mintedCredentialRef{
-			instanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
-		}, ownerInstance},
-	} {
+	for _, c := range logins {
 		// reuseForeign keeps the minted value: the writer refuses that Secret by name.
 		found, reused, err := reuseMintedCredential(ctx, typed, ownerFor(c.scope, st), c.ref)
 		if err != nil {
@@ -393,7 +447,7 @@ func resolveCredentials(
 		}
 	}
 
-	if databaseBackupsEnabled(st) {
+	if plansCluster(st) && databaseBackupsEnabled(st) && !backupsAreExternal(st) {
 		name := objectStoreName + "-credentials"
 		foundUser, user, err := reuseMintedCredential(ctx, typed, ownerFor(ownerCluster, st),
 			mintedCredentialRef{infraNamespace, name, keyMinioUser})
@@ -448,16 +502,21 @@ func mintNewCredentials(st *State) (*credentialSet, error) {
 	var set credentialSet
 	var err error
 
+	if plansInstance(st) {
+		if set.RDBInstancePassword, err = mintPassword(); err != nil {
+			return nil, err
+		}
+		if set.TSDBPassword, err = mintPassword(); err != nil {
+			return nil, err
+		}
+	}
+	if !plansCluster(st) {
+		return &set, nil
+	}
 	if set.RDBPassword, err = mintPassword(); err != nil {
 		return nil, err
 	}
 	if set.RDBProvisionerPassword, err = mintPassword(); err != nil {
-		return nil, err
-	}
-	if set.RDBInstancePassword, err = mintPassword(); err != nil {
-		return nil, err
-	}
-	if set.TSDBPassword, err = mintPassword(); err != nil {
 		return nil, err
 	}
 	// 🔴 ONLY FOR AN IN-CLUSTER STORE. An external destination's credentials are

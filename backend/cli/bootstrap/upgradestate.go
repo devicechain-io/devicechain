@@ -109,6 +109,12 @@ func hydrateUpgradeState(
 		return nil, fmt.Errorf("identifying the cluster instance %q runs on, to read the "+
 			"credentials it shares: %w", opts.Instance, err)
 	}
+	// 🔴 AN UPGRADE MOVES AN INSTANCE ON A CLUSTER `dcctl install` PREPARED, and refuses
+	// one that was not: an instance built before the install existed is a
+	// recreate, not an upgrade, and the refusal says what prepares the cluster.
+	if _, err := readInstallRecord(ctx, typed, st.ClusterUID); err != nil {
+		return nil, refuseUninstalled(err, InstallCommand(provider.Name(), binding.Cluster, opts.KubeContext))
+	}
 	if st.Credentials, err = readInstanceCredentials(ctx, typed, st); err != nil {
 		return nil, err
 	}

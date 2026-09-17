@@ -150,6 +150,17 @@ variable "postgres_storage" {
   default     = "8Gi"
 }
 
+variable "postgres_max_connections" {
+  description = "max_connections on the shared relational store: the connection budget every instance on this cluster is admitted against. Each instance's login is limited to (its relational areas x 20 x 2), so 600 admits two default-profile instances. Changing it restarts the store's instances one at a time."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.postgres_max_connections >= 100 && floor(var.postgres_max_connections) == var.postgres_max_connections
+    error_message = "postgres_max_connections must be a whole number of at least 100."
+  }
+}
+
 variable "postgres_storage_class" {
   description = "StorageClass for the relational Postgres data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume and its data outlive PVC/PV deletion and can still be recovered FROM. 🔴 That is the whole guarantee: a retained PV goes to Released and will not bind a new claim without someone clearing its claimRef, and a new CloudNativePG Cluster bootstraps via initdb rather than adopting an existing PGDATA. It does NOT mean a redeploy comes back up on the old volume — an earlier version of this description said it did. The supported recovery path is bootstrap.recovery from a backup."
   type        = string

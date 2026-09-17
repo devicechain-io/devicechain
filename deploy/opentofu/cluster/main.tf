@@ -562,6 +562,12 @@ module "cnpg_rdb" {
   # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
   # full profile (8x4 + 1 = 33 pods = 660); re-derive before going there.
   #
+  # 🔴 THAT IS ONE INSTANCE'S DEMAND, AND THE STORE IS SHARED BY EVERY INSTANCE ON THE
+  # CLUSTER. Each instance's login carries a CONNECTION LIMIT sized the same way (its
+  # relational areas x 20 x 2), and dcctl admits a new instance only while the limits
+  # already granted plus its own fit under this value — so the default admits two
+  # default-profile instances, and `dcctl install --max-connections` is the knob.
+  #
   # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing
   # it is applied by CNPG as a rolling in-place restart (~2.5 min on the rig), not a
   # reload.
@@ -579,7 +585,7 @@ module "cnpg_rdb" {
   # (500 worst case above), not by this value. Raising it does not raise
   # steady-state memory; it removes a cliff.
   parameters = {
-    max_connections = "600"
+    max_connections = tostring(var.postgres_max_connections)
   }
 
   # `required` durability for this store specifically: it holds the audit
