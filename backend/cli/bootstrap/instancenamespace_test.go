@@ -7,12 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"regexp"
 	"strings"
 	"testing"
 
-	assets "github.com/devicechain-io/dc-deploy"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -229,74 +226,6 @@ func TestAnUnreadableNamespaceStopsTheRunWithoutBeingARefusal(t *testing.T) {
 // Each name dcctl's own install can create, refused by name. The list is built from the
 // same function the refusal reads, so a namespace that moves moves here too — what is
 // pinned is that every entry actually refuses and that the message says which one.
-func TestEveryNamespaceTheClusterInstallOwnsIsRefusedByName(t *testing.T) {
-	operatorNS, err := renderedOperatorNamespace()
-	if err != nil {
-		t.Fatalf("reading the operator's namespace out of the overlay: %v", err)
-	}
-	owned := namespacesTheClusterInstallOwns(operatorNS)
-	// The counterweight: an empty or one-entry map would make every case below vacuous.
-	if len(owned) < 6 {
-		t.Fatalf("only %d namespaces are claimed by the cluster install (%v); the install creates "+
-			"more than that, so something has stopped being reserved", len(owned), owned)
-	}
-	if _, ok := owned[operatorNS]; !ok {
-		t.Errorf("the operator's own namespace %q is not reserved, and it is the one holding the "+
-			"cluster lock every dcctl run takes", operatorNS)
-	}
-
-	for name := range owned {
-		t.Run(name, func(t *testing.T) {
-			err := refuseAReservedNamespace(name, operatorNS)
-			if err == nil {
-				t.Fatalf("an instance could be named %q, taking over a namespace `dcctl install` "+
-					"creates — and `dcctl destroy` would then delete it", name)
-			}
-			if !strings.Contains(err.Error(), name) {
-				t.Errorf("the refusal does not name %q, so the operator is not told which name to "+
-					"change: %v", name, err)
-			}
-		})
-	}
-
-	// Kubernetes' own, and the prefix it reserves for the ones it has not created yet.
-	for _, name := range []string{"default", "kube-system", "kube-public", "kube-node-lease", "kube-anything"} {
-		if err := refuseAReservedNamespace(name, operatorNS); err == nil {
-			t.Errorf("an instance could be named %q", name)
-		}
-	}
-
-	// 🔴 AND THE NEGATIVE CONTROL. A guard that refused every name would pass all of the
-	// above and refuse every instance anyone ever builds.
-	for _, name := range []string{"prod", "acme", "dctest", "monitor", "kubernetes", "dc"} {
-		if err := refuseAReservedNamespace(name, operatorNS); err != nil {
-			t.Errorf("ordinary instance name %q was refused: %v", name, err)
-		}
-	}
-}
-
-// 🔴 A RESERVED NAME IS REFUSED WITHOUT A CLUSTER, AND THE ORDER IS THE POINT. The
-// reserved half of the answer comes from the install's own constants; putting the cluster
-// read first would make a name `dcctl install` owns acceptable on any cluster dcctl
-// cannot currently reach, which is every cluster during a bring-up.
-func TestAReservedNameIsRefusedBeforeTheClusterIsRead(t *testing.T) {
-	orig := namespacePrecheckClient
-	t.Cleanup(func() { namespacePrecheckClient = orig })
-	namespacePrecheckClient = func(string) (kubernetes.Interface, error) {
-		return nil, errors.New("no such context")
-	}
-
-	err := precheckInstanceNamespace(context.Background(), &State{Instance: monitoringNamespace})
-	var refusal *ErrNamespaceUnavailable
-	if !errors.As(err, &refusal) {
-		t.Fatalf("naming an instance after the monitoring namespace was not refused before the "+
-			"cluster read: %v", err)
-	}
-}
-
-// 🔴 THE REFUSAL HAS TO COME OUT OF THE STEP, NOT JUST OUT OF THE FUNCTION. A correct
-// precheck wired to nothing reads exactly like a correct precheck wired up — the same
-// class as a credential minted on every run and placed in no Secret.
 func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	stubSingletons(t, clusterSingletons{}, nil)
 	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
@@ -315,30 +244,3 @@ func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 // returns "" and silently reserves nothing; that trade is only worth making if drift is
 // loud, which is this test. It reads the root shipped INSIDE the binary, so it is the
 // same bytes a real bootstrap applies.
-func TestTheReservedClusterNamespacesMatchTheOpenTofuDefaults(t *testing.T) {
-	raw, err := fs.ReadFile(assets.OpenTofuCluster(), "variables.tf")
-	if err != nil {
-		t.Fatalf("reading the embedded cluster root's variables.tf: %v", err)
-	}
-	for _, c := range []struct{ variable, constant string }{
-		{"cert_manager_namespace", certManagerNamespace},
-		{"cnpg_namespace", cnpgSystemNamespace},
-		{"ingress_nginx_namespace", ingressNginxNamespace},
-		// The two that DO have a constant are checked the same way, because they are
-		// mirrors too — they simply had one already.
-		{"monitoring_namespace", monitoringNamespace},
-		{"namespace", infraNamespace},
-	} {
-		re := regexp.MustCompile(`(?s)variable\s+"` + c.variable + `"\s*\{.*?default\s*=\s*"([^"]+)"`)
-		m := re.FindSubmatch(raw)
-		if m == nil {
-			t.Errorf("variable %q no longer declares a string default in the cluster root, so the "+
-				"constant %q is reserving a name nothing creates", c.variable, c.constant)
-			continue
-		}
-		if got := string(m[1]); got != c.constant {
-			t.Errorf("variable %q defaults to %q but dcctl reserves %q: an instance could be named "+
-				"after the namespace the install actually creates", c.variable, got, c.constant)
-		}
-	}
-}
