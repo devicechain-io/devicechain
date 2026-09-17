@@ -144,14 +144,24 @@ const maxInstanceNameLen = 50
 // and an empty one resolves to the instances directory itself, which a destroy would
 // then try to remove wholesale — taking every other instance with it.
 //
-// 🔑 THE COLLISION HALF OF THIS IS GONE, AND THE REASON IS STRUCTURAL RATHER THAN
+// 🔑 THE DIRECTORY COLLISION IS GONE, AND THE REASON IS STRUCTURAL RATHER THAN
 // ENFORCED HERE. While instances sat directly under the root, a name like "escrow"
 // aimed an instance at a sibling dcctl owns, so this function had to reserve each
 // sibling by hand and ListInstances had to skip the same names — two lists that
 // disagreed. Nesting under instances/ put instance names in their own namespace, so
-// there is nothing left to reserve. Do not add a reservation case back here; add the
-// directory to dcdir's inventory instead, where it is a sibling of instances/ and
-// cannot collide with anything in it.
+// there is no DIRECTORY left to reserve. Do not add a directory reservation back
+// here; add it to dcdir's inventory instead, where it is a sibling of instances/
+// and cannot collide with anything in it.
+//
+// 🔴 THAT SAID "THERE IS NOTHING LEFT TO RESERVE", AND THAT WAS NEVER TRUE OF EVERY
+// GRAMMAR THE NAME LIVES IN. Two other things a name collides with are reserved,
+// both elsewhere and deliberately so, and a reader who takes the sentence above as
+// a general statement will reinvent the defect it describes by folding them in
+// here: reservedInstanceNames below, which is the labels POSTGRESQL owns, and
+// namespacesTheClusterInstallOwns in instancenamespace.go, which is the NAMESPACES
+// `dcctl install` creates. Three lists answering three different questions about
+// one string is correct; one list answering all three is the shape that disagrees
+// with itself.
 //
 // 🔴 AND IT IS A DNS-1123 LABEL, BECAUSE A NAME IS NOW FOUR THINGS AT ONCE. It names a
 // directory here, a Kubernetes namespace, and — on the shared relational store — both
@@ -432,13 +442,32 @@ type KnownInstance struct {
 	// another instance). Reported per row rather than failing the whole listing — one
 	// unreadable record must not hide every healthy one.
 	Err error
+	// Destroying reports that a teardown of this instance started on this machine and
+	// did not finish — the destroy marker beside the record is still there. See
+	// destroy_marker.go.
+	Destroying bool
+	// DestroyingErr is set when the marker could not be STATTED, which is neither
+	// "present" nor "absent". It is carried separately rather than folded into
+	// Destroying because the two have opposite consequences for a reader: present means
+	// "re-run destroy", could-not-tell means "this row does not know" — and a listing
+	// that printed the second as the healthy answer is the defect this change exists to
+	// remove.
+	DestroyingErr error
 }
 
 // ListInstances enumerates every instance directory under ~/.devicechain/instances,
-// with its record where it has one.
+// with its record where it has one and whether a teardown of it is part-way through.
 //
-// 🔴 IT READS ONLY instance.json. Nothing else in the instance directory is opened, and
-// that is a security property rather than an optimisation — see the file header.
+// 🔴 IT READS instance.json AND THE DESTROY MARKER, AND NOTHING ELSE. That is a security
+// property rather than an optimisation — see the file header — and the marker is STATTED
+// rather than read, so no byte of the instance directory beyond the record reaches this
+// process. TestListInstancesReadsTheRecordAndTheDestroyMarkerAndNothingElse asserts it
+// against a planted, unreadable terraform.tfstate.
+//
+// 🔑 THE MARKER IS CHECKED HERE RATHER THAN BY THE COMMAND THAT PRINTS IT, and that is
+// the whole reason this function grew a field instead of the cmd layer growing an
+// os.Stat. The claim above is only as good as the test over it, and that test drives THIS
+// function; a second open in the command layer would have been outside it.
 func ListInstances() ([]KnownInstance, error) {
 	// One directory, in which everything IS an instance. There is no list of names
 	// to skip here any more, because there is nothing beside the instances to skip:
@@ -470,6 +499,10 @@ func ListInstances() ([]KnownInstance, error) {
 			known.Record = rec
 			known.HasRecord = true
 		}
+		// Reported per row, never returned: one instance whose marker could not be
+		// statted must not hide every other instance, for the reason an unreadable
+		// record does not.
+		known.Destroying, known.DestroyingErr = DestroyInProgress(e.Name())
 		out = append(out, known)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instance < out[j].Instance })

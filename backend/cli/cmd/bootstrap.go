@@ -252,10 +252,45 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          enableAreas,
 		}
 
+		// WHAT CAN BE SETTLED FROM THE ARGUMENTS ALONE IS SETTLED HERE, BEFORE THE RUN
+		// TOUCHES ANYTHING.
+		//
+		// 🔴 WHAT THESE TWO HAVE IN COMMON IS THAT NEITHER NEEDS A CLUSTER. Below this
+		// point the command resolves an image source, creates or adopts a cluster, reads
+		// its install record and writes a local record, and the pipeline then builds
+		// images, takes the cluster lock and reads what is deployed. A refusal that can be
+		// made from a string and a stat has no business waiting for any of that.
+		//
+		// Both refuse on a --dry-run as well, and that is deliberate: a rehearsal exists to
+		// find out whether these arguments are usable, so it is the run that most needs the
+		// answer soonest. The PIPELINE's refusals rehearse instead, because by then the
+		// question needs a cluster and a rehearsal is often aimed at one that is not there
+		// yet.
+
 		// 🔴 CHECKED WHERE A NEW NAME ENTERS, and only here. `destroy` deliberately does
 		// NOT validate: whatever is already on disk must stay destroyable, including
 		// anything created before this check existed.
 		if err := bootstrap.ValidateInstanceName(opts.Instance); err != nil {
+			return err
+		}
+
+		// 🔴 AN INSTANCE WHOSE TEARDOWN DID NOT FINISH IS NOT A NAME THIS COMMAND MAY
+		// BUILD ON. `dcctl destroy` writes a marker on this machine before it deletes
+		// anything (beginDestroy), and it survives a destroy that died part-way — which
+		// is exactly the state where the cluster holds some of the old instance and no
+		// longer holds the rest. Bootstrapping over that produces a half-old, half-new
+		// instance whose failures are attributed to the new run.
+		//
+		// 🔴 HERE, NOT IN THE PIPELINE, AND THE REASON IS THE LOCAL RECORD. The record is
+		// written before the pipeline starts, and for a marked instance it is not a
+		// phantom: it is the only thing that names the cluster the destroy has to finish
+		// in. Refused here it is never touched; refused later this run would first
+		// REPLACE it with its own binding — possibly naming a different cluster — and the
+		// only way back would be a rollback. So this refusal deliberately does NOT join
+		// unwindLocalRecordWhenNothingWasWritten's list, which exists for records that
+		// describe nothing. TestTheBootstrapCommandRefusesAHalfDestroyedInstanceBeforeItTouchesAnything
+		// is what holds it in front of both EnsureCluster and WriteInstanceRecord.
+		if err := bootstrap.RefuseUnfinishedDestroy(opts.Instance); err != nil {
 			return err
 		}
 

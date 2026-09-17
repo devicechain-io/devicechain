@@ -94,6 +94,16 @@ func newTeardownRig(t *testing.T, rels []*release.Release, namespaces []string, 
 	t.Cleanup(func() { teardownClients = restoreClients })
 	teardownClients = func(string) (dynamic.Interface, kubernetes.Interface, error) { return dyn, r.typed, nil }
 
+	// The marker write is recorded rather than replaced: what is under test is WHEN it
+	// happens relative to the deletions, and the ordering is the whole value of it. The
+	// real implementation still runs, so this watches the shipped code.
+	restoreMarker := writeDestroyMarker
+	t.Cleanup(func() { writeDestroyMarker = restoreMarker })
+	writeDestroyMarker = func(instance string) error {
+		r.calls = append(r.calls, "mark destroying "+instance)
+		return restoreMarker(instance)
+	}
+
 	restoreTofu := destroyInstanceInfrastructure
 	t.Cleanup(func() { destroyInstanceInfrastructure = restoreTofu })
 	destroyInstanceInfrastructure = func(_ context.Context, kubeContext, instance string) error {
@@ -162,12 +172,34 @@ func TestADestroyInterruptedDuringTheUninstallStopsAfterItAsAnInterrupt(t *testi
 	if !strings.Contains(err.Error(), "interrupted") || strings.Contains(err.Error(), "tofu") {
 		t.Fatalf("the error does not say the destroy was interrupted: %v", err)
 	}
-	if len(r.calls) != 0 {
-		t.Fatalf("steps after the uninstall ran on an interrupted destroy: %v\n%s", r.calls, out)
+	if got := r.teardownCalls(); len(got) != 0 {
+		t.Fatalf("steps after the uninstall ran on an interrupted destroy: %v\n%s", got, out)
 	}
 	if r.stateRemoved() {
 		t.Fatal("an interrupted destroy removed the instance's local state")
 	}
+	// 🔴 AND THE MARKER SURVIVES IT, which is the case the marker exists for: this
+	// destroy removed the chart release and stopped, so the cluster holds part of the
+	// instance and no longer holds the rest. A re-run resumes; a bootstrap is refused.
+	if _, err := os.Stat(filepath.Join(r.home, ".devicechain", "instances", "acme", destroyMarkerFile)); err != nil {
+		t.Fatalf("an interrupted destroy left nothing saying a teardown had started: %v", err)
+	}
+}
+
+// teardownCalls is what the destroy DID: the recorded steps minus the marker write,
+// which is not a step but the record that the steps are about to begin. A test asking
+// "did anything run?" means deletions. The marker's own placement is asserted where it
+// belongs — in wantTeardownOrder and
+// TestTheMarkerIsWrittenBeforeTheFirstDeletionAndWithoutReachingTheCluster — so filtering
+// it out here hides nothing.
+func (r *teardownRig) teardownCalls() []string {
+	var out []string
+	for _, c := range r.calls {
+		if !strings.HasPrefix(c, "mark destroying ") {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (r *teardownRig) releases(t *testing.T) []string {
@@ -190,6 +222,10 @@ func (r *teardownRig) stateRemoved() bool {
 }
 
 var wantTeardownOrder = []string{
+	// 🔴 FIRST, AND BEFORE THE LOCK AND THE PHASE THAT FOLLOW IT. See beginDestroy: the
+	// two steps after this one both return early when the cluster cannot be reached, so a
+	// marker written beside the phase would be skipped in the one case it exists for.
+	"mark destroying acme",
 	"tofu destroy kind-c acme",
 	"read install record",
 	"delete namespace acme",
@@ -303,8 +339,8 @@ func TestOnlyAnInstanceWithAFootprintIsResumed(t *testing.T) {
 		if !errors.As(err, &foreign) || foreign.Absent {
 			t.Fatalf("want the contradiction refusal, got %v\n%s", err, out)
 		}
-		if len(r.calls) != 0 || r.stateRemoved() {
-			t.Errorf("a refused destroy went on: calls %q, state removed %v", r.calls, r.stateRemoved())
+		if got := r.teardownCalls(); len(got) != 0 || r.stateRemoved() {
+			t.Errorf("a refused destroy went on: calls %q, state removed %v", got, r.stateRemoved())
 		}
 	})
 }

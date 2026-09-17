@@ -466,7 +466,34 @@ func finishUpgradePhase(ctx context.Context, dyn dynamic.Interface, instance str
 		if runErr != nil {
 			phase = dcv1beta1.PhaseFailed
 		}
-		if err := setInstancePhase(cleanup, dyn, instance, phase); err != nil {
+		// 🔴 AND NOT OVER A TEARDOWN. Destroying is the one phase value another command
+		// ACTS on — writeInstanceCR refuses a rebuild over it and hydrateUpgradeState
+		// refuses an upgrade over it — so stamping it out does not merely mislabel the
+		// instance, it removes the only cluster-side evidence that the cluster holds half
+		// of one, and hands the next bootstrap a green light onto it.
+		//
+		// 🔑 THE REFUSAL UPSTREAM SHOULD MEAN THIS NEVER FIRES, AND THAT IS EXACTLY WHY IT
+		// IS HERE. hydrateUpgradeState refuses a teardown before this defer is registered,
+		// but nothing in THIS function depends on that: it is an ordering two files apart
+		// that a reordering, or a future caller reaching finishUpgradePhase by another
+		// path, would break in silence. The guarantee is made local to the function that
+		// would do the damage.
+		//
+		// 🔑 A READ THAT FAILS NEEDS NO ARM OF ITS OWN, and giving it one would be a
+		// branch nothing could tell from the other. setInstancePhase reads the same
+		// declaration through the same client before it patches, so a read this could not
+		// make is a write that cannot happen either — and that already warns. What must
+		// not happen is the read failing and the phase being written anyway, which is not
+		// reachable from here.
+		current, readErr := readInstanceCR(cleanup, dyn, instance)
+		if readErr == nil && current != nil &&
+			current.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
+			fmt.Println(color.YellowString(
+				"warning: instance %q is part-way through being DESTROYED, so this upgrade left the "+
+					"declaration saying so rather than recording itself as %s.\n"+
+					"  Finish the teardown with `dcctl destroy %s`, which is resumable, and build it "+
+					"again with `dcctl bootstrap` afterwards.", instance, phase, instance))
+		} else if err := setInstancePhase(cleanup, dyn, instance, phase); err != nil {
 			fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
 		}
 	}

@@ -698,10 +698,18 @@ func TestAnUnnamedAdoptedBindingIsNeverDeclaredGone(t *testing.T) {
 }
 
 // 🔴 THE SECURITY PROPERTY, ASSERTED. cmd/instances.go claims the listing opens only
-// instance.json — its neighbour terraform.tfstate holds the database superuser password
-// and the broker's TLS private key in cleartext, and this output is what gets pasted into
-// an issue. The claim was cited against a test that did not exist; this is that test.
-func TestListInstancesReadsOnlyTheRecord(t *testing.T) {
+// instance.json and the destroy marker — their neighbour terraform.tfstate holds the
+// database superuser password and the broker's TLS private key in cleartext, and this
+// output is what gets pasted into an issue. The claim was cited against a test that did
+// not exist; this is that test.
+//
+// 🔑 THE MARKER IS READ FROM IN HERE FOR THIS TEST'S SAKE. Reading it in the command
+// layer instead would have been a second, unwatched open of a file in that directory —
+// and this test, which drives ListInstances, would have gone on passing while the surface
+// it pins grew. The marker is opened by STAT, so it is not even read; keeping it inside
+// this function is what keeps every local open of an instance directory in one place with
+// one test over it.
+func TestListInstancesReadsTheRecordAndTheDestroyMarkerAndNothingElse(t *testing.T) {
 	home := fakeHome(t)
 	writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
 
@@ -727,6 +735,63 @@ func TestListInstancesReadsOnlyTheRecord(t *testing.T) {
 	if len(got) != 1 || !got[0].HasRecord || got[0].Record.Cluster != "c" {
 		t.Fatalf("listing did not read the record it was supposed to: %+v", got)
 	}
+	if got[0].Destroying || got[0].DestroyingErr != nil {
+		t.Fatalf("an instance with no destroy marker was reported as part-way destroyed: %+v", got[0])
+	}
+}
+
+// 🔴 THE MARKER IS READ HERE, AND ITS FAILURE IS NOT FOLDED INTO ITS ABSENCE. The listing
+// is the one place an operator finds out that a teardown started and stopped; a row that
+// could not answer must say so rather than fall through to the healthy cell.
+func TestListInstancesReportsTheDestroyMarkerAndWhenItCouldNotBeChecked(t *testing.T) {
+	t.Run("a marked instance", func(t *testing.T) {
+		fakeHome(t)
+		writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
+		if err := writeDestroyMarker("inst"); err != nil {
+			t.Fatal(err)
+		}
+		got, err := ListInstances()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || !got[0].Destroying {
+			t.Fatalf("the listing did not notice the destroy marker: %+v", got)
+		}
+		if got[0].DestroyingErr != nil {
+			t.Errorf("a marker that was found was also reported as unreadable: %v", got[0].DestroyingErr)
+		}
+	})
+
+	t.Run("a marker that could not be checked", func(t *testing.T) {
+		home := fakeHome(t)
+		writeRecord(t, InstanceRecord{Instance: "inst", Provider: "local", Cluster: "c", KubeContext: "kind-c", Managed: true})
+		dir := filepath.Join(home, ".devicechain", "instances", "inst")
+		// 🔴 0o000, NOT 0o100. With execute-only the directory is still TRAVERSABLE, so a
+		// stat of a known name inside it succeeds and reports ErrNotExist — the reach
+		// control below skipped on it, which is a case that asserts nothing wearing a pass.
+		if err := os.Chmod(dir, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		if _, err := os.Stat(filepath.Join(dir, destroyMarkerFile)); errors.Is(err, os.ErrNotExist) {
+			t.Skip("the tightened directory is still statable here, so this case cannot detect the fold")
+		}
+
+		got, err := ListInstances()
+		if err != nil {
+			t.Fatalf("one unreadable marker failed the whole listing: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("listing: %+v", got)
+		}
+		if got[0].DestroyingErr == nil {
+			t.Fatal("a marker that could not be statted was reported as a definite answer, " +
+				"which prints as a healthy row over an instance nobody can say anything about")
+		}
+		if got[0].Destroying {
+			t.Error("could-not-tell was reported as present")
+		}
+	})
 }
 
 // The atomic-write property, asserted by its observable consequence: no partial file is

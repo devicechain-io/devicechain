@@ -234,7 +234,13 @@ func TestEachVerbNamesItsOwnPhase(t *testing.T) {
 	for fn, want := range map[string][]string{
 		"WriteInstanceCR":       {"PhaseBootstrapping"},
 		"recordUpgradedVersion": {"PhaseUpgrading"},
-		"finishUpgradePhase":    {"PhaseFailed", "PhaseReady"},
+		// 🔴 PhaseDestroying IS IN THIS LIST AS A READ, NOT AS A WORD THIS VERB CLAIMS.
+		// finishUpgradePhase compares the declaration's current phase against it and
+		// DECLINES to stamp when they match, because Destroying is the one value another
+		// command acts on. This check counts MENTIONS, so it cannot tell a comparison from
+		// a write — TestFinishUpgradePhaseNeverWritesADestroyingPhase is what keeps the
+		// distinction, and without it this entry is a hole an actual mis-stamp fits through.
+		"finishUpgradePhase": {"PhaseDestroying", "PhaseFailed", "PhaseReady"},
 	} {
 		got := phaseConstantsNamedBy(t, fn)
 		if !slices.Equal(got, want) {

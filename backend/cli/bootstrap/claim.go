@@ -613,9 +613,11 @@ func reclaim(ctx context.Context, client kubernetes.Interface, ns, kubeContext s
 // lock is free.
 //
 // (An earlier version of this comment also named `instances list`, which does not
-// call it: that command reads only the local records on this machine and never
-// contacts a cluster. Naming a caller that does not exist is how a reader concludes
-// a surface is covered when it is not.)
+// call it. That command DOES contact a cluster now — it asks the provider whether
+// the cluster is still there, and reads each instance's declaration for its phase —
+// but it never asks about the LOCK, which is the only thing this function answers.
+// The correction is the same one either way: naming a caller that does not exist is
+// how a reader concludes a surface is covered when it is not.)
 func PeekClaim(ctx context.Context, client kubernetes.Interface, ns string) (*coordinationv1.Lease, error) {
 	l, err := client.CoordinationV1().Leases(ns).Get(ctx, claimLeaseName, metav1.GetOptions{})
 	if err != nil {
