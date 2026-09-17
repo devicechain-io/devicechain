@@ -23,9 +23,11 @@ get captured here as we find them.
 ```bash
 cd deploy/local
 dcctl preflight local   # check the host is ready (prints fixes for anything missing)
-dcctl bootstrap local <instance>   # cluster, infra, core, chart, credentials, seed
+dcctl install local                # once: kind cluster + shared prerequisites in dc-system
+dcctl bootstrap local <instance>   # the instance: infra, core, chart, credentials, seed
 # ... test ...
-dcctl destroy <instance>           # deletes the cluster too (--keep-cluster to keep it)
+dcctl destroy local <instance>     # removes the instance only; the cluster stays installed
+kind delete cluster --name devicechain   # only if you want the cluster gone too
 ```
 
 The cluster is named **`devicechain`**, so its kube-context is
@@ -122,7 +124,8 @@ a larger drive or `wsl --manage <distro> --resize <size>`.
 
 ## What the bring-up does
 
-**`dcctl bootstrap local <instance>` is the bring-up, and it is the only one.**
+**`dcctl install local` followed by `dcctl bootstrap local <instance>` is the bring-up,
+and it is the only one.**
 There used to be a second: `up.sh`, which performed the same steps directly as
 shell. It was removed once dcctl became the thing that mints an instance's
 credentials — a script applying the infrastructure tree on its own could only
@@ -132,14 +135,19 @@ login are all written by dcctl BEFORE the apply now (ADR-080). Two tools meant t
 implementations of those rules, which is how one shared default credential came to
 open every instance in the first place.
 
-What remains here is the part dcctl does not own: the **cluster** itself, the
-**host diagnosis**, and the **image registry**.
+What remains here is the part dcctl does not own: the **host diagnosis**, the
+**image registry**, and deleting the **cluster** when you are done with it.
 
 1. **Preflight** — `dcctl preflight local`. Fails fast if the host
    baseline isn't met.
-2. **The kind cluster** — `dcctl bootstrap local` creates one from the embedded
-   copy of [`kind-cluster.yaml`](kind-cluster.yaml) (single control-plane node by
-   default) if there is none, and `dcctl destroy` deletes it again.
+2. **`dcctl install local`** — creates the kind cluster from the embedded copy of
+   [`kind-cluster.yaml`](kind-cluster.yaml) (single control-plane node by default)
+   if there is none (`--cluster <name>`, default `devicechain`), then installs what
+   every instance shares into `dc-system`: the CloudNativePG operator, the relational
+   store (`dc-rdb`), the backup object store, cert-manager, monitoring and ingress.
+   Once per cluster; re-running converges, and changing its settings (`--ha`,
+   `--compact`, ...) is refused while any instance exists. `dcctl bootstrap` refuses on
+   a cluster where it has not completed.
 3. **`dcctl bootstrap local <instance>`** — everything else, in the order ADR-080
    settled: CRDs and the operator FIRST, so the definition of an instance exists
    before anything declares one; then the credentials, minted and written; then the
@@ -150,12 +158,14 @@ bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no
 `type: LoadBalancer` service has to resolve. Run it yourself only if you want real
 LoadBalancer IPs — and then stop it yourself (`pkill -x cloud-provider-kind`).
 
-`dcctl destroy <instance>` deletes the cluster along with the instance. Two things
-survive it deliberately, both one-liners if you want them gone:
+`dcctl destroy local <instance>` removes the instance — its Helm release, its database and
+login, its namespace and its local state — and **never** the cluster or what `dcctl install`
+put on it. There is no uninstall command yet; to tear everything down, each is a one-liner:
 
 ```bash
-docker rm -f kind-registry          # the local image registry (kept as a warm cache)
-pkill -x cloud-provider-kind        # only if you started it
+kind delete cluster --name devicechain   # the cluster, and everything install put on it
+docker rm -f kind-registry               # the local image registry (kept as a warm cache)
+pkill -x cloud-provider-kind             # only if you started it
 ```
 
 ### Images — published by default, build is a developer opt-in
@@ -231,8 +241,10 @@ Use `bounce.sh` when you need to validate the actual served artifact.
 
 Single control-plane is the default (least overhead — every node is a full
 kubelet/containerd container). To exercise PodDisruptionBudgets / anti-affinity,
-uncomment the `worker` nodes in [`kind-cluster.yaml`](kind-cluster.yaml) and
-re-run `dcctl bootstrap local <instance>`.
+uncomment the `worker` nodes in [`kind-cluster.yaml`](kind-cluster.yaml), delete the
+cluster (`kind delete cluster --name devicechain`) and re-run `dcctl install local`, then
+`dcctl bootstrap local <instance>` — the node layout is fixed when kind creates the cluster,
+so an existing cluster is reused as it is.
 
 ---
 

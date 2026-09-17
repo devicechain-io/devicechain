@@ -144,70 +144,57 @@ secretos vaya a echar de menos.
 
 ## Recuperar una instancia {#recover}
 
-La recuperación es **un solo comando**, y es un comando que construye una instancia
-nueva. La base de datos se recupera desde su archivo histórico en el momento en que se
-crea el clúster, antes de que ningún servicio se conecte a ella, sembrada con la clave
-raíz de su artefacto de depósito.
+La recuperación es un comando que **construye** una instancia nueva. Lo que `dcctl` puede
+recuperar hoy es la clave raíz y el almacén de eventos; la base de datos relacional todavía
+no está entre ellos.
 
 Por eso aquí no hay un paso de «restaurar sobre la instancia en marcha». No existe una
 forma soportada de hacerlo, deliberadamente: restaurar por debajo de servicios que ya
 han creado sus propios esquemas implica eliminar tablas que tienen abiertas y competir
 con sus migraciones. **Recupere reconstruyendo.**
 
-**1. Reconstruya la instancia recuperando la base de datos y la clave a la vez.**
+:::caution La restauración de la base de datos relacional aún no está disponible con `dcctl`
+La base de datos relacional contiene la base de datos de **todas** las instancias del
+clúster, y la instala una vez por clúster `dcctl install`, no `dcctl bootstrap`. Restaurarla
+es, por tanto, una operación de clúster, y esa operación todavía no se ha publicado. Hasta
+entonces, `dcctl` no puede recuperar los datos principales desde su archivo histórico: la
+mitad de esta página que la clave raíz existe para proteger. Su log de escritura anticipada
+se sigue archivando en el destino de respaldo, así que las copias se siguen tomando; lo que
+falta es el comando que restaura a partir de ellas.
+:::
+
+**1. Reconstruya la instancia con su clave raíz.**
 
 ```bash
 dcctl bootstrap local mi-instancia \
-  --restore-root-key ~/backups/mi-instancia-rootkey.escrow \
-  --restore-rdb-from dc-rdb
+  --restore-root-key ~/backups/mi-instancia-rootkey.escrow
 ```
 
-`--restore-rdb-from` indica la **ruta del archivo histórico dentro de su bucket de
-copias**: el `serverName` bajo el que escribía la instancia antigua, `dc-rdb` salvo que
-lo haya cambiado. Se le pedirá la frase de contraseña del artefacto (o puede
+La clave raíz del almacén de secretos de la instancia se siembra desde el artefacto de
+depósito en lugar de acuñarse, de modo que los secretos que vuelvan con sus datos
+principales puedan descifrarse. Se le pedirá la frase de contraseña del artefacto (o puede
 proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
 
-Dos cosas que este comando no le permitirá hacer:
+Una recuperación es una de las pocas cosas que sí pueden ejecutarse contra una instancia
+que ya existe: la recuperación es justamente la situación en la que una ejecución se
+interrumpe y hay que reintentarla, y una guarda más precisa lo hace seguro al permitirlo
+solo cuando el artefacto de depósito lleva la clave sobre la que la instancia ya está
+funcionando.
 
-- **Recuperar datos sin la clave.** `--restore-rdb-from` por sí solo se rechaza.
-  Rehidrataría todas las filas y acuñaría una clave raíz *nueva*, dejando todos los
-  secretos almacenados ilegibles para siempre: una pérdida que ningún paso posterior
-  puede deshacer.
-- **Recuperar sobre una instancia en uso.** Una recuperación es una de las pocas cosas
-  que sí pueden ejecutarse contra una instancia que ya existe: la recuperación es
-  justamente la situación en la que una ejecución se interrumpe y hay que reintentarla,
-  y una guarda más precisa lo hace seguro al permitirlo solo cuando el artefacto de
-  depósito lleva la clave sobre la que la instancia ya está funcionando. Pero la opción
-  en sí solo surte efecto cuando se *crea* el clúster de base de datos, así que
-  apuntarla a una instancia en uso no mueve ningún dato, en lugar de funcionar a medias.
-
-La instancia recuperada empieza de inmediato a archivar bajo una ruta **nueva**, propia,
-de modo que no puede sobrescribir el archivo histórico del que acaba de nacer. El
-resumen del bootstrap imprime el nombre que eligió.
-
-**2. Retroceda a un punto en el tiempo**, si el desastre fue que los datos se
-destruyeron *correctamente*: una migración defectuosa, un borrado masivo por error.
-Añada `--restore-rdb-at` con una marca de tiempo RFC 3339 estrictamente anterior al
-daño:
-
-```bash
-dcctl bootstrap local mi-instancia \
-  --restore-root-key ~/backups/mi-instancia-rootkey.escrow \
-  --restore-rdb-from dc-rdb \
-  --restore-rdb-at 2026-03-14T09:15:00Z
-```
-
-**3. Restaure los datos de eventos** por separado con `--restore-tsdb-from` (y
-opcionalmente `--restore-tsdb-at`), cuando convenga a su objetivo de tiempo de
-recuperación. Los dos almacenes mantienen líneas de tiempo independientes a propósito:
+**2. Restaure los datos de eventos** con `--restore-tsdb-from` (y opcionalmente
+`--restore-tsdb-at`, una marca de tiempo RFC 3339 estrictamente anterior al daño, para
+retroceder a un punto en el tiempo), cuando convenga a su objetivo de tiempo de
+recuperación. El almacén de eventos mantiene una línea de tiempo independiente a propósito:
 rebobinar la telemetría hasta ayer no significa que el plano de control deba rebobinarse
-con ella. El paso 4 no depende de esto.
+con ella. La opción solo surte efecto cuando se *crea* el almacén de eventos, así que
+apuntarla a una instancia en uso no mueve ningún dato, en lugar de funcionar a medias. El
+paso 3 no depende de esto.
 
-**4. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
+**3. Confirme que los secretos almacenados se descifran**: lea un objeto respaldado por
 un secreto (un conector de salida, un canal de notificación) desde la consola o la API.
 Una restauración que devuelve filas no es una prueba; un valor que se descifra sí lo es.
 
-**5. Si restauró datos de eventos, revise la maquinaria y no el número de filas.** Un
+**4. Si restauró datos de eventos, revise la maquinaria y no el número de filas.** Un
 almacén de eventos recuperado puede conservar todas las filas y haber dejado de ser en
 silencio una base de datos de series temporales: las tablas están ahí, las consultas
 responden, y lo que falta es el trabajo en segundo plano. Ese almacén responderá
@@ -269,7 +256,7 @@ está en el namespace propio de la instancia.
 
 Debe ver `Cluster in healthy state`. Un clúster atascado en `Setting up primary` no se
 ha recuperado: lo más habitual es que el archivo histórico sea inalcanzable, o que
-`--restore-rdb-from` indique una ruta que no existe en el bucket.
+`--restore-tsdb-from` indique una ruta que no existe en el bucket.
 :::
 
 :::note Restaurar con otro nombre de instancia
@@ -368,15 +355,13 @@ de arreglarla.
 
 ## Después de `dcctl destroy` {#after-destroy}
 
-`dcctl destroy` elimina el clúster y el estado local de la instancia, pero **no** el
-artefacto de depósito, que vive fuera de ese directorio por diseño y que destroy
-nombra al terminar.
+`dcctl destroy` elimina la instancia —su release de Helm, su base de datos y su login de
+base de datos, su namespace— y su estado local, pero **no** el artefacto de depósito, que
+vive fuera de ese directorio por diseño y que destroy nombra al terminar.
 
-Hay un caso en el que elimina menos: una instancia arrancada dentro de un clúster que
-creaste tú mismo (con `--kube-context`) deja ese clúster **en marcha**. La instancia se
-desinstala de él y su estado local —incluidos los vecinos del depósito— se limpia, pero
-el clúster no es de dcctl para borrarlo. Lo dice, y nombra el clúster, al terminar.
-`dcctl instances list` muestra qué instancias están en ese estado.
+Nunca elimina el clúster, ni los requisitos previos que `dcctl install` dejó en él: la base
+de datos relacional que usan las demás instancias y el almacén de objetos de los respaldos
+siguen donde están.
 
 Consérvelo mientras conserve cualquier copia de seguridad de las bases de datos de esa
 instancia. Es lo único que todavía puede leerlas. Elimínelo cuando esas copias hayan

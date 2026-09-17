@@ -116,8 +116,8 @@ aplicar reapuntaría el vínculo con el clúster en dos pasos que, por separado,
 legítimos.
 
 **`dcctl destroy` libera el finalizador por sí mismo**, como último paso, una vez que la
-instancia ya no está —así que en el caso normal no hay nada que hacer a mano. (Cuando
-`destroy` elimina el clúster entero, la declaración se va con él.)
+instancia ya no está —así que en el caso normal no hay nada que hacer a mano. `destroy`
+nunca elimina el clúster en sí, así que este es el paso que elimina la declaración.
 
 :::note Un destroy que falla deja la declaración en su sitio a propósito
 Sigue registrando en qué clúster vive la instancia, que es lo que necesita una nueva
@@ -158,4 +158,4 @@ DeviceChain divide deliberadamente cada capa:
 | Ciclo de vida | **Operador** | Agregación de estado de `Instance` y recarga en caliente de configuración |
 | Configuración de negocio | kubectl / UI | inquilinos y sus ajustes |
 
-OpenTofu se ejecuta una vez en la creación del clúster; el chart renderiza las cargas de trabajo; el operador se ejecuta de forma continua, reconciliando el ciclo de vida. El arranque del clúster nunca vive en el código de la aplicación o del operador — es responsabilidad de la capa de infraestructura. Los módulos de OpenTofu viven en [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); aprovisionan el nivel de base de datos con guardas de retención para que sobreviva al desmontaje de la aplicación (vea [Versiones y actualizaciones](./releases-and-upgrades.md#data-durability)).
+OpenTofu se ejecuta al instalar un clúster (`dcctl install`, para los requisitos previos que comparten todas las instancias) y al arrancar una instancia (para el bróker y el almacén de eventos propios de esa instancia); el chart renderiza las cargas de trabajo; el operador se ejecuta de forma continua, reconciliando el ciclo de vida. El arranque del clúster nunca vive en el código de la aplicación o del operador — es responsabilidad de la capa de infraestructura. Los módulos de OpenTofu viven en [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); aprovisionan el nivel de base de datos con guardas de retención para que sobreviva al desmontaje de la aplicación (vea [Versiones y actualizaciones](./releases-and-upgrades.md#data-durability)).

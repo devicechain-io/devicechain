@@ -11,7 +11,7 @@ DeviceChain is designed to run locally with only two dependencies: **NATS** and 
 DeviceChain is pre-release. This guide covers working on the source tree — building the Go
 workspace and running a single service against dependencies you started yourself. If you
 want a **complete running instance** instead, use `dcctl` and the
-[Quickstart](../quickstart/first-device.md); it stands up everything in one command.
+[Quickstart](../quickstart/first-device.md); it stands up everything with two commands, `dcctl install` and `dcctl bootstrap`.
 :::
 
 ## Prerequisites

@@ -138,65 +138,54 @@ you would miss.
 
 ## Recovering an instance {#recover}
 
-Recovery is **one command**, and it is a command that builds a new instance. The
-database is recovered from its archive as the cluster is created, before any service
-connects to it, seeded with the root key from your escrow artifact.
+Recovery is a command that **builds** a new instance. What `dcctl` can recover today is
+the root key and the event store; the relational database is not yet among them.
 
 That is why there is no "restore into the running instance" step here. There is no
 supported way to do that, deliberately: restoring underneath services that have
 already created their own schemas means dropping tables they hold open and racing
 their migrations. **Recover by rebuilding.**
 
-**1. Rebuild the instance, recovering the database and the key together.**
+:::caution Relational database restore is not available through `dcctl` yet
+The relational database holds **every** instance's database on the cluster, and it is
+installed once per cluster by `dcctl install`, not by `dcctl bootstrap`. Restoring it is
+therefore a cluster-level operation, and that operation has not shipped. Until it does,
+`dcctl` cannot recover core data from its archive — the half of this page the root key
+exists to protect. Its write-ahead log is still archived to the backup destination, so
+the backups themselves are being taken; what is missing is the command that restores
+from them.
+:::
+
+**1. Rebuild the instance with its root key.**
 
 ```bash
 dcctl bootstrap local my-instance \
-  --restore-root-key ~/backups/my-instance-rootkey.escrow \
-  --restore-rdb-from dc-rdb
+  --restore-root-key ~/backups/my-instance-rootkey.escrow
 ```
 
-`--restore-rdb-from` names the **archive path inside your backup bucket** — the
-`serverName` the old instance was writing under, `dc-rdb` unless you changed it. You
-will be asked for the artifact's passphrase (or supply it with
-`--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
+The instance's secret-store root key is seeded from the escrow artifact instead of being
+minted, so secrets that come back with its core data can be decrypted. You will be asked
+for the artifact's passphrase (or supply it with `--escrow-passphrase-file` /
+`DCCTL_ESCROW_PASSPHRASE`).
 
-Two things this command will not let you do:
+A restore is one of the few things allowed to run against an instance that already
+exists — recovery is exactly the situation a run gets interrupted in and has to be
+retried, and a sharper guard makes that safe by permitting it only when the escrow
+artifact carries the key the instance is already running on.
 
-- **Recover data without the key.** `--restore-rdb-from` on its own is refused. It
-  would rehydrate every row and mint a *fresh* root key, leaving every stored secret
-  permanently unreadable — a loss no later step can undo.
-- **Recover into a live instance.** A restore is one of the few things allowed to run
-  against an instance that already exists — recovery is exactly the situation a run gets
-  interrupted in and has to be retried, and a sharper guard makes that safe by permitting
-  it only when the escrow artifact carries the key the instance is already running on. But
-  the flag itself only takes effect when the database cluster is *created*, so aiming one
-  at a live instance moves no data at all, rather than half-working.
+**2. Restore event data** with `--restore-tsdb-from` (and optionally `--restore-tsdb-at`,
+an RFC 3339 timestamp strictly before the damage, to roll back to a point in time),
+whenever it suits your recovery-time target. The event store keeps an independent
+timeline on purpose: rewinding telemetry to yesterday does not mean the control plane
+should be rewound with it. The flag only takes effect when the event store is *created*,
+so aiming it at a live instance moves no data at all, rather than half-working. Step 3
+does not depend on this.
 
-The recovered instance immediately begins archiving under a **new** archive path of
-its own, so it cannot write over the archive it was just born from. The bootstrap
-summary prints the name it chose.
-
-**2. Roll back to a point in time instead**, if the disaster was that the data was
-destroyed *correctly* — a bad migration, a mistaken bulk delete. Add
-`--restore-rdb-at` with an RFC 3339 timestamp strictly before the damage:
-
-```bash
-dcctl bootstrap local my-instance \
-  --restore-root-key ~/backups/my-instance-rootkey.escrow \
-  --restore-rdb-from dc-rdb \
-  --restore-rdb-at 2026-03-14T09:15:00Z
-```
-
-**3. Restore event data** separately with `--restore-tsdb-from` (and optionally
-`--restore-tsdb-at`), whenever it suits your recovery-time target. The two stores
-keep independent timelines on purpose: rewinding telemetry to yesterday does not mean
-the control plane should be rewound with it. Step 4 does not depend on this.
-
-**4. Confirm the stored secrets decrypt** — read back a secret-backed object (an
+**3. Confirm the stored secrets decrypt** — read back a secret-backed object (an
 outbound connector, a notification channel) through the console or the API. A restore
 that returns rows is not proof; a value that decrypts is.
 
-**5. If you restored event data, check the machinery and not the row count.** A
+**4. If you restored event data, check the machinery and not the row count.** A
 recovered event store can hold every row and still have quietly stopped being a
 time-series database — the tables are there, the queries return, and the thing that is
 missing is the background work. That store answers queries perfectly for as long as it
@@ -257,7 +246,7 @@ instance's own namespace.
 
 You are looking for `Cluster in healthy state`. A cluster stuck in `Setting up
 primary` has not recovered — most often the archive is unreachable, or
-`--restore-rdb-from` names a path that does not exist in the bucket.
+`--restore-tsdb-from` names a path that does not exist in the bucket.
 :::
 
 :::note Restoring under a different instance name
@@ -343,15 +332,13 @@ work around the check rather than fix it.
 
 ## After `dcctl destroy` {#after-destroy}
 
-`dcctl destroy` removes the cluster and the instance's local state — but **not** the
-escrow artifact, which lives outside that directory by design, and which destroy names
-on its way out.
+`dcctl destroy` removes the instance — its Helm release, its database and database login,
+its namespace — and its local state, but **not** the escrow artifact, which lives outside
+that directory by design, and which destroy names on its way out.
 
-One case removes less: an instance bootstrapped into a cluster you created yourself
-(with `--kube-context`) has that cluster **left running**. The instance is uninstalled
-from it and its local state — including the escrow's siblings — is cleared, but the
-cluster is not dcctl's to delete. It says so, and names the cluster, on the way out.
-`dcctl instances list` shows which instances are in that state.
+It never deletes the cluster, nor the prerequisites `dcctl install` put on it: the
+relational database the other instances use, and the backup object store, stay where they
+are.
 
 Keep it for as long as you keep any backup of that instance's databases. It is the
 only thing that can still read them. Delete it when those backups are gone, and not

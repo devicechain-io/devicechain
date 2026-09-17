@@ -5,10 +5,13 @@ title: Bootstrap an Instance
 
 # Bootstrap an Instance
 
-`dcctl bootstrap` stands up a complete DeviceChain instance — infrastructure, the
-operator, and all the service workloads — with a single command:
+A DeviceChain deployment is built with two commands. `dcctl install` prepares a
+cluster **once**, and `dcctl bootstrap` stands up a complete DeviceChain instance on
+it — its infrastructure and all the service workloads — as many times as you want
+instances:
 
 ```bash
+dcctl install local
 dcctl bootstrap local my-instance
 ```
 
@@ -16,18 +19,72 @@ dcctl bootstrap local my-instance
 chart, and the operator manifests are all embedded inside it, so you never need a
 checkout of the source tree or `git` to deploy.
 
-It does not carry its own **tools**. `bootstrap` drives `docker`, `kubectl`,
+It does not carry its own **tools**. `install` and `bootstrap` drive `docker`, `kubectl`,
 `helm` and `tofu` (or `terraform`) as binaries on your `PATH`, and on the `local`
-provider `kind` as well. It checks for all of them before it starts and stops if
+provider `kind` as well. They check for all of them before they start and stop if
 one is missing, so install them first — the full list, and what each is used for,
 is under [Prerequisites](#prerequisites).
 
 :::note Status
-DeviceChain is pre-release. `dcctl bootstrap local` is implemented and validated
-end-to-end on local Kubernetes (kind), and it creates the kind cluster for you if
-none is running — it asks first, unless you pass `--yes`. The `gcp` provider is a
-planned follow-up.
+DeviceChain is pre-release. `dcctl install local` and `dcctl bootstrap local` are
+implemented and validated end-to-end on local Kubernetes (kind). `dcctl install local`
+creates the kind cluster for you if none exists — it asks first, unless you pass `--yes`.
+The `gcp` provider is a planned follow-up.
 :::
+
+## Install the cluster {#install}
+
+`dcctl install <provider>` prepares a cluster to hold DeviceChain instances. It installs
+the prerequisites every instance on the cluster shares, in the `dc-system` namespace:
+
+- the CloudNativePG operator;
+- the relational database (`dc-rdb`), which holds one database per instance;
+- the object store database backups are archived to;
+- cert-manager;
+- monitoring (Prometheus and Grafana — see [Observability](./observability.md));
+- the ingress controller.
+
+It also creates the base database identity that each instance's own database login is
+created with, and records the install in the cluster.
+
+Which cluster it installs into:
+
+- **`local`** — `--cluster <name>` (default `devicechain`) names a kind cluster. If none
+  of that name exists, `install` creates it, asking first unless you pass `--yes`; if one
+  does, it is reused.
+- **Any provider** — `--kube-context <ctx>` installs into a cluster that already exists.
+  `dcctl` never creates or deletes a cluster reached this way.
+
+Re-running `install` against the same cluster converges it: what is already in place is
+left as it is, and what is missing is added. **Changing its settings** — `--ha`,
+`--compact`, monitoring, backups — is refused while any instance exists on the cluster,
+because every instance was built to the settings in place when it was bootstrapped.
+
+The flags are listed under [Install flags](#install-flags). On a laptop:
+
+```bash
+dcctl install local --dev
+dcctl bootstrap local devicechain --dev
+```
+
+`dcctl bootstrap` **refuses** on a cluster where `dcctl install` has not completed, and the
+refusal names the install command to run. `dcctl upgrade` refuses in the same case.
+
+There is no command that uninstalls the prerequisites yet. [`dcctl destroy`](#destroy)
+removes one instance and leaves them in place. To remove a local cluster `dcctl install`
+created, delete it with kind:
+
+```bash
+kind delete cluster --name devicechain
+docker rm -f kind-registry   # the local image registry, if you used --build
+```
+
+**The connection budget.** The relational database has a fixed number of connections,
+set by `--max-connections` (default `600`). Each instance reserves a connection limit on
+its database login, sized from the areas it enables, and `dcctl bootstrap` refuses an
+instance whose reservation does not fit in what is left. A cluster meant to hold many
+instances, or instances with many areas enabled, needs a larger budget, set when the
+cluster is installed.
 
 ## What it does {#what-it-does}
 
@@ -57,6 +114,10 @@ looks perfectly healthy and has no data in it.
 This is the one documented reason to run `dcctl bootstrap` against an instance that is
 already live, so `--allow-legacy-db-removal` is carved out of the refusal in step 3 as well
 as this one. Nothing else is.
+
+The flag is split along the same line as the databases: the relational database belongs to
+the cluster, so `dcctl install --allow-legacy-db-removal` covers it, and the event store
+belongs to the instance, so `dcctl bootstrap --allow-legacy-db-removal` covers that.
 :::
 
 **Several instances on one cluster.** A cluster can hold more than one DeviceChain
@@ -65,8 +126,9 @@ its credentials live in a namespace named after the instance, and each instance 
 to the shared relational database with a login of its own that owns exactly one database —
 so no instance can reach another's data. What instances share are the cluster's
 prerequisites: the ingress controller, cert-manager, the CloudNativePG operator,
-monitoring, the relational database and the backup object store. The first bootstrap on a
-cluster installs them; later ones reuse them.
+monitoring, the relational database and the backup object store. [`dcctl install`](#install)
+installs them once; every bootstrap reuses them, and follows the settings the cluster was
+installed with — high availability, compact sizing, monitoring and backups.
 
 Two things on a cluster can belong to only one instance, and the bootstrap handles both:
 
@@ -132,15 +194,12 @@ components`), so a failure names a step you can find here:
    credentials cannot be recovered from the cluster once they are in it. The root key is additionally escrowed to an encrypted file you keep;
    see [Disaster Recovery](./disaster-recovery.md).
 8. **Apply infrastructure** — `tofu apply` the embedded OpenTofu configuration via
-   [terraform-exec](https://github.com/hashicorp/terraform-exec), in two parts. First the
-   cluster's shared prerequisites — NGINX ingress, cert-manager, the CloudNativePG operator
-   and its Barman Cloud backup plugin, monitoring, the relational database and the object
-   store the backup plugin archives to — with state kept in
-   `~/.devicechain/clusters/<cluster-id>/infra`, so a second instance on the same cluster
-   reuses them rather than installing them again. Then this instance's own login and
-   database on the relational database, and its own broker (NATS) and event store
-   (TimescaleDB) in its namespace, with state kept in
-   `~/.devicechain/instances/<instance>/infra`. Subsequent runs are incremental.
+   [terraform-exec](https://github.com/hashicorp/terraform-exec), for this instance only:
+   its own broker (NATS) and event store (TimescaleDB) in its namespace, with state kept in
+   `~/.devicechain/instances/<instance>/infra`. The step also creates the instance's own
+   login and database on the shared relational database. The cluster's shared
+   prerequisites are not applied here — [`dcctl install`](#install) put them in place.
+   Subsequent runs are incremental.
 9. **Install instance (Helm)** — write the instance's **configuration document** — the one
    every service reads its credentials and endpoints from — and then deploy the Helm chart
    via the Helm Go SDK, blocking until the workloads are ready. That document is what makes
@@ -175,9 +234,9 @@ production deploy.
 
 :::info The default backup destination is an AGPL component
 Database backups need somewhere to go, and by default that somewhere is a single-replica
-**MinIO** in your instance's namespace, so that a stock bootstrap produces an instance
-whose write-ahead log is genuinely being archived rather than one carrying a backup plugin
-with nowhere to put anything.
+**MinIO** in the `dc-system` namespace, installed by `dcctl install`, so that a stock
+install produces instances whose write-ahead log is genuinely being archived rather than
+instances carrying a backup plugin with nowhere to put anything.
 
 Two things to know before you accept that default. MinIO is licensed **AGPL-3.0**, and
 community MinIO entered maintenance mode in December 2025 and was archived in April 2026,
@@ -189,7 +248,8 @@ and many organisations do not permit AGPL software regardless of how it is used.
 Point the backup destination at storage outside the cluster to avoid both. That is the
 recommended production configuration anyway, for a reason that has nothing to do with
 licensing: an in-cluster bucket shares the cluster's failure domain, so it cannot be
-disaster recovery. See [Disaster Recovery](./disaster-recovery.md) and the OpenTofu
+disaster recovery. Pass `--backup-credentials-file` to `dcctl install` to name an object
+store you already own; see [Disaster Recovery](./disaster-recovery.md) and the OpenTofu
 configuration's `backup_destination`.
 :::
 
@@ -200,10 +260,9 @@ configuration's `backup_destination`.
   it; `dcctl preflight` checks it up front, because otherwise the failure lands
   part-way through a bootstrap that has already written your root-key escrow file.
   For the `local`
-  provider this is a local cluster (kind / minikube / k3d / docker-desktop).
-  `dcctl` auto-detects a local context; pass `--kube-context <name>` to choose one
-  explicitly. (Today the `local` provider selects an existing context; creating the
-  cluster for you is a planned addition.)
+  provider this is a kind cluster, which `dcctl install local` creates for you
+  (`--cluster <name>`, default `devicechain`); pass `--kube-context <name>` to use a
+  cluster you already have instead (kind / minikube / k3d / docker-desktop).
 - **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`.
   `dcctl` drives it to provision infrastructure. Install it from
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check this
@@ -235,16 +294,14 @@ pipeline, chart, and operator are identical.
 
 | Flag | Purpose |
 |------|---------|
-| `--kube-context <name>` | Target a specific kube-context (default: auto-detect a local one). |
+| `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
+| `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, and MCP), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
-| `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). |
-| `--compact` | Small-footprint preset — see below. |
-| `--ha` | Messaging high availability — see below. Needs at least **3 schedulable nodes**. |
-| `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the infra apply fails without this. |
-| `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster and takes no cluster lock, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal; it does still report whether another operator is holding the cluster. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
+| `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). On a cluster installed without cert-manager this is on by default, and `--no-tls=false` is refused: there is nothing to issue the certificate. |
+| `--dry-run` | Print what each step would do without changing anything. A dry run takes no cluster lock; it does still report whether another operator is holding the cluster. |
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
 | `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |
@@ -286,10 +343,32 @@ given one later without being rebuilt: `dcctl upgrade` writes the missing artifa
 pass it a passphrase, and checks an existing one every time it runs. See
 [the escrow reconcile](./disaster-recovery.md#escrow-reconcile).
 
+## Install flags {#install-flags}
+
+These are flags of [`dcctl install`](#install). They describe the cluster, and every
+instance bootstrapped on it follows them; none of them is a `dcctl bootstrap` flag.
+
+| Flag | Purpose |
+|------|---------|
+| `--cluster <name>` | `local` provider: the kind cluster to install into (default `devicechain`), created if it does not exist. |
+| `--kube-context <name>` | Install into the existing cluster this kube-context points at. `dcctl` never creates or deletes it. |
+| `--compact` | Small-footprint preset — see below. |
+| `--ha` | High availability — see below. Needs at least **3 schedulable nodes**. |
+| `--no-tls` | With `--compact`: install no cert-manager, and therefore no database backups. `--compact --no-tls=false` keeps both. |
+| `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |
+| `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
+| `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
+| `--max-connections <n>` | The relational database's connection budget (default `600`) — see [the connection budget](#install). |
+| `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What it does](#what-it-does). |
+| `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
+| `--yes` | Do not ask before creating a kind cluster. |
+| `--skip-preflight` | Skip the environment checks. |
+| `--dev` | Local convenience for a laptop cluster; implies `--yes`. |
+
 ### `--compact`
 
-A preset for small clusters. It composes levers that already exist rather than adding a
-tuning axis of its own:
+A preset for small clusters, chosen at install. It composes levers that already exist
+rather than adding a tuning axis of its own:
 
 - lower JetStream and KV per-stream ceilings, and the smaller volumes those permit
   (2Gi JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
@@ -300,24 +379,26 @@ tuning axis of its own:
 - no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
   cert-manager stays — see below), and consequently no database backup plugin.
 
-It does **not** change which services run — that stays on `--profile`, where it is named
-and visible. A profile *larger* than `default` — today only `full` — is rejected: the
-published compact numbers are measured on `default`, so they would not describe an
-instance running three more services. The smaller profiles (`telemetry`, `ingest-only`)
-are accepted.
+It does **not** change which services run — that stays on each instance's `--profile`,
+where it is named and visible. A profile *larger* than `default` — today only `full` — is
+rejected on a compact cluster: the published compact numbers are measured on `default`, so
+they would not describe an instance running three more services. The smaller profiles
+(`telemetry`, `ingest-only`) are accepted.
 
 Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monitoring=false`
-is honoured, and every other compact lever still applies. Keeping TLS also keeps
-cert-manager, which is what issues the certificate. `--grafana-sso` needs the monitoring
-stack Grafana lives in, so it is rejected unless you keep it with `--no-monitoring=false`.
+on `dcctl install` is honoured, and every other compact lever still applies. Keeping TLS
+also keeps cert-manager, which is what issues the certificate. On a cluster installed
+without cert-manager, every instance is served without TLS: `dcctl bootstrap` defaults
+`--no-tls` on and refuses `--no-tls=false`.
 
 :::note Why `--compact --no-tls` drops the backup plugin
 The Barman Cloud plugin issues its own certificates through cert-manager, so dropping
 cert-manager drops the plugin with it. Turning TLS back on (`--no-tls=false`) restores
-both. Note it takes *both* flags: `--no-tls` on its own — as in the local-URL example
-below — keeps cert-manager and therefore keeps the plugin.
+both. Note it takes *both* install flags: `--no-tls` on its own keeps cert-manager and
+therefore keeps the plugin — and `--no-tls` on `dcctl bootstrap`, as in the local-URL
+example below, only changes how that one instance is served.
 
-The CloudNativePG operator itself is installed on *every* bring-up, compact included —
+The CloudNativePG operator itself is installed on *every* cluster, compact included —
 one Deployment requesting 100m/128Mi, plus its CRDs. That is a footprint cost compact
 does not avoid, and it is deliberate: backup is not a high-availability feature, so the
 storage tier has one shape everywhere.
@@ -333,10 +414,11 @@ instance meant to run indefinitely, set a retention window rather than relying o
 volume size.
 :::
 
-:::caution Apply it to a fresh cluster
+:::caution Choose it before the first instance
 Lowering a ceiling below what a stream or KV bucket already holds succeeds silently,
-truncates nothing, and refuses writes until the data ages out. `--compact` is safe on a
-first bring-up; it is not the same operation applied to a running instance.
+truncates nothing, and refuses writes until the data ages out. That is why `dcctl install`
+refuses to change its settings while any instance exists on the cluster: `--compact` is
+decided once, before anything is running under it.
 :::
 
 :::tip Zero-config local URL
@@ -346,15 +428,17 @@ console at `http://localhost/` — no hosts-file entry and no certificate warnin
 
 ### `--ha` {#ha}
 
-Runs the message broker as a 3-node RAFT cluster, one server per node, with **every
-JetStream stream and KV bucket replicated across it**. The instance then survives the
-loss of any one node without losing messages, device sessions, or live state.
+Chosen at install, and followed by every instance on the cluster. Each instance runs its
+message broker as a 3-node RAFT cluster, one server per node, with **every JetStream
+stream and KV bucket replicated across it**. The instance then survives the loss of any
+one node without losing messages, device sessions, or live state.
 
 ```bash
-dcctl bootstrap local my-instance --ha
+dcctl install local --ha
+dcctl bootstrap local my-instance
 ```
 
-Both halves are set from that one flag, and that is the point of it. The broker's size
+Both halves are set from that one setting, and that is the point of it. The broker's size
 is infrastructure (OpenTofu); the per-stream replica factor is instance configuration
 (Helm). They live in different tools, neither of which can see the other, and raising
 only the first is the failure mode this flag exists to prevent: a three-node cluster
@@ -454,3 +538,20 @@ dcctl sim create demo --instance my-instance --server localhost
 The simulator then drives telemetry and alarms in over the same device wire real
 hardware uses — see [Trying it with simulated
 data](../intro.md#trying-it-with-simulated-data).
+
+## Removing an instance {#destroy}
+
+```bash
+dcctl destroy local my-instance
+```
+
+`dcctl destroy` removes **that instance only**: its Helm release, its database and database
+login, its namespace, and its local state under `~/.devicechain/instances/<instance>/`. The
+root-key escrow artifact is kept — see
+[Disaster Recovery](./disaster-recovery.md#after-destroy). It never deletes the cluster or
+the prerequisites `dcctl install` put there, so the next `dcctl bootstrap` on the cluster
+needs no install first. Destroying an instance and bootstrapping it again under the same
+name is how an instance is recreated.
+
+There is no uninstall command yet. To delete a local cluster `dcctl install` created, use
+kind directly, as shown under [Install the cluster](#install).

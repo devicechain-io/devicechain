@@ -5,10 +5,13 @@ title: Arranque inicial de una instancia
 
 # Arranque inicial de una instancia
 
-`dcctl bootstrap` levanta una instancia completa de DeviceChain —infraestructura,
-el operador y todas las cargas de trabajo de servicio— con un solo comando:
+Un despliegue de DeviceChain se construye con dos comandos. `dcctl install` prepara un
+clúster **una sola vez**, y `dcctl bootstrap` levanta en él una instancia completa de
+DeviceChain —su infraestructura y todas las cargas de trabajo de servicio— tantas veces
+como instancias quieras:
 
 ```bash
+dcctl install local
 dcctl bootstrap local my-instance
 ```
 
@@ -17,18 +20,75 @@ OpenTofu, el chart de Helm y los manifiestos del operador están todos incrustad
 en él, así que nunca necesitas un checkout del árbol de código fuente ni `git`
 para desplegar.
 
-Lo que no lleva son las **herramientas**. `bootstrap` ejecuta `docker`, `kubectl`,
-`helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y en el proveedor
-`local` también `kind`. Comprueba que estén todos antes de empezar y se detiene si
+Lo que no lleva son las **herramientas**. `install` y `bootstrap` ejecutan `docker`,
+`kubectl`, `helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y en el proveedor
+`local` también `kind`. Comprueban que estén todos antes de empezar y se detienen si
 falta alguno, así que instálalos primero —la lista completa, y para qué se usa
 cada uno, está en [Prerrequisitos](#prerequisites).
 
 :::note Estado
-DeviceChain está en fase previa al lanzamiento (pre-release). `dcctl bootstrap local`
-está implementado y validado de extremo a extremo en Kubernetes local (kind), y crea
-el clúster de kind por ti si no hay ninguno en marcha —te pregunta antes, salvo que
-pases `--yes`. El proveedor `gcp` es una mejora planificada.
+DeviceChain está en fase previa al lanzamiento (pre-release). `dcctl install local` y
+`dcctl bootstrap local` están implementados y validados de extremo a extremo en Kubernetes
+local (kind). `dcctl install local` crea el clúster de kind por ti si no existe ninguno —te
+pregunta antes, salvo que pases `--yes`. El proveedor `gcp` es una mejora planificada.
 :::
+
+## Instalar el clúster {#install}
+
+`dcctl install <provider>` prepara un clúster para alojar instancias de DeviceChain. Instala
+los requisitos previos que comparten todas las instancias del clúster, en el namespace
+`dc-system`:
+
+- el operador CloudNativePG;
+- la base de datos relacional (`dc-rdb`), que contiene una base de datos por instancia;
+- el almacén de objetos al que se archivan los respaldos de base de datos;
+- cert-manager;
+- la monitorización (Prometheus y Grafana —consulta [Observabilidad](./observability.md));
+- el controlador de ingress.
+
+Además crea la identidad de base de datos base con la que se crea el login de base de datos
+propio de cada instancia, y registra la instalación en el clúster.
+
+En qué clúster instala:
+
+- **`local`** — `--cluster <name>` (por defecto `devicechain`) nombra un clúster de kind.
+  Si no existe ninguno con ese nombre, `install` lo crea, preguntando antes salvo que pases
+  `--yes`; si existe, lo reutiliza.
+- **Cualquier proveedor** — `--kube-context <ctx>` instala en un clúster que ya existe.
+  `dcctl` nunca crea ni elimina un clúster al que se llega de este modo.
+
+Volver a ejecutar `install` contra el mismo clúster lo hace converger: lo que ya está en su
+sitio se deja como está, y lo que falta se añade. **Cambiar sus ajustes** —`--ha`,
+`--compact`, la monitorización, los respaldos— se rechaza mientras exista alguna instancia
+en el clúster, porque cada instancia se construyó con los ajustes vigentes cuando se
+arrancó.
+
+Los flags se enumeran en [Flags de instalación](#install-flags). En un portátil:
+
+```bash
+dcctl install local --dev
+dcctl bootstrap local devicechain --dev
+```
+
+`dcctl bootstrap` **se niega** en un clúster donde `dcctl install` no ha terminado, y la
+negativa nombra el comando de instalación que hay que ejecutar. `dcctl upgrade` se niega en
+el mismo caso.
+
+Todavía no hay ningún comando que desinstale los requisitos previos. [`dcctl destroy`](#destroy)
+elimina una instancia y los deja en su sitio. Para eliminar un clúster local que creó
+`dcctl install`, bórralo con kind:
+
+```bash
+kind delete cluster --name devicechain
+docker rm -f kind-registry   # el registro de imágenes local, si usaste --build
+```
+
+**El presupuesto de conexiones.** La base de datos relacional tiene un número fijo de
+conexiones, fijado por `--max-connections` (por defecto `600`). Cada instancia reserva un
+límite de conexiones en su login de base de datos, dimensionado a partir de las áreas que
+habilita, y `dcctl bootstrap` rechaza una instancia cuya reserva no cabe en lo que queda. Un
+clúster pensado para alojar muchas instancias, o instancias con muchas áreas habilitadas,
+necesita un presupuesto mayor, fijado al instalar el clúster.
 
 ## Qué hace {#what-it-does}
 
@@ -61,6 +121,11 @@ tiene ningún dato.
 Esta es la única razón documentada para ejecutar `dcctl bootstrap` contra una instancia que ya
 está viva, así que `--allow-legacy-db-removal` queda exceptuado tanto de la negativa del paso
 3 como de esta. Nada más lo está.
+
+El flag se divide por la misma línea que las bases de datos: la base de datos relacional
+pertenece al clúster, así que la cubre `dcctl install --allow-legacy-db-removal`, y el
+almacén de eventos pertenece a la instancia, así que lo cubre
+`dcctl bootstrap --allow-legacy-db-removal`.
 :::
 
 **Varias instancias en un mismo clúster.** Un clúster puede alojar más de una instancia de
@@ -70,8 +135,10 @@ y cada instancia se conecta a la base de datos relacional compartida con un logi
 que es dueño de exactamente una base de datos, de modo que ninguna instancia puede llegar a
 los datos de otra. Lo que comparten las instancias son los requisitos previos del clúster:
 el controlador de ingress, cert-manager, el operador CloudNativePG, la monitorización, la
-base de datos relacional y el almacén de objetos de los respaldos. El primer arranque
-inicial en un clúster los instala; los siguientes los reutilizan.
+base de datos relacional y el almacén de objetos de los respaldos.
+[`dcctl install`](#install) los instala una vez; cada arranque inicial los reutiliza y sigue
+los ajustes con los que se instaló el clúster: alta disponibilidad, tamaño compacto,
+monitorización y respaldos.
 
 Dos cosas de un clúster solo pueden pertenecer a una instancia, y el arranque inicial se
 ocupa de ambas:
@@ -148,16 +215,12 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
 8. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
    configuración de OpenTofu incrustada vía
-   [terraform-exec](https://github.com/hashicorp/terraform-exec), en dos partes. Primero los
-   requisitos previos compartidos del clúster —ingress de NGINX, cert-manager, el operador
-   CloudNativePG y su plugin de respaldo Barman Cloud, la monitorización, la base de datos
-   relacional y el almacén de objetos al que archiva el plugin—, con el estado guardado en
-   `~/.devicechain/clusters/<cluster-id>/infra`, de modo que una segunda instancia en el
-   mismo clúster los reutiliza en lugar de volver a instalarlos. Después, el login y la base
-   de datos propios de esta instancia en la base de datos relacional, y su propio bróker
-   (NATS) y almacén de eventos (TimescaleDB) en su namespace, con el estado guardado en
-   `~/.devicechain/instances/<instance>/infra`. Las ejecuciones posteriores son
-   incrementales.
+   [terraform-exec](https://github.com/hashicorp/terraform-exec), solo para esta instancia:
+   su propio bróker (NATS) y almacén de eventos (TimescaleDB) en su namespace, con el estado
+   guardado en `~/.devicechain/instances/<instance>/infra`. El paso también crea el login y
+   la base de datos propios de la instancia en la base de datos relacional compartida. Los
+   requisitos previos compartidos del clúster no se aplican aquí: los dejó en su sitio
+   [`dcctl install`](#install). Las ejecuciones posteriores son incrementales.
 9. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
    configuración** de la instancia —del que cada servicio lee sus credenciales y sus
    endpoints— y después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando
@@ -194,9 +257,10 @@ puede desviarse de un despliegue de producción.
 
 :::info El destino de respaldo predeterminado es un componente AGPL
 Los respaldos de base de datos necesitan un destino y, de forma predeterminada, ese destino
-es un **MinIO** de una sola réplica en el namespace de tu instancia, para que un arranque
-estándar produzca una instancia cuyo log de escritura anticipada (WAL) se archive de verdad,
-en lugar de una que lleve un plugin de respaldo sin ningún sitio donde escribir.
+es un **MinIO** de una sola réplica en el namespace `dc-system`, instalado por
+`dcctl install`, para que una instalación estándar produzca instancias cuyo log de escritura
+anticipada (WAL) se archive de verdad, en lugar de instancias que lleven un plugin de
+respaldo sin ningún sitio donde escribir.
 
 Dos cosas que conviene saber antes de aceptar ese valor predeterminado. MinIO se distribuye
 bajo licencia **AGPL-3.0**, y la edición comunitaria de MinIO entró en modo de mantenimiento
@@ -210,7 +274,8 @@ use.
 Apunta el destino de respaldo a un almacenamiento fuera del clúster para evitar ambas cosas.
 Esa es la configuración de producción recomendada de todos modos, por un motivo que nada
 tiene que ver con las licencias: un bucket dentro del clúster comparte su dominio de fallo,
-así que no puede constituir recuperación ante desastres. Consulta
+así que no puede constituir recuperación ante desastres. Pasa `--backup-credentials-file` a
+`dcctl install` para nombrar un almacén de objetos que ya tengas; consulta
 [Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
 configuración de OpenTofu.
 :::
@@ -222,11 +287,10 @@ configuración de OpenTofu.
   instalarse por debajo de esa versión; `dcctl preflight` lo verifica por
   adelantado, porque de lo contrario el fallo aparece a mitad de un levantamiento
   que ya ha escrito tu archivo de custodia (escrow) de la clave raíz. Para el
-  proveedor `local` esto es un clúster local (kind / minikube / k3d /
-  docker-desktop). `dcctl` autodetecta un contexto local; pasa
-  `--kube-context <name>` para elegir uno explícitamente. (Hoy el proveedor
-  `local` selecciona un contexto existente; crear el clúster por ti es una
-  incorporación planificada.)
+  proveedor `local` esto es un clúster de kind, que `dcctl install local` crea por
+  ti (`--cluster <name>`, por defecto `devicechain`); pasa `--kube-context <name>`
+  para usar en su lugar un clúster que ya tengas (kind / minikube / k3d /
+  docker-desktop).
 - **OpenTofu** (el binario `tofu`; `terraform` también funciona) en tu `PATH`.
   `dcctl` lo gobierna para aprovisionar infraestructura. Instálalo desde
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para
@@ -259,22 +323,42 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 
 | Flag | Propósito |
 |------|-----------|
-| `--kube-context <name>` | Apunta a un kube-context específico (por defecto: autodetecta uno local). |
+| `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
+| `--kube-context <name>` | Apunta a un clúster instalado a través de este kube-context. |
 | `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo —añade inferencia de IA, conectores salientes y MCP), `telemetry`, o `ingest-only`. |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola **sin editar `/etc/hosts`**. |
-| `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). |
-| `--compact` | Preajuste de huella pequeña —ver más abajo. |
-| `--ha` | Alta disponibilidad de mensajería —ver más abajo. Requiere al menos **3 nodos planificables**. |
-| `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera el apply de infraestructura falla. |
-| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster ni toma el bloqueo del clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo; lo que sí informa es si otro operador está reteniendo el clúster. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
+| `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). En un clúster instalado sin cert-manager está activado por defecto, y `--no-tls=false` se rechaza: no hay nada que emita el certificado. |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no toma el bloqueo del clúster; sí informa de si otro operador está reteniendo el clúster. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
+
+## Flags de instalación {#install-flags}
+
+Estos son flags de [`dcctl install`](#install). Describen el clúster, y toda instancia
+arrancada en él los sigue; ninguno es un flag de `dcctl bootstrap`.
+
+| Flag | Propósito |
+|------|-----------|
+| `--cluster <name>` | Proveedor `local`: el clúster de kind en el que instalar (por defecto `devicechain`), que se crea si no existe. |
+| `--kube-context <name>` | Instala en el clúster existente al que apunta este kube-context. `dcctl` nunca lo crea ni lo elimina. |
+| `--compact` | Preajuste de huella pequeña —ver más abajo. |
+| `--ha` | Alta disponibilidad —ver más abajo. Requiere al menos **3 nodos planificables**. |
+| `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. |
+| `--no-monitoring` | Omite la pila de monitoreo (Prometheus y Grafana). |
+| `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera la instalación falla. |
+| `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
+| `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600`) —consulta [el presupuesto de conexiones](#install). |
+| `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace](#what-it-does). |
+| `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
+| `--yes` | No pregunta antes de crear un clúster de kind. |
+| `--skip-preflight` | Omite las comprobaciones de entorno. |
+| `--dev` | Comodidad local para un clúster en un portátil; implica `--yes`. |
 
 ### `--compact`
 
-Un preajuste para clústeres pequeños. Compone palancas que ya existen en lugar de
-añadir un eje de ajuste propio:
+Un preajuste para clústeres pequeños, que se elige al instalar. Compone palancas que ya
+existen en lugar de añadir un eje de ajuste propio:
 
 - techos por-stream más bajos de JetStream y KV, y los volúmenes más pequeños que
   eso permite (2Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB);
@@ -287,27 +371,27 @@ añadir un eje de ajuste propio:
   certificado (mantener TLS conserva también cert-manager —ver más abajo), y en
   consecuencia sin el plugin de respaldo de base de datos.
 
-**No** cambia qué servicios se ejecutan —eso se controla en `--profile`, donde
-queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo
-`full`— es rechazado: las cifras compactas publicadas se miden sobre `default`,
-así que no describirían una instancia que ejecuta tres servicios más. Los
+**No** cambia qué servicios se ejecutan —eso se controla en el `--profile` de cada
+instancia, donde queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo
+`full`— es rechazado en un clúster compacto: las cifras compactas publicadas se miden sobre
+`default`, así que no describirían una instancia que ejecuta tres servicios más. Los
 perfiles más pequeños (`telemetry`, `ingest-only`) sí se aceptan.
 
 Tanto TLS como el monitoreo pueden conservarse: un `--no-tls=false` o
-`--no-monitoring=false` explícito se respeta, y el resto de las palancas
+`--no-monitoring=false` explícito en `dcctl install` se respeta, y el resto de las palancas
 compactas siguen aplicándose. Mantener TLS también conserva cert-manager, que es
-lo que emite el certificado. `--grafana-sso` necesita la pila de monitoreo donde
-vive Grafana, así que se rechaza a menos que la conserves con
-`--no-monitoring=false`.
+lo que emite el certificado. En un clúster instalado sin cert-manager, toda instancia se
+sirve sin TLS: `dcctl bootstrap` activa `--no-tls` por defecto y rechaza `--no-tls=false`.
 
 :::note Por qué `--compact --no-tls` descarta el plugin de respaldo
 El plugin Barman Cloud emite sus propios certificados a través de cert-manager, así
 que descartar cert-manager descarta también el plugin. Volver a activar TLS
-(`--no-tls=false`) restablece ambos. Ten en cuenta que hacen falta *ambas* banderas:
-`--no-tls` por sí sola —como en el ejemplo de URL local más abajo— conserva
-cert-manager y por lo tanto conserva el plugin.
+(`--no-tls=false`) restablece ambos. Ten en cuenta que hacen falta *ambas* banderas de
+instalación: `--no-tls` por sí sola conserva cert-manager y por lo tanto conserva el
+plugin —y `--no-tls` en `dcctl bootstrap`, como en el ejemplo de URL local más abajo, solo
+cambia cómo se sirve esa instancia.
 
-El operador CloudNativePG en sí se instala en *todo* levantamiento, incluido el
+El operador CloudNativePG en sí se instala en *todo* clúster, incluido el
 compacto —un Deployment que solicita 100m/128Mi, más sus CRDs—. Ese es un costo de
 huella que el modo compacto no evita, y es deliberado: el respaldo no es una función
 de alta disponibilidad, así que la capa de almacenamiento tiene una sola forma en
@@ -326,11 +410,12 @@ una instancia compacta pensada para ejecutarse indefinidamente, establece una
 ventana de retención en lugar de confiar en el tamaño del volumen.
 :::
 
-:::caution Aplícalo a un clúster nuevo
+:::caution Elígelo antes de la primera instancia
 Bajar un techo por debajo de lo que un stream o bucket de KV ya contiene tiene
 éxito silenciosamente, no trunca nada, y rechaza escrituras hasta que los datos
-envejezcan y se purguen. `--compact` es seguro en un primer arranque; no es la
-misma operación aplicada a una instancia en ejecución.
+envejezcan y se purguen. Por eso `dcctl install` se niega a cambiar sus ajustes mientras
+exista alguna instancia en el clúster: `--compact` se decide una vez, antes de que haya
+nada ejecutándose bajo él.
 :::
 
 :::tip URL local sin configuración
@@ -341,16 +426,18 @@ de certificado.
 
 ### `--ha` {#ha}
 
-Ejecuta el broker de mensajería como un clúster RAFT de 3 nodos, un servidor por nodo, con
+Se elige al instalar, y lo sigue toda instancia del clúster. Cada instancia ejecuta su
+broker de mensajería como un clúster RAFT de 3 nodos, un servidor por nodo, con
 **cada stream de JetStream y cada bucket KV replicados a lo largo del clúster**. La
 instancia sobrevive entonces a la pérdida de cualquier nodo sin perder mensajes, sesiones
 de dispositivo ni estado en vivo.
 
 ```bash
-dcctl bootstrap local mi-instancia --ha
+dcctl install local --ha
+dcctl bootstrap local mi-instancia
 ```
 
-Ambas mitades se establecen a partir de ese único flag, y ese es justamente su propósito.
+Ambas mitades se establecen a partir de ese único ajuste, y ese es justamente su propósito.
 El tamaño del broker es infraestructura (OpenTofu); el factor de réplica por stream es
 configuración de la instancia (Helm). Viven en herramientas distintas, ninguna de las
 cuales puede ver a la otra, y elevar solo la primera es el modo de fallo que este flag
@@ -458,3 +545,21 @@ dcctl sim create demo --instance my-instance --server localhost
 El simulador inyecta entonces telemetría y alarmas por el mismo cable de
 dispositivo que usa el hardware real — véase [Probarlo con datos
 simulados](../intro.md#probarlo-con-datos-simulados).
+
+## Eliminar una instancia {#destroy}
+
+```bash
+dcctl destroy local my-instance
+```
+
+`dcctl destroy` elimina **solo esa instancia**: su release de Helm, su base de datos y su
+login de base de datos, su namespace y su estado local en
+`~/.devicechain/instances/<instance>/`. El artefacto de depósito (escrow) de la clave raíz se
+conserva —consulta
+[Recuperación ante desastres](./disaster-recovery.md#after-destroy). Nunca elimina el
+clúster ni los requisitos previos que dejó `dcctl install`, así que el siguiente
+`dcctl bootstrap` en el clúster no necesita instalar antes. Destruir una instancia y volver
+a arrancarla con el mismo nombre es como se recrea una instancia.
+
+Todavía no hay ningún comando de desinstalación. Para eliminar un clúster local que creó
+`dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install).

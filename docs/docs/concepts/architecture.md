@@ -49,7 +49,7 @@ During resolution, device-management looks up the device's **tracked** relations
 
 ## Deployment model
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at cluster-creation time. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`default` / `full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles the `Instance` lifecycle rather than stamping workloads (tenants are control-plane database records, not reconciled resources). This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
+Infrastructure is provisioned by **OpenTofu** in two layers: what every instance on a cluster shares (the relational database, ingress, TLS, monitoring) once, when the cluster is installed, and each instance's own broker (NATS) and event store (TimescaleDB) when that instance is bootstrapped. A **Helm chart** renders the platform workloads — one Deployment + Service per enabled functional area, selected by a deployment **profile** (`default` / `full` / `telemetry` / `ingest-only`) or an explicit set, with a dependency gate that rejects an invalid selection at install time. The **operator** assumes infrastructure exists and handles the `Instance` lifecycle rather than stamping workloads (tenants are control-plane database records, not reconciled resources). This separation keeps cluster bootstrapping out of application code. See [Deployment](../deployment/kubernetes-operator.md).
 
 ## Configuration, health, and startup
 

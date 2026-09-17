@@ -349,7 +349,7 @@ mientras todas las instalaciones siguen siendo tempranas.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
 dcctl bootstrap local devicechain
 ```
 
@@ -397,7 +397,7 @@ existe ninguna ruta de actualización que conserve las filas existentes.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
 dcctl bootstrap local devicechain
 ```
 
@@ -985,6 +985,14 @@ Las instancias creadas antes de esta versión no tienen ese registro y aparecen 
 destroy will guess the cluster`. La destrucción sigue funcionando sobre ellas recurriendo a la
 derivación antigua, así que la advertencia anterior sigue aplicando a ellas y solo a ellas.
 
+:::note `dcctl destroy` ya no elimina clústeres
+En las versiones actuales `dcctl destroy` elimina solo una instancia —su release de Helm, su base
+de datos y su login, su namespace y su estado local— y nunca elimina un clúster ni los requisitos
+previos que dejó `dcctl install`. Por tanto, `dcctl destroy --all` elimina todas las instancias y
+deja todos los clústeres en marcha. Para eliminar un clúster local, usa
+`kind delete cluster --name <name>`. Consulta [Eliminar una instancia](./bootstrap.md#destroy).
+:::
+
 ### v0.15.0 — las actualizaciones dejan de borrar lo que no envió {#v0150-upgrade}
 
 `v0.15.0` es una actualización en sitio corriente desde `v0.14.x`. Las migraciones nuevas se
@@ -1323,7 +1331,7 @@ instancia en funcionamiento.
 
 ```bash
 # Exporte antes lo que necesite: esto descarta las bases de datos.
-dcctl destroy local devicechain
+dcctl destroy local devicechain     # elimina la instancia; el clúster sigue instalado
 dcctl bootstrap local devicechain
 ```
 
@@ -1395,8 +1403,9 @@ No edites la base de datos para sacarla de la configuración de infraestructura 
 
 Actualizar una instancia creada antes de que las bases de datos pasaran al operador es el
 único caso en que esto aparece, y se rechaza en tiempo de planificación en lugar de dejarse
-al azar. Vuelca primero ambas bases de datos y vuelve a ejecutar el arranque con
-`--allow-legacy-db-removal`, que afirma que te has ocupado de los datos y no verifica nada.
+al azar. Vuelca primero ambas bases de datos y vuelve a ejecutar `dcctl install` con
+`--allow-legacy-db-removal` para la base de datos relacional, y el arranque con él para el
+almacén de eventos, lo que afirma que te has ocupado de los datos y no verifica nada.
 Para una instancia local, `dcctl destroy` seguido de un arranque nuevo es más simple y
 descarta los datos de forma deliberada.
 :::
