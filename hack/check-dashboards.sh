@@ -2,10 +2,11 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Guard: the chart's Grafana dashboards must be REAL, must name REAL series, and
-# must keep the ConfigMap names they already have.
+# Guard: the chart's Grafana dashboards must be REAL, must name REAL series,
+# must keep the ConfigMap names they already have, and must keep two instances'
+# boards apart.
 #
-# THREE GAPS, ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
+# FOUR GAPS, ALL OF THEM SILENT, NONE OF THEM COVERED BY ANYTHING ELSE.
 #
 # 1. NOTHING PARSED THE DASHBOARD JSON. templates/grafana-dashboard.yaml used to
 #    embed each file with `.Files.Get | indent 4`, which turns ANY bytes into a
@@ -48,15 +49,11 @@
 #    dashboard` byte for byte, and "I checked by eye" is not a gate.
 #
 # 4. NOTHING KEPT TWO INSTANCES' BOARDS APART. The Grafana sidecar is
-#    cluster-wide: it writes every labeled ConfigMap's data keys into one
-#    directory, and Grafana holds one board per uid. When every instance
-#    rendered the same data key (`event-processing.json`) and the same uid, two
-#    instances on a cluster were one file and one board — measured on kind:
-#    deleting one instance's ConfigMap took the file away, the SURVIVING
-#    instance's board went 404 until the sidecar's next watch restart, and came
-#    back as a new Grafana object. Grafana logged nothing. And a single-instance
-#    render cannot see any of it: every value is unique when there is one of it.
-#    So this renders the chart for TWO instances — one of them at the longest id
+#    cluster-wide, so two instances rendering the same data key and uid were one
+#    file and one board, and deleting either took the other's board away
+#    (measured; templates/grafana-dashboard.yaml has the account). A
+#    single-instance render cannot see that: every value is unique when there is
+#    one of it. So this renders the chart for TWO instances — one of them at the longest id
 #    the chart's schema accepts, because Grafana refuses a uid over 40 characters
 #    — and fails on a duplicate uid or data key across the pair, a uid too long,
 #    a board whose `namespace` variable is not a hidden constant naming its own
@@ -324,12 +321,7 @@ PY
     EXPECTED_KEYS="$(printf '%s\n' "${EXPECTED_DATA_KEYS[@]}")" \
     python3 - "$dir" "$short_id" "$long_id" <<'PY' || rc=$?
 import json, os, sys
-
-try:
-    import yaml
-except ImportError:
-    sys.exit("PyYAML is required to read the rendered ConfigMaps and is not installed.\n"
-             "This check cannot run and will not pretend it passed.")
+import yaml  # presence already enforced at the top of the script
 
 render_dir, ids = sys.argv[1], sys.argv[2:]
 names = [p for p in os.environ["EXPECTED_NAMES"].split("\n") if p]

@@ -9,14 +9,13 @@ Operator but no Grafana sidecar).
 CONSTRUCTION, NOT BY A PICKER. The sidecar is cluster-wide (searchNamespace ALL) and
 writes every labeled ConfigMap's data keys into ONE directory, and Grafana holds one
 board per uid. Before this template rendered per-instance values, every instance's
-ConfigMap carried the same data key (`event-processing.json`), the same uid and the
-same title, so two instances on a cluster were one file and one board. Measured on kind
-with two instances: deleting one instance's ConfigMap made the sidecar delete the shared
-file, and the SURVIVING instance's board returned 404 until the sidecar's next watch
-restart (a fixed ~60s cycle; 3s–20s of 404 observed), then came back as a NEW Grafana
-object (new numeric id, `created` reset). Grafana never logged a duplicate uid. The
-instance picker the boards used to carry could not help — it scoped the queries of a
-board that was not there.
+ConfigMap carried the same data key (`event-processing.json`), uid and title, so two
+instances on a cluster were one file and one board. Measured on kind: deleting one
+instance's ConfigMap made the sidecar delete the shared file, and the SURVIVING
+instance's board returned 404 until the sidecar's next watch restart (a fixed ~60s cycle;
+3s–20s of 404 observed), then came back as a NEW Grafana object (new numeric id,
+`created` reset). Grafana never logged a duplicate uid. The instance picker the boards
+used to carry could not help — it scoped the queries of a board that was not there.
 
 So each ConfigMap now differs per instance in five places, and nowhere else:
 
@@ -32,12 +31,11 @@ So each ConfigMap now differs per instance in five places, and nowhere else:
     title. A sidecar without the option ignores it and the boards land flat, still apart.
   - the board `uid`, `dc-` + the first 20 hex characters of
     sha256("{instance}/<file stem>"). Grafana refuses a uid over 40 characters and an
-    instance id may be 50 (values.schema.json), so the id cannot be spelled into it; a
-    hash is fixed-length (23) whatever the id or file name, and 80 bits puts a collision
-    between two instances on one cluster out of reach. It is a pure function of
-    (instance, file), so a board keeps its uid — and every bookmark to it — across
-    upgrades and reinstalls. `/` can occur in neither part (the id is a DNS label, the
-    stem a file name), so no two pairs hash the same input.
+    instance id may be 50 (values.schema.json), so the id cannot be spelled into it; the
+    hash is always 23 characters, and 80 bits keeps two instances on one cluster from
+    colliding. `/` can occur in neither part, so no two pairs hash the same input. A
+    pure function of (instance, file), so a board keeps its uid — and every bookmark to
+    it — across upgrades and reinstalls.
   - the `title`, the file's own title with `[{instance}]` appended, so a search across
     folders still says which instance a board reads.
   - the `namespace` template variable, below.
@@ -47,7 +45,7 @@ instance (the instance id IS its namespace — metadata.namespace below). Every 
 already filters `namespace="$namespace"`, so the queries are untouched and a board can
 only ever read its own instance's series. The files on disk carry that entry as an empty
 constant; the whole entry is replaced here, so nothing in the file can leave a board
-unscoped, and a board with no `namespace` entry at all fails the render.
+unscoped, and a board with no `namespace` entry fails the render.
 
 🔴 THE CONFIGMAP NAME IS A PUBLISHED INTERFACE, not an implementation detail. It was
 `{instance}-event-processing-dashboard` when this template hardcoded one filename, and
