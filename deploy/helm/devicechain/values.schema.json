@@ -90,6 +90,8 @@
     },
     "metrics": {
       "type": "object",
+      "comment": "databaseNamespace is REQUIRED, and minLength on its own did not make it so. values.yaml supplies it and the schema already refuses an empty string, but the key could be REMOVED (--set metrics.databaseNamespace=null) — and three alert templates build their namespace selector from it whether it is there or not. The render then SUCCEEDS and ships PromQL reading namespace=~\"%!s(<nil>)|dci-<id>\", a Go formatting error verb inside a live alert expression, plus namespace=\"\" elsewhere: the CNPG unobserved-state alert then fires permanently while the volume-fullness alerts can never fire at all. Nothing rejected that, so requiring the key is what turns it into a refusal at install time instead of alerting that silently means nothing.",
+      "required": ["databaseNamespace"],
       "properties": {
         "enabled": { "type": "boolean" },
         "grafanaDashboards": { "type": "boolean" },
