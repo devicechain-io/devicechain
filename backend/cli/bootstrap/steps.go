@@ -204,7 +204,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 
 	paths := resolveArchivePaths(live, st.Restore, freshTsdbArchivePath(st.Instance, st.InstanceUID), time.Now().UTC())
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
-	if st.Restore.Active() {
+	if st.Restore.RestoresEventStore() {
 		notes = append(notes, fmt.Sprintf(
 			"event store recovering from archive %q, and will archive under %q",
 			st.Restore.TsdbFrom, paths.Tsdb))

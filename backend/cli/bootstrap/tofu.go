@@ -530,8 +530,16 @@ func infraVars(st *State) []string {
 	}
 	// The restore itself. Rebuild-time only: CloudNativePG reads `spec.bootstrap`
 	// when it CREATES a Cluster, so these do nothing to a store that already exists
-	// — stepRenderConfig says so out loud when it finds one.
+	// — stepRenderConfig and Install say so out loud when they find one.
+	//
+	// All four are emitted from here whichever command is running, and splitVars
+	// routes each to the root that DECLARES it: the relational pair belongs to the
+	// cluster root, the event pair to the instance root. Naming them correctly is
+	// therefore the whole of the wiring — and a name neither root declares stops the
+	// run rather than quietly applying that root's default. See rootvars.go.
 	for _, v := range []struct{ name, value string }{
+		{"restore_rdb_from", st.Restore.RdbFrom},
+		{"restore_rdb_target_time", st.Restore.RdbTargetTime},
 		{"restore_tsdb_from", st.Restore.TsdbFrom},
 		{"restore_tsdb_target_time", st.Restore.TsdbTargetTime},
 	} {

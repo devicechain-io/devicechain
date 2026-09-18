@@ -44,17 +44,22 @@ inventing one for a drill would be a much worse trade than reading the store.
 
 **`decoy`** mints a well-formed escrow artifact holding a root key that is *not*
 the instance's — the wrong key the negative control recovers under. It exists
-because the control it replaces can no longer be expressed: `dcctl` refused
-`--restore-rdb-from` without `--restore-root-key`, which is the guard against an
+because the control it replaces can no longer be expressed: `dcctl` once refused a
+relational restore without `--restore-root-key`, which was the guard against an
 operator silently losing every secret, and it took "rebuild with `--no-escrow`"
 with it.
 
-> **The relational half of this drill is unavailable for now.** `--restore-rdb-from` and
-> `--restore-rdb-at` no longer exist: the relational store is installed once per cluster by
-> `dcctl install` and holds every instance's database, so restoring it is a cluster-level
-> operation, and that has not shipped. Until it does, `dcctl` offers no path that restores
-> the database this drill seeds a secret into, and the drill cannot be run end to end.
-> `--restore-root-key` and the event-store restore (`--restore-tsdb-from`) remain.
+> **The relational restore is a cluster-level operation.** The relational store is
+> installed once per cluster by `dcctl install` and holds every instance's database, so
+> `dcctl install --restore-rdb-from` (with `--restore-rdb-at` for a point in time)
+> recovers it; `dcctl bootstrap --restore-tsdb-from` recovers the instance's event
+> store, and `--restore-root-key` seeds the root key that makes the recovered secrets
+> readable. A rebuild is therefore an install followed by a bootstrap, in that order,
+> which is what `hack/dr-rig.sh` rehearses.
+>
+> The old refusal has no replacement, and cannot have one: an install has no instance
+> and no escrow artifact to check a root key against. `dcctl install --restore-rdb-from`
+> says so instead, before it applies anything.
 
 The artifact comes out of `escrow.Wrap` — the same function `dcctl` calls, same
 KDF parameters, same passphrase — and is consumed by the same

@@ -44,6 +44,15 @@ func TestEveryVariableDcctlPassesIsDeclaredBySomeRoot(t *testing.T) {
 				TsdbFrom: "dc-tsdb", TsdbTargetTime: "2026-07-26 01:02:03+00",
 			}},
 		},
+		{
+			// `dcctl install`'s half. Both pairs are emitted from the one infraVars
+			// and routed by splitVars to whichever root declares them, so a misspelled
+			// relational name fails here rather than applying a default nobody chose.
+			"restoring the relational store",
+			&State{KubeContext: "kind-dc", Instance: "a", Restore: RestorePlan{
+				RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-26 01:02:03+00",
+			}},
+		},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			if tc.st.Values == nil {

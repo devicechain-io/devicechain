@@ -86,6 +86,11 @@ func rebuildRefusalReason(st *State, deployed *config.InstanceConfiguration) err
 	// there and sharper than this one: refuseRestoreOverADifferentKey allows it only
 	// when the escrow artifact carries the key the instance is already running. A
 	// blanket refusal here would take away the retry precisely when it matters.
+	//
+	// 🔴 Active(), NOT RestoresEventStore(), and the breadth is the point: the carve-out
+	// widens for ANY archive a run names, so a restore field added later reaches it
+	// without anyone remembering to widen it. TestEveryWayOfNamingARestoreReachesTheCarveOut
+	// reads the struct rather than a list for the same reason.
 	if st.Restore.Active() || st.Escrow.RestoringRootKey() {
 		return nil
 	}

@@ -65,7 +65,7 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 		TLS:           !st.NoTLS,
 		ImageRegistry: st.ImageRegistry,
 		ImageVersion:  st.ImageVersion,
-		Restored:      st.Restore.Active(),
+		Restored:      st.Restore.RestoresEventStore(),
 	}
 	// The DELTA, not the expansion. st.EnabledAreas is the resolved union the chart
 	// is told about; st.EnableAreas is what the operator asked for on top of the

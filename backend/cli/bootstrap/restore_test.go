@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -786,5 +787,426 @@ func TestInfraVarsOfAnOrdinaryInstallCarriesNoRestore(t *testing.T) {
 				t.Errorf("an ordinary install emitted %q; it should take the root's default", v)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The RELATIONAL store — `dcctl install`'s half
+// ---------------------------------------------------------------------------
+
+// The disaster the relational half exists for: the cluster is gone, its archive is
+// not. The recovered store must archive somewhere OTHER than the path it read, or
+// CloudNativePG stops it on `Expected empty archive` and it sits in `Setting up
+// primary` forever — during a recovery, with nothing failing.
+//
+// 🔴 THIS IS WHAT MAKES terraform_data.restore_guard UNREACHABLE FROM dcctl. That
+// precondition refuses backup_server_name_rdb equal to (or unset alongside)
+// restore_rdb_from. dcctl must never ask for that combination in the first place; the
+// guard is a net under someone driving OpenTofu by hand, not a step in this path.
+func TestRestoringTheRelationalStoreIntoNothingTakesAFreshPath(t *testing.T) {
+	plan := RestorePlan{RdbFrom: RdbClusterName}
+
+	got, ineffective := resolveRdbArchivePath(clusterArchiveState{}, plan, testNow)
+
+	if got == "" {
+		t.Fatal("the recovered relational store kept the OpenTofu default, which means it " +
+			"archives back over the archive it recovered FROM. CloudNativePG hangs in " +
+			"`Setting up primary` on that, it does not fail — and the root's restore_guard " +
+			"would refuse the apply, which is a refusal dcctl should never provoke.")
+	}
+	if got == RdbClusterName {
+		t.Fatalf("the recovered store's archive path equals the source %q", RdbClusterName)
+	}
+	if !strings.HasPrefix(got, RdbClusterName+"-restored-") {
+		t.Errorf("archive path %q is not recognisable as a restore of %q", got, RdbClusterName)
+	}
+	if ineffective {
+		t.Error("the relational store does not exist, so this restore WILL run; reporting it " +
+			"as ineffective tells an operator mid-incident that the recovery they are " +
+			"performing is a no-op")
+	}
+}
+
+// A second disaster recovered from the SAME source. A plain "<source>-restored" would
+// collide with the first recovery's path — not empty, because that cluster archived
+// into it — and wedge the very run that is trying to recover.
+func TestTwoRelationalRestoresFromOneSourceTakeDifferentPaths(t *testing.T) {
+	gone := clusterArchiveState{}
+	plan := RestorePlan{RdbFrom: RdbClusterName}
+
+	first, _ := resolveRdbArchivePath(gone, plan, testNow)
+	second, _ := resolveRdbArchivePath(gone, plan, testNow.Add(time.Second))
+
+	if first == second {
+		t.Fatalf("two recoveries from %q both took archive path %q; the second one wedges",
+			RdbClusterName, first)
+	}
+}
+
+// 🔴 THE SAME DEFECT THE EVENT HALF SHIPPED WITH, asserted for the relational half
+// before it can ship it too.
+//
+// An ordinary install renders no serverName, so the live path is "" while the store is
+// very much alive and archiving under its own name. A restore naming that very archive
+// — the obvious wrong guess a half-followed runbook produces — must NOT be allowed to
+// derive a fresh path: the restore cannot run anyway (spec.bootstrap is CREATE-only),
+// so the only thing a new path could achieve is retargeting a LIVE archiver at a
+// prefix with no base backup in it.
+func TestARelationalRestoreAimedAtALiveStoreNeverMovesItsArchive(t *testing.T) {
+	for name, live := range map[string]clusterArchiveState{
+		"archiving under its own name": {Exists: true, Path: ""},
+		"archiving under a set path":   {Exists: true, Path: "dc-rdb-2026"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ineffective := resolveRdbArchivePath(live, RestorePlan{RdbFrom: RdbClusterName}, testNow)
+			if got != live.Path {
+				t.Fatalf("a restore aimed at a LIVE relational store moved its archive path "+
+					"from %q to %q. Every instance on the cluster writes to that store; the "+
+					"prefix holding its base backup would stop receiving WAL, on a green apply.",
+					live.Path, got)
+			}
+			if !ineffective {
+				t.Error("the store already exists, so the restore will NOT run — that has to " +
+					"be reported, because a green apply that restored nothing and a green " +
+					"apply that restored everything look identical")
+			}
+		})
+	}
+}
+
+// A re-install that carries the same restore flags — the legitimate retry after an
+// install died part-way — must not invent a second archive path for a store that
+// already took one.
+func TestRerunningARelationalRestoreKeepsThePathItAlreadyTook(t *testing.T) {
+	const taken = "dc-rdb-restored-20260728T140506Z"
+	got, _ := resolveRdbArchivePath(clusterArchiveState{Exists: true, Path: taken},
+		RestorePlan{RdbFrom: RdbClusterName}, testNow.Add(time.Hour))
+	if got != taken {
+		t.Fatalf("a retry moved the relational archive path from %q to %q", taken, got)
+	}
+}
+
+// 🔴 THE FRESH PATH IS THE OPENTOFU DEFAULT, AND THAT IS NOT AN OVERSIGHT. Empty means
+// "archive under the Cluster's own name", which is unambiguous for the relational store
+// because a cluster has exactly one, in a bucket of its own. Deriving an instance-shaped
+// path here would move the archive of every ordinary install that has ever run.
+func TestAFreshRelationalStoreArchivesUnderItsOwnName(t *testing.T) {
+	got, ineffective := resolveRdbArchivePath(clusterArchiveState{}, RestorePlan{}, testNow)
+	if got != "" {
+		t.Fatalf("a fresh install must leave the relational archive path at the root's "+
+			"default; got %q, which infraVars would emit as backup_server_name_rdb", got)
+	}
+	if ineffective {
+		t.Error("nothing is being restored; nothing can be an ineffective restore")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// What the operator is told
+// ---------------------------------------------------------------------------
+
+// 🔴 THE HAZARD THIS FUNCTION EXISTS TO CLOSE. A rehearsal that reads back from an
+// apply it never runs describes the zero value and calls it the answer — this project
+// shipped a --dry-run printing "Backups: NONE" for a cluster that archives. Both of
+// describeRelationalRestore's inputs are available before anything is applied, so the
+// sentence a rehearsal prints is the sentence the real run prints.
+func TestTheRestoreDescriptionNamesTheSourceAndTheFreshPath(t *testing.T) {
+	plan := RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z"}
+	lines := describeRelationalRestore(plan, clusterArchiveState{}, testNow)
+	if len(lines) == 0 {
+		t.Fatal("a restore about to be performed was described by nothing at all")
+	}
+	path, _ := resolveRdbArchivePath(clusterArchiveState{}, plan, testNow)
+	for _, want := range []string{"dc-rdb", path, "2026-07-28T12:00:00Z"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("the description does not mention %q, so a rehearsal cannot be checked "+
+				"against it: %q", want, lines[0])
+		}
+	}
+	if path == "" || path == plan.RdbFrom {
+		t.Fatalf("the described archive path %q is the source or empty — the description is "+
+			"accurate about a plan that would wedge", path)
+	}
+
+	// 🔴 AND THE HALF THE INSTALL CANNOT ENFORCE. Before the install/bootstrap split
+	// dcctl REFUSED a relational restore without --restore-root-key, because the
+	// recovered rows hold secrets sealed by a key no database backup contains. An
+	// install has no instance and no artifact to check against, so the refusal is
+	// gone; saying it is what is left, and this is the moment the operator is
+	// thinking about the recovery.
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"--restore-root-key", "permanently unreadable"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("an operator recovering the relational store is never told about %q. "+
+				"An instance rebuilt without it comes up CLEAN and every recovered secret "+
+				"is gone: %s", want, joined)
+		}
+	}
+}
+
+// An ordinary install must say nothing about recovery at all. A line that appears
+// unconditionally is a line nobody reads when it matters.
+func TestAnOrdinaryInstallIsToldNothingAboutRestores(t *testing.T) {
+	if lines := describeRelationalRestore(RestorePlan{}, clusterArchiveState{}, testNow); lines != nil {
+		t.Fatalf("an ordinary install was told about a restore it is not performing: %v", lines)
+	}
+	// ...including one aimed at the event store, which this command does not own.
+	if lines := describeRelationalRestore(RestorePlan{TsdbFrom: "dc-tsdb"}, clusterArchiveState{}, testNow); lines != nil {
+		t.Fatalf("dcctl install described an EVENT store restore: %v", lines)
+	}
+}
+
+// The no-op, said out loud. "It restored" and "it declined to restore" are
+// indistinguishable from the outside — green apply, no data moved — so the one case
+// where the operator must be interrupted is this one.
+func TestALiveRelationalStoreIsReportedAsARestoreThatWillNotRun(t *testing.T) {
+	lines := describeRelationalRestore(RestorePlan{RdbFrom: "dc-rdb"},
+		clusterArchiveState{Exists: true, Path: "dc-rdb-2026"}, testNow)
+	if len(lines) != 1 {
+		t.Fatalf("want one line, got %v", lines)
+	}
+	for _, want := range []string{"will NOT run", "spec.bootstrap", RdbClusterName} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("the warning does not mention %q: %q", want, lines[0])
+		}
+	}
+	// And it must not also claim a fresh archive path, which would read as a plan.
+	if strings.Contains(lines[0], "-restored-") {
+		t.Errorf("the warning describes an archive path for a restore that will not happen: %q", lines[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Which store a plan is about
+// ---------------------------------------------------------------------------
+
+// Active gained a second store, and two of its callers are about an INSTANCE: the
+// declaration's `Restored` field and the rebuild carve-out in rebuildRefusalReason.
+// A relational recovery is not an answer to either question, which is why they ask
+// RestoresEventStore instead.
+func TestAPlanKnowsWhichStoreItIsAbout(t *testing.T) {
+	for _, tc := range []struct {
+		what                      string
+		plan                      RestorePlan
+		active, event, relational bool
+	}{
+		{"nothing", RestorePlan{}, false, false, false},
+		{"the event store", RestorePlan{TsdbFrom: "dc-tsdb"}, true, true, false},
+		{"the relational store", RestorePlan{RdbFrom: "dc-rdb"}, true, false, true},
+		{"both", RestorePlan{RdbFrom: "dc-rdb", TsdbFrom: "dc-tsdb"}, true, true, true},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			if got := tc.plan.Active(); got != tc.active {
+				t.Errorf("Active() = %v, want %v", got, tc.active)
+			}
+			if got := tc.plan.RestoresEventStore(); got != tc.event {
+				t.Errorf("RestoresEventStore() = %v, want %v", got, tc.event)
+			}
+			if got := tc.plan.RestoresRelationalStore(); got != tc.relational {
+				t.Errorf("RestoresRelationalStore() = %v, want %v", got, tc.relational)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Relational flag validation
+// ---------------------------------------------------------------------------
+
+// Every rule the event store's flags obey, asserted for the relational store's — the
+// checks are walked once per store rather than written twice precisely so this table
+// cannot drift away from the other one.
+func TestResolveRestorePlanAppliesTheSameRulesToTheRelationalStore(t *testing.T) {
+	for _, tc := range []struct {
+		what    string
+		flags   RestoreFlags
+		wantErr string
+	}{
+		{
+			"a recovery target with nothing to recover",
+			RestoreFlags{RdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true},
+			"--restore-rdb-from",
+		},
+		{
+			// The one that succeeds and is wrong: PostgreSQL reads an offsetless
+			// timestamp in the RECOVERING server's timezone, stops hours from the
+			// named moment, and reports success.
+			"a target time with no offset",
+			RestoreFlags{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-27 13:59:00", BackupsEnabled: true},
+			"RFC3339",
+		},
+		{
+			"a cluster with no backup plugin to read the archive",
+			RestoreFlags{RdbFrom: "dc-rdb"},
+			"--restore-rdb-from",
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			_, err := ResolveRestorePlan(tc.flags)
+			if err == nil {
+				t.Fatalf("%+v was accepted", tc.flags)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("the refusal does not mention %q: %v", tc.wantErr, err)
+			}
+			// 🔴 AND IT MUST NOT BLAME THE OTHER STORE'S FLAG. An operator running
+			// `dcctl install` has no --restore-tsdb-from to drop, so a refusal naming
+			// it reads as a bug in dcctl rather than as an answer — during an incident.
+			if strings.Contains(err.Error(), "--restore-tsdb") {
+				t.Errorf("the refusal blames a flag this command does not have: %v", err)
+			}
+		})
+	}
+}
+
+// The counterweight: refusing the wrong combinations is only worth anything while a
+// real recovery still passes through untouched.
+func TestResolveRestorePlanPassesAValidRelationalRestoreThrough(t *testing.T) {
+	plan, err := ResolveRestorePlan(RestoreFlags{
+		RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z", BackupsEnabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan != (RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z"}) {
+		t.Fatalf("the plan did not carry the flags through, or carried them into the wrong "+
+			"store's fields: %+v", plan)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Emission and routing
+// ---------------------------------------------------------------------------
+
+// The relational restore has to reach OpenTofu under the names the CLUSTER root
+// declares, and reach the CLUSTER root specifically.
+//
+// 🔴 ROUTING IS THE HALF A NAMING TEST CANNOT SEE. splitVars sends each variable to
+// the root that declares it; a relational restore that reached the INSTANCE apply
+// would be refused as an undeclared variable, and one that reached NEITHER would be
+// dropped with the apply silently taking the root's default — an empty database
+// where a recovery was asked for.
+func TestTheRelationalRestoreReachesTheClusterRootOnly(t *testing.T) {
+	st := compactState(false)
+	st.Restore = RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T13:00:00Z"}
+	st.Values["backupServerNameRdb"] = "dc-rdb-restored-20260728T140506Z"
+
+	cluster, instance, err := splitVars(infraVars(st))
+	if err != nil {
+		t.Fatalf("dcctl passes a variable no OpenTofu root declares: %v", err)
+	}
+	for _, want := range []string{
+		"restore_rdb_from=dc-rdb",
+		"restore_rdb_target_time=2026-07-28T13:00:00Z",
+		"backup_server_name_rdb=dc-rdb-restored-20260728T140506Z",
+	} {
+		if !slices.Contains(cluster, want) {
+			t.Errorf("%q never reached the cluster root: %v", want, cluster)
+		}
+		if slices.Contains(instance, want) {
+			t.Errorf("%q reached the INSTANCE root, which does not own the relational "+
+				"store: %v", want, instance)
+		}
+	}
+}
+
+// The mirror image: the event store's restore is an instance's, and must not be
+// applied by the command that owns the cluster.
+func TestTheEventRestoreReachesTheInstanceRootOnly(t *testing.T) {
+	st := compactState(false)
+	st.Restore = RestorePlan{TsdbFrom: "dc-tsdb"}
+
+	cluster, instance, err := splitVars(infraVars(st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "restore_tsdb_from=dc-tsdb"
+	if !slices.Contains(instance, want) {
+		t.Errorf("%q never reached the instance root: %v", want, instance)
+	}
+	if slices.Contains(cluster, want) {
+		t.Errorf("%q reached the CLUSTER root: %v", want, cluster)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The rehearsal
+// ---------------------------------------------------------------------------
+
+// withRdbArchiveState stubs the seam a rehearsal reads the relational store through.
+func withRdbArchiveState(t *testing.T, state clusterArchiveState, err error) *int {
+	t.Helper()
+	prev := readRdbArchiveState
+	t.Cleanup(func() { readRdbArchiveState = prev })
+	calls := 0
+	readRdbArchiveState = func(context.Context, string) (clusterArchiveState, error) {
+		calls++
+		return state, err
+	}
+	return &calls
+}
+
+// 🔴 THE HAZARD, NAMED: a rehearsal that reads back from an apply it never runs
+// predicts nothing. This project shipped a --dry-run printing "Backups: NONE" for a
+// cluster that archives, because the value it read is only set by an apply.
+//
+// So the rehearsal READS, exactly as the real run does, and the most valuable thing it
+// can say is the one that costs the most to learn late: this recovery will do nothing,
+// because CloudNativePG reads spec.bootstrap only when it CREATES a cluster.
+func TestARehearsalOfARestoreReadsTheLiveStoreAndSaysWhatWillHappen(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		live clusterArchiveState
+		want string
+	}{
+		{"the store is gone (the recovery runs)", clusterArchiveState{}, "recovering from archive"},
+		{"the store is live (the recovery is a no-op)", clusterArchiveState{Exists: true}, "will NOT run"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			calls := withRdbArchiveState(t, tc.live, nil)
+			st := &State{KubeContext: "kind-dc", DryRun: true,
+				Restore: RestorePlan{RdbFrom: RdbClusterName}, Values: map[string]string{}}
+
+			lines := describeRelationalRestore(st.Restore, dryRunRdbArchiveState(t.Context(), st), testNow)
+
+			if *calls != 1 {
+				t.Fatalf("the rehearsal read the live store %d times, want 1. Predicting from "+
+					"the flags alone is how a rehearsal ends up describing a different run "+
+					"than the one it is rehearsing.", *calls)
+			}
+			if len(lines) == 0 || !strings.Contains(strings.Join(lines, "\n"), tc.want) {
+				t.Fatalf("the rehearsal never said %q: %v", tc.want, lines)
+			}
+		})
+	}
+}
+
+// An ordinary rehearsal must not go near the API server for an answer it has no use
+// for. A dry run is routinely aimed at a cluster that does not exist yet, and the
+// reachable failure is a scary line about the relational store in a plan that never
+// mentions one.
+func TestARehearsalWithNoRestoreReadsNothing(t *testing.T) {
+	calls := withRdbArchiveState(t, clusterArchiveState{Exists: true, Path: "surprise"}, nil)
+	st := &State{KubeContext: "kind-dc", DryRun: true, Values: map[string]string{}}
+
+	if got := dryRunRdbArchiveState(t.Context(), st); got != (clusterArchiveState{}) {
+		t.Errorf("an ordinary rehearsal read an archive state it has no use for: %+v", got)
+	}
+	if *calls != 0 {
+		t.Errorf("an ordinary rehearsal contacted the cluster %d time(s)", *calls)
+	}
+}
+
+// 🔴 AND WHEN THE READ FAILS, the rehearsal assumes the store is NOT there — which is
+// the opposite of what the real run does, and is right only because nothing is applied.
+// The real run fails on this read; acting on a wrong answer there moves a live
+// archiver. Saying so is what keeps the two apart.
+func TestAnUnreadableStoreLeavesTheRehearsalPredictingAFreshRestore(t *testing.T) {
+	withRdbArchiveState(t, clusterArchiveState{}, errors.New("the API server is not answering"))
+	st := &State{KubeContext: "kind-dc", DryRun: true,
+		Restore: RestorePlan{RdbFrom: RdbClusterName}, Values: map[string]string{}}
+
+	if got := dryRunRdbArchiveState(t.Context(), st); got != (clusterArchiveState{}) {
+		t.Fatalf("an unreadable store was not read as absent in a rehearsal: %+v", got)
 	}
 }

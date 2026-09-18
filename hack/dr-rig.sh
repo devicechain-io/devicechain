@@ -40,19 +40,30 @@
 # after 7 days, so an instance older than a week is mostly compressed chunks, and
 # a drill that only seeds fresh data restores the shape production mostly is not.
 #
-# 🔴🔴 THE RESTORE HALF OF THIS DRILL IS DISABLED, AND SAYS SO RATHER THAN SKIPPING.
+# 🔴 THE RESTORE IS TWO COMMANDS, BECAUSE THE TWO STORES BELONG TO DIFFERENT THINGS.
 #
-# The relational store is now CLUSTER-level: `dcctl install` provisions it, and
-# `dcctl bootstrap` builds an instance on top of it. Recovering it from an archive
-# was a bootstrap flag (--restore-rdb-from) that did not survive that split, and
-# `dcctl install` has no equivalent yet. Without it neither verdict this drill
-# reaches can be reached honestly: the sealed secret lives in the relational store,
-# and even the event half's verify logs in as the seeded identity, which lives there
-# too. So `restore`, `control` and `all` REFUSE before doing any work (see
-# relational_restore_unavailable), and a pass cannot be printed by a run that never
-# restored the half the claim is about. `up`, `archive`, `disaster` and `down` still
-# run: they build the instance, fill both archives and exercise the completeness
-# gate, none of which depends on a restore.
+# The relational store is CLUSTER-level: `dcctl install` provisions it and every
+# instance on the cluster shares it, so `dcctl install --restore-rdb-from` recovers
+# it. The event store is one INSTANCE's, so `dcctl bootstrap --restore-tsdb-from`
+# recovers that. A rebuild here therefore restores in two steps, in that order —
+# see install_cluster and rebuild, which is the real procedure rather than a
+# rehearsal-only shortcut.
+#
+# Both halves of every verdict this drill reaches read the relational store: the
+# sealed secret lives there, and even the event half's verify logs in as the seeded
+# identity, which lives there too. That is why `restore` and `control` recover it
+# rather than treating it as optional — a rebuild without it would produce exit 1s
+# and "not found"s that read as a restore that did not work, and a negative control
+# that "holds" for a reason unrelated to the key.
+#
+# 🔴 dcctl PICKS THE RECOVERED STORE'S OWN ARCHIVE PATH; THIS RIG MUST NOT. A
+# recovered CNPG cluster keeps archiving, and CloudNativePG refuses to archive into
+# a non-empty archive — a store pointed back at the path it read comes up and then
+# HANGS in `Setting up primary`, which is not an apply failure, it is a wedged
+# database discovered while restoring. dcctl derives a stamped path of its own
+# (dc-rdb-restored-<UTC instant>) from the live cluster rather than from argv, so
+# there is deliberately no flag for it and nothing for this rig to pass. A serverName
+# named here would be a second opinion about a value that must not move.
 #
 # Until this passes, WITH its negative control, nothing in the docs should tell
 # an operator their instance is recoverable. Every restore procedure that skips
@@ -69,12 +80,10 @@
 #                             (resume a run whose `up` got as far as seeding)
 #   hack/dr-rig.sh disaster   destroy the cluster and the local cluster and instance state,
 #                             keeping only what an off-site backup would have
-#   hack/dr-rig.sh restore    [DISABLED — see above]
-#                             fresh cluster recovered from the escrow artifact +
+#   hack/dr-rig.sh restore    fresh cluster recovered from the escrow artifact +
 #                             BOTH off-cluster archives; the secret MUST decrypt
 #                             and the telemetry MUST come back intact
-#   hack/dr-rig.sh control    [DISABLED — see above]
-#                             THE NEGATIVE CONTROLS, one per half: the identical
+#   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half: the identical
 #                             restore under a DIFFERENT root key, with the event
 #                             store NOT restored at all. The secret half now fails
 #                             TWICE, at two different depths — the area that stores
@@ -83,7 +92,6 @@
 #                             telemetry must be reported MISSING, each with its own
 #                             exact exit code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
-#                             [DISABLED — refuses before `up`, see above]
 #   hack/dr-rig.sh down       dcctl destroy the instance (when it still has local
 #                             state), then delete the cluster, the object store and
 #                             the rig's working directory
@@ -252,8 +260,8 @@ event_pg_port="${DC_DR_TSDB_PORT:-15433}"
 # barman plugin defaults serverName to the cluster name, so the objects land under
 # <bucket>/dc-rdb/. A RESTORED cluster deliberately archives to a different
 # serverName, which is why a relational restore has to name the SOURCE explicitly
-# rather than infer it. (dcctl currently exposes no relational restore at all — see
-# relational_restore_unavailable.)
+# rather than infer it. dcctl chooses the recovered store's own DESTINATION by itself
+# and offers no flag for it, so this is the only half the rig supplies.
 rdb_cluster="dc-rdb"
 rdb_source="$rdb_cluster"
 
@@ -1122,12 +1130,28 @@ restore cannot possibly find it."
 #
 # The cluster itself is created by create_cluster, from the rig's own kind config, so
 # this installs into it by context rather than letting dcctl create a stock one.
+#
+# $1, when non-empty, is the RELATIONAL store's source serverName: this install
+# recovers the shared store from that archive instead of initialising an empty one.
+# `up` passes nothing (there is nothing to recover from yet); every rebuild passes it.
+#
+# 🔴 THE DESTINATION IS NOT PASSED, AND MUST NOT BE. dcctl mints a stamped archive
+# path of its own for the recovered store, read back off the live cluster on every
+# later re-run so it cannot move. Naming one here would be a second opinion about a
+# value whose whole property is that it does not move — and getting it equal to the
+# source is the wedge the root's restore_guard exists to refuse.
 install_cluster() {
+  local rdb_from="${1:-}"
   say "installing the cluster prerequisites WITH backups"
   note "archive:  $bucket_rdb + $bucket_tsdb (on $minio_container, outside the cluster)"
+  local restore_args=()
+  if [[ -n "$rdb_from" ]]; then
+    note "relational store: recovering from $rdb_from"
+    restore_args+=(--restore-rdb-from "$rdb_from")
+  fi
   "$dcctl" install local --yes --compact --no-tls=false \
     --kube-context "$kube_context" \
-    "$(backup_args)"
+    "$(backup_args)" "${restore_args[@]+"${restore_args[@]}"}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1344,15 +1368,13 @@ Run 'hack/dr-rig.sh disaster' first, or 'hack/dr-rig.sh all' to do it in order."
 # recovered ciphertext readable — a recovery that mints a fresh key reports success
 # and leaves every secret permanently unreadable.
 #
-# 🔴🔴 UNREACHABLE TODAY, AND INCOMPLETE ON PURPOSE. Its only callers, cmd_restore and
-# cmd_control, refuse first (relational_restore_unavailable). The disaster deleted
-# the cluster, so the rebuild has to `dcctl install` again before it can bootstrap,
-# and that install is where the RELATIONAL restore now belongs — dcctl has no flag
-# for it. As written, the install below would stand up an EMPTY relational store,
-# and one archiving under the same serverName the original archive occupies. When a
-# relational restore ships, it goes on install_cluster here, together with a
-# distinct archive serverName for the recovered store; only then may the refusal be
-# lifted.
+# 🔴 IT RESTORES IN TWO STEPS, AND THE ORDER IS THE PROCEDURE, NOT A CONVENIENCE. The
+# disaster deleted the cluster, so the rebuild has to `dcctl install` again before it
+# can bootstrap — and the install is where the RELATIONAL restore belongs, because
+# that store is the cluster's and is shared by every instance on it. The bootstrap
+# that follows restores the EVENT store, which is this instance's. An install that
+# skipped the first half would stand up an empty relational store and every verdict
+# below would be about that, not about the archive.
 rebuild() {
   # $3 is the EVENT store's source serverName, and an EMPTY value means "do not
   # restore the event store". That is not a convenience flag — it is how the
@@ -1365,7 +1387,10 @@ rebuild() {
   local artifact="$1" what="$2" tsdb_from="${3:-}" expected_failure="${4:-}"
   create_cluster
   require_no_instance
-  install_cluster
+  # The relational half. Always restored, in both phases: see the header — every
+  # verdict this drill reaches reads that store, so a rebuild without it reports on
+  # something else.
+  install_cluster "$rdb_source"
 
   say "recovering $instance from the archive, under $what"
   # No --escrow-file here, and dcctl refuses the combination outright: a restored
@@ -1593,42 +1618,43 @@ here, so this run is INCONCLUSIVE. Re-run."
   return "$rc"
 }
 
-# relational_restore_unavailable is the refusal every phase that needs a RELATIONAL
-# restore makes, before it does any work at all.
+# require_relational_restore asserts that the dcctl surface this drill's relational
+# half rests on still EXISTS, before any work is done.
 #
-# 🔴 A REFUSAL, NOT A SKIP. Both verdicts of this drill read the relational store:
-# the secret half decrypts a row that lives there, and the event half's
-# verify-events logs in as the seeded identity, which lives there too. Rebuilding
-# without restoring it would not produce a weaker pass — it would produce exit 1s
-# and "not found"s that read as a restore that did not work, and a negative control
-# that "holds" for a reason unrelated to the key. A phase that cannot reach its
-# question must say so in words, not report on something else.
+# 🔴 THIS USED TO BE A REFUSAL, AND THE REASON IT EXISTED IS THE REASON IT IS STILL
+# HERE. Both verdicts of this drill read the relational store: the secret half
+# decrypts a row that lives there, and the event half's verify-events logs in as the
+# seeded identity, which lives there too. Rebuilding without restoring it would not
+# produce a weaker pass — it would produce exit 1s and "not found"s that read as a
+# restore that did not work, and a negative control that "holds" for a reason
+# unrelated to the key.
 #
-# It is called FIRST — before building tools or creating a cluster — so `all` stops
-# before an hour of bring-up rather than after it.
+# The flag has gone missing once already: recovering the relational store was a
+# `dcctl bootstrap` flag, and the install/bootstrap split moved the store to the
+# cluster without moving the flag with it — which nothing noticed, because every
+# phase that needed it was the phase nobody could run. An unknown flag now would be
+# rejected by dcctl in the middle of a rebuild, an hour into `all`; this asks first.
 #
-# relational_restore_flag names the dcctl install flag that recovers the relational
-# store, and it is EMPTY because no such flag exists. 🔴 Filling it in is not enough to
-# lift the refusal honestly: rebuild must also pass it (with a distinct archive
-# serverName for the recovered store) — read the note on rebuild first.
-relational_restore_flag=""
-relational_restore_unavailable() {
-  [[ -n "$relational_restore_flag" ]] && return 0
-  fail "relational store restore is not available through dcctl since the install/bootstrap split; this drill's relational half is disabled until it ships.
+# It is called FIRST in each phase that rebuilds — before creating a cluster — so a
+# missing surface stops the run before the bring-up rather than after it.
+relational_restore_flag="--restore-rdb-from"
+require_relational_restore() {
+  "$dcctl" install --help 2>&1 | grep -q -- "$relational_restore_flag" || fail \
+    "dcctl install does not offer $relational_restore_flag, so this drill cannot recover the
+RELATIONAL store — and both of its verdicts read that store: the sealed secret lives
+there, and the event half's verify logs in as an identity that lives there too.
 
-The relational store is now provisioned by 'dcctl install', and '--restore-rdb-from'
-was a bootstrap flag that did not survive the split. Both halves of this phase read
-that store (the sealed secret lives there, and the event verify logs in as an
-identity that lives there), so running it now could only report a failure that is
-not a finding.
+Recovering it was a 'dcctl bootstrap' flag once, and the install/bootstrap split moved
+the store to the cluster without moving the flag. If that has happened again, running
+on would report a failure that is not a finding.
 
-Still runnable: up, archive, disaster, down."
+Still runnable without it: up, archive, disaster, down."
 }
 
 cmd_restore() {
-  relational_restore_unavailable
   need_all
   build_tools
+  require_relational_restore
   load_exit_codes
   for f in "$escrow_file" "$receipt_file" "$backup_creds_file"; do
     [[ -s "$f" ]] || fail "$f is missing or empty; run 'up' then 'disaster' first"
@@ -1805,17 +1831,24 @@ $state"
 # the long comment on runDecoy for what the substitution does and does not stand
 # in for.
 #
-# 🔴 DISABLED, like cmd_restore and for the same reason: the relational restore it
-# rebuilds from has no dcctl flag since the install/bootstrap split. Without it the
-# control instance holds no sealed row at all — the secret-storing area's startup
-# self-test has nothing to refuse on, and run_verify reports NOT-FOUND rather than
-# DECRYPT-FAILED — so neither leg could hold, and "INCONCLUSIVE" on every run teaches
-# nothing. That guard's replacement belongs on whatever install flag restores the
-# relational store; when it exists, re-derive this paragraph from it.
+# 🔴 THAT REFUSAL NO LONGER EXISTS, AND NOTHING REPLACED IT. It cannot: `dcctl
+# install` recovers the relational store, and an install has no instance and no
+# escrow artifact to check a root key against — `dcctl bootstrap` runs afterwards,
+# possibly much later, possibly from another machine. What is left is that the
+# install SAYS so, in the sentence it prints before the apply. So the decoy remains
+# the only way to express this control, and it is now the only thing standing where
+# a refusal used to.
+#
+# 🔴 THE CONTROL'S PREMISE IS THE RELATIONAL RESTORE. Without it the control instance
+# holds no sealed row at all — the secret-storing area's startup self-test has nothing
+# to refuse on, and run_verify reports NOT-FOUND rather than DECRYPT-FAILED, so
+# neither leg holds and the phase teaches nothing. rebuild restores it in both phases
+# for exactly that reason; require_relational_restore is what stops this phase before
+# it can report on something else.
 cmd_control() {
-  relational_restore_unavailable
   need_all
   build_tools
+  require_relational_restore
   load_exit_codes
   for f in "$escrow_file" "$receipt_file" "$backup_creds_file"; do
     [[ -s "$f" ]] || fail "$f is missing or empty; run 'up' then 'disaster' first"
@@ -2041,8 +2074,10 @@ case "${1:-all}" in
   control) cmd_control ;;
   down) cmd_down ;;
   all)
-    # Refused HERE, before `up`, rather than by cmd_restore an hour later.
-    relational_restore_unavailable
+    # Asked HERE, before `up`, rather than by cmd_restore an hour later.
+    need_all
+    build_tools
+    require_relational_restore
     cmd_up
     cmd_disaster
     cmd_restore
