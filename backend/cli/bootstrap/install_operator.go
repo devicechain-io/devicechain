@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 )
 
@@ -32,6 +33,38 @@ import (
 // 🔴 THE LIFETIME IS ONE-SHOT-AND-FOREVER. Nothing here reference-counts
 // instances, adopts an existing operator, or removes anything when the last
 // instance leaves. Removal belongs to `dcctl uninstall`, which does not exist yet.
+
+// claimForInstall takes the cluster lock for an install, with this command's own
+// progress framing.
+//
+// The lock itself is ClaimCluster's, shared with the bootstrap pipeline. What is
+// here is only what differs: how an install announces it, and that a rehearsal
+// takes nothing while still reporting the claim it would have met.
+func claimForInstall(ctx context.Context, st *State) error {
+	if st.DryRun {
+		ns, err := operator.Namespace()
+		if err != nil {
+			return fail("reading the operator namespace", err)
+		}
+		st.OperatorNamespace = ns
+		wouldDo("take the cluster lock in namespace " + ns)
+		return reportExistingClaim(ctx, st)
+	}
+
+	doing("claiming the cluster")
+	claim, ns, err := ClaimCluster(ctx, st.KubeContext, st.Instance)
+	// Recorded even when the claim was refused: the namespace is resolved before
+	// the lock is contended, and a refusal still wants to say where it was looking.
+	if ns != "" {
+		st.OperatorNamespace = ns
+	}
+	if err != nil {
+		return err
+	}
+	st.Claim = claim
+	done()
+	return nil
+}
 
 // installOperator puts the CRDs, RBAC and controller Deployment on the cluster,
 // building the controller image first on the developer path.

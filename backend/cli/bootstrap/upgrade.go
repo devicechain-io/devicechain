@@ -12,7 +12,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	apply "github.com/devicechain-io/dc-k8s/apply"
-	dck8s "github.com/devicechain-io/dc-k8s/config"
+	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,7 +81,7 @@ type UpgradeOptions struct {
 // in it, and they are the half with a trap: the API server prunes fields a
 // structural schema does not declare, so an instance whose CRDs stayed at the
 // version they were bootstrapped at would silently discard anything a later
-// release added to them. Applying the stream costs nothing extra — RenderOperator
+// release added to them. Applying the stream costs nothing extra — the renderer
 // already emits it as one document — and it means the CRD path is never the thing
 // nobody remembered.
 //
@@ -169,7 +169,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// written yet.
 	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
 
-	manifests, err := dck8s.RenderOperator(image)
+	manifests, err := operator.Render(image)
 	if err != nil {
 		return fmt.Errorf("rendering operator manifests: %w", err)
 	}

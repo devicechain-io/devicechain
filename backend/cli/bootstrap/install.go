@@ -107,12 +107,16 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// would be the same hole this Lease exists to close, relocated into the verb
 	// that was supposed to own the resource.
 	//
-	// stepClaimCluster is the bootstrap pipeline's own step, called rather than
-	// copied — it creates the operator's namespace (idempotently, reading the name
-	// from the rendered overlay rather than a constant) and then acquires. Two
+	// ClaimCluster is shared with the bootstrap pipeline rather than reimplemented
+	// here: it creates the operator's namespace (idempotently, reading the name from
+	// the rendered overlay rather than a constant) and then acquires. Two
 	// implementations of "where does the cluster lock live" is how a lock ends up
 	// protecting nothing.
-	if err := stepClaimCluster(ctx, st); err != nil {
+	//
+	// A dry run takes nothing. It still resolves the namespace and reports the claim
+	// it WOULD have met, because "another operator is already running" is part of
+	// the answer to what this command would do.
+	if err := claimForInstall(ctx, st); err != nil {
 		return err
 	}
 	// Released on every exit, including a refusal below. A CLI that has exited holds

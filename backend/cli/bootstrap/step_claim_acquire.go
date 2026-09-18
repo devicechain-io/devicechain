@@ -7,11 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	dck8s "github.com/devicechain-io/dc-k8s/config"
+	"github.com/devicechain-io/dcctl/operator"
 )
 
 // stepClaimCluster takes the cluster lock, and it runs BEFORE anything is applied.
@@ -34,39 +30,38 @@ import (
 //
 // The DECLARATION still cannot be written until the CRDs are installed, which is
 // why declaring is a separate step after the install rather than part of this one.
+// It is a thin wrapper over ClaimCluster, which `dcctl install` calls too. What
+// stays here is the progress framing and the dry-run rehearsal — the parts that
+// differ between a pipeline step and a command — while the part that must NOT
+// differ, where the lock lives and how it is taken, has one implementation.
 func stepClaimCluster(ctx context.Context, st *State) error {
-	manifests, err := dck8s.RenderOperator("")
-	if err != nil {
-		return fail("rendering the operator overlay to find where the cluster lock lives", err)
-	}
-	ns, err := operatorNamespace(manifests)
-	if err != nil {
-		return fail("reading the operator namespace", err)
-	}
-	st.OperatorNamespace = ns
-
-	doing("claiming the cluster")
 	if st.DryRun {
+		// A dry run takes no lock — it is a plan, and a plan that mutates the
+		// cluster is not one. It still resolves the namespace, so that a rehearsal
+		// which could not even render the overlay says so rather than reporting a
+		// plan it could not have built.
+		ns, err := operator.Namespace()
+		if err != nil {
+			return fail("reading the operator namespace", err)
+		}
+		st.OperatorNamespace = ns
+
+		doing("claiming the cluster")
 		fmt.Println()
 		wouldDo("take the cluster lock in namespace " + ns)
-		// A dry run takes no lock — it is a plan, and a plan that mutates the
-		// cluster is not one. It still reports the claim it would have met, since
-		// "another operator is already running" is part of the answer to "what
-		// would this do".
+		// "Another operator is already running" is part of the answer to "what
+		// would this do", so it is reported even though nothing is taken.
 		return reportExistingClaim(ctx, st)
 	}
 
-	_, _, typed, err := kubeClients(st.KubeContext)
-	if err != nil {
-		return fail("building kube clients", err)
+	doing("claiming the cluster")
+	claim, ns, err := ClaimCluster(ctx, st.KubeContext, st.Instance)
+	// The namespace is recorded even when the claim was refused: it is resolved
+	// before the lock is contended, and a refusal is one of the paths that still
+	// wants to say where it was looking.
+	if ns != "" {
+		st.OperatorNamespace = ns
 	}
-	if _, err := typed.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: ns},
-	}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fail("creating namespace "+ns, err)
-	}
-
-	claim, err := AcquireClaim(ctx, typed, ns, st.Instance, st.KubeContext)
 	if err != nil {
 		return err
 	}

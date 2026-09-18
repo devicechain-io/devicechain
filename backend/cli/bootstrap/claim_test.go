@@ -19,8 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
-
-	dck8s "github.com/devicechain-io/dc-k8s/config"
 )
 
 // testClaimNS stands in for the operator namespace the lock really lives in. The
@@ -1169,68 +1167,6 @@ func TestThePipelineFenceStopsBeforeTheNextStep(t *testing.T) {
 		}
 		if len(*ran) != 3 {
 			t.Errorf("the pipeline ran %v", *ran)
-		}
-	})
-}
-
-// The lock lives in the operator's namespace, and that namespace is a kustomize
-// setting rather than a constant. A copy of it here would be a second place to
-// remember: a rename would leave dcctl taking its lock somewhere nothing else
-// looks, which is a lock that protects nothing while appearing to work.
-func TestOperatorNamespaceComesFromTheRenderedOverlay(t *testing.T) {
-	t.Run("it is read out of the manifests", func(t *testing.T) {
-		// The Namespace is deliberately NOT the first document: the function has to
-		// search the overlay, not read its head.
-		manifests := []byte(`apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dc-operator-controller-manager
-  namespace: dc-operator-system
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: dc-operator-system
-`)
-		got, err := operatorNamespace(manifests)
-		if err != nil {
-			t.Fatalf("the overlay's namespace could not be read: %v", err)
-		}
-		if got != "dc-operator-system" {
-			t.Errorf("read namespace %q", got)
-		}
-	})
-
-	t.Run("an overlay with no Namespace fails loudly", func(t *testing.T) {
-		manifests := []byte(`apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dc-operator-controller-manager
-  namespace: dc-operator-system
-`)
-		got, err := operatorNamespace(manifests)
-		if err == nil {
-			t.Fatalf("a manifest set declaring no Namespace answered %q; the lock would be taken "+
-				"in a namespace nothing else uses", got)
-		}
-		if !strings.Contains(err.Error(), "lock") {
-			t.Errorf("the refusal does not say what it costs: %v", err)
-		}
-	})
-
-	// And against the overlay dcctl actually renders, because the refusal above is
-	// only worth having if the real thing passes.
-	t.Run("the real operator overlay declares one", func(t *testing.T) {
-		manifests, err := dck8s.RenderOperator("")
-		if err != nil {
-			t.Fatalf("rendering the operator overlay: %v", err)
-		}
-		ns, err := operatorNamespace(manifests)
-		if err != nil {
-			t.Fatalf("the shipped operator overlay declares no namespace to take the lock in: %v", err)
-		}
-		if ns == "" {
-			t.Error("the shipped operator overlay declares an empty namespace")
 		}
 	})
 }

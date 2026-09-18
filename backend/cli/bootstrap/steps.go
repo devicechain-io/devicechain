@@ -17,10 +17,9 @@ import (
 	"strings"
 	"time"
 
-	apply "github.com/devicechain-io/dc-k8s/apply"
-	dck8s "github.com/devicechain-io/dc-k8s/config"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,11 +58,6 @@ const (
 	// shell tokenizer to read Go would trade a rule that is right for one that is
 	// nearly right. To move the pin: `crane digest registry:<version>`.
 	localRegistryImage = "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
-	// operatorImageName must match the name the release pipeline publishes the
-	// operator under — ghcr.io/devicechain-io/operator (see .github/workflows/
-	// release.yml, which special-cases backend/k8s to ".../operator"). A
-	// mismatch makes the published-image bootstrap pull a nonexistent image.
-	operatorImageName = "operator"
 )
 
 // doing prints a white "doing…" progress line (house style).
@@ -614,9 +608,14 @@ func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName s
 // for the frontend's docker build, which this path never reaches, and refusing an
 // install over a variable only the console build reads would be a refusal about
 // something the operator does not use.
+// Where the controller's source lives and what the built image is called are both
+// the operator package's to answer, so that a build pushing to one name and an
+// overlay pulling from another cannot happen. What ko does with them is this
+// module's business, which is why the builder stays here — it builds the services
+// too.
 func buildOperatorImage(ctx context.Context, root string, st *State) error {
-	return koBuild(ctx, root, st, filepath.Join(root, "backend", "k8s"),
-		fmt.Sprintf("%s/%s", st.ImageRegistry, operatorImageName))
+	return koBuild(ctx, root, st, operator.SourceDir(root),
+		fmt.Sprintf("%s/%s", st.ImageRegistry, operator.ImageName))
 }
 
 // buildImages ko-builds every service (backend/services/*/main.go) and the
@@ -769,21 +768,24 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		func() error { return applyInfra(ctx, st) })
 }
 
-// operatorImageRef is the controller image a settled image source names.
+// operatorImageRef is the controller image this run's settled image source names.
 //
-// One definition, because three verbs now deploy this operator — bootstrap,
-// upgrade and install — and a reference assembled from the same three fields in
-// three places is three chances for them to stop agreeing. They must agree: the
-// whole point of the identity stamp is that two dcctl runs at the same release
-// install the same thing.
+// A State-shaped convenience over operator.ImageRef, so callers that already hold
+// a State do not restate which two fields feed it.
 func operatorImageRef(st *State) string {
-	return fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
+	return operator.ImageRef(st.ImageRegistry, st.ImageVersion)
 }
 
-// stepInstallCore renders the operator overlay (CRDs + RBAC + controller) the
-// same way `make deploy` does and applies it via client-go server-side apply.
-// The manifests are rendered in-process from manifests embedded in the binary —
-// no source checkout or kubectl/kustomize binary required.
+// stepInstallCore puts the operator on the cluster: CRDs, RBAC and the controller
+// Deployment, rendered in-process from manifests embedded in the binary.
+//
+// 🔴 THIS STEP IS ON ITS WAY OUT. The operator is CLUSTER-scoped and `dcctl
+// install` now applies it too; a bootstrap applying it is a per-instance verb
+// moving a resource every instance on the cluster shares. It remains here only so
+// that the move can be made in slices that each stay green — the next one removes
+// it from the pipeline and refuses instead. Both callers render and apply through
+// the operator package, so until then they cannot disagree about what they put on
+// the cluster.
 func stepInstallCore(ctx context.Context, st *State) error {
 	if err := requireResolvedImages(st, "installing the operator"); err != nil {
 		return err
@@ -795,11 +797,11 @@ func stepInstallCore(ctx context.Context, st *State) error {
 	// is where the operator's namespace is decided and the next step takes the
 	// cluster lock inside it. Rendering is pure — no cluster is touched — so a dry
 	// run that renders here also stops reporting a plan it could not have built.
-	manifests, err := dck8s.RenderOperator(operatorImage)
+	manifests, err := operator.Render(operatorImage)
 	if err != nil {
 		return fail("rendering operator manifests", err)
 	}
-	ns, err := operatorNamespace(manifests)
+	ns, err := operator.NamespaceOf(manifests)
 	if err != nil {
 		return fail("reading the operator namespace from the rendered overlay", err)
 	}
@@ -815,7 +817,7 @@ func stepInstallCore(ctx context.Context, st *State) error {
 	if err != nil {
 		return fail("building kube clients", err)
 	}
-	if err := apply.NewApplyOptions(dyn, disco).WithServerSide(true).Apply(ctx, manifests); err != nil {
+	if err := operator.Apply(ctx, dyn, disco, manifests); err != nil {
 		return fail("applying operator manifests", err)
 	}
 	done()

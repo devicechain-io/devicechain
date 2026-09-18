@@ -65,25 +65,22 @@ func TestTheOperatorVersionIsNotRecordedAsAClusterSetting(t *testing.T) {
 	}
 }
 
-// A registry with a port is the developer path's own default (localhost:5000), so the
-// reference the operator overlay is handed has a colon in it that is NOT a tag
-// separator. splitImageRef gets this right; this pins that operatorImageRef hands it
-// something it can still get right, since the two are now composed on three verbs.
-func TestTheOperatorReferenceSurvivesARegistryPort(t *testing.T) {
-	st := &State{ImageRegistry: "localhost:5000", ImageVersion: "dev"}
-	if got, want := operatorImageRef(st), "localhost:5000/operator:dev"; got != want {
-		t.Fatalf("the operator image resolved to %q, want %q", got, want)
-	}
-}
-
-// 🔴 A BUILD IS THE DEVELOPER PATH, AND ON EVERY OTHER PATH IT MUST DO NOTHING.
-// buildOperatorImageForInstall runs before the operator is applied on every install,
-// published ones included, and it reaches for a source checkout (repoRoot) and docker.
-// A missing --build guard would make `dcctl install local` — the released,
-// no-checkout, no-docker path — fail while preparing a cluster, on work it does not
-// need. The nil return is the whole assertion: it must not have looked.
+// 🔴 A BUILD IS THE DEVELOPER PATH, AND ON EVERY OTHER PATH IT MUST DO NOTHING —
+// not "must succeed", MUST NOT LOOK.
+//
+// buildOperatorImageForInstall runs before the operator is applied on every
+// install, published ones included, and behind the guard it reaches for a source
+// checkout, starts a registry container and writes a ConfigMap to whatever cluster
+// the current context names. So a nil return proves nothing on a developer's
+// machine, where all of that would succeed: this asserts the guard by pointing the
+// run at a kube context that does not exist. Past the guard, ensureLocalRegistry
+// must fail on it; returning nil means it never got that far.
 func TestAPublishedInstallBuildsNothing(t *testing.T) {
-	st := &State{ImageRegistry: "ghcr.io/devicechain-io", ImageVersion: "v0.17.0"}
+	st := &State{
+		ImageRegistry: "ghcr.io/devicechain-io",
+		ImageVersion:  "v0.17.0",
+		KubeContext:   "no-such-context-" + t.Name(),
+	}
 	if err := buildOperatorImageForInstall(t.Context(), st); err != nil {
 		t.Fatalf("an install that was not asked to build anything tried to: %v", err)
 	}
