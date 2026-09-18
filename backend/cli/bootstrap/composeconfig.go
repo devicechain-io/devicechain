@@ -294,7 +294,7 @@ func mergedStringKeyMap(base interface{}, over map[string]interface{}) map[strin
 func instanceConfigSecret(instance string, doc []byte) ownedSecret {
 	return ownedSecret{
 		Name:        instanceConfigSecretName(instance),
-		Namespace:   instance,
+		Namespace:   instanceNamespace(instance),
 		Type:        corev1.SecretTypeOpaque,
 		Labels:      map[string]string{"devicechain.io/instance": instance},
 		Annotations: map[string]string{kube.ResourcePolicyAnno: kube.KeepPolicy},
@@ -338,14 +338,15 @@ func adoptChartWrittenInstanceConfig(
 	typed kubernetes.Interface,
 	instance, instanceUID, releaseName, releaseNamespace string,
 ) error {
-	api := typed.CoreV1().Secrets(instance)
+	namespace := instanceNamespace(instance)
+	api := typed.CoreV1().Secrets(namespace)
 	existing, err := api.Get(ctx, instanceConfigSecretName(instance), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		// A fresh install. Nothing to take over.
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("reading the existing instance configuration Secret %s/%s: %w",
-			instance, instanceConfigSecretName(instance), err)
+			namespace, instanceConfigSecretName(instance), err)
 	}
 
 	a := existing.GetAnnotations()
@@ -380,7 +381,7 @@ func adoptChartWrittenInstanceConfig(
 	// the document alive. instanceConfigSecret is.
 	if _, err := api.Update(ctx, adopted, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("taking over the instance configuration Secret %s/%s from the chart: %w",
-			instance, existing.Name, err)
+			namespace, existing.Name, err)
 	}
 	return nil
 }
@@ -423,14 +424,18 @@ func ensureNamespaceForRelease(
 	typed kubernetes.Interface,
 	instance, releaseName, releaseNamespace string,
 ) error {
+	// 🔑 THE NAMESPACE NAME AND THE LABEL VALUE ARE TWO STRINGS. The namespace comes
+	// through instanceNamespace; the devicechain.io/instance label carries the instance id
+	// itself, which is what the ownership check compares and what the chart writes.
+	namespace := instanceNamespace(instance)
 	api := typed.CoreV1().Namespaces()
 	// The same read the precheck makes four steps earlier, through the same function, so
 	// that "it is not there" means the same thing in both places — and so what counts as
 	// absent cannot later be changed in one of them only.
-	existing, err := lookupNamespace(ctx, typed, instance)
+	existing, err := lookupNamespace(ctx, typed, namespace)
 	if err != nil {
 		return fmt.Errorf("reading namespace %q before writing the instance configuration: %w",
-			instance, err)
+			namespace, err)
 	}
 	if existing != nil {
 		if err := refuseANamespaceThisInstanceDoesNotOwn(instance, existing); err != nil {
@@ -440,7 +445,7 @@ func ensureNamespaceForRelease(
 	}
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name: instance,
+		Name: namespace,
 		Labels: map[string]string{
 			instanceNamespaceLabel: instance,
 			helmManagedByLabel:     helmManagedByValue,
@@ -456,7 +461,7 @@ func ensureNamespaceForRelease(
 			// to own it — only to be sure it exists — so this is success.
 			return nil
 		}
-		return fmt.Errorf("creating namespace %q for the instance configuration: %w", instance, err)
+		return fmt.Errorf("creating namespace %q for the instance configuration: %w", namespace, err)
 	}
 	return nil
 }
@@ -534,17 +539,19 @@ type typedNamespaces interface {
 // when something went wrong the first time. It reports whether it issued the delete, so
 // the caller waits only on a namespace that is actually going.
 func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance string) (deleted bool, err error) {
+	// The namespace name and the label value are two strings; see ensureNamespaceForRelease.
+	namespace := instanceNamespace(instance)
 	api := typed.CoreV1().Namespaces()
-	ns, err := api.Get(ctx, instance, metav1.GetOptions{})
+	ns, err := api.Get(ctx, namespace, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	} else if err != nil {
-		return false, fmt.Errorf("reading namespace %q: %w", instance, err)
+		return false, fmt.Errorf("reading namespace %q: %w", namespace, err)
 	}
 	if ns.Labels[instanceNamespaceLabel] != instance {
 		fmt.Println(color.YellowString(
 			"  namespace %q is not labelled as this instance's, so it was left alone; "+
-				"anything dcctl wrote inside it is still there", instance))
+				"anything dcctl wrote inside it is still there", namespace))
 		return false, nil
 	}
 	// 🔴 ALREADY TERMINATING IS "GOING", NOT "DELETE AGAIN". The API server answers a
@@ -553,11 +560,11 @@ func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, in
 	if ns.DeletionTimestamp != nil {
 		return true, nil
 	}
-	if err := api.Delete(ctx, instance, metav1.DeleteOptions{}); err != nil {
+	if err := api.Delete(ctx, namespace, metav1.DeleteOptions{}); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("deleting namespace %q: %w", instance, err)
+		return false, fmt.Errorf("deleting namespace %q: %w", namespace, err)
 	}
 	return true, nil
 }

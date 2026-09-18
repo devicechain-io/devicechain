@@ -13,6 +13,31 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// instanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
+// and every credential it owns. Today the body below returns the instance id unchanged.
+//
+// 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is infraNamespace, in
+// infranamespace.go. The broker and the event store lived in infraNamespace until each
+// instance got a namespace of its own, and every reference to them was spelled
+// `infraNamespace`, which reads exactly as well as the right answer. Naming the instance's
+// namespace separately is what makes the wrong one visible in a diff.
+//
+// 🔴 AND THIS IS NOW THE ONLY PLACE AN INSTANCE'S NAMESPACE IS SPELLED. Everything that
+// needs one comes through here — every client-go call, every namespace this command
+// creates, deletes or waits on, the DNS names in the broker's certificate, the
+// `instance_namespace` tfvar, and every message that names a namespace — so what an
+// instance's namespace is CALLED is decided in the one line below rather than
+// reconstructed at each call site. Nothing in the type system holds that: client-go takes
+// namespaces as plain strings, so a bare instance id passed where a namespace is meant
+// still compiles. What keeps them apart is that nothing else spells it.
+//
+// 🔑 THE INSTANCE ID HAS OTHER JOBS, AND THEY ARE NOT THIS ONE. It is also the relational
+// database and login name, the VALUE of the devicechain.io/instance label, the stem of the
+// `dci-<id>-…` Secret names and the `dc-<id>` Helm release, the WAL archive path, and the
+// directory under ~/.devicechain/instances. None of those come through here, and a call
+// added to one of them would rename something that has to keep its name.
+func instanceNamespace(instance string) string { return instance }
+
 // instanceNamespaceLabel is what says a namespace is an instance's. The chart writes it
 // on everything it renders, the namespace included (devicechain.instanceLabels in
 // templates/_helpers.tpl), and ensureNamespaceForRelease writes it on the namespace it
@@ -63,10 +88,16 @@ func (e *ErrNamespaceUnavailable) Unwrap() error { return e.Err }
 //
 // existing is nil when the namespace is not there, which is the ordinary case and the
 // only one that needs nothing said about it.
+//
+// 🔑 IT TAKES THE INSTANCE ID AND SPEAKS OF TWO DIFFERENT STRINGS. The namespace it names
+// comes through instanceNamespace; the label it compares, and the `dcctl destroy` argument
+// it prescribes, are the id itself. One variable used to serve both, which reads correctly
+// only while they are the same string.
 func refuseANamespaceThisInstanceDoesNotOwn(instance string, existing *corev1.Namespace) error {
 	if existing == nil {
 		return nil
 	}
+	namespace := instanceNamespace(instance)
 	// 🔑 A NAMESPACE ON ITS WAY OUT IS NOT A NAMESPACE, AND IT IS NOT SOMEBODY ELSE'S
 	// EITHER. Kubernetes refuses new content in a terminating namespace, so a write would
 	// fail with a sentence about "new content" that reads as a defect rather than as a
@@ -76,7 +107,7 @@ func refuseANamespaceThisInstanceDoesNotOwn(instance string, existing *corev1.Na
 	if existing.DeletionTimestamp != nil {
 		return fmt.Errorf("namespace %q is still being deleted, so this instance cannot be "+
 			"built into it yet: a previous `dcctl destroy` has not finished. Wait for the "+
-			"namespace to go and run this again", instance)
+			"namespace to go and run this again", namespace)
 	}
 	if existing.Labels[instanceNamespaceLabel] == instance {
 		return nil
@@ -89,7 +120,7 @@ func refuseANamespaceThisInstanceDoesNotOwn(instance string, existing *corev1.Na
 		"  Build the instance under a name of its own, or — if that namespace really is meant to "+
 		"be this instance's — say so and run this again:\n"+
 		"    kubectl label namespace %s %s=%s",
-		instance, instance, instance, instanceNamespaceLabel, instance)
+		namespace, instance, namespace, instanceNamespaceLabel, instance)
 }
 
 // lookupNamespace returns the namespace, or nil if it is not there. A read failure is an

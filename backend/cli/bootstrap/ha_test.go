@@ -428,7 +428,7 @@ func TestInfraApplySkipsTheNodeGuardWithoutHa(t *testing.T) {
 func TestHelmInstallConsultsTheBrokerPreflight(t *testing.T) {
 	st := haState(true)
 	st.DryRun = true
-	st.Values["namespace"] = "dctest"
+	st.Values["namespace"] = instanceNamespace(st.Instance)
 	// What applyInfra would have read back from a single-server broker.
 	st.Values[natsClusterReplicasKey] = "1"
 

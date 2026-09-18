@@ -688,7 +688,13 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 		return nil, err
 	}
 	name := fmt.Sprintf("dci-%s-config", instanceId)
-	sec, err := typed.CoreV1().Secrets(instanceId).Get(ctx, name, metav1.GetOptions{})
+	// 🔴 THE NAMESPACE COMES THROUGH instanceNamespace; THE SECRET NAME DOES NOT. Both are
+	// built from the instance id and they are not the same string — the `dci-` above is the
+	// Secret-NAME prefix this read is contracted to (see instanceConfigSecretName). Reading
+	// the wrong namespace answers NotFound, which this function reads as "no instance
+	// there" — the mint branch, over a live instance.
+	namespace := instanceNamespace(instanceId)
+	sec, err := typed.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
@@ -696,7 +702,7 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 		return nil, fmt.Errorf("checking whether instance %q already exists (Secret %s/%s): %w. "+
 			"Refusing to continue: if the instance IS there, minting fresh credentials would rotate them "+
 			"out from under it — making every stored secret unreadable and breaking broker auth for every "+
-			"pod that starts afterwards", instanceId, instanceId, name, err)
+			"pod that starts afterwards", instanceId, namespace, name, err)
 	}
 	return parseDeployedConfig(sec.Data["instance"], instanceId, name)
 }
@@ -715,7 +721,8 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 		return nil, fmt.Errorf("instance %q has a configuration Secret (%s/%s) with no \"instance\" payload, "+
 			"so what it is running cannot be determined. Refusing to continue rather than treat it as a "+
 			"fresh install, which would rotate every credential out from under it. Inspect the Secret, or "+
-			"`dcctl destroy` the instance if it is not wanted", instanceId, instanceId, secretName)
+			"`dcctl destroy` the instance if it is not wanted",
+			instanceId, instanceNamespace(instanceId), secretName)
 	}
 	cfg := &config.InstanceConfiguration{}
 	if err := json.Unmarshal(raw, cfg); err != nil {

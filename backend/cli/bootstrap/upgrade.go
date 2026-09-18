@@ -280,7 +280,14 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		// ARE the terminator. Nothing goes around it: this call site used to open the
 		// line itself and then print a bare `done.` on top of `done (12/12 ready).`,
 		// and on the failure path a `failed.` on top of `timed out (3/12 ready).`.
-		if err := waitForAreasStep(ctx, typed, st.Instance, "waiting for the services to roll over",
+		//
+		// 🔴 AND WHAT IT IS HANDED IS A NAMESPACE, NOT AN INSTANCE. Unlike the bootstrap
+		// path this one never runs stepRenderConfig, so it has no resolved namespace to
+		// pass and reached for the instance id instead — the same string until an
+		// instance's namespace gained a prefix, and after that a five-minute wait on a
+		// namespace that does not exist, on every upgrade.
+		if err := waitForAreasStep(ctx, typed, instanceNamespace(st.Instance),
+			"waiting for the services to roll over",
 			areaReadyTimeout, areaReadyPollInterval); err != nil {
 			return fmt.Errorf("waiting for the services: %w", err)
 		}

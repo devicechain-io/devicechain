@@ -24,7 +24,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "devicechain.instanceConfigSecret" . }}
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 type: Opaque

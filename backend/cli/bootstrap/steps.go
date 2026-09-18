@@ -100,10 +100,12 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		st.Profile = defaultProfile
 	}
 
-	// The chart deploys every per-instance workload into a namespace named after
-	// the instance id (templates/namespace.yaml uses .Values.instance.id), so the
-	// readiness gate and report must target exactly that.
-	namespace := st.Instance
+	// The chart deploys every per-instance workload into the instance's own namespace
+	// (templates/namespace.yaml derives it from .Values.instance.id), so the readiness
+	// gate and the report must target exactly that. What it is called is instanceNamespace's
+	// to decide, and the chart has to agree with it — this value travels no further than
+	// st.Values["namespace"], which is where the gate and the report read it from.
+	namespace := instanceNamespace(st.Instance)
 
 	doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
 

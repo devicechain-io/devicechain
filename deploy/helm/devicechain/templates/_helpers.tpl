@@ -119,6 +119,32 @@ resolve through, so a release pins the whole deploy coherently.
 {{- end -}}
 
 {{/*
+THE namespace this instance's objects live in. Takes the ROOT context — several
+templates call it from inside a `range`/`with`, so they pass the `$root` (or `$`)
+they already hold rather than the dot in scope.
+
+🔴 THIS IS THE ONLY PLACE THE INSTANCE'S NAMESPACE IS SPELLED. Every template
+that needs it — every `metadata.namespace`, the Namespace object's own name, the
+ServiceMonitor's namespaceSelector, the PodMonitor's in-namespace default, the
+`namespace="…"` matcher in every alert expression, the dashboards' hidden
+`namespace` constant — goes through here, and nothing writes it inline.
+
+The reason is that it is ABOUT TO STOP BEING THE INSTANCE ID. It returns the id
+today, which is what every one of those sites used to say; it will shortly return
+a prefixed name, and the only thing that has to change is the line below. What a
+per-site spelling would have made instead is a change of a few dozen sites in
+which the ones that mean something ELSE by the instance id are indistinguishable
+— the object names (`dci-<id>-config`, the `dc-<id>` ServiceAccount), the
+`devicechain.io/instance` LABEL that is also a pod selector, the Grafana uid,
+title, ConfigMap name and folder, `DC_INSTANCE_ID` and everything the services
+derive from it (database names, NATS subjects, MQTT topics). Those stay the id.
+Do not route them through here, and do not write the namespace anywhere else.
+*/}}
+{{- define "devicechain.instanceNamespace" -}}
+{{- .Values.instance.id -}}
+{{- end -}}
+
+{{/*
 The instance config Secret name. C2 (ADR-022 review): the instance config holds
 persistence credentials, so it is rendered into a Secret (not a ConfigMap). When
 instance.existingSecret is set, that name is used instead so an operator can point

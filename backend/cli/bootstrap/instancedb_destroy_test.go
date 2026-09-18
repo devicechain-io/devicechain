@@ -27,7 +27,7 @@ func stubRemoveInstanceDatabase(t *testing.T, fn func(ctx context.Context, kubeC
 }
 
 func anInstanceLoginSecret() *corev1.Secret {
-	return mintedSecret("acme", "dci-acme-rdb-credentials", testUID,
+	return mintedSecret(instanceNamespace("acme"), "dci-acme-rdb-credentials", testUID,
 		map[string]string{"username": "acme", "password": "pw"})
 }
 
@@ -50,7 +50,7 @@ func TestAnInstanceDestroyDropsItsLoginThroughTheRecordedStore(t *testing.T) {
 	if gotInstance != "acme" || got != aRelationalStore() {
 		t.Errorf("dropped %q through %+v, want acme through the recorded store", gotInstance, got)
 	}
-	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets(instanceNamespace("acme")).Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the login's Secret survived a successful drop: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestAFailedDropKeepsTheLoginsSecret(t *testing.T) {
 	if _, err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err == nil {
 		t.Fatal("a failed drop was reported as success")
 	}
-	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets(instanceNamespace("acme")).Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); err != nil {
 		t.Errorf("the login's Secret was removed although its login was not: %v", err)
 	}

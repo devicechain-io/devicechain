@@ -6,7 +6,10 @@ instance's namespace, so one rule object alerts only on its own instance. Thresh
 conservative defaults tuned for alert-quietness; operators tune per deployment.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
-{{- $ns := .Values.instance.id }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -25,7 +28,7 @@ spec:
           for: 2m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "No replica holds the DETECT partition"
             description: "Nothing has owned the DETECT partition for 2m, so no detection rule is being evaluated for any tenant. The absent() half is not optional: a pod in CrashLoopBackOff publishes no series at all, so a rule written only against the value would go quiet at exactly the moment it should fire."
@@ -37,7 +40,7 @@ spec:
           for: 10m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "A DETECT leader is holding the partition without consuming"
             description: "A replica owns the partition but is not inside a live term and has committed nothing for 10m — it is stuck building a term, which holds the partition against every standby while detecting nothing. The checkpoint term is what keeps this quiet during a long replay, which checkpoints as it goes."
@@ -46,7 +49,7 @@ spec:
           for: 10m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "DETECT consumer is falling behind"
             description: "The resolved-events durable consumer has >50k undelivered messages for 10m; the DETECT engine is not keeping up with ingest."
@@ -55,7 +58,7 @@ spec:
           for: 10m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "DETECT watermark is lagging wall-clock"
             description: "The engine watermark is >5m behind wall-clock for 10m; time-based detections (absence/duration) will fire late."
@@ -66,7 +69,7 @@ spec:
           for: 15m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "DETECT is not checkpointing while a backlog exists"
             description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (broker/store outage or a halted stale writer)."
@@ -75,7 +78,7 @@ spec:
           for: 15m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "DETECT leaf-predicate evaluation errors"
             description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
@@ -84,7 +87,7 @@ spec:
           for: 10m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "Geofence edits are not being announced to the detection engine"
             description: "device-management could not publish a geofence-set manifest — a marshal error, a broker refusal, or a transport fault. The fence edit itself succeeded and is durable; what failed is telling event-processing about it, so containment holds the previous fence set until the five-minute reconcile sweep repairs it. A sustained rate means every fence edit is taking minutes to take effect. If this started after a broker configuration change, check that infrastructure.nats.streamMaxMsgSize is not set below what a manifest needs — the service logs a warning naming both sizes at startup."
@@ -93,7 +96,7 @@ spec:
           for: 10m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "Geofence geometry cannot be read back from device-management"
             description: "A geofence set names fences whose geometry this service could not fetch from device-management's archive. Those fences are installed carrying their error, so containment reports unresolvable for them rather than answering — which also shows up as DetectFanoutEvalErrors. It repairs on the next reconcile sweep if the cause was transient; sustained means the archive read is failing. Check device-management's health and the service-token seam. The tenant and fence are named in event-processing's error log, never in this counter."
@@ -102,7 +105,7 @@ spec:
           for: 5m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "Geofence geometry did not match the content address it was served under"
             description: "A geometry document did not hash to the address it was requested under. This is never transient and never benign: an address IS the SHA-256 of the document stored under it, so either device-management served the wrong row, something re-encoded the document in transit, or the archive is corrupt. The affected fences are refused rather than compiled, which is why containment degrades instead of answering wrongly. Investigate before restarting anything — a restart hides the symptom and changes nothing."
@@ -111,7 +114,7 @@ spec:
           for: 15m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "device-management does not serve the geofence manifest doors"
             description: "event-processing asked device-management for a fence-set manifest and was told the query does not exist, which means the two are running builds from either side of the manifest-delivery change. Expected briefly while an upgrade rolls, since the two services are independent Deployments and neither waits for the other. Sustained means device-management is behind — most likely rolled back on its own — and fence edits are not reaching the detection engine until it rolls forward."
@@ -120,7 +123,7 @@ spec:
           for: 10m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "REACT is giving up on un-dispatchable derived events"
             description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
@@ -139,7 +142,7 @@ spec:
           for: 5m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "the dead-letter store is losing records"
             description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
@@ -160,7 +163,7 @@ spec:
           for: 5m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "work is being lost with no record of it"
             description: "A consumer gave up on a message AND could not write it to the dead-letter stream, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. Look at JetStream itself: this is a failed publish, so the broker is unreachable, refusing, or the account is out of storage. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
@@ -169,7 +172,7 @@ spec:
           for: 15m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "Connector actions are being shed at the source for over-quota egress"
             description: "REACT is dropping httpCall/publish actions at the source because a tenant is over its outbound egress quota (ADR-060 SD-3) for 15m — a source shed destroys the action (this counter is its only evidence). Expected governance back-pressure, but sustained shedding is likely a runaway/misconfigured rule or a per-tenant outbound limit set too low. Raise the tenant's outboundMessagesPerSecond/outboundBurst if legitimate."
@@ -181,7 +184,7 @@ spec:
           for: 30m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "A tenant is over its DETECT state budget"
             description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget (ADR-023) for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
@@ -194,7 +197,7 @@ spec:
           for: 10m
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "A JetStream stream is near its ceiling"
             description: "Stream {{`{{ $labels.stream }}`}} is over 80% of its byte ceiling for 10m; the oldest messages will be evicted (DiscardOld) once full."

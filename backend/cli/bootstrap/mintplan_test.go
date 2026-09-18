@@ -214,7 +214,7 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		// The shared store's credentials are the cluster's; the event store's, the instance's.
 		wantNS := infraNamespace
 		if name == "dc-tsdb-app-credentials" {
-			wantNS = "acme"
+			wantNS = instanceNamespace("acme")
 		}
 		if s.Namespace != wantNS {
 			t.Errorf("%s is planned for namespace %q, want %q", name, s.Namespace, wantNS)
@@ -227,7 +227,7 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 	if !ok {
 		t.Fatal("the instance's own relational login is missing from the plan")
 	}
-	if login.Namespace != "acme" {
+	if login.Namespace != instanceNamespace("acme") {
 		t.Errorf("the instance's login Secret is planned for namespace %q, want the instance's own", login.Namespace)
 	}
 	if login.Data[secretKeyUsername] != "acme" || login.Data[secretKeyPassword] == "" {
@@ -320,8 +320,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 		},
 		// The event store is the instance's, and CloudNativePG reads a Cluster's
 		// credentials from the Cluster's own namespace.
-		"acme/dc-tsdb-app-credentials": {
-			keys: []string{"username", "password"}, namespace: "acme",
+		instanceNamespace("acme") + "/dc-tsdb-app-credentials": {
+			keys: []string{"username", "password"}, namespace: instanceNamespace("acme"),
 			typ: "kubernetes.io/basic-auth",
 		},
 		// Read by the object store's own container, and by the relational store's
@@ -332,8 +332,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 		},
 		// ...and by the event store's backup plugin, which resolves the same name in
 		// the event store's namespace.
-		"acme/dc-object-store-credentials": {
-			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: "acme",
+		instanceNamespace("acme") + "/dc-object-store-credentials": {
+			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: instanceNamespace("acme"),
 			typ: "Opaque",
 		},
 	}
@@ -361,7 +361,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 	}
 
 	// The reload label is likewise a literal the database operator matches on.
-	for _, name := range []string{"dc-system/dc-rdb-app-credentials", "acme/dc-tsdb-app-credentials"} {
+	for _, name := range []string{"dc-system/dc-rdb-app-credentials",
+		instanceNamespace("acme") + "/dc-tsdb-app-credentials"} {
 		if byName[name].Labels["cnpg.io/reload"] != "true" {
 			t.Errorf("%s does not carry cnpg.io/reload=true", name)
 		}

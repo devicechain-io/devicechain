@@ -59,11 +59,13 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 		if opts.WithoutState {
 			infra = "SKIP tofu destroy (--without-state), "
 		}
+		// Two values, not one repeated: the namespace this would delete comes through
+		// instanceNamespace, the local state directory is named for the instance itself.
 		wouldDo(fmt.Sprintf(
 			"uninstall the instance release, %sdrop its database and login from the shared relational store, "+
 				"delete namespace %s and wait until it is gone, and remove ~/.devicechain/instances/%s "+
 				"(root-key escrow kept), LEAVING cluster %s running",
-			infra, opts.Instance, opts.Instance, binding.describe()))
+			infra, instanceNamespace(opts.Instance), opts.Instance, binding.describe()))
 		return nil
 	}
 

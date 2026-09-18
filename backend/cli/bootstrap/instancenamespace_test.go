@@ -48,6 +48,10 @@ func writesIn(c *fake.Clientset) []string {
 	return out
 }
 
+// labelledNamespace builds the escape hatch: a namespace an operator made and labelled
+// as an instance's by hand. The two arguments are deliberately separate — name is the
+// NAMESPACE, instance is the devicechain.io/instance label VALUE, and they are not the
+// same string.
 func labelledNamespace(name, instance string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   name,
@@ -65,7 +69,9 @@ func labelledNamespace(name, instance string) *corev1.Namespace {
 // broker's TLS private key and four database credentials, all in a namespace `dcctl
 // destroy` then correctly refused to touch.
 func TestTheSeamRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
-	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "monitoring"}})
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: instanceNamespace("monitoring"),
+	}})
 
 	err := ensureNamespaceForRelease(context.Background(), c, "monitoring", "dc-monitoring", "default")
 	if err == nil {
@@ -84,7 +90,7 @@ func TestTheSeamRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
 // from a bootstrap that can never resume.
 func TestANamespaceThisInstanceOwnsIsAccepted(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   "dctest",
+		Name:   instanceNamespace("dctest"),
 		Labels: map[string]string{"devicechain.io/instance": "dctest", "app.kubernetes.io/managed-by": "Helm"},
 		Annotations: map[string]string{
 			"meta.helm.sh/release-name":      "dc-dctest",
@@ -110,13 +116,13 @@ func TestANamespaceThisInstanceOwnsIsAccepted(t *testing.T) {
 // install, after the credentials have landed. Accepting it therefore has to include
 // giving it the three keys.
 func TestALabelledNamespaceIsGivenTheMetadataHelmAdoptsItWith(t *testing.T) {
-	c := fake.NewSimpleClientset(labelledNamespace("dctest", "dctest"))
+	c := fake.NewSimpleClientset(labelledNamespace(instanceNamespace("dctest"), "dctest"))
 
 	if err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc-dctest", "default"); err != nil {
 		t.Fatalf("a namespace labelled as this instance's was refused: %v", err)
 	}
 
-	ns, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{})
+	ns, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +149,7 @@ func TestALabelledNamespaceIsGivenTheMetadataHelmAdoptsItWith(t *testing.T) {
 // Helm's ownership check pass for a release that does not own it — a loud refusal turned
 // into a silent adoption. Left alone, Helm refuses and names both values.
 func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
-	ns := labelledNamespace("dctest", "dctest")
+	ns := labelledNamespace(instanceNamespace("dctest"), "dctest")
 	ns.Annotations = map[string]string{"meta.helm.sh/release-name": "their-release"}
 	c := fake.NewSimpleClientset(ns)
 
@@ -151,7 +157,7 @@ func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
 		t.Fatalf("a namespace labelled as this instance's was refused: %v", err)
 	}
 
-	got, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{})
+	got, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,14 +175,14 @@ func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
 // that it writes nothing — and would be left behind by the refusal it is about to raise,
 // because no unwind covers it.
 func TestThePrecheckRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
-	c := stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	c := stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: instanceNamespace("beta")}})
 
 	err := precheckInstanceNamespace(context.Background(), &State{Instance: "beta"})
 	var refusal *ErrNamespaceUnavailable
 	if !errors.As(err, &refusal) {
 		t.Fatalf("a namespace that is not this instance's was not refused as one: %v", err)
 	}
-	if !strings.Contains(err.Error(), `namespace "beta"`) {
+	if !strings.Contains(err.Error(), fmt.Sprintf("namespace %q", instanceNamespace("beta"))) {
 		t.Errorf("the refusal does not name the namespace it is about: %v", err)
 	}
 	if wrote := writesIn(c); len(wrote) > 0 {
@@ -187,7 +193,7 @@ func TestThePrecheckRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T)
 // A namespace this instance owns is not refused here either — the precheck must let a
 // resumed bootstrap through, or it refuses every re-run of every instance.
 func TestThePrecheckAcceptsThisInstancesOwnNamespace(t *testing.T) {
-	stubNamespacePrecheck(t, labelledNamespace("beta", "beta"))
+	stubNamespacePrecheck(t, labelledNamespace(instanceNamespace("beta"), "beta"))
 	if err := precheckInstanceNamespace(context.Background(), &State{Instance: "beta"}); err != nil {
 		t.Fatalf("this instance's own namespace was refused before the run started: %v", err)
 	}
@@ -229,7 +235,7 @@ func TestAnUnreadableNamespaceStopsTheRunWithoutBeingARefusal(t *testing.T) {
 // carries it out rather than reading it and going on.
 func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	stubSingletons(t, clusterSingletons{}, nil)
-	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: instanceNamespace("beta")}})
 
 	err := stepCheckClusterSingletons(context.Background(), &State{
 		Instance: "beta", IngressHost: "beta.localhost", Values: map[string]string{}})
@@ -265,9 +271,10 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 
 	// A namespace that is not this instance's: the rehearsal does not refuse, it says what
 	// a real run would refuse over, in the refusal's own words.
-	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: instanceNamespace("beta")}})
 	foreign := rehearse(t)
-	if !strings.Contains(foreign, "REFUSE") || !strings.Contains(foreign, `namespace "beta" already exists`) {
+	if !strings.Contains(foreign, "REFUSE") ||
+		!strings.Contains(foreign, fmt.Sprintf("namespace %q already exists", instanceNamespace("beta"))) {
 		t.Errorf("a rehearsal against a namespace this instance does not own printed:\n%s"+
 			"  It has to name the refusal a real run raises. A rehearsal that says nothing about "+
 			"the namespace sends an operator into a bootstrap that stops at step 4", foreign)
@@ -286,7 +293,8 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 		t.Errorf("a namespace read that failed was rehearsed as a refusal:\n%s"+
 			"  Nothing on the cluster said this namespace is taken", unread)
 	}
-	if !strings.Contains(unread, `namespace "beta"`) || !strings.Contains(unread, "forbidden") {
+	if !strings.Contains(unread, fmt.Sprintf("namespace %q", instanceNamespace("beta"))) ||
+		!strings.Contains(unread, "forbidden") {
 		t.Errorf("a rehearsal whose namespace read failed printed:\n%s"+
 			"  It has to say which read failed and why. The line missing from the rehearsal is "+
 			"the one that would have explained the real run's stop", unread)

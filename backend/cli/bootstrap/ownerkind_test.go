@@ -42,7 +42,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"acme/dc-object-store-credentials", "acme/dc-tsdb-app-credentials", "acme/dci-acme-rdb-credentials"},
+			instanceOwnedAt("dc-object-store-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials"),
 		},
 		{
 			"backups to an object store the operator owns",
@@ -60,7 +60,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			[]string{"acme/dc-backup-credentials", "acme/dc-tsdb-app-credentials", "acme/dci-acme-rdb-credentials"},
+			instanceOwnedAt("dc-backup-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials"),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -379,11 +379,11 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("devicechain"), "password": []byte("rdb-in-use")}),
 		clusterOwnedSecret("dc-object-store-credentials", testClusterUID, map[string][]byte{
 			"MINIO_ROOT_USER": []byte("os-user-in-use"), "MINIO_ROOT_PASSWORD": []byte("os-secret-in-use")}),
-		mintedSecret("acme", "dc-tsdb-app-credentials", testUID, map[string]string{
+		mintedSecret(instanceNamespace("acme"), "dc-tsdb-app-credentials", testUID, map[string]string{
 			"username": "devicechain", "password": "tsdb-in-use"}),
 		clusterOwnedSecret("dc-rdb-provisioner-credentials", testClusterUID, map[string][]byte{
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
-		mintedSecret("acme", "dci-acme-rdb-credentials", testUID, map[string]string{
+		mintedSecret(instanceNamespace("acme"), "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
 		// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise
 		// that the same run rolls Grafana onto it. It does not: Grafana reads the Secret as
@@ -680,4 +680,18 @@ func TestTheLastCompletedInstallIsTheRecordOrWhatItKept(t *testing.T) {
 	if applying.lastCompleted() != kept {
 		t.Error("an applying record's kept install was not returned")
 	}
+}
+
+// instanceOwnedAt spells the "<namespace>/<name>" addresses of the test instance's own
+// Secrets. The namespace comes through instanceNamespace; the NAMES stay literal, for the
+// reason TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse gives — they are what the
+// readers look up, and reading them from our own constants would follow a rename past the
+// only thing being checked. (Note `dci-acme-rdb-credentials`: that `dci-` is the Secret
+// name's, not the namespace's.)
+func instanceOwnedAt(names ...string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, instanceNamespace("acme")+"/"+n)
+	}
+	return out
 }

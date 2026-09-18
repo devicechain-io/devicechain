@@ -55,9 +55,9 @@ func (f namespacedState) Show(context.Context, ...tfexec.ShowOption) (*tfjson.St
 func TestAnInstanceBuiltInTheSharedNamespaceIsRefused(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []namespacedState{
-		{nats: "dc-system", tsdb: "dc-system"},
-		{nats: "dc-system", tsdb: "acme"},
-		{nats: "acme", tsdb: "dc-system"},
+		{nats: infraNamespace, tsdb: infraNamespace},
+		{nats: infraNamespace, tsdb: instanceNamespace("acme")},
+		{nats: instanceNamespace("acme"), tsdb: infraNamespace},
 	} {
 		err := checkInstanceInItsOwnNamespace(ctx, tc, "acme")
 		if err == nil || !strings.Contains(err.Error(), "dcctl destroy <provider> acme") {
@@ -65,7 +65,8 @@ func TestAnInstanceBuiltInTheSharedNamespaceIsRefused(t *testing.T) {
 		}
 	}
 	// The counterweights: an instance already in its own namespace, and one with no state.
-	if err := checkInstanceInItsOwnNamespace(ctx, namespacedState{nats: "acme", tsdb: "acme"}, "acme"); err != nil {
+	own := instanceNamespace("acme")
+	if err := checkInstanceInItsOwnNamespace(ctx, namespacedState{nats: own, tsdb: own}, "acme"); err != nil {
 		t.Errorf("an instance in its own namespace was refused: %v", err)
 	}
 	if err := checkInstanceInItsOwnNamespace(ctx, namespacedState{}, "acme"); err != nil {
@@ -84,7 +85,7 @@ func TestTheInstanceArchiveCredentialIsACopyInItsOwnNamespace(t *testing.T) {
 	cluster := ownedSecret{Name: "dc-object-store-credentials", Namespace: infraNamespace, Scope: ownerCluster,
 		Data: map[string]string{keyMinioUser: "u", keyMinioPassword: "p"}}
 	got := instanceArchiveCredential(st, cluster)
-	if got.Namespace != "acme" || got.Scope != ownerInstance || got.Name != cluster.Name {
+	if got.Namespace != instanceNamespace("acme") || got.Scope != ownerInstance || got.Name != cluster.Name {
 		t.Errorf("copy = %s/%s scope %q", got.Namespace, got.Name, got.Scope)
 	}
 	if got.Data[keyMinioUser] != "u" || got.Data[keyMinioPassword] != "p" {
@@ -110,15 +111,15 @@ func ing(ns, host string) networkingv1.Ingress {
 // the instance that owns the port or host must keep it, not be told it is taken.
 func TestSingletonsAreAttributedToOtherInstancesOnly(t *testing.T) {
 	got := singletonsFrom(
-		[]corev1.Service{svc("alpha", localMQTTNodePort), svc("gamma", 30001)},
-		[]networkingv1.Ingress{ing("alpha", "localhost"), ing("gamma", "gamma.localhost")},
+		[]corev1.Service{svc(instanceNamespace("alpha"), localMQTTNodePort), svc(instanceNamespace("gamma"), 30001)},
+		[]networkingv1.Ingress{ing(instanceNamespace("alpha"), "localhost"), ing(instanceNamespace("gamma"), "gamma.localhost")},
 		"beta", "localhost")
-	if got.MQTTNodePortHolder != "alpha" || got.HostHolder != "alpha" {
+	if got.MQTTNodePortHolder != instanceNamespace("alpha") || got.HostHolder != instanceNamespace("alpha") {
 		t.Errorf("beta sees %+v, want both held by alpha", got)
 	}
 	own := singletonsFrom(
-		[]corev1.Service{svc("alpha", localMQTTNodePort)},
-		[]networkingv1.Ingress{ing("alpha", "localhost")},
+		[]corev1.Service{svc(instanceNamespace("alpha"), localMQTTNodePort)},
+		[]networkingv1.Ingress{ing(instanceNamespace("alpha"), "localhost")},
 		"alpha", "localhost")
 	if own != (clusterSingletons{}) {
 		t.Errorf("alpha's own port and host were reported as taken: %+v", own)
@@ -240,7 +241,7 @@ func TestBrokerHashesAreReadFromTheInstanceNamespace(t *testing.T) {
 		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: natsStatefulSetName + "-config"},
 			Data: map[string]string{"nats.conf": `{"password": "` + hash + `", "user": "` + natsauth.ServiceUser + `"}`}}
 	}
-	c := fake.NewSimpleClientset(cm("acme", "$2a$11$instance"), cm(infraNamespace, "$2a$11$decoy"))
+	c := fake.NewSimpleClientset(cm(instanceNamespace("acme"), "$2a$11$instance"), cm(infraNamespace, "$2a$11$decoy"))
 	got := deployedBrokerHashesIn(context.Background(), c, instanceNamespace("acme"), natsStatefulSetName)
 	if got.Service != "$2a$11$instance" {
 		t.Errorf("the broker hashes were not read from the instance's namespace: %+v", got)
@@ -258,13 +259,13 @@ func TestBrokerHashesAreReadFromTheInstanceNamespace(t *testing.T) {
 	if err := stepRenderConfig(t.Context(), st); err != nil {
 		t.Fatalf("stepRenderConfig: %v", err)
 	}
-	if asked != "prod" {
+	if asked != instanceNamespace("prod") {
 		t.Errorf("the render step asked for the broker's hashes in namespace %q, want the instance's own", asked)
 	}
 }
 
 func TestTheHAVerifierLooksForTheBrokerInTheInstanceNamespace(t *testing.T) {
-	if got := brokerNamespace(HaVerifyOptions{InstanceId: "acme"}); got != "acme" {
+	if got := brokerNamespace(HaVerifyOptions{InstanceId: "acme"}); got != instanceNamespace("acme") {
 		t.Errorf("the HA verifier looks for the broker in %q, want the instance's namespace", got)
 	}
 }
@@ -275,7 +276,7 @@ func TestTheInstanceRootIsToldItsNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(instance, "instance_namespace=acme") {
+	if !slices.Contains(instance, "instance_namespace="+instanceNamespace("acme")) {
 		t.Errorf("the instance root is not told its namespace: %v", instance)
 	}
 	for _, v := range cluster {

@@ -8,7 +8,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $area }}
-  namespace: {{ $root.Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" $root }}
   labels:
     {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
 spec:

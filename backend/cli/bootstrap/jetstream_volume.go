@@ -109,22 +109,6 @@ func jetStreamStorageFor(st *State) string {
 	return ""
 }
 
-// infraNamespace is the CLUSTER's namespace: where the cluster root installs what every
-// instance shares — the relational store, the object store — and where the cluster-owned
-// credentials and the install record live. It mirrors the cluster root's `namespace`
-// default; dcctl does not override it.
-const infraNamespace = "dc-system"
-
-// instanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
-// and every credential it owns. It is the instance id.
-//
-// 🔴 TWO FUNCTIONS, NOT ONE CONSTANT AND A HABIT. The broker and the event store lived
-// in infraNamespace until each instance got a namespace of its own, and every reference
-// to them was spelled `infraNamespace` — which reads exactly as well as the right answer.
-// Naming the instance's namespace separately is what makes the wrong one visible in a
-// diff.
-func instanceNamespace(instance string) string { return instance }
-
 // embeddedJetStreamStorageDefault extracts the nats_jetstream_storage default from
 // the embedded OpenTofu variables.tf, or "" if it cannot be found.
 func embeddedJetStreamStorageDefault() string {

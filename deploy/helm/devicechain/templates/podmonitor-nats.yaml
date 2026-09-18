@@ -35,7 +35,7 @@ permanently-down one.
 {{- $host := .Values.metrics.natsBrokerHost | default .Values.instance.config.infrastructure.nats.hostname | required "instance.config.infrastructure.nats.hostname is required to render the NATS PodMonitor; set metrics.natsPodMonitor=false if this instance uses a broker it does not name" }}
 {{- $parts := splitList "." $host }}
 {{- $release := index $parts 0 }}
-{{- $natsNamespace := .Values.instance.id }}
+{{- $natsNamespace := include "devicechain.instanceNamespace" . }}
 {{- if gt (len $parts) 1 }}
 {{- $natsNamespace = index $parts 1 }}
 {{- end }}
@@ -43,7 +43,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: nats-broker
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 spec:

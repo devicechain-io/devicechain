@@ -217,11 +217,13 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 	// opposite of removeInstanceNamespace on purpose. That function is deciding what to
 	// DELETE, so it deletes only what it can prove is ours; this one is deciding whether
 	// anything is here, so a namespace carrying the instance's name is disqualifying
-	// whoever labelled it.
-	if _, err := typed.CoreV1().Namespaces().Get(ctx, instance, metav1.GetOptions{}); err == nil {
-		found = append(found, fmt.Sprintf("namespace %q", instance))
+	// whoever labelled it. The name it is matched by is the instance's namespace, which
+	// instanceNamespace decides — not the bare id.
+	namespace := instanceNamespace(instance)
+	if _, err := typed.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err == nil {
+		found = append(found, fmt.Sprintf("namespace %q", namespace))
 	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("reading namespace %q: %w", instance, err)
+		return nil, fmt.Errorf("reading namespace %q: %w", namespace, err)
 	}
 
 	// An instance built before each instance had its own namespace left the Secrets dcctl
