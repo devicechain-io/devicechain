@@ -585,6 +585,40 @@ func ensureLocalRegistry(ctx context.Context, st *State) error {
 	return err
 }
 
+// koBuild builds one Go module into one image reference and pushes it. --bare
+// names the image exactly REGISTRY/<area>:TAG, matching what the chart and the
+// operator overlay pull.
+//
+// Extracted from buildImages so `dcctl install` can build the operator WITHOUT
+// building the services. The two verbs deploy different things — install puts the
+// operator on a cluster, bootstrap puts services in a namespace — and a shared
+// builder that always built everything would make `dcctl install --build` spend a
+// full bootstrap's worth of ko builds on images it never applies.
+func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName string) error {
+	cmd := exec.CommandContext(ctx, "ko", "build", "--bare",
+		"--tags", st.ImageVersion, "--platform", "linux/amd64", "./")
+	cmd.Dir = moduleDir
+	cmd.Env = append(os.Environ(),
+		"KO_DOCKER_REPO="+imageName,
+		"KO_CONFIG_PATH="+filepath.Join(root, ".ko.yaml"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ko build %s: %w\n%s", imageName, err, out)
+	}
+	return nil
+}
+
+// buildOperatorImage builds just the controller image the operator overlay names.
+//
+// This is `dcctl install --build`'s half of what stepLocalRegistry does for a
+// bootstrap. It deliberately does NOT call dockerBuildNetwork: that check exists
+// for the frontend's docker build, which this path never reaches, and refusing an
+// install over a variable only the console build reads would be a refusal about
+// something the operator does not use.
+func buildOperatorImage(ctx context.Context, root string, st *State) error {
+	return koBuild(ctx, root, st, filepath.Join(root, "backend", "k8s"),
+		fmt.Sprintf("%s/%s", st.ImageRegistry, operatorImageName))
+}
+
 // buildImages ko-builds every service (backend/services/*/main.go) and the
 // operator, pushing to ImageRegistry at ImageVersion. --bare names each image
 // exactly REGISTRY/<area>:TAG, matching what the chart and operator deploy pull.
@@ -594,18 +628,8 @@ func buildImages(ctx context.Context, root string, st *State) error {
 	if _, err := dockerBuildNetwork(); err != nil {
 		return err
 	}
-	koConfig := filepath.Join(root, ".ko.yaml")
 	build := func(moduleDir, imageName string) error {
-		cmd := exec.CommandContext(ctx, "ko", "build", "--bare",
-			"--tags", st.ImageVersion, "--platform", "linux/amd64", "./")
-		cmd.Dir = moduleDir
-		cmd.Env = append(os.Environ(),
-			"KO_DOCKER_REPO="+imageName,
-			"KO_CONFIG_PATH="+koConfig)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("ko build %s: %w\n%s", imageName, err, out)
-		}
-		return nil
+		return koBuild(ctx, root, st, moduleDir, imageName)
 	}
 
 	servicesDir := filepath.Join(root, "backend", "services")
@@ -625,8 +649,10 @@ func buildImages(ctx context.Context, root string, st *State) error {
 			return err
 		}
 	}
-	if err := build(filepath.Join(root, "backend", "k8s"),
-		fmt.Sprintf("%s/%s", st.ImageRegistry, operatorImageName)); err != nil {
+	// Through buildOperatorImage rather than inline, so "which module is the
+	// operator, and what is it called in a registry" has ONE answer that install
+	// and bootstrap share.
+	if err := buildOperatorImage(ctx, root, st); err != nil {
 		return err
 	}
 
@@ -743,6 +769,17 @@ func stepInfraApply(ctx context.Context, st *State) error {
 		func() error { return applyInfra(ctx, st) })
 }
 
+// operatorImageRef is the controller image a settled image source names.
+//
+// One definition, because three verbs now deploy this operator — bootstrap,
+// upgrade and install — and a reference assembled from the same three fields in
+// three places is three chances for them to stop agreeing. They must agree: the
+// whole point of the identity stamp is that two dcctl runs at the same release
+// install the same thing.
+func operatorImageRef(st *State) string {
+	return fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
+}
+
 // stepInstallCore renders the operator overlay (CRDs + RBAC + controller) the
 // same way `make deploy` does and applies it via client-go server-side apply.
 // The manifests are rendered in-process from manifests embedded in the binary —
@@ -751,7 +788,7 @@ func stepInstallCore(ctx context.Context, st *State) error {
 	if err := requireResolvedImages(st, "installing the operator"); err != nil {
 		return err
 	}
-	operatorImage := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
+	operatorImage := operatorImageRef(st)
 	doing("installing core components (CRDs + operator)")
 
 	// Rendered BEFORE the dry-run branch, and on both paths, because the overlay

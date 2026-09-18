@@ -28,6 +28,9 @@ var (
 	installMaxConnections    int
 	installRestoreRdbFrom    string
 	installRestoreRdbAt      string
+	installRegistry          string
+	installVersion           string
+	installBuild             bool
 )
 
 // installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
@@ -94,7 +97,8 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 // the wrong field. That failure is silent in the worst direction: `dcctl install
 // --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
 // EMPTY relational store, during the recovery it was run for.
-func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan) bootstrap.InstallOptions {
+func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
+	img bootstrap.ImageSource) bootstrap.InstallOptions {
 	return bootstrap.InstallOptions{
 		Options: bootstrap.Options{
 			KubeContext:          installKubeContext,
@@ -103,6 +107,9 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 			AssumeYes:            installAssumeYes,
 			NoTLS:                installNoTLS,
 			AllowLegacyDbRemoval: installAllowLegacyDb,
+			ImageRegistry:        img.Registry,
+			ImageVersion:         img.Version,
+			BuildImages:          installBuild,
 		},
 		NoMonitoring:      installNoMonitoring,
 		NoCNPG:            installNoCNPG,
@@ -126,12 +133,18 @@ For the local provider it creates a kind cluster (named by --cluster, default
 "devicechain") if there is none, or uses the one that exists. --kube-context installs
 into an existing cluster instead, which dcctl never creates or deletes.
 
-It installs what every instance on the cluster shares: the relational store and the
-backup object store in namespace dc-system, and the CloudNativePG operator,
-cert-manager, ingress and the monitoring stack each in a namespace of its own. It
-creates the base database identity each instance's own login is made with, and
-records the install in the cluster. Every bootstrap follows that record: an instance
-on an --ha cluster is HA, an instance on a --compact cluster is compact.
+It installs what every instance on the cluster shares: the DeviceChain operator and
+its CRDs, the relational store and the backup object store in namespace dc-system,
+and the CloudNativePG operator, cert-manager, ingress and the monitoring stack each
+in a namespace of its own. It creates the base database identity each instance's own
+login is made with, and records the install in the cluster. Every bootstrap follows
+that record: an instance on an --ha cluster is HA, an instance on a --compact
+cluster is compact.
+
+The operator and its CRDs are the cluster's, not any instance's — there is one copy
+shared by every instance, so the release a cluster is prepared at is chosen here with
+--version, and moving it is this command's job rather than a side effect of building
+or upgrading one instance.
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,
@@ -197,13 +210,25 @@ the cluster, with one exception: the connection budget may be raised.`,
 			return err
 		}
 
+		// 🔴 SETTLED FROM ARGV TOO, AND FOR A REASON THIS COMMAND ONLY ACQUIRED WHEN
+		// IT TOOK OVER THE OPERATOR. `dcctl install` deploys a workload now — the
+		// controller Deployment names an image — so the failure ResolveImageSource
+		// exists to catch reaches this verb: a dcctl built from source carries the
+		// unpublished tag "dev", which names no image in any registry and manifests
+		// as an ImagePullBackOff on a controller nobody is watching, minutes after a
+		// cluster was created to hold it.
+		imageSource, err := bootstrap.ResolveImageSource(installRegistry, installVersion, installBuild)
+		if err != nil {
+			return err
+		}
+
 		if !installSkipPreflight {
 			if d := runDoctor(args[0]); d.fails > 0 {
 				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
 			}
 		}
 
-		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan))
+		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan, imageSource))
 	},
 	SilenceUsage: true,
 }
@@ -244,6 +269,21 @@ func init() {
 			"whole archive. For the disaster where the data was destroyed correctly — a bad "+
 			"migration, a mistaken delete — so pick a moment strictly before the damage. Needs "+
 			"--restore-rdb-from")
+	// The image source for the OPERATOR, which is the one workload `dcctl install`
+	// deploys. The service images belong to an instance and are `dcctl bootstrap`'s
+	// to choose — these three flags are spelled the same way there deliberately, but
+	// they select different things, because a cluster and the instances on it are
+	// versioned separately.
+	installCmd.Flags().StringVar(&installRegistry, "registry", "",
+		"pull the operator image from this registry (default: the published registry, or the "+
+			"local one with --build)")
+	installCmd.Flags().StringVar(&installVersion, "version", "",
+		"install the operator at this released tag (default: the release this dcctl was built "+
+			"for). This is the CLUSTER's version — the instances on it carry their own")
+	installCmd.Flags().BoolVar(&installBuild, "build", false,
+		"developer path: ko-build the operator image from this source checkout and push it to a "+
+			"local registry, instead of pulling a published one. Builds ONLY the operator; the "+
+			"service images are an instance's and are built by dcctl bootstrap --build")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	rootCmd.AddCommand(installCmd)

@@ -126,7 +126,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	st.Evolving = true
 
-	image := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
+	image := operatorImageRef(st)
 
 	fmt.Println(GreenUnderline(fmt.Sprintf(
 		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))

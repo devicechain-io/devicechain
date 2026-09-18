@@ -93,11 +93,50 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Settings:"), color.GreenString(describeInstallSettings(settings)))
+	reportOperatorPlan(st)
+
+	// 🔴 THE LOCK IS TAKEN BEFORE THE READS THAT DECIDE, not just before the writes.
+	// Everything below — the previous install record, whether a re-install would
+	// hurt, what the relational store's archive path already is — is read from the
+	// cluster and then acted on, and a concurrent bootstrap is exactly what makes
+	// such a read stale between the asking and the acting.
+	//
+	// 🔴 UNTIL THIS RELEASE `dcctl install` TOOK NO LOCK AT ALL. That was survivable
+	// only while install wrote nothing cluster-scoped that bootstrap also wrote: it
+	// now installs the operator, so a lockless install racing a locked bootstrap
+	// would be the same hole this Lease exists to close, relocated into the verb
+	// that was supposed to own the resource.
+	//
+	// stepClaimCluster is the bootstrap pipeline's own step, called rather than
+	// copied — it creates the operator's namespace (idempotently, reading the name
+	// from the rendered overlay rather than a constant) and then acquires. Two
+	// implementations of "where does the cluster lock live" is how a lock ends up
+	// protecting nothing.
+	if err := stepClaimCluster(ctx, st); err != nil {
+		return err
+	}
+	// Released on every exit, including a refusal below. A CLI that has exited holds
+	// nothing, and leaving the Lease behind would send the operator's own retry down
+	// the reclaim path for no reason. Release detaches from ctx itself, so a Ctrl+C
+	// still hands the lock back.
+	defer func() {
+		if st.Claim != nil {
+			st.Claim.Release(ctx)
+		}
+	}()
 
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
 	if st.DryRun {
+		// Listed in the order the real run performs them — build, then apply, then
+		// the long OpenTofu apply. A rehearsal whose steps are in a different order
+		// from the run is a rehearsal of something else.
+		if err := buildOperatorImageForInstall(ctx, st); err != nil {
+			return err
+		}
+		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
+			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
 		wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
 			"(CloudNativePG operator + backup plugin, ingress, cert-manager, monitoring, the relational " +
 			"store, the backup object store)")
@@ -183,6 +222,14 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
 		return err
 	}
+	// 🔴 AFTER markInstallApplying, WHICH IS THE ONE ORDERING CONSTRAINT THAT BITES.
+	// That call is what refuses a cluster whose record was written by a NEWER dcctl,
+	// and the overlay carries CRDs — so applying it first would let an older binary
+	// prune a newer structural schema's fields on its way to being told it may not
+	// touch this cluster. Refuse, then apply.
+	if err := installOperator(ctx, st); err != nil {
+		return err
+	}
 	var outputs InstallOutputs
 	if err := runStreamed("applying cluster prerequisites (OpenTofu)", "cluster prerequisites", func() error {
 		outputs, err = applyClusterPrereqs(ctx, st, st.ClusterUID, clusterVars, infraNamespace)
@@ -241,12 +288,20 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		NoMonitoring:         opts.NoMonitoring,
 		NoCNPG:               opts.NoCNPG,
 		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-		Compact:              opts.Compact,
-		HA:                   opts.HA,
-		BackupDestination:    opts.BackupDestination,
-		MaxConnections:       opts.MaxConnections,
-		Restore:              opts.Restore,
-		Values:               map[string]string{},
+		// The image source the operator is installed at. Settled in the command
+		// layer by ResolveImageSource before this cluster exists, for the same reason
+		// the restore plan is — a dcctl build with no pinned image version is
+		// knowable from argv, and finding out after EnsureCluster has spun up a kind
+		// cluster is the expensive time to find out.
+		ImageRegistry:     opts.ImageRegistry,
+		ImageVersion:      opts.ImageVersion,
+		BuildImages:       opts.BuildImages,
+		Compact:           opts.Compact,
+		HA:                opts.HA,
+		BackupDestination: opts.BackupDestination,
+		MaxConnections:    opts.MaxConnections,
+		Restore:           opts.Restore,
+		Values:            map[string]string{},
 	}
 }
 
