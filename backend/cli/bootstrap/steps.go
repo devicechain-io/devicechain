@@ -853,29 +853,51 @@ func stepSeedAdmin(ctx context.Context, st *State) error {
 // waited for, and `total > 0` keeps an empty namespace from reporting success — an
 // absence answering a question about health.
 func stepWaitReady(ctx context.Context, st *State) error {
-	doing("waiting for areas to become ready")
 	if st.DryRun {
+		doing(waitReadyMessage)
 		fmt.Println()
 		wouldDo("poll each area's deployment until it has rolled over")
 		return nil
 	}
 	_, _, typed, err := kubeClients(st.KubeContext)
 	if err != nil {
+		doing(waitReadyMessage)
 		return fail("building kube clients", err)
 	}
-	return waitForAreas(ctx, typed, st.Values["namespace"], areaReadyTimeout, areaReadyPollInterval)
+	return waitForAreasStep(ctx, typed, st.Values["namespace"], waitReadyMessage,
+		areaReadyTimeout, areaReadyPollInterval)
 }
 
 const (
 	areaReadyTimeout      = 5 * time.Minute
 	areaReadyPollInterval = 3 * time.Second
+	waitReadyMessage      = "waiting for areas to become ready"
 )
+
+// waitForAreasStep opens the progress line, waits, and lets waitForAreas close it.
+// All three belong together, which is the whole reason it exists: waitForAreas
+// closes its own line (see below), so a call site that opens the line itself has to
+// KNOW that and add no terminator — and knowing is exactly what a call site turns
+// out not to do. `dcctl upgrade` opened the line, let waitForAreas close it, and
+// then closed it again, printing a bare `done.` under the real one on every upgrade.
+// Callers add nothing before this and nothing after it.
+func waitForAreasStep(ctx context.Context, typed kubernetes.Interface, ns, msg string,
+	timeout, poll time.Duration) error {
+	doing(msg)
+	return waitForAreas(ctx, typed, ns, timeout, poll)
+}
 
 // waitForAreas carries the body of stepWaitReady, separated from it so the
 // predicate this gate applies can be exercised without a cluster. That separation
 // is the point rather than a tidying: the naive check this replaced lived here for
 // as long as it did because nothing could reach it, and a fix to an untested gate
 // leaves the next reader no way to tell which check is in force.
+//
+// 🔴 IT CLOSES ITS OWN PROGRESS LINE, ON BOTH PATHS — `done (12/12 ready).` when
+// every area has rolled over, `timed out (3/12 ready).` when one has not. The counts
+// are why: a generic done()/fail() terminator would drop the one number an operator
+// needs, and this function is the only place that holds it. So do not call done() or
+// fail() around it; go through waitForAreasStep instead.
 func waitForAreas(ctx context.Context, typed kubernetes.Interface, ns string, timeout, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {

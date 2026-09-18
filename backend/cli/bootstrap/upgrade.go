@@ -276,11 +276,14 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		}); err != nil {
 			return err
 		}
-		doing("waiting for the services to roll over")
-		if err := waitForAreas(ctx, typed, st.Instance, areaReadyTimeout, areaReadyPollInterval); err != nil {
-			return fail("waiting for the services", err)
+		// waitForAreasStep prints the progress line AND its terminator — the counts
+		// ARE the terminator. Nothing goes around it: this call site used to open the
+		// line itself and then print a bare `done.` on top of `done (12/12 ready).`,
+		// and on the failure path a `failed.` on top of `timed out (3/12 ready).`.
+		if err := waitForAreasStep(ctx, typed, st.Instance, "waiting for the services to roll over",
+			areaReadyTimeout, areaReadyPollInterval); err != nil {
+			return fmt.Errorf("waiting for the services: %w", err)
 		}
-		done()
 		return nil
 	}); err != nil {
 		return err
