@@ -546,11 +546,19 @@ func describeBlockingArtifact(path string, existing []byte) string {
 			"It is most likely left over from an interrupted bootstrap. Move it aside and re-run",
 			path, err)
 	}
+	// 🔴 THE FIRST ANSWER IS NARROWER THAN IT USED TO READ, AND SAYING SO IS THE POINT.
+	// --restore-root-key seeds an existing key instead of minting one, and a bootstrap now
+	// refuses it unless there is something for that key to open: a database the relational
+	// store already holds, or this instance half-built in the cluster by the very run that
+	// left this artifact. After a `dcctl destroy` neither is true — the next instance is a
+	// new instance, with a key of its own — so offering it there would send the operator
+	// into a refusal. See refuseAStoreAndKeyThatDoNotMatch.
 	return fmt.Sprintf("an escrow artifact for instance %q already exists at %s (key id %s), and this "+
 		"will not overwrite it.\n"+
-		"  If that is the key you want this instance to use — for example this is a retry after a failed "+
-		"bootstrap — re-run with --restore-root-key %s.\n"+
-		"  If it belongs to an instance that is truly gone, move it aside. `dcctl secrets escrow show %s` "+
+		"  If this is a retry of a bootstrap that failed part-way, that key is the one the half-built "+
+		"instance already has: re-run with --restore-root-key %s.\n"+
+		"  If it belongs to an instance that is gone — destroyed, or never finished — move it aside; "+
+		"the instance built here mints a key of its own. `dcctl secrets escrow show %s` "+
 		"will tell you what it is before you decide",
 		art.Instance, path, art.Fingerprint, path, path)
 }

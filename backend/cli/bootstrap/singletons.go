@@ -99,22 +99,41 @@ type ErrConnectionBudget struct{ Err error }
 func (e *ErrConnectionBudget) Error() string { return e.Err.Error() }
 func (e *ErrConnectionBudget) Unwrap() error { return e.Err }
 
-// precheckConnectionBudget asks the shared store whether this instance's connection
-// limit would be admitted, without admitting it. Indirected so the step can be driven
-// without a cluster.
-var precheckConnectionBudget = func(ctx context.Context, st *State) error {
+// precheckSharedStore asks the shared relational store the two things a bootstrap has to
+// settle before it writes anything: whether this instance's connection limit would be
+// admitted — without admitting it — and what the store already holds under this
+// instance's name. Indirected so the step can be driven without a cluster.
+//
+// 🔴 ONE SESSION, TWO ANSWERS. Reaching the store means creating the provisioner over
+// the primary's local socket and opening a port-forward to it; asking twice in one step
+// would run that ALTER ROLE twice to learn two things one connection can answer. It is
+// the same reason readClusterSingletons answers about the node port and the ingress host
+// together rather than reading the cluster twice.
+//
+// A State with no install record has no store to ask, so it is not asked — and the zero
+// instanceStore that comes back is storeStateUnknown, never storeStateAbsent. See the
+// caller: it does not consult a state it did not read.
+var precheckSharedStore = func(ctx context.Context, st *State) (instanceStore, error) {
 	if st.Install == nil {
-		return nil
+		return instanceStore{}, nil
 	}
 	limit, err := instanceConnectionLimit(st)
 	if err != nil {
-		return fmt.Errorf("sizing this instance's connection limit: %w", err)
+		return instanceStore{}, fmt.Errorf("sizing this instance's connection limit: %w", err)
 	}
 	rdb := st.Install.Outputs.Rdb
+	var store instanceStore
 	err = withProvisionerSession(ctx, st.KubeContext, rdb, func(q instanceDBQuerier) error {
-		return admitInstance(ctx, q, st.Instance, connectionAdmission{Limit: limit, Budget: rdb.MaxConnections})
+		if err := admitInstance(ctx, q, st.Instance, connectionAdmission{Limit: limit, Budget: rdb.MaxConnections}); err != nil {
+			return err
+		}
+		store, err = readInstanceStore(ctx, q, st.Instance)
+		return err
 	})
-	return asBudgetRefusal(err)
+	if err != nil {
+		return instanceStore{}, asBudgetRefusal(err)
+	}
+	return store, nil
 }
 
 // asBudgetRefusal types an admission refusal so the command layer can tell it from
@@ -182,6 +201,15 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 			wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
 				"read failed (%v), and a real run would stop here", InstanceNamespace(st.Instance), err))
 		}
+		// 🔴 THE STORE IS NOT REHEARSED, AND THAT IS SAID RATHER THAN LEFT OUT. Reaching it
+		// means creating the provisioner inside the primary pod and port-forwarding to it —
+		// writes, on a cluster a rehearsal may be aimed at before it exists. So the budget
+		// has never been rehearsed, and what the store already holds cannot be either. A
+		// rehearsal that simply omitted the one refusal whose cost is permanent would be
+		// read as clearance for the run it cannot clear.
+		wouldDo(fmt.Sprintf("ask the relational store what it already holds for %q, and refuse to mint "+
+			"a fresh root key over a database recovered from an archive — NOT rehearsed, because "+
+			"reading the store means signing in to it", st.Instance))
 		return nil
 	}
 
@@ -201,12 +229,36 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	if err := precheckInstanceNamespace(ctx, st); err != nil {
 		return err
 	}
-	// 🔴 AND THE CONNECTION BUDGET, FOR THE SAME REASON: on a shared store it is the refusal
-	// an operator is likeliest to meet, and meeting it at the apply would leave a declared,
-	// namespaced, credentialed instance behind. The apply admits again, under a lock —
-	// this is the early answer, not the enforcement.
-	if err := precheckConnectionBudget(ctx, st); err != nil {
-		return err
+	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.
+	//
+	// The connection budget is the refusal an operator is likeliest to meet, and meeting
+	// it at the apply would leave a declared, namespaced, credentialed instance behind.
+	// The apply admits again, under a lock — this is the early answer, not the enforcement.
+	//
+	// What the store already HOLDS is the one that cannot wait at all. A database sitting
+	// there under this instance's name, owned by this instance's own login, is what a
+	// relational restore leaves behind — and a bootstrap that mints a fresh root key over
+	// it comes up green with every recovered secret sealed shut forever. That question was
+	// already being asked, inside the apply, one line AFTER writeMintedSecrets put the
+	// fresh key in the cluster. Here it can still change the outcome.
+	//
+	// The guard is the caller DECLINING TO ASK, not a second copy of the policy: with no
+	// install record there is no store to reach, so there is no reading of it to reason
+	// about, and inventing one would mean deciding from storeStateUnknown — which refuses.
+	if st.Install != nil {
+		store, err := precheckSharedStore(ctx, st)
+		if err != nil {
+			return err
+		}
+		if err := refuseAStoreAndKeyThatDoNotMatch(st, store, func() (bool, error) {
+			held, err := readClusterInstances(ctx, st.KubeContext)
+			if err != nil {
+				return false, err
+			}
+			return held.holds(st.Instance), nil
+		}); err != nil {
+			return err
+		}
 	}
 	done()
 	if held.MQTTNodePortHolder != "" {

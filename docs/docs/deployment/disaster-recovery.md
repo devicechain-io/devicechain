@@ -176,9 +176,18 @@ its own and then keeps that path across every later run.
 :::caution The rows come back; the keys do not
 A database backup contains no root keys. Every secret in the recovered store is still
 sealed by the key of the instance that wrote it, and that key lived only in the cluster
-you just lost. Rebuild each instance with `--restore-root-key` in step 2. An instance
-bootstrapped without it mints a fresh key, comes up perfectly clean, and leaves every
-one of those secrets permanently unreadable.
+you just lost. Rebuild each instance with `--restore-root-key` in step 2.
+
+`dcctl bootstrap` refuses to do it any other way. Before it writes anything it asks the
+recovered store what it already holds under that instance's name, and a database that is
+there without this cluster ever having built it can only have come from an archive — so
+a run with no `--restore-root-key` stops, naming the flag, rather than minting a fresh
+key that would come up perfectly clean and leave every one of those secrets permanently
+unreadable.
+
+The refusal is the last line, not the first. It can only speak for an instance whose
+escrow artifact still exists: one bootstrapped with `--no-escrow` has no second copy of
+its key anywhere, and nothing can open those rows again.
 :::
 
 **2. Rebuild the instance with its root key**, and with its event data.

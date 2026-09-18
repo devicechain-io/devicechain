@@ -286,15 +286,16 @@ func TestTheInstanceRootIsToldItsNamespace(t *testing.T) {
 	}
 }
 
-// stubConnectionBudget replaces the budget precheck and counts the asks.
-func stubConnectionBudget(t *testing.T, err error) *int {
+// stubSharedStore replaces step 4's one session on the relational store and counts the
+// asks. The store it answers with is what the step then reasons about.
+func stubSharedStore(t *testing.T, store instanceStore, err error) *int {
 	t.Helper()
-	orig := precheckConnectionBudget
-	t.Cleanup(func() { precheckConnectionBudget = orig })
+	orig := precheckSharedStore
+	t.Cleanup(func() { precheckSharedStore = orig })
 	calls := 0
-	precheckConnectionBudget = func(context.Context, *State) error {
+	precheckSharedStore = func(context.Context, *State) (instanceStore, error) {
 		calls++
-		return err
+		return store, err
 	}
 	return &calls
 }
@@ -304,8 +305,8 @@ func stubConnectionBudget(t *testing.T, err error) *int {
 func TestTheSingletonStepRefusesAnInstanceTheStoreHasNoBudgetFor(t *testing.T) {
 	stubSingletons(t, clusterSingletons{MQTTNodePortHolder: "alpha"}, nil)
 	noBudget := &ErrConnectionBudget{Err: fmt.Errorf("admitting beta: %w", errNoConnectionBudget)}
-	calls := stubConnectionBudget(t, noBudget)
-	st := &State{Instance: "beta", IngressHost: "beta.localhost", Values: map[string]string{}}
+	calls := stubSharedStore(t, instanceStore{}, noBudget)
+	st := &State{Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}}
 	err := stepCheckClusterSingletons(context.Background(), st)
 	var typed *ErrConnectionBudget
 	if !errors.As(err, &typed) || !errors.Is(err, errNoConnectionBudget) {
@@ -319,27 +320,32 @@ func TestTheSingletonStepRefusesAnInstanceTheStoreHasNoBudgetFor(t *testing.T) {
 	}
 
 	// A dry run reads no store: it may be aimed at a cluster that does not exist.
-	calls = stubConnectionBudget(t, noBudget)
-	st = &State{Instance: "beta", IngressHost: "beta.localhost", DryRun: true, Values: map[string]string{}}
+	calls = stubSharedStore(t, instanceStore{}, noBudget)
+	st = &State{Instance: "beta", IngressHost: "beta.localhost", DryRun: true, Install: installed(), Values: map[string]string{}}
 	if err := stepCheckClusterSingletons(context.Background(), st); err != nil || *calls != 0 {
 		t.Errorf("a dry run checked the budget (%d call(s)) or failed: %v", *calls, err)
 	}
 
 	// The host refusal comes first: a run refused for its host never opens a database session.
 	stubSingletons(t, clusterSingletons{HostHolder: "alpha"}, nil)
-	calls = stubConnectionBudget(t, noBudget)
-	st = &State{Instance: "beta", IngressHost: "localhost", Values: map[string]string{}}
+	calls = stubSharedStore(t, instanceStore{}, noBudget)
+	st = &State{Instance: "beta", IngressHost: "localhost", Install: installed(), Values: map[string]string{}}
 	var host *ErrHostTaken
 	if err := stepCheckClusterSingletons(context.Background(), st); !errors.As(err, &host) || *calls != 0 {
 		t.Errorf("a taken host was not refused before the budget (%d call(s)): %v", *calls, err)
 	}
 }
 
-// With no install on the state there is no store to ask: the real precheck answers nil
-// without touching a cluster.
-func TestTheBudgetPrecheckNeedsAnInstall(t *testing.T) {
-	if err := precheckConnectionBudget(context.Background(), &State{Instance: "beta"}); err != nil {
+// With no install on the state there is no store to ask: the real precheck answers
+// without touching a cluster, and what it answers with is storeStateUnknown — never
+// storeStateAbsent, which would read as "no database here" to everything downstream.
+func TestTheStorePrecheckNeedsAnInstall(t *testing.T) {
+	store, err := precheckSharedStore(context.Background(), &State{Instance: "beta"})
+	if err != nil {
 		t.Errorf("a state with no install was checked against a store: %v", err)
+	}
+	if store.State != storeStateUnknown {
+		t.Errorf("a store that was never read answered %v, want %v", store.State, storeStateUnknown)
 	}
 }
 

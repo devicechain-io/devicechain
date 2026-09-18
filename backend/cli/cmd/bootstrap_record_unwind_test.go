@@ -120,6 +120,13 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 		{"a namespace refusal raised at the apply rather than the early check", fmt.Errorf(
 			"step \"Apply infrastructure\": %w",
 			errors.New(`namespace "bravo" already exists and is not this instance's`))},
+		// 🔴 AND THE STORE REFUSAL'S LATE HALF, which ensureInstanceDatabase raises from
+		// inside the infrastructure apply. By then the root key is already in the cluster
+		// and the record is the only thing that can name what to destroy, so it stays
+		// untyped — see refuseAPreIsolationDatabase.
+		{"a store refusal raised at the apply rather than the early check", fmt.Errorf(
+			"step \"Apply infrastructure\": %w",
+			errors.New(`database "bravo" already exists on the relational store and is owned by "devicechain"`))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, prior := refusedHome(t, "bravo")
@@ -129,6 +136,21 @@ func TestEveryOtherFailureKeepsTheRecord(t *testing.T) {
 					"behind, so nothing can name the cluster to destroy it")
 			}
 		})
+	}
+}
+
+// And the refusal of a bootstrap that would mint a fresh root key over a relational
+// store recovered from an archive. Same step, same window: it fires before the operator
+// install and before the declaration, so the record it clears describes nothing.
+func TestTheCommandLayerClearsTheRecordAfterAStoreRefusal(t *testing.T) {
+	home, prior := refusedHome(t, "bravo")
+	refusal := fmt.Errorf("step %q: %w", "Check what other instances hold", &bootstrap.ErrStoreAndKeyDisagree{
+		Err: errors.New(`the relational store already holds database "bravo"`),
+	})
+	unwindLocalRecordWhenNothingWasWritten(bootstrap.Options{Instance: "bravo"}, prior, refusal)
+	if recordDirExists(t, home, "bravo") {
+		t.Fatal("a bootstrap refused because its root key could not open the store it found left a " +
+			"record `dcctl instances list` shows for an instance that was never built")
 	}
 }
 

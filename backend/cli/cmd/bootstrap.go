@@ -469,10 +469,12 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 // the comment here read "the one refusal that fires before anything is written" while two
 // refusals already qualified, and a third was about to.
 //
-// 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. All three types below
-// are raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
+// 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. Every type below is
+// raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
 // holds ahead of the operator install and the declaration. The namespace refusal is raised
-// in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable.
+// in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable;
+// the store refusal is raised in one, and the late half of the same decision stays untyped
+// for exactly that reason — see refuseAPreIsolationDatabase.
 //
 // It reports and moves on. The refusal is what the operator is about to read, and
 // failing differently because the cleanup failed would replace a message they can act on
@@ -481,8 +483,9 @@ func unwindLocalRecordWhenNothingWasWritten(opts bootstrap.Options, prior bootst
 	var hostTaken *bootstrap.ErrHostTaken
 	var noBudget *bootstrap.ErrConnectionBudget
 	var noNamespace *bootstrap.ErrNamespaceUnavailable
+	var storeDisagrees *bootstrap.ErrStoreAndKeyDisagree
 	if opts.DryRun || !(errors.As(runErr, &hostTaken) || errors.As(runErr, &noBudget) ||
-		errors.As(runErr, &noNamespace)) {
+		errors.As(runErr, &noNamespace) || errors.As(runErr, &storeDisagrees)) {
 		return
 	}
 	removed, err := prior.Restore()

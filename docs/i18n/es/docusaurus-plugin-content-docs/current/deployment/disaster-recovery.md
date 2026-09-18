@@ -185,8 +185,19 @@ posteriores.
 Un respaldo de base de datos no contiene ninguna clave raíz. Cada secreto del almacén
 recuperado sigue sellado con la clave de la instancia que lo escribió, y esa clave solo
 vivía en el clúster que acaba de perder. Reconstruya cada instancia con
-`--restore-root-key` en el paso 2. Una instancia arrancada sin él acuña una clave nueva,
-arranca de forma impecable y deja todos esos secretos ilegibles para siempre.
+`--restore-root-key` en el paso 2.
+
+`dcctl bootstrap` se niega a hacerlo de otra manera. Antes de escribir nada, le pregunta
+al almacén recuperado qué contiene ya bajo el nombre de esa instancia, y una base de
+datos que está ahí sin que este clúster la haya construido nunca solo puede venir de un
+archivo — así que una ejecución sin `--restore-root-key` se detiene y nombra la opción,
+en lugar de acuñar una clave nueva que arrancaría de forma impecable y dejaría todos
+esos secretos ilegibles para siempre.
+
+La negativa es la última línea de defensa, no la primera. Solo puede hablar por una
+instancia cuyo artefacto de depósito siga existiendo: una arrancada con `--no-escrow` no
+tiene ninguna segunda copia de su clave en ninguna parte, y nada puede volver a abrir
+esas filas.
 :::
 
 **2. Reconstruya la instancia con su clave raíz**, y con sus datos de eventos.
