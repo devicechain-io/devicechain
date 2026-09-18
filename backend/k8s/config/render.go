@@ -93,13 +93,26 @@ func renderOverlay(image string) (resmap.ResMap, error) {
 // setManagerImage injects an images override into the manager kustomization,
 // mirroring `kustomize edit set image controller=<image>` in `make deploy`. The
 // placeholder image name in config/manager/manager.yaml is "controller".
+//
+// 🔴 THE VALUES ARE QUOTED, AND UNQUOTED THEY WERE A LIVE BUG RATHER THAN A STYLE
+// POINT. This writes YAML, and kustomize unmarshals newTag into a Go string — so a
+// perfectly ordinary image tag that YAML reads as some other scalar type never
+// reaches the renderer at all. `--version 1.0` and `--version 20260918` both parse
+// as NUMBERS, and a tag of `y`, `no`, `on` or `true` parses as a BOOLEAN; each
+// fails with "cannot unmarshal number into Go struct field Image.images.newTag of
+// type string", wrapped in a kustomize accumulation error that names a path the
+// operator never typed and says nothing about their tag.
+//
+// Docker tags may begin with a digit, so the numeric case is not a corner: it is
+// every date-stamped or unprefixed-semver release anyone might publish. Quoting
+// makes the scalar a string whatever it spells.
 func setManagerImage(fsys filesys.FileSystem, image string) error {
 	name, tag := splitImageRef(image)
 	var b strings.Builder
 	b.WriteString("resources:\n- manager.yaml\nimages:\n- name: controller\n")
-	b.WriteString("  newName: " + name + "\n")
+	b.WriteString(fmt.Sprintf("  newName: %q\n", name))
 	if tag != "" {
-		b.WriteString("  newTag: " + tag + "\n")
+		b.WriteString(fmt.Sprintf("  newTag: %q\n", tag))
 	}
 	return fsys.WriteFile("manager/kustomization.yaml", []byte(b.String()))
 }
