@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	pgx "github.com/jackc/pgx/v5"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // fakeStore answers the one query readInstanceStore asks, and nothing else: a query it
@@ -343,5 +345,53 @@ func TestTheSingletonStepDoesNotJudgeAStoreItNeverRead(t *testing.T) {
 	if *calls != 0 || *swept != 0 {
 		t.Errorf("a state with no install record still read the store (%d) or swept the cluster (%d)",
 			*calls, *swept)
+	}
+}
+
+// 🔴 THE WIRING, NOT THE POLICY. refuseAStoreAndKeyThatDoNotMatch is pinned above
+// against a thunk built by hand to fail; this drives the thunk the STEP builds, which is
+// a different piece of code and the one that ships. Swallow the error there and an
+// unreachable API server becomes "this cluster holds nothing" — which routes a
+// legitimately half-built instance straight into the archive refusal, and, because that
+// refusal is typed, takes its local record with it.
+func TestAnUnreadableClusterDoesNotBecomeAnArchiveRefusal(t *testing.T) {
+	stubSingletons(t, clusterSingletons{}, nil)
+	stubNamespacePrecheck(t)
+	stubSharedStore(t, instanceStore{State: storeStateOurs}, nil)
+	stubClusterInstances(t, clusterInstances{}, errors.New("the API server is unreachable"))
+
+	err := stepCheckClusterSingletons(context.Background(), &State{
+		Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}})
+	if err == nil {
+		t.Fatal("a cluster that could not be read was treated as one holding nothing, so a bootstrap " +
+			"repairing its own half-built instance is refused whenever the API server hiccups")
+	}
+	var typed *ErrStoreAndKeyDisagree
+	if errors.As(err, &typed) {
+		t.Errorf("a failed cluster read reached the operator as the archive refusal, which clears "+
+			"the local record of a run that may have been about to succeed: %v", err)
+	}
+}
+
+// 🔴 AND THE ORDER, WHICH IS THE OTHER HALF OF WHAT THE HOST CHECK ALREADY PINS. The
+// store is the expensive one to reach — a port-forward into the database primary and a
+// sign-in — so a run that is going to be refused for its namespace must find that out
+// first. TestTheSingletonStepRefusesAnInstanceTheStoreHasNoBudgetFor holds the host ahead
+// of it; this holds the namespace.
+func TestANamespaceRefusalNeverReachesTheStore(t *testing.T) {
+	stubSingletons(t, clusterSingletons{}, nil)
+	// A namespace bearing this instance's name that carries no label saying it is this
+	// instance's — the shape refuseANamespaceThisInstanceDoesNotOwn stops.
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("beta")}})
+	calls := stubSharedStore(t, instanceStore{State: storeStateAbsent}, nil)
+
+	err := stepCheckClusterSingletons(context.Background(), &State{
+		Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}})
+	var refusal *ErrNamespaceUnavailable
+	if !errors.As(err, &refusal) {
+		t.Fatalf("step 4 did not refuse a namespace that is not this instance's: %v", err)
+	}
+	if *calls != 0 {
+		t.Errorf("a run refused for its namespace still signed in to the relational store %d time(s)", *calls)
 	}
 }
