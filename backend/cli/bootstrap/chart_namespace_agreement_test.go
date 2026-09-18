@@ -35,14 +35,15 @@ import (
 // match no series and every dashboard is blank. Nothing fails loudly; the instance just
 // never comes up, and the reason is two strings in two languages.
 //
-// 🔴 THIS FILE PASSES TRIVIALLY TODAY AND THAT IS NOT A REASON TO DELETE IT. Both
-// functions currently return the instance id unchanged, so `InstanceNamespace(id) == id`
-// and every assertion below compares a string to itself. The namespace is about to become
-// `dci-<id>` — values.yaml already documents it as such — and the WHOLE POINT of these
-// tests is the moment those two bodies change: on that day the two strings become
-// distinguishable for the first time, and every site the flip missed fails here. A test
-// written after the flip could only ever confirm the flip that was made; this one has to
-// be in place before it to say whether the flip was COMPLETE.
+// 🔴 THIS FILE WAS WRITTEN BEFORE THE PREFIX EXISTED, DELIBERATELY, AND THAT IS WHY IT IS
+// WORTH KEEPING. While both functions returned the instance id unchanged every assertion
+// below compared a string to itself and could not fail — which is exactly what made it the
+// right instrument: it was in place BEFORE the two bodies changed, so when they did, every
+// site the flip had missed failed here. A test written afterwards could only ever confirm
+// the flip that was made; this one was able to say whether the flip was COMPLETE. It is
+// now live — `InstanceNamespace(id)` is `dci-<id>` and the chart computes the same string
+// independently — and it goes on guarding the agreement between two expressions that have
+// no other reason to stay equal.
 //
 // 🔑 WHAT IS COMPARED AGAINST WHAT, AND WHY IT DIFFERS BY ASSERTION. For the NAMESPACE,
 // InstanceNamespace() IS the contract, so calling it is exactly right — the question is

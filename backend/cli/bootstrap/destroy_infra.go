@@ -380,7 +380,6 @@ func (d stateDocument) addresses() []string {
 // and here both readings are "absent"). PVCs are never asked: they outlive their
 // workloads by design and prove nothing about what is running.
 func liveInstanceInfrastructure(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, instance string) ([]string, error) {
-	ns := InstanceNamespace(instance)
 	var found []string
 
 	// 🔴 AND THE SHARED NAMESPACE, FOR THE BROKER AND EVENT STORE THEMSELVES. An instance
@@ -389,7 +388,18 @@ func liveInstanceInfrastructure(ctx context.Context, typed kubernetes.Interface,
 	// neither. Asked only in the instance's own namespace, a lost state over one of those
 	// instances found nothing, and the destroy closed green over a broker and event store
 	// it had never touched.
-	for _, where := range []string{ns, infraNamespace} {
+	//
+	// 🔴 AND THE UNPREFIXED NAMESPACE, WHICH IS THAT SAME MISTAKE ONE GENERATION LATER. An
+	// instance built before instance namespaces carried a prefix runs its broker and event
+	// store in the bare id. Without asking there, such an instance with a lost state passes
+	// this refusal, is told its state lists nothing, and has its namespace deleted with no
+	// `tofu destroy` ever run — which is exactly what `--without-state` means, granted
+	// without the operator having asked for it. Label-gated in instanceNamespaceCandidates,
+	// so a namespace that merely shares the name is never probed as this instance's.
+	// Computed once and used by both sweeps below; append never shares this slice's array
+	// with the loop's, which would make the second sweep's list depend on the first's.
+	candidates := instanceNamespaceCandidates(ctx, typed, instance)
+	for _, where := range append(append([]string{}, candidates...), infraNamespace) {
 		sts, err := typed.AppsV1().StatefulSets(where).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
 		switch {
 		case apierrors.IsNotFound(err):
@@ -409,17 +419,23 @@ func liveInstanceInfrastructure(ctx context.Context, typed kubernetes.Interface,
 		}
 	}
 
+	// The release RECORDS of the broker and the event store live in the namespace their
+	// workloads do — unlike the instance chart's, which is kept in `default`. So they are
+	// looked for in the same candidates, and for the same reason: a pre-prefix instance
+	// keeps both where it was built.
 	for _, release := range []string{natsReleaseName, tsdbClusterName} {
-		secrets, err := typed.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "owner=helm,name=" + release,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("listing Helm release records for %s in %s: %w", release, ns, err)
-		}
-		for i := range secrets.Items {
-			if live(&secrets.Items[i].ObjectMeta) {
-				found = append(found, fmt.Sprintf("Helm release %s/%s", ns, release))
-				break
+		for _, ns := range candidates {
+			secrets, err := typed.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: "owner=helm,name=" + release,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("listing Helm release records for %s in %s: %w", release, ns, err)
+			}
+			for i := range secrets.Items {
+				if live(&secrets.Items[i].ObjectMeta) {
+					found = append(found, fmt.Sprintf("Helm release %s/%s", ns, release))
+					break
+				}
 			}
 		}
 	}

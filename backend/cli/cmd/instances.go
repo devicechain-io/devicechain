@@ -237,10 +237,14 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 	// --all` prints as its confirmation prompt — the last thing anybody reads before a bulk
 	// teardown — and what they are approving is the removal of these namespaces.
 	//
-	// 🔑 DERIVED, NOT READ FROM THE CLUSTER. It is what dcctl WOULD act on, which is the
-	// useful thing to show beside a status that reports what is actually there: an instance
-	// built under the older naming shows the namespace this dcctl would use, and its status
-	// is what says the two do not match.
+	// 🔑 DERIVED, NOT READ FROM THE CLUSTER, AND THE LIMIT OF THAT IS WORTH STATING. It is
+	// the namespace THIS dcctl would act on, which is the useful thing to show beside a
+	// status saying what is there — but an instance built before instance namespaces
+	// carried a prefix lives in the unprefixed one, and nothing in this row would say so:
+	// the status reads the local marker, the cluster probe and the declaration's phase, and
+	// none of them looks at a namespace. Such a row shows a namespace that does not exist.
+	// Destroy handles both names, so the teardown is right either way; it is this CELL that
+	// would be wrong, and a reader must not take it for a probe.
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "INSTANCE\tNAMESPACE\tPROVIDER\tCLUSTER\tCONTEXT\tSTATUS")
 	for _, k := range known {

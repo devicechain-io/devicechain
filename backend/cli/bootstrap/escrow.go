@@ -693,18 +693,55 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 	// Secret-NAME prefix this read is contracted to (see instanceConfigSecretName). Reading
 	// the wrong namespace answers NotFound, which this function reads as "no instance
 	// there" — the mint branch, over a live instance.
-	namespace := InstanceNamespace(instanceId)
-	sec, err := typed.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
+	// 🔴🔴 BOTH NAMESPACES ARE ASKED, AND THE SECOND IS NOT TIDINESS. An instance built
+	// before instance namespaces were prefixed keeps its unprefixed one, and this function
+	// is how the other commands find out an instance is THERE. Asking only about the
+	// prefixed name answers "nothing here" about a live instance, and what each caller does
+	// with that answer is the damage: `dcctl upgrade` reports the instance was never
+	// finished and advises completing or destroying it, and stepRefuseRebuild stops
+	// refusing — so a re-run mints a fresh root key and re-sets the live instance's
+	// database login. On a machine holding that instance's OpenTofu state a later fence
+	// still stops it; from any other machine nothing does.
+	//
+	// 🔑 THE LEGACY CANDIDATE IS LABEL-GATED, for the reason destroy's is: the bare id is
+	// the shape of an ordinary namespace somebody else owns, and a Secret in it that
+	// happened to match this name would otherwise be read as this instance's.
+	for _, candidate := range instanceNamespaceCandidates(ctx, typed, instanceId) {
+		sec, err := typed.CoreV1().Secrets(candidate).Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case err == nil:
+			return parseDeployedConfig(sec.Data["instance"], instanceId, name)
+		case apierrors.IsNotFound(err):
+			continue
+		default:
+			return nil, fmt.Errorf("checking whether instance %q already exists (Secret %s/%s): %w. "+
+				"Refusing to continue: if the instance IS there, minting fresh credentials would rotate them "+
+				"out from under it — making every stored secret unreadable and breaking broker auth for every "+
+				"pod that starts afterwards", instanceId, candidate, name, err)
 		}
-		return nil, fmt.Errorf("checking whether instance %q already exists (Secret %s/%s): %w. "+
-			"Refusing to continue: if the instance IS there, minting fresh credentials would rotate them "+
-			"out from under it — making every stored secret unreadable and breaking broker auth for every "+
-			"pod that starts afterwards", instanceId, namespace, name, err)
 	}
-	return parseDeployedConfig(sec.Data["instance"], instanceId, name)
+	return nil, nil
+}
+
+// instanceNamespaceCandidates is where an instance's own objects may be: its namespace,
+// and — only while it carries this instance's label — the unprefixed one an earlier build
+// would have used.
+//
+// 🔴 A FAILED LEGACY LOOKUP DROPS THE CANDIDATE RATHER THAN FAILING THE CALL. The caller's
+// read of the instance's own namespace is the authoritative one and reports its own errors;
+// this is a widening for one pre-GA generation, and making every caller fail on a cluster
+// that will not answer one extra namespace read would be the worse trade. Deletable at GA
+// with the rest of the pre-prefix handling.
+func instanceNamespaceCandidates(ctx context.Context, typed kubernetes.Interface, instance string) []string {
+	own := InstanceNamespace(instance)
+	if own == instance {
+		return []string{own}
+	}
+	ns, err := typed.CoreV1().Namespaces().Get(ctx, instance, metav1.GetOptions{})
+	if err != nil || ns.Labels[instanceNamespaceLabel] != instance {
+		return []string{own}
+	}
+	return []string{own, instance}
 }
 
 // parseDeployedConfig turns the config Secret's payload into the instance's

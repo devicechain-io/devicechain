@@ -380,3 +380,61 @@ func TestAnInstanceNamedAfterAClusterNamespaceIsBuiltBesideItNotIntoIt(t *testin
 		})
 	}
 }
+
+// 🔴🔴 AN INSTANCE BUILT BEFORE THE PREFIX IS STILL THERE, AND THIS IS WHAT EVERY OTHER
+// COMMAND ASKS. Reading only the prefixed namespace answers "nothing here" about a live
+// instance, and the callers act on that answer: `dcctl upgrade` reports the instance was
+// never finished, and stepRefuseRebuild stops refusing — so a re-run mints a fresh root key
+// and re-sets the running instance's database login. A machine holding the instance's
+// OpenTofu state has a later fence; a machine without it has nothing.
+func TestAnInstanceBuiltBeforeThePrefixIsStillFound(t *testing.T) {
+	c := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "legacy",
+			Labels: map[string]string{"devicechain.io/instance": "legacy"},
+		}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "dci-legacy-config", Namespace: "legacy"},
+			Data:       map[string][]byte{"instance": []byte(`{"id":"legacy"}`)},
+		},
+	)
+
+	got := instanceNamespaceCandidates(context.Background(), c, "legacy")
+	want := []string{InstanceNamespace("legacy"), "legacy"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("candidates = %v, want %v: an instance built before the prefix is invisible, "+
+			"and every caller reads that as a free name", got, want)
+	}
+}
+
+// 🔴 AND THE COUNTERWEIGHT: the bare id is the shape of a namespace somebody else owns, so
+// it is a candidate only while it carries this instance's label. Without this, `monitoring`
+// — the collision the prefix exists to retire — would be read as instance `monitoring`'s
+// own namespace all over again.
+func TestAnUnlabelledNamespaceSharingTheNameIsNotACandidate(t *testing.T) {
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "monitoring",
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "dcctl"},
+	}})
+
+	got := instanceNamespaceCandidates(context.Background(), c, "monitoring")
+	if len(got) != 1 || got[0] != InstanceNamespace("monitoring") {
+		t.Fatalf("candidates = %v, want only %q: the monitoring stack's namespace was taken "+
+			"for an instance's", got, InstanceNamespace("monitoring"))
+	}
+}
+
+// A cluster that will not answer the extra namespace read drops the candidate rather than
+// failing the call: the caller's read of the instance's OWN namespace is the authoritative
+// one and reports its own errors.
+func TestACandidateLookupThatCannotBeAnsweredFallsBackToTheInstancesOwnNamespace(t *testing.T) {
+	c := fake.NewSimpleClientset()
+	c.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("the API server is not answering")
+	})
+
+	got := instanceNamespaceCandidates(context.Background(), c, "acme")
+	if len(got) != 1 || got[0] != InstanceNamespace("acme") {
+		t.Fatalf("candidates = %v, want only %q", got, InstanceNamespace("acme"))
+	}
+}
