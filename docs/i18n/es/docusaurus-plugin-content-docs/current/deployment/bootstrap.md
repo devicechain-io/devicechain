@@ -71,6 +71,39 @@ instancias en marcha (consulta [el presupuesto de conexiones](#connection-budget
 Reducirlo se rechaza como cualquier otro cambio, y una nueva ejecución que no pase
 `--max-connections` conserva el presupuesto que ya tiene el clúster.
 
+Los requisitos previos se aplican con OpenTofu, y su estado vive en la máquina que ejecutó
+`dcctl install`, en `~/.devicechain/clusters/<cluster-uid>/infra`. El directorio se indexa por
+la **identidad** del clúster —el UID de su namespace `kube-system`— y no por su nombre, porque
+un clúster de kind borrado y vuelto a crear lleva el mismo nombre de contexto sin contener
+ninguno de los recursos que describe el estado antiguo. El `cluster.json` que hay junto a
+`infra/` registra el nombre del clúster y el kube-context por los que tú lo conoces, de modo
+que un directorio se puede emparejar con su clúster:
+
+```bash
+cat ~/.devicechain/clusters/*/cluster.json
+kubectl --context <kube-context> get namespace kube-system -o jsonpath='{.metadata.uid}'
+```
+
+Ese estado es con lo que trabaja una nueva ejecución, así que **un clúster ya instalado solo
+puede reinstalarse desde la máquina que tiene su directorio**. Ejecuta `dcctl install` contra
+él desde otra máquina y se rechaza antes de aplicar nada:
+
+```text
+cluster ... is already installed (by dcctl <version>, <time>), but this machine holds no state
+for it under ~/.devicechain/clusters/<cluster-uid>. It was installed from another machine, and
+re-applying from empty state would try to create every prerequisite again. Run `dcctl install`
+from the machine that installed it
+```
+
+Aplicar desde un estado vacío planificaría todos los requisitos previos como nuevos y fallaría
+a medias con nombres ya en uso, así que la negativa es el resultado seguro —pero convierte ese
+directorio en precondición de toda nueva ejecución descrita en esta página, incluida la que
+aumenta `--max-connections`. Es la única copia del estado de los requisitos previos del
+clúster, y ningún respaldo de DeviceChain lo contiene. Consérvalo en la máquina desde la que
+instalas; si otra máquina va a tomar el relevo, copia antes a ella el directorio
+`~/.devicechain/clusters/<cluster-uid>/` completo. Contiene el estado de la raíz del clúster,
+credenciales incluidas, así que trátalo como tratas el directorio del depósito (escrow).
+
 `--no-tls` en `dcctl install` solo tiene sentido junto con `--compact`, donde descarta
 cert-manager; sin `--compact` se rechaza. Para servir una instancia por HTTP simple, pasa
 `--no-tls` a `dcctl bootstrap`.
@@ -95,6 +128,12 @@ kind delete cluster --name devicechain
 docker rm -f kind-registry   # el registro de imágenes local, si usaste --build
 ```
 
+kind no sabe nada de `~/.devicechain/clusters/`, así que borrar el clúster de este modo deja
+atrás su directorio. El siguiente `dcctl destroy` de una instancia que estaba en ese clúster
+descubre que el clúster ya no existe y elimina el directorio junto con el estado local propio
+de la instancia —consulta [Eliminar una instancia](#destroy). O elimínalo a mano, una vez que
+su `cluster.json` haya confirmado a qué clúster pertenecía.
+
 ### El presupuesto de conexiones {#connection-budget}
 
 La base de datos relacional tiene un número fijo de conexiones, fijado por
@@ -112,6 +151,28 @@ sale gratis. Cambiar el límite de conexiones de la base de datos reinicia sus i
 base de datos una a una; en un clúster instalado sin `--ha` solo hay una, así que **todas las
 instancias del clúster pierden brevemente su base de datos** mientras se reinicia. Hazlo en
 un momento tranquilo.
+
+`dcctl upgrade` se admite contra el mismo presupuesto. Una versión puede cambiar lo que
+necesitan las áreas relacionales de una instancia, así que la actualización compara la
+necesidad de esta versión con el límite que ya tiene el login de la instancia, **antes de
+escribir nada**. Una necesidad que no ha cambiado no se vuelve a admitir. Un aumento que el
+presupuesto no puede admitir se rechaza sin haber movido nada:
+
+```text
+this release needs instance "my-instance"'s database login to hold <n> connections, up from <m>,
+and nothing has been changed: ... Destroy an instance, or raise the budget by re-running
+`dcctl install` with a larger --max-connections
+```
+
+El remedio es el de arriba, y reinicia la base de datos —así que en un clúster cuyo
+presupuesto está casi agotado, auméntalo en un momento tranquilo *antes* de la ventana de
+actualización, en lugar de descubrir la necesidad dentro de ella. Un aumento que cabe se
+aplica antes de que los servicios se desplieguen; una versión que necesita *menos* recorta el
+login solo cuando todos los servicios están listos en la nueva versión. Un recorte que falla
+no hace fallar la actualización —los servicios ya están en marcha—: se imprime como una
+advertencia que termina en ``re-run `dcctl upgrade` to finish it``, y hasta que lo hagas el
+login retiene más presupuesto del que necesita. `dcctl upgrade --dry-run` informa de la
+comprobación que haría sin iniciar sesión en el almacén.
 
 ## Qué hace {#what-it-does}
 
@@ -179,6 +240,21 @@ ocupa de ambas:
   bróker de la primera instancia. Los brókeres de las instancias posteriores son
   alcanzables desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
 
+El namespace de la instancia se comprueba en el mismo punto. Una instancia es **dueña** de
+`dci-<id>`: dcctl escribe ahí su clave raíz, el par de claves TLS de su bróker y todas sus
+credenciales de base de datos, y `dcctl destroy` elimina el namespace entero. Por eso un
+`dci-<id>` que ya existe y no lleva la etiqueta `devicechain.io/instance=<id>` se rechaza antes
+de escribir nada de eso. Nada salvo dcctl crea namespaces bajo `dci-`, así que la causa
+probable es un `dcctl destroy` anterior de esta misma instancia que no terminó —la negativa lo
+dice y nombra el comando para terminarlo, `dcctl destroy <provider> <id>`. Un namespace que aún
+se está eliminando también se rechaza, hasta que desaparece. Si el namespace lo creaste tú a
+propósito —para llevar una cuota, una política o un RBAC propios—, entrégaselo a la instancia
+y vuelve a ejecutar el arranque inicial:
+
+```bash
+kubectl label namespace dci-<id> devicechain.io/instance=<id>
+```
+
 Los nombres de instancia son letras minúsculas, dígitos y `-`, de 50 caracteres como
 máximo. El nombre es, tal cual, la base de datos de la instancia y el login de esa base de
 datos, y es además la cola de otros dos nombres: el namespace es `dci-` más el nombre, y la
@@ -213,10 +289,13 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    rechazaría una ejecución real, en lugar de ocultarlo.
 4. **Comprobar lo que tienen otras instancias** (*Check what other instances hold*) — pregunta
    al clúster qué host de ingress y qué puerto MQTT local tienen ya otras instancias, y se
-   detiene si el host de esta instancia es uno de ellos. Se ejecuta antes de escribir nada,
-   así que una negativa no deja nada detrás; un puerto MQTT local que tiene otra instancia no
-   detiene la ejecución, y se indica. Una ejecución en seco dice qué rechazaría una ejecución
-   real. Consulta **Varias instancias en un mismo clúster** más arriba.
+   detiene si el host de esta instancia es uno de ellos; y mira el namespace en el que está a
+   punto de construirse esta instancia, `dci-<id>`, deteniéndose si existe y no es de esta
+   instancia, o si aún se está eliminando. Se ejecuta antes de escribir nada, así que una
+   negativa no deja nada detrás; un puerto MQTT local que tiene otra instancia no detiene la
+   ejecución, y se indica. Una ejecución en seco dice qué rechazaría una ejecución real.
+   Consulta **Varias instancias en un mismo clúster** más arriba, incluida la etiqueta que
+   entrega a la instancia un namespace que creaste tú.
 5. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
    operador (CRDs + RBAC + controlador) y lo aplica directamente con la API de
    Kubernetes. Va por delante de la aplicación de infraestructura porque la definición de
@@ -362,6 +441,10 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 | `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). En un clúster instalado sin cert-manager está activado por defecto, y `--no-tls=false` se rechaza: no hay nada que emita el certificado. |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no toma el bloqueo del clúster; sí informa de si otro operador está reteniendo el clúster. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
+| `--escrow-passphrase-file <path>` | Lee la frase de paso del depósito (escrow) de la clave raíz desde un archivo en lugar de pedirla. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
+| `--escrow-file <path>` | Escribe el artefacto de depósito en otro sitio distinto de `~/.devicechain/escrow/`. |
+| `--no-escrow` | **No** deposita la clave raíz. Solo para instancias desechables; implícito con `--dev`. A una instancia creada así se le puede dar un depósito más tarde —consulta [la reconciliación del depósito](./disaster-recovery.md#escrow-reconcile). |
+| `--restore-root-key <path>` | Recuperación ante desastres: siembra la clave raíz de esta instancia desde un artefacto de depósito en lugar de acuñar una. Solo se acepta cuando hay algo que esa clave pueda abrir —una base de datos que el almacén relacional ya contiene para esta instancia (consulta [Recuperar una instancia](./disaster-recovery.md#recover)), o esta misma instancia a medio construir por una ejecución anterior que se está terminando. Tras `dcctl destroy` no se da ninguna de las dos cosas y el flag se **rechaza**: la siguiente instancia con ese nombre acuña una clave propia, así que arranca sin el flag y aparta antes el artefacto antiguo —el arranque inicial no sobrescribe ninguno. `dcctl secrets escrow show <path>` te dice para qué instancia se escribió un artefacto. |
 
 ## Flags de instalación {#install-flags}
 
@@ -378,6 +461,8 @@ arrancada en él los sigue; ninguno es un flag de `dcctl bootstrap`.
 | `--no-monitoring` | Omite la pila de monitoreo (Prometheus y Grafana). |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin esta bandera la instalación falla. |
 | `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
+| `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
+| `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo —para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
 | `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual) —consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
 | `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace](#what-it-does). |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que sí llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. |
@@ -612,6 +697,13 @@ a arrancarla con el mismo nombre es como se recrea una instancia. Una instancia 
 por una versión anterior, de antes de que existiera `dcctl install`, es la excepción: también
 hay que recrear su clúster —consulta
 [Versiones y actualizaciones](./releases-and-upgrades.md#pre-declaration-recreate).
+
+Si el propio clúster de kind ya no existe —borrado con `kind delete cluster`—, destroy no tiene
+nada que desinstalar y lo dice, limpiando solo el estado local: el directorio de la instancia
+y el directorio propio del clúster en `~/.devicechain/clusters/<cluster-uid>/`, que creó
+`dcctl install` y que `kind delete cluster` dejó atrás (consulta
+[Instalar el clúster](#install)). Mientras lo hace imprime
+`removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)`.
 
 Todavía no hay ningún comando de desinstalación. Para eliminar un clúster local que creó
 `dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install).

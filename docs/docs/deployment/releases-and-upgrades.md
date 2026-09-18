@@ -180,6 +180,46 @@ defaults move between versions, so prefer writing the values out and passing the
 where you can see them.
 :::
 
+:::caution If the instance config comes from a Secret you manage
+An install that mounts its instance config from a Secret the chart does not write — set with
+`instance.existingSecret`, the pattern External Secrets and sealed-secrets produce — now has
+to satisfy four conditions, and `helm upgrade` **fails the render** rather than proceeding
+when one is not met. Nothing in the release changes when that happens; the refusal is the
+whole effect.
+
+- **The Secret must be named `dci-<instance.id>-config`**, in the instance's namespace. Any
+  other name is refused, because `dcctl` reads the config back by exactly that name to decide
+  whether an instance already exists, and treats a missing Secret as a fresh install — a
+  re-run would mint a new root key and new database and broker credentials over a live
+  instance. If your Secret is under another name, create it again under this one (an
+  External Secrets `target.name`, a sealed secret's `metadata.name`) before you upgrade.
+- **`instance.existingSecretChecksum` is required**: the sha256 of the document under the
+  Secret's `instance` key, as 64 lowercase hex characters. The chart cannot read your Secret,
+  so this is what rolls the pods when the config changes; without it a rotated credential
+  would apply cleanly, restart nothing and report success. Recompute it whenever the document
+  changes:
+
+  ```bash
+  kubectl get secret dci-<instance.id>-config -n dci-<instance.id> \
+    -o jsonpath='{.data.instance}' | base64 -d | sha256sum | cut -d' ' -f1
+  ```
+
+- **`networkPolicy.externalConfigPorts` is required while `networkPolicy.enabled` is on**,
+  with keys `nats` and `rdb` restating the broker and database ports your document names.
+  The chart would otherwise take them from its own defaults, and a port that disagrees
+  silently blocks the services' own egress — which presents as a broker or database outage.
+- **`metrics.natsBrokerHost` is required while `metrics.natsPodMonitor` is on** — the
+  broker's hostname as your document names it (the short Service name for a broker in this
+  instance's namespace, `<service>.<namespace>` for one elsewhere). It decides which
+  namespace the PodMonitor watches; a default that does not match monitors nothing. Or set
+  `metrics.natsPodMonitor=false`.
+
+Each `helm` error names the value it wants and why. The two transforms the chart normally
+applies while writing the document — the `infrastructure.shutdown` block, and the removal of
+`infrastructure.aiInference` when that area is not deployed — remain yours to reproduce, as
+before.
+:::
+
 ## Zero-downtime upgrades {#zero-downtime-upgrades}
 
 Upgrading an instance you bootstrapped is **one command**, and the chart and services are
@@ -1282,9 +1322,43 @@ dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
 
-For a cluster reached with `--kube-context`, which `dcctl` never deletes, delete and
-recreate it with whatever created it, then pass the same `--kube-context` to `install` and
-`bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
+For a cluster reached with `--kube-context`, which `dcctl` never deletes, pass that
+`--kube-context` to the `destroy` line as well — the reason is in the note below — then
+delete and recreate the cluster with whatever created it, and pass the same `--kube-context`
+to `install` and `bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
+
+:::note This release's `dcctl` does not read the older release's local state
+`dcctl` now keeps what it knows about an instance under
+`~/.devicechain/instances/<instance>/`. Releases up to `v0.16.0` kept it one level up, at
+`~/.devicechain/<instance>/`, and **the new `dcctl` does not read, list or remove that
+directory** — there is deliberately no migration, because `dcctl` cannot tell an old
+instance directory from one you made yourself. Three things follow for the recipe above:
+
+- **`dcctl instances list` shows none of your older instances.** On a machine holding only
+  instances built by `v0.16.0` or earlier it prints `No DeviceChain instances on this machine
+  (nothing under ~/.devicechain/instances).` Nothing has been lost; the instances are still
+  in their clusters, and `helm list -A` still shows their releases.
+- **`destroy` guesses the cluster.** The cluster record the older release wrote is in the
+  directory the new `dcctl` does not read, so `destroy` prints
+  `No record of which cluster instance "<instance>" lives in — GUESSING cluster … from its
+  name` and derives it from the instance name. That guess is right for a local instance
+  named the way the recipe names it, and **wrong for one bootstrapped with `--kube-context`**,
+  which is why that flag goes on the `destroy` line. `--without-state` is still needed: the
+  infrastructure state is also in the directory `dcctl` no longer looks in.
+- **The old directory stays on disk.** `destroy` removes `~/.devicechain/instances/<instance>/`
+  — which for such an instance holds nothing — and leaves `~/.devicechain/<instance>/`
+  where it was, with its `infra/terraform.tfstate` (the database superuser password and the
+  broker's TLS private key, in cleartext) and `broker-credentials.json`. Once the instance is
+  gone, remove it yourself:
+
+  ```bash
+  rm -rf ~/.devicechain/<instance>
+  ```
+
+  Do **not** touch `~/.devicechain/escrow/`. The root-key escrow artifact has always lived
+  there, outside any instance directory, and it still opens that instance's database backups
+  — see [Disaster Recovery](./disaster-recovery.md#after-destroy).
+:::
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm`

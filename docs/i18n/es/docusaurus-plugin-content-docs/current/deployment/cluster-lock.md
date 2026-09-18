@@ -232,7 +232,9 @@ aplicando con total confianza mientras otra persona concluye correctamente que y
 `Ctrl+C` detiene una ejecución **con elegancia**. A la herramienta de infraestructura se
 le pide que pare como ella quiere —termina la operación en curso y escribe su archivo de
 estado— y `dcctl` devuelve el bloqueo antes de salir. La siguiente ejecución, que suele ser
-la tuya reintentando, encuentra el clúster libre.
+la tuya reintentando, encuentra el clúster libre. Un `SIGTERM` —lo que envía un runner de
+CI o un planificador para cancelar un trabajo— se trata exactamente igual que ese primer
+`Ctrl+C`.
 
 Como un solo release de Helm dentro de una aplicación puede llevar un timeout de varios
 minutos, se permite que la parada elegante tarde: hasta veinte minutos en el peor caso, y
@@ -248,6 +250,44 @@ bloqueo **no** se devuelve, de modo que la siguiente ejecución contra ese clús
 que esperar una duración de arrendamiento y [reclamarlo](#reclaim). Úsala cuando la
 primera interrupción no esté avanzando, no como forma normal de parar.
 :::
+
+### Cuando la parada elegante nunca vuelve {#abandoned}
+
+Hay un tercer desenlace, y una ejecución que nadie está mirando —CI, un trabajo
+programado— es la que llega a él, porque no hay nadie para pulsar `Ctrl+C` una segunda
+vez.
+
+OpenTofu en sí obedece la parada, pero algo que él arrancó —un plugin de proveedor, lo más
+habitual— puede sobrevivirle y seguir reteniendo la tubería de la que `dcctl` lee su
+salida, así que `dcctl` nunca ve terminar el comando. En lugar de esperar para siempre,
+desiste por su cuenta **alrededor de un minuto después del presupuesto de veinte minutos**
+y sale con un error. Esto es lo que encontrarás en el registro:
+
+```
+dcctl stopped waiting for the interrupted OpenTofu command. OpenTofu itself has gone,
+but something it started — a provider plugin, most likely — outlived it and is still
+holding the pipe dcctl reads its output from, so dcctl cannot see the command end. It
+was asked to stop gracefully and to write its state before this point and very probably
+did, but nothing here witnessed that: treat this instance's infrastructure as PARTIALLY
+APPLIED rather than untouched. Re-run the same command — the apply is idempotent and
+reconciles whatever was left half done. Assuming nothing happened is the one reading
+that is not safe (dcctl waited 21m0s after the interrupt)
+```
+
+De ahí se siguen dos cosas, y ambas apuntan en dirección contraria a la segunda
+interrupción:
+
+- **El bloqueo se devuelve.** Es un paso fallido, no una muerte del proceso, así que la
+  liberación se ejecuta como con cualquier otro error. No hay nada que
+  [reclamar](#reclaim); la siguiente ejecución encuentra el clúster libre.
+- **No se sabe que la infraestructura esté intacta.** A OpenTofu se le pidió que
+  escribiera su estado y muy probablemente lo hizo, pero `dcctl` no fue testigo. Vuelve
+  a ejecutar el mismo comando —`bootstrap`, `upgrade` o `destroy`, el que fuera— y deja
+  que la aplicación reconcilie lo que quedó a medias. La única lectura que no es segura es
+  «no pasó nada».
+
+El reloj arranca con la interrupción y en ningún otro sitio. Una aplicación que nadie
+interrumpió se espera lo que haga falta.
 
 ## Véase también
 

@@ -51,7 +51,14 @@ instance bootstrapped on that cluster is watched by it:
   `devicechain-<instance>`, holding its own copy of every board. Each copy is scoped to
   that instance and titled with its id; there is no instance picker to set. The files
   under `dashboards/` are templates the chart renders per instance, not boards to
-  import by hand.
+  import by hand. The folder comes from a `grafana_folder: devicechain-<instance>`
+  annotation on each dashboard ConfigMap, and only a sidecar configured to read it
+  files boards by folder: the sidecar must run with `FOLDER_ANNOTATION=grafana_folder`
+  and its dashboard provider must have `foldersFromFilesStructure: true`. The stack
+  `dcctl install` deploys sets both. If you installed with `--no-monitoring` and point
+  your own Grafana sidecar at these ConfigMaps without them, the annotation is ignored
+  and every instance's boards land flat in one place — still separate boards, each
+  still scoped to its own instance, just not in folders.
 - **Instances on a cluster keep their boards apart** — once every instance on a cluster
   runs a chart with per-instance folders, removing or upgrading one leaves the others'
   boards untouched. Until then, instances still on an older chart share one board per
@@ -73,6 +80,50 @@ single sign-on is not currently available.
 Metrics are instance-level and cross-tenant, so Grafana is an *operator* surface, not
 something tenant users can reach. Tenants see their own data through the console and
 dashboards, never through Grafana.
+
+### Reaching Grafana
+
+The stack `dcctl install` deploys publishes no ingress route for Grafana; its Service
+is `ClusterIP`. Port-forward it and open `http://localhost:3000/`:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+```
+
+### The admin password
+
+Sign in as `admin`. The password is minted by `dcctl install` and stored in Secret
+`dc-grafana-admin` in the `monitoring` namespace, key `admin-password`:
+
+```bash
+kubectl -n monitoring get secret dc-grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+The install report prints the same two commands. Grafana runs **once per cluster**, so
+this is the *cluster's* login, shared by every instance on it — not one password per
+instance. Rotating it locks out every instance's operators on that cluster, not just yours.
+
+### Rotating it
+
+Re-running `dcctl install` **keeps** the password: the Secret is read back and reused,
+and a new one is minted only when the Secret is absent. Editing the Secret by hand does
+not rotate it either — Grafana reads the password from the Secret as an environment
+variable at start-up, a changed Secret restarts nothing, and Grafana keeps accepting the
+password it started with while the Secret names one it has never seen. To rotate it on
+purpose, do all three steps:
+
+```bash
+kubectl -n monitoring delete secret dc-grafana-admin
+dcctl install <the flags the cluster was installed with>   # a missing Secret is minted afresh
+kubectl -n monitoring rollout restart deployment/kube-prometheus-stack-grafana
+```
+
+:::caution
+Do not skip the restart. After the first two steps the Secret holds a new password and
+Grafana still accepts the old one, so the rotation looks done and is not — and the next
+person who reads the Secret cannot log in. The restart is what applies it, and it works
+because the deployed Grafana keeps no persistent database.
+:::
 
 ## The event-processing operations board
 

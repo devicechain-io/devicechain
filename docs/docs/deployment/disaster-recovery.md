@@ -303,15 +303,26 @@ bucket.
 :::
 
 :::caution Recover under the instance's own name
-A recovery has to use the name the instance had. The relational restore brings the
-database back under that name, owned by that instance's own login — so a bootstrap
-run under a *different* name looks into the store, finds nothing of its own there,
-and refuses rather than minting a fresh root key over recovered rows it would never
-be able to open.
+A recovery has to use the name the instance had. The relational database is named after
+the instance, so the restore in step 1 brings it back under the *old* name, owned by
+that instance's own login. A bootstrap run with `--restore-root-key` under a *different*
+name looks into the store, finds no database of its own there, and — on a cluster that
+holds no half-built instance of that name either — stops before writing anything:
 
-The refusal comes before anything is written, but it comes *after* the relational
-restore has already run, so this is worth settling before you start rather than
-during the incident.
+```text
+--restore-root-key recovers the key that opens instance "<new-name>"'s stored secrets, and
+there is nothing here for it to open: the relational store holds no database for "<new-name>" ...
+```
+
+It refuses because the alternative is an *empty* instance sealed under a recovered key —
+which looks like a successful recovery from the outside and holds none of the data you
+came back for. The yellow `note: ... was escrowed for instance "<old-name>"` printed
+earlier in the same run is the warning, not the refusal.
+
+The way out is to run step 2 again under the original name — the one `dcctl secrets
+escrow show` prints as `Instance:` for the artifact, and the one the recovered database
+carries. The refusal comes *after* the relational restore has already run, so settle the
+name before you start rather than during the incident.
 
 The artifact does record the name it was written for, and that name is
 authenticated — it cannot be edited without invalidating the file. Renaming an

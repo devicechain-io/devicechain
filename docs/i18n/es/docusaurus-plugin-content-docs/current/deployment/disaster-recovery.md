@@ -320,15 +320,27 @@ ha recuperado: lo más habitual es que el archivo histórico sea inalcanzable, o
 :::
 
 :::caution Recupere con el nombre propio de la instancia
-Una recuperación debe usar el nombre que tenía la instancia. La restauración relacional
-devuelve la base de datos con ese nombre, propiedad del login de esa misma instancia, de
-modo que un bootstrap ejecutado con un nombre *distinto* consulta el almacén, no
-encuentra nada suyo allí y rechaza la operación en lugar de acuñar una clave raíz nueva
-sobre filas recuperadas que después no podría abrir.
+Una recuperación debe usar el nombre que tenía la instancia. La base de datos relacional
+lleva el nombre de la instancia, así que la restauración del paso 1 la devuelve con el
+nombre *antiguo*, propiedad del login de esa misma instancia. Un bootstrap ejecutado con
+`--restore-root-key` bajo un nombre *distinto* consulta el almacén, no encuentra ninguna
+base de datos suya allí y, en un clúster que tampoco contiene una instancia a medio
+construir con ese nombre, se detiene antes de escribir nada:
 
-El rechazo se produce antes de escribir nada, pero *después* de que la restauración
-relacional ya se haya ejecutado, así que conviene decidirlo antes de empezar y no
-durante el incidente.
+```text
+--restore-root-key recovers the key that opens instance "<nombre-nuevo>"'s stored secrets, and
+there is nothing here for it to open: the relational store holds no database for "<nombre-nuevo>" ...
+```
+
+Rechaza la operación porque la alternativa es una instancia *vacía* sellada con una clave
+recuperada: desde fuera parece una recuperación exitosa y no contiene ninguno de los datos
+por los que usted volvió. El aviso amarillo `note: ... was escrowed for instance
+"<nombre-antiguo>"` impreso antes en la misma ejecución es la advertencia, no el rechazo.
+
+La salida es repetir el paso 2 con el nombre original: el que `dcctl secrets escrow show`
+muestra como `Instance:` para el artefacto, y el que lleva la base de datos recuperada. El
+rechazo se produce *después* de que la restauración relacional ya se haya ejecutado, así
+que decida el nombre antes de empezar y no durante el incidente.
 
 El artefacto sí registra el nombre para el que se escribió, y ese nombre está
 autenticado: no se puede editar sin invalidar el archivo. Renombrar una instancia es una
