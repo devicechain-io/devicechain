@@ -26,7 +26,29 @@ var (
 	installAllowLegacyDb     bool
 	installBackupCredentials string
 	installMaxConnections    int
+	installRestoreRdbFrom    string
+	installRestoreRdbAt      string
 )
+
+// installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
+// parsed flags.
+//
+// Extracted from RunE for the same reason restoreFlagsFromArgv is: it is two string
+// copies and a derivation, exactly the kind of code that looks too trivial to test
+// and then copies the source into the target — a mistake with no symptom at all
+// until an operator's recovery stops at the wrong moment during an incident.
+//
+// 🔴 IT FILLS ONLY THE Rdb HALF. The event store belongs to an INSTANCE and is
+// `dcctl bootstrap`'s to recover; a value landing in the Tsdb fields here would be
+// emitted as restore_tsdb_from, routed by splitVars to the INSTANCE root, and
+// applied to a store this command does not own.
+func installRestoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
+	return bootstrap.RestoreFlags{
+		RdbFrom:        installRestoreRdbFrom,
+		RdbTargetTime:  installRestoreRdbAt,
+		BackupsEnabled: backupsEnabled,
+	}
+}
 
 // compactModeResolution is the set of flag values the --compact preset settles on.
 type compactModeResolution struct {
@@ -61,6 +83,36 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 		res.NoMonitoring = noMonitoring
 	}
 	return res
+}
+
+// installOptions assembles what the install engine is told to do, from the parsed
+// flags and the two plans RunE has already settled.
+//
+// 🔴 EXTRACTED FROM RunE BECAUSE NOTHING COULD OTHERWISE SEE IT. bootstrap.Install
+// needs a provider and a cluster, so no test reaches this struct literal through the
+// command — and a literal is precisely where a settled plan gets dropped or landed in
+// the wrong field. That failure is silent in the worst direction: `dcctl install
+// --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
+// EMPTY relational store, during the recovery it was run for.
+func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan) bootstrap.InstallOptions {
+	return bootstrap.InstallOptions{
+		Options: bootstrap.Options{
+			KubeContext:          installKubeContext,
+			Cluster:              installCluster,
+			DryRun:               installDryRun,
+			AssumeYes:            installAssumeYes,
+			NoTLS:                installNoTLS,
+			AllowLegacyDbRemoval: installAllowLegacyDb,
+		},
+		NoMonitoring:      installNoMonitoring,
+		NoCNPG:            installNoCNPG,
+		Compact:           installCompact,
+		HA:                installHA,
+		BackupDestination: dest,
+		MaxConnections:    installMaxConnections,
+		Restore:           restore,
+		DcctlVersion:      Version,
+	}
 }
 
 // installCmd prepares a cluster for DeviceChain instances.
@@ -134,29 +186,24 @@ the cluster, with one exception: the connection budget may be raised.`,
 				"those turned backups off")
 		}
 
+		// 🔴 SETTLED FROM ARGV, BEFORE ANY CLUSTER IS TOUCHED. Every way a restore's
+		// flags can be wrong — a recovery target with nothing to recover, a timestamp
+		// with no offset, an archive on a cluster that has no plugin to read it — is
+		// knowable here, and finding out ten minutes into a rebuild, during an
+		// incident, is the expensive time to find out.
+		restorePlan, err := bootstrap.ResolveRestorePlan(installRestoreFlagsFromArgv(
+			bootstrap.DatabaseBackupsEnabled(installNoCNPG, installCompact, installNoTLS)))
+		if err != nil {
+			return err
+		}
+
 		if !installSkipPreflight {
 			if d := runDoctor(args[0]); d.fails > 0 {
 				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
 			}
 		}
 
-		return bootstrap.Install(cmd.Context(), provider, bootstrap.InstallOptions{
-			Options: bootstrap.Options{
-				KubeContext:          installKubeContext,
-				Cluster:              installCluster,
-				DryRun:               installDryRun,
-				AssumeYes:            installAssumeYes,
-				NoTLS:                installNoTLS,
-				AllowLegacyDbRemoval: installAllowLegacyDb,
-			},
-			NoMonitoring:      installNoMonitoring,
-			NoCNPG:            installNoCNPG,
-			Compact:           installCompact,
-			HA:                installHA,
-			BackupDestination: backupDestination,
-			MaxConnections:    installMaxConnections,
-			DcctlVersion:      Version,
-		})
+		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan))
 	},
 	SilenceUsage: true,
 }
@@ -178,6 +225,25 @@ func init() {
 			"(dc-postgresql). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — applying with it set "+
 			"destroys that StatefulSet and brings up an empty database on the same hostname")
 	installCmd.Flags().StringVar(&installBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the cluster provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. Keep the file readable only by you")
+	// Database restore (ADR-028 / ADR-020 A2.5). These are the CLUSTER's half: the
+	// relational store is installed once per cluster and shared by every instance, so
+	// recovering it is an install operation. The event store is an instance's, and
+	// `dcctl bootstrap --restore-tsdb-from` recovers that one.
+	//
+	// They are REBUILD-time levers, not repair levers. dcctl picks the path the
+	// recovered store archives INTO by itself, and that is deliberately not a flag: it
+	// must stay put across every later re-run, so it is read back off the live cluster
+	// rather than re-derived from argv.
+	installCmd.Flags().StringVar(&installRestoreRdbFrom, "restore-rdb-from", "",
+		"disaster recovery: recover the RELATIONAL store from this archive path (the serverName "+
+			"inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. "+
+			"🔴 Only takes effect when the store is CREATED — recover by installing into a cluster "+
+			"whose relational store is not there, not by re-running against a live one")
+	installCmd.Flags().StringVar(&installRestoreRdbAt, "restore-rdb-at", "",
+		"stop the relational store's recovery at this RFC3339 timestamp instead of replaying the "+
+			"whole archive. For the disaster where the data was destroyed correctly — a bad "+
+			"migration, a mistaken delete — so pick a moment strictly before the damage. Needs "+
+			"--restore-rdb-from")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	rootCmd.AddCommand(installCmd)

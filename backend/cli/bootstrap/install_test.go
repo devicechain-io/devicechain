@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -423,5 +424,154 @@ func TestTheRelationalAreasAreTheServicesThatOpenTheRelationalStore(t *testing.T
 	}
 	if got, _ := strconv.Atoi(string(m[1])); got != servicePoolSize {
 		t.Errorf("services open pools of %d connections and each is budgeted at %d", got, servicePoolSize)
+	}
+}
+
+// 🔴 A RESTORE IS A ONE-SHOT FLAG, NOT A CLUSTER SETTING, and which of the two it is
+// decides whether the NEXT ordinary install is refused.
+//
+// refuseAReinstallThatWouldHurt refuses a SETTINGS change under running instances,
+// because every instance was built to the settings it found. Recording the restore in
+// InstallSettings would make a recovery install differ from every install before and
+// after it — so the flagless converge that follows a recovery, the very next thing an
+// operator runs, would be refused under its own instances with the remedy "re-run with
+// the settings it was installed with": restore again, over a store that already holds
+// the recovered data.
+//
+// Asserted rather than assumed because the omission is invisible: InstallSettings
+// compares by value, and a field added to it is refused-on-change for free.
+func TestARestoreIsNotRecordedAsAClusterSetting(t *testing.T) {
+	ordinary, _ := reinstallState()
+	recovering, _ := reinstallState()
+	recovering.Restore = RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z"}
+
+	if installSettingsFor(ordinary) != installSettingsFor(recovering) {
+		t.Fatalf("a restore changed the cluster's recorded settings:\n  ordinary   %+v\n  recovering %+v\n"+
+			"The next ordinary `dcctl install` would then be a settings CHANGE, and refused "+
+			"under the instances the recovery just brought back.", installSettingsFor(ordinary),
+			installSettingsFor(recovering))
+	}
+
+	// And the run after the recovery — no flags, instances up — is not refused.
+	withClusterInstances(t, []string{"prod"}, nil)
+	st, settings := reinstallState()
+	if err := refuseAReinstallThatWouldHurt(context.Background(), st, installed(), settings, stateHere()); err != nil {
+		t.Fatalf("the ordinary install following a recovery was refused: %v", err)
+	}
+}
+
+// 🔴 AND THE RETRY, which is the case a presence-keyed guard would break. An install
+// can die at many steps — the apply, the base identity, the record — and the operator's
+// next move is the SAME command with the SAME flags. That must be allowed: the
+// relational store either exists (the restore already happened, and is reported as a
+// no-op) or does not (the restore runs). Neither is a reason to refuse.
+func TestARetriedRecoveryInstallIsNotRefused(t *testing.T) {
+	withClusterInstances(t, []string{"prod"}, nil)
+	st, settings := reinstallState()
+	st.Restore = RestorePlan{RdbFrom: "dc-rdb"}
+	if err := refuseAReinstallThatWouldHurt(context.Background(), st, installed(), settings, stateHere()); err != nil {
+		t.Fatalf("re-running a recovery install with the same flags was refused: %v\n"+
+			"  A recovery is exactly the run most likely to be interrupted and need "+
+			"repeating; a guard that blocks the retry blocks it during the incident.", err)
+	}
+}
+
+// 🔴 THE HAND-OFF THE WHOLE SUITE WAS BLIND TO, measured: deleting `Restore:
+// opts.Restore` from the State an install runs from failed nothing at all. Install
+// needs a provider and a live cluster, so no test reaches that literal through the
+// command — which is why the literal is now a function.
+//
+// Dropped, infraVars emits no restore variables and the apply initialises an EMPTY
+// relational store. Green, ordinary, unremarkable — during the recovery the operator
+// ran it for. It is asserted through the emitter rather than only through the field,
+// because a field that is set and never emitted fails in exactly the same way.
+func TestTheRestorePlanReachesTheStateAnInstallAppliesFrom(t *testing.T) {
+	plan := RestorePlan{RdbFrom: "dc-rdb", RdbTargetTime: "2026-07-28T12:00:00Z"}
+	st := installState(ClusterBinding{KubeContext: "kind-devicechain"}, "local",
+		InstallOptions{Restore: plan})
+
+	if st.Restore != plan {
+		t.Fatalf("the install runs from %+v, not the plan it was given %+v", st.Restore, plan)
+	}
+	vars := infraVars(st)
+	for _, want := range []string{
+		"restore_rdb_from=dc-rdb",
+		"restore_rdb_target_time=2026-07-28T12:00:00Z",
+	} {
+		if !slices.Contains(vars, want) {
+			t.Errorf("%q never reached OpenTofu: the apply would initialise an empty "+
+				"relational store and report success. Got %v", want, vars)
+		}
+	}
+}
+
+// 🔴 THE GUARD IN THE OPENTOFU ROOT MUST BE UNREACHABLE FROM dcctl, not merely
+// survivable.
+//
+// terraform_data.restore_guard refuses backup_server_name_rdb equal to — or unset
+// alongside — restore_rdb_from, because a recovered store pointed back at the archive
+// it read comes up and then HANGS in `Setting up primary` on `Expected empty archive`.
+// It does not fail the apply; it wedges the database.
+//
+// A dcctl that minted no path would hit that precondition on every recovery: still a
+// refusal, but from a layer the operator is not driving, naming a variable dcctl does
+// not expose, in the middle of an incident. So this asserts the emission the guard
+// checks, exactly as the guard checks it.
+//
+// Measured, not assumed: reverting this to "keep the live path only" — which is what
+// the code did before the relational restore shipped — failed nothing in this package.
+func TestARelationalRecoveryNeverAsksForTheArchiveItIsReading(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		live clusterArchiveState
+	}{
+		{"the store is gone (the disaster)", clusterArchiveState{}},
+		{"CNPG is not installed yet (a rebuilt cluster)", clusterArchiveState{}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			st := compactState(false)
+			st.Restore = RestorePlan{RdbFrom: RdbClusterName}
+
+			settleRdbArchivePath(st, tc.live, testNow)
+
+			vars := infraVars(st)
+			if !slices.Contains(vars, "restore_rdb_from="+RdbClusterName) {
+				t.Fatalf("the recovery itself never reached OpenTofu: %v", vars)
+			}
+			path := st.Values["backupServerNameRdb"]
+			if path == "" {
+				t.Fatalf("no archive path was settled for the recovered store. " +
+					"backup_server_name_rdb is then unset, which the root reads as \"the " +
+					"Cluster's own name\" — the archive being recovered FROM. restore_guard " +
+					"refuses the apply, naming a variable dcctl does not expose.")
+			}
+			if path == RdbClusterName {
+				t.Fatalf("the recovered store was told to archive into %q, the very archive "+
+					"it is reading: `Setting up primary`, forever, during a recovery", path)
+			}
+			if !slices.Contains(vars, "backup_server_name_rdb="+path) {
+				t.Errorf("the settled path %q never reached OpenTofu: %v", path, vars)
+			}
+		})
+	}
+}
+
+// The counterweight, in both directions. An ordinary install must still emit NO
+// relational archive path (the root's default is the Cluster's own name, which is
+// right and which every cluster in the field is already using), and a LIVE store keeps
+// the path it already owns.
+func TestSettlingTheRelationalArchivePathLeavesAnOrdinaryInstallAlone(t *testing.T) {
+	fresh := compactState(false)
+	settleRdbArchivePath(fresh, clusterArchiveState{}, testNow)
+	if got := fresh.Values["backupServerNameRdb"]; got != "" {
+		t.Errorf("a fresh ordinary install settled on archive path %q; it must take the "+
+			"root's default", got)
+	}
+
+	live := compactState(false)
+	settleRdbArchivePath(live, clusterArchiveState{Exists: true, Path: "dc-rdb-2026"}, testNow)
+	if got := live.Values["backupServerNameRdb"]; got != "dc-rdb-2026" {
+		t.Errorf("a live store's archive path became %q; moving it retargets a WAL archiver "+
+			"every instance on the cluster depends on", got)
 	}
 }

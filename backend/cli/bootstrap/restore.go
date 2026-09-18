@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/fatih/color"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,7 +29,20 @@ const (
 const barmanPluginName = "barman-cloud.cloudnative-pg.io"
 
 // RestoreFlags is the raw --restore-* input, before validation.
+//
+// 🔴 THE TWO STORES ARE REACHED BY DIFFERENT COMMANDS, and one struct carries both
+// on purpose. The relational store is the CLUSTER's — `dcctl install` builds it and
+// every instance shares it — while the event store is one INSTANCE's, built by
+// `dcctl bootstrap`. So `install` fills the Rdb half and `bootstrap` fills the Tsdb
+// half, and neither ever fills the other's.
+//
+// They share a struct because every rule that makes a restore wrong is the same rule
+// for both — a recovery target with nothing to recover, a timestamp with no offset, a
+// cluster with no backup plugin to read the archive — and the one that was written
+// twice is the one that gets fixed once.
 type RestoreFlags struct {
+	RdbFrom        string
+	RdbTargetTime  string
 	TsdbFrom       string
 	TsdbTargetTime string
 	// BackupsEnabled is whether the cluster archives at all — the install's answer.
@@ -36,21 +50,35 @@ type RestoreFlags struct {
 	BackupsEnabled bool
 }
 
-// RestorePlan is the settled database-restore intent for one bootstrap run: which
-// archive the event store recovers FROM, and how far it replays.
+// RestorePlan is the settled database-restore intent for one run: which archive each
+// store recovers FROM, and how far it replays.
 //
 // 🔴 REBUILD-TIME ONLY. `spec.bootstrap` is read when CloudNativePG CREATES a
 // Cluster, so a plan aimed at a store that already exists does nothing at all — no
-// error, no restore, a green apply. stepRenderConfig says so out loud when it finds
-// the Cluster already there, because "it ran and restored nothing" and "it declined
-// to run" are indistinguishable from the outside.
+// error, no restore, a green apply. stepRenderConfig and Install both say so out loud
+// when they find the Cluster already there, because "it ran and restored nothing" and
+// "it declined to run" are indistinguishable from the outside.
 type RestorePlan struct {
+	RdbFrom        string
+	RdbTargetTime  string
 	TsdbFrom       string
 	TsdbTargetTime string
 }
 
 // Active reports whether this run restores anything.
-func (p RestorePlan) Active() bool { return p.TsdbFrom != "" }
+func (p RestorePlan) Active() bool { return p.RdbFrom != "" || p.TsdbFrom != "" }
+
+// RestoresEventStore reports whether this run recovers the INSTANCE's event store.
+//
+// Separate from Active because the two are asked by different code for different
+// reasons, and one plan can now carry a restore that is not this question's: an
+// instance's declaration records whether that INSTANCE was restored, and a cluster's
+// relational recovery is not an answer to it.
+func (p RestorePlan) RestoresEventStore() bool { return p.TsdbFrom != "" }
+
+// RestoresRelationalStore reports whether this run recovers the CLUSTER's shared
+// relational store.
+func (p RestorePlan) RestoresRelationalStore() bool { return p.RdbFrom != "" }
 
 // DatabaseBackupsEnabled reports whether this combination of install flags leaves the
 // cluster with a backup destination — i.e. whether OpenTofu will be told
@@ -80,58 +108,75 @@ func BackupsEnabledFor(st *State) bool { return databaseBackupsEnabled(st) }
 // time to find out.
 func ResolveRestorePlan(f RestoreFlags) (RestorePlan, error) {
 	plan := RestorePlan{
+		RdbFrom:        f.RdbFrom,
+		RdbTargetTime:  f.RdbTargetTime,
 		TsdbFrom:       f.TsdbFrom,
 		TsdbTargetTime: f.TsdbTargetTime,
 	}
 
-	// A target time with nothing to restore is silently ignored by the root, which
-	// is the wrong outcome for a flag whose whole purpose is to stop replay before
-	// a known-bad moment: the operator would get a full-archive restore and be told
-	// nothing. (The root refuses this too — this refusal is here so it lands before
-	// the rebuild rather than at plan time.)
-	if f.TsdbTargetTime != "" && f.TsdbFrom == "" {
-		return RestorePlan{}, fmt.Errorf(
-			"--restore-tsdb-at is set but --restore-tsdb-from is empty, so nothing is being " +
-				"restored and the recovery target would be silently ignored")
-	}
-
-	// A recovery target is a moment, and a moment with no timezone is a different
-	// moment on a different server.
-	//
-	// 🔴 THIS IS THE ONE THAT SUCCEEDS AND IS WRONG. PostgreSQL accepts
-	// "2026-07-27 13:59:00" and interprets it in the RECOVERING server's TimeZone,
-	// so a target meant as UTC silently becomes a target hours away — and recovery
-	// stops there, reports success, and hands back a database rewound to the wrong
-	// instant. Everything else on this path fails loudly; this one does not, and
-	// the whole reason an operator reaches for a target is that they know exactly
-	// which moment they need to stop before.
-	//
-	// RFC3339 is narrower than the OpenTofu variable accepts, deliberately: the var
-	// is a general lever for someone driving OpenTofu directly, and this is the
-	// operator surface, where an unambiguous instant is worth more than a permissive
-	// grammar.
-	if plan.TsdbTargetTime != "" {
-		if _, err := time.Parse(time.RFC3339, plan.TsdbTargetTime); err != nil {
+	// 🔴 ONE SET OF RULES, WALKED ONCE PER STORE. The alternative — the same three
+	// checks written out again with `rdb` swapped for `tsdb` — is the shape that lets
+	// one copy stop covering what the other does, and the copy that stops covering is
+	// always the newer one, whose failures nobody has seen yet.
+	for _, s := range []struct {
+		fromFlag, atFlag string
+		from, at         string
+	}{
+		{"--restore-rdb-from", "--restore-rdb-at", f.RdbFrom, f.RdbTargetTime},
+		{"--restore-tsdb-from", "--restore-tsdb-at", f.TsdbFrom, f.TsdbTargetTime},
+	} {
+		// A target time with nothing to restore is silently ignored by the root, which
+		// is the wrong outcome for a flag whose whole purpose is to stop replay before
+		// a known-bad moment: the operator would get a full-archive restore and be told
+		// nothing. (The root refuses this too — this refusal is here so it lands before
+		// the rebuild rather than at plan time.)
+		if s.at != "" && s.from == "" {
 			return RestorePlan{}, fmt.Errorf(
-				"--restore-tsdb-at %q is not an RFC3339 timestamp. It needs an explicit offset — "+
-					"2026-07-27T13:59:00Z, or 2026-07-27T09:59:00-04:00. Without one PostgreSQL "+
-					"reads it in the recovering server's own timezone, and recovery stops at a "+
-					"different moment than you named and reports success",
-				plan.TsdbTargetTime)
+				"%s is set but %s is empty, so nothing is being restored and the recovery "+
+					"target would be silently ignored", s.atFlag, s.fromFlag)
 		}
-	}
 
-	// Restoring needs the Barman Cloud plugin, and the flags that switch the backup
-	// destination off switch the RESTORE path off with it — the same plugin reads
-	// the archive that writes it. Without this the run proceeds, OpenTofu refuses at
-	// plan time, and the operator is told to set a variable dcctl does not expose.
-	if plan.Active() && !f.BackupsEnabled {
-		return RestorePlan{}, fmt.Errorf(
-			"--restore-tsdb-from needs the database backup plugin, and this cluster was " +
-				"installed without it: `dcctl install --no-cnpg` skips the CloudNativePG operator " +
-				"the plugin extends, and `dcctl install --compact --no-tls` drops cert-manager, which " +
-				"the plugin needs for its own Issuer and Certificates. Restore onto a cluster " +
-				"installed with neither (--compact --no-tls=false keeps backups)")
+		// A recovery target is a moment, and a moment with no timezone is a different
+		// moment on a different server.
+		//
+		// 🔴 THIS IS THE ONE THAT SUCCEEDS AND IS WRONG. PostgreSQL accepts
+		// "2026-07-27 13:59:00" and interprets it in the RECOVERING server's TimeZone,
+		// so a target meant as UTC silently becomes a target hours away — and recovery
+		// stops there, reports success, and hands back a database rewound to the wrong
+		// instant. Everything else on this path fails loudly; this one does not, and
+		// the whole reason an operator reaches for a target is that they know exactly
+		// which moment they need to stop before.
+		//
+		// RFC3339 is narrower than the OpenTofu variable accepts, deliberately: the var
+		// is a general lever for someone driving OpenTofu directly, and this is the
+		// operator surface, where an unambiguous instant is worth more than a permissive
+		// grammar.
+		if s.at != "" {
+			if _, err := time.Parse(time.RFC3339, s.at); err != nil {
+				return RestorePlan{}, fmt.Errorf(
+					"%s %q is not an RFC3339 timestamp. It needs an explicit offset — "+
+						"2026-07-27T13:59:00Z, or 2026-07-27T09:59:00-04:00. Without one PostgreSQL "+
+						"reads it in the recovering server's own timezone, and recovery stops at a "+
+						"different moment than you named and reports success",
+					s.atFlag, s.at)
+			}
+		}
+
+		// Restoring needs the Barman Cloud plugin, and the flags that switch the backup
+		// destination off switch the RESTORE path off with it — the same plugin reads
+		// the archive that writes it. Without this the run proceeds, OpenTofu refuses at
+		// plan time, and the operator is told to set a variable dcctl does not expose.
+		//
+		// The message names the flag the operator actually typed. A refusal that named
+		// the OTHER store's flag would read as a bug in dcctl rather than as an answer.
+		if s.from != "" && !f.BackupsEnabled {
+			return RestorePlan{}, fmt.Errorf(
+				"%s needs the database backup plugin, and this cluster was "+
+					"installed without it: `dcctl install --no-cnpg` skips the CloudNativePG operator "+
+					"the plugin extends, and `dcctl install --compact --no-tls` drops cert-manager, which "+
+					"the plugin needs for its own Issuer and Certificates. Restore onto a cluster "+
+					"installed with neither (--compact --no-tls=false keeps backups)", s.fromFlag)
+		}
 	}
 
 	return plan, nil
@@ -351,6 +396,37 @@ type archivePaths struct {
 // SAME bucket, so its own name would be every instance's path.
 func resolveArchivePaths(live clusterArchiveState, plan RestorePlan, fresh string, now time.Time) archivePaths {
 	var out archivePaths
+	path, ineffective := resolveArchivePath(live, plan.TsdbFrom, fresh, now)
+	out.Tsdb = path
+	if ineffective {
+		out.AlreadyLive = append(out.AlreadyLive, TsdbClusterName)
+	}
+	return out
+}
+
+// resolveRdbArchivePath is resolveArchivePaths for the CLUSTER's relational store —
+// `dcctl install`'s half, settled the same way and for the same reason.
+//
+// 🔴 ITS FRESH PATH IS EMPTY, AND THAT IS NOT AN OVERSIGHT. Empty is the OpenTofu
+// default, which means "archive under the Cluster's own name" — unambiguous here
+// because a cluster has exactly ONE relational store, in one bucket of its own. The
+// event store cannot do that: every instance's shares one bucket, so its own name
+// would be every instance's path, which is why freshTsdbArchivePath exists and why
+// nothing like it is needed here.
+//
+// ineffective reports that the relational store is already there, so the restore will
+// NOT run — CloudNativePG reads `spec.bootstrap` only when it CREATES a Cluster.
+func resolveRdbArchivePath(live clusterArchiveState, plan RestorePlan, now time.Time) (path string, ineffective bool) {
+	return resolveArchivePath(live, plan.RdbFrom, "", now)
+}
+
+// resolveArchivePath is the rule above applied to ONE store: what it archives under,
+// given what it is already archiving under and what this run recovers it from.
+//
+// Written once and called per store rather than once per store, because the branch
+// that was wrong the first time — Path where it meant Exists — is exactly the kind
+// that gets fixed in one copy.
+func resolveArchivePath(live clusterArchiveState, restoreFrom, fresh string, now time.Time) (path string, ineffective bool) {
 	switch {
 	case live.Exists:
 		// 🔴 A CLUSTER THAT EXISTS KEEPS ITS PATH, unconditionally — including the
@@ -369,17 +445,114 @@ func resolveArchivePaths(live clusterArchiveState, plan RestorePlan, fresh strin
 		// WAL would have no base backup until the next scheduled one: a window,
 		// up to a day wide, in which the database is restorable to no point at
 		// all. Green apply, no error, on the run that was trying to recover.
-		out.Tsdb = live.Path
-		if plan.TsdbFrom != "" {
-			out.AlreadyLive = append(out.AlreadyLive, TsdbClusterName)
-		}
-	case plan.TsdbFrom != "":
+		return live.Path, restoreFrom != ""
+	case restoreFrom != "":
 		// The real restore: nothing is there, so this Cluster is about to be
 		// CREATED and needs a path of its own to archive into.
-		out.Tsdb = RestoredArchivePath(plan.TsdbFrom, now)
+		//
+		// 🔴 THIS IS WHAT MAKES terraform_data.restore_guard UNREACHABLE FROM dcctl
+		// rather than merely survivable. That precondition refuses a recovered store
+		// pointed back at the archive it read; deriving a stamped path here means
+		// dcctl never asks for that combination in the first place, so the guard is
+		// a net under someone driving OpenTofu by hand, not a step in this path.
+		return RestoredArchivePath(restoreFrom, now), false
 	default:
 		// A fresh ordinary install.
-		out.Tsdb = fresh
+		return fresh, false
 	}
-	return out
+}
+
+// describeRelationalRestore is what `dcctl install` tells the operator about the
+// relational restore it is about to perform — in one place, so the rehearsal and the
+// real run cannot describe the same plan differently.
+//
+// 🔴 IT IS COMPUTED FROM THE PLAN AND THE LIVE READ, NEVER FROM AN APPLY'S OUTPUTS.
+// A --dry-run reads back nothing from an apply it does not run, so a describer built
+// on outputs prints the zero value and calls it the answer — which this project has
+// already shipped once, as a dry run reporting "Backups: NONE" for a cluster that
+// archives. Both inputs here are available before anything is applied, so the
+// rehearsal's sentence is the real run's sentence.
+//
+// Empty when nothing is being restored: an ordinary install should say nothing about
+// recovery at all.
+func describeRelationalRestore(plan RestorePlan, live clusterArchiveState, now time.Time) []string {
+	if !plan.RestoresRelationalStore() {
+		return nil
+	}
+	path, ineffective := resolveRdbArchivePath(live, plan, now)
+	if ineffective {
+		// 🔴 SAID OUT LOUD, because from the outside "it restored" and "it declined to
+		// restore" look identical: the apply is green either way and no data moves.
+		return []string{fmt.Sprintf(
+			"Cluster %s/%s already exists, so its restore from %q will NOT run: CloudNativePG "+
+				"reads spec.bootstrap only when it CREATES a cluster. A relational restore only "+
+				"takes effect on a cluster whose relational store is not there — which is the "+
+				"disaster it is for.", infraNamespace, RdbClusterName, plan.RdbFrom)}
+	}
+	line := fmt.Sprintf("relational store recovering from archive %q, and will archive under %q",
+		plan.RdbFrom, path)
+	if plan.RdbTargetTime != "" {
+		line += fmt.Sprintf(", replaying no further than %s", plan.RdbTargetTime)
+	}
+	// 🔴 THE HALF THIS COMMAND CANNOT ENFORCE, SAID WHERE THE OPERATOR IS.
+	//
+	// Before the install/bootstrap split, dcctl REFUSED a relational restore that did
+	// not also carry --restore-root-key: the recovered rows hold secrets sealed by an
+	// instance's root key, and a key that existed only in the destroyed cluster's etcd
+	// cannot be minted back. That refusal cannot live here any more — an install has no
+	// instance and no escrow artifact to check against, and `dcctl bootstrap` runs
+	// later, possibly much later, possibly from another machine.
+	//
+	// What is left is that this is the last moment anyone is thinking about the
+	// recovery, so it is the moment to say it. A warning an operator can still act on
+	// is worth more than a guard this command is structurally unable to make.
+	return []string{line,
+		"🔴 the recovered rows hold secrets sealed by each instance's root key, and no " +
+			"database backup contains those keys. Rebuild every instance with `dcctl bootstrap " +
+			"--restore-root-key <artifact>`: one bootstrapped without it mints a fresh key, " +
+			"comes up clean, and leaves every one of those secrets permanently unreadable"}
+}
+
+// dryRunRdbArchiveState is the relational store's archive state as a REHEARSAL is
+// allowed to read it: best effort, because a dry run is often aimed at a cluster that
+// does not exist yet and failing on an unreachable API server would break the
+// rehearsal for the case it serves best.
+//
+// 🔴 THE ASYMMETRY WITH THE REAL RUN IS DELIBERATE AND ONE-DIRECTIONAL. Install
+// FAILS on this read, because acting on a wrong answer there moves a live archiver.
+// Here nothing is applied, so a wrong answer costs nothing — but it is still SAID,
+// because a rehearsal that quietly assumed the store was absent would predict a
+// restore the real run declines to perform. Same shape, same reason, as
+// stepRenderConfig's read.
+func dryRunRdbArchiveState(ctx context.Context, st *State) clusterArchiveState {
+	// 🔴 NOTHING IS READ FOR A RUN THAT RESTORES NOTHING. An ordinary rehearsal must
+	// not start contacting an API server for an answer it has no use for — a dry run
+	// is routinely aimed at a cluster that does not exist yet, and the reachable
+	// failure would be a scary line about the relational store in a plan that never
+	// mentions one.
+	if !st.Restore.RestoresRelationalStore() {
+		return clusterArchiveState{}
+	}
+	state, err := readRdbArchiveState(ctx, st.KubeContext)
+	if err == nil {
+		return state
+	}
+	fmt.Println(color.YellowString(
+		"  could not read the relational store's archive state (%v); the rehearsal below "+
+			"assumes it is not there, which the real run will refuse to assume", err))
+	return clusterArchiveState{}
+}
+
+// readRdbArchiveState is the seam the rehearsal reads the CLUSTER's relational store
+// through. Indirected for the same reason readLiveArchiveState is: the branch behind it
+// decides between "this recovery will run" and "this recovery is a no-op", and that
+// decision has to be testable without standing up CloudNativePG — and, just as much,
+// without a test quietly reaching the developer's own cluster and passing because of
+// what happens to be in it.
+var readRdbArchiveState = func(ctx context.Context, kubeContext string) (clusterArchiveState, error) {
+	dyn, _, _, err := kubeClients(kubeContext)
+	if err != nil {
+		return clusterArchiveState{}, err
+	}
+	return clusterArchivePath(ctx, dyn, infraNamespace, RdbClusterName)
 }

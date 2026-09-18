@@ -62,7 +62,15 @@ type InstallOptions struct {
 	// MaxConnections is the relational store's connection budget. Zero keeps what the
 	// cluster was installed with, or the default on a first install.
 	MaxConnections int
-	DcctlVersion   string
+	// Restore recovers the CLUSTER's shared relational store from an archive instead
+	// of initialising an empty one (ADR-028). The zero plan is an ordinary install.
+	//
+	// Settled in the command layer by ResolveRestorePlan, before this cluster exists,
+	// because every way the flags can be wrong is knowable from argv alone. Only the
+	// Rdb half is ever set here: the event store belongs to an INSTANCE, and `dcctl
+	// bootstrap` carries that half.
+	Restore      RestorePlan
+	DcctlVersion string
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies
@@ -80,23 +88,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return err
 	}
 
-	st := &State{
-		KubeContext:          binding.KubeContext,
-		Binding:              binding,
-		Provider:             provider.Name(),
-		DcctlVersion:         opts.DcctlVersion,
-		DryRun:               opts.DryRun,
-		AssumeYes:            opts.AssumeYes,
-		NoTLS:                opts.NoTLS,
-		NoMonitoring:         opts.NoMonitoring,
-		NoCNPG:               opts.NoCNPG,
-		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-		Compact:              opts.Compact,
-		HA:                   opts.HA,
-		BackupDestination:    opts.BackupDestination,
-		MaxConnections:       opts.MaxConnections,
-		Values:               map[string]string{},
-	}
+	st := installState(binding, provider.Name(), opts)
 	settings := installSettingsFor(st)
 
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
@@ -111,6 +103,17 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			"store, the backup object store)")
 		wouldDo("create the base database identity instances' logins are made with")
 		wouldDo(fmt.Sprintf("record the install in ConfigMap %s/%s", infraNamespace, installRecordName))
+		// 🔴 A RESTORE IS THE ONE THING A REHEARSAL MOST NEEDS TO BE TOLD ABOUT, and
+		// the reason it is rendered from the PLAN plus a READ rather than from the
+		// apply's outputs is that a dry run has no outputs: this project has already
+		// shipped a --dry-run that printed "Backups: NONE" for a cluster that
+		// archives, because it read back a value an apply it never ran would have set.
+		// Both inputs here exist before anything is applied.
+		//
+		// Printed the way the real run prints it, not through wouldDo: these are
+		// sentences, and one of them says a restore will NOT happen, which "would" in
+		// front of it would turn into its own opposite.
+		printRelationalRestore(st.Restore, dryRunRdbArchiveState(ctx, st))
 		return nil
 	}
 
@@ -152,15 +155,17 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err != nil {
 		return fail("reading the relational store's archive state", err)
 	}
-	// The path the relational store archives under is permanent once it is archiving;
-	// see resolveArchivePaths.
-	if live.Exists {
-		st.Values["backupServerNameRdb"] = live.Path
-	}
+	settleRdbArchivePath(st, live, time.Now().UTC())
 	if st.Credentials, err = resolveCredentials(ctx, typed, st, liveArchiveState{Rdb: live}); err != nil {
 		return fail("settling the cluster's credentials", err)
 	}
 	done()
+
+	// 🔴 SAID BEFORE THE APPLY, not after. "It restored" and "it declined to restore"
+	// are indistinguishable from the outside — the apply is green either way and no
+	// data moves — so an operator mid-incident has to be told which one is about to
+	// happen while they can still stop.
+	printRelationalRestore(st.Restore, live)
 
 	clusterVars, _, err := splitVars(infraVars(st))
 	if err != nil {
@@ -212,6 +217,73 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	reportInstall(st, provider.Name())
 	return nil
+}
+
+// installState is the State an install runs from: the options, turned into the shape
+// every step downstream reads.
+//
+// 🔴 SEPARATED FROM Install SO IT CAN BE EXERCISED AT ALL. Install needs a provider
+// and a live cluster, so no test in this package reaches the struct literal below —
+// and a literal is exactly where a settled option is dropped. The restore is the one
+// that costs most: a dropped Restore leaves infraVars emitting no restore variables,
+// which is an ordinary install of an EMPTY relational store, reported green, during
+// the recovery it was run for. This was measured, not assumed — deleting the line was
+// invisible to the whole suite before this function existed.
+func installState(binding ClusterBinding, provider string, opts InstallOptions) *State {
+	return &State{
+		KubeContext:          binding.KubeContext,
+		Binding:              binding,
+		Provider:             provider,
+		DcctlVersion:         opts.DcctlVersion,
+		DryRun:               opts.DryRun,
+		AssumeYes:            opts.AssumeYes,
+		NoTLS:                opts.NoTLS,
+		NoMonitoring:         opts.NoMonitoring,
+		NoCNPG:               opts.NoCNPG,
+		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
+		Compact:              opts.Compact,
+		HA:                   opts.HA,
+		BackupDestination:    opts.BackupDestination,
+		MaxConnections:       opts.MaxConnections,
+		Restore:              opts.Restore,
+		Values:               map[string]string{},
+	}
+}
+
+// settleRdbArchivePath records the serverName the CLUSTER's relational store owns for
+// the rest of its life, which infraVars emits as backup_server_name_rdb.
+//
+// The path is permanent once the store is archiving, so a live store's own answer wins
+// — see resolveArchivePaths for what deriving it from a one-shot flag costs. A restore
+// into a store that is NOT there mints a fresh stamped path instead.
+//
+// 🔴 THAT SECOND BRANCH IS WHAT MAKES terraform_data.restore_guard UNREACHABLE FROM
+// dcctl rather than merely survivable. The guard refuses backup_server_name_rdb equal
+// to — or unset alongside — restore_rdb_from, because a recovered store pointed back
+// at the archive it read comes up and then hangs in `Setting up primary` on `Expected
+// empty archive`. Without the minting here, every dcctl recovery would hit that
+// precondition: loudly, but as a refusal from a layer the operator is not driving,
+// naming a variable dcctl does not expose, mid-incident.
+//
+// Empty is the OpenTofu default — the Cluster's own name — and is what every ordinary
+// install leaves, so the var is omitted rather than passed empty.
+//
+// Split out from Install so it can be exercised: the branch that is wrong is the one
+// that never runs on a developer's cluster, because a developer's cluster already has
+// a relational store.
+func settleRdbArchivePath(st *State, live clusterArchiveState, now time.Time) {
+	if path, _ := resolveRdbArchivePath(live, st.Restore, now); path != "" {
+		st.Values["backupServerNameRdb"] = path
+	}
+}
+
+// printRelationalRestore tells the operator what this run will do to the relational
+// store. One printer for the rehearsal and the real run, so the two cannot describe the
+// same plan in different words — which is the whole claim a rehearsal makes.
+func printRelationalRestore(plan RestorePlan, live clusterArchiveState) {
+	for _, line := range describeRelationalRestore(plan, live, time.Now().UTC()) {
+		fmt.Println(color.YellowString("  %s", line))
+	}
 }
 
 // previousInstall reads whatever install record the cluster already has, parsed but not
@@ -409,6 +481,16 @@ func reportInstall(st *State, provider string) {
 	printBackups("instances on this cluster", databaseBackupsEnabled(st), backupsAreExternal(st))
 	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
 		fmt.Printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
+	}
+	// 🔴 INTENT, AND LABELLED AS INTENT. The apply returning says the recovery
+	// bootstrap was rendered, not that a single row came back — nothing in an apply
+	// can say that. An operator who reads this as a verdict stops checking, which is
+	// how a restore that recovered nothing gets believed.
+	if st.Restore.RestoresRelationalStore() {
+		fmt.Printf("  %s %s\n", color.WhiteString("Relational recovery:"),
+			color.GreenString("requested from %q — check `kubectl -n %s get clusters.postgresql.cnpg.io %s` "+
+				"reads `Cluster in healthy state` before believing it", st.Restore.RdbFrom,
+				infraNamespace, RdbClusterName))
 	}
 	fmt.Println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
 		provider, clusterTargetFlag(st.Binding)))

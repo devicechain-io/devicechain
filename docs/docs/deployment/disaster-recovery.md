@@ -138,57 +138,79 @@ you would miss.
 
 ## Recovering an instance {#recover}
 
-Recovery is a command that **builds** a new instance. What `dcctl` can recover today is
-the root key and the event store; the relational database is not yet among them.
-
-That is why there is no "restore into the running instance" step here. There is no
-supported way to do that, deliberately: restoring underneath services that have
+Recovery **builds** a new cluster and a new instance on it. There is no "restore into
+the running instance" step, deliberately: restoring underneath services that have
 already created their own schemas means dropping tables they hold open and racing
 their migrations. **Recover by rebuilding.**
 
-:::caution Relational database restore is not available through `dcctl` yet
-The relational database holds **every** instance's database on the cluster, and it is
-installed once per cluster by `dcctl install`, not by `dcctl bootstrap`. Restoring it is
-therefore a cluster-level operation, and that operation has not shipped. Until it does,
-`dcctl` cannot recover core data from its archive — the half of this page the root key
-exists to protect. Its write-ahead log is still archived to the backup destination, so
-the backups themselves are being taken; what is missing is the command that restores
-from them.
+Two databases, two commands, in that order — because the two stores belong to different
+things. The relational database is installed once per cluster and holds **every**
+instance's data, so `dcctl install` recovers it. The event store is one instance's, so
+`dcctl bootstrap` recovers that one.
+
+**1. Recover the shared relational database**, as the cluster is prepared.
+
+```bash
+dcctl install local --restore-rdb-from dc-rdb
+```
+
+`--restore-rdb-from` names the folder inside the backup bucket — `dc-rdb` for a store
+that has never been restored, since the archive is written under the cluster's own name.
+Add `--restore-rdb-at`, an RFC 3339 timestamp strictly before the damage, for the other
+kind of disaster: the one where the data was destroyed correctly, by a bad migration or
+a mistaken delete, and you want the state just before it.
+
+Pass the same `--backup-credentials-file` the original install used, so the new cluster
+reads the archive the old one wrote.
+
+The flag only takes effect when the relational store is *created*, so aiming it at a
+cluster that already has one moves no data at all rather than half-working — `dcctl`
+says so, before it applies anything. Recover by installing into a cluster whose
+relational store is not there.
+
+Where the recovered store archives *afterwards* is chosen by `dcctl`, not by you, and
+there is no flag for it: a recovered database that kept archiving to the path it read
+would stop on its own safety check and hang on the way up. `dcctl` gives it a path of
+its own and then keeps that path across every later run.
+
+:::caution The rows come back; the keys do not
+A database backup contains no root keys. Every secret in the recovered store is still
+sealed by the key of the instance that wrote it, and that key lived only in the cluster
+you just lost. Rebuild each instance with `--restore-root-key` in step 2. An instance
+bootstrapped without it mints a fresh key, comes up perfectly clean, and leaves every
+one of those secrets permanently unreadable.
 :::
 
-**1. Rebuild the instance with its root key.**
+**2. Rebuild the instance with its root key**, and with its event data.
 
 ```bash
 dcctl bootstrap local my-instance \
-  --restore-root-key ~/backups/my-instance-rootkey.escrow
+  --restore-root-key ~/backups/my-instance-rootkey.escrow \
+  --restore-tsdb-from dc-tsdb-my-instance-1a2b3c4d
 ```
 
 The instance's secret-store root key is seeded from the escrow artifact instead of being
-minted, so the instance keeps the key its secrets were encrypted with: secrets in a
-relational backup restored later — once that restore is available — can be decrypted. On
-its own, this step does not bring any core data back. It yields an instance with an empty
-relational database and the old key. You will be asked
-for the artifact's passphrase (or supply it with `--escrow-passphrase-file` /
-`DCCTL_ESCROW_PASSPHRASE`).
+minted, so the instance keeps the key its secrets were encrypted with and the rows
+recovered in step 1 can be decrypted. You will be asked for the artifact's passphrase
+(or supply it with `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`).
+
+`--restore-tsdb-from` is optional and independent: the event store keeps its own
+timeline on purpose, so rewinding telemetry to yesterday does not mean the control plane
+should be rewound with it, and step 3 does not depend on it. It takes `--restore-tsdb-at`
+for a point in time, the same way. Every instance's event store archives under a path of
+its own, so read the path off the archive rather than guessing — `dc-tsdb` alone is the
+relational-style name and will not be there.
 
 A restore is one of the few things allowed to run against an instance that already
 exists — recovery is exactly the situation a run gets interrupted in and has to be
 retried, and a sharper guard makes that safe by permitting it only when the escrow
 artifact carries the key the instance is already running on.
 
-**2. Restore event data** with `--restore-tsdb-from` (and optionally `--restore-tsdb-at`,
-an RFC 3339 timestamp strictly before the damage, to roll back to a point in time),
-whenever it suits your recovery-time target. The event store keeps an independent
-timeline on purpose: rewinding telemetry to yesterday does not mean the control plane
-should be rewound with it. The flag only takes effect when the event store is *created*,
-so aiming it at a live instance moves no data at all, rather than half-working. Step 3
-does not depend on this.
-
 **3. Confirm the root key is the escrowed one** with `dcctl secrets escrow verify` (see
 [Verifying your escrow](#verify)). Reading a secret-backed object back — an outbound
-connector, a notification channel — is the stronger check, but it needs the relational
-database restored, so it becomes available with that restore: a restore that returns rows
-is not proof; a value that decrypts is.
+connector, a notification channel — is the stronger check, and it is available once step
+1 has recovered the store that object lives in: a restore that returns rows is not proof;
+a value that decrypts is.
 
 **4. If you restored event data, check the machinery and not the row count.** A
 recovered event store can hold every row and still have quietly stopped being a
@@ -252,7 +274,8 @@ instance's own namespace.
 
 You are looking for `Cluster in healthy state`. A cluster stuck in `Setting up
 primary` has not recovered — most often the archive is unreachable, or
-`--restore-tsdb-from` names a path that does not exist in the bucket.
+`--restore-rdb-from` / `--restore-tsdb-from` names a path that does not exist in the
+bucket.
 :::
 
 :::note Restoring under a different instance name
