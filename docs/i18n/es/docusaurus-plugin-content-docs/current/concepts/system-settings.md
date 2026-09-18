@@ -18,24 +18,29 @@ nunca lo ve.
 | `entity.token_masks` | La forma de cada token que acuña la consola | más abajo |
 | `locale.default` | El idioma en el que se abre la consola | más abajo |
 
-Leer un ajuste no requiere más autoridad que haber iniciado sesión. Escribir uno requiere
-`settings:write`, que es una autoridad de nivel operador y no forma parte de ningún rol de
-inquilino.
+Leer un ajuste requiere `settings:read` y escribir uno requiere `settings:write`; ambas son
+autoridades de nivel operador y no forman parte de ningún rol de inquilino. Dos cosas siguen
+siendo legibles por cualquier usuario con sesión iniciada sin ninguna de las dos: la consulta
+`tokenMasks`, que sirve solo el mapa efectivo de máscaras de token para que todo formulario de
+creación de la consola pueda acuñar un token, y la marca, el mapa base y el idioma *efectivos* de
+un inquilino, que el objeto del inquilino expone ya plegados sobre el valor por defecto de la
+instancia.
 
 ## A qué está sujeta toda escritura de ajustes {#settings-write-rules}
 
 Tres reglas se aplican a las cuatro claves, en este orden:
 
-1. **El valor debe ocupar menos de 64 KB.** Por encima de eso la escritura se rechaza indicando el
-   recuento de bytes. Esto acota el documento JSON entero, no un campo concreto dentro de él — lo
+1. **La clave debe ser una de las cuatro anteriores.** El vocabulario es cerrado: escribir una clave
+   no reconocida se rechaza en lugar de crear un ajuste, y se rechaza antes siquiera de mirar el
+   valor. No hay forma de añadir uno desde la API.
+2. **El valor debe ocupar como máximo 64 KB.** Por encima de eso la escritura se rechaza indicando
+   el recuento de bytes. Esto acota el documento JSON entero, no un campo concreto dentro de él — lo
    que importa sobre todo en `branding.default`, donde un logotipo `data:` incrustado podría ser
    mucho mayor. El [registro de marca](./white-labeling.md) admite un logotipo incrustado de 256 KB
    *en un inquilino*, donde se guarda como una columna con tipo y no como un ajuste; en el nivel de
    instancia se aplica en su lugar el límite de 64 KB del documento, que equivale a unos 48 KB de
    imagen. La consola le dirige a una URL `https` en este nivel exactamente por eso.
-2. **El valor debe ser JSON válido.**
-3. **La clave debe ser una de las cuatro anteriores.** El vocabulario es cerrado: escribir una clave
-   no reconocida se rechaza en lugar de crear un ajuste. No hay forma de añadir uno desde la API.
+3. **El valor debe ser JSON válido.**
 
 Después cada clave aplica su propia validación, que describen las páginas enlazadas en la tabla.
 

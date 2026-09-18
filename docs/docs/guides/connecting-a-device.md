@@ -33,16 +33,20 @@ console**, and the broker refuses anything that is not that value or that value 
 including the random id your client library invents when you leave it unset. (The suffix is how one
 device runs two connections; see [MQTT](#mqtt) below.) It is a session key, not a label.
 
-**How they go wrong.** A refused connection is **closed, not answered** — your client reports a
-reset or an unexpected EOF, never an authorization failure, and a device that reconnects
-automatically will loop on it. So all three of these mistakes look identical from the device. If a
+**How they go wrong.** A refused connection gets **one generic answer**: the broker returns MQTT
+CONNACK return code 5 (*not authorized*) and then closes the connection — the same code whether the
+client id, the `{tenant}:` prefix or the credential was wrong, so your client reports "not
+authorized" (or, if it never reads the CONNACK, only the reset or unexpected EOF that follows), and a
+device that reconnects automatically will loop on it. So all three of these mistakes look identical
+from the device. If a
 device cannot connect, check the client id first — it is the one value the console never shows you,
 so it is the one you had to construct — then the `{tenant}:` prefix on the username, then the
 credential itself.
 
 And a fourth, further on: the `token` in a **command** envelope identifies the *command*, not the
-device. Sending the device token back in a command response matches nothing and the response is
-discarded — see [Responding to a command](#responding-to-a-command).
+device. Sending the device token back in a command response matches nothing: the answer settles no
+command and ends up on the platform's dead-letter stream, where an operator can see it, while the
+command stays outstanding — see [Responding to a command](#responding-to-a-command).
 :::
 
 ## The event body
@@ -66,10 +70,12 @@ Every inbound event — over any transport — is a JSON object:
 
 ### Payload shapes
 
-**Every payload wraps its content in an `entries` array**, and every numeric value is a **JSON
-string**. Both rules are enforced: a payload with no entries, an entry with nothing in it, or a bare
-number where a string is expected is **rejected** — HTTP answers `400` and an MQTT publish is
-dead-lettered rather than silently accepted.
+**Every payload wraps its content in an `entries` array**, and the JSON type of each value is fixed
+by the shape: measurement values and every `Location` field are **JSON strings** (`"21.5"`, not
+`21.5`), while an alert's `level` is a **bare JSON integer**. Both rules are enforced: a payload with
+no entries, an entry with nothing in it, or a value of the wrong JSON type (a bare number where a
+string is expected, or a quoted alert `level`) is **rejected** — HTTP answers `400` and an MQTT
+publish is dead-lettered rather than silently accepted.
 
 **One entry is one reading, taken at one instant.** An entry may carry its own `occurredTime`, and
 that is the instant the reading is stored, charted, evaluated and returned at — so a device that
@@ -213,7 +219,7 @@ That requirement is not bookkeeping. An MQTT client id is the key a broker files
 **If a device needs more than one connection, give each one a suffix:** `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, and so on. Anything after the third `:` is yours to choose. Two connections sharing one client id are two clients fighting over one session — they will disconnect each other in a loop — so a device that publishes on one connection and subscribes for commands on another needs a distinct suffix for each.
 
 :::tip Diagnosing a rejected client id
-A refused connection is **closed, not answered** — the broker drops the socket rather than returning an MQTT "not authorized" code, so your client reports a connection reset or an unexpected EOF rather than an authorization failure. A device that reconnects automatically will loop on it. If a device that used to connect suddenly cannot, check its client id before you check its credential.
+A refused connection is answered with **MQTT CONNACK return code 5 (not authorized)** and then closed — and that code is deliberately generic: a bad client id, a missing `{tenant}:` prefix and a bad credential all produce the same one, so the refusal never says which check failed. Your client reports "not authorized" (or, if it does not read the CONNACK before the close, a connection reset or an unexpected EOF). A device that reconnects automatically will loop on it. If a device that used to connect suddenly cannot, check its client id before you check its credential.
 :::
 
 Publish the event body to your device's events topic:
@@ -340,7 +346,9 @@ mosquitto_pub \
 
 - **`commandToken` must be the `token` from the delivery envelope** — the command's token,
   not the device's. This is the single most common mistake: sending the device token here
-  matches no command and the response is discarded.
+  matches no command, so the response settles nothing — it is redelivered until the broker's
+  delivery ceiling (five attempts) and then recorded on the dead-letter stream with reason
+  `exhausted`, visible to an operator, while the command stays outstanding.
 - **`dispatchNonce` must be the `dispatchNonce` from the delivery envelope you are
   answering.** It is required: a response that omits it, or that quotes a nonce from an
   earlier delivery of the same command, does not settle the command. See below for why.

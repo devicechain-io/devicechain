@@ -25,9 +25,19 @@ y conviene respaldarlos y restaurarlos como dos operaciones separadas, no como u
 | Necesita la clave raíz | **Sí** | No |
 
 No es una política impuesta sobre una única base de datos: es como la plataforma ya
-almacena las cosas. `event-management` es el único servicio que habla con TimescaleDB,
-y no habla con ningún otro almacén; todos los demás servicios viven íntegramente en el
-servidor relacional. No hay escrituras cruzadas que mantener consistentes entre ambos.
+almacena las cosas. `event-management` es el propietario del almacén de eventos —su
+esquema, sus hypertables, sus políticas de retención— y es el único servicio que
+escribe telemetría en él; todos los demás servicios guardan sus propios datos en el
+servidor relacional. El único otro servicio que llega a TimescaleDB es `user-management`,
+a través de una conexión invitada que no crea ningún esquema ni ejecuta migraciones, y
+solo para borrar las filas de un inquilino purgado. Ninguna escritura abarca ambos
+almacenes, así que no hay nada que mantener transaccionalmente consistente entre ellos.
+Lo único que conviene saber cuando las dos mitades tienen puntos de recuperación
+distintos: la fila del inquilino en el lado relacional es lo que impulsa ese borrado y se
+elimina una vez terminado, de modo que unos datos de eventos restaurados a un punto
+*anterior* a la purga de un inquilino, junto a unos datos de núcleo restaurados a un
+punto *posterior* a la liberación de su fila, devuelven una telemetría que ya nada
+volverá a borrar.
 
 Dos consecuencias que conviene planificar:
 
@@ -309,10 +319,20 @@ ha recuperado: lo más habitual es que el archivo histórico sea inalcanzable, o
 `--restore-rdb-from` / `--restore-tsdb-from` indique una ruta que no existe en el bucket.
 :::
 
-:::note Restaurar con otro nombre de instancia
-Está perfectamente soportado: el artefacto registra el nombre para el que se escribió y
-`dcctl` señala la discrepancia en lugar de rechazarla. El nombre registrado está
-autenticado, así que no se puede editar sin invalidar el archivo.
+:::caution Recupere con el nombre propio de la instancia
+Una recuperación debe usar el nombre que tenía la instancia. La restauración relacional
+devuelve la base de datos con ese nombre, propiedad del login de esa misma instancia, de
+modo que un bootstrap ejecutado con un nombre *distinto* consulta el almacén, no
+encuentra nada suyo allí y rechaza la operación en lugar de acuñar una clave raíz nueva
+sobre filas recuperadas que después no podría abrir.
+
+El rechazo se produce antes de escribir nada, pero *después* de que la restauración
+relacional ya se haya ejecutado, así que conviene decidirlo antes de empezar y no
+durante el incidente.
+
+El artefacto sí registra el nombre para el que se escribió, y ese nombre está
+autenticado: no se puede editar sin invalidar el archivo. Renombrar una instancia es una
+migración, no una restauración, y hoy la plataforma no lo hace.
 :::
 
 ## Verificar el depósito antes de necesitarlo {#verify}
@@ -357,10 +377,13 @@ no llegan a conectarse al bróker.
 
 `dcctl upgrade` es el comando que actúa sobre una instancia viva, y **no acuña nada**.
 Vuelve a leer la clave raíz del almacén de secretos, la autoridad y los inicios de
-sesión del bróker, las contraseñas propietarias de las bases de datos, el secreto de
-autenticación entre servicios y el secreto de cliente del inicio de sesión único, y
-conserva todos ellos. Un cambio de versión no puede convertirse en un cambio de
-credenciales.
+sesión del bróker (la semilla del emisor de callout y las contraseñas de servicio y de
+sistema), las contraseñas de las bases de datos (la del propietario compartido, la del
+aprovisionador, la del inicio de sesión propio de la instancia y la del propietario del
+almacén de eventos), el secreto de autenticación entre servicios —y, cuando el monitoreo
+y las copias de seguridad dentro del clúster están habilitados, la contraseña de
+administrador de Grafana y las credenciales del almacén de objetos—, y conserva todos
+ellos. Un cambio de versión no puede convertirse en un cambio de credenciales.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
 

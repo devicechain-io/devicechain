@@ -355,7 +355,7 @@ extraen las imágenes —la canalización, el chart y el operador son idénticos
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta a un clúster instalado a través de este kube-context. |
-| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo —añade inferencia de IA, conectores salientes y MCP), `telemetry`, o `ingest-only`. |
+| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo —añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M), `telemetry`, o `ingest-only`. |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola **sin editar `/etc/hosts`**. |
@@ -404,8 +404,9 @@ existen en lugar de añadir un eje de ajuste propio:
 **No** cambia qué servicios se ejecutan —eso se controla en el `--profile` de cada
 instancia, donde queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo
 `full`— es rechazado en un clúster compacto: las cifras compactas publicadas se miden sobre
-`default`, así que no describirían una instancia que ejecuta tres servicios más. Los
-perfiles más pequeños (`telemetry`, `ingest-only`) sí se aceptan.
+`default`, así que no describirían una instancia que ejecuta cinco servicios más (inferencia
+de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M). Los perfiles
+más pequeños (`telemetry`, `ingest-only`) sí se aceptan.
 
 Tanto TLS como el monitoreo pueden conservarse: un `--no-tls=false` o
 `--no-monitoring=false` explícito en `dcctl install` se respeta, y el resto de las palancas

@@ -15,7 +15,7 @@ Disponible. Las asignaciones se gestionan desde la pestaña **Assignment** de la
 
 Un dispositivo se autentica con una **credencial**; la asignación solo **organiza** sus datos. Ambos son independientes:
 
-- Un dispositivo que está registrado y provisto de credencial **reporta telemetría de inmediato**, incluso sin asignación. Sus eventos se resuelven con un **anclaje nulo** — igualmente se persisten y actualizan el estado en vivo del dispositivo; simplemente aún no se atribuyen a un cliente/área/activo.
+- Un dispositivo que está registrado y provisto de credencial **reporta telemetría de inmediato**, incluso sin asignación. Sus eventos se resuelven con un **conjunto de anclajes vacío** — igualmente se persisten y actualizan el estado en vivo del dispositivo; simplemente aún no se atribuyen a un cliente/área/activo.
 - **Asignar** el dispositivo posteriormente da a sus eventos subsiguientes un **anclaje**, de modo que consultas como "cada lectura del Edificio 7" los encuentran.
 
 Por lo tanto, los dispositivos sin asignar nunca se descartan silenciosamente — un cambio respecto al comportamiento anterior.

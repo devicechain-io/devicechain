@@ -52,7 +52,7 @@ Hacer una geocerca *más pequeña* casi siempre funciona también, con una excep
 Dos consecuencias que conviene conocer. Como el total del conjunto cuenta formas distintas, hacer diferente una de varias geocercas dibujadas igual puede subir su total aunque esa geocerca se haya hecho más pequeña — el rechazo lo indica cuando ocurre. Y como eliminar baja el total almacenado, un inquilino por encima del límite que elimine una geocerca no podrá volver a crearla: para mover una geocerca a un token nuevo, **cree primero la nueva y elimine después la antigua**.
 :::
 
-Un contorno debe además **delimitar un área**. Un anillo cuyas aristas se cruzan — un «moño» — no tiene un interior bien definido, así que una pregunta de contención sobre él no tiene respuesta honesta. Los anillos así se rechazan al guardar, mediante la misma comprobación que el motor de detección aplica cuando compila una regla. Eso importa más de lo que parece: antes de que la comprobación se ejecutara en el momento de la autoría, una geocerca así se guardaba sin problemas, quedaba en el registro con aspecto saludable, y fallaba solo más tarde, cuando por fin una regla la nombraba.
+Un contorno debe además **delimitar un área**. Un anillo cuyas aristas se cruzan — un «moño» — no tiene un interior bien definido, así que una pregunta de contención sobre él no tiene respuesta honesta. Los anillos así se rechazan al guardar, mediante la misma comprobación que el motor de detección aplica cuando compila la geometría de un conjunto de geocercas. Eso importa más de lo que parece: antes de que la comprobación se ejecutara en el momento de la autoría, una geocerca así se guardaba sin problemas, quedaba en el registro con aspecto saludable, y fallaba solo más tarde, cuando por fin una regla la nombraba.
 
 :::tip La consola advierte antes de que el servidor rechace
 Mientras dibuja, la consola señala de inmediato una forma que se autointerseca. Su comprobación es una aproximación plana de la esférica que realiza el servidor, así que ambas pueden discrepar en geocercas muy grandes o en las que cruzan el antimeridiano — por eso la consola solo *advierte*. La respuesta del servidor es la que decide.
@@ -97,7 +97,7 @@ Las reglas de detección alcanzan una geocerca por token:
 geo.inFence("yard-perimeter")
 ```
 
-El predicado responde para la posición del evento que se está evaluando, contra el conjunto de geocercas con el que ese evento fue sellado. Una regla que nombra una geocerca que no se puede compilar — porque su anillo no delimita un área — falla al compilar en lugar de responder de forma arbitraria.
+El predicado responde para la posición del evento que se está evaluando, contra el conjunto de geocercas con el que ese evento fue sellado. Una regla que nombra una geocerca que no se puede compilar — porque su anillo no delimita un área — compila y publica igualmente; la geocerca se conserva en el conjunto con su error, así que en la evaluación cada muestra contra ella se omite y se cuenta como error de evaluación en lugar de responderse de forma arbitraria — el mismo resultado que un token de geocerca desconocido, descrito [más abajo](#unknown-fence).
 
 ### Una prueba de geocerca y una de medición no pueden compartir condición {#fences-and-measurements}
 
@@ -124,7 +124,7 @@ Cuatro situaciones lo producen, y solo la primera es un error:
 | Una regla autorada contra una geocerca que existe en una versión *posterior* a los eventos que se reproducen | Lo mismo, y por lo mismo |
 | La primerísima regla de geocerca de un inquilino, en los segundos posteriores a publicarla | Transitorio; el motor carga el conjunto de geocercas al llegar la regla |
 
-Los errores de evaluación se exponen por regla en la previsualización de autoría y en la salud de reglas del motor de detección, así que esto es visible — pero nada señala la geocerca como causa. Si una regla de geocerca produce errores y nada más, revise el token primero.
+Los errores de evaluación se exponen por regla en la previsualización de autoría, como su contador de errores de evaluación, y de forma agregada en la métrica `detect_fanout_eval_errors_total` del motor de detección — la vista de salud de reglas no los muestra, y una regla que produce errores en cada muestra sigue apareciendo ahí como `ACTIVE`. Así que esto es visible, pero solo en esas dos superficies, y nada señala la geocerca como causa. Si una regla de geocerca produce errores y nada más, revise el token primero.
 
 ### Qué mantiene el motor en memoria {#fence-set-retention}
 

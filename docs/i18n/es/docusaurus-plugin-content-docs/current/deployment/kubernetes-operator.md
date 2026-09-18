@@ -20,7 +20,7 @@ Usted elige qué servicios ejecutar con **ya sea** un perfil nombrado **o** un c
 | Perfil | Áreas funcionales |
 |---|---|
 | `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — el sistema estándar, y a lo que resuelve un perfil sin establecer |
-| `full` | todo lo de `default`, más `ai-inference`, `outbound-connectors`, y `mcp`: las áreas que alcanzan fuera de la instancia, cada una de las cuales conlleva una decisión que tomar deliberadamente (una clave de proveedor de pago, una superficie de salida, una API orientada a agentes) |
+| `full` | todo lo que incluye esta compilación: `default`, más `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest` y `lwm2m-ingest` — las áreas que `default` deja fuera porque cada una conlleva una decisión que tomar deliberadamente (una clave de proveedor de pago, una superficie de salida, una API orientada a agentes, un transporte de dispositivos Sparkplug B o LwM2M que abre su propio puerto de entrada) |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -95,8 +95,10 @@ kubectl --context <kube-context> get instance <id> -o yaml
 ```
 
 Parte de la especificación es **inmutable** una vez escrita —el vínculo con el clúster
-ante todo, porque reescribirlo apuntaría `dcctl destroy` a un clúster distinto. Es el
-servidor de la API el que rechaza esas ediciones, no una comprobación de `dcctl`.
+ante todo, porque reescribirlo apuntaría `dcctl destroy` a un clúster distinto. Ambas
+capas rechazan esa edición: el CRD lleva las reglas como expresiones de validación, así
+que el servidor de la API rechaza una edición a mano con `kubectl`, y `dcctl` compara esos
+mismos campos con la declaración que ya está en el clúster antes de escribir.
 
 ### `kubectl delete instance` no termina {#finalizer}
 

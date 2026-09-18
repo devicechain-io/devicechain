@@ -10,7 +10,7 @@ Limits are enforced **at the edges**, before traffic reaches shared infrastructu
 
 - **Ingest** — a per-tenant rate limit in the event-sources service, applied as device traffic is decoded, before it is published onto the internal pipeline. An over-limit tenant's excess is shed at the front door instead of backing up the shared stream.
 - **Egress** — outbound volume from [REACT actions](./outbound-connectors.md#governance) is rate-limited per tenant at both ends of the hop: the detection engine sheds over-budget emissions before dispatch, and the outbound-connectors service admits sink traffic within a bounded budget.
-- **AI inference** — the opt-in AI service applies a per-tenant rate limit and tracks per-tenant spend, so one tenant's authoring sessions cannot monopolize (or silently run up) the shared inference path.
+- **AI inference** — the opt-in AI service applies a per-tenant rate limit, so one tenant's authoring sessions cannot monopolize the shared inference path. Inference spend is observable — the input and output tokens the provider reports are counted as instance-wide metrics an operator can watch and alert on — but it is not tracked per tenant, and no budget is enforced against it: the rate ceiling is the only thing that bounds a tenant here.
 - **Undelivered commands** — a per-tenant ceiling on how many commands may be waiting to go out at once, enforced as a command is enqueued. It is the one limit here that **refuses** rather than sheds: the three above drop a tenant's excess traffic, while this one returns a rejection the caller can see and retry — a command is a physical actuation, so quietly dropping one is not available. See [how much backlog a tenant may hold](./commands.md#held-command-ceiling).
 
 All enforcement points resolve limits through one shared **governance library** in the platform core — a single per-tenant limit fetcher/resolver — so every dimension answers the "what is this tenant allowed?" question the same way.
@@ -36,7 +36,7 @@ A tenant's governance ceilings come from its **[tier](./tenant-tiers.md)** — t
 
 **per-tenant override → tier setting → platform default**
 
-Per-tenant overrides are audited exceptions, not the mechanism — the tier carries the packaged answer, and the platform default is the floor the fail-safe rule guarantees. The same cascade shape governs branding and AI model entitlement, so "which tier is this tenant on?" answers one consistent question across subsystems.
+Per-tenant overrides are audited exceptions, not the mechanism — the tier carries the packaged answer, and the platform default is the floor the fail-safe rule guarantees. The same cascade governs AI model entitlement — a per-tenant model assignment, then the model the tenant's tier marks as its default — so "which tier is this tenant on?" answers one consistent question across the governance and AI subsystems. Tenant branding cascades too, but with no tier level in it: a tenant's override, then the operator's `branding.default` system setting, then the shipped default.
 
 ## Seeing it work
 

@@ -105,7 +105,16 @@ account needs:
 
 - `get`, `create`, `update` and `delete` on `leases.coordination.k8s.io` in
   `dc-k8s-system`;
-- `get`, `create` and `update` on `instances.core.devicechain.io`, cluster-wide.
+- `get`, `list`, `create`, `update`, `patch` and `delete` on
+  `instances.core.devicechain.io`, cluster-wide;
+- `list` on `secrets` in `dc-system`.
+
+`list` is not optional on either line, and it is the one most likely to be left out.
+Every bootstrap and upgrade asks the cluster which instances it already holds and what
+they have claimed — the ingress host, the local MQTT port, the connection budget — and
+that question is a list, not a get. An account granted only `get` reaches the check that
+protects the other instances on the cluster and fails there. `patch` and `delete` are
+what release the declaration's finalizer when an instance is torn down.
 
 If the account does not hold them, `dcctl` surfaces the API server's own refusal —
 which verb, which resource, which namespace, which user — rather than reporting it as

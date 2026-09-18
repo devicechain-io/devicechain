@@ -17,23 +17,27 @@ that sets its own value never sees it.
 | `entity.token_masks` | The shape of every token the console mints | below |
 | `locale.default` | The language the console opens in | below |
 
-Reading a setting needs no special authority beyond being signed in. Writing one requires
-`settings:write`, which is an operator-level authority and not part of any tenant role.
+Reading a setting requires `settings:read` and writing one requires `settings:write`; both are
+operator-level authorities and not part of any tenant role. Two things stay readable by any
+signed-in user without either: the `tokenMasks` query, which serves only the effective token-mask
+map so that every console create form can mint a token, and a tenant's *effective* branding,
+basemap and language, which the tenant object exposes already folded over the instance default.
 
 ## What every settings write is subject to {#settings-write-rules}
 
 Three rules apply to all four keys, in this order:
 
-1. **The value must be under 64 KB.** Over that, the write is refused with the byte count. This
+1. **The key must be one of the four above.** The vocabulary is closed: writing an unrecognised
+   key is refused rather than creating a setting, and it is refused before the value is even
+   looked at. There is no way to add one from the API.
+2. **The value must be at most 64 KB.** Over that, the write is refused with the byte count. This
    bounds the whole JSON document, not any one field inside it — which matters most for
    `branding.default`, where an inline `data:` logo could otherwise be far larger. The
    [branding record](./white-labeling.md) allows a 256 KB inline logo *on a tenant*, where it is
    stored as a typed column rather than as a setting; at the instance tier the 64 KB document
    bound applies instead, which works out to roughly 48 KB of image. The console steers you to an
    `https` URL at this tier for exactly that reason.
-2. **The value must be valid JSON.**
-3. **The key must be one of the four above.** The vocabulary is closed: writing an unrecognised
-   key is refused rather than creating a setting. There is no way to add one from the API.
+3. **The value must be valid JSON.**
 
 Each key then applies its own validation, which the pages linked in the table describe.
 

@@ -101,11 +101,34 @@ without looking at anything:
 
 ## 3. Run a service
 
-Each service is a single binary. Configuration is supplied via environment / config; see each service's `config` package for the available settings.
+Each service is a single binary. It takes no flags, and it does not start on an empty
+environment: at startup it reads its **identity** from environment variables and its
+**settings** from two documents at fixed paths, the same ones the Helm chart mounts on every
+pod.
+
+- `DC_INSTANCE_ID` and `DC_MS_FUNCTIONAL_AREA` are **required** — the instance the service
+  belongs to and the service's own area (`event-sources` for the command below). The service
+  refuses to start when either is missing. `DC_LOG_CONSOLE=1` switches the JSON log output to
+  a human-readable console format.
+- `/etc/dci-config/instance` is the **instance-wide** document: NATS hostname and port, the
+  database and persistence settings, and the rest of the shared infrastructure. Its shape is
+  `InstanceConfiguration` in `backend/core/config/instance.go` — this is where you point the
+  service at the NATS and TimescaleDB you started in step 1.
+- `/etc/dct-config/<functional-area>` is the **per-service** document, typed in that service's
+  `config` package (`backend/services/event-sources/config` here). An empty document is valid
+  and applies the typed defaults.
+
+Both documents are decoded strictly — an unknown key is refused, not ignored — and both paths
+are constants with no flag or environment override, so running a service against your own
+infrastructure means writing those two files under `/etc` and exporting the variables:
 
 ```bash
+export DC_INSTANCE_ID=dc-local DC_MS_FUNCTIONAL_AREA=event-sources DC_LOG_CONSOLE=1
 go run ./backend/services/event-sources
 ```
+
+If you want the files rendered for you rather than written by hand, `dcctl install` and
+`dcctl bootstrap` produce a complete instance, as the note at the top of this page says.
 
 (`go run` takes a path to one package, so it resolves inside that module and works from the
 repository root — unlike the `./...` patterns above.)

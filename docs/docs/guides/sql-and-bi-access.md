@@ -83,8 +83,10 @@ the database operator to watch the Secret for updates, and it is required for th
 below to do anything within a predictable time.
 
 Two details that catch people out: the label's *presence* is what counts, so any value works;
-and the `username` in the Secret must match the role name **exactly**, with no trailing newline
-— a mismatch is reported only as a password error, while quietly stalling other reconciliation.
+and the `username` in the Secret must match the role name **exactly**, with no trailing newline.
+When the database operator cannot reconcile a role, it names the role and the cause under the
+database Cluster's `status.managedRolesStatus` — not in DeviceChain's own logs — so look there
+before assuming a bad password.
 :::
 
 **2. Declare the role in your deployment variables**, with a connection limit:
@@ -102,7 +104,15 @@ timescale_analytics_readers = [
 Apply. The role appears, joins the reader group, and can connect. Nothing needs restarting.
 
 To rotate the password, change it in the Secret — the database is reconciled to match, with no
-restart. To revoke access, remove the entry and apply.
+restart. To revoke access, remove the entry, apply, and then **drop the role as a superuser**:
+removing the entry only stops your deployment declaring the role, and the database operator
+leaves a role it no longer manages in place, with its password and its reader-group membership
+intact. Dropping it first would not work either — while it is still declared, the operator
+recreates it.
+
+```sql
+DROP ROLE analytics_acme;
+```
 
 If you created the Secret before the labelling step above was documented, add the label now;
 until you do, a password change may sit unapplied for an unpredictable time.
@@ -147,11 +157,11 @@ distance.
 :::
 
 :::note Upgrading an existing install
-If you declared readers before this split existed, they had position. On the first restart after
-upgrading, the event store takes that grant back from every reader you have not marked
-`reads_location = true` — a dashboard that plots positions will start returning `permission denied`
-until you set it. That convergence is deliberate: the grant is re-derived from your declaration on
-every boot rather than accumulated.
+If you declared readers before this split existed, they had position. On the first restart of the
+`event-management` service after upgrading, it takes that grant back from every reader you have not
+marked `reads_location = true` — a dashboard that plots positions will start returning
+`permission denied` until you set it. That convergence is deliberate: the grant is re-derived from
+your declaration every time `event-management` starts rather than accumulated.
 :::
 
 ## Connecting a BI tool
@@ -205,13 +215,17 @@ client can turn off. It is also how position is separated: a reader without `rea
 no privilege on `analytics.location_events`, so the coordinates are unreachable rather than
 filtered.
 
-**Both layers are re-established every time the event store starts.** The views are rebuilt and the
-privileges re-converged on each boot, so neither a privilege granted by hand during an investigation
-nor a view edited during one quietly outlives it. A restart is a repair.
+**Both layers are re-established every time the `event-management` service starts.** It is the
+service, not the database, that does this — restarting the database alone repairs nothing. On each
+boot the function that resolves a session's tenant is rebuilt, every view is verified — and rebuilt
+if it is missing, exposes the wrong columns, has lost its tenant predicate or is no longer a
+security barrier — and the privileges are re-converged, so neither a privilege granted by hand
+during an investigation nor a view edited during one quietly outlives it. A restart of
+`event-management` is a repair.
 
 That covers the position grant specifically, and in every direction it can be widened: a `GRANT` on
 `analytics.location_events` made to a reader by name, to the general reader group, or to `PUBLIC` is
-taken back on the next boot. What a reader ends up holding is derived from your declaration each
+taken back on the service's next boot. What a reader ends up holding is derived from your declaration each
 time, never accumulated — which is also why removing `reads_location` genuinely removes access
 rather than leaving the last grant in place.
 
@@ -232,7 +246,9 @@ closed and the resource-contention path is not.
 If that matters for your workload, run BI against a **read replica**. A replicated deployment
 already exposes a read-only service alongside the primary; pointing readers at it puts the
 contention on a node whose only job is serving them, and PostgreSQL resolves a conflict there by
-cancelling the long analytics query rather than by delaying replay.
+holding replay back for a bounded time — 30 seconds by default, its `max_standby_streaming_delay`,
+which the deployment leaves at that default — and then cancelling the long analytics query, so the
+replica never falls behind indefinitely.
 :::
 
 :::caution What is *not* capped: query cost
@@ -268,7 +284,8 @@ assumption that every one of those connections may be running a long query.
   tenants have BI access), see when those sessions are active, and see internal table and chunk
   names. It cannot read a row of any of it. If that matters, give each customer its own instance.
 - **Deleting a tenant does not delete its reader role.** Remove the role from your deployment
-  variables as part of decommissioning it. The telemetry is erased, so the role reads nothing — but
-  a login that still exists is a login somebody still holds, **and a tenant id can be reused, in
-  which case that role would read its successor's data.** Removing the role is the step that closes
-  both.
+  variables and then drop it as a superuser, as part of decommissioning it. The telemetry is erased,
+  so the role reads nothing — but a login that still exists is a login somebody still holds, **and a
+  tenant id can be reused, in which case that role would read its successor's data.** Dropping the
+  role is the step that closes both; removing it from your declaration alone leaves it in the
+  database, as described under [Declaring a reader](#declaring-a-reader).

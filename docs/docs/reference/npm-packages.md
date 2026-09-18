@@ -67,9 +67,11 @@ const definition = parseDashboardDefinition(json);
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
 ```
 
-Omit `actions` for a strictly read-only mount: the acting widgets — alarm acknowledge,
-command send — then render without their controls. That is the whole opt-in, and it is
-belt to the server's braces. A viewer who never receives `actions` cannot write from
+Omit `actions` for a strictly read-only mount: the acting widgets then render inert. The
+alarm table omits its acknowledge and clear controls altogether; the command widget
+keeps its parameter form and Send button on screen but disabled, with a notice that the
+viewer has no permission to issue commands. That is the whole opt-in, and it is belt to
+the server's braces. A viewer who never receives `actions` cannot write from
 the board no matter what it contains, and the server enforces `alarm:write` and
 `command:write` regardless.
 
@@ -190,19 +192,22 @@ values ship as `@devicechain/brand`; nothing requires them.
 |---|---|
 | **Module format** | ESM only. There is no CommonJS build. |
 | **React** | 19. |
-| **Bundler** | Vite, webpack, Rollup or esbuild. |
+| **Bundler** | Vite or webpack. |
 | **TypeScript resolution** | The emitted declarations use extensionless specifiers, which resolve under `moduleResolution: "bundler"` and **not** under `node16`/`nodenext`. |
 
 Those are the supported combinations, and the line between "supported" and "probably
 fine" is drawn on purpose. They are exercised against a real browser in three
 applications built outside this repository from the packed tarballs — one on Vite, one
-on webpack, and one on the copy-the-worker recipe above — each of which renders the map
-and is checked on the tiles it actually fetched and the markers it actually placed,
-because "it rendered" is exactly the assertion this widget's failure mode passes.
+on webpack, and one on the copy-the-worker recipe above, also built with webpack — each
+of which renders the map and is checked on the tiles it actually fetched and the markers
+it actually placed, because "it rendered" is exactly the assertion this widget's failure
+mode passes.
 
-Nothing there exercises Next.js or React Server Components, CommonJS consumers, or
-`node16`/`nodenext` resolution. Those are untested rather than known-broken, and this
-page will say so when that changes.
+Nothing there exercises Rollup or esbuild consumers, Next.js or React Server Components,
+CommonJS consumers, or `node16`/`nodenext` resolution. Rollup and esbuild consume the
+same plain ESM and are expected to work, but they sit on the "probably fine" side of the
+line; the rest are untested rather than known-broken. This page will say so when that
+changes.
 
 ## Building against the workspace instead
 

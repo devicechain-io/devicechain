@@ -107,7 +107,16 @@ gente tu cuenta necesita:
 
 - `get`, `create`, `update` y `delete` sobre `leases.coordination.k8s.io` en
   `dc-k8s-system`;
-- `get`, `create` y `update` sobre `instances.core.devicechain.io`, con alcance de clúster.
+- `get`, `list`, `create`, `update`, `patch` y `delete` sobre
+  `instances.core.devicechain.io`, con alcance de clúster;
+- `list` sobre `secrets` en `dc-system`.
+
+`list` no es opcional en ninguna de las dos líneas, y es el verbo que más fácilmente se
+omite. Cada bootstrap y cada upgrade preguntan al clúster qué instancias alberga ya y qué
+han reclamado —el host de ingress, el puerto MQTT local, el presupuesto de conexiones—, y
+esa pregunta es un list, no un get. Una cuenta con solo `get` llega hasta la comprobación
+que protege a las demás instancias del clúster y falla ahí. `patch` y `delete` son los que
+liberan el finalizer de la declaración cuando se destruye una instancia.
 
 Si la cuenta no los tiene, `dcctl` te muestra la negativa del propio servidor de la API
 —qué verbo, qué recurso, qué namespace, qué usuario— en lugar de presentarla como una

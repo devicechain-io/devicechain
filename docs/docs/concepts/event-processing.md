@@ -33,7 +33,7 @@ Group membership is recorded on each event **as it is resolved**, so the engine 
 | **Repeating** | the condition occurs a number of times within a window (e.g. `3 faults in 10 minutes`) | an occurrence count + a window |
 | **Rate of change** | a metric changes too fast between consecutive readings (e.g. `temperature rising > 5°/s`) | the comparison + an optional flag to normalise the change to a per-second rate |
 | **Absence / silence** | a device goes quiet — no qualifying event within a window (a dead-man check) | a silence window |
-| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Defined through the API today — neither console authoring surface offers it yet, and one of them will silently rewrite it (see below).* | none — the [presence](./device-presence.md) edge is the whole signal |
+| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Authored in the console's form builder or through the API — the visual automation canvas does not offer the type (see below).* | none — the [presence](./device-presence.md) edge is the whole signal |
 | **Windowed aggregate** | an aggregate over a window crosses a comparison (e.g. `average > 50 over 10 minutes`) | the function (count/sum/avg/min/max), a window (tumbling, sliding, or session), the comparison + value |
 | **Area correlation** | enough distinct devices in an area meet the condition together (e.g. `≥ 3 devices in a zone report a fault within 5 minutes`) | the area/anchor type, a distinct-device count + window |
 
@@ -60,10 +60,10 @@ than *detection* — a "compare against last month" question is usually better a
 stored history than by holding a month of readings in memory.
 :::
 
-:::warning Do not open a Connectivity rule in the console's form editor
-Because the form builder does not model the Connectivity type, opening an existing Connectivity rule in it **silently reads the rule back as a Threshold rule**, and saving from that drawer replaces the original definition. Nothing warns you: the form's "could not be read" notice fires only when the stored definition is not valid JSON, which a working Connectivity rule of course is.
+:::note Connectivity rules and the automation canvas
+The form builder authors and opens Connectivity rules: the type is in its picker, and because the presence edge is the whole signal, the form offers no condition or parameters for it. The visual automation canvas has no Connectivity node — it refuses to open one outright and tells you the type cannot be shown on the canvas. So author and edit a Connectivity rule in the form builder or through the API, not on the canvas.
 
-The automation canvas is safe — it refuses the rule outright and tells you the type is unsupported. Until the form builder learns the type, edit a Connectivity rule only through the API.
+If the form opens a stored rule it cannot hold completely — a field it does not model, or a type it does not know — it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON, and a Connectivity rule opens with neither.
 :::
 
 ### Static and dynamic thresholds

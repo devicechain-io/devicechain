@@ -20,7 +20,7 @@ You choose which services to run with **either** a named profile **or** an expli
 | Profile | Functional areas |
 |---|---|
 | `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — the standard system, and what an unset profile resolves to |
-| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, and `mcp`: the areas that reach outside the instance, each of which carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API) |
+| `full` | everything this build ships: `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest` and `lwm2m-ingest` — the areas held back from `default` because each carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API, a Sparkplug B or LwM2M device transport that binds its own inbound port) |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -93,8 +93,10 @@ kubectl --context <kube-context> get instance <id> -o yaml
 ```
 
 Part of the spec is **immutable** once written — the cluster binding above all, because
-rewriting it would point `dcctl destroy` at a different cluster. The API server refuses
-those edits rather than `dcctl` checking for them.
+rewriting it would point `dcctl destroy` at a different cluster. Both layers refuse such
+an edit: the CRD carries the rules as validation expressions, so the API server rejects a
+hand edit made with `kubectl`, and `dcctl` compares the same fields against the
+declaration already in the cluster before it writes.
 
 ### `kubectl delete instance` does not complete {#finalizer}
 

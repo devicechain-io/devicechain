@@ -122,9 +122,10 @@ helm install dc deploy/helm/devicechain \
 ```
 
 El chart de Helm en sí también se publica como un artefacto OCI, por lo que puede instalarlo sin una
-copia local del repositorio. El chart se versiona por separado de las imágenes y no lleva la
-`v` inicial; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la
-última, y `--version` rechaza cualquier valor que nunca se haya publicado:
+copia local del repositorio. La versión del chart es la versión publicada sin la `v` inicial
+—`--version 0.16.0` instala la versión `v0.16.0`—, así que no hay un número aparte que buscar;
+`helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la última, y
+`--version` rechaza cualquier valor que nunca se haya publicado:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
@@ -219,8 +220,10 @@ propio registro de la instancia en lugar de adivinarlo, y dice cuál es.
 :::tip Lee todas las credenciales y no acuña ninguna
 `dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
 propietarias de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
-entre servicios, la clave raíz del almacén de secretos y el secreto de cliente del inicio de
-sesión único. Un cambio de versión no puede convertirse en un cambio de credenciales.
+entre servicios, la clave raíz del almacén de secretos y —cuando el clúster los ejecuta— la
+contraseña de administrador del panel de monitoreo y la credencial del almacén de objetos de
+respaldo interno del clúster. Un cambio de versión no puede convertirse en un cambio de
+credenciales.
 
 Esto está verificado, no solo afirmado. Se comprobó la actualización de una instancia en
 funcionamiento comparando un resumen criptográfico (digest) de cada una de esas credenciales
@@ -241,10 +244,10 @@ número de réplicas, por ejemplo, no vuelve a replicar los streams de mensajer�
 con el número anterior.
 
 Otras dos cosas quedan deliberadamente fuera de este comando. No ejecuta la aplicación de
-infraestructura, porque dos de las entradas de esa aplicación no se pueden recuperar del
-clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, y el texto
-claro del secreto de cliente del inicio de sesión único. Y no toca las bases de datos más allá
-de dejar que los servicios ejecuten sus propias migraciones.
+infraestructura, porque una de las entradas de esa aplicación no se puede recuperar del
+clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, que provienen
+del archivo que usted entregó a `dcctl install --backup-credentials-file`. Y no toca las bases
+de datos más allá de dejar que los servicios ejecuten sus propias migraciones.
 :::
 
 ### Qué más comprueba una actualización {#upgrade-checks}
@@ -303,9 +306,15 @@ indicara.
 
 Lo que hace que el despliegue sea seguro:
 
-- **Aumentar antes de terminar.** Cada Deployment usa una estrategia `RollingUpdate` con
+- **Aumentar antes de terminar.** Los Deployments usan por defecto una estrategia `RollingUpdate` con
   `maxUnavailable: 0` y `maxSurge: 1`, de modo que un pod nuevo debe pasar su sonda de disponibilidad
-  `/readyz` **antes** de que se elimine un pod antiguo. La capacidad nunca disminuye durante el despliegue.
+  `/readyz` **antes** de que se elimine un pod antiguo, y la capacidad nunca disminuye durante el
+  despliegue. Cuatro áreas se distribuyen en cambio con `strategy: Recreate` y una sola réplica, porque
+  solo uno de sus pods puede servir a la vez: `event-processing` (el motor de reglas es un escritor
+  único), `mcp` (la sesión de un cliente vive en el pod que la abrió), `sparkplug-ingest` (un Sparkplug
+  Host por pod) y `lwm2m-ingest` (un socket CoAP/UDP por pod). En ellas, todos los pods antiguos se
+  detienen antes de que arranque el nuevo, así que un despliegue tiene una breve brecha por diseño; y
+  el chart rechaza `Recreate` con más de una réplica.
 - **Apagado ordenado / drenaje de conexiones.** Cuando se le pide a un pod que termine, primero
   informa "no listo" (de modo que el Service deje de enrutarle nuevas solicitudes), espera una breve
   ventana de drenaje para que ese cambio se propague, y solo entonces termina el trabajo en curso y
@@ -323,11 +332,16 @@ Lo que hace que el despliegue sea seguro:
   migraciones y el resto espera; sin condiciones de carrera, sin DDL duplicado.
 
 :::tip Ejecute al menos dos réplicas en producción
-Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área, de modo que el despliegue siempre tenga
-un pod activo sirviendo tráfico. Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
+Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área que
+pueda servir desde más de un pod, de modo que el despliegue siempre tenga un pod activo sirviendo tráfico.
+Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
 Configúrelo globalmente con `--set replicas=2`, o por área bajo
-`functionalAreas.<area>.replicas`. Un `PodDisruptionBudget` se genera automáticamente para cualquier
-área con más de una réplica, de modo que los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
+`functionalAreas.<area>.replicas`. Las cuatro áreas de un solo pod mencionadas arriba son la excepción:
+`mcp`, `sparkplug-ingest` y `lwm2m-ingest` rechazan más de una réplica con cualquier estrategia, y
+`event-processing` acepta una segunda réplica solo como reserva en caliente, con `strategy: RollingUpdate`
+configurada junto a ella; en cualquier otro caso el renderizado falla y explica por qué. Un
+`PodDisruptionBudget` se genera automáticamente para cualquier área con más de una réplica, de modo que
+los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
 :::
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}

@@ -119,9 +119,10 @@ helm install dc deploy/helm/devicechain \
 ```
 
 The Helm chart itself is also published as an OCI artifact, so you can install it without a
-checkout of the repository. The chart is versioned separately from the images and carries no
-leading `v`; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the
-latest, and `--version` refuses anything that was never published:
+checkout of the repository. The chart version is the release version without its leading `v`
+— `--version 0.16.0` installs release `v0.16.0` — so there is no separate number to look up;
+`helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the latest, and
+`--version` refuses anything that was never published:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
@@ -210,8 +211,9 @@ cluster from the instance's own record rather than guessing, and says which.
 
 :::tip It reads every credential and mints none
 `dcctl upgrade` keeps what the instance is running on: the database owner passwords, the
-broker's authority and logins, the cross-service secret, the secret-store root key, and the
-single sign-on client secret. A version change cannot become a credential change.
+broker's authority and logins, the cross-service secret, the secret-store root key, and —
+where the cluster runs them — the monitoring dashboard's admin password and the in-cluster
+backup store's credential. A version change cannot become a credential change.
 
 This is verified rather than asserted. An upgrade of a running instance was checked by
 comparing a digest of every one of those credentials before and after, and the only thing
@@ -231,10 +233,10 @@ replica count, for one, does not re-replicate messaging streams that were create
 one.
 
 Two things are deliberately outside this command as well. It does not run the infrastructure
-apply, because two of that apply's inputs cannot be recovered from the cluster — the endpoint
-and bucket names of an off-site backup destination, and the single sign-on client secret's
-cleartext. And it does not touch the databases beyond letting the services run their own
-migrations.
+apply, because one of that apply's inputs cannot be recovered from the cluster — the endpoint
+and bucket names of an off-site backup destination, which come from the file you gave
+`dcctl install --backup-credentials-file`. And it does not touch the databases beyond letting
+the services run their own migrations.
 :::
 
 ### What else an upgrade checks {#upgrade-checks}
@@ -289,9 +291,15 @@ with — indefinitely, and with no error to say so.
 
 What makes the rollout safe:
 
-- **Surge-before-terminate.** Each Deployment uses a `RollingUpdate` strategy with
+- **Surge-before-terminate.** Deployments default to a `RollingUpdate` strategy with
   `maxUnavailable: 0` and `maxSurge: 1`, so a new pod must pass its `/readyz` readiness
-  probe **before** an old pod is removed. Capacity never dips during the rollout.
+  probe **before** an old pod is removed, and capacity never dips during the rollout. Four
+  areas ship with `strategy: Recreate` and one replica instead, because only one of their
+  pods may serve at a time: `event-processing` (the rule engine is a single writer), `mcp`
+  (a client's session lives on the pod that opened it), `sparkplug-ingest` (one Sparkplug
+  Host per pod) and `lwm2m-ingest` (one CoAP/UDP socket per pod). For those, every old pod
+  stops before the new one starts, so a rollout has a brief gap by design — and the chart
+  refuses `Recreate` with more than one replica.
 - **Graceful shutdown / connection draining.** When a pod is asked to terminate it first
   reports "not ready" (so the Service stops routing new requests to it), waits a short
   drain window for that change to propagate, and only then finishes in-flight work and
@@ -310,11 +318,15 @@ What makes the rollout safe:
   wait — no races, no duplicate DDL.
 
 :::tip Run at least two replicas in production
-For true zero-downtime, run `replicas: 2` (or more) for each area so the rollout always has
-a live pod serving traffic. A single replica still has a brief gap while its one pod is
-replaced. Set it globally with `--set replicas=2`, or per area under
-`functionalAreas.<area>.replicas`. A `PodDisruptionBudget` is rendered automatically for any
-area with more than one replica, so node drains can't evict every replica at once.
+For true zero-downtime, run `replicas: 2` (or more) for each area that can serve from more
+than one pod, so the rollout always has a live pod serving traffic. A single replica still
+has a brief gap while its one pod is replaced. Set it globally with `--set replicas=2`, or
+per area under `functionalAreas.<area>.replicas`. The four single-pod areas above are the
+exception: `mcp`, `sparkplug-ingest` and `lwm2m-ingest` refuse more than one replica under
+any strategy, and `event-processing` takes a second replica only as a warm standby, with
+`strategy: RollingUpdate` set alongside it — the render fails and says why otherwise. A
+`PodDisruptionBudget` is rendered automatically for any area with more than one replica, so
+node drains can't evict every replica at once.
 :::
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}

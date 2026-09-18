@@ -207,9 +207,13 @@ rules raise onto the same alarm, all of them must resolve.
 
 Beyond that, the most common cause is a rule kind that **only re-evaluates when an event arrives**.
 If a device raises an alarm and then goes completely silent, there is nothing to observe the
-condition ending, and the alarm stays active. A **repeating-occurrence** rule has a stronger version
-of the same problem: it cannot observe the end of its condition from non-matching traffic at all, so
-only a fresh matching event or a scope change will clear it.
+condition ending, and the alarm stays active. A **repeating-occurrence** rule does not have this
+problem while the device keeps reporting: a non-matching reading that carries its metric still ages
+the earlier matches out of the trailing window, and the alarm clears when the count drops below N.
+**Count-window** and **session** rules have a stronger version of the problem: a count window is
+counted in matching events and a session is opened only by one, so neither can observe the end of
+its condition from non-matching traffic at all — a raised alarm stays up until the next window
+completes or the next session closes with the condition no longer true, which may be never.
 
 **The intended pattern is to pair such a rule with an absence rule**, so a device that stops
 reporting raises a distinct, actionable signal rather than leaving a stale one standing.
@@ -336,8 +340,10 @@ A long timeout costs memory in direct proportion to its length, just as a long w
 :::danger A rule over the ceiling does not run — it is refused at startup, not grandfathered
 The ceiling is applied when the engine **loads** a rule, not only when one is published. A rule
 whose window exceeds the current ceiling fails to compile on load and is **skipped**: it does not
-run, and the only evidence is an error line in the engine's log. No alert fires, and no metric
-moves — a skipped rule holds no state to be measured.
+run. The evidence is an error line in the engine's log and a **Compile error** status, carrying the
+compile diagnostic, on the profile's **Rule Health** tab, which recompiles every published rule under
+the current ceiling. No alert fires, and no metric moves — a skipped rule holds no state to be
+measured.
 
 Two situations produce this, and both are silent:
 

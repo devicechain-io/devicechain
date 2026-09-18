@@ -230,9 +230,14 @@ ellas. Si varias reglas levantan sobre la misma alarma, todas deben resolverse.
 Más allá de eso, la causa más común es un tipo de regla que **solo se reevalúa cuando llega un
 evento**. Si un dispositivo levanta una alarma y luego se queda completamente en silencio, no hay
 nada que observe el fin de la condición, y la alarma sigue activa. Una regla de **ocurrencia
-repetida** tiene una versión más severa del mismo problema: no puede observar en absoluto el fin de
-su condición a partir de tráfico que no coincide, así que solo la limpiará un nuevo evento que sí
-coincida, o un cambio de alcance.
+repetida** no tiene este problema mientras el dispositivo sigue reportando: una lectura que no
+coincide pero que trae su métrica sigue haciendo envejecer las coincidencias anteriores fuera de la
+ventana deslizante, y la alarma se limpia cuando el conteo baja de N. Las reglas de **ventana de
+conteo** y de **sesión** tienen una versión más severa del problema: una ventana de conteo se cuenta
+en eventos que coinciden y una sesión solo la abre uno de ellos, así que ninguna puede observar en
+absoluto el fin de su condición a partir de tráfico que no coincide —una alarma levantada sigue en
+pie hasta que se complete la siguiente ventana o se cierre la siguiente sesión con la condición ya
+no cumplida, lo que puede no ocurrir nunca.
 
 **El patrón previsto es emparejar una regla así con una regla de ausencia**, para que un dispositivo
 que deja de reportar levante una señal distinta y accionable en lugar de dejar una obsoleta en pie.
@@ -372,8 +377,10 @@ memoria en proporción directa a su longitud, igual que una ventana larga.
 :::danger Una regla por encima del techo NO se ejecuta: se rechaza al arrancar, no se preserva
 El techo se aplica cuando el motor **carga** una regla, no solo cuando se publica una. Una regla
 cuya ventana supere el techo vigente falla al compilar durante la carga y **se omite**: no se
-ejecuta, y la única evidencia es una línea de error en el registro del motor. No se dispara ninguna
-alerta ni se mueve ninguna métrica —una regla omitida no retiene estado que medir.
+ejecuta. La evidencia es una línea de error en el registro del motor y un estado **Error de
+compilación**, con el diagnóstico del compilador, en la pestaña **Rule Health** del perfil, que
+recompila cada regla publicada bajo el techo vigente. No se dispara ninguna alerta ni se mueve
+ninguna métrica —una regla omitida no retiene estado que medir.
 
 Hay dos situaciones que producen esto, y ambas son silenciosas:
 

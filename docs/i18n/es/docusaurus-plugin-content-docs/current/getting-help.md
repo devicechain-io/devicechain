@@ -53,11 +53,20 @@ nombres de host internos. Las incidencias y las discusiones son públicas.
 Si faltan datos de telemetría, estas tres causas explican la mayoría de los informes, y
 descartarlas primero suele ser más rápido que esperar una respuesta:
 
-- **El dispositivo no está asignado.** Los eventos de un dispositivo sin asignar se
-  descartan sin que aparezca ningún error visible para el emisor.
-- **La medición no está en el perfil.** El perfil de un tipo de dispositivo declara las
-  mediciones que la plataforma acepta; cualquier otra se descarta durante la
-  decodificación.
+- **El token del dispositivo no está registrado, o su credencial es rechazada.** Que el
+  dispositivo esté sin asignar *no* es el problema: los eventos de un dispositivo sin
+  asignar se almacenan y se proyectan, solo que sin ningún cliente, área o activo al que
+  atribuirse. El problema es un token que la plataforma no conoce, o una credencial que
+  rechaza — el transporte ya ha respondido cuando el evento se resuelve, por lo que el
+  rechazo nunca llega al emisor; el evento se envía a la cola de mensajes no entregados
+  (dead letter) y se registra con nivel de advertencia en device-management.
+- **La medición no está en el perfil, y su valor no es un número.** Una medición sin
+  declarar cuyo valor es numérico se almacena tal cual, sin ninguna advertencia. Una cuyo
+  valor no es numérico se descarta — solo esa entrada, con una advertencia en los
+  registros de device-management — porque las mediciones se almacenan como números. Una
+  medición *declarada* cuyo valor no coincide con el tipo declarado es peor: el evento
+  completo se envía a la cola de mensajes no entregados. Declarar la métrica en el perfil,
+  con el tipo de dato correcto, resuelve ambos casos.
 - **Está consultando un inquilino distinto** de aquel al que reporta el dispositivo.
 
 ## Qué esperar

@@ -51,11 +51,14 @@ sigue el protocolo de sesión de Sparkplug.
   [LwM2M](./lwm2m.md): el estado en línea de un dispositivo Sparkplug es
   autoritativo, no inferido a partir de un tiempo de espera (timeout).
 
-  DeviceChain es deliberadamente estricto sobre qué muertes aplica. Un DEATH se
-  acepta solo cuando su número de secuencia de nacimiento se correlaciona con la
-  sesión que está viva en ese momento, de modo que un will obsoleto o duplicado
-  que quedó de una conexión anterior se **ignora** en lugar de derribar una
-  sesión que un BIRTH más nuevo ya restableció. Un DEATH de dispositivo para un
+  DeviceChain es deliberadamente estricto sobre qué muertes aplica. Cuando el
+  BIRTH de un nodo declara un número de secuencia de nacimiento (como exige la
+  especificación Sparkplug), un DEATH se acepta solo cuando lleva uno que
+  coincide, de modo que un will obsoleto o duplicado que quedó de una conexión
+  anterior se **ignora** en lugar de derribar una sesión que un BIRTH más nuevo
+  ya restableció. Un nodo cuyo BIRTH no declaró ningún número de secuencia de
+  nacimiento no puede correlacionarse en absoluto, así que su muerte se acepta
+  tal cual. Un DEATH de dispositivo para un
   dispositivo que nunca nació no emite nada en absoluto —no hay presencia que
   terminar. Y la muerte de un *nodo* se **propaga en cascada**: marca fuera de
   línea al nodo y a todos los dispositivos conocidos bajo él, porque en
