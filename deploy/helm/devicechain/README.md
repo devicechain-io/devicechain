@@ -19,6 +19,17 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --set image.tag=v1.2.0
 ```
 
+**`instance.id` picks the namespace, but is not the namespace.** The instance is
+deployed into `dci-` plus the id — the install above lands entirely in
+`dci-devicechain` — and the chart creates that namespace itself, so no `--namespace`
+flag is needed. The prefix keeps instance namespaces disjoint from the cluster's own
+(`monitoring`, `dc-system`, `cert-manager`, `cnpg-system`, `ingress-nginx`), so an
+instance can never be installed into a namespace a cluster component owns: without it,
+an instance named `monitoring` would write its root key, its broker TLS private key and
+every database credential into the monitoring stack's namespace. The id keeps all its
+other jobs — it still names the release, the database and its login, the config objects,
+the ServiceAccount, the `devicechain.io/instance` label and every messaging subject.
+
 Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned separately by the
 OpenTofu modules in
 [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu);
@@ -338,10 +349,13 @@ re-opens every private address for every tenant.
 
 ## What it renders
 
-- A `Namespace` named `instance.id` (toggle with `instance.createNamespace`). **The
-  instance's broker and event store live in this namespace too**, so uninstalling the
-  release deletes them — and the event store's data — along with the services.
-- `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`.
+- A `Namespace` named `dci-<instance.id>` (toggle with `instance.createNamespace`), and
+  every object below is written into it. **The instance's broker and event store live in
+  this namespace too**, so uninstalling the release deletes them — and the event store's
+  data — along with the services.
+- `dci-<id>-config` — instance config mounted at `/etc/dci-config/instance`. (The
+  `dci-` here is the object-name prefix these objects have always carried, not the
+  namespace prefix; this Secret lives *in* `dci-<id>`, it is not named after it.)
 - `dct-<id>-config` — per-area config mounted at `/etc/dct-config/<area>`.
 - Per enabled area: a `Deployment` (with `/readyz` readiness + `/healthz`
   liveness probes) and a `Service` on the GraphQL port (plus

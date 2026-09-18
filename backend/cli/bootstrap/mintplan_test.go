@@ -450,9 +450,17 @@ func TestNoMintedCredentialIsPlacedInTwoSecrets(t *testing.T) {
 		if field == "" {
 			continue
 		}
+		// 🔑 THE NAMESPACE IS DERIVED HERE AND THE SECRET NAME IS NOT, and the asymmetry
+		// is deliberate. What this exemption means is "the same Secret, in the instance's
+		// OWN namespace", so the namespace comes from the function that decides what that
+		// is, while the name stays a literal comparison between the two places. This line
+		// used to spell the namespace out as the instance id, which was the same string
+		// until an instance's namespace gained a prefix — at which point it stopped
+		// exempting the pair it was written for and began reporting it.
+		ownNamespace := instanceNamespace(st.Instance) + "/"
 		places := where[field]
-		if len(places) == 2 && strings.HasPrefix(places[1], "acme/") &&
-			strings.TrimPrefix(places[0], "dc-system/") == strings.TrimPrefix(places[1], "acme/") {
+		if len(places) == 2 && strings.HasPrefix(places[1], ownNamespace) &&
+			strings.TrimPrefix(places[0], "dc-system/") == strings.TrimPrefix(places[1], ownNamespace) {
 			continue // the cluster's archive credential and the instance's copy of it
 		}
 		if len(places) > 1 {

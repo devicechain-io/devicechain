@@ -14,7 +14,7 @@ import (
 )
 
 // instanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
-// and every credential it owns. Today the body below returns the instance id unchanged.
+// and every credential it owns. It is the instance id behind instanceNamespacePrefix.
 //
 // 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is infraNamespace, in
 // infranamespace.go. The broker and the event store lived in infraNamespace until each
@@ -36,7 +36,27 @@ import (
 // `dci-<id>-…` Secret names and the `dc-<id>` Helm release, the WAL archive path, and the
 // directory under ~/.devicechain/instances. None of those come through here, and a call
 // added to one of them would rename something that has to keep its name.
-func instanceNamespace(instance string) string { return instance }
+// instanceNamespacePrefix is what puts an instance's namespace out of reach of the
+// cluster's own. `dcctl install` creates monitoring, dc-system, cert-manager, cnpg-system
+// and ingress-nginx; an instance may be named anything an operator likes, and before this
+// prefix a name matching one of those aimed the instance straight at a namespace a cluster
+// component owns. Measured on a real cluster: a bootstrap named `monitoring` wrote the
+// secret-store root key, the broker's TLS private key and four database credentials into
+// the monitoring stack's namespace, and only then was refused by Helm.
+//
+// 🔑 THE POINT IS THAT THE TWO SETS CANNOT MEET, not that the collisions are enumerated.
+// A list of the namespaces `dcctl install` creates would need extending whenever a
+// component gained one, and would still be silent about a namespace a component wants
+// LATER — `monitoring` is free on a `--compact` cluster right up until somebody installs
+// the stack by hand. Every name in one set carries this prefix and no name in the other
+// does, so neither question has to be answered.
+//
+// 🔴 IT IS NOT THE `dci-` IN `dci-<id>-config`. That one prefixes object NAMES, predates
+// this, and means something else; `dci-acme-config` is not "the namespace plus -config".
+// The two are spelled alike and a reader who merges them will rename one of them.
+const instanceNamespacePrefix = "dci-"
+
+func instanceNamespace(instance string) string { return instanceNamespacePrefix + instance }
 
 // instanceNamespaceLabel is what says a namespace is an instance's. The chart writes it
 // on everything it renders, the namespace included (devicechain.instanceLabels in

@@ -148,13 +148,13 @@ variable "grafana_oauth_auth_url" {
 }
 
 variable "grafana_oauth_token_url" {
-  description = "Server-side token endpoint Grafana's pod calls — an IN-CLUSTER service URL (Grafana cannot reach the public ingress host), e.g. http://user-management.<instance>:8080/oauth/token."
+  description = "Server-side token endpoint Grafana's pod calls — an IN-CLUSTER service URL (Grafana cannot reach the public ingress host), e.g. http://user-management.dci-<instance-id>:8080/oauth/token."
   type        = string
   default     = ""
 }
 
 variable "grafana_oauth_api_url" {
-  description = "Server-side userinfo endpoint Grafana's pod calls — an in-cluster service URL, e.g. http://user-management.<instance>:8080/oauth/userinfo."
+  description = "Server-side userinfo endpoint Grafana's pod calls — an in-cluster service URL, e.g. http://user-management.dci-<instance-id>:8080/oauth/userinfo."
   type        = string
   default     = ""
 }

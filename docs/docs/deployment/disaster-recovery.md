@@ -197,11 +197,12 @@ missing is the background work. That store answers queries perfectly for as long
 takes the disk to fill.
 
 Open a shell on the event store's primary — under the operator, `psql` needs no
-password there. The event store runs in the instance's own namespace, and its database is
-named after the instance:
+password there. Two names built from the instance id appear in the command below and they
+are not the same string: the namespace is `dci-` plus the instance id, while the database
+is the instance id on its own, with no prefix.
 
 ```bash
-kubectl -n <instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
+kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
 Ask it two questions. **First, are the event tables still hypertables?**

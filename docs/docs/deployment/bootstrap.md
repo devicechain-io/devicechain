@@ -143,9 +143,13 @@ belongs to the instance, so `dcctl bootstrap --allow-legacy-db-removal` covers t
 
 **Several instances on one cluster.** A cluster can hold more than one DeviceChain
 instance. Each instance's services, its broker (NATS), its event store (TimescaleDB) and
-its credentials live in a namespace named after the instance, and each instance connects
-to the shared relational database with a login of its own that owns exactly one database —
-so no instance can reach another's data. What instances share are the cluster's
+its credentials live in a namespace of their own, named for the instance behind a `dci-`
+prefix: instance `devicechain` runs in namespace `dci-devicechain`. The prefix is what keeps
+an instance's namespace from ever colliding with one the cluster itself uses — `monitoring`,
+`cert-manager`, `ingress-nginx` and the rest are out of reach by construction, so no instance
+id can take one of them. Each instance connects to the shared relational database with a
+login of its own that owns exactly one database — so no instance can reach another's data.
+What instances share are the cluster's
 prerequisites: the ingress controller, cert-manager, the CloudNativePG operator,
 monitoring, the relational database and the backup object store. [`dcctl install`](#install)
 installs them once; every bootstrap reuses them, and follows the settings the cluster was
@@ -161,8 +165,11 @@ Two things on a cluster can belong to only one instance, and the bootstrap handl
   of the first instance only. Later instances' brokers are reachable from inside the
   cluster, and the bootstrap says so when it happens.
 
-Instance names are lowercase letters, digits and `-`, at most 50 characters, because the
-name is also the instance's namespace, its database and that database's login.
+Instance names are lowercase letters, digits and `-`, at most 50 characters. The name is
+the instance's database and that database's login as written, and it is the tail of two
+other names: the namespace is `dci-` plus the name, and the Helm release is `dc-` plus the
+name. The 50 characters come from that release name — Helm caps a release at 53 characters,
+so the name itself has 50 to spend.
 
 An instance built before instances had namespaces of their own runs its broker and event
 store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
@@ -545,7 +552,7 @@ headless/ingest-only instance, deploy with the console disabled — see the char
 To inspect the running instance:
 
 ```bash
-kubectl --context <kube-context> get pods -n my-instance
+kubectl --context <kube-context> get pods -n dci-my-instance
 ```
 
 To explore the console against a moving fleet rather than an empty one, run a

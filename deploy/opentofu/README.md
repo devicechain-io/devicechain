@@ -17,9 +17,9 @@ these modules, passing its cluster credentials to the providers.
 | Provisioned | How | Endpoint (defaults) |
 |---|---|---|
 | Namespace | `kubernetes_namespace_v1` | `dc-system` |
-| NATS (JetStream + MQTT) — instance root | `nats` Helm chart, pinned | `dc-nats.<instance-id>:4222` / `:1883` |
+| NATS (JetStream + MQTT) — instance root | `nats` Helm chart, pinned | `dc-nats.dci-<instance-id>:4222` / `:1883` |
 | Relational Postgres | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-rdb`) | `dc-postgresql.dc-system:5432` |
-| TimescaleDB (event store) — instance root | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.<instance-id>:5432` |
+| TimescaleDB (event store) — instance root | `cnpg-cluster` module — a CloudNativePG `Cluster` (`dc-tsdb`) | `dc-timescaledb-single.dci-<instance-id>:5432` |
 | NGINX ingress controller | `ingress-nginx` Helm chart, pinned | IngressClass `nginx` |
 | cert-manager (+ CRDs) | `cert-manager` Helm chart, pinned | namespace `cert-manager` |
 | Observability (Prometheus/Grafana/Alertmanager) | `kube-prometheus-stack` Helm chart, pinned | namespace `monitoring` |
@@ -210,6 +210,15 @@ cluster by `dcctl install` (the relational store, object store, operators, ingre
 cert-manager, monitoring), and `instance/`, applied per instance by `dcctl bootstrap`
 into the instance's own namespace (NATS and the event store). An instance root is
 destroyed without touching the cluster root.
+
+An instance's namespace is **`dci-` followed by its id** — instance `acme` runs in
+`dci-acme` — which is why the in-cluster endpoints above read `dc-nats.dci-<instance-id>`.
+The id itself is unchanged and still names the database, the database login, the Helm
+release (`dc-acme`) and the messaging subject prefix, so the two strings are not
+interchangeable. `instance/` is *handed* the namespace as `instance_namespace` and never
+derives it from an id; it does require the prefix, so a hand-driven `tofu apply` must
+pass the prefixed name or the Helm chart would render every workload into a namespace the
+broker and the event store are not in.
 
 ## Notes & scope boundaries
 

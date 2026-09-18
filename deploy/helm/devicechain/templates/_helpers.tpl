@@ -129,19 +129,28 @@ ServiceMonitor's namespaceSelector, the PodMonitor's in-namespace default, the
 `namespace="…"` matcher in every alert expression, the dashboards' hidden
 `namespace` constant — goes through here, and nothing writes it inline.
 
-The reason is that it is ABOUT TO STOP BEING THE INSTANCE ID. It returns the id
-today, which is what every one of those sites used to say; it will shortly return
-a prefixed name, and the only thing that has to change is the line below. What a
-per-site spelling would have made instead is a change of a few dozen sites in
-which the ones that mean something ELSE by the instance id are indistinguishable
-— the object names (`dci-<id>-config`, the `dc-<id>` ServiceAccount), the
-`devicechain.io/instance` LABEL that is also a pod selector, the Grafana uid,
-title, ConfigMap name and folder, `DC_INSTANCE_ID` and everything the services
-derive from it (database names, NATS subjects, MQTT topics). Those stay the id.
-Do not route them through here, and do not write the namespace anywhere else.
+🔴 IT IS NOT THE INSTANCE ID, AND EVERY ONE OF THOSE SITES USED TO SAY THE ID.
+The `dci-` prefix keeps an instance's namespace out of reach of the cluster's own
+— monitoring, dc-system, cert-manager, cnpg-system, ingress-nginx — so an
+instance named after one of them cannot be built into it. What a per-site
+spelling would have left instead is a few dozen sites in which the ones that mean
+something ELSE by the instance id are indistinguishable from the ones that mean
+the namespace: the object names (`dci-<id>-config`, the `dc-<id>` ServiceAccount),
+the `devicechain.io/instance` LABEL that is also a pod selector, the
+`devicechain_instance` alert label that routing groups on, the Grafana uid, title,
+ConfigMap name and folder, `DC_INSTANCE_ID` and everything the services derive
+from it (database names, NATS subjects, MQTT topics). Those stay the id. Do not
+route them through here, and do not write the namespace anywhere else.
+
+🔴 THE `dci-` BELOW AND THE `dci-` IN `dci-<id>-config` ARE NOT THE SAME THING.
+The second prefixes object NAMES and is older; `dci-acme-config` is not "the
+namespace plus -config". dcctl spells this same prefix once, in
+bootstrap/instancenamespace.go, and a test renders this chart and holds the two
+answers equal — they are computed twice and must agree, because dcctl creates and
+labels the namespace the chart then renders into.
 */}}
 {{- define "devicechain.instanceNamespace" -}}
-{{- .Values.instance.id -}}
+{{- printf "dci-%s" .Values.instance.id -}}
 {{- end -}}
 
 {{/*
