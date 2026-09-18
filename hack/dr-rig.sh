@@ -1392,6 +1392,64 @@ rebuild() {
   # something else.
   install_cluster "$rdb_source"
 
+  # 🔴 THE GUARD, SHOWN TO FIRE, BEFORE THE RECOVERY THAT DEPENDS ON IT.
+  #
+  # The relational store is back and it holds this instance's database; the cluster is
+  # brand new and holds no declaration for it. That is exactly the state in which a
+  # bootstrap without --restore-root-key would mint a fresh key and seal every recovered
+  # row shut forever, and dcctl refuses it at step 4 for that reason. A refusal nobody
+  # has watched fail is not a guard, so it is exercised here, in the one place the real
+  # conditions exist — against a REAL restored store on a REAL cluster, which no unit
+  # test can reach.
+  #
+  # --no-escrow rather than a passphrase: the run must reach step 4 to be refused, and
+  # minting without one would stop in the command layer asking for an escrow passphrase
+  # it has no terminal to read — a failure that looks identical from the outside and
+  # would prove nothing. It is also the honest shape of the case, an operator with no
+  # artifact to pass.
+  say "checking that a bootstrap WITHOUT --restore-root-key is refused"
+  local guard_rc=0 guard_out
+  guard_out="$("$dcctl" bootstrap local "$instance" --yes --no-escrow \
+    --kube-context "$kube_context" --host localhost "${image_args[@]}" 2>&1)" || guard_rc=$?
+  if (( guard_rc == 0 )); then
+    fail "dcctl bootstrap SUCCEEDED without --restore-root-key, onto a relational store that
+was just recovered from the archive. That instance is running a freshly minted root
+key over rows sealed by the old one, and every secret in them is now unreadable for
+good. The guard that should have stopped this at step 4 did not."
+  fi
+  # 🔴 MATCHED ON WHAT ONLY THIS REFUSAL SAYS, NOT ON THE FLAG NAME. Several other
+  # refusals mention --restore-root-key — describeBlockingArtifact offers it as a
+  # remedy — so a grep for the flag alone would accept a bootstrap that stopped for
+  # an unrelated reason and report the guard as working. This sentence is emitted by
+  # the store check and nothing else.
+  grep -q 'does not hold the credentials dcctl writes beside that database' <<<"$guard_out" || fail \
+    "dcctl bootstrap failed without --restore-root-key, but not for the reason this
+control exists to demonstrate: its output does not carry the store check's own
+sentence. It may have stopped for an unrelated reason — a missing passphrase, a
+blocking escrow artifact, a claim it could not take — any of which would leave the
+guard untested while this phase reported it working.
+
+$guard_out"
+  note "refused by the store check (exit $guard_rc)"
+  # 🔴 AND IT LEFT NOTHING — IN THE CLUSTER AND ON THIS MACHINE, which are two claims.
+  # The refusal is raised before the operator install and before the declaration, so no
+  # namespace should exist; require_no_instance covers that. But the namespace was never
+  # going to exist at step 4 whether or not the rest worked, so that check alone would
+  # pass over a broken unwind. The local record is the half that is actually at risk: it
+  # is written BEFORE the pipeline runs, and only the refusal being TYPED makes the
+  # command layer take it back. Untyped, `dcctl instances list` would show an instance
+  # that exists nowhere and no dcctl path could clear it.
+  require_no_instance
+  if [[ -e "$HOME/.devicechain/instances/$instance" ]]; then
+    fail "the refused bootstrap left its local record at ~/.devicechain/instances/$instance.
+
+Nothing was installed, so that record names an instance which exists nowhere, and
+\`dcctl instances list\` will keep showing it. The refusal is supposed to be typed
+(ErrStoreAndKeyDisagree) so unwindLocalRecordWhenNothingWasWritten takes it back;
+either it is no longer typed, or it is no longer in that function's list."
+  fi
+  note "nothing was left behind: no namespace, no local record"
+
   say "recovering $instance from the archive, under $what"
   # No --escrow-file here, and dcctl refuses the combination outright: a restored
   # instance keeps the artifact it was restored from rather than writing a second
@@ -1831,13 +1889,19 @@ $state"
 # the long comment on runDecoy for what the substitution does and does not stand
 # in for.
 #
-# 🔴 THAT REFUSAL NO LONGER EXISTS, AND NOTHING REPLACED IT. It cannot: `dcctl
-# install` recovers the relational store, and an install has no instance and no
-# escrow artifact to check a root key against — `dcctl bootstrap` runs afterwards,
-# possibly much later, possibly from another machine. What is left is that the
-# install SAYS so, in the sentence it prints before the apply. So the decoy remains
-# the only way to express this control, and it is now the only thing standing where
-# a refusal used to.
+# 🔴 THAT REFUSAL CAME BACK, IN A DIFFERENT PLACE AND KEYED ON DIFFERENT EVIDENCE.
+# It could never return to `install`: an install has no instance and no escrow
+# artifact to check a root key against, and `dcctl bootstrap` runs afterwards,
+# possibly much later, possibly from another machine. So the bootstrap asks the
+# STORE instead — a database already sitting there under this instance's name, with
+# none of the credentials dcctl writes beside it, can only have outlived the cluster
+# that made it — and refuses to mint over it. rebuild exercises exactly that, just
+# above, before every recovery this rig performs.
+#
+# It does NOT make this phase redundant, and the reason is the whole point of the
+# decoy: the refusal fires when there is NO key, and this control is about a WRONG
+# one. `--restore-root-key <decoy>` satisfies the guard and still cannot open the
+# row, which is a question only the crypto can answer. See runDecoy.
 #
 # 🔴 THE CONTROL'S PREMISE IS THE RELATIONAL RESTORE. Without it the control instance
 # holds no sealed row at all — the secret-storing area's startup self-test has nothing

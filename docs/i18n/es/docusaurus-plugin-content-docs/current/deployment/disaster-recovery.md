@@ -76,10 +76,21 @@ gente hace:
 
 Antes esto solo aparecía después, como un error de descifrado inexplicable mucho
 tiempo después de que la copia de seguridad que podría haber ayudado ya hubiera
-rotado. Los servicios que almacenan secretos ahora comprueban su clave raíz contra sus
-propias filas almacenadas al arrancar, así que un clúster con la clave equivocada se
-niega a arrancar e indica la causa. Eso convierte el error en algo ruidoso e
-inmediato en lugar de lento y disperso, pero no recupera nada. La clave sigue perdida.
+rotado. Ahora lo detectan dos comprobaciones, en momentos distintos y sobre pruebas
+distintas, y conviene saber cuál es cuál:
+
+- **Antes de construir nada**, `dcctl bootstrap` le pregunta al almacén relacional qué
+  contiene ya para la instancia. Una base de datos que está ahí sin que este clúster la
+  haya construido solo puede haber sobrevivido al clúster que sí lo hizo, así que el
+  arranque inicial se detiene en lugar de acuñar una clave por encima de ella. Esta es
+  la que evita el error.
+- **Al arrancar**, un servicio que almacena secretos comprueba su clave raíz contra sus
+  propias filas almacenadas y se niega a servir si la clave no las abre. Esta detecta
+  una clave *equivocada* en lugar de una ausente —una recuperación apuntada al artefacto
+  incorrecto—, algo que ninguna lectura del almacén puede ver.
+
+Ambas convierten el error en algo ruidoso e inmediato en lugar de lento y disperso.
+Ninguna recupera nada. Si la clave se perdió, se perdió.
 
 :::danger No hay recuperación posible tras perder la clave raíz
 La clave son 256 bits de aleatoriedad y las claves de datos envueltas no son
@@ -185,8 +196,17 @@ posteriores.
 Un respaldo de base de datos no contiene ninguna clave raíz. Cada secreto del almacén
 recuperado sigue sellado con la clave de la instancia que lo escribió, y esa clave solo
 vivía en el clúster que acaba de perder. Reconstruya cada instancia con
-`--restore-root-key` en el paso 2. Una instancia arrancada sin él acuña una clave nueva,
-arranca de forma impecable y deja todos esos secretos ilegibles para siempre.
+`--restore-root-key` en el paso 2.
+
+`dcctl bootstrap` se niega a hacerlo de otra manera —es la primera de las dos
+comprobaciones descritas arriba—. Antes de escribir nada, le pregunta al almacén
+recuperado qué contiene ya bajo el nombre de esa instancia, y una ejecución sin
+`--restore-root-key` se detiene y nombra la opción.
+
+La negativa es la última línea de defensa, no la primera. Solo puede hablar por una
+instancia cuyo artefacto de depósito siga existiendo: una arrancada con `--no-escrow` no
+tiene ninguna segunda copia de su clave en ninguna parte, y nada puede volver a abrir
+esas filas.
 :::
 
 **2. Reconstruya la instancia con su clave raíz**, y con sus datos de eventos.

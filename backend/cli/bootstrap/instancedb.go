@@ -150,28 +150,33 @@ func ensureInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance, 
 	}
 
 	// THE DATABASE.
-	var owner string
-	err = q.QueryRow(ctx,
-		`select pg_get_userbyid(datdba) from pg_database where datname = $1`, instance).Scan(&owner)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	//
+	// 🔴 THE SAME READING THE PRECHECK TOOK, NOT A SECOND OPINION. This branch used to
+	// spell the owner lookup itself, which left the decision that matters most — "there
+	// is already a database under this name and it is ours" — sitting in two places and
+	// acted on in only one of them. It is a storeState now, and a run that reaches here
+	// has already been admitted against that same value at step 4, before the root key
+	// was written. See storestate.go.
+	store, err := readInstanceStore(ctx, q, instance)
+	if err != nil {
+		return err
+	}
+	switch store.State {
+	case storeStateAbsent:
 		// CREATE DATABASE cannot run inside a transaction block, and does not here: each
 		// Exec on a plain connection is its own implicit transaction.
 		if _, err := q.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s OWNER %s", ident, ident)); err != nil {
 			return fmt.Errorf("creating the database for instance %q: %w", instance, err)
 		}
-	case err != nil:
-		return fmt.Errorf("looking up the database for instance %q: %w", instance, err)
-	case owner != instance:
-		// 🔴 THE PRE-ISOLATION SHAPE. Before instances had logins of their own, every
-		// service created this database as the store's shared owner. Its tables belong
-		// to that owner, so handing the instance its own login would leave services unable
-		// to read their own data — and quietly re-owning it would carry forward exactly
-		// the access this change removes.
-		return fmt.Errorf("%w: database %q already exists on the relational store and is owned by %q, "+
-			"not by the instance's own login. It was created before each instance had a login of its "+
-			"own, or it belongs to something else. Recreate the instance (`dcctl destroy` then "+
-			"`dcctl bootstrap`) on a cluster built by this dcctl", errInstanceDatabaseNotOurs, instance, owner)
+	case storeStateForeign:
+		return refuseAPreIsolationDatabase(instance, store)
+	case storeStateOurs:
+		// Already here, and this instance's: an interrupted bootstrap being finished, or
+		// a recovery that step 4 admitted because the run carries the key those rows are
+		// sealed by. Either way the database is left exactly as it is.
+	default:
+		return fmt.Errorf("the relational store did not say what it holds for instance %q, so dcctl "+
+			"cannot tell whether there is a database here to keep", instance)
 	}
 
 	// 🔴 AS THE OWNER. REVOKE by anyone else who holds no grant option is not an error —
@@ -317,16 +322,21 @@ func dropInstanceDatabase(ctx context.Context, q instanceDBQuerier, instance str
 	}
 	ident := pgx.Identifier{instance}.Sanitize()
 
-	var owner string
-	err := q.QueryRow(ctx,
-		`select pg_get_userbyid(datdba) from pg_database where datname = $1`, instance).Scan(&owner)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return fmt.Errorf("looking up the database for instance %q: %w", instance, err)
-	case owner != instance:
+	// The same reading the bootstrap takes, for the same reason: what a destroy may drop
+	// and what a bootstrap may build onto are one question about the store, and the
+	// answer is settled in one place.
+	store, err := readInstanceStore(ctx, q, instance)
+	if err != nil {
+		return err
+	}
+	switch store.State {
+	case storeStateAbsent:
+	case storeStateForeign:
 		return fmt.Errorf("%w: database %q is owned by %q, not by the instance's own login, so dcctl did "+
-			"not create it and will not drop it", errInstanceDatabaseNotOurs, instance, owner)
+			"not create it and will not drop it", errInstanceDatabaseNotOurs, instance, store.Owner)
+	case storeStateUnknown:
+		return fmt.Errorf("the relational store did not say what it holds for instance %q, and dcctl "+
+			"will not report the instance destroyed without knowing whether its database is still there", instance)
 	default:
 		// As the owner, for the reason ensureInstanceDatabase revokes as the owner:
 		// ownership does not pass through a membership without INHERIT. FORCE ends the
