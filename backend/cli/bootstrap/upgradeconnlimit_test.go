@@ -333,7 +333,7 @@ func TestUpgradeChecksTheBudgetFirstAndRollsOutInsideTheBracket(t *testing.T) {
 		}
 		return true
 	})
-	for _, fn := range []string{"helmInstall", "waitForAreas"} {
+	for _, fn := range []string{"helmInstall", "waitForAreasStep"} {
 		if inside[fn] == 0 {
 			t.Errorf("Upgrade does not call %s inside the rollout the login is sized around", fn)
 		}

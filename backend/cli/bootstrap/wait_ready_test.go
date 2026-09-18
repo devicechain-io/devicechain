@@ -236,3 +236,63 @@ func TestTheWaitLastsAsLongAsItWasGiven(t *testing.T) {
 		t.Errorf("the error does not name the deadline it enforced (%s):\n%s", timeout, err)
 	}
 }
+
+// 🔴 ONE PROGRESS LINE, ONE TERMINATOR — and the terminator is the one carrying the
+// counts. waitForAreas closes its own line, so the opening `doing(...)` and the
+// closing print have to be owned by the same thing or a call site has to REMEMBER
+// which half it owns. `dcctl upgrade` did not: it opened the line, let waitForAreas
+// close it with `done (12/12 ready).`, and then called done() as well, so every
+// upgrade ended with a bare `done.` on a line of its own. waitForAreasStep is the
+// pairing; this is what pins it.
+//
+// It counts NEWLINES rather than matching text on purpose. The strings are
+// colourised, so a substring match is the fragile way to ask; and the defect was
+// never a wrong word, it was exactly one line too many.
+func TestWaitForAreasStepClosesItsProgressLineExactlyOnce(t *testing.T) {
+	t.Run("a finished rollout", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			areaDeployment("device-management", 4, 4, 2, 2, 2, 2),
+			areaDeployment("event-processing", 1, 1, 1, 1, 1, 1),
+		)
+		var werr error
+		out := captureOutput(t, func() {
+			werr = waitForAreasStep(context.Background(), client, "dc-inst",
+				"waiting for the services to roll over", time.Second, time.Millisecond)
+		})
+		if werr != nil {
+			t.Fatalf("refused a fully rolled-over instance, so this measures the wrong path: %v", werr)
+		}
+		if n := strings.Count(out, "\n"); n != 1 {
+			t.Errorf("the rollout wait printed %d lines, not 1 — a second terminator under the "+
+				"real one is what an operator reads as a step that ran twice:\n%q", n, out)
+		}
+		// The counterweight: one line is also what a step that printed NOTHING gives.
+		for _, want := range []string{"waiting for the services to roll over", "2/2 ready"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("the one line printed does not contain %q, so it is not the line this "+
+					"step is meant to print:\n%q", want, out)
+			}
+		}
+	})
+
+	// The failure path is the same contract: `timed out (n/m ready).` IS the
+	// terminator, so nothing adds `failed.` under it either.
+	t.Run("a rollout that did not finish", func(t *testing.T) {
+		client := fake.NewSimpleClientset(areaDeployment("device-management", 4, 3, 2, 2, 2, 2))
+		var werr error
+		out := captureOutput(t, func() {
+			werr = waitForAreasStep(context.Background(), client, "dc-inst",
+				"waiting for the services to roll over", 30*time.Millisecond, time.Millisecond)
+		})
+		if werr == nil {
+			t.Fatal("an unfinished rollout was reported ready, so this measures the wrong path")
+		}
+		if n := strings.Count(out, "\n"); n != 1 {
+			t.Errorf("the failed rollout wait printed %d lines, not 1:\n%q", n, out)
+		}
+		if !strings.Contains(out, "0/1 ready") {
+			t.Errorf("the timeout line does not say how far the rollout got, which is the only "+
+				"reason it is not the generic terminator:\n%q", out)
+		}
+	})
+}

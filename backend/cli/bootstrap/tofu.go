@@ -189,13 +189,23 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	//
 	// 🔴 WaitDelay DOES NOT BOUND A PIPE SOMETHING ELSE STILL HOLDS. terraform-exec
 	// (v0.25.3, cmd_linux.go) takes StdoutPipe/StderrPipe, which are plain files, so
-	// os/exec starts no copy goroutines for WaitDelay to close; and it reads both pipes to
-	// EOF BEFORE it calls cmd.Wait (its legacy pipe closing, which would close them early,
-	// is never enabled by dcctl). So a process that outlives tofu holding the inherited
-	// pipe — a provider plugin, say — hangs dcctl INDEFINITELY, interrupt or not. The
-	// SIGKILL still fires, because the context watcher Start sets up sends it, not Wait;
-	// but it kills tofu's own PID and the pipe stays open. Only the second interrupt, which
-	// exits dcctl, escapes a held pipe.
+	// os/exec starts no copy goroutines — and the one path in os/exec that force-closes
+	// the parent ends of the pipes after WaitDelay is guarded by `c.goroutineErr != nil`,
+	// so it runs only when there ARE such goroutines. terraform-exec also reads both
+	// pipes to EOF BEFORE it calls cmd.Wait (its legacy pipe closing, which would close
+	// them early, is never enabled by dcctl — and must not be: it closes the read end the
+	// instant the context is cancelled, so tofu takes SIGPIPE in the middle of the
+	// graceful stop this budget exists to buy it). So a process that outlives tofu holding
+	// the inherited pipe — a provider plugin, say — leaves terraform-exec blocked forever.
+	// The SIGKILL still fires, because the context watcher Start sets up sends it, not
+	// Wait; but it kills tofu's own PID and the pipe stays open.
+	//
+	// What bounds that is not WaitDelay but dcctl's own willingness to wait:
+	// runUntilAbandoned (tofuexec.go) arms tofuAbandonBudget ONCE THE CONTEXT IS
+	// CANCELLED and returns errTofuAbandoned if terraform-exec still has not come back,
+	// leaving the blocked goroutine parked as dcctl exits. An operator at a terminal
+	// still has the faster escape — the second interrupt — and the budget is what a
+	// non-interactive run, which has nobody to press it, gets instead.
 	tf.SetWaitDelay(tofuGracefulStopBudget)
 
 	if err := tf.Init(ctx); err != nil {
