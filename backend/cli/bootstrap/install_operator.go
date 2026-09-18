@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
@@ -66,26 +67,107 @@ func claimForInstall(ctx context.Context, st *State) error {
 	return nil
 }
 
+// stillHoldsTheCluster is Install's fence, and it is the counterpart of the check
+// Pipeline.Run performs at every step boundary.
+//
+// 🔴 A LOCK NOBODY RE-ASKS ABOUT IS A LOCK THAT STOPS WORKING THE MOMENT IT IS
+// TAKEN AWAY. `AcquireClaim` decides who may start; it cannot decide who may
+// CONTINUE. A run whose machine slept through a full lease duration can be
+// reclaimed by a second operator — deliberately, with a typed confirmation — and
+// without this it would wake up and carry on applying to the same cluster, which
+// is the two-appliers-one-cluster outcome the whole mechanism exists to prevent.
+// The bootstrap pipeline gets this for free at each step; Install is a straight
+// line of function calls with no boundaries, so it has to ask by name.
+//
+// 🔑 THE HONEST BOUND IS THE REMAINDER OF THE CALL IN FLIGHT, not the gap between
+// checks — the cluster apply is ten minutes long, and nothing here cancels it
+// mid-flight. What this buys is that the run stops before the NEXT irreversible
+// write rather than finishing and stamping its own record over the reclaimer's.
+// Pipeline.Run documents the same limitation for the same reason.
+func stillHoldsTheCluster(ctx context.Context, st *State, before string) error {
+	if st.Claim == nil {
+		return nil
+	}
+	if err := st.Claim.CheckHeld(ctx); err != nil {
+		return fmt.Errorf("stopping before %s: %w", before, err)
+	}
+	return nil
+}
+
 // installOperator puts the CRDs, RBAC and controller Deployment on the cluster,
 // building the controller image first on the developer path.
 //
-// 🔴 IT RUNS INSIDE THE INSTALL RECORD'S applying→installed BRACKET, AND THAT
-// POSITION IS LOAD-BEARING IN ONE DIRECTION. markInstallApplying is what refuses a
-// cluster whose record was written by a NEWER dcctl; applying the overlay before
-// that refusal would let an older binary prune a newer CRD's fields on its way to
-// being told it may not touch this cluster. So: refuse first, then apply.
+// 🔴 IT RUNS INSIDE THE INSTALL RECORD'S applying→installed BRACKET, after the last
+// refusal that bracket performs — see the call site for what that refusal does and,
+// more importantly, does not cover.
 //
-// It is applied before the OpenTofu cluster apply rather than after, because it is
-// the short step and the tofu apply is the long one — a rendering or image failure
-// should surface in seconds, not after ten minutes of provisioning.
+// 🔴 THE BUILD IS DELIBERATELY NOT PART OF IT and happens before the bracket opens.
+// A ko build is minutes long and the preflight treats `ko` as optional, so a
+// developer without it would otherwise fail here — leaving a cluster recorded
+// `applying`, which every later bootstrap refuses, over a step that never touched
+// the cluster at all.
+//
+// The apply goes before the OpenTofu cluster apply rather than after, because this
+// is the short step and that one is the long one: a rendering failure or a bad image
+// reference should surface in seconds, not after ten minutes of provisioning.
 func installOperator(ctx context.Context, st *State) error {
-	if err := requireResolvedImages(st, "installing the operator"); err != nil {
+	if err := stepInstallCore(ctx, st); err != nil {
 		return err
 	}
-	if err := buildOperatorImageForInstall(ctx, st); err != nil {
-		return err
+	return waitForOperatorRollout(ctx, st)
+}
+
+// waitForOperatorRollout blocks until the controller this install applied is
+// actually running.
+//
+// 🔴 AN APPLY IS NOT AN INSTALL, AND WITHOUT THIS THE COMMAND LIES. A server-side
+// apply succeeds the moment the API server accepts the objects; it says nothing
+// about whether the image exists. `dcctl install --registry <typo>` would accept
+// the Deployment, apply the prerequisites, record the cluster `installed` and
+// print success, leaving a controller in ImagePullBackOff forever — the exact
+// "an ImagePullBackOff on a controller nobody is watching" failure the image
+// resolver's own comments are written against, produced by the command that now
+// owns the operator.
+//
+// 🔴 ON INSTALL'S PATH ONLY, and deliberately not inside stepInstallCore, which
+// bootstrap still runs. Bootstrap's behaviour is unchanged by this slice; when the
+// operator leaves bootstrap altogether this is already where the check lives.
+//
+// The overlay is rendered a second time rather than threaded through State. It is
+// a pure, in-process render of embedded manifests — no cluster, no I/O — and the
+// alternative is a field that exists only to carry bytes between two adjacent
+// calls, which is the kind of state that outlives its reason.
+func waitForOperatorRollout(ctx context.Context, st *State) error {
+	if st.DryRun {
+		return nil
 	}
-	return stepInstallCore(ctx, st)
+	manifests, err := operator.Render(operatorImageRef(st))
+	if err != nil {
+		return fail("rendering the operator manifests to find what to wait for", err)
+	}
+	targets, err := operatorDeployments(manifests)
+	if err != nil {
+		return fail("reading the rendered operator manifests", err)
+	}
+	if len(targets) == 0 {
+		// Not a warning to print and continue past — the same refusal `dcctl
+		// upgrade` makes, for the same reason. A stream with no Deployment in it
+		// applies cleanly and installs no controller, so waiting for nothing and
+		// reporting success would be false.
+		return fmt.Errorf("the operator overlay rendered no Deployment, so no controller was " +
+			"installed and reporting success would be false; the overlay at backend/k8s/config was changed")
+	}
+
+	_, _, typed, err := kubeClients(st.KubeContext)
+	if err != nil {
+		return fail("building kube clients", err)
+	}
+	doing("waiting for the operator to roll out")
+	if err := waitForRollout(ctx, typed, targets, 5*time.Minute); err != nil {
+		return fail("waiting for the operator to roll out", err)
+	}
+	done()
+	return nil
 }
 
 // buildOperatorImageForInstall ensures the local registry exists and builds the
@@ -129,12 +211,13 @@ func buildOperatorImageForInstall(ctx context.Context, st *State) error {
 	return nil
 }
 
-// reportOperatorPlan names the operator this run will install, in the rehearsal.
+// reportOperatorPlan names the operator this run will install, on every run and
+// in the rehearsal alike.
 //
-// Printed rather than deduced: `dcctl install` did not touch the operator at all
-// until this release, so an operator reading a --dry-run has every reason to
-// expect it still does not, and a plan that silently gained a cluster-scoped write
-// is the one kind of plan a rehearsal exists to rule out.
+// Printed rather than left to be deduced: `dcctl install` did not touch the
+// operator at all until this release, so whoever reads this output has every
+// reason to expect it still does not. A cluster-scoped write that appears in no
+// heading is the one an operator finds out about afterwards.
 func reportOperatorPlan(st *State) {
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(operatorImageRef(st)))
 }

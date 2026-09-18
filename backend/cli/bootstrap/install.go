@@ -91,6 +91,17 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	st := installState(binding, provider.Name(), opts)
 	settings := installSettingsFor(st)
 
+	// 🔴 CHECKED BEFORE THE FIRST LINE IS PRINTED, INCLUDING UNDER --dry-run. The
+	// command layer settles this from argv, so a dcctl run cannot reach here
+	// unresolved — but Install is also the engine, and a caller that built its
+	// options by hand would otherwise have the heading below announce
+	// "Operator: /operator:", a syntactically valid reference that pulls nothing,
+	// and a rehearsal would print a plan the real run refuses. A rehearsal must
+	// refuse what the run refuses.
+	if err := requireResolvedImages(st, "installing the operator"); err != nil {
+		return err
+	}
+
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Settings:"), color.GreenString(describeInstallSettings(settings)))
 	reportOperatorPlan(st)
@@ -133,9 +144,14 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return err
 	}
 	if st.DryRun {
-		// Listed in the order the real run performs them — build, then apply, then
-		// the long OpenTofu apply. A rehearsal whose steps are in a different order
+		// Build, then operator, then the long OpenTofu apply — the order the real
+		// run performs them in. A rehearsal whose steps are in a different order
 		// from the run is a rehearsal of something else.
+		//
+		// (The relational-restore sentence below is the exception, and it is
+		// deliberate: the real run prints it earlier, before the apply, because an
+		// operator mid-incident has to be told which way it will go while they can
+		// still stop. It is a warning, not a step.)
 		if err := buildOperatorImageForInstall(ctx, st); err != nil {
 			return err
 		}
@@ -217,7 +233,22 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := checkRelationalStoreOwner(ctx, st.KubeContext); err != nil {
 		return err
 	}
+	// 🔴 BUILT BEFORE THE INSTALL RECORD IS OPENED, not inside it. On --build this
+	// is a ko build measured in minutes, and the preflight treats `ko` as OPTIONAL
+	// — so a developer without it fails here. Inside the applying→installed bracket
+	// that failure would leave the cluster recorded `applying`, which every later
+	// bootstrap refuses, over a step whose only cluster write is an idempotent
+	// ConfigMap. It is a no-op on every published path.
+	if err := buildOperatorImageForInstall(ctx, st); err != nil {
+		return err
+	}
 	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
+		return err
+	}
+	// Fenced here and before each irreversible write below: everything above this
+	// point is a read or a refusal, and everything below it changes a cluster that
+	// may no longer be ours. See stillHoldsTheCluster.
+	if err := stillHoldsTheCluster(ctx, st, "writing this cluster's credentials"); err != nil {
 		return err
 	}
 	if err := writeClusterSecrets(ctx, typed, st); err != nil {
@@ -226,12 +257,25 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
 		return err
 	}
-	// 🔴 AFTER markInstallApplying, WHICH IS THE ONE ORDERING CONSTRAINT THAT BITES.
-	// That call is what refuses a cluster whose record was written by a NEWER dcctl,
-	// and the overlay carries CRDs — so applying it first would let an older binary
-	// prune a newer structural schema's fields on its way to being told it may not
-	// touch this cluster. Refuse, then apply.
+	// 🔴 AFTER markInstallApplying, BECAUSE THAT CALL IS THE LAST REFUSAL AND A
+	// REFUSAL MUST COME BEFORE A WRITE THAT CANNOT BE TAKEN BACK. It rejects a
+	// cluster whose install record carries a newer SCHEMA than this build writes,
+	// and the overlay carries CRDs: applying first would let such a binary prune
+	// fields out of a structural schema on its way to being told it may not touch
+	// this cluster at all.
+	//
+	// 🔑 THAT IS A NARROWER GUARD THAN IT LOOKS, AND THE GAP IS THE WHOLE REASON
+	// SLICE A EXISTS. The check is `old.Schema > installRecordSchema`, so a NEWER
+	// dcctl at the SAME record schema passes it — and an older install then
+	// server-side-applies its older CRDs with the same field manager and Force,
+	// removing whatever the newer release added. Ordering cannot fix that; only
+	// comparing what is on the cluster against what is about to be applied can,
+	// which is what the operator identity is for. Until the guards that read it
+	// land, this ordering buys the schema-bump case and nothing more.
 	if err := installOperator(ctx, st); err != nil {
+		return err
+	}
+	if err := stillHoldsTheCluster(ctx, st, "applying the cluster prerequisites"); err != nil {
 		return err
 	}
 	var outputs InstallOutputs
@@ -258,6 +302,12 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	done()
 
+	// 🔴 THE LAST ONE MATTERS MOST. This record is what every later bootstrap reads
+	// to decide the shape of the instances it builds; writing it over a reclaimer's
+	// would hand them a cluster described by a run they stopped.
+	if err := stillHoldsTheCluster(ctx, st, "recording the install"); err != nil {
+		return err
+	}
 	if err := writeInstalled(ctx, typed, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,

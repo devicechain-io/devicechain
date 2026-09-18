@@ -1149,9 +1149,12 @@ install_cluster() {
     note "relational store: recovering from $rdb_from"
     restore_args+=(--restore-rdb-from "$rdb_from")
   fi
+  # 🔴 image_args reaches install as well as bootstrap: install deploys the
+  # operator now, and a working-tree dcctl has no pinned image version to fall
+  # back on, so without them the install is refused before the cluster is touched.
   "$dcctl" install local --yes --compact --no-tls=false \
     --kube-context "$kube_context" \
-    "$(backup_args)" "${restore_args[@]+"${restore_args[@]}"}"
+    "$(backup_args)" "${restore_args[@]+"${restore_args[@]}"}" "${image_args[@]}"
 }
 
 # ---------------------------------------------------------------------------
