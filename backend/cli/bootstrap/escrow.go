@@ -688,12 +688,12 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 		return nil, err
 	}
 	name := fmt.Sprintf("dci-%s-config", instanceId)
-	// 🔴 THE NAMESPACE COMES THROUGH instanceNamespace; THE SECRET NAME DOES NOT. Both are
+	// 🔴 THE NAMESPACE COMES THROUGH InstanceNamespace; THE SECRET NAME DOES NOT. Both are
 	// built from the instance id and they are not the same string — the `dci-` above is the
 	// Secret-NAME prefix this read is contracted to (see instanceConfigSecretName). Reading
 	// the wrong namespace answers NotFound, which this function reads as "no instance
 	// there" — the mint branch, over a live instance.
-	namespace := instanceNamespace(instanceId)
+	namespace := InstanceNamespace(instanceId)
 	sec, err := typed.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -722,7 +722,7 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 			"so what it is running cannot be determined. Refusing to continue rather than treat it as a "+
 			"fresh install, which would rotate every credential out from under it. Inspect the Secret, or "+
 			"`dcctl destroy` the instance if it is not wanted",
-			instanceId, instanceNamespace(instanceId), secretName)
+			instanceId, InstanceNamespace(instanceId), secretName)
 	}
 	cfg := &config.InstanceConfiguration{}
 	if err := json.Unmarshal(raw, cfg); err != nil {

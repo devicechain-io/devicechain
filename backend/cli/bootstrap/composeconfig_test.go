@@ -371,7 +371,7 @@ func TestTheNamespaceIsCreatedInAShapeHelmCanAdopt(t *testing.T) {
 		t.Fatalf("creating the namespace: %v", err)
 	}
 
-	ns, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{})
+	ns, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("reading the namespace back: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestTheNamespaceIsCreatedInAShapeHelmCanAdopt(t *testing.T) {
 // refusing a namespace must not turn into claiming one.
 func TestAForeignNamespaceIsRefusedAndNotRestamped(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:        instanceNamespace("dctest"),
+		Name:        InstanceNamespace("dctest"),
 		Labels:      map[string]string{"app.kubernetes.io/managed-by": "someone-else"},
 		Annotations: map[string]string{"meta.helm.sh/release-name": "their-release"},
 	}})
@@ -414,12 +414,12 @@ func TestAForeignNamespaceIsRefusedAndNotRestamped(t *testing.T) {
 		t.Fatal("a namespace that is not this instance's was accepted, so the root key the " +
 			"caller writes next would land in somebody else's namespace")
 	}
-	if !strings.Contains(err.Error(), "kubectl label namespace "+instanceNamespace("dctest")+" devicechain.io/instance=dctest") {
+	if !strings.Contains(err.Error(), "kubectl label namespace "+InstanceNamespace("dctest")+" devicechain.io/instance=dctest") {
 		t.Errorf("the refusal does not say how to give the namespace to this instance on "+
 			"purpose, which leaves an operator who meant it with no way forward: %v", err)
 	}
 
-	ns, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{})
+	ns, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestTheWrittenSecretIsTheOneTheReadBackLooksFor(t *testing.T) {
 		t.Fatalf("writing the instance configuration: %v", err)
 	}
 
-	s, err := c.CoreV1().Secrets(instanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{})
+	s, err := c.CoreV1().Secrets(InstanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("the next bootstrap would not find this Secret and would call the instance "+
 			"fresh: %v", err)
@@ -489,7 +489,7 @@ func TestTheSecretNameMatchesWhatTheChartDemands(t *testing.T) {
 func helmWrittenConfigSecret(release, releaseNamespace string) *corev1.Secret {
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 		Name:              "dci-dctest-config",
-		Namespace:         instanceNamespace("dctest"),
+		Namespace:         InstanceNamespace("dctest"),
 		CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 		Labels: map[string]string{
 			"devicechain.io/instance":      "dctest",
@@ -521,7 +521,7 @@ func TestTheWrittenDocumentIsKeptWhenItLeavesTheChartsManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := getSecret(t, c, instanceNamespace("dctest"), "dci-dctest-config")
+	s := getSecret(t, c, InstanceNamespace("dctest"), "dci-dctest-config")
 	if got := s.Annotations["helm.sh/resource-policy"]; got != "keep" {
 		t.Errorf("helm.sh/resource-policy is %q: the upgrade that follows this write would "+
 			"delete the document, because it is in the previous release's manifest and not "+
@@ -547,7 +547,7 @@ func TestAChartWrittenConfigIsTakenOverRatherThanRefused(t *testing.T) {
 		t.Fatalf("writing after the takeover: %v", err)
 	}
 
-	s := getSecret(t, c, instanceNamespace("dctest"), "dci-dctest-config")
+	s := getSecret(t, c, InstanceNamespace("dctest"), "dci-dctest-config")
 	if s.Annotations[annotationManagedBy] != managedByDcctl || s.Annotations[annotationOwnerUID] != testUID {
 		t.Errorf("the Secret is not owned after the takeover: %v", s.Annotations)
 	}
@@ -635,7 +635,7 @@ func TestTheTakeoverIsANoOpOnAFreshInstall(t *testing.T) {
 	if err := adoptChartWrittenInstanceConfig(context.Background(), c, "dctest", testUID, "dc", "default"); err != nil {
 		t.Fatalf("a fresh install was treated as a failure: %v", err)
 	}
-	if _, err := c.CoreV1().Secrets(instanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{}); err == nil {
+	if _, err := c.CoreV1().Secrets(InstanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{}); err == nil {
 		t.Error("the takeover created a Secret; it is meant only to re-stamp one that exists")
 	}
 }
@@ -679,16 +679,16 @@ func TestRestatingACoordinateDoesNotDropTheBlockItLandsIn(t *testing.T) {
 func TestDestroyRemovesTheNamespaceTheUninstallCannotReach(t *testing.T) {
 	c := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-			Name:   instanceNamespace("dctest"),
+			Name:   InstanceNamespace("dctest"),
 			Labels: map[string]string{"devicechain.io/instance": "dctest"},
 		}},
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-config", Namespace: instanceNamespace("dctest")}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-config", Namespace: InstanceNamespace("dctest")}},
 	)
 
-	if _, err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+	if _, err := removeInstanceNamespaces(context.Background(), c, "dctest"); err != nil {
 		t.Fatalf("removing the namespace: %v", err)
 	}
-	if _, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{}); err == nil {
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{}); err == nil {
 		t.Error("the namespace survived destroy, so the instance configuration it holds did too")
 	}
 }
@@ -697,14 +697,14 @@ func TestDestroyRemovesTheNamespaceTheUninstallCannotReach(t *testing.T) {
 // shares the name is somebody else's, and deleting it cascades everything in it.
 func TestDestroyLeavesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   instanceNamespace("dctest"),
+		Name:   InstanceNamespace("dctest"),
 		Labels: map[string]string{"devicechain.io/instance": "somebody-else"},
 	}})
 
-	if _, err := removeInstanceNamespace(context.Background(), c, "dctest"); err != nil {
+	if _, err := removeInstanceNamespaces(context.Background(), c, "dctest"); err != nil {
 		t.Fatalf("a namespace this instance does not own was treated as a failure: %v", err)
 	}
-	if _, err := c.CoreV1().Namespaces().Get(context.Background(), instanceNamespace("dctest"), metav1.GetOptions{}); err != nil {
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{}); err != nil {
 		t.Error("a namespace belonging to something else was deleted, cascading everything in it")
 	}
 }
@@ -712,7 +712,7 @@ func TestDestroyLeavesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 // Destroy is re-run precisely when something went wrong the first time, so a
 // namespace that is already gone is success and not an error.
 func TestRemovingAnAbsentNamespaceIsSuccess(t *testing.T) {
-	if _, err := removeInstanceNamespace(context.Background(), fake.NewSimpleClientset(), "dctest"); err != nil {
+	if _, err := removeInstanceNamespaces(context.Background(), fake.NewSimpleClientset(), "dctest"); err != nil {
 		t.Errorf("an already-deleted namespace failed the destroy: %v", err)
 	}
 }
@@ -725,7 +725,7 @@ func TestRemovingAnAbsentNamespaceIsSuccess(t *testing.T) {
 func TestBootstrappingIntoATerminatingNamespaceIsRefusedClearly(t *testing.T) {
 	deleting := metav1.NewTime(time.Now())
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:              instanceNamespace("dctest"),
+		Name:              InstanceNamespace("dctest"),
 		DeletionTimestamp: &deleting,
 		Finalizers:        []string{"kubernetes"},
 	}})
@@ -737,5 +737,77 @@ func TestBootstrappingIntoATerminatingNamespaceIsRefusedClearly(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "still being deleted") {
 		t.Errorf("the refusal does not say what is happening: %v", err)
+	}
+}
+
+// 🔴🔴 THE GREEN LINE OVER A LIVE INSTANCE. An instance built before instance namespaces
+// were prefixed lives in the bare id. Asking only about the prefixed name finds nothing,
+// reports no error, skips the wait — and destroy goes on to delete the local record and
+// print that the instance was destroyed, while its namespace, holding the secret-store
+// root key, the broker's TLS private key and every database credential, keeps running
+// with nothing left pointing at it.
+//
+// `dcctl upgrade` refuses a pre-prefix instance and says to destroy and bootstrap, so
+// destroy is the one verb every one of them is guaranteed to reach.
+func TestDestroyRemovesTheNamespaceOfAnInstanceBuiltBeforeThePrefix(t *testing.T) {
+	c := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "dctest",
+			Labels: map[string]string{"devicechain.io/instance": "dctest"},
+		}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "dci-dctest-config", Namespace: "dctest"}},
+	)
+
+	torn, err := removeInstanceNamespaces(context.Background(), c, "dctest")
+	if err != nil {
+		t.Fatalf("removing the namespace: %v", err)
+	}
+	if !torn.Deleted || torn.Namespace != "dctest" || !torn.Legacy {
+		t.Fatalf("got %+v; want the unprefixed namespace deleted and reported as a legacy one", torn)
+	}
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{}); err == nil {
+		t.Error("the namespace survived, so destroy reported success over a live instance")
+	}
+}
+
+// 🔴 AND THE COUNTERWEIGHT, WHICH IS WHAT MAKES THE ABOVE SAFE TO DO AT ALL. The bare id
+// is the shape of an ordinary namespace somebody else owns — `monitoring` exists on nearly
+// every cluster, and an instance called `monitoring` is exactly the collision the prefix
+// was introduced to make impossible. Deleting it because it shares the name would be the
+// original defect, reintroduced by its own fix.
+func TestDestroyLeavesAnUnprefixedNamespaceThatIsNotThisInstances(t *testing.T) {
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "monitoring",
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "dcctl"},
+	}})
+
+	torn, err := removeInstanceNamespaces(context.Background(), c, "monitoring")
+	if err != nil {
+		t.Fatalf("a namespace this instance does not own was treated as a failure: %v", err)
+	}
+	if torn.Deleted {
+		t.Errorf("got %+v; the monitoring stack's namespace was deleted by destroying an "+
+			"instance that merely shares its name", torn)
+	}
+	if _, err := c.CoreV1().Namespaces().Get(context.Background(), "monitoring", metav1.GetOptions{}); err != nil {
+		t.Error("the monitoring stack's namespace was deleted, cascading Grafana, Prometheus and their volumes")
+	}
+}
+
+// The instance's OWN namespace is preferred when both are present, so a rebuilt instance
+// is not torn down by a stale namespace that outlived an earlier generation of it.
+func TestDestroyPrefersTheInstancesOwnNamespaceOverTheUnprefixedOne(t *testing.T) {
+	label := map[string]string{"devicechain.io/instance": "dctest"}
+	c := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("dctest"), Labels: label}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "dctest", Labels: label}},
+	)
+
+	torn, err := removeInstanceNamespaces(context.Background(), c, "dctest")
+	if err != nil {
+		t.Fatalf("removing the namespace: %v", err)
+	}
+	if torn.Namespace != InstanceNamespace("dctest") || torn.Legacy {
+		t.Fatalf("got %+v; want the instance's own namespace taken first", torn)
 	}
 }

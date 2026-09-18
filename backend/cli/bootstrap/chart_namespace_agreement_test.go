@@ -19,7 +19,7 @@ import (
 // An instance's namespace is spelled TWICE — once in Go and once in the chart — and
 // nothing but these tests makes the two agree.
 //
-//   - Go:    instanceNamespace() in instancenamespace.go, which every client-go call,
+//   - Go:    InstanceNamespace() in instancenamespace.go, which every client-go call,
 //     every namespace dcctl creates/deletes/waits on, the broker certificate's DNS
 //     names and the `instance_namespace` tfvar come through.
 //   - Chart: the named template devicechain.instanceNamespace in
@@ -36,7 +36,7 @@ import (
 // never comes up, and the reason is two strings in two languages.
 //
 // 🔴 THIS FILE PASSES TRIVIALLY TODAY AND THAT IS NOT A REASON TO DELETE IT. Both
-// functions currently return the instance id unchanged, so `instanceNamespace(id) == id`
+// functions currently return the instance id unchanged, so `InstanceNamespace(id) == id`
 // and every assertion below compares a string to itself. The namespace is about to become
 // `dci-<id>` — values.yaml already documents it as such — and the WHOLE POINT of these
 // tests is the moment those two bodies change: on that day the two strings become
@@ -45,7 +45,7 @@ import (
 // be in place before it to say whether the flip was COMPLETE.
 //
 // 🔑 WHAT IS COMPARED AGAINST WHAT, AND WHY IT DIFFERS BY ASSERTION. For the NAMESPACE,
-// instanceNamespace() IS the contract, so calling it is exactly right — the question is
+// InstanceNamespace() IS the contract, so calling it is exactly right — the question is
 // whether the chart agrees with Go, not whether either matches a literal. For everything
 // the instance id names that is NOT a namespace, the expected strings are written as
 // LITERALS below. Deriving those from a constant would move both sides of the comparison
@@ -102,7 +102,7 @@ var chartSourceComment = regexp.MustCompile(`(?m)^#\s*Source:\s*(\S+)`)
 // (<release>.<namespace>), renders a namespaceSelector naming that broker's OWN namespace
 // — a bring-your-own broker running somewhere else entirely. That selector is correctly
 // not this instance's namespace, so rendering it would put a string into the walk below
-// that must not be held to instanceNamespace(). Unqualified, the branch does not fire and
+// that must not be held to InstanceNamespace(). Unqualified, the branch does not fire and
 // the policy selects the broker by pod labels instead.
 func renderNamespaceFixture(t *testing.T) []renderedChartDoc {
 	t.Helper()
@@ -239,7 +239,7 @@ func walkRendered(path string, v interface{}, onMap func(string, map[string]inte
 // gains later is covered the day it renders, which is the whole reason this is not a
 // list.
 func TestEveryRenderedObjectIsInTheInstanceNamespace(t *testing.T) {
-	want := instanceNamespace(nsTestInstanceID)
+	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
 	placed := 0
@@ -257,7 +257,7 @@ func TestEveryRenderedObjectIsInTheInstanceNamespace(t *testing.T) {
 		placed++
 		if ns != want {
 			t.Errorf("%s renders into namespace %q; dcctl creates, labels and destroys %q.\n"+
-				"The chart and instanceNamespace() disagree, so this object is written where "+
+				"The chart and InstanceNamespace() disagree, so this object is written where "+
 				"nothing dcctl did will find it.", d, ns, want)
 		}
 	}
@@ -282,7 +282,7 @@ func TestEveryRenderedObjectIsInTheInstanceNamespace(t *testing.T) {
 // nobody else touches — and it is also the one an install can hide, because
 // instance.createNamespace is optional and dcctl creates the namespace itself.
 func TestTheRenderedNamespaceObjectIsTheInstanceNamespace(t *testing.T) {
-	want := instanceNamespace(nsTestInstanceID)
+	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
 	found := 0
@@ -355,7 +355,7 @@ var promQLNamespaceMatcher = regexp.MustCompile(`\bnamespace\s*(=~|!~|!=|=)\s*"(
 // both PodMonitors and all six PrometheusRules are covered by construction, along with
 // anything added next to them.
 func TestEveryNamespaceNamedInTheRenderedManifestIsAccountedFor(t *testing.T) {
-	want := instanceNamespace(nsTestInstanceID)
+	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
 	exercised := map[string]bool{}
@@ -443,7 +443,7 @@ func TestEveryNamespaceNamedInTheRenderedManifestIsAccountedFor(t *testing.T) {
 // and there is no picker to correct it: bound to the wrong string, every panel is
 // silently empty and the board still loads perfectly.
 func TestGrafanaBoardsAreScopedToTheInstanceNamespace(t *testing.T) {
-	want := instanceNamespace(nsTestInstanceID)
+	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
 	boards, constants := 0, 0

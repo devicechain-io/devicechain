@@ -128,7 +128,7 @@ func TestTheChartWrittenTakeoverIsStillReachablePastTheFence(t *testing.T) {
 	if err := adoptChartWrittenInstanceConfig(context.Background(), c, "dctest", testUID, "dc", "default"); err != nil {
 		t.Fatalf("taking over a plain-Helm instance's Secret: %v", err)
 	}
-	s, err := c.CoreV1().Secrets(instanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{})
+	s, err := c.CoreV1().Secrets(InstanceNamespace("dctest")).Get(context.Background(), "dci-dctest-config", metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

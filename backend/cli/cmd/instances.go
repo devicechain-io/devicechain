@@ -230,8 +230,19 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 		return nil
 	}
 
+	// 🔴 THE NAMESPACE EARNS A COLUMN NOW THAT IT IS NOT THE INSTANCE NAME. While the two
+	// were one string this would have printed the first column twice; since an instance's
+	// namespace became its id behind a prefix it is a second fact, and not one an operator
+	// can derive by eye from a name they typed. This table is also what `dcctl destroy
+	// --all` prints as its confirmation prompt — the last thing anybody reads before a bulk
+	// teardown — and what they are approving is the removal of these namespaces.
+	//
+	// 🔑 DERIVED, NOT READ FROM THE CLUSTER. It is what dcctl WOULD act on, which is the
+	// useful thing to show beside a status that reports what is actually there: an instance
+	// built under the older naming shows the namespace this dcctl would use, and its status
+	// is what says the two do not match.
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "INSTANCE\tPROVIDER\tCLUSTER\tCONTEXT\tSTATUS")
+	fmt.Fprintln(w, "INSTANCE\tNAMESPACE\tPROVIDER\tCLUSTER\tCONTEXT\tSTATUS")
 	for _, k := range known {
 		provider, cluster, kubeContext := "?", "?", "?"
 		if k.HasRecord {
@@ -242,7 +253,8 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 			}
 			kubeContext = k.Record.KubeContext
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", k.Instance, provider, cluster, kubeContext, instanceStatus(ctx, k, liveProbes))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", k.Instance, bootstrap.InstanceNamespace(k.Instance),
+			provider, cluster, kubeContext, instanceStatus(ctx, k, liveProbes))
 	}
 	return w.Flush()
 }

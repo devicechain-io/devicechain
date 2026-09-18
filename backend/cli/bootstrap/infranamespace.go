@@ -20,7 +20,7 @@ import (
 // credentials and the install record live. It mirrors the cluster root's `namespace`
 // default; dcctl does not override it.
 //
-// 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is instanceNamespace, in
+// 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is InstanceNamespace, in
 // instancenamespace.go. The broker and the event store lived HERE until each instance got
 // a namespace of its own, and every reference to them was spelled `infraNamespace`, which
 // reads exactly as well as the right answer. Naming the instance's namespace separately is

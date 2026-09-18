@@ -82,7 +82,7 @@ func readNATSAuthority(
 	typed kubernetes.Interface,
 	instance, instanceUID string,
 ) (*x509.Certificate, *rsa.PrivateKey, error) {
-	ref := mintedCredentialRef{instanceNamespace(instance), natsAuthoritySecretName, "tls.key"}
+	ref := mintedCredentialRef{InstanceNamespace(instance), natsAuthoritySecretName, "tls.key"}
 
 	foundKey, keyPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID), ref)
 	if err != nil {
@@ -98,7 +98,7 @@ func readNATSAuthority(
 	}
 
 	foundCert, certPEM, err := reuseMintedCredential(ctx, typed, instanceOwner(instance, instanceUID),
-		mintedCredentialRef{instanceNamespace(instance), natsAuthoritySecretName, "tls.crt"})
+		mintedCredentialRef{InstanceNamespace(instance), natsAuthoritySecretName, "tls.crt"})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +107,7 @@ func readNATSAuthority(
 		// something wrote this object and left it unusable.
 		return nil, nil, fmt.Errorf(
 			"Secret %s/%s holds the broker authority's private key but not its certificate, so "+
-				"no certificate can be signed under it", instanceNamespace(instance), natsAuthoritySecretName)
+				"no certificate can be signed under it", InstanceNamespace(instance), natsAuthoritySecretName)
 	}
 
 	cert, err := parseFirstCertificate(certPEM)
@@ -201,7 +201,7 @@ func namesMissingFrom(have, wanted []string) []string {
 // happens to roll the StatefulSet, which on a healthy instance may be never, and the
 // certificate would expire anyway with a green renewal in the log.
 func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st *State) error {
-	current, err := typed.CoreV1().Secrets(instanceNamespace(st.Instance)).Get(
+	current, err := typed.CoreV1().Secrets(InstanceNamespace(st.Instance)).Get(
 		ctx, natsReleaseName+"-tls", metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		fmt.Println(color.YellowString(
@@ -214,7 +214,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	replicas := haFor(st.HA).ServerReplicas
-	wanted := natsServerDNSNames(natsReleaseName, instanceNamespace(st.Instance), replicas)
+	wanted := natsServerDNSNames(natsReleaseName, InstanceNamespace(st.Instance), replicas)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {
 		return err
@@ -244,12 +244,12 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(
-		caCert, caKey, natsReleaseName, instanceNamespace(st.Instance), replicas, time.Now().UTC())
+		caCert, caKey, natsReleaseName, InstanceNamespace(st.Instance), replicas, time.Now().UTC())
 	if err != nil {
 		return err
 	}
 	material := &natsTLSMaterial{
-		Namespace:   instanceNamespace(st.Instance),
+		Namespace:   InstanceNamespace(st.Instance),
 		CACertPEM:   encodePEM("CERTIFICATE", caCert.Raw),
 		LeafCertPEM: leafCertPEM,
 		LeafKeyPEM:  leafKeyPEM,
@@ -259,7 +259,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return err
 	}
 
-	if err := restartBroker(ctx, typed, instanceNamespace(st.Instance)); err != nil {
+	if err := restartBroker(ctx, typed, InstanceNamespace(st.Instance)); err != nil {
 		return err
 	}
 	fmt.Println(color.WhiteString(

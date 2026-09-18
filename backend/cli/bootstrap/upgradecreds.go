@@ -62,7 +62,7 @@ func credentialPlacements(st *State) []credentialPlacement {
 		},
 		{
 			Field: "RDBInstancePassword",
-			Ref:   mintedCredentialRef{instanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword},
+			Ref:   mintedCredentialRef{InstanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword},
 			Into:  func(s *credentialSet) *string { return &s.RDBInstancePassword },
 			// 🔴 NOT "restore it from a backup". An instance built before each instance had
 			// a database login of its own never had this Secret, and restoring nothing
@@ -79,17 +79,17 @@ func credentialPlacements(st *State) []credentialPlacement {
 					return fmt.Errorf("instance %q was built before each instance had a namespace of its own: "+
 						"its database login, broker and event store are in the shared %s namespace rather than "+
 						"in %q, and they cannot be moved in place. An upgrade cannot move it; recreate the "+
-						"instance (`dcctl destroy` then `dcctl bootstrap`)", instance, infraNamespace, instanceNamespace(instance))
+						"instance (`dcctl destroy` then `dcctl bootstrap`)", instance, infraNamespace, InstanceNamespace(instance))
 				}
 				return fmt.Errorf("instance %q has no database login of its own (no Secret %s/%s): it was "+
 					"built before each instance had one, and its data belongs to the shared owner. An "+
 					"upgrade cannot move it; recreate the instance (`dcctl destroy` then `dcctl bootstrap`) "+
-					"on a cluster built by this dcctl", instance, instanceNamespace(instance), name)
+					"on a cluster built by this dcctl", instance, InstanceNamespace(instance), name)
 			},
 		},
 		{
 			Field: "TSDBPassword",
-			Ref:   mintedCredentialRef{instanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword},
+			Ref:   mintedCredentialRef{InstanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword},
 			Into:  func(s *credentialSet) *string { return &s.TSDBPassword },
 		},
 	}

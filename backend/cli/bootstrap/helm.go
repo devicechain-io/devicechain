@@ -52,12 +52,25 @@ const legacyHelmReleaseName = "dc"
 
 // helmReleaseNamespace is where the release RECORD lives — not where the workloads go.
 //
-// 🔴 IT IS STILL A CONSTANT, AND THAT IS DELIBERATE RATHER THAN UNFINISHED. Moving the
-// record into the instance's own namespace would mean Helm uninstalling a release whose
-// record lives in the namespace that uninstall is deleting, and whether that is safe is
-// a live-cluster question nobody has asked yet. The NAME is the half that has to move
-// for two instances to coexist; the record's home does not, because a release name is
-// unique per namespace and the names are now distinct.
+// 🔴 IT IS STILL A CONSTANT, AND THAT IS DELIBERATE RATHER THAN UNFINISHED. The NAME is
+// the half that has to move for two instances to coexist; the record's home does not,
+// because a release name is unique per namespace and the names are now distinct.
+//
+// 🔑 THIS USED TO SAY THE QUESTION HAD NOT BEEN ASKED. It has been, and the answer is no —
+// and it is answerable from Helm's own behaviour rather than from a cluster. Moving the
+// record into the instance's namespace would mean uninstalling a release whose record
+// lives in the namespace that uninstall deletes: `releaseutil.UninstallOrder` puts the
+// Namespace LAST, dcctl sets `Wait`, and `purgeReleases` then reads its own record out of
+// a namespace that is already gone. It gets NotFound, and uninstallRelease matches
+// "not found" and reports NOTHING REMOVED for an uninstall that removed everything. That
+// bool is what the foreign-release refusal is built on, so the cost is not a failed
+// uninstall — it is destroy quietly losing the ability to tell "I removed it" from "there
+// was nothing of mine there".
+//
+// It would also make the readers worse rather than better: deviceChainReleaseNames would
+// need List.AllNamespaces to answer "which instances does this cluster hold", and
+// refuseLegacyNamedRelease would still have to look in `default` for the whole pre-GA
+// window — two record homes instead of one. Do not revisit this expecting a tidier answer.
 //
 // The instance's OTHER releases — the broker and the event store, which OpenTofu
 // installs — do keep their records in the instance's namespace, and so go with it when

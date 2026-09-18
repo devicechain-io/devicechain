@@ -57,7 +57,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 		// the apply itself will report the connection problem far better.
 		return nil
 	}
-	sts, err := typed.AppsV1().StatefulSets(instanceNamespace(st.Instance)).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+	sts, err := typed.AppsV1().StatefulSets(InstanceNamespace(st.Instance)).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
 	if err != nil {
 		// Not found is the overwhelmingly likely case: a fresh install. Any other
 		// error (RBAC, transient) is not worth blocking a bootstrap over.
@@ -86,7 +86,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 				"%s: at %s the reservation sits exactly on its headroom floor, so the platform "+
 				"cannot add a stream or bucket without moving this volume",
 			have.String(), want.String(),
-			natsStatefulSetName, instanceNamespace(st.Instance), want.String(),
+			natsStatefulSetName, InstanceNamespace(st.Instance), want.String(),
 			have.String(), want.String(), have.String())
 	}
 	return nil

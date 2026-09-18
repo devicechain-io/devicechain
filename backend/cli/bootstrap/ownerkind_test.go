@@ -379,11 +379,11 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("devicechain"), "password": []byte("rdb-in-use")}),
 		clusterOwnedSecret("dc-object-store-credentials", testClusterUID, map[string][]byte{
 			"MINIO_ROOT_USER": []byte("os-user-in-use"), "MINIO_ROOT_PASSWORD": []byte("os-secret-in-use")}),
-		mintedSecret(instanceNamespace("acme"), "dc-tsdb-app-credentials", testUID, map[string]string{
+		mintedSecret(InstanceNamespace("acme"), "dc-tsdb-app-credentials", testUID, map[string]string{
 			"username": "devicechain", "password": "tsdb-in-use"}),
 		clusterOwnedSecret("dc-rdb-provisioner-credentials", testClusterUID, map[string][]byte{
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
-		mintedSecret(instanceNamespace("acme"), "dci-acme-rdb-credentials", testUID, map[string]string{
+		mintedSecret(InstanceNamespace("acme"), "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
 		// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise
 		// that the same run rolls Grafana onto it. It does not: Grafana reads the Secret as
@@ -683,7 +683,7 @@ func TestTheLastCompletedInstallIsTheRecordOrWhatItKept(t *testing.T) {
 }
 
 // instanceOwnedAt spells the "<namespace>/<name>" addresses of the test instance's own
-// Secrets. The namespace comes through instanceNamespace; the NAMES stay literal, for the
+// Secrets. The namespace comes through InstanceNamespace; the NAMES stay literal, for the
 // reason TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse gives — they are what the
 // readers look up, and reading them from our own constants would follow a rename past the
 // only thing being checked. (Note `dci-acme-rdb-credentials`: that `dci-` is the Secret
@@ -691,7 +691,7 @@ func TestTheLastCompletedInstallIsTheRecordOrWhatItKept(t *testing.T) {
 func instanceOwnedAt(names ...string) []string {
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		out = append(out, instanceNamespace("acme")+"/"+n)
+		out = append(out, InstanceNamespace("acme")+"/"+n)
 	}
 	return out
 }

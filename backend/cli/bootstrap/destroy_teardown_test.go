@@ -228,8 +228,8 @@ var wantTeardownOrder = []string{
 	"mark destroying acme",
 	"tofu destroy kind-c acme",
 	"read install record",
-	"delete namespace " + instanceNamespace("acme"),
-	"wait for namespace " + instanceNamespace("acme"),
+	"delete namespace " + InstanceNamespace("acme"),
+	"wait for namespace " + InstanceNamespace("acme"),
 }
 
 // inOrder reports whether want appears in calls as a subsequence.
@@ -265,7 +265,7 @@ func TestUninstallInstanceRunsEveryStepInOrder(t *testing.T) {
 	if got := r.releases(t); !slices.Equal(got, []string{helmReleaseNameFor("b")}) {
 		t.Errorf("releases left: %q, want only the neighbour's", got)
 	}
-	if slices.Contains(r.calls, "delete namespace "+instanceNamespace("b")) {
+	if slices.Contains(r.calls, "delete namespace "+InstanceNamespace("b")) {
 		t.Error("the neighbour's namespace was deleted")
 	}
 	if !r.stateRemoved() {
@@ -329,7 +329,7 @@ func TestOnlyAnInstanceWithAFootprintIsResumed(t *testing.T) {
 			t.Errorf("a name with nothing here was not reported as a stale record:\n%s", out)
 		}
 		if slices.Contains(r.calls, "tofu destroy kind-c acme") ||
-			slices.Contains(r.calls, "delete namespace "+instanceNamespace("b")) {
+			slices.Contains(r.calls, "delete namespace "+InstanceNamespace("b")) {
 			t.Errorf("a stale record ran the teardown: %q", r.calls)
 		}
 	})
@@ -403,7 +403,7 @@ func TestAPreSplitStateIsRefusedBeforeTheChartIsUninstalled(t *testing.T) {
 		t.Errorf("--without-state did not say what it left:\n%s", wout)
 	}
 	if len(r.releases(t)) != 0 || !r.stateRemoved() ||
-		!slices.Contains(r.calls, "delete namespace "+instanceNamespace("acme")) {
+		!slices.Contains(r.calls, "delete namespace "+InstanceNamespace("acme")) {
 		t.Errorf("--without-state did not remove the instance: releases %q, calls %q", r.releases(t), r.calls)
 	}
 }

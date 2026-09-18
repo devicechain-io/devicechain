@@ -125,7 +125,7 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 	}
 	// Where the release is, read from the state while the state still says. An instance
 	// built before each instance had a namespace keeps it in the shared one.
-	namespace, name, listed := instanceNamespace(instance), tsdbClusterName, false
+	namespace, name, listed := InstanceNamespace(instance), tsdbClusterName, false
 	if state != nil && state.Values != nil {
 		if r := findStateResource(state.Values.RootModule, tsdbReleaseAddress); r != nil {
 			listed = true
@@ -158,7 +158,7 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 	// this run decides changes what the state says to remove.
 	if err := tf.Destroy(ctx,
 		tfexec.Var("kubeconfig_context="+kubeContext),
-		tfexec.Var("instance_namespace="+instanceNamespace(instance)),
+		tfexec.Var("instance_namespace="+InstanceNamespace(instance)),
 	); err != nil {
 		return fmt.Errorf("tofu destroy: %w", err)
 	}
@@ -380,7 +380,7 @@ func (d stateDocument) addresses() []string {
 // and here both readings are "absent"). PVCs are never asked: they outlive their
 // workloads by design and prove nothing about what is running.
 func liveInstanceInfrastructure(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, instance string) ([]string, error) {
-	ns := instanceNamespace(instance)
+	ns := InstanceNamespace(instance)
 	var found []string
 
 	// 🔴 AND THE SHARED NAMESPACE, FOR THE BROKER AND EVENT STORE THEMSELVES. An instance
@@ -494,7 +494,7 @@ func refuseUndestroyableInstance(ctx context.Context, kubeContext, instance stri
 			"and namespace, and says that tofu destroy was skipped. Anything listed above outside namespace %s "+
 			"(an instance built before each instance had its own namespace runs its broker and event store in %s) "+
 			"is not in that namespace and is left running",
-		instance, strings.Join(found, "\n  "), instanceNamespace(instance), infraNamespace)
+		instance, strings.Join(found, "\n  "), InstanceNamespace(instance), infraNamespace)
 }
 
 // namespaceGoneTimeout bounds the wait for an instance namespace to finish deleting.

@@ -93,7 +93,7 @@ func TestTheEmptyStateProbeFindsOnlyLiveInfrastructure(t *testing.T) {
 	// The instance id, and the NAMESPACE that id's instance runs in — two strings, and
 	// the fixtures below are objects in the namespace while `id` is what the probe is
 	// asked about.
-	ns := instanceNamespace(id)
+	ns := InstanceNamespace(id)
 	for _, tc := range []struct {
 		name  string
 		typed []runtime.Object
@@ -127,9 +127,9 @@ func TestTheEmptyStateProbeFindsOnlyLiveInfrastructure(t *testing.T) {
 		{name: "a terminating pre-namespace broker", typed: []runtime.Object{natsStatefulSet(infraNamespace, true)}},
 		// The bystander: the same objects in another instance's namespace are not this one's.
 		{name: "another instance's infrastructure",
-			typed: []runtime.Object{natsStatefulSet(instanceNamespace("other"), false),
-				helmStorageSecret(instanceNamespace("other"), "dc-tsdb", false)},
-			dyn: []runtime.Object{tsdbCluster(instanceNamespace("other"), false)}},
+			typed: []runtime.Object{natsStatefulSet(InstanceNamespace("other"), false),
+				helmStorageSecret(InstanceNamespace("other"), "dc-tsdb", false)},
+			dyn: []runtime.Object{tsdbCluster(InstanceNamespace("other"), false)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := liveInstanceInfrastructure(context.Background(),
@@ -383,25 +383,25 @@ func (s statePlus) Show(ctx context.Context, _ ...tfexec.ShowOption) (*tfjson.St
 func TestTheInstanceRootTeardownSequence(t *testing.T) {
 	// The var the destroy carries is the instance's NAMESPACE, and so is where the
 	// release is uninstalled from when the state does not say otherwise.
-	destroy := "destroy kubeconfig_context=kind-x instance_namespace=" + instanceNamespace("acme")
+	destroy := "destroy kubeconfig_context=kind-x instance_namespace=" + InstanceNamespace("acme")
 	for _, tc := range []struct {
 		name  string
 		state stateLister
 		want  []string
 	}{
-		{name: "a live instance", state: statePlus{addresses: []string{"module.nats.helm_release.nats"}, tsdbNs: instanceNamespace("acme")},
-			want: []string{"uninstall kind-x " + instanceNamespace("acme") + "/dc-tsdb", "state rm " + tsdbReleaseAddress, destroy}},
+		{name: "a live instance", state: statePlus{addresses: []string{"module.nats.helm_release.nats"}, tsdbNs: InstanceNamespace("acme")},
+			want: []string{"uninstall kind-x " + InstanceNamespace("acme") + "/dc-tsdb", "state rm " + tsdbReleaseAddress, destroy}},
 		// Resumed after the entry was removed: no state rm (it would exit 1), and the
 		// uninstall still runs, tolerating a release already gone.
 		{name: "resumed after state rm", state: statePlus{addresses: []string{"module.nats.helm_release.nats"}},
-			want: []string{"uninstall kind-x " + instanceNamespace("acme") + "/dc-tsdb", destroy}},
+			want: []string{"uninstall kind-x " + InstanceNamespace("acme") + "/dc-tsdb", destroy}},
 		// 🔴 Built before namespaces: the namespace fence is NOT run here, and the release
 		// is uninstalled where it actually is.
 		{name: "built in the shared namespace", state: statePlus{tsdbNs: infraNamespace},
 			want: []string{"uninstall kind-x dc-system/dc-tsdb", "state rm " + tsdbReleaseAddress, destroy}},
 		// 🔴 Retired-infrastructure addresses are what destroy exists to remove.
 		{name: "holding retired infrastructure", state: statePlus{addresses: []string{retiredStateAddresses[0]}},
-			want: []string{"uninstall kind-x " + instanceNamespace("acme") + "/dc-tsdb", destroy}},
+			want: []string{"uninstall kind-x " + InstanceNamespace("acme") + "/dc-tsdb", destroy}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []string
@@ -422,7 +422,7 @@ func TestTheInstanceRootTeardownSequence(t *testing.T) {
 func TestTheInstanceRootTeardownRefusesPreSplitState(t *testing.T) {
 	var calls []string
 	err := destroyOpenedInstanceRoot(context.Background(),
-		recordingTofu{stateLister: statePlus{addresses: []string{"module.cnpg_rdb.helm_release.cluster"}, tsdbNs: instanceNamespace("acme")}, calls: &calls},
+		recordingTofu{stateLister: statePlus{addresses: []string{"module.cnpg_rdb.helm_release.cluster"}, tsdbNs: InstanceNamespace("acme")}, calls: &calls},
 		"kind-x", "acme", recordingUninstall(&calls, nil))
 	if err == nil || !strings.Contains(err.Error(), "--without-state") || !strings.Contains(err.Error(), "module.cnpg_rdb.helm_release.cluster") {
 		t.Errorf("want the pre-split refusal naming --without-state, got %v", err)
@@ -437,12 +437,12 @@ func TestTheInstanceRootTeardownRefusesPreSplitState(t *testing.T) {
 func TestAFailedEventStoreUninstallKeepsItsStateEntry(t *testing.T) {
 	var calls []string
 	err := destroyOpenedInstanceRoot(context.Background(),
-		recordingTofu{stateLister: statePlus{tsdbNs: instanceNamespace("acme")}, calls: &calls},
+		recordingTofu{stateLister: statePlus{tsdbNs: InstanceNamespace("acme")}, calls: &calls},
 		"kind-x", "acme", recordingUninstall(&calls, errors.New("boom")))
 	if err == nil {
 		t.Fatal("a failed uninstall was swallowed")
 	}
-	if !slices.Equal(calls, []string{"uninstall kind-x " + instanceNamespace("acme") + "/dc-tsdb"}) {
+	if !slices.Equal(calls, []string{"uninstall kind-x " + InstanceNamespace("acme") + "/dc-tsdb"}) {
 		t.Errorf("went on after a failed uninstall: %q", calls)
 	}
 }
@@ -520,19 +520,25 @@ func TestTheNamespaceWait(t *testing.T) {
 // answers that delete with a Conflict.
 func TestATerminatingInstanceNamespaceIsWaitedOnNotDeletedAgain(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name: instanceNamespace("acme"), Labels: map[string]string{"devicechain.io/instance": "acme"},
+		Name: InstanceNamespace("acme"), Labels: map[string]string{"devicechain.io/instance": "acme"},
 		DeletionTimestamp: &deleting, Finalizers: []string{"kubernetes"},
 	}})
 	c.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "namespaces"}, "acme",
 			errors.New("the system is ensuring all content is removed from this namespace"))
 	})
-	deleted, err := removeInstanceNamespace(context.Background(), c, "acme")
-	if err != nil || !deleted {
-		t.Errorf("deleted=%v err=%v; want a namespace on its way out reported as going", deleted, err)
+	torn, err := removeInstanceNamespaces(context.Background(), c, "acme")
+	if err != nil || !torn.Deleted {
+		t.Errorf("deleted=%v err=%v; want a namespace on its way out reported as going", torn.Deleted, err)
+	}
+	// 🔑 AND IT MUST NAME THE ONE IT TORE DOWN. The caller waits on what this returns; a
+	// name re-derived at the call site instead is precisely how the wait and the delete
+	// came apart when an instance's namespace stopped being its id.
+	if torn.Namespace != InstanceNamespace("acme") {
+		t.Errorf("reported namespace %q, want %q", torn.Namespace, InstanceNamespace("acme"))
 	}
 	// And one this run did not touch is not waited on.
-	if deleted, _ := removeInstanceNamespace(context.Background(), fake.NewSimpleClientset(), "acme"); deleted {
+	if torn, _ := removeInstanceNamespaces(context.Background(), fake.NewSimpleClientset(), "acme"); torn.Deleted {
 		t.Error("an absent namespace was reported as deleted")
 	}
 }

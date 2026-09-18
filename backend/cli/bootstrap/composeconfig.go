@@ -294,7 +294,7 @@ func mergedStringKeyMap(base interface{}, over map[string]interface{}) map[strin
 func instanceConfigSecret(instance string, doc []byte) ownedSecret {
 	return ownedSecret{
 		Name:        instanceConfigSecretName(instance),
-		Namespace:   instanceNamespace(instance),
+		Namespace:   InstanceNamespace(instance),
 		Type:        corev1.SecretTypeOpaque,
 		Labels:      map[string]string{"devicechain.io/instance": instance},
 		Annotations: map[string]string{kube.ResourcePolicyAnno: kube.KeepPolicy},
@@ -338,7 +338,7 @@ func adoptChartWrittenInstanceConfig(
 	typed kubernetes.Interface,
 	instance, instanceUID, releaseName, releaseNamespace string,
 ) error {
-	namespace := instanceNamespace(instance)
+	namespace := InstanceNamespace(instance)
 	api := typed.CoreV1().Secrets(namespace)
 	existing, err := api.Get(ctx, instanceConfigSecretName(instance), metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -425,9 +425,9 @@ func ensureNamespaceForRelease(
 	instance, releaseName, releaseNamespace string,
 ) error {
 	// 🔑 THE NAMESPACE NAME AND THE LABEL VALUE ARE TWO STRINGS. The namespace comes
-	// through instanceNamespace; the devicechain.io/instance label carries the instance id
+	// through InstanceNamespace; the devicechain.io/instance label carries the instance id
 	// itself, which is what the ownership check compares and what the chart writes.
-	namespace := instanceNamespace(instance)
+	namespace := InstanceNamespace(instance)
 	api := typed.CoreV1().Namespaces()
 	// The same read the precheck makes four steps earlier, through the same function, so
 	// that "it is not there" means the same thing in both places — and so what counts as
@@ -538,9 +538,8 @@ type typedNamespaces interface {
 // deleted between the read and the delete, is success: destroy is re-run precisely
 // when something went wrong the first time. It reports whether it issued the delete, so
 // the caller waits only on a namespace that is actually going.
-func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance string) (deleted bool, err error) {
+func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, instance, namespace string) (deleted bool, err error) {
 	// The namespace name and the label value are two strings; see ensureNamespaceForRelease.
-	namespace := instanceNamespace(instance)
 	api := typed.CoreV1().Namespaces()
 	ns, err := api.Get(ctx, namespace, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -549,9 +548,17 @@ func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, in
 		return false, fmt.Errorf("reading namespace %q: %w", namespace, err)
 	}
 	if ns.Labels[instanceNamespaceLabel] != instance {
-		fmt.Println(color.YellowString(
-			"  namespace %q is not labelled as this instance's, so it was left alone; "+
-				"anything dcctl wrote inside it is still there", namespace))
+		// 🔑 SILENT FOR A NAMESPACE THAT MERELY SHARES THE NAME, LOUD FOR ONE WE MAY HAVE
+		// WRITTEN IN. Since an instance's namespace gained a prefix, this function is
+		// also asked about the UNPREFIXED name, which on an ordinary cluster is some
+		// unrelated namespace an operator owns — warning about that on every destroy
+		// would be noise about somebody else's property. The instance's own namespace is
+		// the one whose foreignness is worth a sentence.
+		if namespace == InstanceNamespace(instance) {
+			fmt.Println(color.YellowString(
+				"  namespace %q is not labelled as this instance's, so it was left alone; "+
+					"anything dcctl wrote inside it is still there", namespace))
+		}
 		return false, nil
 	}
 	// 🔴 ALREADY TERMINATING IS "GOING", NOT "DELETE AGAIN". The API server answers a
@@ -567,4 +574,57 @@ func removeInstanceNamespace(ctx context.Context, typed kubernetes.Interface, in
 		return false, fmt.Errorf("deleting namespace %q: %w", namespace, err)
 	}
 	return true, nil
+}
+
+// namespaceTeardown is what a destroy did about this instance's namespace. It is a
+// VALUE rather than a bool because "nothing was deleted" has three causes that call for
+// three different sentences, and the one that used to be impossible is now the dangerous
+// one: the namespace was already gone (an ordinary resumed destroy), it is there but is
+// not this instance's (left alone on purpose), or it was looked for under a name this
+// instance does not use. A bool collapses all three into the same silent success.
+type namespaceTeardown struct {
+	// Namespace is what was acted on, or "" when this instance owns neither candidate.
+	Namespace string
+	// Deleted says this run issued the delete, or found one already under way — so the
+	// caller waits only on a namespace that is actually going.
+	Deleted bool
+	// Legacy says the namespace found was the unprefixed one an earlier release built.
+	Legacy bool
+}
+
+// removeInstanceNamespaces deletes whichever namespace this instance actually owns.
+//
+// 🔴 TWO CANDIDATES, AND THE SECOND IS WHY THIS EXISTS. An instance's namespace is its
+// id behind instanceNamespacePrefix, but an instance built before that prefix existed
+// lives in the bare id, and its local record and its OpenTofu state both still point at
+// real infrastructure there. `dcctl upgrade` refuses such an instance and says to destroy
+// and bootstrap — so destroy is the one verb every one of them is guaranteed to reach,
+// and it is the verb that must not answer "nothing here" about them.
+//
+// 🔴🔴 THE FAILURE THIS PREVENTS IS A GREEN LINE OVER A LIVE INSTANCE. Asking only about
+// the prefixed name would find nothing, report no error, skip the wait, and let destroy
+// go on to delete the local record and print that the instance was destroyed — while its
+// namespace, holding the secret-store root key, the broker's TLS private key and every
+// database credential, kept running with nothing left pointing at it.
+//
+// Both candidates are guarded by the same instance label, so the legacy name is only ever
+// deleted when it carries this instance's own mark. An unrelated namespace that happens to
+// share the id is left alone, which on a cluster where instance names were once namespace
+// names is the ordinary case.
+//
+// 🔑 DELETABLE AT GA, with the rest of the pre-prefix handling: the oldest release a
+// supported instance can have been built by rises past this, and then there is only one
+// candidate again. See hack/upgrade-baseline-policy.
+func removeInstanceNamespaces(ctx context.Context, typed kubernetes.Interface, instance string) (namespaceTeardown, error) {
+	own := InstanceNamespace(instance)
+	for _, namespace := range []string{own, instance} {
+		deleted, err := removeInstanceNamespace(ctx, typed, instance, namespace)
+		if err != nil {
+			return namespaceTeardown{}, err
+		}
+		if deleted {
+			return namespaceTeardown{Namespace: namespace, Deleted: true, Legacy: namespace != own}, nil
+		}
+	}
+	return namespaceTeardown{}, nil
 }

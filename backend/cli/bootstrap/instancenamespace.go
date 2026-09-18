@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// instanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
+// InstanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
 // and every credential it owns. It is the instance id behind instanceNamespacePrefix.
 //
 // 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is infraNamespace, in
@@ -56,7 +56,7 @@ import (
 // The two are spelled alike and a reader who merges them will rename one of them.
 const instanceNamespacePrefix = "dci-"
 
-func instanceNamespace(instance string) string { return instanceNamespacePrefix + instance }
+func InstanceNamespace(instance string) string { return instanceNamespacePrefix + instance }
 
 // instanceNamespaceLabel is what says a namespace is an instance's. The chart writes it
 // on everything it renders, the namespace included (devicechain.instanceLabels in
@@ -110,14 +110,14 @@ func (e *ErrNamespaceUnavailable) Unwrap() error { return e.Err }
 // only one that needs nothing said about it.
 //
 // 🔑 IT TAKES THE INSTANCE ID AND SPEAKS OF TWO DIFFERENT STRINGS. The namespace it names
-// comes through instanceNamespace; the label it compares, and the `dcctl destroy` argument
+// comes through InstanceNamespace; the label it compares, and the `dcctl destroy` argument
 // it prescribes, are the id itself. One variable used to serve both, which reads correctly
 // only while they are the same string.
 func refuseANamespaceThisInstanceDoesNotOwn(instance string, existing *corev1.Namespace) error {
 	if existing == nil {
 		return nil
 	}
-	namespace := instanceNamespace(instance)
+	namespace := InstanceNamespace(instance)
 	// 🔑 A NAMESPACE ON ITS WAY OUT IS NOT A NAMESPACE, AND IT IS NOT SOMEBODY ELSE'S
 	// EITHER. Kubernetes refuses new content in a terminating namespace, so a write would
 	// fail with a sentence about "new content" that reads as a defect rather than as a
@@ -132,15 +132,25 @@ func refuseANamespaceThisInstanceDoesNotOwn(instance string, existing *corev1.Na
 	if existing.Labels[instanceNamespaceLabel] == instance {
 		return nil
 	}
-	return fmt.Errorf("namespace %q already exists and is not this instance's, so this instance "+
-		"cannot be built into it: an instance OWNS the namespace it is named after — dcctl writes "+
-		"its secret-store root key, its broker TLS keypair and every one of its database "+
-		"credentials there, and `dcctl destroy %s` deletes the whole namespace. Refusing now, "+
-		"before any of that is written.\n"+
-		"  Build the instance under a name of its own, or — if that namespace really is meant to "+
-		"be this instance's — say so and run this again:\n"+
+	// 🔑 WHAT REACHES THIS CHANGED WHEN THE NAMESPACE GAINED A PREFIX, AND SO DID THE
+	// ADVICE. Nothing but dcctl creates a namespace under instanceNamespacePrefix, so this
+	// is no longer likely to be a cluster component's namespace an instance was named
+	// after — that collision is now unrepresentable. What is left is an earlier generation
+	// of this same instance whose destroy did not finish, or a namespace somebody made by
+	// hand. Leading with "pick another name" would send an operator away from the instance
+	// they meant to build; leading with the leftover names the case that is actually here.
+	return fmt.Errorf("namespace %q already exists and is not this instance's, so instance %q "+
+		"cannot be built into it: an instance OWNS its namespace — dcctl writes its secret-store "+
+		"root key, its broker TLS keypair and every one of its database credentials there, and "+
+		"`dcctl destroy %s` deletes the whole namespace. Refusing now, before any of that is "+
+		"written.\n"+
+		"  Nothing but dcctl makes a namespace under %q, so this is most likely what an earlier "+
+		"`dcctl destroy` of this instance left behind. Finish that first — `dcctl destroy "+
+		"<provider> %s` — or, if the namespace really is meant to be this instance's, say so and "+
+		"run this again:\n"+
 		"    kubectl label namespace %s %s=%s",
-		namespace, instance, namespace, instanceNamespaceLabel, instance)
+		namespace, instance, instance, instanceNamespacePrefix, instance,
+		namespace, instanceNamespaceLabel, instance)
 }
 
 // lookupNamespace returns the namespace, or nil if it is not there. A read failure is an
@@ -185,7 +195,7 @@ var namespacePrecheckClient = func(kubeContext string) (kubernetes.Interface, er
 // The refusals come back typed; a failure to READ does not, because a cluster that will
 // not say what it holds is a failed run rather than a refused one.
 func precheckInstanceNamespace(ctx context.Context, st *State) error {
-	namespace := instanceNamespace(st.Instance)
+	namespace := InstanceNamespace(st.Instance)
 	typed, err := namespacePrecheckClient(st.KubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to see whether namespace %q is this instance's: %w",

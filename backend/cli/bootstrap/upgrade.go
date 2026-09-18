@@ -286,7 +286,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		// pass and reached for the instance id instead — the same string until an
 		// instance's namespace gained a prefix, and after that a five-minute wait on a
 		// namespace that does not exist, on every upgrade.
-		if err := waitForAreasStep(ctx, typed, instanceNamespace(st.Instance),
+		if err := waitForAreasStep(ctx, typed, InstanceNamespace(st.Instance),
 			"waiting for the services to roll over",
 			areaReadyTimeout, areaReadyPollInterval); err != nil {
 			return fmt.Errorf("waiting for the services: %w", err)
