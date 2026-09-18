@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -28,9 +29,18 @@ import (
 // about something else from having to describe a namespace world it does not care about.
 // A test that DOES care calls stubNamespacePrecheck, which replaces this for its duration
 // and restores it afterwards.
+// 🔴 THE SAME TRAP, SECOND DOOR. readInstanceCredentialSecret reaches a cluster the same
+// way and for the same kind of question, so it gets the same package-wide default: what a
+// cluster with nothing in it answers. "No Secret by that name" refuses a bootstrap onto a
+// store that is already ours, which is the SAFE direction for a test that has no opinion —
+// a default of "the credentials are there" would let a test pass because the guard was
+// silently disabled. A test that cares calls stubInstanceCredentials.
 func TestMain(m *testing.M) {
 	namespacePrecheckClient = func(string) (kubernetes.Interface, error) {
 		return fake.NewSimpleClientset(), nil
+	}
+	readInstanceCredentialSecret = func(context.Context, string, string) (bool, error) {
+		return false, nil
 	}
 	os.Exit(m.Run())
 }

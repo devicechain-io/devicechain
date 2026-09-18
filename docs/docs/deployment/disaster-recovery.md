@@ -69,11 +69,20 @@ The consequence is a failure that passes the drill most people actually run:
   one is not derivable from anything you still have.
 
 This used to surface only later, as an unexplained decryption error long after the
-backup that could have helped had rotated away. The services that store secrets now
-check their root key against their own stored rows as they start, so a cluster holding
-the wrong key refuses to start and names the cause. That makes the mistake loud
-and immediate instead of slow and scattered — but it recovers nothing. The key is
-still gone.
+backup that could have helped had rotated away. Two checks now catch it, at different
+moments and on different evidence, and it is worth knowing which is which:
+
+- **Before anything is built**, `dcctl bootstrap` asks the relational store what it
+  already holds for the instance. A database that is there without this cluster having
+  built it can only have outlived the cluster that did, so the bootstrap stops rather
+  than minting a key over it. This is the one that prevents the mistake.
+- **At startup**, a service that stores secrets checks its root key against its own
+  stored rows and refuses to serve if the key does not open them. This one catches a
+  wrong key rather than a missing one — a recovery pointed at the wrong artifact — which
+  no reading of the store can see.
+
+Both make the mistake loud and immediate instead of slow and scattered. Neither recovers
+anything. If the key is gone, it is gone.
 
 :::danger There is no recovery from a lost root key
 The key is 256 bits of randomness and the wrapped data keys are not brute-forceable.
@@ -178,12 +187,10 @@ A database backup contains no root keys. Every secret in the recovered store is 
 sealed by the key of the instance that wrote it, and that key lived only in the cluster
 you just lost. Rebuild each instance with `--restore-root-key` in step 2.
 
-`dcctl bootstrap` refuses to do it any other way. Before it writes anything it asks the
-recovered store what it already holds under that instance's name, and a database that is
-there without this cluster ever having built it can only have come from an archive — so
-a run with no `--restore-root-key` stops, naming the flag, rather than minting a fresh
-key that would come up perfectly clean and leave every one of those secrets permanently
-unreadable.
+`dcctl bootstrap` refuses to do it any other way — this is the first of the two checks
+described above. Before it writes anything it asks the recovered store what it already
+holds under that instance's name, and a run with no `--restore-root-key` stops, naming
+the flag.
 
 The refusal is the last line, not the first. It can only speak for an instance whose
 escrow artifact still exists: one bootstrapped with `--no-escrow` has no second copy of

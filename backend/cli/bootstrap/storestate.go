@@ -113,6 +113,28 @@ func refuseAPreIsolationDatabase(instance string, store instanceStore) error {
 		"`dcctl bootstrap`) on a cluster built by this dcctl", errInstanceDatabaseNotOurs, instance, store.Owner)
 }
 
+// clusterEvidence is what this cluster can still say about an instance, as two reads that
+// are taken only if the arm that needs them is reached. Lazy because each costs a
+// different sweep and no ordinary bootstrap needs either.
+//
+// HoldsInstance also reports WHAT answered — the artifact that named the instance — so a
+// refusal can quote what it read rather than only assert its conclusion.
+type clusterEvidence struct {
+	HoldsInstance       func() (held bool, source string, err error)
+	KeepsItsCredentials func() (bool, error)
+}
+
+// describeNothingHeld turns the absence HoldsInstance reported into a clause a refusal
+// can finish a sentence with. A source that answered and named nothing is worth quoting;
+// one that could name nothing at all is not, and saying "according to nothing" would be
+// worse than saying less.
+func describeNothingHeld(source string) string {
+	if source == "" {
+		return "nothing in this cluster names an instance of that name either"
+	}
+	return fmt.Sprintf("%s do not name it either", source)
+}
+
 // ErrStoreAndKeyDisagree is the refusal of a bootstrap whose root key and whose
 // relational store do not belong together, raised before anything is written. Typed for
 // exactly the reason ErrHostTaken is: it is raised by stepCheckClusterSingletons, ahead
@@ -134,19 +156,35 @@ func (e *ErrStoreAndKeyDisagree) Unwrap() error { return e.Err }
 // first is the refusal this function exists for, and the second is refused too, because
 // there is no run for which it is the right thing to have done.
 //
-// 🔑 clusterHoldsInstance IS WHAT SEPARATES THE TWO HISTORIES OF storeStateOurs, AND IT
-// IS ONLY LEGIBLE HERE. A bootstrap that died between provisioning the database and
-// writing the configuration document is re-runnable BY DESIGN — that window is the one
-// stepRefuseRebuild deliberately leaves open — and it leaves a database that looks
-// exactly like a restored one. But that database can only exist if the same run already
-// wrote this instance's declaration two steps earlier, while a recovery onto a rebuilt
-// cluster faces fresh etcd and has written nothing. THIS run's declaration lands at step
-// 6, after this check, so the distinction holds at step 4 and is gone by step 7.
+// 🔑 EACH ARM ASKS THE CLUSTER A DIFFERENT QUESTION, AND THE WRITE ORDER IS WHY. Both
+// arms face the same ambiguity — a bootstrap that died part-way is re-runnable BY DESIGN
+// (that window is the one stepRefuseRebuild deliberately leaves open) and what it leaves
+// behind looks from the store exactly like a recovery. But the two arms are at different
+// points in that run, so different evidence is available:
 //
-// 🔴 IT IS A THUNK BECAUSE THE BRANCHES THAT NEED IT ARE THE RARE ONES. The read walks
-// declarations, minted Secrets and Helm releases; asking it on every ordinary bootstrap
-// would be a cluster-wide sweep to answer a question only a recovery or a retry raises.
-// Passing the read rather than its result is what keeps "which state needs this" from
+//   - storeStateOurs asks KeepsItsCredentials. A database exists, and applyInfra writes
+//     this instance's Secrets one call BEFORE it creates that database — an order
+//     TestApplyInfraAppliesOnlyTheInstanceInOrder pins — so for any run of this bootstrap
+//     the two are there together. If the database is here and the Secrets are not, the
+//     namespace that held them is gone, and the root key went with it.
+//   - storeStateAbsent asks HoldsInstance. There is no database yet, so there are no
+//     Secrets to look for either; the earliest artifact that run can have left is its
+//     declaration, written two steps earlier.
+//
+// 🔴 THE DECLARATION IS NOT ENOUGH FOR THE FIRST ARM, AND THAT IS NOT A DETAIL. The
+// Instance CRD is CLUSTER-SCOPED, so `kubectl delete ns dci-<instance>` takes the root
+// key and the configuration document and LEAVES the declaration standing — while the
+// database, which lives in the shared store rather than that namespace, survives too. A
+// bootstrap keyed on the declaration would read that as its own half-built work and mint
+// over rows whose key the operator had just deleted. The Secrets are in the namespace, so
+// they answer that case correctly.
+//
+// ⚠️ NEITHER READ IS AIRTIGHT, and the honest bound is worth stating: deleting only the
+// configuration document while leaving the namespace still presents as a repairable run.
+// The Secrets read strictly dominates the declaration read; it does not close everything.
+//
+// 🔴 THEY ARE THUNKS BECAUSE THE ARMS THAT NEED THEM ARE THE RARE ONES, and passing the
+// reads rather than their results is what keeps "which state needs which evidence" from
 // being duplicated into the caller — the mistake this whole change exists to undo.
 //
 // 🔴 --no-escrow NEEDS NO CLAUSE OF ITS OWN, AND ITS ABSENCE HERE IS LOAD-BEARING.
@@ -154,7 +192,7 @@ func (e *ErrStoreAndKeyDisagree) Unwrap() error { return e.Err }
 // requiring the restore against a store that is already ours makes the combination
 // unreachable. The message still names it, because an operator who bootstrapped with
 // --no-escrow has no artifact to pass and needs to be told that, not sent looking.
-func refuseAStoreAndKeyThatDoNotMatch(st *State, store instanceStore, clusterHoldsInstance func() (bool, error)) error {
+func refuseAStoreAndKeyThatDoNotMatch(st *State, store instanceStore, ev clusterEvidence) error {
 	restoring := st.Escrow.RestoringRootKey()
 	switch store.State {
 	case storeStateAbsent:
@@ -168,7 +206,7 @@ func refuseAStoreAndKeyThatDoNotMatch(st *State, store instanceStore, clusterHol
 			// recovery onto a rebuilt cluster never does. Refusing both would make a
 			// half-built instance unrepairable, which is the regression this branch exists
 			// to avoid.
-			held, err := clusterHoldsInstance()
+			held, source, err := ev.HoldsInstance()
 			if err != nil {
 				return fmt.Errorf("--restore-root-key names a key for instance %q and the relational "+
 					"store holds no database for it, so dcctl asked whether this cluster holds a "+
@@ -184,14 +222,18 @@ func refuseAStoreAndKeyThatDoNotMatch(st *State, store instanceStore, clusterHol
 			// did not happen — `dcctl install --restore-rdb-from` is a no-op against a
 			// store that already exists — and that is what they need to hear.
 			return &ErrStoreAndKeyDisagree{Err: fmt.Errorf(
-				"--restore-root-key recovers the key that opens instance %q's stored secrets, but the "+
-					"relational store holds no database for %q, so there is nothing here for it to open.\n\n"+
-					"  Recover the data first:  dcctl install %s --restore-rdb-from <archive>\n"+
-					"  Then bootstrap:          dcctl bootstrap %s %s --restore-root-key <artifact>\n\n"+
-					"A relational restore only takes effect on a cluster whose store is not there yet — "+
-					"run against one that already exists it is silently a no-op. To build a NEW instance "+
-					"under this name, drop --restore-root-key: it will mint a key of its own",
-				st.Instance, st.Instance, st.Provider, st.Provider, st.Instance)}
+				"--restore-root-key recovers the key that opens instance %q's stored secrets, and there "+
+					"is nothing here for it to open: the relational store holds no database for %q, and "+
+					"%s.\n\n"+
+					"  To build a NEW instance under this name, drop --restore-root-key — it mints a key "+
+					"of its own, and an instance that starts empty needs no older one.\n\n"+
+					"  To RECOVER one, the data has to come back first:\n"+
+					"    dcctl install %s --restore-rdb-from <archive>\n"+
+					"    dcctl bootstrap %s %s --restore-root-key <artifact>\n\n"+
+					"  A relational restore only takes effect on a cluster whose store is not there yet; "+
+					"run against one that already exists it is silently a no-op, which is the likeliest "+
+					"reason that store is empty now.",
+				st.Instance, st.Instance, describeNothingHeld(source), st.Provider, st.Provider, st.Instance)}
 		}
 		return nil
 
@@ -201,33 +243,35 @@ func refuseAStoreAndKeyThatDoNotMatch(st *State, store instanceStore, clusterHol
 			// key is refuseRestoreOverADifferentKey's question, not this one.
 			return nil
 		}
-		held, err := clusterHoldsInstance()
+		kept, err := ev.KeepsItsCredentials()
 		if err != nil {
 			return fmt.Errorf("the relational store already holds a database for instance %q, and dcctl "+
-				"could not tell whether this cluster holds the instance it belongs to: %w. Refusing "+
-				"rather than assuming it does: assuming wrong mints a fresh root key over recovered "+
-				"rows, and nothing can open them afterwards", st.Instance, err)
+				"could not tell whether this cluster still holds the credentials that were written "+
+				"beside it: %w. Refusing rather than assuming they are there: assuming wrong mints a "+
+				"fresh root key over rows nothing can open afterwards", st.Instance, err)
 		}
-		if held {
-			// A bootstrap being run again over its own half-built instance. The database
-			// is this run's own work, not somebody's recovery, and the credential
-			// machinery already knows how to finish it.
+		if kept {
+			// A bootstrap being run again over its own half-built instance: the database
+			// and the Secrets written one call before it are both here, which is the state
+			// applyInfra leaves when it is interrupted after provisioning the database.
+			// Nothing has served from that database yet, so nothing in it is sealed.
 			return nil
 		}
 		return &ErrStoreAndKeyDisagree{Err: fmt.Errorf(
-			"the relational store already holds database %q, owned by this instance's own login, and "+
-				"this cluster has no declaration for it — so it came back from an archive rather than "+
-				"from a run of this bootstrap.\n\n"+
-				"Every secret in those rows is sealed by instance %q's root key, and no database backup "+
-				"contains that key: it lived in the destroyed cluster's etcd. Minting a fresh one here "+
-				"would come up green and leave all of them permanently unreadable.\n\n"+
+			"the relational store already holds database %q, owned by this instance's own login — but "+
+				"namespace %s does not hold the credentials dcctl writes beside that database, one "+
+				"call before it is created. The two are only ever separated by the database outliving "+
+				"the namespace: this store came back from an archive onto a new cluster, or that "+
+				"namespace was deleted out from under a running instance.\n\n"+
+				"Either way the root key that sealed the secrets in those rows is gone, and no database "+
+				"backup contains it — it lived in that cluster's etcd. Minting a fresh one here would "+
+				"come up green and leave every one of them permanently unreadable.\n\n"+
 				"  dcctl bootstrap %s %s --restore-root-key <artifact>\n\n"+
-				"The artifact is the .escrow file written when the instance was first bootstrapped "+
-				"(by default under ~/.devicechain/escrow). If that instance was bootstrapped with "+
-				"--no-escrow there is no artifact and no way to read those rows again; drop the "+
-				"database (`dcctl destroy %s %s` clears what is left) and bootstrap a new instance, "+
-				"which starts empty",
-			st.Instance, st.Instance, st.Provider, st.Instance, st.Provider, st.Instance)}
+				"The artifact is the .escrow file written when the instance was first bootstrapped (by "+
+				"default under ~/.devicechain/escrow). If it was bootstrapped with --no-escrow there is "+
+				"no artifact and no way to read those rows again: drop the database (`dcctl destroy %s "+
+				"%s` clears what is left) and bootstrap a new instance, which starts empty",
+			st.Instance, InstanceNamespace(st.Instance), st.Provider, st.Instance, st.Provider, st.Instance)}
 
 	case storeStateForeign:
 		// The same refusal ensureInstanceDatabase raises, taken before the root key and

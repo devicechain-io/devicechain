@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -98,6 +99,37 @@ type ErrConnectionBudget struct{ Err error }
 
 func (e *ErrConnectionBudget) Error() string { return e.Err.Error() }
 func (e *ErrConnectionBudget) Unwrap() error { return e.Err }
+
+// readInstanceCredentialSecret reports whether this instance's own database-login Secret
+// is still in its namespace.
+//
+// 🔴 IT IS THE ARTIFACT THAT TRAVELS WITH THE DATABASE. applyInfra writes this Secret one
+// call before it creates the database (writeMintedSecrets, then provisionInstanceDatabase
+// — an order TestApplyInfraAppliesOnlyTheInstanceInOrder pins), and it lives in the
+// instance's namespace, which is where the root key lives too. So its absence beside a
+// database that IS there says the namespace went and the key with it. See
+// refuseAStoreAndKeyThatDoNotMatch.
+//
+// A missing namespace reports as a missing Secret, which is the same answer for the same
+// reason. Every other failure is an error: "could not tell" is not "it is gone".
+var readInstanceCredentialSecret = func(ctx context.Context, kubeContext, instance string) (bool, error) {
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return false, fmt.Errorf("connecting to the cluster to look for instance %q's credentials: %w",
+			instance, err)
+	}
+	name := instanceRdbSecretName(instance)
+	ns := InstanceNamespace(instance)
+	switch _, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("reading Secret %s/%s to see whether this instance still holds the "+
+			"credentials written beside its database: %w", ns, name, err)
+	}
+}
 
 // precheckSharedStore asks the shared relational store the two things a bootstrap has to
 // settle before it writes anything: whether this instance's connection limit would be
@@ -250,12 +282,17 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		if err != nil {
 			return err
 		}
-		if err := refuseAStoreAndKeyThatDoNotMatch(st, store, func() (bool, error) {
-			held, err := readClusterInstances(ctx, st.KubeContext)
-			if err != nil {
-				return false, err
-			}
-			return held.holds(st.Instance), nil
+		if err := refuseAStoreAndKeyThatDoNotMatch(st, store, clusterEvidence{
+			HoldsInstance: func() (bool, string, error) {
+				held, err := readClusterInstances(ctx, st.KubeContext)
+				if err != nil {
+					return false, "", err
+				}
+				return held.holds(st.Instance), held.Source, nil
+			},
+			KeepsItsCredentials: func() (bool, error) {
+				return readInstanceCredentialSecret(ctx, st.KubeContext, st.Instance)
+			},
 		}); err != nil {
 			return err
 		}

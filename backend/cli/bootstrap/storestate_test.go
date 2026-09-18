@@ -48,6 +48,17 @@ func (f *fakeStore) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	})
 }
 
+// stubInstanceCredentials replaces the read that answers whether this instance's own
+// credentials are still in its namespace.
+func stubInstanceCredentials(t *testing.T, kept bool, err error) {
+	t.Helper()
+	orig := readInstanceCredentialSecret
+	t.Cleanup(func() { readInstanceCredentialSecret = orig })
+	readInstanceCredentialSecret = func(context.Context, string, string) (bool, error) {
+		return kept, err
+	}
+}
+
 // 🔴 THE FOUR ANSWERS, AND THE ONE THAT MUST NOT COLLAPSE INTO ANOTHER. A store that
 // will not answer reading as "no database here" is what mints a fresh root key over
 // recovered rows, so the error case is asserted to be storeStateUnknown by name rather
@@ -83,16 +94,46 @@ func TestTheStoreSaysWhichOfFourThingsItHolds(t *testing.T) {
 	}
 }
 
-// storeAnswering builds the thunk step 4 hands the policy, and reports whether it was
-// called. Whether it is called is a PROPERTY, not an implementation detail: the read
-// behind it walks every declaration, minted Secret and Helm release in the cluster, and
-// only one of the four states has any use for the answer.
-func storeAnswering(held bool, err error) (func() (bool, error), *int) {
-	calls := 0
-	return func() (bool, error) {
-		calls++
-		return held, err
-	}, &calls
+// fakeEvidence stands in for the two cluster reads and counts each SEPARATELY.
+//
+// 🔑 WHICH READ AN ARM TAKES IS A PROPERTY, NOT AN IMPLEMENTATION DETAIL, and it is the
+// property the hand-deleted-namespace case turns on: the ours arm must ask for the
+// instance's credentials, because a declaration outlives the namespace that held the root
+// key. An arm reading the other one — or reading either when it should read neither —
+// fails here.
+type fakeEvidence struct {
+	held    bool
+	heldErr error
+	kept    bool
+	keptErr error
+
+	heldCalls, keptCalls int
+}
+
+func (f *fakeEvidence) evidence() clusterEvidence {
+	return clusterEvidence{
+		HoldsInstance: func() (bool, string, error) {
+			f.heldCalls++
+			return f.held, "the instance declarations in this cluster", f.heldErr
+		},
+		KeepsItsCredentials: func() (bool, error) {
+			f.keptCalls++
+			return f.kept, f.keptErr
+		},
+	}
+}
+
+// reads asserts exactly how many times each side was asked.
+func (f *fakeEvidence) reads(t *testing.T, wantHeld, wantKept int) {
+	t.Helper()
+	if f.heldCalls != wantHeld {
+		t.Errorf("the cluster was asked %d time(s) whether it holds this instance, want %d",
+			f.heldCalls, wantHeld)
+	}
+	if f.keptCalls != wantKept {
+		t.Errorf("the instance's credentials were looked for %d time(s), want %d",
+			f.keptCalls, wantKept)
+	}
 }
 
 func restoringState() *State {
@@ -108,8 +149,8 @@ func mintingState() *State { return &State{Instance: "beta", Provider: "local"} 
 // and leaves every recovered secret sealed shut. Nothing in the cluster holds this
 // instance, so it cannot be a bootstrap finishing its own work.
 func TestAStoreThatCameBackFromAnArchiveRefusesAFreshlyMintedKey(t *testing.T) {
-	answer, calls := storeAnswering(false, nil)
-	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, answer)
+	ev := &fakeEvidence{kept: false}
+	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, ev.evidence())
 
 	var typed *ErrStoreAndKeyDisagree
 	if !errors.As(err, &typed) {
@@ -117,9 +158,7 @@ func TestAStoreThatCameBackFromAnArchiveRefusesAFreshlyMintedKey(t *testing.T) {
 			"refusal, so the command layer would keep a local record for an instance that was never "+
 			"built: %v", err)
 	}
-	if *calls != 1 {
-		t.Errorf("the cluster was asked %d time(s) whether it holds this instance, want once", *calls)
-	}
+	ev.reads(t, 0, 1)
 	// The operator has to be able to act on it: the route back, and the one case where
 	// there is no route back at all.
 	for _, want := range []string{"--restore-root-key", "--no-escrow", "dcctl bootstrap local beta"} {
@@ -133,14 +172,11 @@ func TestAStoreThatCameBackFromAnArchiveRefusesAFreshlyMintedKey(t *testing.T) {
 // the documented recovery route, and it must not be refused — nor should it cost the
 // cluster-wide read, which only the refusal above has any use for.
 func TestTheRecoveryRouteIsAllowedWithoutAskingTheCluster(t *testing.T) {
-	answer, calls := storeAnswering(false, nil)
-	if err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateOurs}, answer); err != nil {
+	ev := &fakeEvidence{}
+	if err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateOurs}, ev.evidence()); err != nil {
 		t.Fatalf("the documented recovery route was refused: %v", err)
 	}
-	if *calls != 0 {
-		t.Errorf("a run already carrying the key swept the cluster %d time(s) to learn something "+
-			"it had no use for", *calls)
-	}
+	ev.reads(t, 0, 0)
 }
 
 // 🔴 THE WINDOW stepRefuseRebuild DELIBERATELY LEAVES OPEN. A bootstrap that died
@@ -149,22 +185,20 @@ func TestTheRecoveryRouteIsAllowedWithoutAskingTheCluster(t *testing.T) {
 // looking at the store. What separates them is that its own earlier run had already
 // written this instance into the cluster two steps before the database existed.
 func TestABootstrapFinishingItsOwnHalfBuiltInstanceIsNotRefused(t *testing.T) {
-	answer, calls := storeAnswering(true, nil)
-	if err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, answer); err != nil {
+	ev := &fakeEvidence{kept: true}
+	if err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, ev.evidence()); err != nil {
 		t.Fatalf("a bootstrap re-run over its own half-built instance was refused, which makes that "+
 			"instance unrepairable: %v", err)
 	}
-	if *calls != 1 {
-		t.Errorf("the cluster was asked %d time(s), want once", *calls)
-	}
+	ev.reads(t, 0, 1)
 }
 
 // 🔴 A CLUSTER THAT WILL NOT SAY WHETHER IT HOLDS THE INSTANCE IS NOT A CLUSTER THAT
 // DOES NOT. And the failure is NOT typed: the typed refusals clear the local record, and
 // clearing it for a run whose check never completed is the orphan the record prevents.
 func TestAClusterThatWillNotAnswerStopsTheRunWithoutBeingARefusal(t *testing.T) {
-	answer, _ := storeAnswering(false, errors.New("the API server is unreachable"))
-	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, answer)
+	ev := &fakeEvidence{keptErr: errors.New("the API server is unreachable")}
+	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, ev.evidence())
 	if err == nil {
 		t.Fatal("a cluster that could not be read was treated as one holding nothing, which mints a " +
 			"fresh root key over recovered rows")
@@ -179,8 +213,8 @@ func TestAClusterThatWillNotAnswerStopsTheRunWithoutBeingARefusal(t *testing.T) 
 // 🔴 AND THE SAME RULE ONE LAYER DOWN. storeStateUnknown is the zero value on purpose;
 // deciding from it must fail rather than fall through to "nothing there".
 func TestAStoreThatWasNotReadIsNotReadAsEmpty(t *testing.T) {
-	answer, calls := storeAnswering(false, nil)
-	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{}, answer)
+	ev := &fakeEvidence{}
+	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{}, ev.evidence())
 	if err == nil {
 		t.Fatal("an unread store was treated as an absent one, which is the one direction that " +
 			"cannot be undone")
@@ -189,9 +223,7 @@ func TestAStoreThatWasNotReadIsNotReadAsEmpty(t *testing.T) {
 	if errors.As(err, &typed) {
 		t.Errorf("a store that was never read was typed as a refusal: %v", err)
 	}
-	if *calls != 0 {
-		t.Errorf("a run that could not read the store still swept the cluster %d time(s)", *calls)
-	}
+	ev.reads(t, 0, 0)
 }
 
 // --restore-root-key against a store with nothing in it, on a cluster holding no trace of
@@ -199,8 +231,8 @@ func TestAStoreThatWasNotReadIsNotReadAsEmpty(t *testing.T) {
 // a recovered key while the operator believes they recovered, and the likeliest cause is
 // a relational restore that silently did not run.
 func TestARecoveredKeyIsRefusedWhenThereIsNothingToOpen(t *testing.T) {
-	answer, calls := storeAnswering(false, nil)
-	err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, answer)
+	ev := &fakeEvidence{held: false}
+	err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, ev.evidence())
 
 	var typed *ErrStoreAndKeyDisagree
 	if !errors.As(err, &typed) {
@@ -209,10 +241,11 @@ func TestARecoveredKeyIsRefusedWhenThereIsNothingToOpen(t *testing.T) {
 	if !strings.Contains(err.Error(), "--restore-rdb-from") {
 		t.Errorf("the refusal does not name the step that was missed:\n%s", err)
 	}
-	if *calls != 1 {
-		t.Errorf("the cluster was asked %d time(s) whether it holds a half-built instance of this "+
-			"name, want once", *calls)
+	// It quotes what it READ rather than only asserting the conclusion.
+	if !strings.Contains(err.Error(), "the instance declarations in this cluster") {
+		t.Errorf("the refusal does not say what it read to conclude nothing is here:\n%s", err)
 	}
+	ev.reads(t, 1, 0)
 }
 
 // 🔴 THE OTHER READER OF --restore-root-key, AND REFUSING IT WOULD HAVE BEEN A
@@ -223,21 +256,19 @@ func TestARecoveredKeyIsRefusedWhenThereIsNothingToOpen(t *testing.T) {
 // apply that creates the database. What makes it a retry rather than a recovery is that
 // its own earlier run had already written this instance into the cluster.
 func TestARetryAfterAFailedBootstrapMayReuseItsOwnEscrowedKey(t *testing.T) {
-	answer, calls := storeAnswering(true, nil)
-	if err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, answer); err != nil {
+	ev := &fakeEvidence{held: true}
+	if err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, ev.evidence()); err != nil {
 		t.Fatalf("a bootstrap re-run with the key its own failed run escrowed was refused, which "+
 			"leaves that instance unrepairable — the artifact cannot be overwritten either: %v", err)
 	}
-	if *calls != 1 {
-		t.Errorf("the cluster was asked %d time(s), want once", *calls)
-	}
+	ev.reads(t, 1, 0)
 }
 
 // And a cluster that will not say, on that same branch: a failed read is not "nothing
 // half-built here", and it is not typed, so the local record survives it.
 func TestARetryIsNotAssumedWhenTheClusterWillNotAnswer(t *testing.T) {
-	answer, _ := storeAnswering(false, errors.New("the API server is unreachable"))
-	err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, answer)
+	ev := &fakeEvidence{heldErr: errors.New("the API server is unreachable")}
+	err := refuseAStoreAndKeyThatDoNotMatch(restoringState(), instanceStore{State: storeStateAbsent}, ev.evidence())
 	if err == nil {
 		t.Fatal("a cluster that could not be read was treated as holding nothing")
 	}
@@ -251,13 +282,11 @@ func TestARetryIsNotAssumedWhenTheClusterWillNotAnswer(t *testing.T) {
 // The ordinary first bootstrap of an instance: nothing in the store, no recovery asked
 // for, and no cluster-wide sweep to establish it.
 func TestAFreshInstanceIsNotRefusedAndCostsNoClusterRead(t *testing.T) {
-	answer, calls := storeAnswering(false, nil)
-	if err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateAbsent}, answer); err != nil {
+	ev := &fakeEvidence{}
+	if err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateAbsent}, ev.evidence()); err != nil {
 		t.Fatalf("an ordinary first bootstrap was refused: %v", err)
 	}
-	if *calls != 0 {
-		t.Errorf("an ordinary bootstrap swept the cluster %d time(s)", *calls)
-	}
+	ev.reads(t, 0, 0)
 }
 
 // 🔴 THE PRE-ISOLATION SHAPE, REFUSED BEFORE THE ROOT KEY IS WRITTEN RATHER THAN AFTER.
@@ -266,8 +295,8 @@ func TestAFreshInstanceIsNotRefusedAndCostsNoClusterRead(t *testing.T) {
 // the record goes back too.
 func TestADatabaseOwnedBySomethingElseIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	for _, st := range []*State{mintingState(), restoringState()} {
-		answer, calls := storeAnswering(true, nil)
-		err := refuseAStoreAndKeyThatDoNotMatch(st, instanceStore{State: storeStateForeign, Owner: "devicechain"}, answer)
+		ev := &fakeEvidence{held: true, kept: true}
+		err := refuseAStoreAndKeyThatDoNotMatch(st, instanceStore{State: storeStateForeign, Owner: "devicechain"}, ev.evidence())
 
 		var typed *ErrStoreAndKeyDisagree
 		if !errors.As(err, &typed) {
@@ -279,9 +308,7 @@ func TestADatabaseOwnedBySomethingElseIsRefusedBeforeAnythingIsWritten(t *testin
 		if !strings.Contains(err.Error(), `owned by "devicechain"`) {
 			t.Errorf("the refusal does not name the owner it read:\n%s", err)
 		}
-		if *calls != 0 {
-			t.Errorf("a foreign database still cost a cluster sweep (%d)", *calls)
-		}
+		ev.reads(t, 0, 0)
 	}
 }
 
@@ -358,7 +385,7 @@ func TestAnUnreadableClusterDoesNotBecomeAnArchiveRefusal(t *testing.T) {
 	stubSingletons(t, clusterSingletons{}, nil)
 	stubNamespacePrecheck(t)
 	stubSharedStore(t, instanceStore{State: storeStateOurs}, nil)
-	stubClusterInstances(t, clusterInstances{}, errors.New("the API server is unreachable"))
+	stubInstanceCredentials(t, false, errors.New("the API server is unreachable"))
 
 	err := stepCheckClusterSingletons(context.Background(), &State{
 		Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}})
@@ -393,5 +420,57 @@ func TestANamespaceRefusalNeverReachesTheStore(t *testing.T) {
 	}
 	if *calls != 0 {
 		t.Errorf("a run refused for its namespace still signed in to the relational store %d time(s)", *calls)
+	}
+}
+
+// 🔴 THE CASE THE DECLARATION COULD NOT SEE, AND THE REASON THE OURS ARM DOES NOT ASK IT.
+// The Instance CRD is cluster-scoped, so `kubectl delete ns dci-<instance>` takes the root
+// key and the configuration document and LEAVES the declaration — while the database,
+// which lives in the shared store rather than that namespace, survives. Keyed on the
+// declaration this reads as a repairable half-built run and mints over rows whose key the
+// operator just deleted; keyed on the credentials that travel WITH the database, it does
+// not.
+func TestADatabaseThatOutlivedItsNamespaceIsNotMistakenForARepair(t *testing.T) {
+	ev := &fakeEvidence{held: true, kept: false}
+	err := refuseAStoreAndKeyThatDoNotMatch(mintingState(), instanceStore{State: storeStateOurs}, ev.evidence())
+
+	var typed *ErrStoreAndKeyDisagree
+	if !errors.As(err, &typed) {
+		t.Fatalf("a database whose namespace was deleted out from under it was read as this run's own "+
+			"half-built work, so the bootstrap would mint a fresh root key over rows sealed by the key "+
+			"that namespace held: %v", err)
+	}
+	// It must not have reached the declaration at all — that is the read that gets this
+	// case wrong, and consulting it even as a tiebreak would reintroduce the hole.
+	ev.reads(t, 0, 1)
+	if !strings.Contains(err.Error(), InstanceNamespace("beta")) {
+		t.Errorf("the refusal does not name the namespace it looked in:\n%s", err)
+	}
+}
+
+// The step, not the policy: the ours arm's evidence has to be the credentials read when
+// it runs for real. Stubbing the declarations to name the instance — the shape a deleted
+// namespace leaves — must NOT rescue a bootstrap whose credentials are gone.
+func TestTheSingletonStepAsksForCredentialsNotTheDeclaration(t *testing.T) {
+	stubSingletons(t, clusterSingletons{}, nil)
+	stubNamespacePrecheck(t)
+	stubSharedStore(t, instanceStore{State: storeStateOurs}, nil)
+	stubClusterInstances(t, clusterInstances{IDs: []string{"beta"}, Source: "the instance declarations in this cluster"}, nil)
+	stubInstanceCredentials(t, false, nil)
+
+	err := stepCheckClusterSingletons(context.Background(), &State{
+		Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}})
+	var typed *ErrStoreAndKeyDisagree
+	if !errors.As(err, &typed) {
+		t.Fatalf("step 4 let a bootstrap through onto a database whose namespace is gone, because a "+
+			"surviving declaration said the cluster still holds the instance: %v", err)
+	}
+
+	// And the counterweight: the same step, same declarations, credentials still there —
+	// a genuine half-built run, which must go through.
+	stubInstanceCredentials(t, true, nil)
+	if err := stepCheckClusterSingletons(context.Background(), &State{
+		Instance: "beta", IngressHost: "beta.localhost", Install: installed(), Values: map[string]string{}}); err != nil {
+		t.Fatalf("step 4 refused a bootstrap repairing its own half-built instance: %v", err)
 	}
 }
