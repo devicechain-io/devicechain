@@ -207,6 +207,7 @@ func TestTheHydrationReturnsTheRefusalTheClusterEarns(t *testing.T) {
 	binding := ClusterBinding{KubeContext: "kind-devicechain-upgrade", Cluster: "devicechain-upgrade"}
 	opts := UpgradeOptions{Options: Options{Instance: "upgrig"}}
 
+	stubOperatorCheck(t, nil)
 	prev := readInstanceDeclaration
 	t.Cleanup(func() { readInstanceDeclaration = prev })
 	// No declaration: the case both refusals start from.

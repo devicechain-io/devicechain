@@ -271,34 +271,35 @@ var GreenUnderline = color.New(color.Underline, color.FgHiGreen).SprintFunc()
 
 // NewDefaultPipeline returns the bootstrap steps in execution order.
 //
-// 🔴 THE ORDER IS THE DESIGN, AND THREE OF ITS EDGES ARE LOAD-BEARING (ADR-080).
+// 🔴 THE ORDER IS THE DESIGN, AND TWO OF ITS EDGES ARE LOAD-BEARING (ADR-080).
 // EnsureCluster runs before all of this, in the command layer, so every step
 // below may assume a reachable cluster.
 //
-//  1. The CRDs and the operator go in FIRST, ahead of the infrastructure apply
-//     they used to follow. An instance is declared in the cluster now, so the
-//     Instance CRD has to exist before anything can write the declaration — and
-//     the thing that writes it is the next step. Nothing blocks the move: the
-//     operator overlay creates its own namespace, its webhook/cert-manager
-//     patches are not enabled, and it consumes nothing OpenTofu produces.
+//  1. THE OPERATOR IS NO LONGER INSTALLED HERE, AND THIS PIPELINE NO LONGER HAS A
+//     STEP FOR IT. It used to go in first, ahead of the infrastructure apply, so
+//     that the Instance CRD existed before the declaration was written. The CRDs
+//     and the controller are CLUSTER-scoped — one copy shared by every instance —
+//     so installing them from a per-instance verb moved them for instances nobody
+//     had asked about, in either direction, with nothing comparing versions. That
+//     belongs to `dcctl install`, and the command layer now REFUSES a cluster
+//     without a matching operator before this pipeline starts. See RequireOperator.
 //
-//  2. The local registry goes in AHEAD of that, which is the one place this
-//     order departs from the sequence ADR-080 wrote down. Installing the
-//     operator means applying a Deployment that names an image, and on the
-//     --build path stepLocalRegistry is what builds and pushes that image. Put
-//     the operator first and a developer bootstrap installs a Deployment
-//     pointing at a registry that does not exist yet: it recovers on its own
-//     once the push lands, but only after a pull-backoff long enough to look
-//     like a broken install. Registry-first costs nothing — it needs only the
-//     cluster — and the CRD still lands before the claim.
+//     What this costs: the guard has to run before the steps below, not inside
+//     them, because steps 3 and 4 LIST the Instance declarations and a missing CRD
+//     would read to them as "no instances" — an absence answering a question about
+//     contents. declaredInstances refuses that now rather than tolerating it.
+//
+//  2. The local registry still goes first. It no longer has an operator image to
+//     have ready, but it still builds and pushes every SERVICE image, and the
+//     chart step below deploys them.
 //
 //  3. Render still precedes the infrastructure apply, because the broker
 //     credentials it mints must be recorded before OpenTofu configures the
 //     broker with them (see broker_record.go, and the test that pins it).
 //
 // The image source is settled before any of this, in the command layer — see
-// ResolveImageSource. Step 2 always consumes it and step 1 does on --build, and
-// neither can wait for the render step to fill it in.
+// ResolveImageSource. Step 1 consumes it on --build, and cannot wait for the
+// render step to fill it in.
 func NewDefaultPipeline() Pipeline {
 	return Pipeline{Steps: []Step{
 		{Name: "Ensure local registry", Run: stepLocalRegistry},
@@ -312,7 +313,6 @@ func NewDefaultPipeline() Pipeline {
 		// What only one instance per cluster can hold — the ingress host, the local MQTT
 		// port. Before the first write, so a refusal leaves nothing behind.
 		{Name: "Check what other instances hold", Run: stepCheckClusterSingletons},
-		{Name: "Install core components", Run: stepInstallCore},
 		{Name: "Declare the instance", Run: stepDeclareInstance},
 		{Name: "Render configuration", Run: stepRenderConfig},
 		{Name: "Apply infrastructure", Run: stepInfraApply},

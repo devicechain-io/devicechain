@@ -37,11 +37,20 @@ func listFails(dyn *dynamicfake.FakeDynamicClient, err error) {
 	})
 }
 
-// 🔴 THE VIRGIN CLUSTER, AND IT IS THE CASE THAT WOULD BREAK EVERY FIRST BOOTSTRAP. This
-// reader runs BEFORE stepInstallCore puts the Instance CRD in, so on a cluster nobody has
-// ever installed anything into, the declaration source must answer "nothing" rather than
-// "I cannot look".
-func TestAClusterWithNoInstanceCRDHoldsNoInstances(t *testing.T) {
+// 🔴 THIS TEST ASSERTED THE OPPOSITE UNTIL THE OPERATOR MOVED, AND THE REVERSAL IS THE
+// POINT RATHER THAN AN ADJUSTMENT.
+//
+// This reader used to run BEFORE the step that put the Instance CRD in, so a cluster
+// nobody had installed anything into genuinely had no CRD — and answering "nothing"
+// was the only way the first bootstrap of any cluster could proceed. `dcctl install`
+// installs the operator now, and the command layer refuses a cluster without one
+// before this pipeline starts, so "no CRD" no longer means "new cluster".
+//
+// What it means now is that the cluster cannot be asked the question. Answering
+// "there are no instances" to that is an absence used as an answer about CONTENTS,
+// and the cost is the one the sibling test below names: a second instance built over
+// a live one.
+func TestAClusterWithNoInstanceCRDCannotBeAskedWhatItHolds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -60,12 +69,15 @@ func TestAClusterWithNoInstanceCRDHoldsNoInstances(t *testing.T) {
 			listFails(dyn, tc.err)
 
 			ids, err := declaredInstances(t.Context(), dyn)
-			if err != nil {
-				t.Fatalf("a cluster with no Instance CRD was reported as unreadable, which "+
-					"refuses the first bootstrap of every new cluster: %v", err)
+			if err == nil {
+				t.Fatalf("a cluster with no Instance definition answered %v instead of "+
+					"refusing; an absence was used as an answer about what the cluster holds", ids)
 			}
-			if len(ids) != 0 {
-				t.Fatalf("a cluster with no Instance CRD named instances %v", ids)
+			if !strings.Contains(err.Error(), "dcctl install") {
+				t.Errorf("the refusal does not name what puts the definition there: %v", err)
+			}
+			if !strings.Contains(err.Error(), "over a live one") {
+				t.Errorf("the refusal does not say what reading this as empty would cost: %v", err)
 			}
 		})
 	}

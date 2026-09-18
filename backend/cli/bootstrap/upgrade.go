@@ -12,7 +12,6 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	apply "github.com/devicechain-io/dc-k8s/apply"
-	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,7 +100,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	announceBinding(binding, source, opts.Instance)
 	kubeContext := binding.KubeContext
 
-	dyn, disco, typed, err := kubeClients(kubeContext)
+	dyn, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("building kube clients: %w", err)
 	}
@@ -126,14 +125,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	st.Evolving = true
 
-	image := operatorImageRef(st)
-
 	fmt.Println(GreenUnderline(fmt.Sprintf(
 		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
-	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(image))
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
+	// not. hydrateUpgradeState has already refused unless the cluster's operator is
+	// the one this build expects; what this verb moves is the instance.
+	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
+		color.GreenString("the cluster's — checked, not moved (`dcctl install` moves it)"))
 
 	// 🔴 THE CONNECTION BUDGET IS ASKED BEFORE THE FIRST WRITE, while a refusal still
 	// means nothing has moved. See upgradeconnlimit.go.
@@ -169,29 +170,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// written yet.
 	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
 
-	manifests, err := operator.Render(image)
-	if err != nil {
-		return fmt.Errorf("rendering operator manifests: %w", err)
-	}
-	targets, err := operatorDeployments(manifests)
-	if err != nil {
-		return fmt.Errorf("reading the rendered operator manifests: %w", err)
-	}
-	if len(targets) == 0 {
-		// Not a warning to print and continue past. This command's only
-		// observable effect is a controller running new code; a stream with no
-		// Deployment in it would apply cleanly, report success, and move nothing.
-		return fmt.Errorf(
-			"reading the rendered operator manifests: the operator overlay rendered no Deployment, " +
-				"so there is nothing to upgrade and reporting success would be false; " +
-				"the overlay at backend/k8s/config was changed")
-	}
-
 	if opts.DryRun {
 		fmt.Println()
-		for _, t := range targets {
-			wouldDo(fmt.Sprintf("apply CRDs/RBAC and set %s/%s to %s", t.namespace, t.name, image))
-		}
 		wouldDo("recompose the instance configuration document from this release's chart, " +
 			"keeping every credential the instance is running on")
 		wouldDo("upgrade the instance's Helm release")
@@ -215,23 +195,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// write would run before it (defers unwind backwards) and fence out the very
 	// stamp it is meant to permit.
 	upgradeClaim = beginUpgradeClaim(ctx, kubeContext, opts.Instance)
-
-	// Read what is running BEFORE anything is applied. An upgrade that reports
-	// only its destination cannot be told apart from a no-op, and "no-op" is the
-	// answer an operator most wants confirmed on a cluster they are unsure about.
-	before := currentOperatorImages(ctx, typed, targets)
-
-	doing("applying operator manifests (CRDs + RBAC + controller)")
-	if err := apply.NewApplyOptions(dyn, disco).WithServerSide(true).Apply(ctx, manifests); err != nil {
-		return fail("applying operator manifests", err)
-	}
-	done()
-
-	doing("waiting for the controller to roll over")
-	if err := waitForRollout(ctx, typed, targets, 5*time.Minute); err != nil {
-		return fail("waiting for the controller", err)
-	}
-	done()
 
 	// THE SERVICES, AND THE DOCUMENT THEY READ.
 	//
@@ -297,19 +260,15 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 
 	fmt.Println(color.HiGreenString("\nInstance upgraded."))
-	for _, t := range targets {
-		was := before[t.String()]
-		switch {
-		case was == "":
-			fmt.Printf("  %s %s\n", color.WhiteString(t.String()+":"), color.GreenString(image))
-		case was == image:
-			fmt.Printf("  %s %s %s\n", color.WhiteString(t.String()+":"), color.GreenString(image),
-				color.YellowString("(already at this version — re-applied)"))
-		default:
-			fmt.Printf("  %s %s → %s\n", color.WhiteString(t.String()+":"),
-				color.YellowString(was), color.GreenString(image))
-		}
-	}
+	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
+		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// 🔴 SAID BECAUSE THE OPERATOR IS THE ONE THING THIS COMMAND USED TO MOVE AND NO
+	// LONGER DOES, and an operator who upgraded through the previous release has
+	// every reason to assume it did. The check that let this run at all proved the
+	// cluster's operator is the one this build expects — so naming it here is a
+	// statement about what was verified, not about what was applied.
+	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
+		color.GreenString("unchanged — the cluster's, already at this release"))
 	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
 	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
 	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth

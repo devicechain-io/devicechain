@@ -340,6 +340,22 @@ var bootstrapCmd = &cobra.Command{
 			fmt.Println(color.YellowString("[dry-run] %v\n  The plan below assumes an installed "+
 				"cluster with default settings.", err))
 		}
+		// 🔴 AND THE OPERATOR ITSELF IS CHECKED SEPARATELY, AGAINST THE CLUSTER RATHER
+		// THAN AGAINST THE RECORD ABOVE. A record written by a dcctl from before the
+		// operator moved into `dcctl install` says "installed" perfectly truthfully
+		// while no operator is present at all — so the record cannot answer this, and a
+		// guard that asked it would wave through exactly the clusters it exists to
+		// catch. Ask for the artifact that travels WITH the thing.
+		//
+		// A dry run is softened the same way the record check above is, and for the same
+		// reason: a rehearsal is often aimed at a cluster that is not prepared yet, and
+		// it is still worth having.
+		if err := bootstrap.RequireOperator(ctx, binding.KubeContext, "a bootstrap", installCommand); err != nil {
+			if !opts.DryRun {
+				return err
+			}
+			fmt.Println(color.YellowString("[dry-run] %v", err))
+		}
 		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
 		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
 		// writes it anywhere.

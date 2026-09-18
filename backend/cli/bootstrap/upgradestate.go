@@ -51,6 +51,33 @@ func hydrateUpgradeState(
 		Values:       map[string]string{},
 	}
 
+	// 0. THE OPERATOR, AND IT COMES FIRST FOR A REASON THAT IS NOT PRIORITY.
+	//
+	// 🔴 A MISSING CRD MAKES EVERY LATER REFUSAL LIE. The declaration read below
+	// asks the cluster for an Instance; with no Instance CRD installed, that comes
+	// back NotFound and is reported as "instance %q is not declared — check the
+	// name". The name is fine. The cluster has no operator. Sending an operator to
+	// re-check a correct name, during an upgrade, is advice they cannot act on.
+	//
+	// 🔴 AND IT IS BEFORE ANYTHING Upgrade DEFERS. Once Upgrade has called
+	// recordUpgradedVersion the declaration may say Upgrading, and from that point
+	// every exit has to stamp a terminal phase; a refusal made after it would write
+	// Failed over an instance nothing had touched. Everything in this function runs
+	// ahead of both, which is why the refusal lives here rather than in Upgrade.
+	//
+	// 🔑 THIS IS WHERE THE ONE-COMMAND UPGRADE ENDS. `dcctl upgrade` used to apply
+	// the operator itself, so it could move a cluster and an instance together. It
+	// moved the cluster for every OTHER instance at the same time, which is what it
+	// no longer does.
+	// Through the seam for the reason the declaration read below uses one: what this
+	// selects is WHICH refusal an operator gets, and every other part of that
+	// decision is exercisable without a cluster. Reading around the seam would leave
+	// the wiring between the check and the refusal the one piece no test could reach.
+	if err := requireOperatorFor(ctx, binding.KubeContext, "an upgrade",
+		InstallCommand(provider.Name(), binding)); err != nil {
+		return nil, err
+	}
+
 	// 1. THE DECLARATION.
 	//
 	// 🔑 THROUGH THE SEAM step_claim.go ALREADY DECLARES, not through ReadInstanceCR

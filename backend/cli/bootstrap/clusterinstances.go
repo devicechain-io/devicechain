@@ -152,9 +152,20 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 
 // declaredInstances lists the Instance declarations in a cluster.
 //
-// 🔴 IT MUST TOLERATE THE CRD BEING ABSENT, because this runs BEFORE stepInstallCore
-// installs it. A virgin cluster has to read as "no instances" rather than as an error,
-// or the boundary would refuse the first bootstrap of every cluster.
+// 🔴 IT USED TO TOLERATE THE CRD BEING ABSENT, AND THAT REVERSED WITH THE OPERATOR.
+// This runs at steps 3 and 4, and the operator used to be installed at step 5 — so a
+// virgin cluster genuinely had no CRD yet, and reading that as "no instances" was the
+// only way the first bootstrap of a cluster could ever proceed.
+//
+// `dcctl install` installs the operator now, and the command layer refuses a cluster
+// without one before this pipeline starts. So an absent CRD no longer means "new
+// cluster"; it means the cluster is not prepared, or something removed the definition
+// underneath a run that had already checked. Neither is "there are no instances here",
+// and answering that would be an absence used as an answer about CONTENTS — the exact
+// shape that lets a second instance be built over a live one.
+//
+// It is a backstop rather than the message an operator should ever see: RequireOperator
+// refuses earlier and says what to run. If this one fires, the CRD went away mid-run.
 //
 // 🔑 THE DISAMBIGUATION isInstanceNotFound MAKES DOES NOT APPLY TO A LIST, and reusing
 // it verbatim would be wrong rather than merely redundant. That function exists because
@@ -172,7 +183,12 @@ func declaredInstances(ctx context.Context, dyn dynamic.Interface) ([]string, er
 	list, err := dyn.Resource(instanceGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-			return nil, nil
+			return nil, fmt.Errorf(
+				"this cluster has no Instance definition, so it cannot be asked which instances it " +
+					"holds. The operator that installs that definition belongs to the cluster and is " +
+					"put there by `dcctl install`; run it, then try again. Refusing to continue: " +
+					"treating a cluster that cannot answer as an EMPTY one is how a second instance " +
+					"gets built over a live one")
 		}
 		return nil, fmt.Errorf("listing the instance declarations in this cluster: %w. Refusing "+
 			"to continue: if a declaration IS there, treating this cluster as empty would "+

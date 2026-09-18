@@ -189,18 +189,35 @@ func TestTheSingletonStepRefusesAHostAndRecordsTheNodePort(t *testing.T) {
 	}
 }
 
-// 🔴 THE STEP COMES BEFORE THE FIRST WRITE. A refusal after the operator install or the
-// declaration leaves a declared instance that was never built.
+// 🔴 THE STEP COMES BEFORE THE FIRST WRITE. A refusal after the declaration leaves a
+// declared instance that was never built.
+//
+// 🔴 IT NAMES ITS STEPS AND REFUSES A NAME THAT IS NOT THERE, which this test learned
+// the hard way. It used to compare against "Install core components" too, through a
+// bare slices.Index — and when that step was removed with the operator, Index returned
+// −1 and `check > -1` was true for every possible pipeline. The test failed, which was
+// right, but it failed saying the singleton check ran AFTER a step that no longer
+// exists, which sent the reader looking for an ordering bug that was not there. A
+// missing name is a different fact from a bad order and has to say so.
 func TestTheSingletonStepRunsBeforeAnythingIsWritten(t *testing.T) {
 	var names []string
 	for _, s := range NewDefaultPipeline().Steps {
 		names = append(names, s.Name)
 	}
-	check := slices.Index(names, "Check what other instances hold")
-	core := slices.Index(names, "Install core components")
-	declare := slices.Index(names, "Declare the instance")
-	if check < 0 || check > core || check > declare {
-		t.Errorf("the singleton check is at %d, after the first write (core %d, declare %d): %v", check, core, declare, names)
+	at := func(name string) int {
+		i := slices.Index(names, name)
+		if i < 0 {
+			t.Fatalf("the pipeline has no step named %q, so this ordering cannot be checked "+
+				"at all. Steps: %v", name, names)
+		}
+		return i
+	}
+	check := at("Check what other instances hold")
+	declare := at("Declare the instance")
+	if check > declare {
+		t.Errorf("the singleton check is at %d and the declaration is written at %d, so a "+
+			"refusal would leave a declared instance that was never built: %v",
+			check, declare, names)
 	}
 }
 

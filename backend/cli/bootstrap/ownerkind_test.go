@@ -301,6 +301,7 @@ func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stubOperatorCheck(t, nil)
 	st, err := hydrateUpgradeState(context.Background(), c, provider,
 		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
 		UpgradeOptions{Options: Options{Instance: "prod"}})
@@ -351,6 +352,7 @@ func TestAnUpgradeOnAnOffSiteArchivedClusterDemandsNoObjectStoreCredential(t *te
 		t.Fatal(err)
 	}
 
+	stubOperatorCheck(t, nil)
 	st, err := hydrateUpgradeState(context.Background(), c, provider,
 		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
 		UpgradeOptions{Options: Options{Instance: "prod"}})
