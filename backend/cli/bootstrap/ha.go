@@ -326,9 +326,12 @@ func checkBrokerHostsReplication(st *State) error {
 			"instance.config.infrastructure.nats.streamReplicas=%d — a stream cannot be replicated "+
 			"wider than the cluster hosting it. The two halves of the HA toggle disagree: "+
 			"nats_cluster_replicas (OpenTofu) sizes the broker and streamReplicas (Helm) sizes the "+
-			"data on it. Re-run the infrastructure apply with --ha, or drop --ha here. (dcctl sets "+
-			"both from one value, so a disagreement means the infrastructure was applied by "+
-			"something else — check for a terraform.tfvars in the instance's infra directory)",
+			"data on it. HA is a property of the CLUSTER — it is set once by 'dcctl install --ha' "+
+			"and every instance bootstrapped on that cluster follows it — so the fix is to re-apply "+
+			"this instance's infrastructure at the cluster's setting by re-running the bootstrap, or "+
+			"to re-install the cluster at the topology you actually want. (dcctl sets both halves "+
+			"from that one value, so a disagreement means this instance's infrastructure was applied "+
+			"by something else — check for a terraform.tfvars in the instance's infra directory)",
 		servers, ha.StreamReplicas)
 }
 

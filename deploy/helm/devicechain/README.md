@@ -14,10 +14,14 @@ functional area**, plus the instance and per-service config ConfigMaps.
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
-  --version 1.2.0 \
+  --version <X.Y.Z> \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set image.tag=v<X.Y.Z>
 ```
+
+Take `<X.Y.Z>` from the [Releases
+page](https://github.com/devicechain-io/devicechain/releases) — the chart's OCI tag is
+the release version without the leading `v`, and `image.tag` keeps the `v`.
 
 **`instance.id` picks the namespace, but is not the namespace.** The instance is
 deployed into `dci-` plus the id — the install above lands entirely in
@@ -49,7 +53,7 @@ is that same version without the leading `v`; `image.tag` keeps it.
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v1.2.0
+  --set image.tag=v<X.Y.Z>
 ```
 
 ## Choosing what to deploy
@@ -230,8 +234,8 @@ exports later) go to a pluggable object store, configured under
 `RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
 pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
 503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
-propagate, then drains in-flight requests — an app-side drain, since the `FROM
-scratch` images have no shell for a `preStop` hook. That window and
+propagate, then drains in-flight requests — an app-side drain, since the
+distroless images have no shell for a `preStop` hook. That window and
 `terminationGracePeriodSeconds` (default 30) are one budget: both are rendered into
 the instance configuration, and a service refuses to start if the drain would take
 more than half the grace period, since the teardown after the drain is what actually

@@ -9,9 +9,11 @@
 // Since decision 4 narrowed the operator and moved workload rendering to the
 // Helm chart, the deployment-time dependency gate that actually runs is the
 // chart's `devicechain.enabledAreas` template guard, which mirrors this catalog.
-// No production Go code consults this package today (only its tests do); it is
-// deliberately retained as the single Go source of truth for that guard and for
-// the deferred dependency-admission webhook (ADR-022 review E18), which would
+// It is also the single Go source of truth that guard mirrors, and dcctl reads it
+// directly — areas.go and connbudget.go resolve a profile's areas and size the
+// instance's connection budget from this catalog, and cmd/bootstrap.go validates
+// --enable-area against it before any cluster is touched. It is retained for that
+// and for the deferred dependency-admission webhook (ADR-022 review E18), which would
 // re-establish a Go enforcement path so the Helm template stops being a parallel
 // reimplementation. Until then the webhook is consciously descoped in favor of
 // the template guard (tracked on the roadmap).
