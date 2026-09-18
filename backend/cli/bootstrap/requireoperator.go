@@ -88,9 +88,12 @@ func judgeOperator(have operator.Installed, want, verb, installCommand string) (
 		// an operator should know when it did not run.
 		return fmt.Sprintf(
 			"  note: this cluster's operator carries no identity, so dcctl cannot check it against "+
-				"the one this build expects. That is what a `make deploy` install looks like; if you "+
-				"did not install it by hand, run `%s` to replace it with one dcctl can vouch for.",
-			installCommand), nil
+				"the one this build expects, and %s is going ahead unchecked.\n"+
+				"  That is what a `make deploy` install looks like, and it is fine. It is ALSO what "+
+				"a dcctl from before this check ran against this cluster looks like — and that one "+
+				"moved the definitions to whatever version it carried. If you did not install this "+
+				"operator by hand, run `%s` to put a known one back.",
+			verb, installCommand), nil
 
 	case !have.Matches(want):
 		return "", fmt.Errorf(

@@ -178,11 +178,10 @@ var namespacePrecheckClient = func(kubeContext string) (kubernetes.Interface, er
 // precheckInstanceNamespace settles, before this run has written anything anywhere,
 // whether this instance may own the namespace it is named after.
 //
-// 🔴 THE SEAM ON ITS OWN IS FOUR STEPS TOO LATE. ensureNamespaceForRelease is what stands
-// between a foreign namespace and the instance configuration Secret, and it holds — but it
-// runs inside the infrastructure apply, by which time the operator is installed, the
-// Instance declaration exists, the cluster lock is held and the local record points at all
-// of it. Taking the same decision here turns a half-built instance into a refusal that
+// 🔴 THE SEAM ON ITS OWN IS SEVERAL STEPS TOO LATE. ensureNamespaceForRelease is what
+// stands between a foreign namespace and the instance configuration Secret, and it holds —
+// but it runs inside the infrastructure apply, by which time the Instance declaration
+// exists, the cluster lock is held and the local record points at all of it. Taking the same decision here turns a half-built instance into a refusal that
 // leaves nothing behind.
 //
 // 🔑 IT ANSWERS ONLY ABOUT A NAMESPACE THAT EXISTS, and that bound is worth stating because

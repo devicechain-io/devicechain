@@ -129,9 +129,10 @@ func installOperator(ctx context.Context, st *State) error {
 // resolver's own comments are written against, produced by the command that now
 // owns the operator.
 //
-// 🔴 ON INSTALL'S PATH ONLY, and deliberately not inside stepInstallCore, which
-// bootstrap still runs. Bootstrap's behaviour is unchanged by this slice; when the
-// operator leaves bootstrap altogether this is already where the check lives.
+// It sits here rather than inside stepInstallCore because that function is the
+// APPLY and this is the confirmation; keeping them separate is what let bootstrap
+// run the apply without the wait while it still did, and it is where a future
+// `dcctl uninstall` or repair path would reuse one without the other.
 //
 // The overlay is rendered a second time rather than threaded through State. It is
 // a pure, in-process render of embedded manifests — no cluster, no I/O — and the

@@ -31,12 +31,27 @@ var crdGVR = schema.GroupVersionResource{
 //   - ABSENT. No CRD. The cluster was never prepared, or was prepared by a dcctl
 //     from before the operator moved into `dcctl install`. The remedy is to run
 //     install.
-//   - UNSTAMPED. The CRDs are there and carry no identity. `make deploy` pipes the
+//
+//   - UNSTAMPED. The CRDs are there and carry no identity.
+//
+//     🔴 THIS STATE HAS THREE CAUSES AND ONLY ONE OF THEM IS BENIGN, which is the
+//     thing to know before reading the policy as safe. (a) `make deploy` pipes the
 //     kustomize CLI to kubectl and never goes through this package, so a
-//     maintainer's hand-installed operator looks exactly like this. It is NOT a
-//     mismatch — it is an operator dcctl cannot vouch for, and the remedy is
-//     nothing, because second-guessing somebody who installed it deliberately is
-//     worse than proceeding.
+//     maintainer's deliberate hand-install looks exactly like this. (b) Somebody
+//     edited the annotation off. (c) — the one that is easy to miss — a dcctl from
+//     BEFORE the stamp existed ran `bootstrap` or `upgrade` against a stamped
+//     cluster: those verbs server-side-applied this same overlay under the same
+//     field manager with Force, so the apply REMOVED the annotation the newer dcctl
+//     had set, and moved the schema to whatever that older binary carried. A team on
+//     mixed dcctl releases reaches (c) far more often than anyone runs `make deploy`.
+//
+//     It is still not treated as a mismatch, because dcctl cannot tell the three
+//     apart and refusing (a) would overrule a choice it has no better information
+//     about. What it must not do is stay quiet: the note the caller prints names the
+//     benign cause AND says to run install if that is not what happened, so (c) is
+//     recoverable by somebody who reads it. Pre-GA that trade stands; it is written
+//     down so the next person weighing it is weighing the real thing.
+//
 //   - STAMPED. Compare it and say whether it is the one this dcctl needs.
 //
 // An absence read as agreement would let a bootstrap write an Instance against a

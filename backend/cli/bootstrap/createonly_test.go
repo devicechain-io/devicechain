@@ -105,7 +105,7 @@ func TestTheLegacyDatabaseRemovalRerunIsStillAllowed(t *testing.T) {
 // The second edge used to name the operator install as the first write. That step is
 // gone — the operator is the cluster's and `dcctl install` puts it there — so the
 // edge is stated against the first thing this pipeline still writes, the declaration.
-func TestTheRebuildRefusalRunsAfterTheLockAndBeforeAnythingIsApplied(t *testing.T) {
+func TestTheRebuildRefusalRunsAfterTheLockAndBeforeAnythingIsWritten(t *testing.T) {
 	claim := stepIndex(t, stepClaimCluster)
 	refuse := stepIndex(t, stepRefuseRebuild)
 	declare := stepIndex(t, stepDeclareInstance)

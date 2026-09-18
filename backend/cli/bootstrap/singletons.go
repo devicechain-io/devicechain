@@ -198,8 +198,9 @@ func (e *ErrHostTaken) Error() string {
 // would have to take from it, and refuses what is not free: a host another instance
 // serves, the namespace this instance is named after, and room on the shared store.
 //
-// 🔴 BEFORE ANYTHING IS WRITTEN. It sits right after the rebuild refusal, ahead of the
-// operator install and the instance declaration: a refusal after those would leave a
+// 🔴 BEFORE ANYTHING IS WRITTEN. It sits right after the rebuild refusal and ahead of
+// the instance declaration, which is this pipeline's first write: a refusal after it
+// would leave a
 // declaration for an instance that was never built, and the cluster would report holding
 // it. The node port is not refused — the instance is built without it — but it is decided
 // here, from the same read, and said. TestTheSingletonStepRunsBeforeAnythingIsWritten is

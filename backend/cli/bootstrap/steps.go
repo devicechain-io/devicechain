@@ -779,13 +779,11 @@ func operatorImageRef(st *State) string {
 // stepInstallCore puts the operator on the cluster: CRDs, RBAC and the controller
 // Deployment, rendered in-process from manifests embedded in the binary.
 //
-// 🔴 THIS STEP IS ON ITS WAY OUT. The operator is CLUSTER-scoped and `dcctl
-// install` now applies it too; a bootstrap applying it is a per-instance verb
-// moving a resource every instance on the cluster shares. It remains here only so
-// that the move can be made in slices that each stay green — the next one removes
-// it from the pipeline and refuses instead. Both callers render and apply through
-// the operator package, so until then they cannot disagree about what they put on
-// the cluster.
+// 🔴 IT IS NO LONGER A BOOTSTRAP STEP. The name survives from when it was one; it
+// is now reached only by `dcctl install`, which is the verb that owns the operator.
+// A bootstrap applying it was a per-instance verb moving a resource every instance
+// on the cluster shares, so it was removed from the pipeline and replaced with a
+// refusal — see RequireOperator.
 func stepInstallCore(ctx context.Context, st *State) error {
 	if err := requireResolvedImages(st, "installing the operator"); err != nil {
 		return err

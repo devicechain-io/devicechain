@@ -16,20 +16,22 @@ import (
 // to sit after "Install core components", which server-side-applies the CRDs, the
 // RBAC and the operator Deployment — cluster-scoped objects, at this run's chosen
 // version. Those are exactly the objects the lock's own rationale names as
-// contended, and exactly the ones `dcctl upgrade` takes the lock to apply. So a
+// contended, and at the time exactly the ones `dcctl upgrade` also applied. So a
 // second bootstrap, on its way to being refused, would first have applied its
 // operator version over a cluster the first one was mid-apply on. The lock
 // excluded the runs and not the writes.
 //
 // Taking it here needs one thing to exist: a namespace to put the Lease in. That
 // is why this step creates the operator's namespace and only the namespace. The
-// object is idempotent, it is the same one the overlay declares (read from the
-// rendered manifests rather than named here, so a kustomize rename cannot leave
-// the lock somewhere nothing else looks), and creating it early costs nothing —
-// the overlay applies it again a step later without complaint.
+// object is idempotent and it is the same one the overlay declares — read from the
+// rendered manifests rather than named here, so a kustomize rename cannot leave the
+// lock somewhere nothing else looks. On a cluster `dcctl install` has prepared the
+// namespace is already there and the create is a no-op; it is still done, because
+// this step must not depend on which verb got here first.
 //
-// The DECLARATION still cannot be written until the CRDs are installed, which is
-// why declaring is a separate step after the install rather than part of this one.
+// The DECLARATION still cannot be written until the CRDs exist, but nothing in this
+// pipeline installs them any more — `dcctl install` does, and the command layer
+// refuses a cluster without them before this step runs.
 // It is a thin wrapper over ClaimCluster, which `dcctl install` calls too. What
 // stays here is the progress framing and the dry-run rehearsal — the parts that
 // differ between a pipeline step and a command — while the part that must NOT

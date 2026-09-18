@@ -203,7 +203,7 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 	// including an Instance CRD that is not installed — isInstanceNotFound separates a
 	// missing OBJECT from a missing RESOURCE TYPE and only the first reads as absent.
 	// Keeping the record on a cluster with no CRD is the right direction anyway: the
-	// operator installs the CRD before the release (step 5 before step 9), so a cluster
+	// CRD is installed by `dcctl install`, before any release exists, so a cluster
 	// holding a release has one, and a cluster that somehow does not is a cluster whose
 	// answer we do not have.
 	inst, err := readInstanceCR(ctx, dyn, instance)

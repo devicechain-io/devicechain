@@ -354,7 +354,8 @@ var bootstrapCmd = &cobra.Command{
 			if !opts.DryRun {
 				return err
 			}
-			fmt.Println(color.YellowString("[dry-run] %v", err))
+			fmt.Println(color.YellowString("[dry-run] %v\n"+
+				"  The plan below assumes the operator this release expects.", err))
 		}
 		// Set on a dry run too: the rehearsal reads the cluster's Secrets back, and asks
 		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
@@ -487,7 +488,7 @@ func followClusterShape(changed func(string) bool, st *bootstrap.State) error {
 //
 // 🔑 WHAT ENFORCES IT IS WHERE THE ERRORS COME FROM, NOT THIS LIST. Every type below is
 // raised only by stepCheckClusterSingletons, which TestTheSingletonStepRunsBeforeAnythingIsWritten
-// holds ahead of the operator install and the declaration. The namespace refusal is raised
+// holds ahead of the declaration. The namespace refusal is raised
 // in two places and only ONE of them is typed for that reason — see ErrNamespaceUnavailable;
 // the store refusal is raised in one, and the late half of the same decision stays untyped
 // for exactly that reason — see refuseAPreIsolationDatabase.

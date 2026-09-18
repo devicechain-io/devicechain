@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -44,9 +43,16 @@ type UpgradeOptions struct {
 	DcctlVersion string
 }
 
-// Upgrade moves a live instance onto a release: the cluster-scoped operator
-// install, the configuration document its services read, and the Helm release
-// that runs them.
+// Upgrade moves a live instance onto a release: the configuration document its
+// services read, and the Helm release that runs them.
+//
+// 🔴 IT NO LONGER MOVES THE OPERATOR, AND THAT IS THE POINT RATHER THAN AN
+// OMISSION. The CRDs and the controller are cluster-scoped — one copy shared by
+// every instance — so this verb moving them moved them for every instance on the
+// cluster, including ones nobody had asked about, in either direction and with
+// nothing comparing versions. `dcctl install` owns them. hydrateUpgradeState
+// refuses unless the cluster already carries the operator this release needs, so
+// by the time anything below runs the schema is known to be the right one.
 //
 // 🔴 BOOTSTRAP CREATES, UPGRADE EVOLVES, AND THAT SPLIT IS THE POINT. They are not
 // two spellings of one pipeline. A bootstrap composes an instance out of its
@@ -76,13 +82,12 @@ type UpgradeOptions struct {
 //     what an instance IS is a different question with different answers (raising
 //     replicas does not re-replicate streams that were created at one).
 //
-// The whole rendered stream is applied, not just the Deployment's image. CRDs are
-// in it, and they are the half with a trap: the API server prunes fields a
-// structural schema does not declare, so an instance whose CRDs stayed at the
-// version they were bootstrapped at would silently discard anything a later
-// release added to them. Applying the stream costs nothing extra — the renderer
-// already emits it as one document — and it means the CRD path is never the thing
-// nobody remembered.
+// 🔑 THE CRD TRAP THIS USED TO SOLVE HAS MOVED, NOT GONE. The API server prunes
+// fields a structural schema does not declare, so an instance running against CRDs
+// older than its services silently discards anything a later release added. This
+// verb used to close that by re-applying the whole rendered stream; what closes it
+// now is the refusal — an instance cannot be upgraded past the operator its cluster
+// carries, so the two can no longer drift apart unnoticed.
 //
 // The result is named because a deferred call reads it: from the moment the
 // declaration says Upgrading, every exit from this function has to say how the
@@ -150,8 +155,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 
 	// Declared here and taken further down: the deferred call closes over the
 	// VARIABLE, so the lock the run takes later is the lock this hands back — and
-	// the exits between the two (a dry run, a manifest that renders no Deployment)
-	// reach the deferred call with nothing to release, which is the truth.
+	// the exits between the two (a dry run) reach the deferred call with nothing to
+	// release, which is the truth.
 	var upgradeClaim *Claim
 
 	// 🔴 REGISTERED HERE AND NOT ONE LINE EARLIER, BECAUSE WHAT IS ABOVE IS NOT THIS
@@ -178,12 +183,11 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return nil
 	}
 
-	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO, AND FORGETTING IT WOULD HAVE LEFT A
-	// HOLE SHAPED EXACTLY LIKE THIS COMMAND. The lock exists so that two operators
-	// cannot mutate one cluster at once, and this command server-side-applies the
-	// CRDs, the RBAC and the controller Deployment — cluster-scoped objects that a
-	// concurrent bootstrap is also applying. A lock that only bootstrap and destroy
-	// take is a lock with a documented bypass.
+	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO. It no longer applies the cluster-scoped
+	// operator objects that first justified this — that is `dcctl install`'s now — but
+	// it still rewrites the instance's configuration document and its Helm release,
+	// and a concurrent bootstrap of the same instance writes both. A lock that only
+	// bootstrap and destroy take is a lock with a documented bypass.
 	//
 	// It is announced and not enforced, for the same reason destroy's is: an
 	// operator repairing a stuck instance must not be blocked by a lock held by
@@ -506,27 +510,6 @@ func operatorDeployments(manifests []byte) ([]deploymentRef, error) {
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 	return refs, nil
-}
-
-// currentOperatorImages reads the container images each target Deployment runs
-// right now, joined when a Deployment has more than one container. A target that
-// does not exist yet, or cannot be read, is simply absent from the map — this is
-// reporting, and a failure to read it must not fail an upgrade that then went on
-// to work.
-func currentOperatorImages(ctx context.Context, typed kubernetes.Interface, targets []deploymentRef) map[string]string {
-	out := make(map[string]string, len(targets))
-	for _, t := range targets {
-		d, err := typed.AppsV1().Deployments(t.namespace).Get(ctx, t.name, metav1.GetOptions{})
-		if err != nil {
-			continue
-		}
-		var images []string
-		for _, c := range d.Spec.Template.Spec.Containers {
-			images = append(images, c.Image)
-		}
-		out[t.String()] = strings.Join(images, ", ")
-	}
-	return out
 }
 
 // waitForRollout blocks until every target Deployment has fully rolled onto its

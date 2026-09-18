@@ -311,7 +311,7 @@ func writeRecordFile(dir, name string, contents []byte) error {
 // record exists to prevent. That reasoning holds for every failure except the ones
 // stepCheckClusterSingletons raises, and what makes them the exception is WHERE they are
 // raised rather than what they are about — TestTheSingletonStepRunsBeforeAnythingIsWritten
-// holds that step ahead of the operator install and the declaration. On those the record
+// holds that step ahead of the declaration. On those the record
 // this run wrote describes nothing, and left behind it is a phantom: `dcctl instances
 // list` prints an instance that was never built. WHICH errors those are is
 // unwindLocalRecordWhenNothingWasWritten's list in cmd and is deliberately not restated

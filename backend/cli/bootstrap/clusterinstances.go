@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -64,6 +65,16 @@ func (c clusterInstances) othersThan(instance string) []string {
 	return out
 }
 
+// errNoInstanceCRD says the declarations source cannot be asked, because the cluster
+// has no Instance definition to list.
+//
+// 🔴 IT IS "I CANNOT ANSWER", WHICH IS A THIRD THING BESIDE "NONE" AND "FAILED".
+// Answering "no instances" would be an absence used as an answer about contents — the
+// direction that writes a second instance over a live one. Answering "failed" would
+// stop the walk before the Secrets and Helm sources, which can still answer, and would
+// tell a `dcctl install` re-run to go and run `dcctl install`.
+var errNoInstanceCRD = errors.New("this cluster has no Instance definition, so its declarations cannot be listed")
+
 // instanceSource is one durable artifact a bootstrap leaves behind that can name the
 // instance it belongs to.
 type instanceSource struct {
@@ -88,12 +99,24 @@ type instanceSource struct {
 // either of them being present disqualifies the cluster on its own, so nothing turns on
 // which is asked second.
 //
-// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet — no CRD on
-// a virgin cluster, no release until the Helm step — must not stop the walk, or every
-// first bootstrap would read the first source's silence as the whole cluster's.
+// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet — no
+// release until the Helm step — must not stop the walk, or every first bootstrap would
+// read the first source's silence as the whole cluster's.
+//
+// 🔴 AND A SOURCE THAT CANNOT BE ASKED IS NOT A FAILED WALK. With no Instance CRD the
+// declarations source has no question to answer, and that is an ordinary state for
+// `dcctl install` — which runs on clusters that have no operator yet, and asks this
+// aggregate whether a re-install would hurt anyone. Stopping there told such an
+// operator to run `dcctl install`, which is the command they were running, and threw
+// away the Secrets and Helm evidence that could still have answered. So this one error
+// advances the walk instead of ending it; every OTHER error still ends it, because a
+// cluster that will not say what it holds is not an empty one.
 func firstAnsweringSource(sources []instanceSource) (clusterInstances, error) {
 	for _, s := range sources {
 		ids, err := s.read()
+		if errors.Is(err, errNoInstanceCRD) {
+			continue
+		}
 		if err != nil {
 			return clusterInstances{}, err
 		}
@@ -164,8 +187,12 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 // and answering that would be an absence used as an answer about CONTENTS — the exact
 // shape that lets a second instance be built over a live one.
 //
-// It is a backstop rather than the message an operator should ever see: RequireOperator
-// refuses earlier and says what to run. If this one fires, the CRD went away mid-run.
+// 🔑 IT IS A SIGNAL, NOT A REFUSAL AN OPERATOR READS. firstAnsweringSource recognises
+// it and asks the next source instead, because `dcctl install` legitimately runs on a
+// cluster with no operator and asks this same aggregate whether a re-install would hurt
+// anyone. What must never happen is this source answering "no instances" — that is an
+// absence used as an answer about CONTENTS, and it is how a second instance gets built
+// over a live one. Saying "I cannot be asked" keeps both properties.
 //
 // 🔑 THE DISAMBIGUATION isInstanceNotFound MAKES DOES NOT APPLY TO A LIST, and reusing
 // it verbatim would be wrong rather than merely redundant. That function exists because
@@ -183,12 +210,7 @@ func declaredInstances(ctx context.Context, dyn dynamic.Interface) ([]string, er
 	list, err := dyn.Resource(instanceGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-			return nil, fmt.Errorf(
-				"this cluster has no Instance definition, so it cannot be asked which instances it " +
-					"holds. The operator that installs that definition belongs to the cluster and is " +
-					"put there by `dcctl install`; run it, then try again. Refusing to continue: " +
-					"treating a cluster that cannot answer as an EMPTY one is how a second instance " +
-					"gets built over a live one")
+			return nil, fmt.Errorf("listing the instance declarations in this cluster: %w", errNoInstanceCRD)
 		}
 		return nil, fmt.Errorf("listing the instance declarations in this cluster: %w. Refusing "+
 			"to continue: if a declaration IS there, treating this cluster as empty would "+

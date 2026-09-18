@@ -11,7 +11,6 @@ import (
 
 	dck8s "github.com/devicechain-io/dc-k8s/config"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -254,22 +253,6 @@ func TestWaitForRolloutAcceptsACompletedRollout(t *testing.T) {
 func TestWaitForRolloutFailsOnAMissingDeployment(t *testing.T) {
 	if err := waitForRollout(context.Background(), fake.NewSimpleClientset(), operatorTarget, 50*time.Millisecond); err == nil {
 		t.Fatal("an absent Deployment was reported as a completed rollout")
-	}
-}
-
-// TestCurrentOperatorImagesReportsWhatIsRunning covers the before/after line. An
-// unreadable target is deliberately absent from the map rather than an error —
-// this is reporting, and failing to read it must not fail an upgrade.
-func TestCurrentOperatorImagesReportsWhatIsRunning(t *testing.T) {
-	dep := deployment(1, 1, 1, 1, 1, 1)
-	dep.Spec.Template.Spec.Containers = []corev1.Container{{Name: "manager", Image: "ghcr.io/devicechain-io/operator:v0.11.0"}}
-
-	got := currentOperatorImages(context.Background(), fake.NewSimpleClientset(dep), operatorTarget)
-	if got["dc-k8s-system/dc-k8s-controller-manager"] != "ghcr.io/devicechain-io/operator:v0.11.0" {
-		t.Fatalf("got %q", got["dc-k8s-system/dc-k8s-controller-manager"])
-	}
-	if len(currentOperatorImages(context.Background(), fake.NewSimpleClientset(), operatorTarget)) != 0 {
-		t.Fatal("an unreadable target should be absent, not reported")
 	}
 }
 

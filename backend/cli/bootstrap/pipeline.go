@@ -343,9 +343,10 @@ type ImageSource struct {
 //
 // It also has to be settled before the first step that CONSUMES it, and after
 // the ADR-080 reorder that is no longer the render step: the operator Deployment
-// installed by stepInstallCore always names an image, and stepLocalRegistry
-// builds and pushes that image on the --build path (it returns early otherwise).
-// Both now run ahead of stepRenderConfig, which is where this used to live.
+// service images the chart deploys are pushed by stepLocalRegistry on the --build
+// path (it returns early otherwise), and that step runs ahead of stepRenderConfig,
+// which is where this used to live. `dcctl install` resolves its own source the
+// same way, for the operator image it deploys.
 //
 // Idempotent, and deliberately so: re-resolving an already-settled pair returns
 // it unchanged, which is what lets stepRenderConfig keep calling it for the
@@ -375,9 +376,9 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 	// produces — and IsUnpublishedImageVersion does NOT catch it, since "" is
 	// neither "dev" nor a dev stamp. Without it a published-path bootstrap sails
 	// through this function, creates a cluster, and then dies inside
-	// stepInstallCore saying ResolveImageSource must run before the pipeline —
-	// which is both false (it did run) and late (the cluster now exists), the
-	// exact failure this function was moved forward to remove. Only the published
+	// a step saying ResolveImageSource must run before the pipeline — which is both
+	// false (it did run) and late (the cluster now exists), the exact failure this
+	// function was moved forward to remove. Only the published
 	// path can reach it — --build defaults to the literal "dev" — but the check is
 	// written unconditionally because a reference with no tag at all is read by
 	// Kubernetes as :latest, whatever produced it.

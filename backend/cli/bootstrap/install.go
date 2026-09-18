@@ -270,8 +270,16 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// server-side-applies its older CRDs with the same field manager and Force,
 	// removing whatever the newer release added. Ordering cannot fix that; only
 	// comparing what is on the cluster against what is about to be applied can,
-	// which is what the operator identity is for. Until the guards that read it
-	// land, this ordering buys the schema-bump case and nothing more.
+	// which is what the operator identity is for.
+	//
+	// 🔴 THOSE GUARDS EXIST NOW — in `dcctl bootstrap` and `dcctl upgrade`, which
+	// refuse a cluster whose operator is not the one they need. INSTALL ITSELF STILL
+	// HAS NONE, and that is deliberate rather than overlooked: install is the verb
+	// whose job is to MOVE the operator, so a guard refusing a difference would
+	// refuse the only command that can resolve one. The consequence is that an older
+	// dcctl's `install` still downgrades a newer cluster's CRDs silently, and closing
+	// that needs a comparison that can tell "older" from "different" — which the
+	// identity, being equality-only, cannot. Written down rather than left implied.
 	if err := installOperator(ctx, st); err != nil {
 		return err
 	}

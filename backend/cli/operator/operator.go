@@ -5,11 +5,12 @@
 // called, where its source lives, what manifests it renders to, which namespace
 // it occupies, and how to put it on a cluster.
 //
-// 🔴 IT EXISTS BECAUSE THREE VERBS NOW SHARE IT, AND THEY ARE NOT PEERS. The
-// operator is CLUSTER-SCOPED — one copy per cluster, shared by every instance on
-// it — so `dcctl install` owns it. `dcctl bootstrap` and `dcctl upgrade` still
-// touch it today only because the move away from them is being done in slices,
-// and each of those verbs has to agree with install about what "the operator" IS.
+// 🔴 IT EXISTS BECAUSE THREE VERBS SHARE IT, AND THEY ARE NOT PEERS. The operator
+// is CLUSTER-SCOPED — one copy per cluster, shared by every instance on it — so
+// `dcctl install` owns it: install is the only verb that puts it there. `dcctl
+// bootstrap` and `dcctl upgrade` READ it, to refuse a cluster whose operator is not
+// the one they need. All three have to agree about what "the operator" IS, and that
+// agreement is what lives here.
 //
 // Before this package they agreed by having written the same lines three times.
 // The overlay was rendered in four places, the image reference assembled in three,

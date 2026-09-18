@@ -31,9 +31,12 @@ import (
 //   - THE PREVIOUS RELEASE holds the handful of values that came out of an
 //     infrastructure apply this verb does not run. See carryForwardFromRelease.
 //
-// 🔴 AND THE ORDER MATTERS FOR ONE REASON: the declaration is read first because a
-// missing one is the cheapest, clearest refusal available. Reading credentials first
-// would report a missing Secret on an instance that does not exist.
+// 🔴 AND THE ORDER MATTERS. The OPERATOR is checked before anything else, because
+// with no Instance CRD there can be no declaration and the declaration's refusal
+// would blame a name that is correct — see the "0." block below. After that the
+// declaration is read before the credentials, because a missing declaration is the
+// cheapest, clearest refusal available: reading credentials first would report a
+// missing Secret on an instance that does not exist.
 func hydrateUpgradeState(
 	ctx context.Context,
 	typed kubernetes.Interface,
@@ -132,7 +135,7 @@ func hydrateUpgradeState(
 	}
 	if deployed == nil {
 		// 🔴 A DECLARATION WITH NO DOCUMENT IS A BOOTSTRAP THAT DIED BEFORE ITS
-		// NINTH STEP. The declaration lands at step 6 and the document at step 9
+		// EIGHTH STEP. The declaration lands at step 5 and the document at step 8
 		// (NewDefaultPipeline), so this state is reachable and it is not an upgrade's
 		// to repair: the
 		// credentials the half-built instance is holding were never written down

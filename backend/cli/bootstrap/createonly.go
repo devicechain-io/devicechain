@@ -31,7 +31,8 @@ import (
 //     that instance permanently unrepairable.
 //   - NOT the Instance declaration. It lands at step 6, before a single credential has
 //     been minted — so every failure in steps 7 through 9 would become unrepairable.
-//   - NOT "any of our namespaces". The operator's lands at step 5, before anything
+//   - NOT "any of our namespaces". The operator's namespace is created by the claim
+//     step (and by `dcctl install` before that), before anything
 //     instance-shaped exists, and dc-system is the cluster's — `dcctl install` created
 //     it before this bootstrap was allowed to start.
 //
@@ -42,7 +43,7 @@ import (
 // destroyed. That is the same line the whole reuse machinery was already drawn
 // around, and DeployedInstanceConfig already fails closed on "could not tell".
 //
-// 🔴 THE WINDOW BETWEEN STEPS 8 AND 9 IS THE ONE THIS MUST LEAVE OPEN. A live broker
+// 🔴 THE WINDOW BETWEEN STEPS 7 AND 8 IS THE ONE THIS MUST LEAVE OPEN. A live broker
 // configured with credentials whose only copy is a file on this machine, live database
 // Clusters whose owner passwords exist only in their Secrets, and no document. It is
 // reachable, it has been observed, and re-running is the only thing that repairs it.
