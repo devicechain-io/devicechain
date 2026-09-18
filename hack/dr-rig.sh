@@ -292,11 +292,27 @@ store_bucket() { case "$1" in rdb) printf '%s' "$bucket_rdb" ;; tsdb) printf '%s
 store_source() { case "$1" in rdb) printf '%s' "$rdb_source" ;; tsdb) tsdb_source ;; *) return 1 ;; esac; }
 store_cluster() { case "$1" in rdb) printf '%s' "$rdb_cluster" ;; tsdb) printf '%s' "$tsdb_cluster" ;; *) return 1 ;; esac; }
 store_service() { case "$1" in rdb) printf '%s' "dc-postgresql" ;; tsdb) printf '%s' "dc-timescaledb-single" ;; *) return 1 ;; esac; }
+# instance_namespace is the one place this rig spells an instance's namespace, mirroring
+# instanceNamespace() in backend/cli/bootstrap/instancenamespace.go: the instance id behind
+# a `dci-` prefix, so an instance can never be named onto a namespace the cluster itself
+# owns (`monitoring`, `cert-manager`, …).
+#
+# 🔴 THE ID IS NOT THE NAMESPACE, AND IT KEEPS ITS OTHER JOBS. The relational database and
+# its login, the `dc-<id>` Helm release, the `dci-<id>-…` Secret names, the WAL archive
+# path, the `devicechain.io/instance` label VALUE and ~/.devicechain/instances/<id> are all
+# still the bare id. Only a NAMESPACE comes through here.
+#
+# 🔴 IT IS NOT THE `dci-` IN `dci-<instance>-config`. That prefixes object NAMES, is older,
+# and means something else — `dci-drdrill-config` is not "the namespace plus -config". Both
+# appear on one line in instance_config below; they are two prefixes that are spelled alike
+# and are not the same thing.
+instance_namespace() { printf '%s' "dci-$instance"; }
+
 # store_namespace is where each store's Cluster, pods, backups and Services live: the
 # relational store is the CLUSTER's, in the shared namespace; the event store is the
 # INSTANCE's, in the instance's own. Every kubectl call about a store goes through it —
 # a store looked for in the wrong namespace reads as a store that is not there.
-store_namespace() { case "$1" in rdb) printf '%s' "dc-system" ;; tsdb) printf '%s' "$instance" ;; *) return 1 ;; esac; }
+store_namespace() { case "$1" in rdb) printf '%s' "dc-system" ;; tsdb) instance_namespace ;; *) return 1 ;; esac; }
 
 # The stores the drill seeds, archives, destroys and restores. Written as a list
 # so that adding a third store is one entry rather than an audit of every loop.
@@ -670,8 +686,11 @@ archive_wal_segments() {
 # password is generated per bootstrap, so there is nothing to hardcode anyway.
 # ---------------------------------------------------------------------------
 
+# 🔴 TWO `dci-` ON ONE LINE, AND THEY ARE DIFFERENT PREFIXES. The first is the instance's
+# NAMESPACE (instance_namespace, new); the second is the config Secret's own NAME, which is
+# older and unchanged. Merging them would rename one of them.
 instance_config() {
-  kubectl --context "$kube_context" -n "$instance" get secret "dci-$instance-config" \
+  kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "dci-$instance-config" \
     -o jsonpath='{.data.instance}' | base64 -d
 }
 
@@ -1250,9 +1269,62 @@ so there is nothing holding the archive the restore would read."
 # `all` was safe because it runs `disaster` between phases, but the standalone
 # phases are documented and both were wrong. The precondition belongs here, not in
 # the caller.
+#
+# 🔴🔴 IT ASKS A QUESTION THAT CAN STILL BE ANSWERED YES. It used to be
+# `kubectl get ns "$instance"` — the bare id. Once an instance's namespace gained the
+# `dci-` prefix that name is one nothing creates any more, so the lookup would answer
+# "not there" for a fully running instance, every time, for ever. A guard that cannot
+# fire does not protect the premise, it just stops mentioning it: `up` then `restore`
+# would print DRILL PASSED over a cluster that never lost anything, which is the one
+# outcome this whole rig exists to make impossible. A rename must not be able to do
+# that again, which is why the question below is asked by LABEL and not only by name.
+#
+# What it actually means is "is this instance still in this cluster?", and there are
+# three ways for the answer to be yes:
+#
+#   1. a namespace carrying devicechain.io/instance=<id>, WHATEVER it is called. Both
+#      dcctl (ensureNamespaceForRelease) and the chart write that label on the
+#      namespace, so this is the name-independent form of the question and the one
+#      that survives the next rename.
+#   2. dci-<id>, the namespace this release builds — belt and braces with (1), for a
+#      namespace whose labels were stripped by hand.
+#   3. <id>, the UNPREFIXED namespace an instance built by an EARLIER release lives
+#      in. Nothing here builds one, so it is never a target; it is checked because
+#      such an instance is exactly as alive, and exactly as fatal to the premise, as a
+#      prefixed one. Walking past it would be the old bug with extra steps.
+#
+# 🔑 (3) IS QUALIFIED AND (1)/(2) ARE NOT, and that asymmetry is the point of the
+# prefix. `dci-<id>` is a name only an instance can hold — dcctl refuses to build into
+# one that is not this instance's — but the BARE id is a name an instance is now
+# deliberately allowed to share with a namespace the cluster owns (`monitoring`,
+# `default`, `cert-manager`). Refusing on the bare name alone would fail the drill on
+# a cluster component that has nothing to do with it. So (3) counts only when that
+# namespace holds this instance's config Secret — which is not an arbitrary tell, it
+# is the object carrying the ROOT KEY, i.e. the exact thing that makes the premise
+# false.
+#
+# It names what it found, so the operator is told which namespace to deal with rather
+# than being told the phase refuses.
+instance_namespaces_present() {
+  {
+    kubectl --context "$kube_context" get ns \
+      -l "devicechain.io/instance=$instance" -o name 2>/dev/null || true
+    kubectl --context "$kube_context" get ns "$(instance_namespace)" -o name 2>/dev/null || true
+    # (3): the bare id, qualified by this instance's config Secret being in it.
+    if kubectl --context "$kube_context" -n "$instance" get secret "dci-$instance-config" \
+      >/dev/null 2>&1; then
+      printf 'namespace/%s\n' "$instance"
+    fi
+  } | sed 's#^namespace/##' | sort -u
+}
+
 require_no_instance() {
-  if kubectl --context "$kube_context" get ns "$instance" >/dev/null 2>&1; then
-    fail "cluster $cluster is still running instance $instance.
+  local found
+  found="$(instance_namespaces_present)"
+  if [[ -n "$found" ]]; then
+    fail "cluster $cluster is still running instance $instance, in namespace(s):
+
+$(sed 's/^/  /' <<<"$found")
 
 This phase rebuilds the instance from the archive, and its whole premise is a
 cluster that lost everything. A surviving instance keeps its original root key, so
@@ -1633,7 +1705,7 @@ assert_startup_refusal() {
   local area="$1" waited=0 limit=300 pods pod logs state
   say "asserting $area refused to start, and refused ON THE ROOT KEY"
   while true; do
-    pods="$(kubectl --context "$kube_context" -n "$instance" get pods \
+    pods="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get pods \
       -l "devicechain.io/functional-area=$area" -o name 2>/dev/null || true)"
     for pod in $pods; do
       # BOTH the current container's log and the last TERMINATED one, concatenated.
@@ -1642,8 +1714,8 @@ assert_startup_refusal() {
       # CrashLoopBackOff there may be no current container to read at all. Reading
       # only one of the two makes the verdict depend on where in the backoff cycle
       # this call happened to land, which is a control that passes intermittently.
-      logs="$(kubectl --context "$kube_context" -n "$instance" logs "$pod" --tail=-1 2>/dev/null || true)
-$(kubectl --context "$kube_context" -n "$instance" logs "$pod" --previous --tail=-1 2>/dev/null || true)"
+      logs="$(kubectl --context "$kube_context" -n "$(instance_namespace)" logs "$pod" --tail=-1 2>/dev/null || true)
+$(kubectl --context "$kube_context" -n "$(instance_namespace)" logs "$pod" --previous --tail=-1 2>/dev/null || true)"
       if grep -qF -- "$root_key_refusal" <<<"$logs"; then
         say "REFUSAL OBSERVED — $area named the instance root key and did not start.
 The self-test unwrapped this instance's stored DEK with the key it was given, failed,
@@ -1655,7 +1727,7 @@ the first half of the control, and it is the half that did not exist before."
       # that is serving has built its secret store, so the key it was given opens the
       # ciphertext and the decoy did not take. Waiting five more minutes to report
       # that as "no refusal found" would describe it as the wrong problem.
-      if [[ "$(kubectl --context "$kube_context" -n "$instance" get "$pod" \
+      if [[ "$(kubectl --context "$kube_context" -n "$(instance_namespace)" get "$pod" \
         -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" == "True" ]]; then
         fail "$area is READY, and this phase requires that it refuse to start.
 
@@ -1665,9 +1737,9 @@ the archive restored something other than the sealed row. This is not a control.
       fi
     done
     if (( waited >= limit )); then
-      state="$(kubectl --context "$kube_context" -n "$instance" get pods \
+      state="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get pods \
         -l "devicechain.io/functional-area=$area" -o wide 2>&1 || true)"
-      [[ -n "$pods" ]] || fail "no $area pod exists in namespace $instance after ${waited}s.
+      [[ -n "$pods" ]] || fail "no $area pod exists in namespace $(instance_namespace) after ${waited}s.
 
 The control needs that service to START and REFUSE. One that was never scheduled
 refuses nothing, so there is no evidence here in either direction — the deploy did

@@ -90,7 +90,7 @@ tests:
     input_series:
       - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsNotReady"}'
         values: "1+0x9 0+0x170"
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsNotReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsNotReady"}'
         values: "1+0x9 0+0x170"
       # The other conditions stay TRUE throughout, exactly as they did on the rig:
       # nothing is wrong with Postgres, WAL archiving, or the last backup. If the
@@ -118,11 +118,11 @@ tests:
         values: "1+0x180"
       - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
     alert_rule_test:
       # 🔴 THE `for` FROM THE SIDE THAT CAN BE WRONG. Ready drops at minute 10, so
@@ -157,14 +157,14 @@ tests:
           - exp_labels:
               severity: critical
               devicechain_instance: devicechain
-              namespace: devicechain
+              namespace: dci-devicechain
               cluster: dc-tsdb
               type: Ready
               reason: ClusterIsNotReady
             exp_annotations:
               summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
               description: >-
-                dc-tsdb in namespace devicechain reports Ready=False (ClusterIsNotReady). THIS BLOCKS
+                dc-tsdb in namespace dci-devicechain reports Ready=False (ClusterIsNotReady). THIS BLOCKS
                 FAILOVER: while a Cluster is not reconciling it is never promoted, so losing the
                 primary leaves healthy, fully caught-up replicas that nothing will elect — the
                 databases look fine right up until the moment they need to move. A phase of
@@ -212,7 +212,7 @@ tests:
     input_series:
       - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
         values: "1+0x180"
@@ -224,11 +224,11 @@ tests:
         values: "1+0x180"
       - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
     alert_rule_test:
       - eval_time: 60m
@@ -263,7 +263,7 @@ tests:
     input_series:
       - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x29 0+0x7 1+0x143"
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
         values: "1+0x180"
@@ -277,11 +277,11 @@ tests:
         values: "1+0x180"
       - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
     alert_rule_test:
       # Minute 36: inside the outage, pending, short of the `for`.
@@ -342,7 +342,7 @@ tests:
       # simplification, and it is the reason this scenario exists.
       - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
       # The control plane is entirely healthy. Nothing here is a controller fault.
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
@@ -358,11 +358,11 @@ tests:
         values: "1+0x9 0+0x170"
       - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
       # 🔴 ANOTHER DeviceChain INSTANCE'S DATABASE, IN ITS OWN NAMESPACE, FULLY
       # BROKEN. Multiple Instances share one Kubernetes cluster and one CNPG
@@ -371,7 +371,7 @@ tests:
       # incident would page from every Instance, all but one of them stamping
       # `devicechain_instance` on a database that is not theirs. The assertions
       # below must therefore see dc-rdb ONLY.
-      - series: 'cnpg_collector_up{cluster="other-rdb", namespace="other-instance", pod="other-rdb-1", instance="10.244.9.9:9187", container="postgres", endpoint="metrics", job="other-instance/other-rdb"}'
+      - series: 'cnpg_collector_up{cluster="other-rdb", namespace="dci-other-instance", pod="other-rdb-1", instance="10.244.9.9:9187", container="postgres", endpoint="metrics", job="other-instance/other-rdb"}'
         values: "0+0x180"
     alert_rule_test:
       # 🔴 THE `for` FROM THE SIDE THAT CAN BE WRONG. The collector drops at
@@ -460,7 +460,7 @@ tests:
         values: "1+0x180"
       # Every instance has its own event store, in its own namespace — so a healthy
       # instance reports a condition there too.
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="plugin-barman-cloud"}'
         values: "1+0x180"
@@ -547,12 +547,12 @@ tests:
           - exp_labels:
               severity: warning
               devicechain_instance: devicechain
-              namespace: devicechain
+              namespace: dci-devicechain
               type: Ready
             exp_annotations:
               summary: "No CloudNativePG Cluster conditions are being collected"
               description: >-
-                Nothing is reporting PostgreSQL Cluster conditions in namespace devicechain, so the
+                Nothing is reporting PostgreSQL Cluster conditions in namespace dci-devicechain, so the
                 health of database failover is UNKNOWN rather than good — and while this fires,
                 CNPGClusterNotReady CANNOT fire, because it reads the series this rule says are
                 missing. Check, in order: kube-state-metrics is running; it was started with
@@ -588,7 +588,7 @@ tests:
     input_series:
       - series: 'kube_cnpg_cluster_condition{namespace="dc-system", cluster="dc-rdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
-      - series: 'kube_cnpg_cluster_condition{namespace="devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
+      - series: 'kube_cnpg_cluster_condition{namespace="dci-devicechain", cluster="dc-tsdb", type="Ready", reason="ClusterIsReady"}'
         values: "1+0x180"
       - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
         values: "2+0x9 0+0x170"
@@ -603,11 +603,11 @@ tests:
         values: "1+0x180"
       - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-2", instance="10.244.2.11:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
-      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-3", instance="10.244.3.12:9187", container="postgres", endpoint="metrics", job="devicechain/dc-tsdb"}'
         values: "1+0x180"
     alert_rule_test:
       - eval_time: 60m

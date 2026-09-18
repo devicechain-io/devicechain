@@ -24,6 +24,11 @@ TARGET=${1:?usage: bounce.sh <frontend|service-area> [instance]}
 INSTANCE=${2:-devicechain}
 REGISTRY=${REGISTRY:-localhost:5000}
 CONTEXT=${CONTEXT:-kind-$INSTANCE}
+# An instance's workloads live in `dci-` plus its id, matching instanceNamespace() in
+# backend/cli/bootstrap and the chart's devicechain.instanceNamespace helper. The id
+# itself is NOT the namespace — it still names the kind cluster (above), the database,
+# the Helm release and ~/.devicechain/instances/<id>, none of which take this prefix.
+NAMESPACE="dci-$INSTANCE"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -59,8 +64,8 @@ fi
 
 # The chart names each container after the area (or "frontend"), == the
 # Deployment name, so `set image deploy/$TARGET $TARGET=...` targets it.
-log "🔄 Rolling deploy/$TARGET in namespace $INSTANCE onto the new image"
-kubectl --context "$CONTEXT" -n "$INSTANCE" set image "deploy/$TARGET" "$TARGET=$IMG"
-kubectl --context "$CONTEXT" -n "$INSTANCE" rollout status "deploy/$TARGET" --timeout=120s
+log "🔄 Rolling deploy/$TARGET in namespace $NAMESPACE onto the new image"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" set image "deploy/$TARGET" "$TARGET=$IMG"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deploy/$TARGET" --timeout=120s
 
 log "✅ $TARGET bounced ($IMG)"

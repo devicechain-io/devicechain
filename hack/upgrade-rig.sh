@@ -326,6 +326,20 @@ kind_config="$repo_root/deploy/local/kind-cluster-upgrade.yaml"
 # developer's own cluster.
 instance="${DC_INSTANCE:-upgrig}"
 
+# instance_namespace is the one place this rig spells an instance's namespace, mirroring
+# instanceNamespace() in backend/cli/bootstrap/instancenamespace.go: the instance id behind
+# a `dci-` prefix, so an instance can never be named onto a namespace the cluster itself
+# owns (`monitoring`, `cert-manager`, …).
+#
+# 🔴 IT IS NOT helm_namespace ABOVE, WHICH IS STILL `default`. The Helm release RECORD
+# lives there and always has; the instance's own objects live here. The two were never the
+# same namespace and the prefix does not change that.
+#
+# 🔴 AND THE ID KEEPS ITS OTHER JOBS: the relational database and login name, the
+# `dc-<id>` Helm release name, the stem of the `dci-<id>-…` Secret names,
+# ~/.devicechain/instances/<id>. Only a NAMESPACE comes through here.
+instance_namespace() { printf '%s' "dci-$instance"; }
+
 # The ingress the drill reaches the platform on. `--compact` implies plain HTTP
 # (whether the baseline takes it on `install` or, before that command existed, on
 # `bootstrap` — see cmd_up),
@@ -1675,9 +1689,9 @@ release adds, and at what they do NOT rewrite."
 # meant to read. The Secret is dcctl's, named after the instance, in its namespace.
 pg_credentials() {
   local secret="dci-${instance}-rdb-credentials" user
-  user="$(kubectl --context "$kube_context" -n "$instance" get secret "$secret" \
+  user="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "$secret" \
     -o jsonpath='{.data.username}' 2>/dev/null | base64 -d)" || true
-  [[ -n "$user" ]] || fail "Secret $instance/$secret carries no username, so nothing can connect
+  [[ -n "$user" ]] || fail "Secret $(instance_namespace)/$secret carries no username, so nothing can connect
 as this instance — which says nothing about coverage in either direction."
   printf '%s %s' "$user" "$secret"
 }
@@ -1756,7 +1770,7 @@ failed is a CREATE, on an instance that is running the code under test."
   # is readable by any local process through /proc for as long as the command runs, and
   # is one `set -x` away from a CI step log with a ninety-day retention. apiprobe
   # REFUSES a DSN carrying one rather than trusting this comment.
-  PGPASSWORD="$(kubectl --context "$kube_context" -n "$instance" get secret "$secret" \
+  PGPASSWORD="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "$secret" \
     -o jsonpath='{.data.password}' | base64 -d)" \
     "$apiprobe" tablesweep \
     --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \

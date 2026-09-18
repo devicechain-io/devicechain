@@ -71,6 +71,19 @@ instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
 dcctl="$repo_root/backend/cli/build/dcctl"
 
+# instance_namespace is the one place this rig spells an instance's namespace, mirroring
+# instanceNamespace() in backend/cli/bootstrap/instancenamespace.go: the instance id behind
+# a `dci-` prefix, so an instance can never be named onto a namespace the cluster itself
+# owns (`monitoring`, `cert-manager`, …).
+#
+# 🔴 THE ID IS NOT THE NAMESPACE. It is still the relational database and login name, the
+# `dc-<id>` Helm release, the stem of the `dci-<id>-…` Secret names, the
+# `devicechain.io/instance` label VALUE and the directory under ~/.devicechain/instances.
+# None of those come through here — only a NAMESPACE does. `--namespace` on
+# `dcctl ha verify-db` is one, which is why the CHECK B2 call and both event-store
+# controls below go through it.
+instance_namespace() { printf '%s' "dci-$1"; }
+
 # Scratch space for the run's generated inputs (see ensure_lease_identities). Not
 # under the repo: a rig that drops files into the working tree eventually gets one
 # committed. Removed on exit however the run ends, including a failed check —
@@ -223,10 +236,44 @@ create_cluster() {
 # It is caught here rather than left to dcctl for the reason dr-rig catches it: the
 # rig knows what the operator meant, and can say `down` first. dcctl can only say
 # that an instance exists.
+#
+# 🔴🔴 IT ASKS A QUESTION THAT CAN STILL BE ANSWERED YES. It used to be
+# `kubectl get ns "$inst"` — the bare id. Once an instance's namespace gained the `dci-`
+# prefix that is a name nothing creates any more, so the lookup would answer "not there"
+# for a fully running instance, every time, for ever: the guard would stop existing
+# without ever going red, and the rig would walk on into dcctl's own refusal having
+# re-applied the cluster's prerequisites for nothing. A rename must not be able to do that
+# again, which is why the question is asked by LABEL first and not only by name:
+#
+#   1. a namespace carrying devicechain.io/instance=<id>, WHATEVER it is called. Both
+#      dcctl (ensureNamespaceForRelease) and the chart write that label on the namespace,
+#      so this is the name-independent form of the question.
+#   2. dci-<id>, the namespace this release builds — for a namespace whose labels were
+#      stripped by hand. A name only an instance can hold, so it needs no qualifying.
+#   3. <id>, the UNPREFIXED namespace of an instance built by an EARLIER release, which is
+#      exactly as present and exactly as fatal to `up`. Qualified by this instance's
+#      config Secret, because the bare id is now a name an instance may legitimately SHARE
+#      with a namespace the cluster owns — that sharing is the whole point of the prefix,
+#      and refusing on the bare name alone would fail the rig on `monitoring`.
+instance_namespaces_present() {
+  local inst="$1" ctx="$2"
+  {
+    kubectl --context "$ctx" get ns -l "devicechain.io/instance=$inst" -o name 2>/dev/null || true
+    kubectl --context "$ctx" get ns "$(instance_namespace "$inst")" -o name 2>/dev/null || true
+    # (3): the bare id, qualified by this instance's config Secret being in it.
+    if kubectl --context "$ctx" -n "$inst" get secret "dci-$inst-config" >/dev/null 2>&1; then
+      printf 'namespace/%s\n' "$inst"
+    fi
+  } | sed 's#^namespace/##' | sort -u
+}
+
 require_no_instance() {
-  local cluster="$1" inst="$2" ctx="$3"
-  if kubectl --context "$ctx" get ns "$inst" >/dev/null 2>&1; then
-    fail "cluster $cluster is already running instance $inst.
+  local cluster="$1" inst="$2" ctx="$3" found
+  found="$(instance_namespaces_present "$inst" "$ctx")"
+  if [[ -n "$found" ]]; then
+    fail "cluster $cluster is already running instance $inst, in namespace(s):
+
+$(sed 's/^/  /' <<<"$found")
 
 'dcctl bootstrap' creates an instance and will refuse to run against one that is
 already there, because it mints every credential an instance has.
@@ -324,7 +371,7 @@ cmd_verify() {
   say "CHECK B2 — asserting the EVENT store replication claim and background-job health"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 3 --require-synchronous --durability preferred --timescale-jobs \
-    --namespace "$instance" --kube-context "kind-$ha_cluster" \
+    --namespace "$(instance_namespace "$instance")" --kube-context "kind-$ha_cluster" \
     || fail "the event store does not hold the replication it declares, or its background jobs are not healthy (see the findings above)"
   say "CHECK B2 PASSED"
 }
@@ -427,7 +474,7 @@ control never ran and the result is inconclusive."
   say "NEGATIVE CONTROL — the same check, against an event store that is NOT replicated"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 3 --require-synchronous --durability preferred \
-    --namespace "$control_instance" --kube-context "kind-$control_cluster" --expect-fail \
+    --namespace "$(instance_namespace "$control_instance")" --kube-context "kind-$control_cluster" --expect-fail \
     || fail "THE EVENT-STORE NEGATIVE CONTROL DID NOT HOLD, or could not run. Read the output
 above: a PASS where a failure was expected means CHECK B2 proves nothing."
   say "NEGATIVE CONTROL HELD (event store)"
@@ -476,7 +523,7 @@ above may still be holding on the instance-count assertions."
   say "JOB-AXIS COVERAGE — the background-job checks must RUN and see real jobs"
   "$dcctl" ha verify-db --cluster dc-tsdb --alias-service dc-timescaledb-single \
     --instances 1 --timescale-jobs \
-    --namespace "$control_instance" --kube-context "kind-$control_cluster" \
+    --namespace "$(instance_namespace "$control_instance")" --kube-context "kind-$control_cluster" \
     || fail "THE BACKGROUND-JOB CHECKS FAILED on a healthy single-node event store. Either the
 event store is genuinely broken, or (B9) no database carries the timescaledb extension, which
 would mean the checks examined nothing and CHECK B2's job half proves nothing."

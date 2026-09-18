@@ -157,6 +157,24 @@ concurrency:
   # first, not cancel a mid-flight ~15 min bring-up and throw its numbers away.
   cancel-in-progress: false
 
+# The instance this gate bootstraps, and the namespace it runs in — TWO VALUES, and
+# they are deliberately not one.
+#
+# An instance's Kubernetes namespace is `dci-` plus its id (the one spelling lives in
+# backend/cli/bootstrap/instancenamespace.go, mirrored by the chart's
+# devicechain.instanceNamespace helper). Everything ELSE an instance is named after
+# keeps the bare id: the Helm release `dc-<id>`, the database and its login, the
+# `dct-<id>-config` ConfigMap this gate patches, the `devicechain.io/instance` label
+# VALUE, and ~/.devicechain/instances/<id>.
+#
+# Spelled here once rather than at each `kubectl -n`: a dozen literal namespaces are a
+# dozen places for the next rename to reach eleven of them, and the failure shape is a
+# port-forward or a `get pods` that finds nothing — which the steps below then report
+# as the platform being unhealthy.
+env:
+  DC_INSTANCE: devicechain
+  DC_NAMESPACE: dci-devicechain
+
 jobs:
   bringup:
     runs-on: ubuntu-latest
@@ -280,7 +298,7 @@ jobs:
           if [ "$rc" -eq 0 ]; then
             # shellcheck disable=SC2086
             DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
-            "$RUNNER_TEMP/dcctl" bootstrap local devicechain \
+            "$RUNNER_TEMP/dcctl" bootstrap local "$DC_INSTANCE" \
               --host localhost -y $preflight $imgargs || rc=$?
           fi
           end=$(date +%s)
@@ -421,7 +439,7 @@ jobs:
       - name: Open device-plane ingress (shared port-forward)
         id: ingress
         run: |
-          kubectl port-forward -n devicechain svc/event-sources 8081:8081 \
+          kubectl port-forward -n "$DC_NAMESPACE" svc/event-sources 8081:8081 \
             >"$RUNNER_TEMP/pf-eventsources.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
@@ -474,7 +492,7 @@ jobs:
           # pods are dc-tsdb-N and whose primary moves on failover, while the alias
           # follows it. In the INSTANCE's namespace — the event store is the instance's
           # own, where the relational store is the cluster's.
-          kubectl port-forward -n devicechain svc/dc-timescaledb-single 5432:5432 \
+          kubectl port-forward -n "$DC_NAMESPACE" svc/dc-timescaledb-single 5432:5432 \
             >"$RUNNER_TEMP/pf-tsdb.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
@@ -954,7 +972,7 @@ jobs:
           # there (e.g. ingestRateLimit) and breaking the "only the floor changed between
           # the two regimes" premise the attribution rests on -- a merge patch cannot merge
           # INSIDE a string. jq folds the floor into whatever is there (default {}).
-          before=$(kubectl get configmap dct-devicechain-config -n devicechain \
+          before=$(kubectl get configmap "dct-$DC_INSTANCE-config" -n "$DC_NAMESPACE" \
             -o jsonpath='{.data.event-sources}')
           echo "event-sources config before: ${before:-<empty>}"
           # NB: a literal {} default must NOT be inlined as ${before:-{}} -- the shell
@@ -962,14 +980,14 @@ jobs:
           # jq choke ("Unmatched '}'"). Assign the default on its own line instead.
           if [ -z "$before" ]; then before='{}'; fi
           updated=$(printf '%s' "$before" | jq -c '. + {contention: {manualFloor: 1}}')
-          kubectl patch configmap dct-devicechain-config -n devicechain --type merge \
+          kubectl patch configmap "dct-$DC_INSTANCE-config" -n "$DC_NAMESPACE" --type merge \
             -p "$(jq -nc --arg v "$updated" '{data: {"event-sources": $v}}')"
           # rollout restart forces new pods regardless of the config-checksum annotation,
           # and a fresh pod always mounts the current ConfigMap -- so this needs no helm.
-          kubectl rollout restart deployment/event-sources -n devicechain
-          kubectl rollout status deployment/event-sources -n devicechain --timeout=120s
+          kubectl rollout restart deployment/event-sources -n "$DC_NAMESPACE"
+          kubectl rollout status deployment/event-sources -n "$DC_NAMESPACE" --timeout=120s
           echo "event-sources config after:"
-          kubectl get configmap dct-devicechain-config -n devicechain \
+          kubectl get configmap "dct-$DC_INSTANCE-config" -n "$DC_NAMESPACE" \
             -o jsonpath='{.data.event-sources}'; echo
 
       - name: L3 -- reopen device-plane forward (post-rollout)
@@ -982,20 +1000,20 @@ jobs:
           # drive against floor 0 -- a misattributed red flake. The newest pod by creation
           # time is the floor-1 pod. (A fresh forward is needed regardless: kubectl
           # port-forward binds one pod and does not follow a rollout.)
-          newpod=$(kubectl get pods -n devicechain \
+          newpod=$(kubectl get pods -n "$DC_NAMESPACE" \
             -l devicechain.io/functional-area=event-sources \
             --field-selector=status.phase=Running \
             --sort-by=.metadata.creationTimestamp \
             -o jsonpath='{.items[-1:].metadata.name}')
           if [ -z "$newpod" ]; then
             echo "::error::no Running event-sources pod found after the rollout"
-            kubectl get pods -n devicechain -l devicechain.io/functional-area=event-sources -o wide || true
+            kubectl get pods -n "$DC_NAMESPACE" -l devicechain.io/functional-area=event-sources -o wide || true
             exit 1
           fi
           echo "forwarding device-plane ingress to the post-rollout pod $newpod"
           # Same readiness discipline as the shared forward: a 404 from `/` proves a full
           # round trip through the new pod, not just an open local socket.
-          kubectl port-forward -n devicechain "pod/$newpod" 8081:8081 \
+          kubectl port-forward -n "$DC_NAMESPACE" "pod/$newpod" 8081:8081 \
             >"$RUNNER_TEMP/pf-eventsources-2.log" 2>&1 &
           pf_pid=$!
           echo "pf_pid=$pf_pid" >> "$GITHUB_OUTPUT"
