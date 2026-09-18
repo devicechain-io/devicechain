@@ -31,7 +31,7 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   name: {{ $tls.issuerName }}
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 spec:
@@ -42,7 +42,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: devicechain-api
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:
@@ -148,7 +148,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: devicechain-wellknown
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:
@@ -204,7 +204,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: devicechain-web
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:

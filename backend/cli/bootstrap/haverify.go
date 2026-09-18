@@ -250,16 +250,19 @@ var settleInterval = 5 * time.Second
 // edited by hand, or installed by an older dcctl, or managed externally via
 // instance.existingSecret, is judged on what it is running.
 func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, instanceId string) (*config.InstanceConfiguration, error) {
+	// The Secret NAME is built from the instance id; the namespace it lives in comes
+	// through InstanceNamespace. Two prefixes, two meanings — see DeployedInstanceConfig.
 	name := fmt.Sprintf("dci-%s-config", instanceId)
-	sec, err := typed.CoreV1().Secrets(instanceId).Get(ctx, name, metav1.GetOptions{})
+	namespace := InstanceNamespace(instanceId)
+	sec, err := typed.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("reading the instance configuration from Secret %s/%s: %w "+
 			"(if this instance sets instance.existingSecret, pass --replicas to state the "+
-			"factor it should hold)", instanceId, name, err)
+			"factor it should hold)", namespace, name, err)
 	}
 	raw, ok := sec.Data["instance"]
 	if !ok {
-		return nil, fmt.Errorf("Secret %s/%s has no \"instance\" key", instanceId, name)
+		return nil, fmt.Errorf("Secret %s/%s has no \"instance\" key", namespace, name)
 	}
 	cfg := &config.InstanceConfiguration{}
 	if err := json.Unmarshal(raw, cfg); err != nil {
@@ -284,10 +287,11 @@ func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, in
 // read produces the strictest check rather than the most forgiving one — which is
 // the right direction for a failure whose cause is unknown.
 func deployedAreas(ctx context.Context, typed *kubernetes.Clientset, instanceId string) ([]string, error) {
-	list, err := typed.AppsV1().Deployments(instanceId).List(ctx, metav1.ListOptions{})
+	namespace := InstanceNamespace(instanceId)
+	list, err := typed.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing the deployed functional areas in namespace %s: %w",
-			instanceId, err)
+			namespace, err)
 	}
 	out := make([]string, 0, len(list.Items))
 	for _, d := range list.Items {
@@ -297,7 +301,7 @@ func deployedAreas(ctx context.Context, typed *kubernetes.Clientset, instanceId 
 }
 
 // brokerNamespace is where the instance's broker runs: its own namespace.
-func brokerNamespace(opts HaVerifyOptions) string { return instanceNamespace(opts.InstanceId) }
+func brokerNamespace(opts HaVerifyOptions) string { return InstanceNamespace(opts.InstanceId) }
 
 // natsPods lists the broker pods, for the placement half of the check.
 func natsPods(ctx context.Context, typed *kubernetes.Clientset, namespace string) ([]corev1.Pod, error) {

@@ -48,9 +48,11 @@ relational database, the CloudNativePG operator, cert-manager, monitoring and in
 done once per cluster; `dcctl bootstrap` refuses on a cluster where it has not completed. See
 [Install the cluster](../deployment/bootstrap.md#install).
 
-The instance id — `devicechain` here — is not decoration. It becomes the namespace, and it is
-the first segment of every device topic and ingest path on this page. If you choose a
-different one, substitute it throughout.
+The instance id — `devicechain` here — is not decoration. It names the instance's Kubernetes
+namespace, which is the id behind a `dci-` prefix (`dci-devicechain`), and it is the first
+segment of every device topic and ingest path on this page. If you choose a different one,
+substitute it throughout: on its own in the topics and paths, and after the `dci-` prefix
+wherever a command names the namespace.
 
 When the bootstrap finishes it prints the namespace, the console URL, and the superuser
 credential. The default superuser is `superuser@devicechain.local` with the password
@@ -159,7 +161,7 @@ and `/api/…`; the device-ingest listener is a separate port that a stock insta
 expose outside the cluster. Forward it:
 
 ```bash
-kubectl -n devicechain port-forward svc/event-sources 8081:8081
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081
 ```
 
 Leave that running in its own terminal.

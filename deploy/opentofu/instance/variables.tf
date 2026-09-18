@@ -17,12 +17,37 @@ variable "kubeconfig_context" {
 }
 
 variable "instance_namespace" {
-  description = "The instance's own namespace — the instance id. The broker, the event store and their Secrets live here, so two instances on one cluster share no names and a destroyed instance leaves nothing of its own behind. 🔴 Deliberately NOT named `namespace`: dcctl routes each variable to every root that declares it, and the cluster root's `namespace` is the shared one."
+  description = "The instance's own namespace: `dci-` followed by the instance id, so instance `acme` runs in `dci-acme`. The broker, the event store and their Secrets live here, so two instances on one cluster share no names and a destroyed instance leaves nothing of its own behind. 🔴 IT IS NOT THE INSTANCE ID — the id still names the database, the database login, the Helm release (`dc-<id>`) and the messaging subject prefix, and this root never reconstructs one from the other: it is handed the namespace and uses it as one. 🔴 Deliberately NOT named `namespace`: dcctl routes each variable to every root that declares it, and the cluster root's `namespace` is the shared one."
   type        = string
 
+  # The `dci-` prefix is REQUIRED, not merely expected, and this is the only place
+  # outside dcctl that says so. dcctl computes this string and the Helm chart computes
+  # it again from instance.id; if the two ever disagree, the broker and the event store
+  # land in one namespace while every Deployment, Service and Secret lands in another —
+  # an instance built in the wrong place, which nothing downstream reports as wrong. A
+  # namespace that does not carry the prefix cannot be the one the chart will render
+  # into, so refusing it here turns that disagreement into a failed first apply.
   validation {
-    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.instance_namespace)) && length(var.instance_namespace) <= 50
-    error_message = "instance_namespace must be the instance id: a DNS-1123 label of at most 50 characters."
+    condition     = can(regex("^dci-[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.instance_namespace))
+    error_message = "instance_namespace is the instance's NAMESPACE, not its id: it must be `dci-` followed by the instance id — for instance `acme`, pass `dci-acme` — and the whole string must be a DNS-1123 label (lower-case alphanumerics and `-`, starting and ending alphanumeric)."
+  }
+
+  # 54 = 4 + 50, and both terms come from somewhere else:
+  #   4   the `dci-` prefix above.
+  #   50  the instance id's own cap (deploy/helm/devicechain's values.schema.json caps
+  #       instance.id at 50 — itself Helm's 53-character release-name limit less the
+  #       `dc-` the release name carries).
+  # A DNS-1123 LABEL, which a namespace is, is capped at 63, so 54 is the tighter of the
+  # two bounds and the one worth enforcing: a longer value is either not a namespace this
+  # platform produces or an id that the chart would have refused first.
+  #
+  # 🔴 This read `<= 50` before the prefix existed, when the namespace WAS the id. Left
+  # that way it refuses every id longer than 46 characters — and refuses it at APPLY
+  # time, after dcctl has already written the Instance declaration, the namespace and
+  # every credential into the cluster.
+  validation {
+    condition     = length(var.instance_namespace) <= 54
+    error_message = "instance_namespace must be at most 54 characters: the 4-character `dci-` prefix plus an instance id of at most 50, which is the id length the DeviceChain chart accepts. Shorten the instance id."
   }
 }
 

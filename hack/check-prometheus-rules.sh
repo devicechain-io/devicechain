@@ -746,6 +746,18 @@ EOF
     st_ok "$label"
   }
 
+  # 🔴 `namespace="devicechain"` IS HISTORY, NOT A LIVE NAMESPACE, AND IT MUST NOT BE
+  # UPDATED. This string is the expression that shipped in v0.15.0, character for
+  # character, and "verbatim" is the whole claim the case rests on — edited to match
+  # today's conventions it becomes one more expression this author wrote to RESEMBLE the
+  # defect, which is exactly what the paragraph above says is not good enough.
+  #
+  # An instance called `devicechain` did run in a namespace of that name then; instance
+  # namespaces now carry a `dci-` prefix, so the same alert today would say
+  # `dci-devicechain`. Nothing here evaluates the selector — check_always_firing reads the
+  # SHAPE of the expression — so the stale label cannot change a verdict. It is called out
+  # because a sweep for `namespace="devicechain"` will land here, and this is the one hit
+  # that is meant to stay.
   st_af_expect_finding "the shipped always-firing expression, verbatim" DeadLetterStoreLosing \
     'sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="devicechain"}[5m])) or vector(0) > 0' \
     'left-hand side of the top-level `or`'

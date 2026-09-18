@@ -191,8 +191,9 @@ func ValidateInstanceName(instance string) error {
 	for _, r := range instance {
 		if !(r == '-' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
 			return fmt.Errorf("instance name %q contains %q; use lowercase letters, digits and '-' "+
-				"(the name also becomes a Kubernetes namespace and the instance's database login)",
-				instance, r)
+				"(the name also names this instance's Kubernetes namespace %s, its database and "+
+				"that database's login)",
+				instance, r, InstanceNamespace(instance))
 		}
 	}
 	if instance[0] == '-' || instance[len(instance)-1] == '-' {

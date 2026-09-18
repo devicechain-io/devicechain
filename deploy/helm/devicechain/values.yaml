@@ -39,9 +39,30 @@ enabledFunctionalAreas: []
 extraSecrets: []
 
 instance:
-  # Instance identity: becomes DC_INSTANCE_ID and the target namespace.
+  # Instance identity. It becomes DC_INSTANCE_ID; it names the instance's own
+  # database and that database's login; it is the value of the
+  # devicechain.io/instance label (which is also a pod selector) and of the
+  # devicechain_instance alert label; it names the Helm release (dc-<id>), the
+  # config objects (dci-<id>-config, dct-<id>-config), the blob claim
+  # (dci-<id>-blob), the ServiceAccount (dc-<id>) and the Grafana folder, board
+  # and ConfigMap; and it is the first segment of every messaging subject, the
+  # device-plane MQTT topic and the HTTP ingest route.
+  #
+  # 🔴 THE NAMESPACE IS NOT THE ID — IT IS `dci-` PLUS THE ID. Instance `foo` is
+  # deployed into namespace `dci-foo`. The prefix makes instance namespaces and
+  # the cluster's own namespaces (monitoring, dc-system, cert-manager,
+  # cnpg-system, ingress-nginx) disjoint sets, so an instance can never be built
+  # into a namespace a cluster component owns. Without it, an instance named
+  # `monitoring` writes its secret-store root key, its broker TLS private key and
+  # every database credential into the monitoring stack's namespace.
+  #
+  # `dci-` wears two unrelated hats in this chart: it is that namespace prefix,
+  # and it is a long-standing prefix on OBJECT names (dci-<id>-config,
+  # dci-<id>-blob). The object names are unchanged; they are not namespaces, and
+  # `dci-<id>-config` is not "the namespace plus -config".
   id: devicechain
-  # Whether the chart creates the target namespace (disable if managed elsewhere).
+  # Whether the chart creates the instance's namespace, i.e. dci-<instance.id>
+  # (disable if the namespace is created and managed elsewhere).
   createNamespace: true
   # C2 (ADR-022 review): the instance config below carries persistence credentials
   # (persistence.*.password), so the chart renders it into a *Secret*, not a
@@ -253,8 +274,10 @@ instance:
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its
-        # in-namespace Service name. The short name resolves within the instance
-        # namespace regardless of instance.id. (Was dc-user-management.dc-system,
+        # in-namespace Service name. A short name resolves within whatever
+        # namespace the pod is in, so it needs no change when the namespace name
+        # does — it holds for any instance.id, and it held unchanged through the
+        # move to the dci-<instance.id> namespace. (Was dc-user-management.dc-system,
         # a stale pre-Helm coordinate that does not exist under ADR-022 rendering.)
         hostname: user-management
         port: 8080
@@ -505,10 +528,12 @@ metrics:
   # volume fills whether or not anything is being backed up, and a full one stops
   # PostgreSQL outright.
   #
-  # It is NOT instance.id. The databases are infrastructure and live alongside the
-  # broker, so an alert scoped to the instance's own namespace would select
-  # nothing — a rule that loads, evaluates zero series, and never fires. This is
-  # the same value that appears inside
+  # It is NOT the instance's own namespace (dci-<instance.id>), and it never can
+  # be: instance namespaces carry the dci- prefix precisely so they cannot collide
+  # with a cluster-owned namespace like this one. The relational store is shared
+  # cluster infrastructure this chart does not deploy, so an alert scoped to the
+  # instance's own namespace would select nothing — a rule that loads, evaluates
+  # zero series, and never fires. This is the same value that appears inside
   # instance.config.persistence.*.configuration.hostname, stated separately
   # because a metric label is not parseable out of a DSN.
   #

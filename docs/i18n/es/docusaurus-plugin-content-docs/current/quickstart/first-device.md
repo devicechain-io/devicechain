@@ -48,9 +48,11 @@ de datos relacional, el operador CloudNativePG, cert-manager, la monitorización
 hace una vez por clúster; `dcctl bootstrap` se niega en un clúster donde no ha terminado.
 Consulte [Instalar el clúster](../deployment/bootstrap.md#install).
 
-El id de instancia —aquí `devicechain`— no es decorativo. Pasa a ser el namespace, y es el primer
-segmento de todos los topics de dispositivo y rutas de ingesta de esta página. Si elige otro,
-sustitúyalo en todas partes.
+El id de instancia —aquí `devicechain`— no es decorativo. Da nombre al namespace de Kubernetes de
+la instancia, que es el id detrás del prefijo `dci-` (`dci-devicechain`), y es el primer segmento
+de todos los topics de dispositivo y rutas de ingesta de esta página. Si elige otro, sustitúyalo
+en todas partes: tal cual en los topics y las rutas, y detrás del prefijo `dci-` allí donde un
+comando nombre el namespace.
 
 Cuando el arranque termina, imprime el namespace, la URL de la consola y la credencial del
 superusuario. El superusuario por defecto es `superuser@devicechain.local` con la contraseña
@@ -159,7 +161,7 @@ El tráfico de dispositivo no entra por la misma puerta que la API. El ingress p
 **no** expone fuera del clúster. Redirija el puerto:
 
 ```bash
-kubectl -n devicechain port-forward svc/event-sources 8081:8081
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081
 ```
 
 Déjelo corriendo en su propia terminal.

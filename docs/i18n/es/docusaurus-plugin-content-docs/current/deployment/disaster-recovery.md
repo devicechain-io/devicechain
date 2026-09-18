@@ -206,11 +206,12 @@ responden, y lo que falta es el trabajo en segundo plano. Ese almacén responder
 consultas perfectamente el tiempo que tarde el disco en llenarse.
 
 Abra una sesión en el primario del almacén de eventos; bajo el operador, `psql` no
-necesita contraseña allí. El almacén de eventos se ejecuta en el namespace propio de la
-instancia, y su base de datos lleva el nombre de la instancia:
+necesita contraseña allí. En el comando de abajo aparecen dos nombres construidos a partir
+del id de instancia, y no son la misma cadena: el namespace es `dci-` más el id de
+instancia, mientras que la base de datos es el id de instancia a secas, sin prefijo.
 
 ```bash
-kubectl -n <id-de-instancia> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <id-de-instancia>
+kubectl -n dci-<id-de-instancia> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <id-de-instancia>
 ```
 
 Hágale dos preguntas. **Primero: ¿siguen siendo hypertables las tablas de eventos?**

@@ -35,10 +35,12 @@ func emptyCluster() (*dynamicfake.FakeDynamicClient, *fake.Clientset) {
 	return declarationClient(), fake.NewSimpleClientset()
 }
 
-func namespaceNamed(name string) *corev1.Namespace {
+// namespaceNamed is an instance's own namespace as dcctl creates it: named through
+// InstanceNamespace, labelled with the instance ID. The two are separate strings.
+func namespaceNamed(instance string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   name,
-		Labels: map[string]string{"devicechain.io/instance": name},
+		Name:   InstanceNamespace(instance),
+		Labels: map[string]string{"devicechain.io/instance": instance},
 	}}
 }
 

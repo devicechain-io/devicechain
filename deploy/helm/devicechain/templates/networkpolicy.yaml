@@ -141,7 +141,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ $root.Values.instance.id }}-outbound-connectors-egress
-  namespace: {{ $root.Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" $root }}
   labels:
     {{- include "devicechain.areaLabels" (dict "root" $root "area" "outbound-connectors") | nindent 4 }}
 spec:

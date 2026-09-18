@@ -84,13 +84,16 @@ matched, and that the alerts CLEAR when the volume is grown. `helm lint` and
 `promtool check rules` would both pass an inverted comparison here.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.databaseNamespace }}
-{{- $ns := .Values.instance.id }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
 {{- $dbns := .Values.metrics.databaseNamespace }}
 {{- /* The relational store is the cluster's, in the shared namespace; the event store is
 this instance's own, in the instance namespace. Every database series is selected across
 both — and only both, so another instance's event store never raises this instance's
 alerts. The object store stays in the shared namespace alone. */}}
-{{- $dbsel := printf "%s|%s" $dbns .Values.instance.id }}
+{{- $dbsel := printf "%s|%s" $dbns $ns }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -118,7 +121,7 @@ spec:
           for: 1h
           labels:
             severity: warning
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "A database volume is over 75% full"
             description: >-
@@ -161,7 +164,7 @@ spec:
           for: 15m
           labels:
             severity: critical
-            devicechain_instance: {{ $ns }}
+            devicechain_instance: {{ $id }}
           annotations:
             summary: "A database volume is almost full"
             description: >-

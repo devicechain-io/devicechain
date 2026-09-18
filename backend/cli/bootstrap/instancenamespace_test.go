@@ -48,6 +48,10 @@ func writesIn(c *fake.Clientset) []string {
 	return out
 }
 
+// labelledNamespace builds the escape hatch: a namespace an operator made and labelled
+// as an instance's by hand. The two arguments are deliberately separate — name is the
+// NAMESPACE, instance is the devicechain.io/instance label VALUE, and they are not the
+// same string.
 func labelledNamespace(name, instance string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   name,
@@ -55,7 +59,7 @@ func labelledNamespace(name, instance string) *corev1.Namespace {
 	}}
 }
 
-// 🔴 THE ROOT-KEY PROPERTY, AND IT IS THE REASON THIS WHOLE CHANGE EXISTS.
+// 🔴 THE ROOT-KEY PROPERTY, AND IT IS THE REASON THIS SEAM EXISTS.
 //
 // The seam is the last thing between a namespace that is not this instance's and
 // writeMintedSecrets, which is one line below its only two callers. What is asserted is
@@ -64,10 +68,20 @@ func labelledNamespace(name, instance string) *corev1.Namespace {
 // measured on a real cluster, not a hypothetical one: the secret-store root key, the
 // broker's TLS private key and four database credentials, all in a namespace `dcctl
 // destroy` then correctly refused to touch.
+//
+// 🔑 WHAT REACHES THIS SEAM CHANGED WHEN AN INSTANCE'S NAMESPACE GAINED A PREFIX, AND THE
+// FIXTURE CHANGED WITH IT. It was built around an instance named `monitoring` on a cluster
+// whose monitoring stack lives there — the case that was actually measured. That case is
+// now unrepresentable, and has a test of its own below. What still reaches here is an
+// earlier generation of this same instance whose destroy did not finish, because nothing
+// but dcctl makes a namespace under the prefix. The property being pinned is unchanged;
+// only the story that gets you to it is.
 func TestTheSeamRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
-	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "monitoring"}})
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: InstanceNamespace("dctest"),
+	}})
 
-	err := ensureNamespaceForRelease(context.Background(), c, "monitoring", "dc-monitoring", "default")
+	err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc-dctest", "default")
 	if err == nil {
 		t.Fatal("a namespace that is not this instance's was accepted")
 	}
@@ -84,7 +98,7 @@ func TestTheSeamRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
 // from a bootstrap that can never resume.
 func TestANamespaceThisInstanceOwnsIsAccepted(t *testing.T) {
 	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   "dctest",
+		Name:   InstanceNamespace("dctest"),
 		Labels: map[string]string{"devicechain.io/instance": "dctest", "app.kubernetes.io/managed-by": "Helm"},
 		Annotations: map[string]string{
 			"meta.helm.sh/release-name":      "dc-dctest",
@@ -110,13 +124,13 @@ func TestANamespaceThisInstanceOwnsIsAccepted(t *testing.T) {
 // install, after the credentials have landed. Accepting it therefore has to include
 // giving it the three keys.
 func TestALabelledNamespaceIsGivenTheMetadataHelmAdoptsItWith(t *testing.T) {
-	c := fake.NewSimpleClientset(labelledNamespace("dctest", "dctest"))
+	c := fake.NewSimpleClientset(labelledNamespace(InstanceNamespace("dctest"), "dctest"))
 
 	if err := ensureNamespaceForRelease(context.Background(), c, "dctest", "dc-dctest", "default"); err != nil {
 		t.Fatalf("a namespace labelled as this instance's was refused: %v", err)
 	}
 
-	ns, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{})
+	ns, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +157,7 @@ func TestALabelledNamespaceIsGivenTheMetadataHelmAdoptsItWith(t *testing.T) {
 // Helm's ownership check pass for a release that does not own it — a loud refusal turned
 // into a silent adoption. Left alone, Helm refuses and names both values.
 func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
-	ns := labelledNamespace("dctest", "dctest")
+	ns := labelledNamespace(InstanceNamespace("dctest"), "dctest")
 	ns.Annotations = map[string]string{"meta.helm.sh/release-name": "their-release"}
 	c := fake.NewSimpleClientset(ns)
 
@@ -151,7 +165,7 @@ func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
 		t.Fatalf("a namespace labelled as this instance's was refused: %v", err)
 	}
 
-	got, err := c.CoreV1().Namespaces().Get(context.Background(), "dctest", metav1.GetOptions{})
+	got, err := c.CoreV1().Namespaces().Get(context.Background(), InstanceNamespace("dctest"), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,14 +183,14 @@ func TestTheStampDoesNotOverwriteAnotherReleasesClaim(t *testing.T) {
 // that it writes nothing — and would be left behind by the refusal it is about to raise,
 // because no unwind covers it.
 func TestThePrecheckRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T) {
-	c := stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	c := stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("beta")}})
 
 	err := precheckInstanceNamespace(context.Background(), &State{Instance: "beta"})
 	var refusal *ErrNamespaceUnavailable
 	if !errors.As(err, &refusal) {
 		t.Fatalf("a namespace that is not this instance's was not refused as one: %v", err)
 	}
-	if !strings.Contains(err.Error(), `namespace "beta"`) {
+	if !strings.Contains(err.Error(), fmt.Sprintf("namespace %q", InstanceNamespace("beta"))) {
 		t.Errorf("the refusal does not name the namespace it is about: %v", err)
 	}
 	if wrote := writesIn(c); len(wrote) > 0 {
@@ -187,7 +201,7 @@ func TestThePrecheckRefusesAForeignNamespaceWithoutWritingAnything(t *testing.T)
 // A namespace this instance owns is not refused here either — the precheck must let a
 // resumed bootstrap through, or it refuses every re-run of every instance.
 func TestThePrecheckAcceptsThisInstancesOwnNamespace(t *testing.T) {
-	stubNamespacePrecheck(t, labelledNamespace("beta", "beta"))
+	stubNamespacePrecheck(t, labelledNamespace(InstanceNamespace("beta"), "beta"))
 	if err := precheckInstanceNamespace(context.Background(), &State{Instance: "beta"}); err != nil {
 		t.Fatalf("this instance's own namespace was refused before the run started: %v", err)
 	}
@@ -229,7 +243,7 @@ func TestAnUnreadableNamespaceStopsTheRunWithoutBeingARefusal(t *testing.T) {
 // carries it out rather than reading it and going on.
 func TestTheSingletonStepRefusesANamespaceThisInstanceDoesNotOwn(t *testing.T) {
 	stubSingletons(t, clusterSingletons{}, nil)
-	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("beta")}})
 
 	err := stepCheckClusterSingletons(context.Background(), &State{
 		Instance: "beta", IngressHost: "beta.localhost", Values: map[string]string{}})
@@ -265,9 +279,10 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 
 	// A namespace that is not this instance's: the rehearsal does not refuse, it says what
 	// a real run would refuse over, in the refusal's own words.
-	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}})
+	stubNamespacePrecheck(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("beta")}})
 	foreign := rehearse(t)
-	if !strings.Contains(foreign, "REFUSE") || !strings.Contains(foreign, `namespace "beta" already exists`) {
+	if !strings.Contains(foreign, "REFUSE") ||
+		!strings.Contains(foreign, fmt.Sprintf("namespace %q already exists", InstanceNamespace("beta"))) {
 		t.Errorf("a rehearsal against a namespace this instance does not own printed:\n%s"+
 			"  It has to name the refusal a real run raises. A rehearsal that says nothing about "+
 			"the namespace sends an operator into a bootstrap that stops at step 4", foreign)
@@ -286,7 +301,8 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 		t.Errorf("a namespace read that failed was rehearsed as a refusal:\n%s"+
 			"  Nothing on the cluster said this namespace is taken", unread)
 	}
-	if !strings.Contains(unread, `namespace "beta"`) || !strings.Contains(unread, "forbidden") {
+	if !strings.Contains(unread, fmt.Sprintf("namespace %q", InstanceNamespace("beta"))) ||
+		!strings.Contains(unread, "forbidden") {
 		t.Errorf("a rehearsal whose namespace read failed printed:\n%s"+
 			"  It has to say which read failed and why. The line missing from the rehearsal is "+
 			"the one that would have explained the real run's stop", unread)
@@ -299,5 +315,126 @@ func TestTheDryRunRehearsesTheNamespaceVerdict(t *testing.T) {
 	if free := rehearse(t); strings.Contains(free, "namespace") {
 		t.Errorf("a rehearsal against a free namespace talked about it anyway:\n%s"+
 			"  Then the two assertions above pass whatever the step actually decided", free)
+	}
+}
+
+// 🔴🔴 THE COLLISION THIS PREFIX EXISTS TO RETIRE, ASSERTED AS IMPOSSIBLE RATHER THAN
+// REFUSED.
+//
+// Measured on a real cluster: `dcctl bootstrap local monitoring`, on a cluster whose
+// monitoring stack lives in the `monitoring` namespace, wrote the instance's secret-store
+// root key, the broker's TLS private key and four database credentials INTO that namespace
+// and installed the broker and the event store there before Helm's ownership check refused
+// it. `dcctl destroy` then correctly declined to delete a namespace not labelled as the
+// instance's, so it reported success and left the credentials behind, and the next
+// bootstrap found them and advised running destroy.
+//
+// Seven namespaces `dcctl install` creates were valid instance names. Under the prefix an
+// instance called `monitoring` is built in `dci-monitoring`, so the two names are in
+// different sets and the collision cannot be expressed — which is a stronger claim than
+// "it is refused", and is the whole reason a reserved-name list was not built instead.
+//
+// 🔑 THIS ASSERTS ACCEPTANCE, WHICH IS THE ONLY WAY TO SEE THE DIFFERENCE. A test that the
+// collision is refused would pass just as well under a list of reserved names, and would
+// also pass if the prefix quietly stopped being applied. Requiring the build to PROCEED,
+// with the cluster's own namespace untouched beside it, fails under both.
+func TestAnInstanceNamedAfterAClusterNamespaceIsBuiltBesideItNotIntoIt(t *testing.T) {
+	for _, owned := range []string{
+		"monitoring", "dc-system", "cert-manager", "cnpg-system", "ingress-nginx", "default",
+	} {
+		t.Run(owned, func(t *testing.T) {
+			// The cluster's own namespace, exactly as `dcctl install` leaves it: present,
+			// and carrying no devicechain.io/instance label.
+			c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:   owned,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "dcctl"},
+			}})
+
+			if err := ensureNamespaceForRelease(
+				context.Background(), c, owned, "dc-"+owned, "default"); err != nil {
+				t.Fatalf("an instance named %q was refused because the cluster owns a namespace by "+
+					"that name: %v.\n  The prefix exists so that name is not the namespace — if this "+
+					"refuses, the two sets have met again", owned, err)
+			}
+
+			// And it was built beside that namespace rather than into it.
+			built, err := c.CoreV1().Namespaces().Get(
+				context.Background(), InstanceNamespace(owned), metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("namespace %q was not created: %v", InstanceNamespace(owned), err)
+			}
+			if built.Labels[instanceNamespaceLabel] != owned {
+				t.Errorf("namespace %q carries %s=%q, want %q", built.Name, instanceNamespaceLabel,
+					built.Labels[instanceNamespaceLabel], owned)
+			}
+			// 🔴 The cluster's namespace must be untouched. This is the assertion that
+			// would have failed against the measured defect.
+			cluster, err := c.CoreV1().Namespaces().Get(context.Background(), owned, metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("the cluster's own namespace %q is gone: %v", owned, err)
+			}
+			if _, claimed := cluster.Labels[instanceNamespaceLabel]; claimed {
+				t.Errorf("the cluster's own namespace %q was claimed as instance %q's: an instance "+
+					"named after a cluster component took its namespace over", owned, owned)
+			}
+		})
+	}
+}
+
+// 🔴🔴 AN INSTANCE BUILT BEFORE THE PREFIX IS STILL THERE, AND THIS IS WHAT EVERY OTHER
+// COMMAND ASKS. Reading only the prefixed namespace answers "nothing here" about a live
+// instance, and the callers act on that answer: `dcctl upgrade` reports the instance was
+// never finished, and stepRefuseRebuild stops refusing — so a re-run mints a fresh root key
+// and re-sets the running instance's database login. A machine holding the instance's
+// OpenTofu state has a later fence; a machine without it has nothing.
+func TestAnInstanceBuiltBeforeThePrefixIsStillFound(t *testing.T) {
+	c := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "legacy",
+			Labels: map[string]string{"devicechain.io/instance": "legacy"},
+		}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "dci-legacy-config", Namespace: "legacy"},
+			Data:       map[string][]byte{"instance": []byte(`{"id":"legacy"}`)},
+		},
+	)
+
+	got := instanceNamespaceCandidates(context.Background(), c, "legacy")
+	want := []string{InstanceNamespace("legacy"), "legacy"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("candidates = %v, want %v: an instance built before the prefix is invisible, "+
+			"and every caller reads that as a free name", got, want)
+	}
+}
+
+// 🔴 AND THE COUNTERWEIGHT: the bare id is the shape of a namespace somebody else owns, so
+// it is a candidate only while it carries this instance's label. Without this, `monitoring`
+// — the collision the prefix exists to retire — would be read as instance `monitoring`'s
+// own namespace all over again.
+func TestAnUnlabelledNamespaceSharingTheNameIsNotACandidate(t *testing.T) {
+	c := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "monitoring",
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "dcctl"},
+	}})
+
+	got := instanceNamespaceCandidates(context.Background(), c, "monitoring")
+	if len(got) != 1 || got[0] != InstanceNamespace("monitoring") {
+		t.Fatalf("candidates = %v, want only %q: the monitoring stack's namespace was taken "+
+			"for an instance's", got, InstanceNamespace("monitoring"))
+	}
+}
+
+// A cluster that will not answer the extra namespace read drops the candidate rather than
+// failing the call: the caller's read of the instance's OWN namespace is the authoritative
+// one and reports its own errors.
+func TestACandidateLookupThatCannotBeAnsweredFallsBackToTheInstancesOwnNamespace(t *testing.T) {
+	c := fake.NewSimpleClientset()
+	c.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("the API server is not answering")
+	})
+
+	got := instanceNamespaceCandidates(context.Background(), c, "acme")
+	if len(got) != 1 || got[0] != InstanceNamespace("acme") {
+		t.Fatalf("candidates = %v, want only %q", got, InstanceNamespace("acme"))
 	}
 }

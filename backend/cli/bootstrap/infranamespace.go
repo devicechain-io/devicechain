@@ -15,6 +15,18 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// infraNamespace is the CLUSTER's namespace: where the cluster root installs what every
+// instance shares — the relational store, the object store — and where the cluster-owned
+// credentials and the install record live. It mirrors the cluster root's `namespace`
+// default; dcctl does not override it.
+//
+// 🔴 TWO NAMES, NOT ONE CONSTANT AND A HABIT — the other half is InstanceNamespace, in
+// instancenamespace.go. The broker and the event store lived HERE until each instance got
+// a namespace of its own, and every reference to them was spelled `infraNamespace`, which
+// reads exactly as well as the right answer. Naming the instance's namespace separately is
+// what makes the wrong one visible in a diff.
+const infraNamespace = "dc-system"
+
 // The address OpenTofu knows the shared infrastructure namespace by, and the labels
 // its module stamps on it (deploy/opentofu/modules/namespace/main.tf).
 //

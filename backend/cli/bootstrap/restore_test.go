@@ -375,7 +375,7 @@ func TestReadArchiveStateReadsTheInstancesEventStore(t *testing.T) {
 	// and a DECOY event store left in the cluster namespace, where it lived before
 	// instances had namespaces. Reading the wrong namespace or name reads a decoy.
 	tsdb := cnpgCluster(TsdbClusterName, archiver("tsdb-owns-this"))
-	tsdb.SetNamespace("acme")
+	tsdb.SetNamespace(InstanceNamespace("acme"))
 	dyn := fakeDyn(
 		cnpgCluster(RdbClusterName, archiver("rdb-owns-this")),
 		tsdb,

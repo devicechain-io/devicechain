@@ -153,10 +153,15 @@ almacén de eventos pertenece a la instancia, así que lo cubre
 
 **Varias instancias en un mismo clúster.** Un clúster puede alojar más de una instancia de
 DeviceChain. Los servicios de cada instancia, su bróker (NATS), su almacén de eventos
-(TimescaleDB) y sus credenciales viven en un namespace que lleva el nombre de la instancia,
-y cada instancia se conecta a la base de datos relacional compartida con un login propio
-que es dueño de exactamente una base de datos, de modo que ninguna instancia puede llegar a
-los datos de otra. Lo que comparten las instancias son los requisitos previos del clúster:
+(TimescaleDB) y sus credenciales viven en un namespace propio, que lleva el nombre de la
+instancia detrás del prefijo `dci-`: la instancia `devicechain` se ejecuta en el namespace
+`dci-devicechain`. El prefijo es lo que impide que el namespace de una instancia choque
+alguna vez con uno de los del propio clúster: `monitoring`, `cert-manager`, `ingress-nginx`
+y los demás quedan fuera de alcance por construcción, así que ningún id de instancia puede
+ocupar uno de ellos. Cada instancia se conecta a la base de datos relacional compartida con
+un login propio que es dueño de exactamente una base de datos, de modo que ninguna instancia
+puede llegar a los datos de otra. Lo que comparten las instancias son los requisitos previos
+del clúster:
 el controlador de ingress, cert-manager, el operador CloudNativePG, la monitorización, la
 base de datos relacional y el almacén de objetos de los respaldos.
 [`dcctl install`](#install) los instala una vez; cada arranque inicial los reutiliza y sigue
@@ -175,8 +180,10 @@ ocupa de ambas:
   alcanzables desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
 
 Los nombres de instancia son letras minúsculas, dígitos y `-`, de 50 caracteres como
-máximo, porque el nombre es también el namespace de la instancia, su base de datos y el
-login de esa base de datos.
+máximo. El nombre es, tal cual, la base de datos de la instancia y el login de esa base de
+datos, y es además la cola de otros dos nombres: el namespace es `dci-` más el nombre, y la
+release de Helm es `dc-` más el nombre. Los 50 caracteres salen de esa release: Helm limita
+el nombre de una release a 53 caracteres, así que al nombre en sí le quedan 50.
 
 Una instancia construida antes de que cada instancia tuviera su propio namespace ejecuta su
 bróker y su almacén de eventos en el namespace compartido `dc-system`, y no se pueden mover
@@ -553,7 +560,7 @@ headless/solo-ingesta, despliega con la consola deshabilitada —ver el valor
 Para inspeccionar la instancia en ejecución:
 
 ```bash
-kubectl --context <kube-context> get pods -n my-instance
+kubectl --context <kube-context> get pods -n dci-my-instance
 ```
 
 Para explorar la consola con una flota en movimiento en lugar de una vacía,

@@ -41,7 +41,8 @@ So each ConfigMap now differs per instance in five places, and nowhere else:
   - the `namespace` template variable, below.
 
 The `namespace` template variable is REPLACED with a hidden constant naming the
-instance (the instance id IS its namespace — metadata.namespace below). Every panel
+instance's NAMESPACE — which is not the instance id but the id behind the `dci-`
+prefix, the same value metadata.namespace carries below. Every panel
 already filters `namespace="$namespace"`, so the queries are untouched and a board can
 only ever read its own instance's series. The files on disk carry that entry as an empty
 constant; the whole entry is replaced here, so nothing in the file can leave a board
@@ -66,13 +67,21 @@ exist.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.grafanaDashboards }}
 {{- $id := .Values.instance.id }}
+{{/* The namespace, spelled apart from the id and used only where a NAMESPACE is
+     meant. $id stays the instance's: the uid hash input, the board title, the
+     ConfigMap name, the grafana_folder and the data key are all identifiers of
+     the instance, not of where its pods run. The two were the same string until an
+     instance's namespace gained a prefix, which is what made spelling them apart
+     necessary rather than merely tidy: a board scoped to the bare id renders
+     perfectly, carries the right uid, title and folder, and shows nothing at all. */}}
+{{- $ns := include "devicechain.instanceNamespace" . }}
 {{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
 {{- $stem := base $path | trimSuffix ".json" }}
 {{- $board := $.Files.Get $path | mustFromJson }}
 {{- $_ := set $board "uid" (printf "dc-%s" (sha256sum (printf "%s/%s" $id $stem) | trunc 20)) }}
 {{- $_ := set $board "title" (printf "%s [%s]" (get $board "title") $id) }}
-{{- $scope := dict "text" $id "value" $id "selected" true }}
-{{- $namespaceVar := dict "type" "constant" "name" "namespace" "label" "Instance" "query" $id "hide" 2 "current" $scope "options" (list $scope) }}
+{{- $scope := dict "text" $ns "value" $ns "selected" true }}
+{{- $namespaceVar := dict "type" "constant" "name" "namespace" "label" "Instance" "query" $ns "hide" 2 "current" $scope "options" (list $scope) }}
 {{- $templating := get $board "templating" | default dict }}
 {{- $vars := list }}
 {{- $scoped := false }}
@@ -93,7 +102,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $id }}-{{ $stem }}-dashboard
-  namespace: {{ $id }}
+  namespace: {{ $ns }}
   labels:
     grafana_dashboard: "1"
     {{- include "devicechain.instanceLabels" $ | nindent 4 }}

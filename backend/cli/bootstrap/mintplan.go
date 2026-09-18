@@ -265,7 +265,7 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 			// This instance's own login. No database operator reads it — dcctl sets
 			// the role's password from it — so it carries no reload label.
 			Name:      instanceRdbSecretName(st.Instance),
-			Namespace: instanceNamespace(st.Instance),
+			Namespace: InstanceNamespace(st.Instance),
 			Type:      corev1.SecretTypeBasicAuth,
 			Labels: map[string]string{
 				"app.kubernetes.io/component": "database",
@@ -279,7 +279,7 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 			// The event store is the instance's, in the instance's namespace, and
 			// CloudNativePG reads a Cluster's credentials from its own namespace.
 			Name:      tsdbClusterName + "-app-credentials",
-			Namespace: instanceNamespace(st.Instance),
+			Namespace: InstanceNamespace(st.Instance),
 			Type:      corev1.SecretTypeBasicAuth,
 			Labels:    dbLabels(tsdbClusterName),
 			Data: map[string]string{
@@ -310,7 +310,7 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 // with it.
 func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 	copied := cluster
-	copied.Namespace = instanceNamespace(st.Instance)
+	copied.Namespace = InstanceNamespace(st.Instance)
 	copied.Scope = ownerInstance
 	copied.Data = make(map[string]string, len(cluster.Data))
 	for k, v := range cluster.Data {
@@ -407,10 +407,10 @@ func resolveCredentials(
 	}
 	if plansInstance(st) {
 		databases = append(databases, databaseCredential{&set.TSDBPassword, mintedCredentialRef{
-			instanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword,
+			InstanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword,
 		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists})
 		logins = append(logins, loginCredential{&set.RDBInstancePassword, mintedCredentialRef{
-			instanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
+			InstanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
 		}, ownerInstance})
 	}
 

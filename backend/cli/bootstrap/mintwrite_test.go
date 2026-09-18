@@ -147,7 +147,7 @@ func TestABootstrapWritesNoClusterOwnedCredential(t *testing.T) {
 		t.Fatal("the bootstrap wrote nothing at all, so the check below is vacuous")
 	}
 	for _, s := range list.Items {
-		if own := readOwnership(&s).owner; own.Kind != ownerInstance || s.Namespace != instanceNamespace(st.Instance) {
+		if own := readOwnership(&s).owner; own.Kind != ownerInstance || s.Namespace != InstanceNamespace(st.Instance) {
 			t.Errorf("a bootstrap wrote %s/%s as %s's; everything it writes is its instance's, in its namespace",
 				s.Namespace, s.Name, own)
 		}

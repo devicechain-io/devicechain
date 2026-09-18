@@ -17,7 +17,7 @@ metadata:
         devicechain.io/functional-area: outbound-connectors
         devicechain.io/instance: devicechain
     name: devicechain-outbound-connectors-egress
-    namespace: devicechain
+    namespace: dci-devicechain
 spec:
     egress:
         - ports:
@@ -102,7 +102,7 @@ metadata:
         devicechain.io/functional-area: outbound-connectors
         devicechain.io/instance: devicechain
     name: devicechain-outbound-connectors-egress
-    namespace: devicechain
+    namespace: dci-devicechain
 spec:
     egress:
         - ports:

@@ -464,9 +464,25 @@ jobs:
       # caught it, because `helm lint` does not execute the body of a false `if` and no
       # job rendered this template enabled.
       #
-      # Rendered into `default` so it needs no namespace of its own, and the dry-run
-      # persists nothing. Both arms of this check have been observed: the shipped policy
-      # is accepted, and re-adding the mapped prefix reproduces the two errors above.
+      # The dry-run persists nothing. Both arms of this check have been observed: the
+      # shipped policy is accepted, and re-adding the mapped prefix reproduces the two
+      # errors above.
+      #
+      # 🔴 IT NEEDS A NAMESPACE THAT EXISTS, AND IT MAKES ONE. A server-side dry-run is a
+      # real request the API server admits and then discards, and it refuses one addressed
+      # to a namespace that is not there — `namespaces "…" not found`, raised before a
+      # single field of the policy is looked at. That is a failure about this HARNESS
+      # wearing the costume of the finding the step exists to produce, and it would be
+      # read as the policy being invalid.
+      #
+      # This used to render with `instance.id=default` so the objects landed in the
+      # cluster's pre-existing `default` namespace. An instance's namespace is now `dci-`
+      # plus its id, so no instance renders into a namespace a cluster already has and
+      # there is nothing left to borrow. The alternative — naming the rig's own instance,
+      # whose namespace does exist by this point — was rejected twice over: it makes the
+      # step depend on where in the drill it sits, and it addresses a LIVE instance's
+      # namespace with objects whose names collide with that instance's own. So the step
+      # creates a namespace of its own, uses it, and takes it away again.
       #
       # 🔴 The WHOLE chart is rendered and the NetworkPolicy documents are selected by
       # KIND, not with `--show-only templates/networkpolicy.yaml`. That flag was the
@@ -474,17 +490,31 @@ jobs:
       # invisible to it, and NetworkPolicies union, so one allow-all policy over the same
       # pods opens everything. The selector refuses to emit nothing, so an empty render
       # fails here rather than passing as "no objects to validate".
+      #
+      # 🔴 AND NOT `--dry-run=client` INSTEAD, which is the cheaper way to make the
+      # namespace problem go away: the paragraph above is the record of a client dry-run
+      # accepting every invalid prefix we planted. It would turn this step green over
+      # precisely the defect it was written to catch.
       - name: The egress NetworkPolicy is valid Kubernetes
         run: |
           set -euo pipefail
+          ctx=kind-devicechain-upgrade
+          # A throwaway id, not the rig's: nothing else in the drill is named this, so the
+          # namespace below cannot be an instance's and deleting it cannot take one with it.
+          id=policy-validation
+          ns="dci-$id"
+          kubectl --context "$ctx" create namespace "$ns"
+          # Removed however this step ends -- `set -e` on the pipeline below would
+          # otherwise leave it behind on exactly the runs that fail.
+          trap 'kubectl --context "$ctx" delete namespace "$ns" --wait=false >/dev/null 2>&1 || true' EXIT
           helm template deploy/helm/devicechain \
             --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" \
-            --set instance.id=default \
+            --set instance.id="$id" \
             --set 'enabledFunctionalAreas={user-management,device-management,event-processing,outbound-connectors}' \
             --set networkPolicy.enabled=true \
             --include-crds \
             | (cd backend/core && go run ./egress/internal/policyranges -policies) \
-            | kubectl --context kind-devicechain-upgrade apply --dry-run=server -f -
+            | kubectl --context "$ctx" apply --dry-run=server -f -
 
       # -------------------------------------------------------------------
       # DRILL A -- the data drill. The baseline is upgradeable onto this release.

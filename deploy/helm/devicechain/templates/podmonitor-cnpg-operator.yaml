@@ -50,7 +50,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: cnpg-operator
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
 spec:

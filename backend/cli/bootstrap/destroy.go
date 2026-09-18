@@ -59,11 +59,13 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 		if opts.WithoutState {
 			infra = "SKIP tofu destroy (--without-state), "
 		}
+		// Two values, not one repeated: the namespace this would delete comes through
+		// InstanceNamespace, the local state directory is named for the instance itself.
 		wouldDo(fmt.Sprintf(
 			"uninstall the instance release, %sdrop its database and login from the shared relational store, "+
 				"delete namespace %s and wait until it is gone, and remove ~/.devicechain/instances/%s "+
 				"(root-key escrow kept), LEAVING cluster %s running",
-			infra, opts.Instance, opts.Instance, binding.describe()))
+			infra, InstanceNamespace(opts.Instance), opts.Instance, binding.describe()))
 		return nil
 	}
 
@@ -161,7 +163,7 @@ func destroyedLine(instance, cluster, leftDatabase string, withoutState bool) st
 		// all in its namespace; the operator asked for that, and the line says so.
 		return color.YellowString("\nInstance %q removed WITHOUT tofu destroy (--without-state); cluster %s left running. "+
 			"Anything of its infrastructure outside namespace %s was not removed.%s",
-			instance, cluster, instanceNamespace(instance), leftDatabaseNote(leftDatabase))
+			instance, cluster, InstanceNamespace(instance), leftDatabaseNote(leftDatabase))
 	}
 	if leftDatabase != "" {
 		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
@@ -289,19 +291,33 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 		return "", fail("removing the instance's database and login", err)
 	}
 	done()
-	doing(fmt.Sprintf("deleting namespace %s and waiting until it is gone", instanceNamespace(opts.Instance)))
-	deleted, err := removeInstanceNamespace(ctx, typed, opts.Instance)
+	doing(fmt.Sprintf("deleting namespace %s and waiting until it is gone", InstanceNamespace(opts.Instance)))
+	torn, err := removeInstanceNamespaces(ctx, typed, opts.Instance)
 	if err != nil {
 		return "", fail("removing the instance namespace", err)
 	}
-	// 🔑 WAITED ON ONLY WHEN THIS RUN DELETED IT. A namespace left alone because it is not
-	// labelled as this instance's is not going anywhere, and was already reported.
-	if deleted {
-		if err := waitForNamespaceGone(ctx, typed, instanceNamespace(opts.Instance), namespaceGoneTimeout, namespaceGonePollEach); err != nil {
+	// 🔑 WAITED ON ONLY WHEN THIS RUN DELETED IT, AND ON THE ONE IT ACTUALLY DELETED. A
+	// namespace left alone because it is not labelled as this instance's is not going
+	// anywhere, and was already reported. Waiting on a name re-derived here rather than on
+	// the one that was torn down is exactly how the line printed above and the namespace
+	// acted on came apart: they were the same string until an instance's namespace gained
+	// a prefix, and nothing in between would have said so.
+	if torn.Deleted {
+		if err := waitForNamespaceGone(ctx, typed, torn.Namespace, namespaceGoneTimeout, namespaceGonePollEach); err != nil {
 			return "", fail("waiting for the instance namespace to be deleted", err)
 		}
 	}
 	done()
+	// After the line is closed, because it is about the run rather than about the step: an
+	// instance built before instance namespaces were prefixed has just had its UNPREFIXED
+	// namespace removed, and an operator reading a transcript that says dci-<id> throughout
+	// should not be left wondering which namespace actually went.
+	if torn.Legacy {
+		fmt.Println(color.HiBlackString(
+			"  namespace %s was removed: this instance was built before instance namespaces "+
+				"carried the %s prefix. A new instance of the same name is built in %s.",
+			torn.Namespace, instanceNamespacePrefix, InstanceNamespace(opts.Instance)))
+	}
 	return leftDatabase, nil
 }
 

@@ -201,7 +201,7 @@ var readLiveArchiveState = func(ctx context.Context, kubeContext, instance strin
 // at a prefix holding no base backup of it.
 func readArchiveState(ctx context.Context, dyn dynamic.Interface, instance string) (clusterArchiveState, error) {
 	// The event store is the instance's, in the instance's namespace.
-	return clusterArchivePath(ctx, dyn, instanceNamespace(instance), TsdbClusterName)
+	return clusterArchivePath(ctx, dyn, InstanceNamespace(instance), TsdbClusterName)
 }
 
 // clusterArchivePath reads one Cluster's archiver serverName.

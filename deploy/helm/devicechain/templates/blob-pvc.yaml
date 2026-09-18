@@ -82,7 +82,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "devicechain.blobClaimName" . }}
-  namespace: {{ .Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   {{- with $p.annotations }}

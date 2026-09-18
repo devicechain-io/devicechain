@@ -13,13 +13,13 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ $area }}
-  namespace: {{ $root.Values.instance.id }}
+  namespace: {{ include "devicechain.instanceNamespace" $root }}
   labels:
     {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
-      - {{ $root.Values.instance.id }}
+      - {{ include "devicechain.instanceNamespace" $root }}
   selector:
     matchLabels:
       {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 6 }}

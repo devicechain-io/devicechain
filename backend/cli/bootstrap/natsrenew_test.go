@@ -23,7 +23,7 @@ func anInstanceWithBrokerMaterialMintedAt(t *testing.T, mintedAt time.Time, repl
 	if replicas > 1 {
 		st.HA = true
 	}
-	material, err := mintNATSTLS(natsReleaseName, instanceNamespace(testInstance), replicas, mintedAt)
+	material, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), replicas, mintedAt)
 	if err != nil {
 		t.Fatalf("minting the broker's certificate: %v", err)
 	}
@@ -34,7 +34,7 @@ func anInstanceWithBrokerMaterialMintedAt(t *testing.T, mintedAt time.Time, repl
 	// changed nothing an operator can observe — so "there was no StatefulSet to
 	// restart" must not be a state any of these tests passes through quietly.
 	c := fake.NewSimpleClientset(&appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: natsStatefulSetName, Namespace: instanceNamespace(testInstance)},
+		ObjectMeta: metav1.ObjectMeta{Name: natsStatefulSetName, Namespace: InstanceNamespace(testInstance)},
 	})
 	if err := writeMintedSecrets(context.Background(), c, st); err != nil {
 		t.Fatalf("writing the broker's material: %v", err)
@@ -45,7 +45,7 @@ func anInstanceWithBrokerMaterialMintedAt(t *testing.T, mintedAt time.Time, repl
 
 func brokerLeaf(t *testing.T, c *fake.Clientset) *x509.Certificate {
 	t.Helper()
-	s, err := c.CoreV1().Secrets(instanceNamespace(testInstance)).Get(
+	s, err := c.CoreV1().Secrets(InstanceNamespace(testInstance)).Get(
 		context.Background(), natsReleaseName+"-tls", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("reading the broker's certificate: %v", err)
@@ -149,14 +149,14 @@ func TestACertificateWellInsideItsLifeIsLeftAlone(t *testing.T) {
 // conclude that nothing ever needs renewing, and would keep concluding it until the
 // broker stopped accepting connections.
 func TestTheExpiryConsultedIsTheLeafsAndNotTheAuthoritys(t *testing.T) {
-	material, err := mintNATSTLS(natsReleaseName, instanceNamespace(testInstance), 1,
+	material, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), 1,
 		time.Now().UTC().Add(-335*24*time.Hour))
 	if err != nil {
 		t.Fatalf("minting: %v", err)
 	}
 	bundle := material.LeafCertPEM + material.CACertPEM
 
-	reason, err := leafReissueReason(bundle, natsServerDNSNames(natsReleaseName, instanceNamespace(testInstance), 1),
+	reason, err := leafReissueReason(bundle, natsServerDNSNames(natsReleaseName, InstanceNamespace(testInstance), 1),
 		time.Now().UTC())
 	if err != nil {
 		t.Fatalf("judging the certificate: %v", err)
@@ -186,13 +186,13 @@ func TestTheExpiryConsultedIsTheLeafsAndNotTheAuthoritys(t *testing.T) {
 // comfortably in date: the routes never form, no leader is elected, and it reads as a
 // broken cluster rather than as a certificate a few names short.
 func TestACertificateThatNoLongerCoversTheClusterIsReissued(t *testing.T) {
-	material, err := mintNATSTLS(natsReleaseName, instanceNamespace(testInstance), 1, time.Now().UTC())
+	material, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), 1, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("minting: %v", err)
 	}
 
 	reason, err := leafReissueReason(material.LeafCertPEM,
-		natsServerDNSNames(natsReleaseName, instanceNamespace(testInstance), 3), time.Now().UTC())
+		natsServerDNSNames(natsReleaseName, InstanceNamespace(testInstance), 3), time.Now().UTC())
 	if err != nil {
 		t.Fatalf("judging the certificate: %v", err)
 	}
@@ -209,13 +209,13 @@ func TestACertificateThatNoLongerCoversTheClusterIsReissued(t *testing.T) {
 // the topology needs is what an instance scaled back down looks like, and re-issuing
 // for it would restart the broker to remove names nothing was using.
 func TestACertificateCoveringMoreThanIsNeededIsLeftAlone(t *testing.T) {
-	material, err := mintNATSTLS(natsReleaseName, instanceNamespace(testInstance), 3, time.Now().UTC())
+	material, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), 3, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("minting: %v", err)
 	}
 
 	reason, err := leafReissueReason(material.LeafCertPEM,
-		natsServerDNSNames(natsReleaseName, instanceNamespace(testInstance), 1), time.Now().UTC())
+		natsServerDNSNames(natsReleaseName, InstanceNamespace(testInstance), 1), time.Now().UTC())
 	if err != nil {
 		t.Fatalf("judging the certificate: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestACertificateCoveringMoreThanIsNeededIsLeftAlone(t *testing.T) {
 // upgrade succeeded.
 func TestAnInstanceWithNoStoredAuthorityIsToldRatherThanFailed(t *testing.T) {
 	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
-	if err := c.CoreV1().Secrets(instanceNamespace(testInstance)).Delete(context.Background(),
+	if err := c.CoreV1().Secrets(InstanceNamespace(testInstance)).Delete(context.Background(),
 		natsAuthoritySecretName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("removing the stored authority: %v", err)
 	}
@@ -258,12 +258,12 @@ func TestTheStoredAuthorityIsNotTheObjectTheBrokerMounts(t *testing.T) {
 	if natsAuthoritySecretName == natsReleaseName+"-tls" {
 		t.Fatal("the authority is kept in the object the broker mounts")
 	}
-	broker, err := c.CoreV1().Secrets(instanceNamespace(testInstance)).Get(
+	broker, err := c.CoreV1().Secrets(InstanceNamespace(testInstance)).Get(
 		context.Background(), natsReleaseName+"-tls", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("reading the broker's Secret: %v", err)
 	}
-	authority, err := c.CoreV1().Secrets(instanceNamespace(testInstance)).Get(
+	authority, err := c.CoreV1().Secrets(InstanceNamespace(testInstance)).Get(
 		context.Background(), natsAuthoritySecretName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("reading the stored authority: %v", err)

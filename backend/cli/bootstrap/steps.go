@@ -100,10 +100,12 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		st.Profile = defaultProfile
 	}
 
-	// The chart deploys every per-instance workload into a namespace named after
-	// the instance id (templates/namespace.yaml uses .Values.instance.id), so the
-	// readiness gate and report must target exactly that.
-	namespace := st.Instance
+	// The chart deploys every per-instance workload into the instance's own namespace
+	// (templates/namespace.yaml derives it from .Values.instance.id), so the readiness
+	// gate and the report must target exactly that. What it is called is InstanceNamespace's
+	// to decide, and the chart has to agree with it — this value travels no further than
+	// st.Values["namespace"], which is where the gate and the report read it from.
+	namespace := InstanceNamespace(st.Instance)
 
 	doing(fmt.Sprintf("rendering config for instance %q (profile %q)", st.Instance, st.Profile))
 
@@ -194,7 +196,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// kept forever expires a year after bootstrap with nothing to re-issue it. That
 	// belongs to the verb that evolves an instance rather than the one that creates
 	// it, and the two answer opposite questions.
-	st.NATSTLS, err = mintNATSTLS(natsReleaseName, instanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC())
+	st.NATSTLS, err = mintNATSTLS(natsReleaseName, InstanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC())
 	if err != nil {
 		return fail("minting the broker's certificate authority", err)
 	}
@@ -252,7 +254,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword,
-			lookupDeployedBrokerHashes(ctx, st.KubeContext, instanceNamespace(st.Instance), natsStatefulSetName))
+			lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName))
 		if err != nil {
 			return fail("reusing the running instance's NATS auth credentials", err)
 		}
@@ -282,7 +284,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := natsauth.CredentialsFromDeployed(
 				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword,
-				lookupDeployedBrokerHashes(ctx, st.KubeContext, instanceNamespace(st.Instance), natsStatefulSetName))
+				lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName))
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")

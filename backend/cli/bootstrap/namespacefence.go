@@ -38,7 +38,7 @@ func checkInstanceInItsOwnNamespace(ctx context.Context, tf stateLister, instanc
 	if state == nil || state.Values == nil || state.Values.RootModule == nil {
 		return nil
 	}
-	want := instanceNamespace(instance)
+	want := InstanceNamespace(instance)
 	var elsewhere []string
 	for _, address := range instanceNamespacedAddresses {
 		r := findStateResource(state.Values.RootModule, address)
@@ -53,8 +53,14 @@ func checkInstanceInItsOwnNamespace(ctx context.Context, tf stateLister, instanc
 	if len(elsewhere) == 0 {
 		return nil
 	}
+	// 🔑 IT SAYS WHAT WAS FOUND RATHER THAN WHICH ERA IT CAME FROM. There are two ways to
+	// reach this now — an instance built before instances had namespaces of their own, and
+	// one built before those namespaces carried a prefix — and the state cannot tell them
+	// apart. Naming one would be a confident wrong answer some of the time, the remedy is
+	// the same either way, and the namespaces actually found are printed below, which is
+	// the part an operator can act on.
 	return fmt.Errorf(
-		"instance %q was built before each instance had a namespace of its own: its infrastructure "+
+		"instance %q was built under a different namespace naming: its infrastructure "+
 			"runs outside namespace %q —\n  %s\n"+
 			"A Helm release cannot move between namespaces in place; OpenTofu would destroy and "+
 			"recreate it, which for the event store is its history. There is no in-place upgrade: "+

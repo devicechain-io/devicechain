@@ -213,15 +213,41 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 		found = append(found, fmt.Sprintf("a declaration (Instance %q)", instance))
 	}
 
-	// The namespace is matched by NAME ALONE, with no label check, and that is the
-	// opposite of removeInstanceNamespace on purpose. That function is deciding what to
-	// DELETE, so it deletes only what it can prove is ours; this one is deciding whether
+	// The instance's own namespace is matched by NAME ALONE, with no label check, and that
+	// is the opposite of removeInstanceNamespace on purpose. That function is deciding what
+	// to DELETE, so it deletes only what it can prove is ours; this one is deciding whether
 	// anything is here, so a namespace carrying the instance's name is disqualifying
-	// whoever labelled it.
-	if _, err := typed.CoreV1().Namespaces().Get(ctx, instance, metav1.GetOptions{}); err == nil {
-		found = append(found, fmt.Sprintf("namespace %q", instance))
+	// whoever labelled it. The prefix strengthens that reading rather than weakening it:
+	// nothing but dcctl makes a namespace under instanceNamespacePrefix, so a name match is
+	// now evidence about this instance specifically rather than about a name it shares.
+	namespace := InstanceNamespace(instance)
+	if _, err := typed.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{}); err == nil {
+		found = append(found, fmt.Sprintf("namespace %q", namespace))
 	} else if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("reading namespace %q: %w", instance, err)
+		return nil, fmt.Errorf("reading namespace %q: %w", namespace, err)
+	}
+
+	// 🔴 AND THE UNPREFIXED NAME IS ASKED ABOUT TOO, UNDER THE OPPOSITE RULE. An instance
+	// built before instance namespaces were prefixed lives there, and this function is what
+	// stands between such an instance and having its local record cleared while it runs —
+	// the record being the only thing that still names the cluster its destroy has to
+	// finish in.
+	//
+	// 🔑 NAME ALONE WOULD BE WRONG HERE, WHICH IS WHY THE TWO CASES READ DIFFERENTLY. The
+	// bare id is exactly the shape of an ordinary namespace somebody else owns — `monitoring`
+	// exists on nearly every cluster — so matching it by name would report a footprint for
+	// an instance that was never built and refuse forever to tidy up after it. The label is
+	// what makes it evidence, and an instance that reached the point of having a namespace
+	// has it: the chart writes it on the namespace it renders.
+	if legacy := instance; legacy != namespace {
+		ns, err := typed.CoreV1().Namespaces().Get(ctx, legacy, metav1.GetOptions{})
+		switch {
+		case err == nil && ns.Labels[instanceNamespaceLabel] == instance:
+			found = append(found, fmt.Sprintf(
+				"namespace %q, from before instance namespaces were prefixed", legacy))
+		case err != nil && !apierrors.IsNotFound(err):
+			return nil, fmt.Errorf("reading namespace %q: %w", legacy, err)
+		}
 	}
 
 	// An instance built before each instance had its own namespace left the Secrets dcctl

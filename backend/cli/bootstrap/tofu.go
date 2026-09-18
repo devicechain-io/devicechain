@@ -372,7 +372,7 @@ func infraVars(st *State) []string {
 		// and none of them creates it.
 		"timescale_database=" + st.Instance,
 		// The broker and the event store run in the instance's own namespace.
-		"instance_namespace=" + instanceNamespace(st.Instance),
+		"instance_namespace=" + InstanceNamespace(st.Instance),
 	}
 	// The broker's certificate authority, PUBLIC HALF ONLY.
 	//

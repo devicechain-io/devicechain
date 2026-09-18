@@ -130,11 +130,17 @@ done
 
 failures=0
 
-# The instance root's namespace is REQUIRED — it is the instance id, and a default would
-# put every instance in one namespace. The console needs a value to evaluate anything in
-# that root, so every assertion runs as one instance. A TF_VAR_ for a variable a root does
-# not declare is ignored, so the cluster root is unaffected.
-export TF_VAR_instance_namespace=harness
+# The instance root's namespace is REQUIRED — it is `dci-` plus the instance id, and a
+# default would put every instance in one namespace. The console needs a value to evaluate
+# anything in that root, so every assertion runs as one instance. A TF_VAR_ for a variable
+# a root does not declare is ignored, so the cluster root is unaffected.
+#
+# 🔴 THE PREFIX IS PART OF THE FIXTURE, not decoration. instance_namespace refuses a
+# namespace that does not carry it, so a bare `harness` here would be refused while
+# LOADING the variables of every assertion in that root — the defaults baseline included.
+# That is loud rather than silent, but it is loud on all of them at once, so read a wall
+# of instance-root failures as this line disagreeing with variables.tf.
+export TF_VAR_instance_namespace=dci-harness
 
 # Assertion keys seen as applicable in at least one root, and keys seen at all. The
 # difference between them is the set of assertions that evaluated NOWHERE.
@@ -499,7 +505,7 @@ run_assertions() {
   # and not any single-node install, which never opens a route. Only the live 3-node
   # rig did. These lines are what move it back into a gate that runs on every PR.
   evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var ha=true
-  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.harness.svc.cluster.local")])' -var ha=true
+  evaluates true 'alltrue([for i in range(3) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless.dci-harness.svc.cluster.local")])' -var ha=true
   # Scaled explicitly: a 5-server cluster needs five peers named, and a SAN list
   # built for three would leave servers 3 and 4 unable to join.
   evaluates true 'alltrue([for i in range(5) : contains(module.nats.ha_topology.server_dns_names, "dc-nats-${i}.dc-nats-headless")])' -var nats_cluster_replicas=5
@@ -510,9 +516,10 @@ run_assertions() {
   evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats-0.dc-nats-headless")' -var ha=false
   # And the client names survive. A route-name change that dropped them would break
   # every service connection instead — the same failure, pointed the other way.
-  evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.harness")' -var ha=true
-  # The broker is in the INSTANCE's namespace, so its names carry the instance id — and
-  # two instances' certificates never name each other's broker.
+  evaluates true 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dci-harness")' -var ha=true
+  # The broker is in the INSTANCE's namespace (`dci-` plus the instance id), so its names
+  # carry that namespace — and two instances' certificates never name each other's broker,
+  # nor the shared one.
   evaluates false 'contains(module.nats.ha_topology.server_dns_names, "dc-nats.dc-system")' -var ha=true
 
   # The ha=true + cluster_replicas=1 contradiction. The REFUSAL lives in a
@@ -824,6 +831,35 @@ run_assertions() {
   done
   unset _cv
 
+  # --- the instance namespace ---------------------------------------------------
+  #
+  # It is `dci-` plus the instance id — NOT the id, which still names the database, the
+  # login, the Helm release and the subject prefix — and it is guarded twice: the
+  # DNS-1123 grammar WITH the prefix required, and a length of at most 54 (the
+  # 4-character prefix plus the chart's 50-character cap on an instance id).
+  #
+  # 🔴 THE LENGTH BOUNDARY IS PINNED FROM BOTH SIDES, and the accepts half is the one
+  # that matters. This bound was 50 back when the namespace WAS the id; carried over
+  # unchanged it refuses every id longer than 46 — at APPLY time, after dcctl has already
+  # created the namespace and written the declaration and the credentials into it. A
+  # rejection at 55 on its own is satisfied by a variable that refuses everything, and
+  # that variable is exactly what the old bound had become.
+  #
+  # 🔴 AND THE PREFIX ITSELF, because it is the only cross-check there is that dcctl and
+  # the Helm chart agree about where an instance lives. They compute the namespace
+  # independently; if they ever diverge, the broker and the event store land in one
+  # namespace and every workload in another, which nothing downstream reports as wrong.
+  # An unprefixed namespace cannot be the one the chart renders into, so this refuses it.
+  rejects instance_namespace "acme"
+  rejects instance_namespace "dc-acme"
+  rejects instance_namespace "dci-Acme"
+  rejects instance_namespace "dci-dc_system"
+  rejects instance_namespace "dci--acme"
+  rejects instance_namespace "dci-acme-"
+  rejects instance_namespace "dci-a234567890a234567890a234567890a234567890a234567890x"
+  accepts instance_namespace "dci-acme-2"
+  accepts instance_namespace "dci-a234567890a234567890a234567890a234567890a234567890"
+
   # --- the read-only SQL/BI reader roles ----------------------------------------
   #
   # 🔴 EVERY ONE OF THESE REFUSALS IS A CROSS-TENANT READ IF IT STOPS FIRING, which
@@ -843,12 +879,6 @@ run_assertions() {
   #                  them since position became its own grant, and the second is the
   #                  one an edit will forget: `analytics_location_reader` with LOGIN
   #                  resolves to a tenant called `location_reader`.
-  # The instance namespace is the instance id, so it has the id's grammar.
-  rejects instance_namespace "Acme"
-  rejects instance_namespace "dc_system"
-  rejects instance_namespace "-acme"
-  rejects instance_namespace "a2345678901234567890123456789012345678901234567890x"
-  accepts instance_namespace "acme-2"
   rejects timescale_analytics_readers '[{name="bi_acme",connection_limit=5}]'
   rejects timescale_analytics_readers '[{name="analytics_",connection_limit=5}]'
   rejects timescale_analytics_readers '[{name="analytics_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxy",connection_limit=5}]'

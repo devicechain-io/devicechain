@@ -57,7 +57,16 @@
 #    the chart's schema accepts, because Grafana refuses a uid over 40 characters
 #    — and fails on a duplicate uid or data key across the pair, a uid too long,
 #    a board whose `namespace` variable is not a hidden constant naming its own
-#    instance, or a ConfigMap without that instance's `grafana_folder`.
+#    instance's NAMESPACE, two instances sharing one namespace, or a ConfigMap
+#    without that instance's `grafana_folder`.
+#
+#    🔴 THE NAMESPACE IS NOT THE INSTANCE ID. It was, and this check asserted the
+#    id, until an instance's namespace gained its `dci-` prefix; the id still names
+#    the ConfigMap, the data key, the folder and the uid hash input. So the expected
+#    value is not reconstructed from the id here — it is read from the Deployments in
+#    the same render, which is the namespace whose label the instance's own series
+#    actually carry, and is therefore an assertion about what the board READS rather
+#    than about a naming convention.
 #
 # 🔴 IF A TOOL IS MISSING THIS HARD FAILS. A checker that cannot parse must not
 # report; "skipped because python3 was absent" and "no problems found" must
@@ -335,6 +344,7 @@ UID_MAX = 40
 problems = []
 uids = {}      # uid -> [(instance, key)]
 all_keys = {}  # data key -> [instance]
+scopes = {}    # namespace a board scopes itself to -> [instance]
 boards = 0
 
 for inst in ids:
@@ -342,6 +352,33 @@ for inst in ids:
     found_names, found_keys = set(), set()
     with open(os.path.join(render_dir, inst + ".yaml"), encoding="utf-8") as fh:
         docs = [d for d in yaml.safe_load_all(fh) if d]
+
+    # 🔑 THE NAMESPACE A BOARD MUST NAME IS READ OUT OF THIS RENDER, NOT DERIVED FROM
+    # THE ID. Every panel filters namespace="$namespace" against series whose
+    # `namespace` label is the Kubernetes namespace of the POD that emitted them, so
+    # the only value that makes a board read its own instance is the namespace that
+    # instance's workloads are in. That used to be the instance id and is now `dci-`
+    # plus the id, and an assertion written against either spelling is an assertion
+    # about the naming convention rather than about what the board reads. Taking it
+    # from the Deployments in the same render asks the question that actually matters
+    # and survives the next rename without being weakened for it.
+    #
+    # 🔴 NOT the dashboard ConfigMap's own metadata.namespace, which is the obvious
+    # source and the useless one: the template writes that and the board's constant
+    # from the SAME expression, so comparing them compares a value with itself and
+    # holds however wrong they both are.
+    workload_ns = sorted({(d.get("metadata") or {}).get("namespace")
+                          for d in docs if d.get("kind") == "Deployment"} - {None, ""})
+    if len(workload_ns) != 1:
+        problems.append(
+            "WORKLOAD-NAMESPACE: instance %s renders its Deployments into %s.\n"
+            "    Exactly one namespace is expected -- it is what every board must scope itself\n"
+            "    to, and with none (or several) there is no single right answer to hold the\n"
+            "    boards to, so the namespace check below would be asserting nothing."
+            % (inst, json.dumps(workload_ns)))
+        continue
+    scope_ns = workload_ns[0]
+
     for doc in docs:
         # The dashboard ConfigMaps, identified by the sidecar label rather than by
         # a name pattern -- matching on the name would make this circular.
@@ -379,16 +416,21 @@ for inst in ids:
             ns = [v for v in (board.get("templating") or {}).get("list") or []
                   if isinstance(v, dict) and v.get("name") == "namespace"]
             ok = (len(ns) == 1 and ns[0].get("type") == "constant" and ns[0].get("hide") == 2
-                  and ns[0].get("query") == inst
-                  and (ns[0].get("current") or {}).get("value") == inst)
+                  and ns[0].get("query") == scope_ns
+                  and (ns[0].get("current") or {}).get("value") == scope_ns)
             if not ok:
                 problems.append(
                     "NAMESPACE: %s does not scope itself to its instance. Want exactly one\n"
                     "    `namespace` template variable, a hidden constant (type constant, hide 2) whose\n"
-                    "    query and current value are %r; found %s.\n"
+                    "    query and current value are %r -- the namespace this instance's Deployments\n"
+                    "    are in, which is where its pods' series carry that label; found %s.\n"
                     "    Every panel filters namespace=\"$namespace\", so this is what decides which\n"
-                    "    instance's series the board reads."
-                    % (where, inst, json.dumps(ns)))
+                    "    instance's series the board reads. Note the instance id (%r) is NOT the\n"
+                    "    answer: it still names the ConfigMap, the folder, the data key and the uid\n"
+                    "    hash input, but a board scoped to it reads a namespace nothing runs in."
+                    % (where, scope_ns, json.dumps(ns), inst))
+            elif len(ns) == 1:
+                scopes.setdefault(ns[0].get("query"), set()).add(inst)
 
     want_names = {p.replace("{instance}", inst) for p in names}
     want_keys = {p.replace("{instance}", inst) for p in keys}
@@ -415,6 +457,19 @@ for key, insts in sorted(all_keys.items()):
             "    The sidecar writes every data key to one directory, so these are one file:\n"
             "    deleting either instance's ConfigMap deletes the other's board."
             % (key, ", ".join(insts)))
+# The per-board check above holds each instance's boards to that instance's OWN render,
+# which is right and is blind in one direction: if the chart put two instances' workloads
+# in ONE namespace, every board would still match the namespace its own render named, and
+# every board would read both instances' series. Only the comparison ACROSS the two
+# renders can see it, which is the same argument DUPLICATE-UID and DUPLICATE-KEY make.
+for scope, insts in sorted(scopes.items(), key=lambda kv: str(kv[0])):
+    if len(insts) > 1:
+        problems.append(
+            "SHARED-NAMESPACE: instances %s both scope their boards to namespace %r.\n"
+            "    Their workloads are therefore in one namespace, so every panel's\n"
+            "    namespace=\"$namespace\" filter selects BOTH instances' series and each\n"
+            "    instance's boards read the other's data."
+            % (", ".join(sorted(insts)), scope))
 
 if not problems:
     print("    %d dashboard ConfigMap(s) across 2 instances (ids of %s characters): names and\n"
@@ -696,6 +751,41 @@ PY
   plant "$tpl" '.Files.Glob "dashboards/*.json"' '.Files.Glob "dashboards/c*.json"'
   expect_configmaps KEY-MISSING "a pinned dashboard that no longer renders"
 
+  # Case 17 — A BOARD SCOPED TO THE INSTANCE ID INSTEAD OF ITS NAMESPACE, alone.
+  #
+  # 🔴 THIS IS THE CHECK'S OWN OLD PREMISE, PLANTED BACK. Until an instance's namespace
+  # gained its `dci-` prefix the id and the namespace were one string, and the assertion
+  # above was written against the id — so the two spellings parting company is the one
+  # regression the previous version of this case structurally could not see. The board
+  # still has exactly one hidden constant `namespace` variable, its uid, title, folder,
+  # ConfigMap name and data key are all untouched, and every panel's
+  # namespace="$namespace" filter now names a namespace nothing runs in: the board is
+  # empty, for ever, silently. Only comparing against the render's own Deployments
+  # catches it, which is what this case is here to prove is what happens.
+  plant "$tpl" '{{- $ns := include "devicechain.instanceNamespace" . }}' '{{- $ns := $id }}'
+  expect_configmaps NAMESPACE "a board scoped to the instance id rather than to its namespace"
+
+  # Case 18 — EVERY INSTANCE IN ONE NAMESPACE, alone, and it is the case the per-board
+  # assertion cannot take. The namespace helper stops varying by instance, so both
+  # renders put their workloads in one namespace AND both boards name it — each board
+  # still agrees with its own render, so every per-instance check holds. What is wrong
+  # is only visible ACROSS the two: both instances' pods emit series carrying the same
+  # namespace label, so each instance's boards read the other's data. Same argument as
+  # DUPLICATE-UID and DUPLICATE-KEY, on the axis this prefix introduced.
+  #
+  # It mutates _helpers.tpl rather than $tpl, so it keeps and restores that file itself;
+  # expect_configmaps only puts $tpl back.
+  helpers="$chart/templates/_helpers.tpl"
+  cp "$helpers" "$tmp/keep-helpers.tpl"
+  plant "$helpers" '{{- printf "dci-%s" .Values.instance.id -}}' '{{- printf "dci-shared" -}}'
+  expect_configmaps SHARED-NAMESPACE "one namespace shared by every instance"
+  cp "$tmp/keep-helpers.tpl" "$helpers"
+  # The restore is load-bearing: everything after this renders the chart, and a helper
+  # left mutated would make the next case pass or fail for a reason that is not its own.
+  check_configmaps "$chart" >/dev/null ||
+    fail "the chart did not pass again after restoring _helpers.tpl, so every case below
+would be measuring the leftover mutation rather than its own"
+
   # Case 16 — A BOARD WITH NO `namespace` VARIABLE, alone. This one is refused
   # by the TEMPLATE, not by the checker above: without the variable there is
   # nothing to replace with the instance's constant, and every panel's
@@ -722,7 +812,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 15 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 17 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

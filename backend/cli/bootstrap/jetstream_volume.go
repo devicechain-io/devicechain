@@ -57,7 +57,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 		// the apply itself will report the connection problem far better.
 		return nil
 	}
-	sts, err := typed.AppsV1().StatefulSets(instanceNamespace(st.Instance)).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+	sts, err := typed.AppsV1().StatefulSets(InstanceNamespace(st.Instance)).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
 	if err != nil {
 		// Not found is the overwhelmingly likely case: a fresh install. Any other
 		// error (RBAC, transient) is not worth blocking a bootstrap over.
@@ -86,7 +86,7 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 				"%s: at %s the reservation sits exactly on its headroom floor, so the platform "+
 				"cannot add a stream or bucket without moving this volume",
 			have.String(), want.String(),
-			natsStatefulSetName, instanceNamespace(st.Instance), want.String(),
+			natsStatefulSetName, InstanceNamespace(st.Instance), want.String(),
 			have.String(), want.String(), have.String())
 	}
 	return nil
@@ -108,22 +108,6 @@ func jetStreamStorageFor(st *State) string {
 	}
 	return ""
 }
-
-// infraNamespace is the CLUSTER's namespace: where the cluster root installs what every
-// instance shares — the relational store, the object store — and where the cluster-owned
-// credentials and the install record live. It mirrors the cluster root's `namespace`
-// default; dcctl does not override it.
-const infraNamespace = "dc-system"
-
-// instanceNamespace is an INSTANCE's namespace: its broker, its event store, its services
-// and every credential it owns. It is the instance id.
-//
-// 🔴 TWO FUNCTIONS, NOT ONE CONSTANT AND A HABIT. The broker and the event store lived
-// in infraNamespace until each instance got a namespace of its own, and every reference
-// to them was spelled `infraNamespace` — which reads exactly as well as the right answer.
-// Naming the instance's namespace separately is what makes the wrong one visible in a
-// diff.
-func instanceNamespace(instance string) string { return instance }
 
 // embeddedJetStreamStorageDefault extracts the nats_jetstream_storage default from
 // the embedded OpenTofu variables.tf, or "" if it cannot be found.

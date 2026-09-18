@@ -68,14 +68,14 @@ tests:
   - name: a single stranded claim still pages
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x9 1+0x120"
       # The other two counters stay flat, so their rules must stay silent. A
       # group where everything fires together carries no more information than
       # a group where nothing does.
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x130"
     alert_rule_test:
       # The 5m `for` from the side that can be wrong: the strand lands at minute
@@ -153,11 +153,11 @@ tests:
   - name: one failed presence read is not a gate that has stopped gating
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x9 1+0x120"
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x130"
     alert_rule_test:
       - eval_time: 15m
@@ -187,11 +187,11 @@ tests:
   - name: a presence gate that has stopped gating pages
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x9 1+1x120"
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x130"
     alert_rule_test:
       # Errors start at minute 10; the 15m `for` cannot be satisfied by minute
@@ -240,13 +240,13 @@ tests:
   - name: a standing reserve-bound refusal rate pages
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x9 1+1x120"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
         values: "0+0x9 5+5x120"
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
     alert_rule_test:
       # Refusals start at minute 10 and the 30m `for` runs against a 15m window,
@@ -298,17 +298,17 @@ tests:
   - name: ceiling-bound refusals alone must not blame the reserve
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="ceiling"}'
         values: "0+0x9 10+10x120"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="DEVICE_NOT_FOUND", bound="none"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="DEVICE_NOT_FOUND", bound="none"}'
         values: "0+0x9 3+3x120"
       # Present and flat: the reserve is attributed nothing at all, which is
       # different from the series being absent.
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
     alert_rule_test:
       - eval_time: 60m
@@ -340,18 +340,18 @@ tests:
   - name: an idle instance raises nothing, and a neighbour's incident is not ours
     interval: 1m
     input_series:
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery"}'
         values: "0+0x130"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-abcde", job="devicechain/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+0x130"
       # A different DeviceChain instance in the same Prometheus, on fire.
-      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_claims_stranded_total{namespace="dci-other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
         values: "0+7x130"
-      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
+      - series: 'devicechain_commanddelivery_command_delivery_presence_read_errors_total{namespace="dci-other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery"}'
         values: "0+11x130"
-      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
+      - series: 'devicechain_commanddelivery_batch_refusals_total{namespace="dci-other-instance", pod="other-command-delivery-1", job="other-instance/command-delivery", code="HELD_CEILING_EXCEEDED", bound="reserve"}'
         values: "0+13x130"
     alert_rule_test:
       - eval_time: 60m

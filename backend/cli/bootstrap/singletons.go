@@ -53,7 +53,7 @@ var readClusterSingletons = func(ctx context.Context, kubeContext, instance, hos
 // singletonsFrom is readClusterSingletons' decision, with no cluster in it.
 func singletonsFrom(svcs []corev1.Service, ings []networkingv1.Ingress, instance, host string) clusterSingletons {
 	var out clusterSingletons
-	own := instanceNamespace(instance)
+	own := InstanceNamespace(instance)
 	for _, s := range svcs {
 		if s.Namespace == own {
 			continue
@@ -180,7 +180,7 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 			wouldDo("REFUSE: " + refusal.Error())
 		case err != nil:
 			wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
-				"read failed (%v), and a real run would stop here", instanceNamespace(st.Instance), err))
+				"read failed (%v), and a real run would stop here", InstanceNamespace(st.Instance), err))
 		}
 		return nil
 	}

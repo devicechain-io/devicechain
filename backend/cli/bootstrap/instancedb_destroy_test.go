@@ -27,7 +27,7 @@ func stubRemoveInstanceDatabase(t *testing.T, fn func(ctx context.Context, kubeC
 }
 
 func anInstanceLoginSecret() *corev1.Secret {
-	return mintedSecret("acme", "dci-acme-rdb-credentials", testUID,
+	return mintedSecret(InstanceNamespace("acme"), "dci-acme-rdb-credentials", testUID,
 		map[string]string{"username": "acme", "password": "pw"})
 }
 
@@ -50,7 +50,7 @@ func TestAnInstanceDestroyDropsItsLoginThroughTheRecordedStore(t *testing.T) {
 	if gotInstance != "acme" || got != aRelationalStore() {
 		t.Errorf("dropped %q through %+v, want acme through the recorded store", gotInstance, got)
 	}
-	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets(InstanceNamespace("acme")).Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("the login's Secret survived a successful drop: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestAFailedDropKeepsTheLoginsSecret(t *testing.T) {
 	if _, err := removeInstanceRelationalLogin(context.Background(), c, "kind-x", "acme"); err == nil {
 		t.Fatal("a failed drop was reported as success")
 	}
-	if _, err := c.CoreV1().Secrets("acme").Get(context.Background(), "dci-acme-rdb-credentials",
+	if _, err := c.CoreV1().Secrets(InstanceNamespace("acme")).Get(context.Background(), "dci-acme-rdb-credentials",
 		metav1.GetOptions{}); err != nil {
 		t.Errorf("the login's Secret was removed although its login was not: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAnUpgradeOfAnInstanceWithNoLoginSaysRebuildNotRestore(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
 	writeInstallThenBootstrapSecrets(t, c, st)
-	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
+	if err := c.CoreV1().Secrets(InstanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 		return true
 	})
 	for _, name := range []string{"helmUninstall", "destroyInstanceInfrastructure", "removeInstanceRelationalLogin",
-		"removeInstanceNamespace", "waitForNamespaceGone"} {
+		"removeInstanceNamespaces", "waitForNamespaceGone"} {
 		if _, ok := pos[name]; !ok {
 			t.Fatalf("uninstallInstance no longer calls %s; an instance destroy would leave its "+
 				"database and login on the shared store", name)
@@ -164,12 +164,28 @@ func TestAnInstanceDestroyDropsItsDatabaseAfterUninstalling(t *testing.T) {
 	if pos["destroyInstanceInfrastructure"] < pos["helmUninstall"] || pos["removeInstanceRelationalLogin"] < pos["destroyInstanceInfrastructure"] {
 		t.Error("tofu destroy is not between the chart uninstall and the database drop")
 	}
-	if pos["waitForNamespaceGone"] < pos["removeInstanceNamespace"] {
+	if pos["waitForNamespaceGone"] < pos["removeInstanceNamespaces"] {
 		t.Error("the namespace is waited on before it is deleted")
 	}
-	if pos["removeInstanceNamespace"] < pos["removeInstanceRelationalLogin"] {
+	if pos["removeInstanceNamespaces"] < pos["removeInstanceRelationalLogin"] {
 		t.Error("the namespace is deleted before the drop, taking the login's Secret with it before the " +
 			"drop can report whether it succeeded")
+	}
+	// 🔴🔴 EVERY NAME AN ORDERING CHECK READS HAS TO BE ONE THE PRESENCE LOOP PROVED IS
+	// THERE, AND NOTHING ABOVE MAKES THAT TRUE ON ITS OWN. `pos` is a map, so a name that
+	// is not in it reads as token.Pos(0) — before everything — which makes
+	// `pos[a] < pos[missing]` false and the check pass having compared nothing.
+	//
+	// Not hypothetical: renaming the namespace removal to its plural left exactly these two
+	// lines reading a key that was no longer in the map, and both went quietly green while
+	// the presence loop above went red. The loop is what caught the rename; these would not
+	// have. Tying the two lists together here is what stops the next rename being silent.
+	for _, name := range []string{"waitForNamespaceGone", "removeInstanceNamespaces",
+		"removeInstanceRelationalLogin", "destroyInstanceInfrastructure", "helmUninstall"} {
+		if _, ok := pos[name]; !ok {
+			t.Fatalf("an ordering check above reads pos[%q], which this test never proved is "+
+				"present: that comparison is against Pos(0) and cannot fail", name)
+		}
 	}
 }
 
@@ -255,7 +271,7 @@ func TestAnUpgradeOfAnInstanceStillInTheSharedNamespaceSaysSo(t *testing.T) {
 	st := aWritableState()
 	c := fake.NewSimpleClientset()
 	writeInstallThenBootstrapSecrets(t, c, st)
-	if err := c.CoreV1().Secrets(instanceNamespace(st.Instance)).Delete(context.Background(),
+	if err := c.CoreV1().Secrets(InstanceNamespace(st.Instance)).Delete(context.Background(),
 		instanceRdbSecretName(st.Instance), metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}

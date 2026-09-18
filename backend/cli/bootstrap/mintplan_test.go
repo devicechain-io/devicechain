@@ -214,7 +214,7 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 		// The shared store's credentials are the cluster's; the event store's, the instance's.
 		wantNS := infraNamespace
 		if name == "dc-tsdb-app-credentials" {
-			wantNS = "acme"
+			wantNS = InstanceNamespace("acme")
 		}
 		if s.Namespace != wantNS {
 			t.Errorf("%s is planned for namespace %q, want %q", name, s.Namespace, wantNS)
@@ -227,7 +227,7 @@ func TestEachSecretCarriesTheKeysItsReaderExpects(t *testing.T) {
 	if !ok {
 		t.Fatal("the instance's own relational login is missing from the plan")
 	}
-	if login.Namespace != "acme" {
+	if login.Namespace != InstanceNamespace("acme") {
 		t.Errorf("the instance's login Secret is planned for namespace %q, want the instance's own", login.Namespace)
 	}
 	if login.Data[secretKeyUsername] != "acme" || login.Data[secretKeyPassword] == "" {
@@ -320,8 +320,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 		},
 		// The event store is the instance's, and CloudNativePG reads a Cluster's
 		// credentials from the Cluster's own namespace.
-		"acme/dc-tsdb-app-credentials": {
-			keys: []string{"username", "password"}, namespace: "acme",
+		InstanceNamespace("acme") + "/dc-tsdb-app-credentials": {
+			keys: []string{"username", "password"}, namespace: InstanceNamespace("acme"),
 			typ: "kubernetes.io/basic-auth",
 		},
 		// Read by the object store's own container, and by the relational store's
@@ -332,8 +332,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 		},
 		// ...and by the event store's backup plugin, which resolves the same name in
 		// the event store's namespace.
-		"acme/dc-object-store-credentials": {
-			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: "acme",
+		InstanceNamespace("acme") + "/dc-object-store-credentials": {
+			keys: []string{"MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD"}, namespace: InstanceNamespace("acme"),
 			typ: "Opaque",
 		},
 	}
@@ -361,7 +361,8 @@ func TestTheSecretNamesAndKeysAreTheOnesTheirReadersUse(t *testing.T) {
 	}
 
 	// The reload label is likewise a literal the database operator matches on.
-	for _, name := range []string{"dc-system/dc-rdb-app-credentials", "acme/dc-tsdb-app-credentials"} {
+	for _, name := range []string{"dc-system/dc-rdb-app-credentials",
+		InstanceNamespace("acme") + "/dc-tsdb-app-credentials"} {
 		if byName[name].Labels["cnpg.io/reload"] != "true" {
 			t.Errorf("%s does not carry cnpg.io/reload=true", name)
 		}
@@ -449,9 +450,17 @@ func TestNoMintedCredentialIsPlacedInTwoSecrets(t *testing.T) {
 		if field == "" {
 			continue
 		}
+		// 🔑 THE NAMESPACE IS DERIVED HERE AND THE SECRET NAME IS NOT, and the asymmetry
+		// is deliberate. What this exemption means is "the same Secret, in the instance's
+		// OWN namespace", so the namespace comes from the function that decides what that
+		// is, while the name stays a literal comparison between the two places. This line
+		// used to spell the namespace out as the instance id, which was the same string
+		// until an instance's namespace gained a prefix — at which point it stopped
+		// exempting the pair it was written for and began reporting it.
+		ownNamespace := InstanceNamespace(st.Instance) + "/"
 		places := where[field]
-		if len(places) == 2 && strings.HasPrefix(places[1], "acme/") &&
-			strings.TrimPrefix(places[0], "dc-system/") == strings.TrimPrefix(places[1], "acme/") {
+		if len(places) == 2 && strings.HasPrefix(places[1], ownNamespace) &&
+			strings.TrimPrefix(places[0], "dc-system/") == strings.TrimPrefix(places[1], ownNamespace) {
 			continue // the cluster's archive credential and the instance's copy of it
 		}
 		if len(places) > 1 {
@@ -541,7 +550,7 @@ func TestABootstrapMintsNoClusterOwnedCredential(t *testing.T) {
 		t.Fatal("resolving read no Secret at all, so the check below is vacuous")
 	}
 	for _, r := range *reads {
-		if !strings.HasPrefix(r, instanceNamespace(st.Instance)+"/") {
+		if !strings.HasPrefix(r, InstanceNamespace(st.Instance)+"/") {
 			t.Errorf("a bootstrap looked for %s to reuse; only its own instance's credentials are its to settle", r)
 		}
 	}

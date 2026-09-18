@@ -230,8 +230,23 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 		return nil
 	}
 
+	// 🔴 THE NAMESPACE EARNS A COLUMN NOW THAT IT IS NOT THE INSTANCE NAME. While the two
+	// were one string this would have printed the first column twice; since an instance's
+	// namespace became its id behind a prefix it is a second fact, and not one an operator
+	// can derive by eye from a name they typed. This table is also what `dcctl destroy
+	// --all` prints as its confirmation prompt — the last thing anybody reads before a bulk
+	// teardown — and what they are approving is the removal of these namespaces.
+	//
+	// 🔑 DERIVED, NOT READ FROM THE CLUSTER, AND THE LIMIT OF THAT IS WORTH STATING. It is
+	// the namespace THIS dcctl would act on, which is the useful thing to show beside a
+	// status saying what is there — but an instance built before instance namespaces
+	// carried a prefix lives in the unprefixed one, and nothing in this row would say so:
+	// the status reads the local marker, the cluster probe and the declaration's phase, and
+	// none of them looks at a namespace. Such a row shows a namespace that does not exist.
+	// Destroy handles both names, so the teardown is right either way; it is this CELL that
+	// would be wrong, and a reader must not take it for a probe.
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "INSTANCE\tPROVIDER\tCLUSTER\tCONTEXT\tSTATUS")
+	fmt.Fprintln(w, "INSTANCE\tNAMESPACE\tPROVIDER\tCLUSTER\tCONTEXT\tSTATUS")
 	for _, k := range known {
 		provider, cluster, kubeContext := "?", "?", "?"
 		if k.HasRecord {
@@ -242,7 +257,8 @@ func runInstancesList(ctx context.Context, out *os.File) error {
 			}
 			kubeContext = k.Record.KubeContext
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", k.Instance, provider, cluster, kubeContext, instanceStatus(ctx, k, liveProbes))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", k.Instance, bootstrap.InstanceNamespace(k.Instance),
+			provider, cluster, kubeContext, instanceStatus(ctx, k, liveProbes))
 	}
 	return w.Flush()
 }

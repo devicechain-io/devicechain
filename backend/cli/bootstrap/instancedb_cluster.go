@@ -360,7 +360,7 @@ func removeInstanceRelationalLogin(ctx context.Context, typed kubernetes.Interfa
 		return "", err
 	}
 	name := instanceRdbSecretName(instance)
-	ns := instanceNamespace(instance)
+	ns := InstanceNamespace(instance)
 	if err := typed.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil &&
 		!apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("deleting Secret %s/%s after dropping the login it held: %w", ns, name, err)
