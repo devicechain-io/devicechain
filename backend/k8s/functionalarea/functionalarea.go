@@ -176,9 +176,10 @@ var catalog = map[FunctionalArea]Manifest{
 		// dead without the area that RESOLVES what it produces (device-management,
 		// Hard, its designed contract). It is an OPT-IN edge
 		// area — held back from ProfileDefault (a Sparkplug deployment is a
-		// deliberate topology choice, and until the ADR-070 lease lands it runs as a
-		// single non-HA instance), shipped by ProfileFull, or named explicitly in
-		// enabledFunctionalAreas. It produces onto inbound-events and consumes
+		// deliberate topology choice, and it runs as ONE instance because a Sparkplug
+		// Host owns per-node alias/seq/session state — the ADR-070 fenced lease makes
+		// REPLACEMENT safe, not a warm standby correct), shipped by ProfileFull, or
+		// named explicitly in enabledFunctionalAreas. It produces onto inbound-events and consumes
 		// nothing, so it declares no consumer of its own as a Hard edge.
 		Area:     SparkplugIngest,
 		HardDeps: []FunctionalArea{DeviceManagement},

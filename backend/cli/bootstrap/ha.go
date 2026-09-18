@@ -196,10 +196,11 @@ func (h haTopology) summary() string {
 //
 // 🔴 BUT IT IS BEST-EFFORT ON A DRY RUN, AND ONLY THERE. A dry run does not
 // create a cluster — EnsureCluster returns a binding and stops (local.go) — so
-// `bootstrap local x --ha --dry-run` on a machine with no cluster reached this
-// check, failed to connect, and died with a connection error instead of printing
-// the plan. That is the rehearsal breaking for the case it serves best: the run
-// before the cluster exists. The asymmetry is the same one readLiveArchiveState
+// `bootstrap local x --ha --dry-run` (as HA was asked for then; today it is the
+// cluster's setting, read from the install record) on a machine with no cluster
+// reached this check, failed to connect, and died with a connection error instead
+// of printing the plan. That is the rehearsal breaking for the case it serves best:
+// the run before the cluster exists. The asymmetry is the same one readLiveArchiveState
 // draws two files over, for the same reason — being unable to READ costs nothing
 // when nothing will be applied. The COUNTING result is still fatal on a dry run:
 // if the cluster answers and cannot host the topology, that is the finding.
@@ -346,13 +347,18 @@ type outputReader interface {
 //
 // THE ASYMMETRY THIS FIXES. Raising the topology has two guards (node capacity,
 // broker capability). Lowering it had none — and lowering it is the destructive
-// direction. `--ha` is not persisted anywhere: State.HA lives for one process, and
-// OpenTofu resolves an unpassed variable to its DEFAULT rather than to whatever
-// the last apply used. So `dcctl bootstrap local prod --host new.example.com` on
-// an instance that was built with `--ha` resolves to one server and scales the
-// StatefulSet 3 -> 1. (Emitting nothing would not help: the defaults derive 1 the
-// same way. The exposure is inherent to gaining the ability to build the cluster
-// at all.)
+// direction. When this was written `--ha` was a bootstrap flag persisted nowhere:
+// State.HA lived for one process, and OpenTofu resolves an unpassed variable to its
+// DEFAULT rather than to whatever the last apply used, so a re-run without the flag
+// resolved to one server and scaled the StatefulSet 3 -> 1. HA is the CLUSTER's
+// setting now — `dcctl install --ha` records it and every bootstrap follows the
+// record (FollowInstall) — and a bootstrap over a built instance is refused outright
+// (stepRefuseRebuild), so that route is closed. What can still shrink the broker is
+// an instance root applied by something other than dcctl (a terraform.tfvars in its
+// directory), or a cluster whose record was changed underneath its instances, and
+// this guard is what stands between either and a quorumless RAFT group. (Emitting
+// nothing would not help: the defaults derive 1 the same way. The exposure is
+// inherent to gaining the ability to build the cluster at all.)
 //
 // What makes that unrecoverable rather than merely wrong: the streams and buckets
 // are still R3, and a 3-replica RAFT group with one surviving peer has no quorum —
@@ -412,7 +418,9 @@ func haTeardownRefusal(want haTopology, appliedServers int, known bool) error {
 			"KV buckets are replicated across those %d servers, so shrinking to %d leaves every "+
 			"RAFT group without a quorum: no writes, no stream creation, and no way back by "+
 			"re-running, because the services deliberately never de-replicate a stream. "+
-			"If you meant to keep this instance highly available, pass --ha. If you really "+
+			"If you meant to keep this instance highly available, its cluster has to be recorded "+
+			"as --ha (`dcctl install`): this instance follows that record, not a flag of its own. "+
+			"If you really "+
 			"intend to collapse it, de-replicate the streams FIRST (`nats stream update -r 1`, "+
 			"while a quorum still exists to accept it) or destroy the instance outright",
 		appliedServers, want.ServerReplicas, appliedServers, want.ServerReplicas)

@@ -31,7 +31,9 @@ the Helm release that runs them.
 
 A DeviceChain release is one version across the service images, the Helm chart,
 the operator and dcctl. This command moves all of them together, in the order
-they have to move in — the operator and its CRDs first, then the services.
+they have to move in — the operator and its CRDs first, then the services. The
+operator and its CRDs are cluster-scoped and shared by every instance on the
+cluster, so moving them here moves them for all of them.
 
 It mints no credentials. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the

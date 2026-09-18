@@ -22,10 +22,12 @@ import (
 //
 // THE BUG THIS EXISTS FOR
 //
-// The infrastructure apply installs the CNPG operator and creates the two
-// database Clusters in ONE graph. Helm's wait returns when the operator's
-// Deployment reports readyReplicas=1 — which is not the same instant its
-// admission webhook can be called. The webhook's ClusterIP is not routable
+// The cluster root installs the CNPG operator and creates the shared relational-store
+// Cluster in ONE graph (the instance root creates the event-store Cluster later, in
+// an apply of its own — see applyWithCNPGAdmissionRetry for why it keeps the retry
+// anyway). Helm's wait returns when the operator's Deployment reports
+// readyReplicas=1 — which is not the same instant its admission webhook can be
+// called. The webhook's ClusterIP is not routable
 // until the EndpointSlice is written and every kube-proxy on the path has
 // re-synced, and the path that matters is the API SERVER's, which on EKS/GKE is
 // not even a node we can see. So the Cluster creates can land in a window where
@@ -35,8 +37,9 @@ import (
 //	failed to call webhook: Post "https://cnpg-webhook-service...":
 //	dial tcp 10.96.33.253:443: connect: connection refused
 //
-// Measured on a cold `--compact` bootstrap: operator pod Ready at 02:24:38, both
-// Cluster releases attempted at 02:24:38, refused. It is a race — one failure in
+// Measured on a cold `--compact` bootstrap, back when one root held both Clusters:
+// operator pod Ready at 02:24:38, both Cluster releases attempted at 02:24:38,
+// refused. It is a race — one failure in
 // two cold runs — which is exactly what makes it dangerous: it passes CI and
 // bites a customer.
 //
@@ -58,9 +61,13 @@ import (
 // no image, no NetworkPolicy hole and no PodSecurity exception. Nothing is
 // persisted: dry-run runs the full admission chain and discards the result.
 //
-// It also needs no privilege the bootstrap does not already exercise, and that is
-// why the probe runs in infraNamespace rather than `default`: creating a Cluster
-// THERE is exactly the operation that just failed. Probing `default` would have
+// It also needs no privilege dcctl does not already exercise, and that is why the
+// probe runs in infraNamespace rather than `default`: it is where the cluster root
+// creates its Cluster — for that root's retry, exactly the operation that just
+// failed — and a namespace every dcctl run already writes into. (The instance
+// root's Cluster lands in the instance's own namespace; the probe stays here
+// because what it measures, whether the API server can reach the webhook, is not
+// a per-namespace fact — see cnpgProbeNamespace.) Probing `default` would have
 // added one permission an installer role scoped to the DeviceChain namespaces —
 // an ordinary least-privilege setup on EKS — would not grant, turning a working
 // gate into an unmeasurable one.
@@ -84,8 +91,11 @@ const (
 	// effective cadence is slower than this and that is fine.
 	cnpgAdmissionPoll = 3 * time.Second
 	// cnpgProbeNamespace is where the throwaway Cluster is dry-run created: the
-	// namespace the real Clusters live in, so the probe needs no privilege the
-	// apply itself does not.
+	// namespace the shared relational-store Cluster lives in, so the probe needs no
+	// privilege the cluster root's apply does not. The instance root's retry probes
+	// here too rather than in the instance's namespace, because the question is
+	// whether the API server can reach the webhook at all, and no namespace changes
+	// that answer.
 	//
 	// The CNPG webhooks carry an EMPTY namespaceSelector (verified against a live
 	// install), so any namespace reaches them — but a probe in a namespace the

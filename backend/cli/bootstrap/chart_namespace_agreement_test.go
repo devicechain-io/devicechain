@@ -63,8 +63,8 @@ import (
 const (
 	// The instance id under test. `acme` is deliberately a string that turns up
 	// INSIDE other rendered strings — `dci-acme-config`, `acme-outbound-connectors-
-	// egress`, `devicechain-acme` — and, once the prefix lands, the namespace
-	// `dci-acme` is itself a prefix of `dci-acme-config`. Everything below compares
+	// egress`, `devicechain-acme` — and the namespace `dci-acme` is itself a prefix
+	// of `dci-acme-config` (instanceNamespacePrefix). Everything below compares
 	// with equality for that reason; nothing here asks whether a string CONTAINS the
 	// id.
 	nsTestInstanceID = "acme"

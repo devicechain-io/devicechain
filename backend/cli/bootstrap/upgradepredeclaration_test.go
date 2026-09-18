@@ -242,7 +242,8 @@ func TestTheHydrationReturnsTheRefusalTheClusterEarns(t *testing.T) {
 }
 
 // An upgrade run without a provider still has to print a recipe somebody can read. The
-// placeholder is the same one ErrSecondInstance uses; a bare hole is worse.
+// placeholder is the one every refusal recipe in this package prints for an unknown
+// provider; a bare hole is worse.
 func TestARecipeWithNoProviderReadsAsAPlaceholder(t *testing.T) {
 	err := &ErrPreDeclarationInstance{Instance: "upgrig", KubeContext: "kind-dev"}
 	if !strings.Contains(err.Error(), "dcctl destroy <provider> upgrig") {

@@ -150,7 +150,8 @@ var deliberatelyNotFenced = map[string]string{
 // that fails partway leaves two state files disagreeing about which one owns the
 // database, which is worse than either state alone. Recreating is honest: destroy
 // takes the instance's data with it, the operator is told that, and the shared
-// prerequisites are rebuilt by the cluster root on the next bootstrap.
+// prerequisites are rebuilt by `dcctl install` (the cluster root), which the next
+// bootstrap follows rather than re-applies.
 func checkNoPreSplitInfrastructure(ctx context.Context, tf stateLister, instance string) error {
 	found, err := stateAddressesPresent(ctx, tf, preSplitStateAddresses)
 	if err != nil {

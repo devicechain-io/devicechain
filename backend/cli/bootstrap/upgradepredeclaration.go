@@ -80,9 +80,10 @@ type ErrPreDeclarationInstance struct {
 func (e *ErrPreDeclarationInstance) Error() string {
 	provider := e.Provider
 	if provider == "" {
-		// The same placeholder ErrSecondInstance uses, for the same reason: a command
-		// printed with a hole in it is worse than one printed with something that reads
-		// as a hole.
+		// The same placeholder every other refusal recipe prints where the provider is
+		// not known (namespacefence.go, splitfence.go, helm.go), for the same reason: a
+		// command printed with a hole in it is worse than one printed with something
+		// that reads as a hole.
 		provider = "<provider>"
 	}
 	// 🔑 EVERY SOURCE LABEL IS A PLURAL NOUN PHRASE — "the instance declarations in this

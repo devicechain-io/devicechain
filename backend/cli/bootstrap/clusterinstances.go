@@ -219,8 +219,11 @@ func releasedInstances(cfg *action.Configuration) ([]string, error) {
 func ownedSecretInstances(ctx context.Context, typed kubernetes.Interface) ([]string, error) {
 	list, err := typed.CoreV1().Secrets(infraNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		// The namespace does not exist until the infrastructure apply creates it, so on
-		// a cluster this reader is asked about before that step it is simply absent.
+		// On any cluster a bootstrap or upgrade may touch, this namespace exists —
+		// `dcctl install` creates it before a pipeline runs, and every pre-split
+		// instance created it in its own apply — so an absent namespace is one deleted
+		// by hand. Reading that as "nothing minted here" is safe: the Secrets this
+		// source would have read went with it, and the sources either side still answer.
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}

@@ -126,12 +126,12 @@ For the local provider it creates a kind cluster (named by --cluster, default
 "devicechain") if there is none, or uses the one that exists. --kube-context installs
 into an existing cluster instead, which dcctl never creates or deletes.
 
-It installs what every instance on the cluster shares, in namespace dc-system: the
-CloudNativePG operator, the relational store, the backup object store, cert-manager,
-ingress and the monitoring stack. It creates the base database identity each
-instance's own login is made with, and records the install in the cluster. Every
-bootstrap follows that record: an instance on an --ha cluster is HA, an instance on a
---compact cluster is compact.
+It installs what every instance on the cluster shares: the relational store and the
+backup object store in namespace dc-system, and the CloudNativePG operator,
+cert-manager, ingress and the monitoring stack each in a namespace of its own. It
+creates the base database identity each instance's own login is made with, and
+records the install in the cluster. Every bootstrap follows that record: an instance
+on an --ha cluster is HA, an instance on a --compact cluster is compact.
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,

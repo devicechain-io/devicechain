@@ -105,8 +105,9 @@ func hydrateUpgradeState(
 	}
 	if deployed == nil {
 		// 🔴 A DECLARATION WITH NO DOCUMENT IS A BOOTSTRAP THAT DIED BEFORE ITS
-		// SEVENTH STEP. The declaration lands at step 4 and the document at step 7,
-		// so this state is reachable and it is not an upgrade's to repair: the
+		// NINTH STEP. The declaration lands at step 6 and the document at step 9
+		// (NewDefaultPipeline), so this state is reachable and it is not an upgrade's
+		// to repair: the
 		// credentials the half-built instance is holding were never written down
 		// anywhere this verb reads.
 		return nil, fmt.Errorf(
