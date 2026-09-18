@@ -29,14 +29,11 @@ const (
 	stateFileMode = 0o600
 )
 
-// applyInfra extracts the embedded OpenTofu config into a stable per-instance
-// working directory and runs init+apply through terraform-exec. The config (.tf
-// + modules) is refreshed from the binary on every run, but terraform.tfstate
-// lives in that directory and persists across runs so the apply is idempotent.
 // tofuGracefulStopBudget is how long a cancelled tofu is given to finish its
 // current operation and write state before it is killed. It must exceed the
-// longest single resource timeout in the infrastructure root (900s today) or the
-// kill lands in the middle of exactly the slow operation it was sized for.
+// longest single resource timeout in either root (900s today: the NATS and
+// CloudNativePG Cluster releases, and the monitoring stack in the cluster root)
+// or the kill lands in the middle of exactly the slow operation it was sized for.
 const tofuGracefulStopBudget = 20 * time.Minute
 
 // applyInfra brings this instance's own infrastructure up on a cluster `dcctl install`
@@ -121,6 +118,10 @@ type openedInstanceRoot struct {
 // openInstanceRoot extracts the instance root, initialises it, and runs every refusal
 // that reads its state. It changes nothing in the cluster, which is what lets
 // applyInfra run it before anything else.
+//
+// The root (.tf + modules) is re-extracted from the binary into a stable per-instance
+// working directory on every run; terraform.tfstate in that directory is what persists
+// across runs, and is what makes the apply idempotent.
 //
 // The caller owns hardening the state files under rootdir, and must register that
 // the moment this returns successfully; on an error return this hardens them itself.
@@ -602,12 +603,16 @@ func instanceRoot(instance string) (string, error) {
 // home for persistent bootstrap state (e.g. ~/.devicechain/instances/<instance>/<sub>),
 // creating it if necessary.
 //
-// 🔴 THE MODE IS THE PROTECTION, and it protects a file this code does not write.
+// 🔴 THE MODE IS THE PROTECTION, and it protects files this code does not write.
 // OpenTofu's local backend puts terraform.tfstate in here, and tfstate is not a
-// summary of the infrastructure — it is the infrastructure's values, in cleartext,
-// including the database superuser password and the NATS server's TLS PRIVATE KEY.
-// It was shipping at 0644 inside 0755 directories, so on any machine with a second
-// account those were readable by everyone on the box.
+// summary of the infrastructure — it is the infrastructure's values, in cleartext.
+// When this was written those included the database superuser password and the
+// NATS server's TLS PRIVATE KEY; both have since moved into dcctl-minted Secrets the
+// apply references by name (natstls.go, mintwrite.go), so the instance root's state
+// now holds bcrypt hashes, the CA's public certificate and the archive contract —
+// and broker-credentials.json beside it holds plaintexts (broker_record.go). It was
+// shipping at 0644 inside 0755 directories, so on any machine with a second account
+// those were readable by everyone on the box.
 //
 // Tightening the constant alone would have fixed only fresh installs: MkdirAll
 // applies its mode to directories it CREATES and silently leaves an existing one

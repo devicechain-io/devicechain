@@ -140,8 +140,12 @@ For brownfield fleets already speaking Sparkplug to their own broker.
   egress (`DCMD`), and it is not a gap waiting on work: a Sparkplug fleet sits on the
   *customer's* MQTT infrastructure, so nothing bridges the platform's command stream to it.
   A command issued to a Sparkplug device ends as `FAILED`, undeliverable — with two
-  qualifications worth knowing before you rely on it. It happens on the **delivery sweep**,
-  which runs every 30 seconds, not at the moment you enqueue it. And it requires the presence
+  qualifications worth knowing before you rely on it. The verdict is normally prompt, but it
+  is not synchronous with the enqueue: enqueueing a command triggers an immediate dispatch
+  attempt for that device, and when it is the device's only queued command the presence gate
+  fails it right away. If the device already has other commands queued, that attempt stands
+  down and the verdict lands on the next **delivery sweep**, which runs every 30 seconds by
+  default (configurable between 5 and 300). And it requires the presence
   gate to be **configured**: that gate needs the cross-service secret and a `device-state`
   endpoint, and without either it is off — it logs that it is off at startup — and the command
   dispatches like any other and ends as `TIMEOUT` instead.
@@ -189,8 +193,13 @@ For constrained devices over CoAP/UDP with DTLS.
   is not configurable, capped at 32 observations per registration, and observations **do not
   survive a leader failover** — presence is reconstructed, telemetry is re-established only as
   each device's registration renews.
-- Commands to a sleeping device are **held durably and drained** when it next checks in, which
-  is the one place the platform holds a command rather than requiring the device to be live.
+- Commands to a sleeping device are **held durably and drained** when it next checks in,
+  recorded as `PARKED`. That is the one place a command the transport has already tried to
+  deliver is kept for the device instead of being lost. It is not the platform's only hold:
+  for every transport — MQTT included, when the broker itself reports device presence — a
+  command whose device the transport asserts is absent is withheld as `HELD` before it is
+  published, and released when presence returns. See
+  [commands to a device that is away](../concepts/commands.md#commands-to-a-device-that-is-away).
 
 #### LwM2M operations in detail
 

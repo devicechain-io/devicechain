@@ -20,7 +20,7 @@ You choose which services to run with **either** a named profile **or** an expli
 | Profile | Functional areas |
 |---|---|
 | `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing — the standard system, and what an unset profile resolves to |
-| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, and `mcp`: the areas that reach outside the instance, each of which carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API) |
+| `full` | everything this build ships: `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest` and `lwm2m-ingest` — the areas held back from `default` because each carries a decision to make deliberately (a paid provider key, an egress surface, an agent-facing API, a Sparkplug B or LwM2M device transport that binds its own inbound port) |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -93,8 +93,47 @@ kubectl --context <kube-context> get instance <id> -o yaml
 ```
 
 Part of the spec is **immutable** once written — the cluster binding above all, because
-rewriting it would point `dcctl destroy` at a different cluster. The API server refuses
-those edits rather than `dcctl` checking for them.
+rewriting it would point `dcctl destroy` at a different cluster. Both layers refuse such
+an edit: the CRD carries the rules as validation expressions, so the API server rejects a
+hand edit made with `kubectl`, and `dcctl` compares the same fields against the
+declaration already in the cluster before it writes.
+
+### Reading the PHASE column {#phase}
+
+`kubectl get instances` prints a **PHASE** column, read from the declaration's
+`core.devicechain.io/phase` annotation. `dcctl instances list` — which works only on the
+machine that bootstrapped the instance, from its local records — reads the same annotation
+and renders it as words in its STATUS column.
+
+:::caution The phase is intent, not health
+It records what the **last `dcctl` run was trying to do**. Nothing that writes it has looked
+at a pod, which is why `dcctl instances list` never says `running`. To know whether the
+workloads are up, look at them: `kubectl get pods -n dci-<id>`.
+:::
+
+| PHASE | `dcctl instances list` STATUS | What it means |
+|---|---|---|
+| `Bootstrapping` | `bootstrap started, not finished` | `dcctl bootstrap` wrote the declaration and has not yet written a final phase. **This is also what a healthy bootstrap running right now in another terminal looks like.** |
+| `Upgrading` | `upgrade started, not finished` | The same, for `dcctl upgrade`. |
+| `Ready` | `declared ready` | The last bootstrap or upgrade finished. It says nothing about the pods today. |
+| `Failed` | `last run failed` | The last bootstrap or upgrade returned an error. |
+| `Destroying` | ``PART-WAY DESTROYED — re-run `dcctl destroy` `` | `dcctl destroy` started and did not finish. It writes this **before** deleting anything, so a destroy killed at any later point is visible here. |
+| *(blank)* | `declared, phase not recorded` | The declaration was written by a `dcctl` from before the annotation existed. |
+
+Before acting on `Bootstrapping` or `Upgrading`, check whether the run is still going: a
+live run rewrites the phase to `Ready` or `Failed` when it ends, including when it is
+interrupted with Ctrl+C. Only a run that never got to write its ending — a machine that lost
+power, a terminal that was killed — leaves one of these behind, and neither value blocks
+anything: `dcctl bootstrap` and `dcctl upgrade` run over them without complaint. The one
+phase the commands **act on** is `Destroying` (see the note below). A row that reads
+`declared, unknown phase "…"` was written by a newer `dcctl` than the one listing it.
+
+`dcctl instances list` answers a few things before it reaches the phase, and each gets its
+own words rather than a healthy one: `PART-WAY DESTROYED` from this machine's own destroy
+marker, even when the cluster cannot be reached; `cluster gone — stale local state`;
+`no record — destroy will guess the cluster` for an instance bootstrapped before the cluster
+was recorded; `cluster present, no declaration`; `declaration marked for deletion` (see
+[below](#finalizer)); and `could not check: …` whenever a probe failed or timed out.
 
 ### `kubectl delete instance` does not complete {#finalizer}
 
@@ -121,9 +160,11 @@ deletes the cluster itself, so this is the step that removes the declaration.
 Unless it fails only while removing the local state, after the declaration is already gone,
 it still records which cluster the instance lives in, which is what a re-run needs, and
 it reads `Destroying` rather than `Ready`, so the next reader can tell they are looking
-at a teardown in progress. `dcctl bootstrap` over such a declaration **refuses** rather
-than building half a new instance on top of half an old one; it tells you to finish the
-teardown first.
+at a teardown in progress. `dcctl bootstrap` and `dcctl upgrade` over such a declaration
+both **refuse** rather than building half a new instance on top of half an old one; the
+refusal tells you to finish the teardown with `dcctl destroy <id>`, which is resumable — or,
+if you are certain nothing of the instance remains, to drop the declaration with
+`dcctl instances release <id>`, which destroys nothing.
 :::
 
 ### Removing a declaration without destroying anything {#release}

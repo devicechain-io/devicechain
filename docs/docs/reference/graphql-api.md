@@ -219,9 +219,12 @@ you last read; omit it for last-write-wins.
 
 #### The `token` argument names the record {#the-token-argument-names-the-record}
 
-Every `update*` declares `token: String!`, and **that argument is what decides which record is
-written.** What the *payload* token does — where one still exists — depends on the mutation, and the
-difference is real, so it is listed rather than smoothed over.
+Every `update*` names the record by an **argument**, never by the payload, and **that argument is
+what decides which record is written.** On all of them but two it is `token: String!`;
+`updateOauthClient` takes `clientId: String!` instead, and `updateProfile` takes no locator at all,
+because the record it edits is the signed-in identity. What the *payload* token does — where one
+still exists — depends on the mutation, and the difference is real, so it is listed rather than
+smoothed over.
 
 There used to be a third answer: a payload token that had to **agree** with the argument, refused
 when it disagreed and read as "unspecified" when empty. Its last two mutations have converted, so

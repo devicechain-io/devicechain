@@ -18,8 +18,9 @@ la herencia por campo, y el almacenamiento de logotipos vía el almacén de
 objetos o una referencia interna/externa. Planificado (Fase 3): una **skin de
 pantalla de inicio de sesión** por inquilino, un **favicon**, y la resolución
 **dominio personalizado → marca del inquilino**; hasta entonces la página de
-inicio de sesión muestra la marca del operador, ya que no se conoce ningún
-inquilino antes de iniciar sesión.
+inicio de sesión muestra la marca incorporada de DeviceChain (no el valor por
+defecto del operador), ya que no se conoce ningún inquilino antes de iniciar
+sesión y la identidad de marca se aplica solo una vez seleccionado un inquilino.
 :::
 
 Marca blanca aquí significa **identidad de marca** —apariencia y estilo. No es
@@ -50,13 +51,16 @@ identidad de marca efectiva.
 
 | Superficie | Campos |
 |---|---|
-| **Título** | el nombre del producto mostrado en la pestaña del navegador y en el encabezado de la consola |
+| **Título** | el nombre del producto mostrado en la pestaña del navegador (el título del documento) |
 | **Logotipo** | una imagen (con un control de altura máxima) intercambiada en el encabezado de la consola |
 | **Paleta** | cuatro colores —primario, fondo, primer plano, acento— aplicados como propiedades personalizadas de CSS en la raíz de la aplicación |
 
 Dado que la consola se tematiza enteramente mediante tokens de diseño, la
-paleta es un único punto de escritura: los cuatro colores reestilizan toda la
-aplicación sin CSS personalizado. (La inyección de CSS arbitrario deliberadamente
+paleta es un único punto de escritura, sin CSS personalizado: el **primario** y
+el **acento** reestilizan los tokens de diseño de la aplicación (botones, anillos
+de foco, acentos), mientras que el **fondo** y el **primer plano** recoloran
+únicamente el cromo de la barra lateral con marca —la base de la página conserva
+su tema claro/oscuro. (La inyección de CSS arbitrario deliberadamente
 no se ofrece —es una superficie de XSS y de mantenimiento con una ganancia
 marginal frente a una paleta adecuada.)
 
@@ -81,9 +85,12 @@ La identidad de marca es un conjunto de columnas tipadas y anulables en el
 el JWT**. Los tokens permanecen solo-autenticación; la consola lee la identidad
 de marca resuelta a través de la consulta `tenant` con alcance propio (su
 consulta de arranque habitual) y la almacena en caché con
-stale-while-revalidate, indexada por un `updatedAt` que se incrementa cuando
-*ya sea* la anulación del inquilino *o* el valor por defecto del operador
-cambian —así que un cambio de marca se propaga con prontitud.
+stale-while-revalidate por inquilino (el valor en caché se pinta primero y luego
+una consulta fresca lo reemplaza en cada carga) —así que un cambio de marca se
+propaga con prontitud. La identidad de marca resuelta también lleva un
+`updatedAt` que se incrementa cuando *ya sea* la anulación del inquilino *o* el
+valor por defecto del operador cambian, para los clientes que quieran indexar
+una caché propia con él.
 
 ## Edición
 

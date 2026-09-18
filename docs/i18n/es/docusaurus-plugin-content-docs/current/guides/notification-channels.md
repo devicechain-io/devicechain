@@ -20,7 +20,7 @@ Un canal divide su configuración en dos:
 - **`config`** — la configuración de conexión no secreta, como un documento JSON (host/puerto/from de SMTP; URL/método/encabezados del webhook).
 - **`secret`** — la credencial (la contraseña de SMTP, un token de autenticación del webhook). Se almacena en el **almacén de secretos** cifrado por sobre (envelope-encrypted) de la plataforma y es de **solo escritura**: la envías al crear, y nunca se devuelve al leer. El canal solo expone un booleano `hasSecret`.
 
-En una **actualización**, un secreto `null` deja el secreto existente sin cambios (nunca necesitas reenviarlo), un valor no nulo lo reemplaza, y una cadena vacía lo borra.
+En una **actualización**, **omite** `secret` para dejar el secreto existente sin cambios (nunca necesitas reenviarlo); un valor no nulo lo reemplaza; enviar `null` — o una cadena vacía — lo borra. Si tu cliente enlaza una variable por campo, una variable no suministrada llega como un `null` explícito y borrará el secreto, así que envía la solicitud completa como una sola variable y deja fuera la clave `secret`.
 
 ### Crear un canal SMTP
 

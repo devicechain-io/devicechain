@@ -33,7 +33,7 @@ La membresía del grupo se registra en cada evento **en el momento en que se res
 | **Repetición** | la condición ocurre un número de veces dentro de una ventana (p. ej. `3 faults in 10 minutes`) | un conteo de ocurrencias + una ventana |
 | **Tasa de cambio** | una métrica cambia demasiado rápido entre lecturas consecutivas (p. ej. `temperature rising > 5°/s`) | la comparación + una marca opcional para normalizar el cambio a una tasa por segundo |
 | **Ausencia / silencio** | un dispositivo deja de reportar — ningún evento calificado dentro de una ventana (una verificación de tipo "hombre muerto") | una ventana de silencio |
-| **Conectividad** | un dispositivo reporta una desconexión autoritativa (levanta) y se reconecta (resuelve) — para transportes que afirman presencia como [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md). *Hoy se define a través de la API — ninguna de las superficies de autoría de la consola la ofrece todavía, y una de ellas la reescribirá en silencio (véase más abajo).* | ninguno — el borde de [presencia](./device-presence.md) es toda la señal |
+| **Conectividad** | un dispositivo reporta una desconexión autoritativa (levanta) y se reconecta (resuelve) — para transportes que afirman presencia como [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md). *Se autora en el constructor de formularios de la consola o a través de la API — el lienzo visual de automatización no ofrece el tipo (véase más abajo).* | ninguno — el borde de [presencia](./device-presence.md) es toda la señal |
 | **Agregado en ventana** | un agregado sobre una ventana cruza una comparación (p. ej. `average > 50 over 10 minutes`) | la función (count/sum/avg/min/max), una ventana (tumbling, sliding o session), la comparación + valor |
 | **Correlación de área** | suficientes dispositivos distintos en un área cumplen la condición en conjunto (p. ej. `≥ 3 devices in a zone report a fault within 5 minutes`) | el tipo de área/ancla, un conteo de dispositivos distintos + ventana |
 
@@ -62,10 +62,10 @@ memoria. Antes de pedirlo, considere si la pregunta trata en realidad de *retenc
 consultando el historial almacenado que reteniendo un mes de lecturas en memoria.
 :::
 
-:::warning No abra una regla de Conectividad en el editor de formulario de la consola
-Como el constructor de formularios no modela el tipo Conectividad, abrir en él una regla de Conectividad existente **la lee en silencio como una regla de Umbral**, y guardar desde ese panel reemplaza la definición original. Nada se lo advierte: el aviso de «no se pudo leer» del formulario solo aparece cuando la definición almacenada no es JSON válido, cosa que una regla de Conectividad en funcionamiento evidentemente sí es.
+:::note Las reglas de Conectividad y el lienzo de automatización
+El constructor de formularios autora y abre reglas de Conectividad: el tipo está en su selector y, como el borde de presencia es toda la señal, el formulario no ofrece condición ni parámetros para él. El lienzo visual de automatización no tiene nodo de Conectividad: rechaza la regla sin más y le indica que ese tipo no puede mostrarse en el lienzo. Así que autore y edite una regla de Conectividad en el constructor de formularios o a través de la API, no en el lienzo.
 
-El lienzo de automatización es seguro: rechaza la regla sin más y le indica que el tipo no está soportado. Hasta que el constructor de formularios aprenda el tipo, edite una regla de Conectividad únicamente a través de la API.
+Si el formulario abre una regla almacenada que no puede contener por completo — un campo que no modela, o un tipo que no conoce — advierte que parte de la definición no se muestra y que guardar reemplazaría la original únicamente con lo que se ve. Ese aviso es distinto del de «no se pudo leer» que aparece cuando la definición no es JSON válido, y una regla de Conectividad se abre sin ninguno de los dos.
 :::
 
 ### Umbrales estáticos y dinámicos

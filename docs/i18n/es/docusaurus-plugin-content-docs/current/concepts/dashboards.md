@@ -53,7 +53,7 @@ Abrir un panel requiere **`dashboard:read`**, que posee todo miembro habilitado 
 Un widget no embebe una consulta — embebe un **selector** tipado que el runtime resuelve:
 
 - **`device`** — un solo dispositivo por token.
-- **`anchor`** — telemetría con alcance a una entidad organizacional (un cliente, área o activo), agregada mediante una consulta del lado del servidor sobre los eventos anclados a esa entidad.
+- **`anchor`** — telemetría con alcance a una entidad organizacional (un cliente, área o activo), designada mediante una relación rastreada. El runtime la expande del lado del cliente a los dispositivos actualmente relacionados con esa entidad y transmite las muestras sin procesar de cada miembro — un flujo por dispositivo, hasta 500 miembros. Agregar los eventos del ancla en una sola serie del lado del servidor está reservado: el campo `aggregation` de un selector se almacena y se conserva, pero todavía no se lee.
 - **`slot`** — un **marcador con nombre** que el host resuelve en el momento del montaje a partir de su manifiesto de vinculación (ver *Incrustación* más abajo). Esto es lo que la consola escribe hoy: reescribe los selectores concretos `device` y `anchor` como slots cuando carga un panel, de modo que un panel creado es una plantilla reutilizable por defecto.
 
 Otros dos tipos (`devices`, `relatedTraversal`) están reservados para que una definición almacenada siga siendo compatible hacia adelante; el runtime los rechaza hasta que se implementen.

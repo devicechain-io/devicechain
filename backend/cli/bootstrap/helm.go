@@ -428,22 +428,27 @@ func helmValues(st *State) map[string]interface{} {
 		},
 		"image": map[string]interface{}{"registry": st.ImageRegistry, "tag": st.ImageVersion},
 		// Metrics rendering (ServiceMonitors / PrometheusRule / dashboards) needs the
-		// Prometheus Operator CRDs. The infra step installs kube-prometheus-stack by
-		// default (BEFORE this Helm step), so enable it — UNLESS --no-monitoring, where
-		// we install no operator and must not render CRs against absent CRDs.
+		// Prometheus Operator CRDs. `dcctl install` installs kube-prometheus-stack by
+		// default, and its record says whether it did (st.NoMonitoring, via
+		// FollowInstall) — so enable it, UNLESS the cluster was installed
+		// --no-monitoring, where there is no operator and we must not render CRs
+		// against absent CRDs.
 		//
 		// databaseBackups gates the WAL-archiving alerts (ADR-028, ADR-020 A2.5) and
 		// comes from what the infrastructure REPORTED, not from a dcctl flag: with
 		// archiving off the cnpg_pg_stat_archiver_* series do not exist, so rendering
 		// those rules anyway yields four alerts that load, evaluate nothing, and never
-		// fire. databaseNamespace is where the database Clusters run — deliberately
-		// NOT instance.id, because an alert scoped to the instance's own namespace
-		// selects none of those series at all.
+		// fire. databaseNamespace is where the SHARED relational-store Cluster runs
+		// (dc-system) — deliberately NOT instance.id, even though the instance's own
+		// event-store Cluster does run there: the chart selects every database series
+		// across both namespaces and only both, so the shared store is seen and another
+		// instance's event store never raises this instance's alerts.
 		//
 		// cnpgNamespace is a THIRD namespace and not a typo for either of the
-		// above: dc-system holds the database Clusters, the instance namespace
-		// holds this release, and cnpg-system holds the OPERATOR that drives the
-		// Clusters. It gates the operator's PodMonitor and the control-plane
+		// above: dc-system holds the shared relational store, the instance's namespace
+		// holds its event store and its workloads (the release RECORD is in `default`,
+		// see helmReleaseNamespace), and cnpg-system holds the OPERATOR that drives
+		// every Cluster. It gates the operator's PodMonitor and the control-plane
 		// alerting rules as one unit (ADR-020 A1.5). Absent means OFF here, with
 		// no fallback to the chart's default — the same asymmetry the backup
 		// alerts use, and for the same reason: rules that cannot fire look like a

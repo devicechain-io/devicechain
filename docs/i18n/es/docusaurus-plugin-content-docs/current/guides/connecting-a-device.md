@@ -33,16 +33,21 @@ incluido el aleatorio que inventa su biblioteca cliente cuando usted no lo fija.
 forma de que un dispositivo abra dos conexiones; vea [MQTT](#mqtt) más abajo.) Es una clave de
 sesión, no una etiqueta.
 
-**Cómo se tuercen las cosas.** Una conexión rechazada se **cierra, no se responde** — su cliente
-informa de un reset o un EOF inesperado, nunca de un fallo de autorización, y un dispositivo que
-reconecta automáticamente entrará en bucle. Así que los tres errores se ven idénticos desde el
+**Cómo se tuercen las cosas.** Una conexión rechazada recibe **una única respuesta genérica**: el
+broker devuelve el código de retorno 5 del CONNACK de MQTT (*no autorizado*) y después cierra la
+conexión — el mismo código tanto si lo incorrecto era el client id, el prefijo `{tenant}:` o la
+credencial, de modo que su cliente informa de «no autorizado» (o, si nunca llega a leer el CONNACK,
+solo del reset o EOF inesperado que sigue), y un dispositivo que reconecta automáticamente entrará
+en bucle. Así que los tres errores se ven idénticos desde el
 dispositivo. Si un dispositivo no consigue conectar, revise primero el client id — es el único valor
 que la consola nunca le muestra, así que es el que ha tenido que construir usted —, luego el prefijo
 `{tenant}:` del nombre de usuario, y después la credencial en sí.
 
 Y un cuarto, más adelante: el `token` del sobre de un **comando** identifica al *comando*, no al
-dispositivo. Devolver el token del dispositivo en una respuesta de comando no coincide con nada y la
-respuesta se descarta — vea [Respuesta a un comando](#responding-to-a-command).
+dispositivo. Devolver el token del dispositivo en una respuesta de comando no coincide con nada: la
+respuesta no cierra ningún comando y acaba en el flujo de mensajes descartados de la plataforma,
+donde un operador puede verla, mientras el comando sigue pendiente — vea
+[Respuesta a un comando](#responding-to-a-command).
 :::
 
 ## El cuerpo del evento
@@ -66,10 +71,13 @@ Todo evento entrante — sobre cualquier transporte — es un objeto JSON:
 
 ### Formas del payload
 
-**Todo payload envuelve su contenido en un arreglo `entries`**, y todo valor numérico es una **cadena
-de texto JSON**. Ambas reglas se aplican: un payload sin entradas, una entrada vacía, o un número
-suelto donde se espera una cadena es **rechazado** — HTTP responde `400` y una publicación MQTT va a
-la cola de mensajes fallidos en lugar de aceptarse en silencio.
+**Todo payload envuelve su contenido en un arreglo `entries`**, y el tipo JSON de cada valor lo fija
+la forma: los valores de medición y todos los campos de `Location` son **cadenas de texto JSON**
+(`"21.5"`, no `21.5`), mientras que el `level` de una alerta es un **entero JSON suelto**. Ambas
+reglas se aplican: un payload sin entradas, una entrada vacía, o un valor del tipo JSON equivocado
+(un número suelto donde se espera una cadena, o un `level` de alerta entre comillas) es
+**rechazado** — HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos en lugar
+de aceptarse en silencio.
 
 **Una entrada es una lectura, tomada en un instante.** Una entrada puede llevar su propio
 `occurredTime`, y ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se
@@ -220,7 +228,7 @@ Ese requisito no es burocracia. Un client id de MQTT es la clave con la que un b
 **Si un dispositivo necesita más de una conexión, dé a cada una un sufijo:** `{instanceId}:{tenant}:{deviceToken}:pub`, `…:sub`, y así sucesivamente. Todo lo que vaya después del tercer `:` queda a su elección. Dos conexiones que comparten un mismo client id son dos clientes peleando por una sola sesión — se desconectarán mutuamente en bucle —, de modo que un dispositivo que publica en una conexión y se suscribe a comandos en otra necesita un sufijo distinto para cada una.
 
 :::tip Diagnóstico de un client id rechazado
-Una conexión rechazada se **cierra, no se responde**: el broker corta el socket en lugar de devolver un código MQTT de «no autorizado», por lo que su cliente informa un reinicio de conexión o un EOF inesperado en vez de un fallo de autorización. Un dispositivo que se reconecta automáticamente entrará en bucle. Si un dispositivo que antes se conectaba deja de hacerlo, revise su client id antes que su credencial.
+Una conexión rechazada se responde con el **código de retorno 5 del CONNACK de MQTT (no autorizado)** y después se cierra — y ese código es deliberadamente genérico: un client id incorrecto, un prefijo `{tenant}:` ausente y una credencial incorrecta producen el mismo, así que el rechazo nunca dice qué comprobación falló. Su cliente informa de «no autorizado» (o, si no llega a leer el CONNACK antes del cierre, de un reinicio de conexión o un EOF inesperado). Un dispositivo que se reconecta automáticamente entrará en bucle. Si un dispositivo que antes se conectaba deja de hacerlo, revise su client id antes que su credencial.
 :::
 
 Publique el cuerpo del evento en el topic de eventos de su dispositivo:
@@ -348,7 +356,10 @@ mosquitto_pub \
 
 - **`commandToken` debe ser el `token` del sobre de entrega** — el token del comando,
   no el del dispositivo. Este es el error más común: enviar aquí el token del dispositivo
-  no coincide con ningún comando y la respuesta se descarta.
+  no coincide con ningún comando, así que la respuesta no cierra nada — se vuelve a entregar
+  hasta el tope de entregas del broker (cinco intentos) y después queda registrada en el flujo de
+  mensajes descartados con el motivo `exhausted`, visible para un operador, mientras el comando
+  sigue pendiente.
 - **`dispatchNonce` debe ser el `dispatchNonce` del sobre de entrega que está respondiendo.**
   Es obligatorio: una respuesta que lo omita, o que cite el nonce de una entrega anterior del
   mismo comando, no cierra el comando. Vea a continuación por qué.

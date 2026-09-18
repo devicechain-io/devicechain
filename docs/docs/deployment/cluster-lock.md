@@ -105,7 +105,16 @@ account needs:
 
 - `get`, `create`, `update` and `delete` on `leases.coordination.k8s.io` in
   `dc-k8s-system`;
-- `get`, `create` and `update` on `instances.core.devicechain.io`, cluster-wide.
+- `get`, `list`, `create`, `update`, `patch` and `delete` on
+  `instances.core.devicechain.io`, cluster-wide;
+- `list` on `secrets` in `dc-system`.
+
+`list` is not optional on either line, and it is the one most likely to be left out.
+Every bootstrap and upgrade asks the cluster which instances it already holds and what
+they have claimed — the ingress host, the local MQTT port, the connection budget — and
+that question is a list, not a get. An account granted only `get` reaches the check that
+protects the other instances on the cluster and fails there. `patch` and `delete` are
+what release the declaration's finalizer when an instance is torn down.
 
 If the account does not hold them, `dcctl` surfaces the API server's own refusal —
 which verb, which resource, which namespace, which user — rather than reporting it as
@@ -218,7 +227,8 @@ somebody else correctly concludes it is gone.
 `Ctrl+C` stops a run **gracefully**. The infrastructure tool is asked to stop the way it
 wants to — it finishes the operation in flight and writes its state file — and `dcctl`
 gives the lock back before exiting. The next run, usually you retrying, finds the
-cluster free.
+cluster free. A `SIGTERM` — what a CI runner or a scheduler sends to cancel a job — is
+treated exactly like that first `Ctrl+C`.
 
 Because a single Helm release inside an apply can carry a timeout measured in minutes, a
 graceful stop is allowed to take a while: up to twenty minutes in the worst case, and
@@ -234,6 +244,41 @@ given back, so the next run against that cluster has to wait out a lease duratio
 [reclaim](#reclaim) it. Use it when the first interrupt is not making progress, not as
 the normal way to stop.
 :::
+
+### When the graceful stop never comes back {#abandoned}
+
+There is a third outcome, and a run nobody is watching — CI, a scheduled job — is the one
+that reaches it, because nobody is there to press `Ctrl+C` a second time.
+
+OpenTofu itself honours the stop, but something it started — a provider plugin, most
+often — can outlive it and go on holding the pipe `dcctl` reads its output from, so
+`dcctl` never sees the command end. Rather than wait forever, it gives up on its own
+**about a minute after the twenty-minute budget** and exits with an error. This is what
+you will find in the log:
+
+```
+dcctl stopped waiting for the interrupted OpenTofu command. OpenTofu itself has gone,
+but something it started — a provider plugin, most likely — outlived it and is still
+holding the pipe dcctl reads its output from, so dcctl cannot see the command end. It
+was asked to stop gracefully and to write its state before this point and very probably
+did, but nothing here witnessed that: treat this instance's infrastructure as PARTIALLY
+APPLIED rather than untouched. Re-run the same command — the apply is idempotent and
+reconciles whatever was left half done. Assuming nothing happened is the one reading
+that is not safe (dcctl waited 21m0s after the interrupt)
+```
+
+Two things follow, and both point the opposite way from the second interrupt:
+
+- **The lock is given back.** This is a failed step, not a kill, so the release runs as it
+  does for any other error. There is nothing to [reclaim](#reclaim); the next run finds
+  the cluster free.
+- **The infrastructure is not known to be untouched.** OpenTofu was asked to write its
+  state and very probably did, but `dcctl` did not witness it. Re-run the same command —
+  `bootstrap`, `upgrade` or `destroy`, whichever it was — and let the apply reconcile
+  whatever was left half done. The one reading that is not safe is "nothing happened".
+
+The clock starts at the interrupt and nowhere else. An apply nobody interrupted is waited
+for as long as it takes.
 
 ## See also
 

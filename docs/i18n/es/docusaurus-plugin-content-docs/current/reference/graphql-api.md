@@ -225,9 +225,12 @@ que leíste por última vez; omítelo para que gane la última escritura.
 
 #### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
-Toda `update*` declara `token: String!`, y **ese argumento es lo que decide qué registro se
-escribe.** Lo que hace el token de la *petición* — donde todavía existe uno — depende de la
-mutación, y la diferencia es real, así que se enumera en lugar de disimularse.
+Toda `update*` nombra el registro mediante un **argumento**, nunca mediante la petición, y **ese
+argumento es lo que decide qué registro se escribe.** En todas salvo dos ese argumento es
+`token: String!`; `updateOauthClient` toma `clientId: String!` en su lugar, y `updateProfile` no toma
+ningún localizador, porque el registro que edita es la identidad con la sesión iniciada. Lo que hace
+el token de la *petición* — donde todavía existe uno — depende de la mutación, y la diferencia es
+real, así que se enumera en lugar de disimularse.
 
 Antes había una tercera respuesta: un token de la petición que debía **coincidir** con el argumento,
 rechazado cuando no coincidía y leído como «sin especificar» cuando venía vacío. Sus dos últimas

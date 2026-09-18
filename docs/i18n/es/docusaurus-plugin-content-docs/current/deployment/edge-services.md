@@ -547,7 +547,7 @@ en las tablas de abajo se emite y se raspa; nada le avisará de ello hasta que u
 
 **La primera alerta que hay que escribir es una alerta de «sin líder»**, en cada servicio de ingesta:
 
-> `sum(devicechain_lwm2mingest_is_leader) != 1`
+> `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
@@ -555,11 +555,13 @@ Cero significa que nadie está sirviendo ese transporte y que todos los disposit
 son inalcanzables en silencio. Cualquier valor distinto de uno merece despertar a alguien. Es la señal
 con más peso de toda esta superficie y es la única de la que hoy nada le informa.
 
-La mitad del `absent()` no es decorativa. El indicador de Sparkplug solo se registra cuando hay al
-menos una fuente configurada, así que un pod que se ejecute sin fuentes no publica la serie **en
-absoluto**, y un `!= 1` sobre un resultado vacío está vacío a su vez: una alerta muda, no una alerta
-que se dispara. Y ese es justo el caso para el que existe la alerta. LwM2M registra su indicador de
-forma incondicional, así que solo la expresión de Sparkplug necesita el emparejamiento.
+La mitad del `absent()` no es decorativa, pero tampoco está ahí por un pod sin fuentes. Ambos servicios
+registran su indicador `is_leader` de forma incondicional al inicializarse, antes de comprobar si tienen
+algo que servir, así que un pod de Sparkplug que se ejecute sin fuentes publica la serie con valor **0**
+durante toda la vida del pod, y el `!= 1` se dispara por sí solo. Lo que cubre `absent()` es el caso en
+que no hay ninguna serie que sumar: ninguna réplica arrancó, o ninguna se está raspando. Ahí un `!= 1`
+sobre un resultado vacío está vacío a su vez: una alerta muda, no una alerta que se dispara. Ese caso
+afecta por igual a ambos transportes, y por eso las dos expresiones llevan el emparejamiento.
 
 Los indicadores `is_leader` de ambos servicios suben cuando la réplica **adquiere** el
 arrendamiento, no cuando termina de construir su turno, de modo que un relevo normal no se lee como

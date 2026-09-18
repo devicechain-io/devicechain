@@ -14,10 +14,10 @@ import (
 // The broker credential record bridges a gap in the bootstrap's own ordering.
 //
 // 🔴 THE BROKER IS CONFIGURED BY THE INFRASTRUCTURE APPLY; THE FIRST DURABLE COPY OF ITS
-// CREDENTIALS IS WRITTEN BY THE CHART INSTALL, which is two steps later. A run that dies
-// in between leaves a live broker holding credentials
-// that no later run can reuse, because the only place dcctl looks for them — the instance
-// chart's config Secret — does not exist yet. Each retry mints fresh ones.
+// CREDENTIALS IS WRITTEN IN THE HELM STEP, which is the step after. A run that dies in
+// between leaves a live broker holding credentials that no later run can reuse, because
+// the only place dcctl looks for them — the instance's configuration document, which
+// dcctl itself writes there — does not exist yet. Each retry mints fresh ones.
 //
 // It cannot be fixed by reading the cluster harder. The apply receives the callout issuer's
 // PUBLIC key and two BCRYPT hashes and nothing else; the ConfigMap it renders carries
@@ -30,12 +30,12 @@ import (
 //
 // WHY LOCAL DISK AND NOT A CLUSTER SECRET
 //
-// A Secret in dc-system is the instinct. On a fresh install that namespace does not exist
-// until the infrastructure apply creates it; dcctl could create it first and turn the module's
-// toggle off, but flipping that toggle on an EXISTING instance moves a count from 1 to 0
-// and plans destruction of dc-system — cascading the broker, both databases and the object
-// store. Writing the Secret after the apply does not close the window either, since dying
-// mid-apply is the observed failure.
+// A cluster Secret is the instinct, and nothing stops one being written any more: dc-system
+// exists before any bootstrap runs (`dcctl install` creates it), and dcctl already writes the
+// Secrets it mints into the instance's own namespace ahead of the apply (writeMintedSecrets).
+// When this record was first a file the ordering forbade it — the apply created the only
+// namespace there was, and dying mid-apply is the observed failure — so the argument that
+// remains is the one below, which was always the deciding one.
 //
 // The deciding argument is that this file sits beside the OpenTofu state, and that state is
 // local-disk-only: there is no backend block anywhere, so a re-run from a different machine
@@ -44,9 +44,14 @@ import (
 // cross-machine recipe — copying ~/.devicechain/instances/<instance>/ wholesale — carries this record
 // with it.
 //
-// The directory's threat model is unchanged by this file: the tfstate next to it already
-// holds the broker's TLS private key and the database superuser password in cleartext, and
-// both are 0700/0600 with an explicit chmod walk for trees an older dcctl created.
+// The directory's threat model is now set by this file rather than inherited: the tfstate
+// next to it used to hold the broker's TLS private key and the database superuser password
+// in cleartext, and no longer holds either — the broker's keys and every database credential
+// are dcctl-minted Secrets the apply references by name (natstls.go, mintwrite.go), and the
+// relational store belongs to the cluster root, whose state lives under
+// ~/.devicechain/clusters/. What is left in this directory as a cleartext credential is
+// this record, and the 0700/0600 modes — with the explicit chmod walk for trees an older
+// dcctl created — protect it first and the state's bcrypt hashes second.
 
 // brokerRecordFile is the record's name inside ~/.devicechain/instances/<instance>/.
 //

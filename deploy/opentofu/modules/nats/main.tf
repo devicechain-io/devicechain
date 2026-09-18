@@ -838,11 +838,12 @@ locals {
 #
 # 🔴 WHAT THIS MODULE LOST WITH THEM IS RENEWAL. `tls_locally_signed_cert` carried
 # `early_renewal_hours = 720`, so every apply re-issued the leaf inside its last 30
-# days. Nothing here replaces that, and dcctl does not yet either -- the leaf is
-# re-minted on each run, which covers a re-run and does NOT cover an instance nobody
-# re-runs. Renewal belongs to the verb that evolves a live instance; until that lands,
-# this is a known gap rather than a solved problem, and cert-manager taking over leaf
-# issuance is what closes it.
+# days. Nothing here replaces that; dcctl does, in the verb that evolves a live
+# instance: `dcctl upgrade` re-issues the leaf inside its last 30 days under the
+# authority it kept in the dc-nats-ca-keypair Secret, and restarts the broker
+# (backend/cli/bootstrap/natsrenew.go). None of it passes through this module, which
+# receives the public CA and nothing else. The case still uncovered is an instance
+# nobody upgrades; cert-manager taking over leaf issuance is what would close that.
 
 resource "kubernetes_config_map_v1" "nats_ca" {
   count = var.enable_tls ? 1 : 0

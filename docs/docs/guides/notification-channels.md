@@ -20,7 +20,7 @@ A channel splits its settings in two:
 - **`config`** — the non-secret connection settings, as a JSON document (SMTP host/port/from; webhook URL/method/headers).
 - **`secret`** — the credential (the SMTP password, a webhook auth token). It is stored in the platform's envelope-encrypted **secret store** and is **write-only**: you submit it on create, and it is never returned on read. The channel exposes only a `hasSecret` boolean.
 
-On an **update**, a `null` secret leaves the existing secret unchanged (you never need to re-send it), a non-null value replaces it, and an empty string clears it.
+On an **update**, **omit** `secret` to leave the existing secret unchanged (you never need to re-send it); a non-null value replaces it; sending `null` — or an empty string — clears it. If your client binds one variable per field, an unsupplied variable arrives as an explicit `null` and will clear the secret, so send the whole request as a single variable and leave the `secret` key out.
 
 ### Create an SMTP channel
 

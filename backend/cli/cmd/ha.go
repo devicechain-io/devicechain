@@ -191,7 +191,7 @@ func init() {
 	haVerifyDbCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
 	haVerifyDbCmd.Flags().StringVar(&dbNamespace, "namespace", "dc-system",
-		"namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), the instance id for its event store (dc-tsdb)")
+		"namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), dci-<instance> for that instance's event store (dc-tsdb)")
 	haVerifyDbCmd.Flags().StringVar(&dbClusterName, "cluster", "dc-rdb",
 		"the CloudNativePG Cluster object to check")
 	haVerifyDbCmd.Flags().StringVar(&dbAliasService, "alias-service", "dc-postgresql",
@@ -226,7 +226,7 @@ func init() {
 		"invert the exit status: succeed only if the check FAILS (the negative control)")
 
 	haVerifyCmd.Flags().StringVar(&haInstanceId, "instance", "default",
-		"instance id — also the namespace its services and broker run in")
+		"instance id; its services and broker run in namespace dci-<instance>")
 	haVerifyCmd.Flags().StringVar(&haKubeContext, "kube-context", "",
 		"kubeconfig context (default: current context)")
 	haVerifyCmd.Flags().IntVar(&haReplicas, "replicas", 0,

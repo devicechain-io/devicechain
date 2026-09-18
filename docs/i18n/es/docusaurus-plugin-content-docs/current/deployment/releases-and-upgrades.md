@@ -122,9 +122,10 @@ helm install dc deploy/helm/devicechain \
 ```
 
 El chart de Helm en sí también se publica como un artefacto OCI, por lo que puede instalarlo sin una
-copia local del repositorio. El chart se versiona por separado de las imágenes y no lleva la
-`v` inicial; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la
-última, y `--version` rechaza cualquier valor que nunca se haya publicado:
+copia local del repositorio. La versión del chart es la versión publicada sin la `v` inicial
+—`--version 0.16.0` instala la versión `v0.16.0`—, así que no hay un número aparte que buscar;
+`helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` imprime la última, y
+`--version` rechaza cualquier valor que nunca se haya publicado:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
@@ -183,6 +184,48 @@ valores predeterminados del chart cambian entre versiones, así que es preferibl
 valores y pasarlos con `-f`, donde puede verlos.
 :::
 
+:::caution Si la configuración de instancia procede de un Secret que usted gestiona
+Una instalación que monta su configuración de instancia desde un Secret que el chart no
+escribe —fijado con `instance.existingSecret`, el patrón que producen External Secrets y
+sealed-secrets— tiene ahora que cumplir cuatro condiciones, y `helm upgrade` **hace fallar el
+renderizado** en lugar de continuar cuando alguna no se cumple. Cuando eso ocurre, nada cambia
+en la release; el rechazo es todo el efecto.
+
+- **El Secret debe llamarse `dci-<instance.id>-config`**, en el namespace de la instancia.
+  Cualquier otro nombre se rechaza, porque `dcctl` vuelve a leer la configuración exactamente
+  por ese nombre para decidir si una instancia ya existe, y trata un Secret ausente como una
+  instalación nueva: una nueva ejecución acuñaría una nueva clave raíz y nuevas credenciales de
+  base de datos y de broker sobre una instancia en funcionamiento. Si su Secret está bajo otro
+  nombre, créelo de nuevo bajo este (el `target.name` de External Secrets, el `metadata.name`
+  de un sealed secret) antes de actualizar.
+- **`instance.existingSecretChecksum` es obligatorio**: el sha256 del documento bajo la clave
+  `instance` del Secret, como 64 caracteres hexadecimales en minúsculas. El chart no puede leer
+  su Secret, así que esto es lo que reinicia los pods cuando la configuración cambia; sin él,
+  una credencial rotada se aplicaría sin problemas, no reiniciaría nada e informaría éxito.
+  Vuelva a calcularlo cada vez que el documento cambie:
+
+  ```bash
+  kubectl get secret dci-<instance.id>-config -n dci-<instance.id> \
+    -o jsonpath='{.data.instance}' | base64 -d | sha256sum | cut -d' ' -f1
+  ```
+
+- **`networkPolicy.externalConfigPorts` es obligatorio mientras `networkPolicy.enabled` esté
+  activado**, con las claves `nats` y `rdb` repitiendo los puertos del broker y de la base de
+  datos que nombra su documento. De lo contrario el chart los tomaría de sus propios valores
+  predeterminados, y un puerto que no coincida bloquea en silencio la salida de los propios
+  servicios, lo que se presenta como una caída del broker o de la base de datos.
+- **`metrics.natsBrokerHost` es obligatorio mientras `metrics.natsPodMonitor` esté activado**:
+  el nombre de host del broker tal como lo nombra su documento (el nombre corto del Service
+  para un broker en el namespace de esta instancia, `<service>.<namespace>` para uno en otro
+  lugar). Decide qué namespace vigila el PodMonitor; un valor predeterminado que no coincida no
+  monitoriza nada. O bien fije `metrics.natsPodMonitor=false`.
+
+Cada error de `helm` nombra el valor que necesita y por qué. Las dos transformaciones que el
+chart aplica normalmente al escribir el documento —el bloque `infrastructure.shutdown` y la
+eliminación de `infrastructure.aiInference` cuando esa área no está desplegada— siguen
+correspondiéndole a usted reproducirlas, como hasta ahora.
+:::
+
 ## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
 
 Actualizar una instancia que usted arrancó con el bootstrap es **un solo comando**, y el chart
@@ -219,8 +262,10 @@ propio registro de la instancia en lugar de adivinarlo, y dice cuál es.
 :::tip Lee todas las credenciales y no acuña ninguna
 `dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
 propietarias de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
-entre servicios, la clave raíz del almacén de secretos y el secreto de cliente del inicio de
-sesión único. Un cambio de versión no puede convertirse en un cambio de credenciales.
+entre servicios, la clave raíz del almacén de secretos y —cuando el clúster los ejecuta— la
+contraseña de administrador del panel de monitoreo y la credencial del almacén de objetos de
+respaldo interno del clúster. Un cambio de versión no puede convertirse en un cambio de
+credenciales.
 
 Esto está verificado, no solo afirmado. Se comprobó la actualización de una instancia en
 funcionamiento comparando un resumen criptográfico (digest) de cada una de esas credenciales
@@ -241,10 +286,10 @@ número de réplicas, por ejemplo, no vuelve a replicar los streams de mensajer�
 con el número anterior.
 
 Otras dos cosas quedan deliberadamente fuera de este comando. No ejecuta la aplicación de
-infraestructura, porque dos de las entradas de esa aplicación no se pueden recuperar del
-clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, y el texto
-claro del secreto de cliente del inicio de sesión único. Y no toca las bases de datos más allá
-de dejar que los servicios ejecuten sus propias migraciones.
+infraestructura, porque una de las entradas de esa aplicación no se puede recuperar del
+clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, que provienen
+del archivo que usted entregó a `dcctl install --backup-credentials-file`. Y no toca las bases
+de datos más allá de dejar que los servicios ejecuten sus propias migraciones.
 :::
 
 ### Qué más comprueba una actualización {#upgrade-checks}
@@ -303,9 +348,15 @@ indicara.
 
 Lo que hace que el despliegue sea seguro:
 
-- **Aumentar antes de terminar.** Cada Deployment usa una estrategia `RollingUpdate` con
+- **Aumentar antes de terminar.** Los Deployments usan por defecto una estrategia `RollingUpdate` con
   `maxUnavailable: 0` y `maxSurge: 1`, de modo que un pod nuevo debe pasar su sonda de disponibilidad
-  `/readyz` **antes** de que se elimine un pod antiguo. La capacidad nunca disminuye durante el despliegue.
+  `/readyz` **antes** de que se elimine un pod antiguo, y la capacidad nunca disminuye durante el
+  despliegue. Cuatro áreas se distribuyen en cambio con `strategy: Recreate` y una sola réplica, porque
+  solo uno de sus pods puede servir a la vez: `event-processing` (el motor de reglas es un escritor
+  único), `mcp` (la sesión de un cliente vive en el pod que la abrió), `sparkplug-ingest` (un Sparkplug
+  Host por pod) y `lwm2m-ingest` (un socket CoAP/UDP por pod). En ellas, todos los pods antiguos se
+  detienen antes de que arranque el nuevo, así que un despliegue tiene una breve brecha por diseño; y
+  el chart rechaza `Recreate` con más de una réplica.
 - **Apagado ordenado / drenaje de conexiones.** Cuando se le pide a un pod que termine, primero
   informa "no listo" (de modo que el Service deje de enrutarle nuevas solicitudes), espera una breve
   ventana de drenaje para que ese cambio se propague, y solo entonces termina el trabajo en curso y
@@ -323,11 +374,16 @@ Lo que hace que el despliegue sea seguro:
   migraciones y el resto espera; sin condiciones de carrera, sin DDL duplicado.
 
 :::tip Ejecute al menos dos réplicas en producción
-Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área, de modo que el despliegue siempre tenga
-un pod activo sirviendo tráfico. Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
+Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área que
+pueda servir desde más de un pod, de modo que el despliegue siempre tenga un pod activo sirviendo tráfico.
+Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
 Configúrelo globalmente con `--set replicas=2`, o por área bajo
-`functionalAreas.<area>.replicas`. Un `PodDisruptionBudget` se genera automáticamente para cualquier
-área con más de una réplica, de modo que los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
+`functionalAreas.<area>.replicas`. Las cuatro áreas de un solo pod mencionadas arriba son la excepción:
+`mcp`, `sparkplug-ingest` y `lwm2m-ingest` rechazan más de una réplica con cualquier estrategia, y
+`event-processing` acepta una segunda réplica solo como reserva en caliente, con `strategy: RollingUpdate`
+configurada junto a ella; en cualquier otro caso el renderizado falla y explica por qué. Un
+`PodDisruptionBudget` se genera automáticamente para cualquier área con más de una réplica, de modo que
+los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
 :::
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
@@ -1353,9 +1409,47 @@ dcctl install local                        # prepara un clúster nuevo
 dcctl bootstrap local devicechain
 ```
 
-Para un clúster al que se llega con `--kube-context`, que `dcctl` nunca elimina, bórrelo y
-recréelo con lo que lo creó, y pase el mismo `--kube-context` a `install` y `bootstrap`.
-`dcctl upgrade` imprime esta misma receta cuando se niega.
+Para un clúster al que se llega con `--kube-context`, que `dcctl` nunca elimina, pase también
+ese `--kube-context` en la línea de `destroy` —el motivo está en la nota siguiente—; después
+borre y recree el clúster con lo que lo creó, y pase el mismo `--kube-context` a `install` y
+`bootstrap`. `dcctl upgrade` imprime esta misma receta cuando se niega.
+
+:::note El `dcctl` de esta versión no lee el estado local de la versión anterior
+`dcctl` guarda ahora lo que sabe de una instancia en `~/.devicechain/instances/<instance>/`.
+Las versiones hasta la `v0.16.0` incluida lo guardaban un nivel más arriba, en
+`~/.devicechain/<instance>/`, y **el nuevo `dcctl` no lee, no lista ni elimina ese
+directorio**: deliberadamente no hay migración, porque `dcctl` no puede distinguir un
+directorio de instancia antiguo de uno que usted haya creado por su cuenta. De ello se siguen
+tres cosas para la receta anterior:
+
+- **`dcctl instances list` no muestra ninguna de sus instancias antiguas.** En una máquina que
+  solo tenga instancias construidas por la `v0.16.0` o una versión anterior imprime `No
+  DeviceChain instances on this machine (nothing under ~/.devicechain/instances).` No se ha
+  perdido nada; las instancias siguen en sus clústeres, y `helm list -A` sigue mostrando sus
+  releases.
+- **`destroy` adivina el clúster.** El registro de clúster que escribió la versión anterior
+  está en el directorio que el nuevo `dcctl` no lee, así que `destroy` imprime
+  `No record of which cluster instance "<instance>" lives in — GUESSING cluster … from its
+  name` y lo deriva del nombre de la instancia. Esa conjetura es correcta para una instancia
+  local con el nombre que usa la receta, y **errónea para una arrancada con `--kube-context`**,
+  que es el motivo por el que `--kube-context` va también en la línea de `destroy`.
+  `--without-state` sigue siendo necesario: el estado de infraestructura también está en el
+  directorio en el que `dcctl` ya no mira.
+- **El directorio antiguo se queda en disco.** `destroy` elimina
+  `~/.devicechain/instances/<instance>/` —que para una instancia así no contiene nada— y deja
+  `~/.devicechain/<instance>/` donde estaba, con su `infra/terraform.tfstate` (la contraseña
+  del superusuario de la base de datos y la clave privada TLS del broker, en claro) y su
+  `broker-credentials.json`. Una vez que la instancia haya desaparecido, elimínelo usted mismo:
+
+  ```bash
+  rm -rf ~/.devicechain/<instance>
+  ```
+
+  **No** toque `~/.devicechain/escrow/`. El artefacto de depósito de la clave raíz siempre ha
+  vivido ahí, fuera de cualquier directorio de instancia, y sigue abriendo las copias de
+  seguridad de la base de datos de esa instancia; consulte
+  [Recuperación ante desastres](./disaster-recovery.md#after-destroy).
+:::
 
 :::caution Exporte primero: recrear descarta sus datos
 La [protección de destrucción](#data-durability) protege las bases de datos frente a una

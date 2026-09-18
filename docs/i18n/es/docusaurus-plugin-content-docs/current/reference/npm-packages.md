@@ -69,9 +69,12 @@ const definition = parseDashboardDefinition(json);
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
 ```
 
-Omite `actions` para un montaje estrictamente de solo lectura: los widgets que actúan —
-reconocer alarma, enviar comando — se renderizan entonces sin sus controles. Esa es toda
-la adhesión explícita, y es el cinturón sobre los tirantes del servidor. Un visor que
+Omite `actions` para un montaje estrictamente de solo lectura: los widgets que actúan se
+renderizan entonces inertes. La tabla de alarmas omite por completo sus controles de
+reconocer y despejar; el widget de comandos mantiene en pantalla su formulario de
+parámetros y el botón de envío, pero deshabilitados, con un aviso de que el visor no tiene
+permiso para emitir comandos. Esa es toda la adhesión explícita, y es el cinturón sobre
+los tirantes del servidor. Un visor que
 nunca recibe `actions` no puede escribir desde el panel, contenga lo que contenga, y el
 servidor hace valer `alarm:write` y `command:write` en cualquier caso.
 
@@ -197,20 +200,23 @@ armazón de tu aplicación. Los valores de DeviceChain se publican como
 |---|---|
 | **Formato de módulo** | Solo ESM. No hay build de CommonJS. |
 | **React** | 19. |
-| **Bundler** | Vite, webpack, Rollup o esbuild. |
+| **Bundler** | Vite o webpack. |
 | **Resolución de TypeScript** | Las declaraciones emitidas usan especificadores sin extensión, que resuelven bajo `moduleResolution: "bundler"` y **no** bajo `node16`/`nodenext`. |
 
 Esas son las combinaciones soportadas, y la línea entre «soportado» y «probablemente
 funcione» está trazada a propósito. Se ejercitan contra un navegador real en tres
 aplicaciones construidas fuera de este repositorio a partir de los tarballs empaquetados
 — una sobre Vite, una sobre webpack, y una sobre la receta de copiar el worker de más
-arriba — cada una de las cuales renderiza el mapa y se comprueba por las teselas que
-realmente pidió y los marcadores que realmente colocó, porque «se renderizó» es
-exactamente la afirmación que el modo de fallo de este widget supera.
+arriba, también construida con webpack — cada una de las cuales renderiza el mapa y se
+comprueba por las teselas que realmente pidió y los marcadores que realmente colocó,
+porque «se renderizó» es exactamente la afirmación que el modo de fallo de este widget
+supera.
 
-Nada de eso ejercita Next.js ni React Server Components, ni consumidores de CommonJS, ni
-la resolución `node16`/`nodenext`. Están sin probar más que sabidos-rotos, y esta página
-lo dirá cuando eso cambie.
+Nada de eso ejercita consumidores de Rollup ni de esbuild, ni Next.js ni React Server
+Components, ni consumidores de CommonJS, ni la resolución `node16`/`nodenext`. Rollup y
+esbuild consumen el mismo ESM plano y se espera que funcionen, pero quedan del lado de
+«probablemente funcione» de la línea; el resto está sin probar más que sabido-roto. Esta
+página lo dirá cuando eso cambie.
 
 ## Compilar contra el workspace en su lugar
 

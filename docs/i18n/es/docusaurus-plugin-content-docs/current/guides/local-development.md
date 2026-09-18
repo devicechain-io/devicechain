@@ -103,11 +103,34 @@ pasaría sin mirar nada:
 
 ## 3. Ejecutar un servicio
 
-Cada servicio es un único binario. La configuración se suministra mediante variables de entorno / configuración; consulta el paquete `config` de cada servicio para ver los ajustes disponibles.
+Cada servicio es un único binario. No acepta banderas, y no arranca con un entorno vacío: al
+iniciarse lee su **identidad** de variables de entorno y sus **ajustes** de dos documentos en
+rutas fijas, las mismas que el chart de Helm monta en cada pod.
+
+- `DC_INSTANCE_ID` y `DC_MS_FUNCTIONAL_AREA` son **obligatorias**: la instancia a la que
+  pertenece el servicio y el área del propio servicio (`event-sources` para el comando de
+  abajo). El servicio se niega a arrancar si falta cualquiera de las dos. `DC_LOG_CONSOLE=1`
+  cambia la salida de log en JSON por un formato de consola legible.
+- `/etc/dci-config/instance` es el documento **de toda la instancia**: nombre de host y puerto
+  de NATS, los ajustes de base de datos y persistencia, y el resto de la infraestructura
+  compartida. Su forma es `InstanceConfiguration` en `backend/core/config/instance.go`; aquí
+  es donde apuntas el servicio al NATS y al TimescaleDB que iniciaste en el paso 1.
+- `/etc/dct-config/<área-funcional>` es el documento **por servicio**, tipado en el paquete
+  `config` de ese servicio (`backend/services/event-sources/config` en este caso). Un
+  documento vacío es válido y aplica los valores por defecto tipados.
+
+Ambos documentos se decodifican de forma estricta —una clave desconocida se rechaza, no se
+ignora— y ambas rutas son constantes sin bandera ni variable de entorno que las sustituya,
+así que ejecutar un servicio contra tu propia infraestructura significa escribir esos dos
+archivos bajo `/etc` y exportar las variables:
 
 ```bash
+export DC_INSTANCE_ID=dc-local DC_MS_FUNCTIONAL_AREA=event-sources DC_LOG_CONSOLE=1
 go run ./backend/services/event-sources
 ```
+
+Si prefieres que los archivos se generen por ti en lugar de escribirlos a mano, `dcctl install`
+y `dcctl bootstrap` producen una instancia completa, como indica la nota al inicio de esta página.
 
 (`go run` recibe la ruta de un solo paquete, así que se resuelve dentro de ese módulo y
 funciona desde la raíz del repositorio —a diferencia de los patrones `./...` de arriba.)

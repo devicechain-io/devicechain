@@ -90,8 +90,10 @@ paso de rotación de más abajo surta efecto en un tiempo previsible.
 
 Dos detalles que suelen pasar desapercibidos: lo que cuenta es la *presencia* de la etiqueta, de
 modo que cualquier valor sirve; y el `username` del Secret debe coincidir **exactamente** con el
-nombre del rol, sin salto de línea final — una discrepancia se comunica solo como un error de
-contraseña, mientras detiene en silencio otras reconciliaciones.
+nombre del rol, sin salto de línea final. Cuando el operador de la base de datos no puede
+reconciliar un rol, indica el rol y la causa bajo el `status.managedRolesStatus` del Cluster de la
+base de datos — no en los registros de la propia DeviceChain —, así que mire allí antes de dar por
+hecho que la contraseña es incorrecta.
 :::
 
 **2. Declare el rol en las variables de su despliegue**, con un límite de conexiones:
@@ -109,7 +111,15 @@ timescale_analytics_readers = [
 Aplique. El rol aparece, se une al grupo de lectores y puede conectarse. No hay que reiniciar nada.
 
 Para rotar la contraseña, cámbiela en el Secret — la base de datos se reconcilia para coincidir,
-sin reinicios. Para revocar el acceso, elimine la entrada y aplique.
+sin reinicios. Para revocar el acceso, elimine la entrada, aplique y después **elimine el rol como
+superusuario**: quitar la entrada solo hace que su despliegue deje de declarar el rol, y el
+operador de la base de datos deja en su sitio un rol que ya no gestiona, con su contraseña y su
+pertenencia al grupo de lectores intactas. Eliminarlo primero tampoco funcionaría — mientras siga
+declarado, el operador lo vuelve a crear.
+
+```sql
+DROP ROLE analytics_acme;
+```
 
 Si creó el Secret antes de que se documentara el paso de etiquetado anterior, añada la etiqueta
 ahora; hasta entonces, un cambio de contraseña puede quedar sin aplicar durante un tiempo
@@ -158,10 +168,11 @@ mapa o calcule una distancia.
 
 :::note Actualizar una instalación existente
 Si declaró lectores antes de que existiera esta separación, tenían la posición. En el primer
-reinicio tras la actualización, el almacén de eventos retira esa concesión a todo lector que usted no
-haya marcado con `reads_location = true` — un panel que dibuje posiciones empezará a devolver
-`permission denied` hasta que lo configure. Esa convergencia es deliberada: la concesión se vuelve a
-derivar de su declaración en cada arranque, en lugar de acumularse.
+reinicio del servicio `event-management` tras la actualización, este retira esa concesión a todo
+lector que usted no haya marcado con `reads_location = true` — un panel que dibuje posiciones
+empezará a devolver `permission denied` hasta que lo configure. Esa convergencia es deliberada: la
+concesión se vuelve a derivar de su declaración cada vez que arranca `event-management`, en lugar
+de acumularse.
 :::
 
 ## Conectar una herramienta de BI
@@ -218,14 +229,17 @@ cliente pueda desactivar. Es también como se separa la posición: un lector sin
 tiene ningún privilegio sobre `analytics.location_events`, de modo que las coordenadas quedan
 inalcanzables en lugar de filtradas.
 
-**Ambas capas se restablecen cada vez que arranca el almacén de eventos.** Las vistas se
-reconstruyen y los privilegios se vuelven a converger en cada arranque, de modo que ni un permiso
-concedido a mano durante una investigación ni una vista editada durante una le sobreviven en
-silencio. Un reinicio es una reparación.
+**Ambas capas se restablecen cada vez que arranca el servicio `event-management`.** Es el
+servicio, no la base de datos, quien lo hace — reiniciar solo la base de datos no repara nada. En
+cada arranque se reconstruye la función que resuelve el inquilino de una sesión, se verifica cada
+vista — y se reconstruye si falta, expone columnas incorrectas, ha perdido su predicado de
+inquilino o ha dejado de ser una barrera de seguridad — y los privilegios se vuelven a converger,
+de modo que ni un permiso concedido a mano durante una investigación ni una vista editada durante
+una le sobreviven en silencio. Un reinicio de `event-management` es una reparación.
 
 Eso cubre en concreto la concesión de posición, y en todas las direcciones en que puede ampliarse:
 un `GRANT` sobre `analytics.location_events` hecho a un lector por su nombre, al grupo general de
-lectores o a `PUBLIC` se retira en el siguiente arranque. Lo que un lector acaba teniendo se deriva
+lectores o a `PUBLIC` se retira en el siguiente arranque del servicio. Lo que un lector acaba teniendo se deriva
 de su declaración cada vez, nunca se acumula — que es también por qué quitar `reads_location` retira
 el acceso de verdad, en lugar de dejar en pie la última concesión.
 
@@ -247,7 +261,9 @@ de recursos no.
 Si eso importa para su carga de trabajo, ejecute BI contra una **réplica de lectura**. Un despliegue
 replicado ya expone un servicio de solo lectura junto al primario; apuntar los lectores allí sitúa
 la contención en un nodo cuyo único trabajo es atenderlos, y PostgreSQL resuelve allí un conflicto
-cancelando la consulta analítica larga en lugar de retrasando la réplica.
+reteniendo la réplica durante un tiempo acotado — 30 segundos por defecto, su
+`max_standby_streaming_delay`, que el despliegue deja en ese valor — y cancelando después la
+consulta analítica larga, de modo que la réplica nunca se queda atrás indefinidamente.
 :::
 
 :::caution Lo que *no* está limitado: el coste de la consulta
@@ -286,7 +302,9 @@ suponiendo que cada una de esas conexiones puede estar ejecutando una consulta l
   esas sesiones y ver nombres internos de tablas y chunks. No puede leer ni una fila de todo eso. Si
   eso importa, dé a cada cliente su propia instancia.
 - **Eliminar un inquilino no elimina su rol de lector.** Quite el rol de las variables de su
-  despliegue como parte del desmantelamiento. La telemetría se borra, así que el rol no lee nada —
-  pero un inicio de sesión que sigue existiendo es un inicio de sesión que alguien conserva, **y un
-  id de inquilino puede reutilizarse, en cuyo caso ese rol leería los datos de su sucesor.** Quitar
-  el rol es el paso que cierra ambas cosas.
+  despliegue y después elimínelo como superusuario, como parte del desmantelamiento. La telemetría
+  se borra, así que el rol no lee nada — pero un inicio de sesión que sigue existiendo es un inicio
+  de sesión que alguien conserva, **y un id de inquilino puede reutilizarse, en cuyo caso ese rol
+  leería los datos de su sucesor.** Eliminar el rol es el paso que cierra ambas cosas; quitarlo
+  solo de su declaración lo deja en la base de datos, como se describe en [Declarar un
+  lector](#declarar-un-lector).

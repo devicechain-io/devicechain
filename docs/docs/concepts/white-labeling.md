@@ -7,7 +7,7 @@ title: White-Labeling & Branding
 DeviceChain lets a tenant present the console under its own brand: a **logo**, a **color palette**, and a **product title** replace the DeviceChain defaults throughout the tenant's console session. White-labeling is part of the open-source core — there is no separate edition for it — so an operator can run one instance and let each customer tenant see *their* brand.
 
 :::note Status
-Available: the branding cascade (tenant → operator default → built-in floor), the console **Branding** editor, per-field inheritance, and logo storage via the object store or an inline/external reference. Planned (Phase 3): a per-tenant **login-screen skin**, **favicon**, and **custom-domain → tenant branding** resolution — until then the login page shows the operator's brand, since no tenant is known before sign-in.
+Available: the branding cascade (tenant → operator default → built-in floor), the console **Branding** editor, per-field inheritance, and logo storage via the object store or an inline/external reference. Planned (Phase 3): a per-tenant **login-screen skin**, **favicon**, and **custom-domain → tenant branding** resolution — until then the login page shows the built-in DeviceChain brand (not the operator default), since no tenant is known before sign-in and branding is applied only once a tenant is selected.
 :::
 
 White-labeling here means **branding** — look and feel. It is not a per-tenant fork of the application: menus, copy, and translations are the same for every tenant.
@@ -26,11 +26,11 @@ A tenant that sets nothing inherits the operator default; an operator that sets 
 
 | Surface | Fields |
 |---|---|
-| **Title** | the product name shown in the browser tab and console header |
+| **Title** | the product name shown in the browser tab (the document title) |
 | **Logo** | an image (with a max-height knob) swapped into the console header |
 | **Palette** | four colors — primary, background, foreground, accent — applied as CSS custom properties at the app root |
 
-Because the console themes entirely through design tokens, the palette is one write point: the four colors restyle the whole application without custom CSS. (Arbitrary CSS injection is deliberately not offered — it is an XSS and maintenance surface for marginal gain over a proper palette.)
+Because the console themes entirely through design tokens, the palette is one write point, with no custom CSS: **primary** and **accent** restyle the application's design tokens (buttons, focus rings, accents), while **background** and **foreground** recolor the branded sidebar chrome only — the page base keeps its light/dark theme. (Arbitrary CSS injection is deliberately not offered — it is an XSS and maintenance surface for marginal gain over a proper palette.)
 
 ## Logo storage
 
@@ -44,7 +44,7 @@ Uploads and inline images are validated server-side (raster image types only, si
 
 ## Where branding lives
 
-Branding is a set of typed, nullable columns on the **tenant control-plane record** — not a JSON blob, and **never in the JWT**. Tokens stay auth-only; the console reads the resolved branding through the self-scoped `tenant` query (its regular boot query) and caches it stale-while-revalidate, keyed on an `updatedAt` that bumps when *either* the tenant override or the operator default changes — so a rebrand propagates promptly.
+Branding is a set of typed, nullable columns on the **tenant control-plane record** — not a JSON blob, and **never in the JWT**. Tokens stay auth-only; the console reads the resolved branding through the self-scoped `tenant` query (its regular boot query) and caches it stale-while-revalidate per tenant (the cached value paints first, then a fresh fetch replaces it on every load) — so a rebrand propagates promptly. The resolved branding also carries an `updatedAt` that bumps when *either* the tenant override or the operator default changes, for clients that want to key a cache of their own on it.
 
 ## Editing
 

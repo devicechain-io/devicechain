@@ -21,8 +21,8 @@ const LocalRegistry = "localhost:5000"
 
 // DefaultIngressHost is the host the instance ingress is exposed on. It matches
 // the chart's ingress.host default; the pipeline sets it explicitly so the
-// access report can print a real URL instead of a placeholder. (A future --host
-// flag / gcp provider can override this through State.)
+// access report can print a real URL instead of a placeholder. (--host overrides
+// it through State.IngressHost; a non-local provider may set a default of its own.)
 const DefaultIngressHost = "devicechain.local"
 
 // DefaultImageVersion is the published image tag deployed by default, injected
@@ -88,11 +88,17 @@ type State struct {
 	// plain HTTP instead of a self-signed cert. See Options for the UX rationale.
 	IngressHost string
 	NoTLS       bool
-	// NoMonitoring skips the kube-prometheus-stack install in the infra apply
-	// (default-on, like Postgres/Timescale). See Options for the rationale.
+	// NoMonitoring records that the cluster was installed WITHOUT the observability
+	// stack. It is `dcctl install`'s flag, applied to the cluster root there; a
+	// bootstrap has no flag for it and reads it back from the install record
+	// (FollowInstall), an upgrade from the declaration (applyDeclaration), and both
+	// use it only to shape what the instance renders — no ServiceMonitors or rules
+	// against CRDs that are not there.
 	NoMonitoring bool
-	// NoCNPG skips the CloudNativePG operator + backup plugin in the infra apply
-	// (default-on, ADR-020 A2). See Options for the rationale.
+	// NoCNPG records that the cluster was installed WITHOUT the CloudNativePG
+	// operator and its backup plugin (ADR-020 A2). Set and read back the same way
+	// as NoMonitoring; on the instance side it goes into the declaration and decides
+	// whether the event store archives at all (databaseBackupsEnabled).
 	NoCNPG bool
 	// AllowLegacyDbRemoval passes the cutover-guard escape hatch through to
 	// OpenTofu (ADR-020 A2.3/A2.4).
@@ -104,9 +110,11 @@ type State struct {
 	// nowhere to set it. On a local cluster the other branch works (destroy and
 	// rebuild); on a real one there was no route past the guard at all.
 	AllowLegacyDbRemoval bool
-	// Compact applies the small-footprint preset (compactSizing). See Options.
+	// Compact applies the small-footprint preset (compactSizing). The cluster's
+	// setting, read back from the install record like NoMonitoring.
 	Compact bool
-	// HA applies the ADR-020 messaging topology (haTopology). See Options.
+	// HA applies the ADR-020 messaging topology (haTopology). The cluster's setting,
+	// read back from the install record like NoMonitoring.
 	HA bool
 	// EnableAreas is the raw extra areas requested via --enable-area (the delta over
 	// the profile), kept for an honest access-report label. EnabledAreas is the

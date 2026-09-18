@@ -49,13 +49,16 @@ func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // SetupWithManager wires the controller to reconcile on Instance changes.
 //
-// 🔴 NOTHING REGISTERED HERE MAY WATCH A CRD THE BOOTSTRAP INSTALLS LATER, and
-// that constraint is newer than it looks. The operator used to be installed
-// after the infrastructure apply, so CloudNativePG's CRDs were already present
-// by the time this ran; ADR-080 moves the operator to the FRONT of the pipeline
-// so the Instance CRD exists before anything declares an instance, which means
-// this now runs at a moment when CNPG, cert-manager and the monitoring stack do
-// not exist yet.
+// 🔴 NOTHING REGISTERED HERE MAY WATCH A CRD THAT IS OPTIONAL ON THE CLUSTER, and
+// the constraint has already changed shape once. The operator used to be
+// installed after the infrastructure apply, so CloudNativePG's CRDs were always
+// present by the time this ran; ADR-080 moved the operator to the FRONT of the
+// bootstrap so the Instance CRD exists before anything declares an instance, and
+// for a while that meant CNPG, cert-manager and the monitoring stack did not exist
+// yet when this ran. Today `dcctl install` puts all three in place before any
+// bootstrap can start — but a cluster installed --no-cnpg or --no-monitoring
+// legitimately never gets them, so a CRD this controller cannot count on is still
+// a CRD it must not watch.
 //
 // A Watches/Owns source registered against a missing CRD does not fail fast and
 // does not recover on its own either. controller-runtime retries GetInformer

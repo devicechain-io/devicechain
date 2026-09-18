@@ -142,8 +142,12 @@ Para flotas ya existentes que hablan Sparkplug con su propio bróker.
   Sparkplug (`DCMD`), y no es una carencia a la espera de trabajo: una flota Sparkplug reside en la
   infraestructura MQTT *del cliente*, así que nada tiende un puente entre el flujo de comandos de la
   plataforma y ella. Un comando emitido a un dispositivo Sparkplug acaba en `FAILED`, no entregable
-  — con dos matices que conviene conocer antes de confiar en ello. Ocurre en el **barrido de
-  entrega**, que corre cada 30 segundos, y no en el momento en que lo encola. Y exige que la
+  — con dos matices que conviene conocer antes de confiar en ello. El veredicto suele ser
+  rápido, pero no es sincrónico con el encolado: encolar un comando desencadena un intento de
+  despacho inmediato para ese dispositivo, y cuando es el único comando encolado del dispositivo
+  la compuerta de presencia lo marca como fallido en el acto. Si el dispositivo ya tiene otros
+  comandos encolados, ese intento se retira y el veredicto llega en el siguiente **barrido de
+  entrega**, que corre cada 30 segundos por defecto (configurable entre 5 y 300). Y exige que la
   compuerta de presencia esté **configurada**: esa compuerta necesita el secreto entre servicios y un
   endpoint de `device-state`, y sin cualquiera de los dos está apagada —lo registra al arrancar— y el
   comando se despacha como cualquier otro y acaba en `TIMEOUT`.
@@ -195,8 +199,12 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
   presencia se reconstruye, la telemetría se restablece solo a medida que se renueva el registro de
   cada dispositivo.
 - Los comandos a un dispositivo dormido se **retienen de forma duradera y se drenan** cuando vuelve a
-  aparecer, que es el único lugar donde la plataforma retiene un comando en vez de exigir que el
-  dispositivo esté en vivo.
+  aparecer, registrados como `PARKED`. Es el único lugar donde un comando que el transporte ya intentó
+  entregar se conserva para el dispositivo en vez de perderse. No es la única retención de la
+  plataforma: para todos los transportes —MQTT incluido, cuando es el propio broker quien informa la
+  presencia del dispositivo— un comando cuyo dispositivo el transporte afirma ausente se retiene como
+  `HELD` antes de publicarse, y se libera cuando vuelve la presencia. Véase
+  [comandos para un dispositivo ausente](../concepts/commands.md#commands-to-a-device-that-is-away).
 
 #### Operaciones LwM2M en detalle
 

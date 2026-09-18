@@ -24,9 +24,17 @@ backing up and restoring as two separate operations rather than one:
 | Needs the root key | **Yes** | No |
 
 This is not a policy imposed on one database — it is how the platform already
-stores things. `event-management` is the only service that talks to TimescaleDB, and
-it talks to nothing else; every other service lives entirely on the relational
-server. There are no cross-writes to keep consistent between them.
+stores things. `event-management` owns the event store — its schema, its hypertables,
+its retention policies — and it is the only service that writes telemetry there; every
+other service keeps its own data on the relational server. The one other service that
+reaches TimescaleDB at all is `user-management`, through a guest connection that creates
+no schema and runs no migrations, and only to delete a purged tenant's rows. No write
+spans both stores, so there is nothing to keep transactionally consistent between them.
+The one thing to know when the two halves carry different recovery points: the tenant's
+row on the relational side is what drives that deletion and is removed once it is done,
+so event data restored to a point *before* a tenant was purged, next to core data
+restored to a point *after* its row was released, brings back telemetry that nothing
+will erase again.
 
 Two consequences worth planning around:
 
@@ -294,10 +302,31 @@ primary` has not recovered — most often the archive is unreachable, or
 bucket.
 :::
 
-:::note Restoring under a different instance name
-Perfectly supported — the artifact records the name it was written for and `dcctl`
-notes the mismatch rather than refusing. The recorded name is authenticated, so it
-cannot be edited without invalidating the file.
+:::caution Recover under the instance's own name
+A recovery has to use the name the instance had. The relational database is named after
+the instance, so the restore in step 1 brings it back under the *old* name, owned by
+that instance's own login. A bootstrap run with `--restore-root-key` under a *different*
+name looks into the store, finds no database of its own there, and — on a cluster that
+holds no half-built instance of that name either — stops before writing anything:
+
+```text
+--restore-root-key recovers the key that opens instance "<new-name>"'s stored secrets, and
+there is nothing here for it to open: the relational store holds no database for "<new-name>" ...
+```
+
+It refuses because the alternative is an *empty* instance sealed under a recovered key —
+which looks like a successful recovery from the outside and holds none of the data you
+came back for. The yellow `note: ... was escrowed for instance "<old-name>"` printed
+earlier in the same run is the warning, not the refusal.
+
+The way out is to run step 2 again under the original name — the one `dcctl secrets
+escrow show` prints as `Instance:` for the artifact, and the one the recovered database
+carries. The refusal comes *after* the relational restore has already run, so settle the
+name before you start rather than during the incident.
+
+The artifact does record the name it was written for, and that name is
+authenticated — it cannot be edited without invalidating the file. Renaming an
+instance is a migration, not a restore, and the platform does not do it today.
 :::
 
 ## Verifying your escrow, before you need it {#verify}
@@ -337,9 +366,12 @@ on different schedules, so fresh credentials open a window in which one side rej
 other, and pods that start inside it fail to reach the broker at all.
 
 `dcctl upgrade` is the command that acts on a live instance, and it **mints nothing**. It
-reads back the secret-store root key, the broker's authority and logins, the database owner
-passwords, the cross-service auth secret and the single sign-on client secret, and keeps every
-one of them. A version change cannot become a credential change.
+reads back the secret-store root key, the broker's authority and logins (the callout issuer
+seed and the service and system passwords), the database passwords (the shared owner, the
+provisioner, the instance's own login and the event store's owner), the cross-service auth
+secret — and, where monitoring and in-cluster backups are enabled, the Grafana admin password
+and the object-store credentials — and keeps every one of them. A version change cannot
+become a credential change.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 

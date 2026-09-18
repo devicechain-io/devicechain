@@ -322,9 +322,11 @@ func runDoctor(provider string) *doctor {
 
 var preflightCmd = &cobra.Command{
 	Use:   "preflight [provider]",
-	Short: "Check prerequisites for bootstrap",
-	Long:  `Proactively diagnoses local-system prerequisites (tools, docker, kernel limits, disk, ports, kube contexts) before a bootstrap run, with an actionable fix for each problem found.`,
-	Args:  cobra.MaximumNArgs(1),
+	Short: "Check local prerequisites for installing a cluster",
+	Long: `Proactively diagnoses local-system prerequisites (tools, docker, kernel limits, disk, ports, kube contexts) before 'dcctl install' prepares a cluster, with an actionable fix for each problem found.
+
+These are the prerequisites for standing a cluster up, not for building an instance on one: a bootstrap runs against a cluster 'dcctl install' has already prepared, so run this before the install.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		provider := ""
 		if len(args) > 0 {

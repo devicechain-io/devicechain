@@ -21,7 +21,7 @@ Available. Credentials are managed from the device detail page's **Credentials**
 
 ## Reading a credential requires `device:write` {#reading-a-credential}
 
-Where a type carries a secret (the `MQTT_BASIC` password), that secret is **write-only**: it is submitted when the credential is registered and is **never returned on read**. The console shows it once, at creation time, and the API returns `null` for it thereafter.
+Where a type carries a secret (the `MQTT_BASIC` password), that secret is **write-only**: it is submitted when the credential is registered and is **never returned on read**. The console never displays it — the password is entered in a masked field and cleared once the credential is created — and the API returns `null` for it thereafter.
 
 That protects the `MQTT_BASIC` password, and nothing else. `ACCESS_TOKEN` and `X509_CERTIFICATE` store no secret to withhold: the **`credentialId` is itself the bearer** — the table above says so for the access token, and the per-event check accepts a certificate credential on its id alone as well — and `credentialId` is a plainly readable field. So reading a device's credentials hands you what you need to authenticate as that device, whatever the type.
 
@@ -57,7 +57,7 @@ The credential above is the **per-event** check. In addition, MQTT/NATS **connec
 
 - The MQTT and NATS listeners are **TLS** — a device connects over TLS with the instance CA.
 - A NATS **auth-callout** authenticates the connection and binds it to **that one device's** subjects — not its tenant's — so a device can publish its own events and read its own commands, and nothing else. For an `MQTT_BASIC` device, the connection presents MQTT username **`{tenant}:{credentialId}`** and the credential password — the same credential that authenticates its events — so a device that can't authenticate can't even connect.
-- The connection must also present the MQTT **client id** `{instanceId}:{tenant}:{deviceToken}`; any other value is refused. The client id is the key the broker files a device's session under, so leaving it to the device would let one device take over another's session.
+- The connection must also present the MQTT **client id** `{instanceId}:{tenant}:{deviceToken}`, optionally followed by `:` and a suffix of the device's choosing (for example `{instanceId}:{tenant}:{deviceToken}:cmd`) so a second concurrent session — one connection publishing, another subscribed for commands — does not evict the first. Any id that does not start with the device's own `{instanceId}:{tenant}:{deviceToken}` is refused. The client id is the key the broker files a device's session under, so leaving it to the device would let one device take over another's session.
 
 See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
@@ -65,7 +65,7 @@ See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
 1. Open the device's detail page and select the **Credentials** tab.
 2. Choose the credential **type** and fill the fields for that type (generate or paste an access token; enter a username + password for MQTT-basic; enter a certificate id for X.509).
-3. Click **Add credential**. For a secret-bearing type, copy the secret now — it will not be shown again.
+3. For `MQTT_BASIC`, record the password before you continue — the field is cleared on success and the password is never shown again. Then click **Add credential**.
 
 Delete a credential from its row; the device can no longer authenticate with it.
 

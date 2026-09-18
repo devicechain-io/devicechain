@@ -504,7 +504,7 @@ below is emitted and scraped; nothing will page you about any of it until you wr
 
 **The first alert to author is a no-leader alert**, on each ingest service:
 
-> `sum(devicechain_lwm2mingest_is_leader) != 1`
+> `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
@@ -512,11 +512,13 @@ Zero means nobody is serving that transport and every device on it is silently u
 other than one is worth waking someone. It is the most load-bearing signal on this whole surface and it
 is the one nothing tells you about today.
 
-The `absent()` half is not decoration. The Sparkplug gauge is only registered once at least one
-source is configured, so a pod running with its sources unset publishes the series **not at all** —
-and `!= 1` over an empty result is itself empty, which is a silent alert, not a firing one. That is
-exactly the case the alert exists for. LwM2M registers its gauge unconditionally, so only the
-Sparkplug expression needs the pairing.
+The `absent()` half is not decoration, but it is not there for a source-less pod either. Both services
+register their `is_leader` gauge unconditionally at initialization, before either checks whether it has
+anything to serve, so a Sparkplug pod running with its sources unset publishes the series reading **0**
+for the life of the pod, and `!= 1` fires on its own. What `absent()` covers is the case where there is
+no series to sum at all — no replica came up, or none is being scraped — because `!= 1` over an empty
+result is itself empty, which is a silent alert, not a firing one. That case applies to both transports
+equally, which is why both expressions carry the pairing.
 
 Both services' `is_leader` gauges go up when the replica **acquires** the lease, not when it
 finishes building its term, so a normal takeover does not read as leaderless while the new leader

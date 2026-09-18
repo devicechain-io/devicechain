@@ -39,18 +39,23 @@ import (
 //
 // 🔴 WHY THE LOCK IS PER-CLUSTER AND NOT PER-INSTANCE, WHICH IS THE PART THAT IS
 // EASY TO GET WRONG. The obvious design gives each instance its own Lease, and it
-// locks the wrong thing. Almost everything a bootstrap touches is a cluster
-// singleton: the Helm release is helmReleaseNameFor(instance) in the literal
-// "default" namespace, the infrastructure root installs fixed-name releases into
-// dc-system / cnpg-system / cert-manager, and the operator Deployment is applied
-// cluster-wide. Two runs holding two different per-instance Leases are both
-// "legal" and will still overwrite each other's release, because the resource
-// they contend for has no instance in its name. The instance id is recorded on
-// the Lease so the refusal can say WHICH instance holds it, but it is not the key.
+// locks the wrong thing. A cluster now holds any number of instances, and most of
+// what they are built ON is still a cluster singleton: the shared relational store
+// in dc-system, into which every bootstrap creates its own login and database; the
+// install record that says how this cluster was prepared; the cluster-scoped
+// Instance declarations that step 4 lists to ask what the others hold; and the
+// cluster prerequisites `dcctl install` applied (cnpg-system, cert-manager, the
+// monitoring stack, the operator Deployment). Two runs holding two different
+// per-instance Leases are both "legal" and still race on all of it, because the
+// resources they contend for have no instance in their names. The instance id is
+// recorded on the Lease so the refusal can say WHICH instance holds it, but it is
+// not the key.
 //
-// 🔑 The remaining hazard is not this lock's to fix and must not be hidden by it:
-// one cluster genuinely holds one instance today, and this lock enforces "one run
-// at a time", not "one instance per cluster". See the follow-up filed with slice 3.
+// 🔑 What this lock does NOT do, and must not be read as doing: it enforces "one
+// dcctl run at a time on this cluster", which is a different claim from anything
+// about how many instances a cluster may hold. It holds several — the per-instance
+// isolation that makes that safe is namespaces, logins and databases, none of
+// which is this Lease's business.
 //
 // WHY IT HAS TO WORK NOW. The OpenTofu state backend is still local (see
 // instanceStateDir), so the state lock that will eventually block a concurrent

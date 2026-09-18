@@ -631,10 +631,10 @@ variable "monitoring_storage_class" {
   default     = ""
 }
 
-# --- Grafana SSO (ADR-047) — set by the bring-up when it provisions the client ----
+# --- Grafana SSO (ADR-047) — operator-set; dcctl does not wire this ---------------
 
 variable "monitoring_grafana_oauth_enabled" {
-  description = "Turn on Grafana OAuth SSO against user-management (ADR-047), operator/superuser-tier only. The bring-up sets this true once it has minted the client secret and computed the URLs below."
+  description = "Turn on Grafana OAuth SSO against user-management (ADR-047), operator/superuser-tier only. Operator-set (tfvars): dcctl does not provision the client or set this, so the client secret and the URLs below are yours to mint and compute (see README.md, Grafana auth)."
   type        = bool
   default     = false
 }
@@ -646,7 +646,7 @@ variable "monitoring_grafana_oauth_client_id" {
 }
 
 variable "monitoring_grafana_oauth_client_secret" {
-  description = "Cleartext Grafana OAuth client secret (user-management stores its bcrypt hash). Minted by the bring-up. Sensitive."
+  description = "Cleartext Grafana OAuth client secret (user-management stores its bcrypt hash). Operator-provisioned; dcctl does not mint it. Sensitive."
   type        = string
   default     = ""
   sensitive   = true

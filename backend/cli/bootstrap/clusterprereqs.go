@@ -154,9 +154,10 @@ func clusterOutputs(outputs map[string]tfexec.OutputMeta) (InstallOutputs, error
 	}
 	// The namespace the CloudNativePG OPERATOR runs in — the database CONTROL
 	// PLANE, which is a different tier from the databases and a different
-	// namespace: dc-system holds the Clusters, cnpg-system holds the operator that
-	// drives them. It gates the operator's PodMonitor and the control-plane
-	// alerting rules together (ADR-020 A1.5).
+	// namespace: dc-system holds the shared relational-store Cluster, each dci-<id>
+	// namespace holds that instance's event-store Cluster, and cnpg-system holds the
+	// one operator that drives them all. It gates the operator's PodMonitor and the
+	// control-plane alerting rules together (ADR-020 A1.5).
 	if meta, ok := outputs["cnpg_namespace"]; ok {
 		out.CNPGNamespace = optionalStringOutput(meta)
 	}

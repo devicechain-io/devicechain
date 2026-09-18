@@ -119,9 +119,10 @@ helm install dc deploy/helm/devicechain \
 ```
 
 The Helm chart itself is also published as an OCI artifact, so you can install it without a
-checkout of the repository. The chart is versioned separately from the images and carries no
-leading `v`; `helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the
-latest, and `--version` refuses anything that was never published:
+checkout of the repository. The chart version is the release version without its leading `v`
+— `--version 0.16.0` installs release `v0.16.0` — so there is no separate number to look up;
+`helm show chart oci://ghcr.io/devicechain-io/charts/devicechain` prints the latest, and
+`--version` refuses anything that was never published:
 
 ```bash
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
@@ -179,6 +180,46 @@ defaults move between versions, so prefer writing the values out and passing the
 where you can see them.
 :::
 
+:::caution If the instance config comes from a Secret you manage
+An install that mounts its instance config from a Secret the chart does not write — set with
+`instance.existingSecret`, the pattern External Secrets and sealed-secrets produce — now has
+to satisfy four conditions, and `helm upgrade` **fails the render** rather than proceeding
+when one is not met. Nothing in the release changes when that happens; the refusal is the
+whole effect.
+
+- **The Secret must be named `dci-<instance.id>-config`**, in the instance's namespace. Any
+  other name is refused, because `dcctl` reads the config back by exactly that name to decide
+  whether an instance already exists, and treats a missing Secret as a fresh install — a
+  re-run would mint a new root key and new database and broker credentials over a live
+  instance. If your Secret is under another name, create it again under this one (an
+  External Secrets `target.name`, a sealed secret's `metadata.name`) before you upgrade.
+- **`instance.existingSecretChecksum` is required**: the sha256 of the document under the
+  Secret's `instance` key, as 64 lowercase hex characters. The chart cannot read your Secret,
+  so this is what rolls the pods when the config changes; without it a rotated credential
+  would apply cleanly, restart nothing and report success. Recompute it whenever the document
+  changes:
+
+  ```bash
+  kubectl get secret dci-<instance.id>-config -n dci-<instance.id> \
+    -o jsonpath='{.data.instance}' | base64 -d | sha256sum | cut -d' ' -f1
+  ```
+
+- **`networkPolicy.externalConfigPorts` is required while `networkPolicy.enabled` is on**,
+  with keys `nats` and `rdb` restating the broker and database ports your document names.
+  The chart would otherwise take them from its own defaults, and a port that disagrees
+  silently blocks the services' own egress — which presents as a broker or database outage.
+- **`metrics.natsBrokerHost` is required while `metrics.natsPodMonitor` is on** — the
+  broker's hostname as your document names it (the short Service name for a broker in this
+  instance's namespace, `<service>.<namespace>` for one elsewhere). It decides which
+  namespace the PodMonitor watches; a default that does not match monitors nothing. Or set
+  `metrics.natsPodMonitor=false`.
+
+Each `helm` error names the value it wants and why. The two transforms the chart normally
+applies while writing the document — the `infrastructure.shutdown` block, and the removal of
+`infrastructure.aiInference` when that area is not deployed — remain yours to reproduce, as
+before.
+:::
+
 ## Zero-downtime upgrades {#zero-downtime-upgrades}
 
 Upgrading an instance you bootstrapped is **one command**, and the chart and services are
@@ -210,8 +251,9 @@ cluster from the instance's own record rather than guessing, and says which.
 
 :::tip It reads every credential and mints none
 `dcctl upgrade` keeps what the instance is running on: the database owner passwords, the
-broker's authority and logins, the cross-service secret, the secret-store root key, and the
-single sign-on client secret. A version change cannot become a credential change.
+broker's authority and logins, the cross-service secret, the secret-store root key, and —
+where the cluster runs them — the monitoring dashboard's admin password and the in-cluster
+backup store's credential. A version change cannot become a credential change.
 
 This is verified rather than asserted. An upgrade of a running instance was checked by
 comparing a digest of every one of those credentials before and after, and the only thing
@@ -231,10 +273,10 @@ replica count, for one, does not re-replicate messaging streams that were create
 one.
 
 Two things are deliberately outside this command as well. It does not run the infrastructure
-apply, because two of that apply's inputs cannot be recovered from the cluster — the endpoint
-and bucket names of an off-site backup destination, and the single sign-on client secret's
-cleartext. And it does not touch the databases beyond letting the services run their own
-migrations.
+apply, because one of that apply's inputs cannot be recovered from the cluster — the endpoint
+and bucket names of an off-site backup destination, which come from the file you gave
+`dcctl install --backup-credentials-file`. And it does not touch the databases beyond letting
+the services run their own migrations.
 :::
 
 ### What else an upgrade checks {#upgrade-checks}
@@ -289,9 +331,15 @@ with — indefinitely, and with no error to say so.
 
 What makes the rollout safe:
 
-- **Surge-before-terminate.** Each Deployment uses a `RollingUpdate` strategy with
+- **Surge-before-terminate.** Deployments default to a `RollingUpdate` strategy with
   `maxUnavailable: 0` and `maxSurge: 1`, so a new pod must pass its `/readyz` readiness
-  probe **before** an old pod is removed. Capacity never dips during the rollout.
+  probe **before** an old pod is removed, and capacity never dips during the rollout. Four
+  areas ship with `strategy: Recreate` and one replica instead, because only one of their
+  pods may serve at a time: `event-processing` (the rule engine is a single writer), `mcp`
+  (a client's session lives on the pod that opened it), `sparkplug-ingest` (one Sparkplug
+  Host per pod) and `lwm2m-ingest` (one CoAP/UDP socket per pod). For those, every old pod
+  stops before the new one starts, so a rollout has a brief gap by design — and the chart
+  refuses `Recreate` with more than one replica.
 - **Graceful shutdown / connection draining.** When a pod is asked to terminate it first
   reports "not ready" (so the Service stops routing new requests to it), waits a short
   drain window for that change to propagate, and only then finishes in-flight work and
@@ -310,11 +358,15 @@ What makes the rollout safe:
   wait — no races, no duplicate DDL.
 
 :::tip Run at least two replicas in production
-For true zero-downtime, run `replicas: 2` (or more) for each area so the rollout always has
-a live pod serving traffic. A single replica still has a brief gap while its one pod is
-replaced. Set it globally with `--set replicas=2`, or per area under
-`functionalAreas.<area>.replicas`. A `PodDisruptionBudget` is rendered automatically for any
-area with more than one replica, so node drains can't evict every replica at once.
+For true zero-downtime, run `replicas: 2` (or more) for each area that can serve from more
+than one pod, so the rollout always has a live pod serving traffic. A single replica still
+has a brief gap while its one pod is replaced. Set it globally with `--set replicas=2`, or
+per area under `functionalAreas.<area>.replicas`. The four single-pod areas above are the
+exception: `mcp`, `sparkplug-ingest` and `lwm2m-ingest` refuse more than one replica under
+any strategy, and `event-processing` takes a second replica only as a warm standby, with
+`strategy: RollingUpdate` set alongside it — the render fails and says why otherwise. A
+`PodDisruptionBudget` is rendered automatically for any area with more than one replica, so
+node drains can't evict every replica at once.
 :::
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
@@ -1270,9 +1322,43 @@ dcctl install local                        # prepares a fresh cluster
 dcctl bootstrap local devicechain
 ```
 
-For a cluster reached with `--kube-context`, which `dcctl` never deletes, delete and
-recreate it with whatever created it, then pass the same `--kube-context` to `install` and
-`bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
+For a cluster reached with `--kube-context`, which `dcctl` never deletes, pass that
+`--kube-context` to the `destroy` line as well — the reason is in the note below — then
+delete and recreate the cluster with whatever created it, and pass the same `--kube-context`
+to `install` and `bootstrap`. `dcctl upgrade` prints this same recipe when it refuses.
+
+:::note This release's `dcctl` does not read the older release's local state
+`dcctl` now keeps what it knows about an instance under
+`~/.devicechain/instances/<instance>/`. Releases up to `v0.16.0` kept it one level up, at
+`~/.devicechain/<instance>/`, and **the new `dcctl` does not read, list or remove that
+directory** — there is deliberately no migration, because `dcctl` cannot tell an old
+instance directory from one you made yourself. Three things follow for the recipe above:
+
+- **`dcctl instances list` shows none of your older instances.** On a machine holding only
+  instances built by `v0.16.0` or earlier it prints `No DeviceChain instances on this machine
+  (nothing under ~/.devicechain/instances).` Nothing has been lost; the instances are still
+  in their clusters, and `helm list -A` still shows their releases.
+- **`destroy` guesses the cluster.** The cluster record the older release wrote is in the
+  directory the new `dcctl` does not read, so `destroy` prints
+  `No record of which cluster instance "<instance>" lives in — GUESSING cluster … from its
+  name` and derives it from the instance name. That guess is right for a local instance
+  named the way the recipe names it, and **wrong for one bootstrapped with `--kube-context`**,
+  which is why that flag goes on the `destroy` line. `--without-state` is still needed: the
+  infrastructure state is also in the directory `dcctl` no longer looks in.
+- **The old directory stays on disk.** `destroy` removes `~/.devicechain/instances/<instance>/`
+  — which for such an instance holds nothing — and leaves `~/.devicechain/<instance>/`
+  where it was, with its `infra/terraform.tfstate` (the database superuser password and the
+  broker's TLS private key, in cleartext) and `broker-credentials.json`. Once the instance is
+  gone, remove it yourself:
+
+  ```bash
+  rm -rf ~/.devicechain/<instance>
+  ```
+
+  Do **not** touch `~/.devicechain/escrow/`. The root-key escrow artifact has always lived
+  there, outside any instance directory, and it still opens that instance's database backups
+  — see [Disaster Recovery](./disaster-recovery.md#after-destroy).
+:::
 
 :::caution Export first — recreation discards your data
 The [destroy guard](#data-durability) protects the databases from an ordinary `helm`

@@ -48,10 +48,19 @@ Issues and Discussions are public.
 If telemetry is missing, these three account for most reports, and ruling them out first
 will usually be faster than waiting on a reply:
 
-- **The device is not assigned.** Events from an unassigned device are dropped without an
-  error anywhere the sender can see.
-- **The measurement is not on the profile.** A device type's profile declares the
-  measurements the platform accepts; anything else is discarded during decoding.
+- **The device token is not registered, or its credential is refused.** Being
+  unassigned is *not* the problem: an unassigned device's events are stored and
+  projected, they just carry no customer, area or asset to be attributed to. A token the
+  platform does not know, or a credential it rejects, is the problem — the transport has
+  already answered by the time the event is resolved, so the refusal never reaches the
+  sender; the event is dead-lettered and logged at warning level in device-management.
+- **The measurement is not on the profile, and its value is not a number.** An
+  undeclared measurement whose value is numeric is stored as-is, with no warning at all.
+  One whose value is not numeric is dropped — that entry alone, with a warning in
+  device-management's logs — because measurements are stored as numbers. A *declared*
+  measurement whose value does not match its declared type is worse: the whole event is
+  dead-lettered. Declaring the metric on the profile, with the right data type, fixes
+  both.
 - **You are looking at a different tenant** than the one the device reports into.
 
 ## What to expect

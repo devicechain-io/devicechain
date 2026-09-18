@@ -19,27 +19,30 @@ import (
 // step that stops the two verbs overlapping.
 //
 // 🔴 WHAT IT KEYS ON IS THE WHOLE DESIGN, AND THE THREE OBVIOUS CHOICES ARE ALL
-// WRONG. A bootstrap builds an instance over ten steps and can die at any of them, so
-// the question this step answers is not "is there anything here?" but "is there a
-// LIVE INSTANCE here, whose credentials I must not mint over?":
+// WRONG. A bootstrap builds an instance over twelve steps (NewDefaultPipeline) and can
+// die at any of them, so the question this step answers is not "is there anything
+// here?" but "is there a LIVE INSTANCE here, whose credentials I must not mint over?":
 //
-//   - NOT the instance namespace. It is created inside the Helm step, one line before
-//     the configuration document is written. A run killed between them leaves a
-//     namespace with no document, and a refusal keyed on the namespace makes that
-//     instance permanently unrepairable.
-//   - NOT the Instance declaration. It lands at step 4, before a single credential has
-//     been minted — so every failure in steps 5 through 7 would become unrepairable.
-//   - NOT "any of our namespaces". The operator's lands at step 2 and the
-//     infrastructure's at step 6, both before anything instance-shaped exists.
+//   - NOT the instance namespace. It is created in the apply step, ahead of the
+//     Secrets dcctl mints into it (CloudNativePG reads the credential Secret when it
+//     creates the Cluster), and again — idempotently — in the Helm step, one line
+//     before the configuration document is written. A run killed anywhere between
+//     leaves a namespace with no document, and a refusal keyed on the namespace makes
+//     that instance permanently unrepairable.
+//   - NOT the Instance declaration. It lands at step 6, before a single credential has
+//     been minted — so every failure in steps 7 through 9 would become unrepairable.
+//   - NOT "any of our namespaces". The operator's lands at step 5, before anything
+//     instance-shaped exists, and dc-system is the cluster's — `dcctl install` created
+//     it before this bootstrap was allowed to start.
 //
-// The configuration document is the boundary: it is written at step 7 and it is the
+// The configuration document is the boundary: it is written at step 9 and it is the
 // first DURABLE copy of the broker credentials and the root key. Before it exists,
 // those values live only in this machine's bootstrap record, and a re-run is how a
 // half-built instance is repaired. After it exists, a re-run is how a working one is
 // destroyed. That is the same line the whole reuse machinery was already drawn
 // around, and DeployedInstanceConfig already fails closed on "could not tell".
 //
-// 🔴 THE WINDOW BETWEEN STEPS 6 AND 7 IS THE ONE THIS MUST LEAVE OPEN. A live broker
+// 🔴 THE WINDOW BETWEEN STEPS 8 AND 9 IS THE ONE THIS MUST LEAVE OPEN. A live broker
 // configured with credentials whose only copy is a file on this machine, live database
 // Clusters whose owner passwords exist only in their Secrets, and no document. It is
 // reachable, it has been observed, and re-running is the only thing that repairs it.

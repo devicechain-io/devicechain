@@ -68,6 +68,37 @@ There is one exception: a re-run **may raise** `--max-connections` while instanc
 change, and a re-run that does not pass `--max-connections` keeps the budget the cluster
 already has.
 
+The prerequisites are applied with OpenTofu, and their state lives on the machine that ran
+`dcctl install`, under `~/.devicechain/clusters/<cluster-uid>/infra`. The directory is keyed
+on the cluster's **identity** — the UID of its `kube-system` namespace — rather than on its
+name, because a kind cluster deleted and recreated wears the same context name while holding
+none of the resources the old state describes. `cluster.json` beside `infra/` records the
+cluster name and kube-context you know it by, so a directory can be matched to its cluster:
+
+```bash
+cat ~/.devicechain/clusters/*/cluster.json
+kubectl --context <kube-context> get namespace kube-system -o jsonpath='{.metadata.uid}'
+```
+
+That state is what a re-run works from, so **an installed cluster can only be re-installed
+from the machine that holds its directory**. Run `dcctl install` against it from another
+machine and it is refused before anything is applied:
+
+```text
+cluster ... is already installed (by dcctl <version>, <time>), but this machine holds no state
+for it under ~/.devicechain/clusters/<cluster-uid>. It was installed from another machine, and
+re-applying from empty state would try to create every prerequisite again. Run `dcctl install`
+from the machine that installed it
+```
+
+Applying from empty state would plan every prerequisite as new and fail part-way on names
+already in use, so the refusal is the safe outcome — but it makes that directory a
+precondition of every re-run on this page, raising `--max-connections` included. It is the
+only copy of the cluster's prerequisite state, and no DeviceChain backup contains it. Keep it
+with the machine you install from; if another machine is to take over, copy the whole
+`~/.devicechain/clusters/<cluster-uid>/` directory to it first. It holds the cluster root's
+state, credentials included, so treat it as you treat the escrow directory.
+
 `--no-tls` on `dcctl install` only means something together with `--compact`, where it
 drops cert-manager; without `--compact` it is refused. To serve one instance over plain
 HTTP, pass `--no-tls` to `dcctl bootstrap` instead.
@@ -91,6 +122,12 @@ kind delete cluster --name devicechain
 docker rm -f kind-registry   # the local image registry, if you used --build
 ```
 
+kind knows nothing about `~/.devicechain/clusters/`, so deleting the cluster this way leaves
+its directory behind. The next `dcctl destroy` of an instance that was on that cluster finds
+the cluster gone and removes the directory along with the instance's own local state — see
+[Removing an instance](#destroy). Or remove it by hand, once its `cluster.json` has confirmed
+which cluster it belonged to.
+
 ### The connection budget {#connection-budget}
 
 The relational database has a fixed number of connections, set by `--max-connections`
@@ -106,6 +143,26 @@ upwards: re-run `dcctl install` with a larger `--max-connections`. It is not fre
 Changing the database's connection limit restarts its database instances one at a time;
 on a cluster installed without `--ha` there is only one, so **every instance on the
 cluster briefly loses its database** while it restarts. Do it in a quiet window.
+
+`dcctl upgrade` is admitted against the same budget. A release can change what an
+instance's relational areas need, so the upgrade compares this release's need with the limit
+the instance's login already holds, **before it writes anything**. A need that has not
+changed is not re-admitted. A grow the budget cannot admit is refused with nothing moved:
+
+```text
+this release needs instance "my-instance"'s database login to hold <n> connections, up from <m>,
+and nothing has been changed: ... Destroy an instance, or raise the budget by re-running
+`dcctl install` with a larger --max-connections
+```
+
+The remedy is the one above, and it restarts the database — so on a cluster whose budget is
+nearly spent, raise it in a quiet window *before* the upgrade window rather than discovering
+the need inside it. A grow that fits is applied before the services roll; a release that
+needs *less* has the login trimmed only after every service is ready on the new release. A
+trim that fails does not fail the upgrade — the services are already running — it is
+printed as a warning ending in ``re-run `dcctl upgrade` to finish it``, and until you do the
+login holds more of the budget than it needs. `dcctl upgrade --dry-run` reports the check it
+would make without signing in to the store.
 
 ## What it does {#what-it-does}
 
@@ -165,6 +222,20 @@ Two things on a cluster can belong to only one instance, and the bootstrap handl
   of the first instance only. Later instances' brokers are reachable from inside the
   cluster, and the bootstrap says so when it happens.
 
+The instance's namespace is checked at the same point. An instance **owns** `dci-<id>`: dcctl
+writes its root key, its broker TLS keypair and every one of its database credentials there,
+and `dcctl destroy` deletes the whole namespace. So a `dci-<id>` that already exists and does
+not carry the label `devicechain.io/instance=<id>` is refused before any of that is written.
+Nothing but dcctl creates a namespace under `dci-`, so the likely cause is an earlier
+`dcctl destroy` of this same instance that did not finish — the refusal says so and names the
+command to finish it, `dcctl destroy <provider> <id>`. A namespace still being deleted is
+refused too, until it is gone. If the namespace is one you made on purpose — to carry a
+quota, a policy or RBAC of your own — hand it to the instance and run the bootstrap again:
+
+```bash
+kubectl label namespace dci-<id> devicechain.io/instance=<id>
+```
+
 Instance names are lowercase letters, digits and `-`, at most 50 characters. The name is
 the instance's database and that database's login as written, and it is the tail of two
 other names: the namespace is `dci-` plus the name, and the Helm release is `dc-` plus the
@@ -195,10 +266,13 @@ components`), so a failure names a step you can find here:
    over.
    A dry run says what a real run would refuse rather than hiding it.
 4. **Check what other instances hold** — ask the cluster which ingress host and local MQTT
-   port other instances already hold, and stop if this instance's host is one of them. It
-   runs before anything is written, so a refusal leaves nothing behind; a local MQTT port
-   another instance holds does not stop the run, and is reported. A dry run says what a real
-   run would refuse. See **Several instances on one cluster** above.
+   port other instances already hold, and stop if this instance's host is one of them; and
+   look at the namespace this instance is about to be built in, `dci-<id>`, stopping if it
+   exists and is not this instance's, or is still being deleted. It runs before anything is
+   written, so a refusal leaves nothing behind; a local MQTT port another instance holds does
+   not stop the run, and is reported. A dry run says what a real run would refuse. See
+   **Several instances on one cluster** above, including the label that hands a namespace
+   you created yourself to the instance.
 5. **Install core components** — render the operator (CRDs + RBAC + controller) and
    apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
    because the definition of an instance has to exist in the cluster before anything can
@@ -324,7 +398,7 @@ pipeline, chart, and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, and MCP), `telemetry`, or `ingest-only`. |
+| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, and LwM2M ingest), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with **no `/etc/hosts` edit**. |
@@ -334,7 +408,7 @@ pipeline, chart, and operator are identical.
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
 | `--escrow-file <path>` | Write the escrow artifact somewhere other than `~/.devicechain/escrow/`. |
 | `--no-escrow` | Do **not** escrow the root key. For throwaway instances only; implied by `--dev`. An instance created this way can be given an escrow later — see [the escrow reconcile](./disaster-recovery.md#escrow-reconcile). |
-| `--restore-root-key <path>` | Disaster recovery: seed this instance's root key from an escrow artifact instead of minting one. |
+| `--restore-root-key <path>` | Disaster recovery: seed this instance's root key from an escrow artifact instead of minting one. Accepted only when there is something for that key to open — a database the relational store already holds for this instance (see [Recovering an instance](./disaster-recovery.md#recover)), or this instance half-built by an earlier run that is being finished. After `dcctl destroy` neither is true and the flag is **refused**: the next instance under that name mints a key of its own, so bootstrap without the flag, and move the old artifact aside first — bootstrap will not overwrite one. `dcctl secrets escrow show <path>` tells you which instance an artifact was written for. |
 
 ### The root-key escrow {#escrow}
 
@@ -386,6 +460,8 @@ instance bootstrapped on it follows them; none of them is a `dcctl bootstrap` fl
 | `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
 | `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
+| `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
+| `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `600` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What it does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. |
@@ -410,7 +486,8 @@ rather than adding a tuning axis of its own:
 It does **not** change which services run — that stays on each instance's `--profile`,
 where it is named and visible. A profile *larger* than `default` — today only `full` — is
 rejected on a compact cluster: the published compact numbers are measured on `default`, so
-they would not describe an instance running three more services. The smaller profiles
+they would not describe an instance running five more services (AI inference, outbound
+connectors, MCP, Sparkplug B ingest, and LwM2M ingest). The smaller profiles
 (`telemetry`, `ingest-only`) are accepted.
 
 Both TLS and monitoring can be kept: an explicit `--no-tls=false` or `--no-monitoring=false`
@@ -599,6 +676,12 @@ needs no install first. Destroying an instance and bootstrapping it again under 
 name is how an instance is recreated. An instance built by an older release, before
 `dcctl install` existed, is the exception: its cluster has to be recreated too — see
 [Releases & Upgrades](./releases-and-upgrades.md#pre-declaration-recreate).
+
+If the kind cluster itself is already gone — deleted with `kind delete cluster` — destroy has
+nothing to uninstall and says so, clearing local state only: the instance's directory, and the
+cluster's own directory under `~/.devicechain/clusters/<cluster-uid>/`, which `dcctl install`
+created and `kind delete cluster` left behind (see [Install the cluster](#install)). It prints
+`removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)` as it does.
 
 There is no uninstall command yet. To delete a local cluster `dcctl install` created, use
 kind directly, as shown under [Install the cluster](#install).

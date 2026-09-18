@@ -52,7 +52,7 @@ Making a fence *smaller* almost always works too, with one exception worth knowi
 Two consequences worth knowing. Because the whole-set total counts distinct shapes, making one of several identically-drawn fences different can raise your total even though that fence got smaller — the refusal says so when it happens. And because deleting lowers the stored total, an over-limit tenant that deletes a fence cannot recreate it: to move a fence to a new token, **create the new one first, then delete the old**.
 :::
 
-A boundary must also **bound an area**. A ring whose edges cross — a bow-tie — has no well-defined interior, so a containment question about it has no honest answer. Rings like that are refused when you save, by the same check the detection engine applies when it compiles a rule. That matters more than it sounds: before the check ran at authoring time, such a fence saved cleanly, sat in the registry looking healthy, and failed only later when a rule finally named it.
+A boundary must also **bound an area**. A ring whose edges cross — a bow-tie — has no well-defined interior, so a containment question about it has no honest answer. Rings like that are refused when you save, by the same check the detection engine applies when it compiles a fence set's geometry. That matters more than it sounds: before the check ran at authoring time, such a fence saved cleanly, sat in the registry looking healthy, and failed only later when a rule finally named it.
 
 :::tip The console warns before the server refuses
 While drawing, the console flags a self-crossing shape immediately. Its check is a flat approximation of the spherical one the server performs, so the two can disagree on very large fences or ones spanning the antimeridian — which is why the console only *warns*. The server's answer is the one that decides.
@@ -97,7 +97,7 @@ Detection rules reach a fence by token:
 geo.inFence("yard-perimeter")
 ```
 
-The predicate answers for the position on the event being evaluated, against the fence set that event was stamped with. A rule naming a fence that cannot be compiled — because its ring does not bound an area — fails to compile rather than answering arbitrarily.
+The predicate answers for the position on the event being evaluated, against the fence set that event was stamped with. A rule naming a fence that cannot be compiled — because its ring does not bound an area — still compiles and publishes; the fence is kept in the set carrying its error, so at evaluation every sample against it is skipped and counted as an evaluation error rather than answered arbitrarily — the same outcome as an unknown fence token, described [below](#unknown-fence).
 
 ### A fence test and a measurement test cannot share a condition {#fences-and-measurements}
 
@@ -124,7 +124,7 @@ Four situations produce this, and only the first is a mistake:
 | A rule authored against a fence that exists in a *later* version than the events being replayed | The same, and for the same reason |
 | A tenant's very first fence rule, in the seconds after it is published | Transient; the engine loads the fence set as the rule arrives |
 
-Evaluation errors are surfaced per rule on the authoring preview and on the detection engine's rule health, so this is visible — but nothing points at the geofence as the cause. If a fence rule is producing errors and nothing else, check the token first.
+Evaluation errors are surfaced per rule on the authoring preview, as its evaluation-error count, and in aggregate on the detection engine's `detect_fanout_eval_errors_total` metric — the rule-health view does not show them, and a rule producing errors on every sample still reads `ACTIVE` there. So this is visible, but only on those two surfaces, and nothing points at the geofence as the cause. If a fence rule is producing errors and nothing else, check the token first.
 
 ### What the engine keeps in memory {#fence-set-retention}
 
