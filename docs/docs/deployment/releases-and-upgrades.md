@@ -1310,6 +1310,90 @@ yourself: its **`maplibre-gl` peer range moves from `^6.6.0` to `^6.7.0`**. If y
 at 6.6.x you will see an unmet-peer warning, or an install failure under a package manager that
 enforces peers strictly. Nothing else about the packages changed.
 
+### v0.17.0 — instances stop owning the cluster they run on {#v0170-upgrade}
+
+🔴 **There is no in-place upgrade into `v0.17.0`.** Every instance built by `v0.16.0` or earlier
+has to be destroyed and built again — `dcctl upgrade` refuses and prints the recipe rather than
+doing anything partial. [The next section](#pre-declaration-recreate) is the one to read, and it
+says what to export first: there is no path that preserves your telemetry, device definitions or
+dashboards across this release.
+
+What follows is what changes for you once you are on it.
+
+#### `dcctl bootstrap` is now two commands
+
+`dcctl install <provider>` prepares a **cluster**, once. `dcctl bootstrap <provider> <instance>`
+builds an **instance** on a cluster that is already prepared, as many times as you want instances.
+
+```bash
+dcctl install local
+dcctl bootstrap local my-instance
+```
+
+Everything that sizes or shapes the cluster moved to `install` and is recorded there, so `--ha`,
+`--compact`, `--no-monitoring`, `--no-cnpg` and `--max-connections` are set **once** and every
+instance on that cluster follows them. A bootstrap has no flags for them any more. `dcctl
+bootstrap` refuses on a cluster where `install` has not completed, and the refusal names the
+command to run.
+
+`dcctl destroy` now tears down one instance's own infrastructure and **leaves the cluster
+standing**. `--keep-cluster` is gone, because it describes what destroy always does now.
+
+#### A future upgrade is two commands, and the first one is the cluster's
+
+The operator moved with the split. It is **one controller per cluster**, shared by every instance
+on it, so `dcctl install` is what puts it there and what moves it:
+
+```bash
+dcctl install local --version <new-version>
+dcctl upgrade local <instance> --version <new-version>
+```
+
+`dcctl upgrade` no longer applies the operator. It **reads** the one the cluster is carrying and
+refuses an instance whose cluster has no operator, or has one identifiably from another release,
+naming the install command to run first. The reason is worth knowing if you run several instances
+on one cluster: an upgrade that applied the operator itself moved it for **every** instance on
+that cluster, silently, as a side effect of upgrading one.
+
+There is one case it lets through with a warning instead. An operator you installed **by hand**
+carries no record of which release put it there, and `dcctl` cannot tell that apart from one an
+older `dcctl` overwrote — so it prints a note naming the install command and continues. If you did
+not install it by hand, treat that note as the refusal it would otherwise have been.
+
+#### One cluster now holds as many instances as you build
+
+Each instance gets a namespace of its own — **`dci-<instance>`**, not the bare instance id — with
+its own broker, its own event store, and its own login and database on the shared relational
+store. Two things on a cluster can still belong to only one instance, and a bootstrap refuses
+rather than colliding: the **ingress host**, and the local MQTT NodePort.
+
+The prefix is why the namespace is not simply your instance id: an instance can no longer be given
+a name that collides with a namespace the cluster itself uses.
+
+#### If you grant `dcctl` explicit RBAC
+
+On a cluster somebody else administers, `dcctl` needs verbs it did not before: **`list`, `patch`
+and `delete`** on `instances.core.devicechain.io` alongside `get`, `create` and `update`, plus
+**`list` on secrets** in `dc-system`. Every bootstrap and upgrade now asks the cluster which
+instances it already holds and what they have claimed, and that question is a list. An account
+holding only the previously documented set is refused partway through a bootstrap.
+
+#### Two things that moved, and one that is gone
+
+- **Grafana single sign-on through DeviceChain is gone.** Grafana is reached by port-forwarding its
+  Service — there is no ingress route — and signed into with a per-cluster admin credential in the
+  `dc-grafana-admin` Secret. See [Observability](./observability.md).
+- **`dcctl`'s local state moved.** Per-instance records are under
+  `~/.devicechain/instances/<instance>/`, and a new per-cluster directory
+  `~/.devicechain/clusters/<cluster-uid>/` holds the cluster's own infrastructure state. That
+  directory is keyed on the cluster's identity rather than its name, and it is the **only** copy of
+  that state — no backup contains it. An installed cluster can only be re-installed from the
+  machine that holds it. See [Install the cluster](./bootstrap.md#install).
+- **A bootstrap asks the relational store what it already holds** before it mints a root key. A
+  database sitting there under the instance's name can only have outlived the cluster that built
+  it, so the bootstrap stops instead of minting a key that could not decrypt the rows already
+  there.
+
 ### Instances built by v0.16.0 and earlier {#pre-declaration-recreate}
 
 An instance bootstrapped by **`v0.16.0`, or by any release before it, cannot be upgraded onto
