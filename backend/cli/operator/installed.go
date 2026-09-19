@@ -49,8 +49,15 @@ var crdGVR = schema.GroupVersionResource{
 //     apart and refusing (a) would overrule a choice it has no better information
 //     about. What it must not do is stay quiet: the note the caller prints names the
 //     benign cause AND says to run install if that is not what happened, so (c) is
-//     recoverable by somebody who reads it. Pre-GA that trade stands; it is written
-//     down so the next person weighing it is weighing the real thing.
+//     recoverable by somebody who reads it.
+//
+//     🔴 THIS IS A DECISION, NOT A DEFAULT NOBODY GOT ROUND TO. It was put to Derek
+//     with all three causes named and the fail-closed alternative costed, and he
+//     confirmed it on 2026-09-19: NOTED, NOT REFUSED. So a later reader who finds
+//     (c) alarming — and it is the alarming one — is re-opening a settled question
+//     rather than spotting an oversight. What would justify re-opening it is new
+//     information: a way to tell the three causes apart, which would make refusing
+//     (c) possible without overruling (a).
 //
 //   - STAMPED. Compare it and say whether it is the one this dcctl needs.
 //
