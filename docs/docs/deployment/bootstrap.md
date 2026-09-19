@@ -260,8 +260,8 @@ An instance built before instances had namespaces of their own runs its broker a
 store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
 refuses such an instance and says to destroy it and bootstrap it again.
 
-The steps below are the ones the run prints as it goes (`[8/11] Install instance`),
-so a failure names a step you can find here:
+The steps below are the ones the run prints as it goes (`[8/11] Install instance
+(Helm)`), so a failure names a step you can find here:
 
 1. **Ensure local registry** — the developer `--build` path only: provision a local
    registry and build every image into it. On the published-image path it does nothing

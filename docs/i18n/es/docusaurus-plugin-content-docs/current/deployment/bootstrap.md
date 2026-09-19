@@ -279,8 +279,8 @@ bróker y su almacén de eventos en el namespace compartido `dc-system`, y no se
 en sitio. El arranque inicial rechaza una instancia así e indica que hay que destruirla y
 volver a arrancarla.
 
-Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install instance`),
-de modo que un fallo nombra un paso que puedes encontrar aquí:
+Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install instance
+(Helm)`), de modo que un fallo nombra un paso que puedes encontrar aquí:
 
 1. **Asegurar el registro local** (*Ensure local registry*) — solo en la ruta de
    desarrollo `--build`: aprovisiona un registro local y compila todas las imágenes en

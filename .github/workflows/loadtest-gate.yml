@@ -272,6 +272,13 @@ jobs:
           # published tag; only skew-free when the checked-out dcctl's schema matches that
           # release, i.e. the tag-triggered path). A HEAD dcctl sending shedPriority to a
           # pre-#480 v0.8.5 server is exactly the skew --build avoids.
+          #
+          # BOTH COMMANDS GET IT, AND install DID NOT USED TO NEED IT. The operator is
+          # installed by `dcctl install` now, so that command names an image too -- and
+          # the dcctl above is a plain `go build`, which deliberately pins no version.
+          # Without the argument it has no image to install and refuses, before the
+          # cluster is prepared at all. Same reason the two validation rigs pass it to
+          # both halves.
           if [ "$BUILD" = "true" ]; then
             imgargs="--build"
             echo "image source: --build (HEAD from source)"
@@ -294,7 +301,7 @@ jobs:
           start=$(date +%s)
           rc=0
           # shellcheck disable=SC2086
-          "$RUNNER_TEMP/dcctl" install local --compact -y $preflight || rc=$?
+          "$RUNNER_TEMP/dcctl" install local --compact -y $preflight $imgargs || rc=$?
           if [ "$rc" -eq 0 ]; then
             # shellcheck disable=SC2086
             DCCTL_ESCROW_PASSPHRASE=loadtest-gate-throwaway \
