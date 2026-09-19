@@ -264,15 +264,34 @@ function main(argv) {
   // resolves to, which no publish exit code reports on.
   //
   // Retried, because the registry's read path is a CDN and a just-published version
-  // can take a few seconds to appear on it. A bounded retry that ends in a hard
-  // failure is the point; an unbounded one, or none at all, would turn propagation
-  // lag into either a hang or a false red.
+  // does not appear on it immediately. A bounded retry that ends in a hard failure is
+  // the point; an unbounded one, or none at all, would turn propagation lag into
+  // either a hang or a false red.
+  //
+  // 🔴 THE BOUND IS FIVE MINUTES BECAUSE NPM'S OWN NOTICE SAYS MINUTES. It was 60s
+  // (12 x 5s), written against "can take a few seconds", and v0.17.0-rc.3 is what
+  // showed that to be the wrong unit: `npm publish` reported success, published a
+  // provenance statement to the transparency log, and printed "Your package is being
+  // processed and may take a few minutes to become available" — and then this
+  // assertion called it a failed publish 60 seconds later. All four packages were on
+  // the registry shortly after, at the right version and with the right dist-tag.
+  //
+  // 🔑 THE FAILURE MODE THIS CREATES IS THE EXPENSIVE ONE, which is why the bound is
+  // generous rather than tight. A version that has been published CANNOT be
+  // republished — npm burns the number permanently — so a false red here does not
+  // cost a retry, it costs a release candidate. Waiting four more minutes for a
+  // registry that is telling us it needs them is the cheaper side of that trade by a
+  // wide margin, and a genuinely failed publish is still caught, just later.
   // ---------------------------------------------------------------------------
+  // 30 x 10s = five minutes.
+  const registryAttempts = 30;
+  const registryPollMs = 10000;
+
   const failures = [];
   for (const { pkg } of packages) {
     let lastSeen = '<absent>';
     let ok = false;
-    for (let attempt = 1; attempt <= 12; attempt += 1) {
+    for (let attempt = 1; attempt <= registryAttempts; attempt += 1) {
       const versions = publishedVersions(pkg.name) ?? [];
       const tags = distTags(pkg.name) ?? {};
       lastSeen = `versions=${versions.includes(version)} dist-tags=${JSON.stringify(tags)}`;
@@ -281,7 +300,7 @@ function main(argv) {
         ok = true;
         break;
       }
-      if (attempt < 12) sleep(5000);
+      if (attempt < registryAttempts) sleep(registryPollMs);
     }
     if (!ok) failures.push(`${pkg.name}: expected ${version} present and ${tag} -> ${version}; saw ${lastSeen}`);
   }
