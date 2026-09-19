@@ -541,6 +541,39 @@ jobs:
             exit 1
           fi
 
+      # 🔴 THE EVENT STORE'S PASSWORD IS MINTED PER INSTANCE, so the self-test cannot
+      # be left on its built-in default. It used to be able to: before the instance
+      # split there was one event store per cluster on a fixed `devicechain` login, and
+      # the tool's `defaultDSN` matched it. `dcctl bootstrap` now mints that password
+      # into `dc-tsdb-app-credentials` in the instance's own namespace, so the default
+      # is wrong on every cluster dcctl builds -- and it fails as `password
+      # authentication failed`, which reads like a broken store rather than a stale
+      # constant. It surfaced only here because this job runs at RELEASE time, so the
+      # first run after the split was a release candidate.
+      #
+      # The password is masked before it is used. `::add-mask::` replaces it wherever
+      # it would otherwise appear in this job's log, including inside the DSN and
+      # inside any error the tool prints back.
+      #
+      # A URL DSN is safe for this value specifically: minted credentials are
+      # `base64.RawURLEncoding`, whose alphabet is A-Za-z0-9-_ and therefore contains
+      # none of `:@/?#` that would need percent-encoding in a userinfo field.
+      - name: Read the event store's minted credential (self-test only)
+        run: |
+          set -o pipefail
+          pw="$(kubectl -n "$DC_NAMESPACE" get secret dc-tsdb-app-credentials \
+                  -o jsonpath='{.data.password}' | base64 -d)"
+          # An EMPTY answer must not become an empty password silently: `kubectl get`
+          # on a missing key exits 0 and prints nothing, which would hand the tool a
+          # DSN with no password and reproduce exactly the failure this step exists to
+          # remove -- one step further from its cause.
+          if [ -z "$pw" ]; then
+            echo "::error::secret dc-tsdb-app-credentials in $DC_NAMESPACE has no 'password' key, so the self-test has no way to reach the event store. The bootstrap above reported success, so either the secret was renamed or its shape changed."
+            exit 1
+          fi
+          echo "::add-mask::$pw"
+          echo "DC_LOADTEST_DB_DSN=postgres://devicechain:$pw@127.0.0.1:5432/devicechain" >> "$GITHUB_ENV"
+
       - name: Self-test -- prove the L1 oracle can FAIL (the instrument check)
         run: |
           "$RUNNER_TEMP/dcctl" sim create selftestprobe -s localhost
