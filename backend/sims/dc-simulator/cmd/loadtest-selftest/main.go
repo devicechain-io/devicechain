@@ -35,11 +35,29 @@ import (
 // for the reconcile invariants to be conclusive.
 const defaultSelfTestMinAccepted = 50
 
-// defaultDSN is the standard local kind coordinates. Port-forward the event store's
-// alias Service — `kubectl -n dc-system port-forward svc/dc-timescaledb-single
-// 5432:5432` — rather than a pod: the store is a CloudNativePG Cluster, so its pods
-// are named `dc-tsdb-N` and which one is the primary changes on a failover, while the
-// alias Service follows it. Override for any other cluster.
+// defaultDSN is the shape of the connection, not a credential that works anywhere.
+//
+// 🔴 THE PASSWORD IN IT IS NO LONGER ANYBODY'S PASSWORD, AND THAT IS DELIBERATE
+// RATHER THAN STALE. It was right when there was one event store per cluster on a
+// fixed login. `dcctl bootstrap` now mints the event store's password per INSTANCE,
+// into `dc-tsdb-app-credentials` in that instance's own namespace, so every cluster
+// dcctl builds needs the real value passed in — `--db-dsn`, or DC_LOADTEST_DB_DSN:
+//
+//	ns=dci-<instance>
+//	kubectl -n "$ns" port-forward svc/dc-timescaledb-single 5432:5432 &
+//	pw=$(kubectl -n "$ns" get secret dc-tsdb-app-credentials \
+//	       -o jsonpath='{.data.password}' | base64 -d)
+//	DC_LOADTEST_DB_DSN="postgres://devicechain:$pw@127.0.0.1:5432/devicechain"
+//
+// The alias Service, not a pod: the store is a CloudNativePG Cluster, so its pods are
+// named `dc-tsdb-N` and which one is the primary changes on a failover, while the
+// alias Service follows it.
+//
+// 🔑 IT IS KEPT AS A DEFAULT ANYWAY so the flag's shape is self-documenting, and
+// because the failure it produces is loud and immediate — Postgres answers a wrong
+// password with 28P01 before any measurement starts, so nothing downstream can mistake
+// it for a platform result. A default that CONNECTED to the wrong place would be the
+// dangerous kind.
 const defaultDSN = "postgres://devicechain:devicechain@127.0.0.1:5432/devicechain"
 
 func main() {
