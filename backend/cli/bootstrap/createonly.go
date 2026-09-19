@@ -19,7 +19,7 @@ import (
 // step that stops the two verbs overlapping.
 //
 // 🔴 WHAT IT KEYS ON IS THE WHOLE DESIGN, AND THE THREE OBVIOUS CHOICES ARE ALL
-// WRONG. A bootstrap builds an instance over twelve steps (NewDefaultPipeline) and can
+// WRONG. A bootstrap builds an instance over eleven steps (NewDefaultPipeline) and can
 // die at any of them, so the question this step answers is not "is there anything
 // here?" but "is there a LIVE INSTANCE here, whose credentials I must not mint over?":
 //

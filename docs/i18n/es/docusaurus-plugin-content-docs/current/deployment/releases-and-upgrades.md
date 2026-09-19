@@ -47,8 +47,8 @@ Dos comandos mueven todo ello, y cuál mueve qué se decide por el **tiempo de v
 cosa. El operador es un solo controlador por clúster, compartido por todas las instancias que
 haya en él, así que `dcctl install` lo mueve junto con el resto de los requisitos previos del
 clúster. El documento de configuración, la versión desplegada del chart y las imágenes de los
-servicios pertenecen a una instancia, así que `dcctl upgrade` mueve esos, de una instancia en
-una. Consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
+servicios pertenecen a una instancia, así que `dcctl upgrade` mueve esos, instancia por
+instancia. Consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
 procedimiento.
 
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
@@ -231,8 +231,8 @@ correspondiéndole a usted reproducirlas, como hasta ahora.
 
 ## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
 
-Actualizar son **dos comandos** —uno para el clúster y luego uno por cada instancia que haya
-en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
+Actualizar consiste en **dos comandos** —uno para el clúster y luego uno por cada instancia
+que haya en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
 perder tráfico. Hay cuatro excepciones, todas documentadas más abajo: la transición a la
 ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
 visible, y la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
@@ -264,13 +264,21 @@ previos compartidos del clúster; consulte
 2. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
    imágenes nuevas y espera a que cada área termine.
 
-**El orden importa, y la actualización lo impone.** El operador es lo que define la
+**El orden importa, y la actualización lo comprueba.** El operador es lo que define la
 declaración de la instancia, así que tiene que estar en la versión nueva antes de mover una
 instancia a ella. `dcctl upgrade` lee el operador que lleva el clúster y **rechaza** una
-instancia cuyo clúster no lleve el de esta versión, nombrando el comando de instalación que
-hay que ejecutar primero. No aplica el operador él mismo: en un clúster con varias instancias
-eso movería el controlador de todas las demás como efecto secundario de actualizar una, en
-silencio.
+instancia cuyo clúster no tenga operador alguno, o cuyo operador sea identificablemente el de
+otra versión, nombrando el comando de instalación que hay que ejecutar primero. No aplica el
+operador él mismo: en un clúster con varias instancias eso movería el controlador de todas
+las demás como efecto secundario de actualizar una, en silencio.
+
+Hay un caso que deja pasar con un aviso en lugar de rechazarlo. `dcctl install` deja
+constancia de qué versión instaló las definiciones; un operador puesto en el clúster **a
+mano** no lleva esa constancia, y `dcctl` no puede distinguir una instalación manual
+deliberada de una que un `dcctl` más antiguo sobrescribió. En lugar de pasar por encima de
+una decisión que no puede ver, imprime una nota con el comando de instalación y continúa. Si
+usted no instaló el operador a mano, tome esa nota como el rechazo que habría sido y ejecute
+`dcctl install` antes de seguir.
 
 Ejecute cualquiera de los dos con `--dry-run` primero si quiere ver qué movería. `dcctl
 upgrade` toma el clúster de destino del propio registro de la instancia en lugar de
@@ -361,8 +369,8 @@ de `helm`: dejaba los servicios nuevos ejecutándose contra el controlador con e
 la instancia por primera vez, indefinidamente y sin ningún error que lo indicara. Eso es lo que
 cierra el rechazo descrito más arriba: los dos comandos siguen siendo dos, porque el operador
 pertenece al clúster y la versión desplegada pertenece a la instancia, pero `dcctl upgrade`
-comprueba ahora qué operador lleva el clúster y no moverá una instancia a una versión en la que
-el clúster no está.
+lee ahora qué operador lleva el clúster y lo dice: rechaza cuando puede distinguirlos, y avisa
+cuando no puede.
 :::
 
 Lo que hace que el despliegue sea seguro:

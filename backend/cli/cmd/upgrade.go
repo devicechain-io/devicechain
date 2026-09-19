@@ -40,8 +40,11 @@ So an upgrade is two commands, in this order:
   dcctl install <provider> --version <tag>     # once, moves the cluster
   dcctl upgrade <provider> <instance> --version <tag>   # per instance
 
-This command checks the cluster's operator and REFUSES if it is not the one this
-release needs, naming the install command that fixes it. It never moves it.
+This command checks the cluster's operator and never moves it. It REFUSES when the
+cluster has no operator, or has one identifiably from another release, naming the
+install command that fixes it. An operator installed by hand carries no record of
+which release put it there, and dcctl cannot tell that apart from one an older
+dcctl overwrote — so that case is allowed through with a note rather than refused.
 
 It mints no credentials. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the

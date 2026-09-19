@@ -184,13 +184,13 @@ func keepRecordReason(instance string, found []string, footprintErr error) error
 // error is the ONLY answer that means "nothing here".
 //
 // 🔴 THE DECLARATION IS FIRST BECAUSE OF WHERE IT SITS IN THE PIPELINE, AND THAT ORDERING
-// IS WHAT MAKES THE WHOLE CHECK SAFE. The twelve bootstrap steps write, in order: the
-// cluster claim (2), the core components (5), the DECLARATION (6), the rendered
-// configuration (7), the instance namespace, the infrastructure and the Secrets dcctl
-// mints (8), the Helm release (9). So a run that got far enough to apply OpenTofu — far
+// IS WHAT MAKES THE WHOLE CHECK SAFE. The eleven bootstrap steps write, in order: the
+// cluster claim (2), the DECLARATION (5), the rendered configuration (6), the instance
+// namespace, the infrastructure and the Secrets dcctl mints (7), the Helm release (8).
+// So a run that got far enough to apply OpenTofu — far
 // enough for its local tfstate to describe real cluster objects — necessarily wrote its
 // declaration first, and the declaration check keeps its record. The record can only be
-// cleared for a run that died before step 6, which has written nothing of the instance
+// cleared for a run that died before step 5, which has written nothing of the instance
 // anywhere.
 //
 // The cluster LOCK is deliberately not one of these. It is not durable state, this very

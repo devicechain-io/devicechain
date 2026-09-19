@@ -76,9 +76,10 @@ Ambas definiciones las instala [`dcctl install`](./bootstrap.md#install), junto 
 controlador, y tienen **alcance de clúster en todos los sentidos**: una sola copia por clúster,
 compartida por todas las instancias que haya en él, versionada con el clúster y no con ninguna
 instancia concreta. Por eso el comando que prepara un clúster es el comando que las mueve.
-`dcctl bootstrap` y `dcctl upgrade` solo las leen: un clúster al que le falten las definiciones,
-o que no tenga las que la versión necesita, se rechaza indicando el comando de instalación que
-hay que ejecutar.
+`dcctl bootstrap` y `dcctl upgrade` solo las leen: un clúster sin definiciones, o con unas
+identificablemente de otra versión, se rechaza indicando el comando de instalación que hay que
+ejecutar. Las definiciones instaladas a mano no llevan constancia de qué versión las puso, así
+que esas se dejan pasar con una nota que nombra el mismo comando, en lugar de rechazarse.
 
 Los inquilinos **no** son recursos personalizados — son registros de base de datos del plano de control creados a través de la API de administración de instancia y la consola `/admin`, compartiendo los servicios de la instancia (vea [Multitenencia](../concepts/multi-tenancy.md)).
 

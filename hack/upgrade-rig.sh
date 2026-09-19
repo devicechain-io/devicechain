@@ -1175,10 +1175,16 @@ $baseline_tag will actually meet."
   build_target_dcctl
 
   # --compact because the cluster was installed compact by `cmd_up`, and this is a
-  # RE-install of a cluster that already exists: the presets describe the cluster's
-  # shape, so omitting one here would ask this run to expand the cluster (cert-manager,
-  # monitoring) as a side effect of an upgrade drill, and the difference would surface
-  # later as a workload nobody asked for.
+  # RE-install of a cluster that already exists.
+  #
+  # 🔴 OMITTING IT WOULD NOT EXPAND THE CLUSTER — IT WOULD MAKE THIS STEP REFUSE, and
+  # the difference matters to whoever reads a red here. An install compares the settings
+  # it was given against the ones recorded on the cluster, and a re-install that CHANGES
+  # them while instances run on it is declined by name: every instance was built to the
+  # settings it found and none is rebuilt when they move. So the flag is not protecting
+  # the cluster from this drill; it is what makes the drill's settings match the record
+  # and the install proceed at all. The registry and version are deliberately NOT part
+  # of that comparison, which is why re-installing at the target tag is allowed.
   say "dcctl install → the cluster's operator and CRDs to $target_tag"
   "$target_dcctl" install local --yes --compact \
     --kube-context "$kube_context" \
@@ -1349,10 +1355,18 @@ upgrade that cannot work reported success, which is the worse of the two."
   # non-zero: an unreachable cluster, a missing kubeconfig, a chart that will not
   # render. A drill satisfied by "it failed" would hold just as well against a release
   # that had lost the refusal entirely and was merely failing to connect.
+  # 🔴 `dcctl install` IS IN THE LIST, AND IT IS THE ONE THAT KEEPS THE CONTROL HONEST.
+  # The other three strings were all emitted by the PRE-SPLIT refusal too, so a build
+  # that regressed to the old two-command advice would have satisfied this loop
+  # completely — a control that greps for strings several refusals share is worth less
+  # than it looks. The recipe an operator is given now has three commands in it, and the
+  # middle one is the cluster's; asserting it is what makes this control specific to the
+  # refusal it is named after.
   local want
   for want in \
     "DOES NOT UPGRADE ONTO ITS PREDECESSOR" \
     "dcctl destroy" \
+    "dcctl install" \
     "dcctl bootstrap"; do
     [[ "$out" == *"$want"* ]] ||
       fail "the upgrade was refused, but NOT with the refusal this drill is about: its
@@ -1369,7 +1383,23 @@ tells them what to do instead."
     fail "the refusal told the operator to check the name, for an instance that is
 installed in this cluster. That is the reading this release replaced: the name is
 correct, the cluster is correct, and the advice cannot be acted on."
-  say "REFUSED, FOR THE RIGHT REASON — and it named destroy + bootstrap as the way through"
+  say "REFUSED, FOR THE RIGHT REASON — and it named destroy + install + bootstrap as the way through"
+
+  # 🔴 AND THE UNSTAMPED NOTE, WHICH IS THE ONLY PLACE ANYTHING MEASURES IT. The operator
+  # check has three answers and this drill is the one live run that reaches the middle
+  # one: a baseline cluster carries both definitions and no identity, because the stamp
+  # postdates it. Every piece of prose in this rig, in the gate and in the published
+  # documentation leans on that answer being PROCEED-WITH-A-NOTE rather than a refusal —
+  # and until this assertion existed, nothing anywhere would have noticed it becoming a
+  # refusal. A build that made it one would fail the string check above instead, with a
+  # message about the wrong refusal, which is a confusing way to learn it.
+  [[ "$out" == *"carries no identity"* ]] ||
+    fail "the refusal did not carry the unstamped-operator NOTE. A cluster built by
+$baseline_tag has the operator's definitions and no identity stamp, so the check is
+supposed to say so and carry on — that is the documented behaviour for an operator
+somebody installed by hand, and this is the only run that exercises it. Either the note
+stopped being printed, or the unstamped case stopped being permissive; the second is a
+policy change and belongs in the documentation before it belongs in the code."
 
   # --- and now: did it damage anything? -------------------------------------
   say "THE OTHER HALF — the instance must be exactly as it was a minute ago"

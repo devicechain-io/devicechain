@@ -59,8 +59,9 @@ produces the images the chart later deploys. On the published-image path that st
 nothing at all.)
 
 `dcctl upgrade` warns rather than refusing on the lock, but it has a separate refusal that
-is not about the lock at all: it will not move an instance onto a release whose operator the
-cluster is not carrying, and it names `dcctl install` as the way through. See
+is not about the lock at all: it will not move an instance onto a release when the cluster has
+no operator, or has one identifiably from another release, and it names `dcctl install` as the
+way through. An operator installed by hand is let through with a note instead. See
 [Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 The asymmetry is deliberate. A second bootstrap running alongside a first produces one

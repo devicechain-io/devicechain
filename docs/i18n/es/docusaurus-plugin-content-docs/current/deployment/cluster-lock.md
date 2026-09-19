@@ -61,8 +61,9 @@ necesita el bloqueo del clúster y produce las imágenes que después despliega 
 ruta de imágenes publicadas ese paso no hace nada en absoluto.)
 
 `dcctl upgrade` avisa en lugar de negarse por el bloqueo, pero tiene una negativa aparte que
-no va del bloqueo en absoluto: no moverá una instancia a una versión cuyo operador no lleve el
-clúster, y nombra `dcctl install` como la salida. Consulta
+no tiene nada que ver con el bloqueo: no moverá una instancia a una versión si el clúster no
+tiene operador, o tiene uno identificablemente de otra versión, y nombra `dcctl install` como
+el camino a seguir. Un operador instalado a mano se deja pasar con una nota. Consulta
 [Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 La asimetría es deliberada. Un segundo arranque inicial ejecutándose junto al primero

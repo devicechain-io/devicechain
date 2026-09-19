@@ -156,8 +156,10 @@ What remains here is the part dcctl does not own: the **host diagnosis**, the
    step 2 has to have run, since a declaration needs the definition install put there
    — then the credentials, minted and written; then the infrastructure apply; then the
    chart; then the seed. It installs nothing cluster-scoped: a cluster with no
-   operator, or with one this build does not recognise, is refused naming `dcctl
-   install`.
+   operator, or with one identifiably from another release, is refused naming `dcctl
+   install`. An operator installed by hand (`make deploy`) carries no release record,
+   so that case is let through with a note rather than refused -- dcctl cannot tell a
+   deliberate hand-install from one an older dcctl overwrote.
 
 `cloud-provider-kind` is **optional and nothing here starts it**. The default
 bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no

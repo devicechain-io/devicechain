@@ -254,12 +254,20 @@ command also moves the rest of the cluster's shared prerequisites; see
 2. **the Helm release** that runs the services, which rolls them onto the new images and
    waits for each area to finish.
 
-**Order matters, and the upgrade enforces it.** The operator is what the instance's
+**Order matters, and the upgrade checks it.** The operator is what the instance's
 declaration is defined by, so it has to be at the new release before an instance is moved
 onto it. `dcctl upgrade` reads the operator the cluster is carrying and **refuses** an
-instance whose cluster is not carrying this release's, naming the install command to run
-first. It does not apply the operator itself: on a cluster holding several instances that
-would move every other instance's controller as a side effect of upgrading one, silently.
+instance whose cluster has no operator at all, or whose operator is identifiably a
+different release's — naming the install command to run first. It does not apply the
+operator itself: on a cluster holding several instances that would move every other
+instance's controller as a side effect of upgrading one, silently.
+
+There is one case it lets through with a warning rather than refusing. `dcctl install`
+records which release installed the definitions; an operator put on the cluster **by hand**
+carries no such record, and `dcctl` cannot tell a deliberate hand-install from one an older
+`dcctl` overwrote. Rather than overrule a choice it cannot see, it prints a note naming the
+install command and continues. If you did not install the operator by hand, treat that note
+as the refusal it would otherwise have been and run `dcctl install` before going further.
 
 Run either with `--dry-run` first if you want to see what it would move. `dcctl upgrade`
 takes the target cluster from the instance's own record rather than guessing, and says
@@ -344,8 +352,8 @@ The gap that form left open was an upgrade stopping after the `helm` half, leavi
 services running against the controller the instance was first bootstrapped with —
 indefinitely, and with no error to say so. That is what the refusal above closes: the two
 commands are still two, because the operator belongs to the cluster and the release belongs
-to the instance, but `dcctl upgrade` now checks which operator the cluster is carrying and
-will not move an instance onto a release the cluster is not at.
+to the instance, but `dcctl upgrade` now reads which operator the cluster is carrying, and
+says so — refusing where it can tell the two apart, and warning where it cannot.
 :::
 
 What makes the rollout safe:

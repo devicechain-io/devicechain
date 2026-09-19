@@ -789,7 +789,7 @@ func stepInstallCore(ctx context.Context, st *State) error {
 		return err
 	}
 	operatorImage := operatorImageRef(st)
-	doing("installing core components (CRDs + operator)")
+	doing("installing the operator (CRDs + RBAC + controller)")
 
 	// Rendered BEFORE the dry-run branch, and on both paths, because the overlay
 	// is where the operator's namespace is decided and the next step takes the

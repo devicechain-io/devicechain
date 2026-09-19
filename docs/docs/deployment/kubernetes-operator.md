@@ -75,8 +75,10 @@ Both definitions are installed by [`dcctl install`](./bootstrap.md#install), tog
 the controller itself, and they are **cluster-scoped in every sense**: one copy per cluster,
 shared by every instance on it, versioned with the cluster rather than with any one instance.
 That is why the command that prepares a cluster is the command that moves them. `dcctl
-bootstrap` and `dcctl upgrade` only read them — a cluster whose definitions are missing, or
-are not the ones the release needs, is refused with the install command to run.
+bootstrap` and `dcctl upgrade` only read them — a cluster with no definitions, or with ones
+identifiably from a different release, is refused with the install command to run. Definitions
+installed by hand carry no record of which release put them there, so those are let through
+with a note naming the same command rather than refused.
 
 Tenants are **not** custom resources — they are control-plane database records created through the instance admin API and the `/admin` console, sharing the instance's services (see [Multi-Tenancy](../concepts/multi-tenancy.md)).
 
