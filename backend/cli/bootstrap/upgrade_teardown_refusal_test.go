@@ -58,6 +58,9 @@ func TestAnUpgradeRefusesAnInstanceWhoseTeardownDidNotFinish(t *testing.T) {
 	}
 	binding := ClusterBinding{KubeContext: "kind-c", Cluster: "c"}
 	opts := UpgradeOptions{Options: Options{Instance: "prod"}}
+	// The operator guard runs first and reads a cluster; these tests are about the
+	// refusals that come after it.
+	stubOperatorCheck(t, nil)
 
 	// 🔴 BOTH HALVES OF THE EVIDENCE, BECAUSE EITHER CAN BE THE ONLY ONE THERE. The local
 	// marker is written by every destroy, including one that never reached the cluster;

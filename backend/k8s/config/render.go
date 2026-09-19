@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"sigs.k8s.io/kustomize/api/krusty"
+	"sigs.k8s.io/kustomize/api/resmap"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
@@ -27,6 +28,31 @@ var overlay embed.FS
 // It returns a multi-document YAML stream ready to apply. An empty image leaves
 // the placeholder (controller:latest) in place.
 func RenderOperator(image string) ([]byte, error) {
+	res, err := renderOverlay(image)
+	if err != nil {
+		return nil, err
+	}
+	// Stamped here rather than by each caller, so that everything dcctl applies
+	// carries it without anyone having to remember.
+	//
+	// 🔴 `make deploy` DOES NOT GO THROUGH HERE — it runs the kustomize CLI over
+	// config/default and pipes it to kubectl (see the Makefile), so an operator
+	// installed that way carries NO identity at all. That is the maintainer path,
+	// and the guards must read an absent annotation as "an operator I cannot
+	// vouch for" rather than as a mismatch: the two deserve different messages,
+	// because one means "run dcctl install" and the other means "you installed
+	// this by hand and dcctl will not second-guess you".
+	if err := stampIdentity(res); err != nil {
+		return nil, err
+	}
+	return res.AsYaml()
+}
+
+// renderOverlay produces the unstamped resource map. It is separate from
+// RenderOperator so the identity's own tests can render the overlay, change a
+// CRD, and re-digest it — exercising the same path the stamp uses rather than a
+// second copy of it that could drift.
+func renderOverlay(image string) (resmap.ResMap, error) {
 	fsys := filesys.MakeFsInMemory()
 	if err := fs.WalkDir(overlay, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -61,19 +87,32 @@ func RenderOperator(image string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kustomize render: %w", err)
 	}
-	return res.AsYaml()
+	return res, nil
 }
 
 // setManagerImage injects an images override into the manager kustomization,
 // mirroring `kustomize edit set image controller=<image>` in `make deploy`. The
 // placeholder image name in config/manager/manager.yaml is "controller".
+//
+// 🔴 THE VALUES ARE QUOTED, AND UNQUOTED THEY WERE A LIVE BUG RATHER THAN A STYLE
+// POINT. This writes YAML, and kustomize unmarshals newTag into a Go string — so a
+// perfectly ordinary image tag that YAML reads as some other scalar type never
+// reaches the renderer at all. `--version 1.0` and `--version 20260918` both parse
+// as NUMBERS, and a tag of `y`, `no`, `on` or `true` parses as a BOOLEAN; each
+// fails with "cannot unmarshal number into Go struct field Image.images.newTag of
+// type string", wrapped in a kustomize accumulation error that names a path the
+// operator never typed and says nothing about their tag.
+//
+// Docker tags may begin with a digit, so the numeric case is not a corner: it is
+// every date-stamped or unprefixed-semver release anyone might publish. Quoting
+// makes the scalar a string whatever it spells.
 func setManagerImage(fsys filesys.FileSystem, image string) error {
 	name, tag := splitImageRef(image)
 	var b strings.Builder
 	b.WriteString("resources:\n- manager.yaml\nimages:\n- name: controller\n")
-	b.WriteString("  newName: " + name + "\n")
+	b.WriteString(fmt.Sprintf("  newName: %q\n", name))
 	if tag != "" {
-		b.WriteString("  newTag: " + tag + "\n")
+		b.WriteString(fmt.Sprintf("  newTag: %q\n", tag))
 	}
 	return fsys.WriteFile("manager/kustomization.yaml", []byte(b.String()))
 }

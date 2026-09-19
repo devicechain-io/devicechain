@@ -388,9 +388,10 @@ jobs:
   # This gate was landed RED on purpose: its operator step asserts that the
   # controller is running the version the services were upgraded to, which the
   # documented procedure could not achieve -- the operator is not in the chart and
-  # nothing moved it afterwards. That is closed. `dcctl upgrade` exists, the drill
-  # runs it as the second half of the documented procedure, and the step now
-  # measures a fix rather than recording a gap.
+  # nothing moved it afterwards. That is closed. `dcctl install` moves the operator,
+  # since it is one controller per cluster rather than one per instance; the drill
+  # runs that command and then `dcctl upgrade`, which is the documented procedure in
+  # full, and the step now measures a fix rather than recording a gap.
   #
   # It still blocks `cli` (below), so a red drill means no GitHub Release for this
   # tag even though the images are already on ghcr; a human investigates rather

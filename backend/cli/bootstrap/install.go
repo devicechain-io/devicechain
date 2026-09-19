@@ -91,13 +91,72 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	st := installState(binding, provider.Name(), opts)
 	settings := installSettingsFor(st)
 
+	// 🔴 CHECKED BEFORE THE FIRST LINE IS PRINTED, INCLUDING UNDER --dry-run. The
+	// command layer settles this from argv, so a dcctl run cannot reach here
+	// unresolved — but Install is also the engine, and a caller that built its
+	// options by hand would otherwise have the heading below announce
+	// "Operator: /operator:", a syntactically valid reference that pulls nothing,
+	// and a rehearsal would print a plan the real run refuses. A rehearsal must
+	// refuse what the run refuses.
+	if err := requireResolvedImages(st, "installing the operator"); err != nil {
+		return err
+	}
+
 	fmt.Println(GreenUnderline(fmt.Sprintf("\nInstall DeviceChain prerequisites on cluster %s", binding.Describe())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Settings:"), color.GreenString(describeInstallSettings(settings)))
+	reportOperatorPlan(st)
+
+	// 🔴 THE LOCK IS TAKEN BEFORE THE READS THAT DECIDE, not just before the writes.
+	// Everything below — the previous install record, whether a re-install would
+	// hurt, what the relational store's archive path already is — is read from the
+	// cluster and then acted on, and a concurrent bootstrap is exactly what makes
+	// such a read stale between the asking and the acting.
+	//
+	// 🔴 UNTIL THIS RELEASE `dcctl install` TOOK NO LOCK AT ALL. That was survivable
+	// only while install wrote nothing cluster-scoped that bootstrap also wrote: it
+	// now installs the operator, so a lockless install racing a locked bootstrap
+	// would be the same hole this Lease exists to close, relocated into the verb
+	// that was supposed to own the resource.
+	//
+	// ClaimCluster is shared with the bootstrap pipeline rather than reimplemented
+	// here: it creates the operator's namespace (idempotently, reading the name from
+	// the rendered overlay rather than a constant) and then acquires. Two
+	// implementations of "where does the cluster lock live" is how a lock ends up
+	// protecting nothing.
+	//
+	// A dry run takes nothing. It still resolves the namespace and reports the claim
+	// it WOULD have met, because "another operator is already running" is part of
+	// the answer to what this command would do.
+	if err := claimForInstall(ctx, st); err != nil {
+		return err
+	}
+	// Released on every exit, including a refusal below. A CLI that has exited holds
+	// nothing, and leaving the Lease behind would send the operator's own retry down
+	// the reclaim path for no reason. Release detaches from ctx itself, so a Ctrl+C
+	// still hands the lock back.
+	defer func() {
+		if st.Claim != nil {
+			st.Claim.Release(ctx)
+		}
+	}()
 
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
 	if st.DryRun {
+		// Build, then operator, then the long OpenTofu apply — the order the real
+		// run performs them in. A rehearsal whose steps are in a different order
+		// from the run is a rehearsal of something else.
+		//
+		// (The relational-restore sentence below is the exception, and it is
+		// deliberate: the real run prints it earlier, before the apply, because an
+		// operator mid-incident has to be told which way it will go while they can
+		// still stop. It is a warning, not a step.)
+		if err := buildOperatorImageForInstall(ctx, st); err != nil {
+			return err
+		}
+		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
+			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
 		wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
 			"(CloudNativePG operator + backup plugin, ingress, cert-manager, monitoring, the relational " +
 			"store, the backup object store)")
@@ -174,13 +233,57 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := checkRelationalStoreOwner(ctx, st.KubeContext); err != nil {
 		return err
 	}
+	// 🔴 BUILT BEFORE THE INSTALL RECORD IS OPENED, not inside it. On --build this
+	// is a ko build measured in minutes, and the preflight treats `ko` as OPTIONAL
+	// — so a developer without it fails here. Inside the applying→installed bracket
+	// that failure would leave the cluster recorded `applying`, which every later
+	// bootstrap refuses, over a step whose only cluster write is an idempotent
+	// ConfigMap. It is a no-op on every published path.
+	if err := buildOperatorImageForInstall(ctx, st); err != nil {
+		return err
+	}
 	if err := ensureInfraNamespace(ctx, typed, infraNamespace); err != nil {
+		return err
+	}
+	// Fenced here and before each irreversible write below: everything above this
+	// point is a read or a refusal, and everything below it changes a cluster that
+	// may no longer be ours. See stillHoldsTheCluster.
+	if err := stillHoldsTheCluster(ctx, st, "writing this cluster's credentials"); err != nil {
 		return err
 	}
 	if err := writeClusterSecrets(ctx, typed, st); err != nil {
 		return err
 	}
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
+		return err
+	}
+	// 🔴 AFTER markInstallApplying, BECAUSE THAT CALL IS THE LAST REFUSAL AND A
+	// REFUSAL MUST COME BEFORE A WRITE THAT CANNOT BE TAKEN BACK. It rejects a
+	// cluster whose install record carries a newer SCHEMA than this build writes,
+	// and the overlay carries CRDs: applying first would let such a binary prune
+	// fields out of a structural schema on its way to being told it may not touch
+	// this cluster at all.
+	//
+	// 🔑 THAT IS A NARROWER GUARD THAN IT LOOKS, AND THE GAP IS THE WHOLE REASON
+	// SLICE A EXISTS. The check is `old.Schema > installRecordSchema`, so a NEWER
+	// dcctl at the SAME record schema passes it — and an older install then
+	// server-side-applies its older CRDs with the same field manager and Force,
+	// removing whatever the newer release added. Ordering cannot fix that; only
+	// comparing what is on the cluster against what is about to be applied can,
+	// which is what the operator identity is for.
+	//
+	// 🔴 THOSE GUARDS EXIST NOW — in `dcctl bootstrap` and `dcctl upgrade`, which
+	// refuse a cluster whose operator is not the one they need. INSTALL ITSELF STILL
+	// HAS NONE, and that is deliberate rather than overlooked: install is the verb
+	// whose job is to MOVE the operator, so a guard refusing a difference would
+	// refuse the only command that can resolve one. The consequence is that an older
+	// dcctl's `install` still downgrades a newer cluster's CRDs silently, and closing
+	// that needs a comparison that can tell "older" from "different" — which the
+	// identity, being equality-only, cannot. Written down rather than left implied.
+	if err := installOperator(ctx, st); err != nil {
+		return err
+	}
+	if err := stillHoldsTheCluster(ctx, st, "applying the cluster prerequisites"); err != nil {
 		return err
 	}
 	var outputs InstallOutputs
@@ -207,6 +310,12 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	done()
 
+	// 🔴 THE LAST ONE MATTERS MOST. This record is what every later bootstrap reads
+	// to decide the shape of the instances it builds; writing it over a reclaimer's
+	// would hand them a cluster described by a run they stopped.
+	if err := stillHoldsTheCluster(ctx, st, "recording the install"); err != nil {
+		return err
+	}
 	if err := writeInstalled(ctx, typed, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
@@ -241,12 +350,20 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		NoMonitoring:         opts.NoMonitoring,
 		NoCNPG:               opts.NoCNPG,
 		AllowLegacyDbRemoval: opts.AllowLegacyDbRemoval,
-		Compact:              opts.Compact,
-		HA:                   opts.HA,
-		BackupDestination:    opts.BackupDestination,
-		MaxConnections:       opts.MaxConnections,
-		Restore:              opts.Restore,
-		Values:               map[string]string{},
+		// The image source the operator is installed at. Settled in the command
+		// layer by ResolveImageSource before this cluster exists, for the same reason
+		// the restore plan is — a dcctl build with no pinned image version is
+		// knowable from argv, and finding out after EnsureCluster has spun up a kind
+		// cluster is the expensive time to find out.
+		ImageRegistry:     opts.ImageRegistry,
+		ImageVersion:      opts.ImageVersion,
+		BuildImages:       opts.BuildImages,
+		Compact:           opts.Compact,
+		HA:                opts.HA,
+		BackupDestination: opts.BackupDestination,
+		MaxConnections:    opts.MaxConnections,
+		Restore:           opts.Restore,
+		Values:            map[string]string{},
 	}
 }
 

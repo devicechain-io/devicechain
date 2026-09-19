@@ -15,12 +15,12 @@ import (
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	apply "github.com/devicechain-io/dc-k8s/apply"
-	dck8s "github.com/devicechain-io/dc-k8s/config"
+	"github.com/devicechain-io/dcctl/operator"
 )
 
 // The claim is the lock one dcctl run holds while it mutates a cluster.
@@ -130,31 +130,12 @@ func newHolderIdentity() (string, error) {
 	return fmt.Sprintf("%s@%s/%d/%s", name, host, os.Getpid(), hex.EncodeToString(b[:])), nil
 }
 
-// operatorNamespace reads the namespace the operator overlay declares.
+// 🔴 THE LOCK LIVES IN THE OPERATOR'S NAMESPACE, which is read from the rendered
+// overlay and never written down as a constant — see operator.Namespace for why.
 //
-// Read from the rendered manifests rather than hard-coded, for the same reason
-// operatorDeployments does it: the namespace is a kustomize setting, and a copy
-// of it here would be a second place to remember. A rename would otherwise leave
-// dcctl taking its lock in a namespace nothing else uses — a lock that silently
-// protects nothing.
-//
-// 🔴 This namespace is SHARED with the operator and is never in destroy's
-// deletion set. Deleting it would delete the Lease of whichever run is holding
-// it, including destroy's own.
-func operatorNamespace(manifests []byte) (string, error) {
-	objs, err := apply.Decode(manifests)
-	if err != nil {
-		return "", err
-	}
-	for _, o := range objs {
-		if o.GetKind() == "Namespace" {
-			if n := o.GetName(); n != "" {
-				return n, nil
-			}
-		}
-	}
-	return "", errors.New("the rendered operator overlay declares no Namespace, so there is nowhere to take the cluster lock")
-}
+// 🔴 That namespace is SHARED with the operator and is never in destroy's deletion
+// set. Deleting it would delete the Lease of whichever run is holding it,
+// including destroy's own.
 
 // ClaimHeldError is the refusal a second operator meets. It carries the facts a
 // human needs in order to decide what to do, because "the cluster is locked"
@@ -641,17 +622,8 @@ func ClaimLeaseDuration() time.Duration { return claimLeaseDuration }
 
 // ClaimClients resolves where the cluster lock lives and how to reach it, for the
 // commands that act on the lock without running a pipeline.
-//
-// The namespace is read from the operator overlay, the same source stepInstallCore
-// uses, rather than from a constant — see operatorNamespace. The overlay renders
-// with no image because nothing here is going to apply it; only its namespace is
-// wanted, and that is a kustomize setting rather than a property of the build.
 func ClaimClients(kubeContext string) (string, kubernetes.Interface, error) {
-	manifests, err := dck8s.RenderOperator("")
-	if err != nil {
-		return "", nil, fmt.Errorf("rendering the operator overlay to find where the cluster lock lives: %w", err)
-	}
-	ns, err := operatorNamespace(manifests)
+	ns, err := operator.Namespace()
 	if err != nil {
 		return "", nil, err
 	}
@@ -660,4 +632,42 @@ func ClaimClients(kubeContext string) (string, kubernetes.Interface, error) {
 		return "", nil, fmt.Errorf("connecting to the cluster: %w", err)
 	}
 	return ns, typed, nil
+}
+
+// ClaimCluster creates the namespace the lock lives in and takes the lock.
+//
+// 🔴 THE TWO HALVES ARE ONE FUNCTION BECAUSE THE SECOND CANNOT HAPPEN WITHOUT THE
+// FIRST, and a caller that remembered only one of them would be a caller with no
+// lock. The namespace is the operator's own — the same object the overlay
+// declares, created here idempotently so that the lock can be taken BEFORE the
+// operator is applied rather than after. That ordering is the whole point: the
+// objects the lock exists to serialize are the cluster-scoped ones the operator
+// overlay carries, so a lock taken after applying them excludes the runs and not
+// the writes.
+//
+// 🔴 IT IS SHARED BY `install` AND `bootstrap` RATHER THAN BEING A PIPELINE STEP
+// ONE OF THEM REACHES INTO. Both verbs write cluster-scoped objects and so both
+// must hold the same Lease in the same namespace; `install` used to take no lock
+// at all, which was survivable only while it wrote nothing bootstrap also wrote.
+// Two implementations of "where does the cluster lock live" is how a lock ends up
+// protecting nothing.
+//
+// The instance id is recorded on the Lease for reporting only — the lock is
+// per-CLUSTER, and an install legitimately passes no instance at all.
+func ClaimCluster(ctx context.Context, kubeContext, instance string) (*Claim, string, error) {
+	ns, err := operator.Namespace()
+	if err != nil {
+		return nil, "", err
+	}
+	_, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, ns, fmt.Errorf("building kube clients: %w", err)
+	}
+	if _, err := typed.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: ns},
+	}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, ns, fmt.Errorf("creating namespace %s: %w", ns, err)
+	}
+	claim, err := AcquireClaim(ctx, typed, ns, instance, kubeContext)
+	return claim, ns, err
 }

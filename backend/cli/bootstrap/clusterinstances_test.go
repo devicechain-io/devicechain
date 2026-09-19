@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,11 +38,20 @@ func listFails(dyn *dynamicfake.FakeDynamicClient, err error) {
 	})
 }
 
-// 🔴 THE VIRGIN CLUSTER, AND IT IS THE CASE THAT WOULD BREAK EVERY FIRST BOOTSTRAP. This
-// reader runs BEFORE stepInstallCore puts the Instance CRD in, so on a cluster nobody has
-// ever installed anything into, the declaration source must answer "nothing" rather than
-// "I cannot look".
-func TestAClusterWithNoInstanceCRDHoldsNoInstances(t *testing.T) {
+// 🔴 THIS TEST ASSERTED THE OPPOSITE UNTIL THE OPERATOR MOVED, AND THE REVERSAL IS THE
+// POINT RATHER THAN AN ADJUSTMENT.
+//
+// This reader used to run BEFORE the step that put the Instance CRD in, so a cluster
+// nobody had installed anything into genuinely had no CRD — and answering "nothing"
+// was the only way the first bootstrap of any cluster could proceed. `dcctl install`
+// installs the operator now, and the command layer refuses a cluster without one
+// before this pipeline starts, so "no CRD" no longer means "new cluster".
+//
+// What it means now is that the cluster cannot be asked the question. Answering
+// "there are no instances" to that is an absence used as an answer about CONTENTS,
+// and the cost is the one the sibling test below names: a second instance built over
+// a live one.
+func TestAClusterWithNoInstanceCRDCannotBeAskedWhatItHolds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -60,12 +70,14 @@ func TestAClusterWithNoInstanceCRDHoldsNoInstances(t *testing.T) {
 			listFails(dyn, tc.err)
 
 			ids, err := declaredInstances(t.Context(), dyn)
-			if err != nil {
-				t.Fatalf("a cluster with no Instance CRD was reported as unreadable, which "+
-					"refuses the first bootstrap of every new cluster: %v", err)
+			if err == nil {
+				t.Fatalf("a cluster with no Instance definition answered %v instead of saying "+
+					"it could not be asked; an absence was used as an answer about contents", ids)
 			}
-			if len(ids) != 0 {
-				t.Fatalf("a cluster with no Instance CRD named instances %v", ids)
+			if !errors.Is(err, errNoInstanceCRD) {
+				t.Fatalf("the source reported a hard failure rather than \"I cannot be asked\": %v\n"+
+					"firstAnsweringSource recognises the sentinel and moves on to the Secrets and "+
+					"Helm evidence; a plain error stops the walk and throws that evidence away.", err)
 			}
 		})
 	}
@@ -296,5 +308,49 @@ func TestOthersThanExcludesOnlyTheInstanceNamed(t *testing.T) {
 	}
 	if got := held.othersThan("charlie"); !reflect.DeepEqual(got, []string{"alpha", "bravo"}) {
 		t.Fatalf("othersThan(charlie) = %v", got)
+	}
+}
+
+// 🔴 A CLUSTER WITH NO Instance CRD MUST STILL BE ASKED THE OTHER TWO SOURCES, and
+// this is the case `dcctl install` itself is in.
+//
+// refuseAReinstallThatWouldHurt calls this aggregate to find out whether a settings
+// change would hurt anyone — on a cluster that may legitimately have no operator yet.
+// When the declarations source stopped the walk outright, such a re-install was
+// refused with advice to run `dcctl install`, which is the command being run; and the
+// Secrets and Helm evidence, which could have answered, was thrown away unread.
+func TestAMissingCRDDoesNotHideTheOtherEvidence(t *testing.T) {
+	got, err := firstAnsweringSource([]instanceSource{
+		{"the instance declarations in this cluster", func() ([]string, error) {
+			return nil, fmt.Errorf("listing: %w", errNoInstanceCRD)
+		}},
+		{"the credentials dcctl minted", func() ([]string, error) {
+			return []string{"prod"}, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("a cluster with no Instance CRD could not be asked at all: %v", err)
+	}
+	if !got.holds("prod") {
+		t.Fatalf("the walk answered %+v; the credentials naming \"prod\" were never consulted, "+
+			"so a re-install would proceed over a live instance", got)
+	}
+}
+
+// 🔴 THE COUNTERWEIGHT, AND IT IS THE ONE THAT MATTERS. "Skip a source that cannot
+// answer" is one edit away from "skip a source that failed", and a reader that walked
+// past a real error would report a cluster holding a live instance as empty.
+func TestOnlyTheCannotBeAskedErrorAdvancesTheWalk(t *testing.T) {
+	_, err := firstAnsweringSource([]instanceSource{
+		{"the instance declarations in this cluster", func() ([]string, error) {
+			return nil, errors.New("etcd is not answering")
+		}},
+		{"the credentials dcctl minted", func() ([]string, error) {
+			return nil, nil
+		}},
+	})
+	if err == nil {
+		t.Fatal("a source that FAILED was walked past as though it had merely been absent; " +
+			"a cluster that will not say what it holds would be reported as empty")
 	}
 }

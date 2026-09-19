@@ -7,12 +7,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	apply "github.com/devicechain-io/dc-k8s/apply"
-	dck8s "github.com/devicechain-io/dc-k8s/config"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,9 +43,16 @@ type UpgradeOptions struct {
 	DcctlVersion string
 }
 
-// Upgrade moves a live instance onto a release: the cluster-scoped operator
-// install, the configuration document its services read, and the Helm release
-// that runs them.
+// Upgrade moves a live instance onto a release: the configuration document its
+// services read, and the Helm release that runs them.
+//
+// 🔴 IT NO LONGER MOVES THE OPERATOR, AND THAT IS THE POINT RATHER THAN AN
+// OMISSION. The CRDs and the controller are cluster-scoped — one copy shared by
+// every instance — so this verb moving them moved them for every instance on the
+// cluster, including ones nobody had asked about, in either direction and with
+// nothing comparing versions. `dcctl install` owns them. hydrateUpgradeState
+// refuses unless the cluster already carries the operator this release needs, so
+// by the time anything below runs the schema is known to be the right one.
 //
 // 🔴 BOOTSTRAP CREATES, UPGRADE EVOLVES, AND THAT SPLIT IS THE POINT. They are not
 // two spellings of one pipeline. A bootstrap composes an instance out of its
@@ -77,13 +82,12 @@ type UpgradeOptions struct {
 //     what an instance IS is a different question with different answers (raising
 //     replicas does not re-replicate streams that were created at one).
 //
-// The whole rendered stream is applied, not just the Deployment's image. CRDs are
-// in it, and they are the half with a trap: the API server prunes fields a
-// structural schema does not declare, so an instance whose CRDs stayed at the
-// version they were bootstrapped at would silently discard anything a later
-// release added to them. Applying the stream costs nothing extra — RenderOperator
-// already emits it as one document — and it means the CRD path is never the thing
-// nobody remembered.
+// 🔑 THE CRD TRAP THIS USED TO SOLVE HAS MOVED, NOT GONE. The API server prunes
+// fields a structural schema does not declare, so an instance running against CRDs
+// older than its services silently discards anything a later release added. This
+// verb used to close that by re-applying the whole rendered stream; what closes it
+// now is the refusal — an instance cannot be upgraded past the operator its cluster
+// carries, so the two can no longer drift apart unnoticed.
 //
 // The result is named because a deferred call reads it: from the moment the
 // declaration says Upgrading, every exit from this function has to say how the
@@ -101,7 +105,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	announceBinding(binding, source, opts.Instance)
 	kubeContext := binding.KubeContext
 
-	dyn, disco, typed, err := kubeClients(kubeContext)
+	dyn, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("building kube clients: %w", err)
 	}
@@ -126,14 +130,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	st.Evolving = true
 
-	image := fmt.Sprintf("%s/%s:%s", st.ImageRegistry, operatorImageName, st.ImageVersion)
-
 	fmt.Println(GreenUnderline(fmt.Sprintf(
 		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
 	fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
-	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"), color.GreenString(image))
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
+	// not. hydrateUpgradeState has already refused unless the cluster's operator is
+	// the one this build expects; what this verb moves is the instance.
+	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
+		color.GreenString("the cluster's — checked, not moved (`dcctl install` moves it)"))
 
 	// 🔴 THE CONNECTION BUDGET IS ASKED BEFORE THE FIRST WRITE, while a refusal still
 	// means nothing has moved. See upgradeconnlimit.go.
@@ -149,8 +155,8 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 
 	// Declared here and taken further down: the deferred call closes over the
 	// VARIABLE, so the lock the run takes later is the lock this hands back — and
-	// the exits between the two (a dry run, a manifest that renders no Deployment)
-	// reach the deferred call with nothing to release, which is the truth.
+	// the exits between the two (a dry run) reach the deferred call with nothing to
+	// release, which is the truth.
 	var upgradeClaim *Claim
 
 	// 🔴 REGISTERED HERE AND NOT ONE LINE EARLIER, BECAUSE WHAT IS ABOVE IS NOT THIS
@@ -169,41 +175,19 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// written yet.
 	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
 
-	manifests, err := dck8s.RenderOperator(image)
-	if err != nil {
-		return fmt.Errorf("rendering operator manifests: %w", err)
-	}
-	targets, err := operatorDeployments(manifests)
-	if err != nil {
-		return fmt.Errorf("reading the rendered operator manifests: %w", err)
-	}
-	if len(targets) == 0 {
-		// Not a warning to print and continue past. This command's only
-		// observable effect is a controller running new code; a stream with no
-		// Deployment in it would apply cleanly, report success, and move nothing.
-		return fmt.Errorf(
-			"reading the rendered operator manifests: the operator overlay rendered no Deployment, " +
-				"so there is nothing to upgrade and reporting success would be false; " +
-				"the overlay at backend/k8s/config was changed")
-	}
-
 	if opts.DryRun {
 		fmt.Println()
-		for _, t := range targets {
-			wouldDo(fmt.Sprintf("apply CRDs/RBAC and set %s/%s to %s", t.namespace, t.name, image))
-		}
 		wouldDo("recompose the instance configuration document from this release's chart, " +
 			"keeping every credential the instance is running on")
 		wouldDo("upgrade the instance's Helm release")
 		return nil
 	}
 
-	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO, AND FORGETTING IT WOULD HAVE LEFT A
-	// HOLE SHAPED EXACTLY LIKE THIS COMMAND. The lock exists so that two operators
-	// cannot mutate one cluster at once, and this command server-side-applies the
-	// CRDs, the RBAC and the controller Deployment — cluster-scoped objects that a
-	// concurrent bootstrap is also applying. A lock that only bootstrap and destroy
-	// take is a lock with a documented bypass.
+	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO. It no longer applies the cluster-scoped
+	// operator objects that first justified this — that is `dcctl install`'s now — but
+	// it still rewrites the instance's configuration document and its Helm release,
+	// and a concurrent bootstrap of the same instance writes both. A lock that only
+	// bootstrap and destroy take is a lock with a documented bypass.
 	//
 	// It is announced and not enforced, for the same reason destroy's is: an
 	// operator repairing a stuck instance must not be blocked by a lock held by
@@ -215,23 +199,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// write would run before it (defers unwind backwards) and fence out the very
 	// stamp it is meant to permit.
 	upgradeClaim = beginUpgradeClaim(ctx, kubeContext, opts.Instance)
-
-	// Read what is running BEFORE anything is applied. An upgrade that reports
-	// only its destination cannot be told apart from a no-op, and "no-op" is the
-	// answer an operator most wants confirmed on a cluster they are unsure about.
-	before := currentOperatorImages(ctx, typed, targets)
-
-	doing("applying operator manifests (CRDs + RBAC + controller)")
-	if err := apply.NewApplyOptions(dyn, disco).WithServerSide(true).Apply(ctx, manifests); err != nil {
-		return fail("applying operator manifests", err)
-	}
-	done()
-
-	doing("waiting for the controller to roll over")
-	if err := waitForRollout(ctx, typed, targets, 5*time.Minute); err != nil {
-		return fail("waiting for the controller", err)
-	}
-	done()
 
 	// THE SERVICES, AND THE DOCUMENT THEY READ.
 	//
@@ -297,19 +264,15 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 
 	fmt.Println(color.HiGreenString("\nInstance upgraded."))
-	for _, t := range targets {
-		was := before[t.String()]
-		switch {
-		case was == "":
-			fmt.Printf("  %s %s\n", color.WhiteString(t.String()+":"), color.GreenString(image))
-		case was == image:
-			fmt.Printf("  %s %s %s\n", color.WhiteString(t.String()+":"), color.GreenString(image),
-				color.YellowString("(already at this version — re-applied)"))
-		default:
-			fmt.Printf("  %s %s → %s\n", color.WhiteString(t.String()+":"),
-				color.YellowString(was), color.GreenString(image))
-		}
-	}
+	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
+		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// 🔴 SAID BECAUSE THE OPERATOR IS THE ONE THING THIS COMMAND USED TO MOVE AND NO
+	// LONGER DOES, and an operator who upgraded through the previous release has
+	// every reason to assume it did. The check that let this run at all proved the
+	// cluster's operator is the one this build expects — so naming it here is a
+	// statement about what was verified, not about what was applied.
+	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
+		color.GreenString("unchanged — the cluster's, already at this release"))
 	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
 	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
 	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
@@ -547,27 +510,6 @@ func operatorDeployments(manifests []byte) ([]deploymentRef, error) {
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 	return refs, nil
-}
-
-// currentOperatorImages reads the container images each target Deployment runs
-// right now, joined when a Deployment has more than one container. A target that
-// does not exist yet, or cannot be read, is simply absent from the map — this is
-// reporting, and a failure to read it must not fail an upgrade that then went on
-// to work.
-func currentOperatorImages(ctx context.Context, typed kubernetes.Interface, targets []deploymentRef) map[string]string {
-	out := make(map[string]string, len(targets))
-	for _, t := range targets {
-		d, err := typed.AppsV1().Deployments(t.namespace).Get(ctx, t.name, metav1.GetOptions{})
-		if err != nil {
-			continue
-		}
-		var images []string
-		for _, c := range d.Spec.Template.Spec.Containers {
-			images = append(images, c.Image)
-		}
-		out[t.String()] = strings.Join(images, ", ")
-	}
-	return out
 }
 
 // waitForRollout blocks until every target Deployment has fully rolled onto its

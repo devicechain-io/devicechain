@@ -25,15 +25,26 @@ var (
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade <provider> <instance>",
 	Short: "Move a live instance onto a released version",
-	Long: `Upgrades an existing instance: the cluster-scoped operator install (namespace,
-CRDs, RBAC and the controller), the configuration document its services read, and
-the Helm release that runs them.
+	Long: `Upgrades an existing instance: the configuration document its services read,
+and the Helm release that runs them.
 
 A DeviceChain release is one version across the service images, the Helm chart,
-the operator and dcctl. This command moves all of them together, in the order
-they have to move in — the operator and its CRDs first, then the services. The
-operator and its CRDs are cluster-scoped and shared by every instance on the
-cluster, so moving them here moves them for all of them.
+the operator and dcctl — but this command moves ONE INSTANCE, not the cluster.
+The operator and its CRDs are cluster-scoped: there is one copy, shared by every
+instance on the cluster. Moving them is 'dcctl install', so that a cluster-wide
+change happens when somebody asks for one, rather than as a side effect of
+upgrading whichever instance came first.
+
+So an upgrade is two commands, in this order:
+
+  dcctl install <provider> --version <tag>     # once, moves the cluster
+  dcctl upgrade <provider> <instance> --version <tag>   # per instance
+
+This command checks the cluster's operator and never moves it. It REFUSES when the
+cluster has no operator, or has one identifiably from another release, naming the
+install command that fixes it. An operator installed by hand carries no record of
+which release put it there, and dcctl cannot tell that apart from one an older
+dcctl overwrote — so that case is allowed through with a note rather than refused.
 
 It mints no credentials. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the

@@ -36,8 +36,15 @@ pregunta antes, salvo que pases `--yes`. El proveedor `gcp` es una mejora planif
 ## Instalar el clúster {#install}
 
 `dcctl install <provider>` prepara un clúster para alojar instancias de DeviceChain. Instala
-los requisitos previos que comparten todas las instancias del clúster, en el namespace
-`dc-system`:
+los requisitos previos que comparten todas las instancias del clúster:
+
+- el **operador de DeviceChain** y las dos definiciones de recurso personalizado que
+  reconcilia —`Instance` e `InstanceConfiguration`— en el namespace `dc-k8s-system`. Son
+  lo que hace que un clúster pueda alojar una instancia: `dcctl bootstrap` declara un
+  `Instance`, y no puede declarar uno en un clúster donde la definición no existe.
+  Consulta [el operador](./kubernetes-operator.md);
+
+y, en el namespace `dc-system`:
 
 - el operador CloudNativePG;
 - la base de datos relacional (`dc-rdb`), que contiene una base de datos por instancia;
@@ -45,6 +52,11 @@ los requisitos previos que comparten todas las instancias del clúster, en el na
 - cert-manager;
 - la monitorización (Prometheus y Grafana —consulta [Observabilidad](./observability.md));
 - el controlador de ingress.
+
+El operador es **un solo controlador por clúster**, compartido por todas las instancias que
+haya en él, y por eso instalarlo es tarea del comando del clúster y no de cada instancia.
+Es también la razón por la que mover un clúster a una versión nueva empieza aquí: consulta
+[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 Además crea la identidad de base de datos base con la que se crea el login de base de datos
 propio de cada instancia, y registra la instalación en el clúster.
@@ -183,13 +195,13 @@ Es un verbo de creación. Todas las credenciales de la instancia se acuñan aqu�
 contraseñas de las bases de datos, la autoridad y los inicios de sesión del bróker, el secreto
 entre servicios, la clave raíz del almacén de secretos— porque ninguna de ellas existe
 todavía. Apúntalo a una instancia que ya esté en marcha y se detiene en el paso 3 —antes de
-tocar el operador, la infraestructura o el chart— y nombra el comando que sí mueve una
+tocar la infraestructura o el chart— y nombra el comando que sí mueve una
 instancia viva: `dcctl upgrade`, descrito en
 [Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 Una ejecución que *falló* a mitad de camino es otro caso distinto, y volver a ejecutarla sigue
 siendo la forma de repararla. Lo que el paso 3 rechaza es una instancia **viva**, que reconoce
-por el documento de configuración que se escribe en el paso 9 —de modo que todo lo que se
+por el documento de configuración que se escribe en el paso 8 —de modo que todo lo que se
 quede antes de eso es una instancia a medio construir, y volver a ejecutar el arranque inicial
 es la manera admitida de terminarla.
 
@@ -223,7 +235,8 @@ ocupar uno de ellos. Cada instancia se conecta a la base de datos relacional com
 un login propio que es dueño de exactamente una base de datos, de modo que ninguna instancia
 puede llegar a los datos de otra. Lo que comparten las instancias son los requisitos previos
 del clúster:
-el controlador de ingress, cert-manager, el operador CloudNativePG, la monitorización, la
+el operador de DeviceChain y sus definiciones de recurso personalizado, el controlador de
+ingress, cert-manager, el operador CloudNativePG, la monitorización, la
 base de datos relacional y el almacén de objetos de los respaldos.
 [`dcctl install`](#install) los instala una vez; cada arranque inicial los reutiliza y sigue
 los ajustes con los que se instaló el clúster: alta disponibilidad, tamaño compacto,
@@ -266,14 +279,14 @@ bróker y su almacén de eventos en el namespace compartido `dc-system`, y no se
 en sitio. El arranque inicial rechaza una instancia así e indica que hay que destruirla y
 volver a arrancarla.
 
-Los pasos de abajo son los que la ejecución va imprimiendo (`[5/12] Install core
-components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
+Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install instance
+(Helm)`), de modo que un fallo nombra un paso que puedes encontrar aquí:
 
 1. **Asegurar el registro local** (*Ensure local registry*) — solo en la ruta de
    desarrollo `--build`: aprovisiona un registro local y compila todas las imágenes en
    él. En la ruta de imágenes publicadas no hace nada y lo indica. Va primero porque el
-   operador que se instala cuatro pasos después nombra una imagen, y en la ruta `--build`
-   este es el paso que la produce.
+   chart que se instala más adelante nombra esas imágenes, y en la ruta `--build` este es
+   el paso que las produce.
 2. **Reclamar el clúster** (*Claim the cluster*) — crea el namespace del operador y toma
    el **bloqueo del clúster**, antes de aplicar nada. Mientras está tomado, un segundo
    `dcctl bootstrap` contra el mismo clúster se rechaza en lugar de aplicarse
@@ -296,19 +309,14 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    ejecución, y se indica. Una ejecución en seco dice qué rechazaría una ejecución real.
    Consulta **Varias instancias en un mismo clúster** más arriba, incluida la etiqueta que
    entrega a la instancia un namespace que creaste tú.
-5. **Instalar los componentes del núcleo** (*Install core components*) — renderiza el
-   operador (CRDs + RBAC + controlador) y lo aplica directamente con la API de
-   Kubernetes. Va por delante de la aplicación de infraestructura porque la definición de
-   una instancia debe existir en el clúster antes de que nada pueda describirle una —y
-   describir una es justamente el paso siguiente.
-6. **Declarar la instancia** (*Declare the instance*) — escribe la **declaración** de la
+5. **Declarar la instancia** (*Declare the instance*) — escribe la **declaración** de la
    instancia en el clúster: el proveedor y el clúster al que pertenece, el perfil, la
    versión de imagen y si sus bases de datos se están recuperando desde un archivo. Acto
    seguido se vuelve a leer, y todos los pasos siguientes trabajan con lo que se leyó y no
    con los flags que lo produjeron —de modo que el registro de lo que es esta instancia
    está en el clúster, no en tu portátil. Consulta
    [la declaración de la instancia](./kubernetes-operator.md#instance-declaration).
-7. **Renderizar la configuración** (*Render configuration*) — resuelve el id de la
+6. **Renderizar la configuración** (*Render configuration*) — resuelve el id de la
    instancia, el namespace, el perfil y todas las credenciales generadas: el material de
    autenticación del bróker (la contraseña de servicio compartida y la clave del emisor
    del callout), la autoridad certificadora que firma el propio certificado TLS del bróker,
@@ -322,7 +330,7 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    configura antes que la instancia, y sus credenciales ya no se pueden recuperar del clúster
    una vez están en él. Además, la clave raíz se deposita en un archivo cifrado que tú
    conservas; consulta [Recuperación ante desastres](./disaster-recovery.md).
-8. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
+7. **Aplicar la infraestructura** (*Apply infrastructure*) — ejecuta `tofu apply` sobre la
    configuración de OpenTofu incrustada vía
    [terraform-exec](https://github.com/hashicorp/terraform-exec), solo para esta instancia:
    su propio bróker (NATS) y almacén de eventos (TimescaleDB) en su namespace, con el estado
@@ -330,15 +338,15 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
    la base de datos propios de la instancia en la base de datos relacional compartida. Los
    requisitos previos compartidos del clúster no se aplican aquí: los dejó en su sitio
    [`dcctl install`](#install). Las ejecuciones posteriores son incrementales.
-9. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
+8. **Instalar la instancia (Helm)** (*Install instance (Helm)*) — escribe el **documento de
    configuración** de la instancia —del que cada servicio lee sus credenciales y sus
    endpoints— y después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando
    hasta que las cargas de trabajo estén listas. Ese documento es lo que hace que la instancia
    esté viva, y lo que el paso 3 busca en cualquier ejecución posterior.
-10. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
+9. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
    de superusuario la siembra el servicio user-management en el primer arranque; este paso
    fija los valores que imprimirá el informe final.
-11. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
+10. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
     área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
     producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en
     la espera del propio paso de Helm. Que haya réplicas disponibles no basta: cuando se
@@ -346,7 +354,7 @@ components`), de modo que un fallo nombra un paso que puedes encontrar aquí:
     espera además a que se observe la nueva plantilla, a que todas las réplicas se hayan
     recreado sobre ella y a que no quede ninguna réplica antigua en ejecución. `dcctl
     upgrade` usa la misma puerta por la misma razón.
-12. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
+11. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
     credencial de superusuario y cómo llegar a la instancia.
 
 :::tip `Ctrl+C` detiene una ejecución de forma limpia
@@ -355,7 +363,7 @@ lo que está haciendo y escribe su estado— y devuelve el bloqueo del clúster,
 con volver a ejecutarla. Un **segundo** `Ctrl+C` sale de inmediato y renuncia a ambas cosas.
 Consulta [Interrumpir una ejecución](./cluster-lock.md#interrupt).
 
-Si la ejecución ya había llegado al paso 9, la instancia existe y el arranque inicial se
+Si la ejecución ya había llegado al paso 8, la instancia existe y el arranque inicial se
 negará la próxima vez que lo ejecutes. Eso no es un callejón sin salida: la instancia está
 construida, y `dcctl upgrade` es como se mueve a partir de ahí.
 :::

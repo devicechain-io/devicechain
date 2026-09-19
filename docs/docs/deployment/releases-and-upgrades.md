@@ -41,8 +41,11 @@ Every release is a single semantic-version git tag (`vX.Y.Z`). That one version 
 `dcctl` CLI are all published at the same version. There is no per-service version skew to
 reason about: a deployment is one coherent number.
 
-One command moves all of it together — the operator is not part of the chart, so something
-outside the chart has to be the thing that moves both. See
+Two commands move all of it, and which one moves what follows the thing's **lifetime**.
+The operator is one controller per cluster, shared by every instance on it, so
+`dcctl install` moves it along with the rest of the cluster's prerequisites. The
+configuration document, the chart release and the service images belong to one instance, so
+`dcctl upgrade` moves those, one instance at a time. See
 [Zero-downtime upgrades](#zero-downtime-upgrades) for the procedure.
 
 - **Stable releases** are `vX.Y.Z` (e.g. `v1.2.0`). The `:latest` tag tracks the most
@@ -142,8 +145,7 @@ An instance installed with `helm install` rather than `dcctl bootstrap` is upgra
 `helm upgrade`, and it keeps a trap the `dcctl` path does not have.
 
 `dcctl upgrade` does not apply to it. That command reads an instance's declaration and its
-configuration document back out of the cluster, and a chart-only install has neither; it
-also installs no operator, so there is no second half for anything to move.
+configuration document back out of the cluster, and a chart-only install has neither.
 
 The release name below is `dc` because that is the name the `helm install` above chose. An
 instance installed by `dcctl bootstrap` carries a release named after the instance —
@@ -222,32 +224,54 @@ before.
 
 ## Zero-downtime upgrades {#zero-downtime-upgrades}
 
-Upgrading an instance you bootstrapped is **one command**, and the chart and services are
-built to roll customers forward without dropping traffic. Four exceptions are documented
-below: the durable-ingest cutover, which is still an ordinary upgrade but has a visible side
-effect, and **`v0.9.0`, `v0.10.0` and any instance built by `v0.16.0` or earlier, which
-cannot be upgraded into at all**. Check the release notes for the version you are moving to
-before running it:
+Upgrading is **two commands** — one for the cluster, then one for each instance on it — and
+the chart and services are built to roll customers forward without dropping traffic. Four
+exceptions are documented below: the durable-ingest cutover, which is still an ordinary
+upgrade but has a visible side effect, and **`v0.9.0`, `v0.10.0` and any instance built by
+`v0.16.0` or earlier, which cannot be upgraded into at all**. Check the release notes for
+the version you are moving to before running it:
 
 ```bash
+dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-A release is one version across the service images, the chart, the operator and `dcctl`, and
-that command moves all of them together, in the order they have to move in:
+A release is one version across the service images, the chart, the operator and `dcctl`.
+The two commands split it by what each thing belongs to:
 
-1. **the operator** — its namespace, CRDs, RBAC and controller, applied from manifests
-   embedded in `dcctl`. It is not part of the Helm chart, so nothing inside the chart can
-   reach it. The whole rendered stream is applied rather than just the controller's image,
-   because the CRDs are in it: a schema left at the version the instance was bootstrapped at
-   silently discards any field a later release added;
-2. **the configuration document** every service reads its credentials and endpoints from,
+**`dcctl install` moves the cluster.** The operator — its namespace, CRDs, RBAC and
+controller — is applied from manifests embedded in `dcctl`. It is not part of the Helm
+chart, so nothing inside the chart can reach it. The whole rendered stream is applied rather
+than just the controller's image, because the CRDs are in it: a schema left at the version
+the instance was bootstrapped at silently discards any field a later release added. This
+command also moves the rest of the cluster's shared prerequisites; see
+[Install the cluster](./bootstrap.md#install).
+
+**`dcctl upgrade` moves one instance**, and moves nothing that is shared:
+
+1. **the configuration document** every service reads its credentials and endpoints from,
    recomposed from this release's chart and written by `dcctl`, which owns it;
-3. **the Helm release** that runs the services, which rolls them onto the new images and
+2. **the Helm release** that runs the services, which rolls them onto the new images and
    waits for each area to finish.
 
-Run it with `--dry-run` first if you want to see what it would move. It takes the target
-cluster from the instance's own record rather than guessing, and says which.
+**Order matters, and the upgrade checks it.** The operator is what the instance's
+declaration is defined by, so it has to be at the new release before an instance is moved
+onto it. `dcctl upgrade` reads the operator the cluster is carrying and **refuses** an
+instance whose cluster has no operator at all, or whose operator is identifiably a
+different release's — naming the install command to run first. It does not apply the
+operator itself: on a cluster holding several instances that would move every other
+instance's controller as a side effect of upgrading one, silently.
+
+There is one case it lets through with a warning rather than refusing. `dcctl install`
+records which release installed the definitions; an operator put on the cluster **by hand**
+carries no such record, and `dcctl` cannot tell a deliberate hand-install from one an older
+`dcctl` overwrote. Rather than overrule a choice it cannot see, it prints a note naming the
+install command and continues. If you did not install the operator by hand, treat that note
+as the refusal it would otherwise have been and run `dcctl install` before going further.
+
+Run either with `--dry-run` first if you want to see what it would move. `dcctl upgrade`
+takes the target cluster from the instance's own record rather than guessing, and says
+which.
 
 :::tip It reads every credential and mints none
 `dcctl upgrade` keeps what the instance is running on: the database owner passwords, the
@@ -313,10 +337,10 @@ outcomes fails the upgrade: an escrow problem is about a future disaster and the
 front of it is about the running instance, and an operator who cannot upgrade will work around
 the check rather than fix it.
 
-:::note This used to be two commands, one of them a `helm upgrade`
+:::note The instance half used to be a `helm upgrade`
 The procedure was: write the current release's values to a file with `helm get values`, pass
-them back with `-f` alongside the new image tag, delete the file because it held your secrets,
-and then run `dcctl upgrade` a second time for the operator.
+them back with `-f` alongside the new image tag, delete the file because it held your
+secrets, and then move the operator separately.
 
 That dance existed only because the Helm release was where the instance's generated
 credentials lived, and Helm starts from the chart's defaults the moment you pass it any value
@@ -324,9 +348,12 @@ at all — so an upgrade that did not carry them forward by hand lost them. `dcc
 configuration document now, the release no longer holds those credentials, and the step that
 told you to write your secrets to a file simply goes.
 
-It also closes a gap the two-command form had: an upgrade that stopped after the `helm` half
-left the new services running against the controller the instance was first bootstrapped
-with — indefinitely, and with no error to say so.
+The gap that form left open was an upgrade stopping after the `helm` half, leaving the new
+services running against the controller the instance was first bootstrapped with —
+indefinitely, and with no error to say so. That is what the refusal above closes: the two
+commands are still two, because the operator belongs to the cluster and the release belongs
+to the instance, but `dcctl upgrade` now reads which operator the cluster is carrying, and
+says so — refusing where it can tell the two apart, and warning where it cannot.
 :::
 
 What makes the rollout safe:
@@ -1290,8 +1317,8 @@ the release that follows `v0.16.0`**. `dcctl upgrade` refuses rather than trying
 
 `dcctl bootstrap` now records a **declaration** — a cluster-scoped object saying what the
 instance *is*: its profile, its topology, how it is exposed, and which functional areas it
-runs. `dcctl upgrade` reads that declaration to know what to deploy, which is what lets one
-command move a version without being told an instance's shape all over again. Releases up to
+runs. `dcctl upgrade` reads that declaration to know what to deploy, which is what lets it
+move a version without being told an instance's shape all over again. Releases up to
 and including `v0.16.0` wrote no such record, so there is nothing for the upgrade to read.
 
 It says so, rather than treating your instance as a name that does not exist:

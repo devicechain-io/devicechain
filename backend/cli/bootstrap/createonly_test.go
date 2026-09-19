@@ -96,25 +96,28 @@ func TestTheLegacyDatabaseRemovalRerunIsStillAllowed(t *testing.T) {
 	}
 }
 
-// 🔴 THE REFUSAL IS PLACED AFTER THE LOCK AND BEFORE ANYTHING IS APPLIED, and both
+// 🔴 THE REFUSAL IS PLACED AFTER THE LOCK AND BEFORE ANYTHING IS WRITTEN, and both
 // edges are load-bearing. After the lock, because the answer is read from the cluster
 // and a concurrent bootstrap is exactly what would make it stale between reading and
-// acting. Before the operator install, because every step past that one writes to a
+// acting. Before the first write, because every step past that one writes to a
 // cluster that may already be running the instance it would be writing over.
-func TestTheRebuildRefusalRunsAfterTheLockAndBeforeAnythingIsApplied(t *testing.T) {
+//
+// The second edge used to name the operator install as the first write. That step is
+// gone — the operator is the cluster's and `dcctl install` puts it there — so the
+// edge is stated against the first thing this pipeline still writes, the declaration.
+func TestTheRebuildRefusalRunsAfterTheLockAndBeforeAnythingIsWritten(t *testing.T) {
 	claim := stepIndex(t, stepClaimCluster)
 	refuse := stepIndex(t, stepRefuseRebuild)
-	core := stepIndex(t, stepInstallCore)
+	declare := stepIndex(t, stepDeclareInstance)
 
 	if refuse <= claim {
 		t.Errorf("the rebuild check runs at %d and the lock is taken at %d: a concurrent "+
 			"bootstrap could make the answer stale between reading it and acting on it",
 			refuse, claim)
 	}
-	if refuse >= core {
-		t.Errorf("the rebuild check runs at %d and the operator install at %d: a refused "+
-			"bootstrap would already have written its own version over a live instance",
-			refuse, core)
+	if refuse >= declare {
+		t.Errorf("the rebuild check runs at %d and the declaration is written at %d: a refused "+
+			"bootstrap would already have written over a live instance", refuse, declare)
 	}
 }
 

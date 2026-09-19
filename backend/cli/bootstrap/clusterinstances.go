@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -64,6 +65,16 @@ func (c clusterInstances) othersThan(instance string) []string {
 	return out
 }
 
+// errNoInstanceCRD says the declarations source cannot be asked, because the cluster
+// has no Instance definition to list.
+//
+// 🔴 IT IS "I CANNOT ANSWER", WHICH IS A THIRD THING BESIDE "NONE" AND "FAILED".
+// Answering "no instances" would be an absence used as an answer about contents — the
+// direction that writes a second instance over a live one. Answering "failed" would
+// stop the walk before the Secrets and Helm sources, which can still answer, and would
+// tell a `dcctl install` re-run to go and run `dcctl install`.
+var errNoInstanceCRD = errors.New("this cluster has no Instance definition, so its declarations cannot be listed")
+
 // instanceSource is one durable artifact a bootstrap leaves behind that can name the
 // instance it belongs to.
 type instanceSource struct {
@@ -88,12 +99,24 @@ type instanceSource struct {
 // either of them being present disqualifies the cluster on its own, so nothing turns on
 // which is asked second.
 //
-// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet — no CRD on
-// a virgin cluster, no release until the Helm step — must not stop the walk, or every
-// first bootstrap would read the first source's silence as the whole cluster's.
+// 🔑 AN EMPTY ANSWER IS NOT AN ANSWER. A source that is simply not there yet — no
+// release until the Helm step — must not stop the walk, or every first bootstrap would
+// read the first source's silence as the whole cluster's.
+//
+// 🔴 AND A SOURCE THAT CANNOT BE ASKED IS NOT A FAILED WALK. With no Instance CRD the
+// declarations source has no question to answer, and that is an ordinary state for
+// `dcctl install` — which runs on clusters that have no operator yet, and asks this
+// aggregate whether a re-install would hurt anyone. Stopping there told such an
+// operator to run `dcctl install`, which is the command they were running, and threw
+// away the Secrets and Helm evidence that could still have answered. So this one error
+// advances the walk instead of ending it; every OTHER error still ends it, because a
+// cluster that will not say what it holds is not an empty one.
 func firstAnsweringSource(sources []instanceSource) (clusterInstances, error) {
 	for _, s := range sources {
 		ids, err := s.read()
+		if errors.Is(err, errNoInstanceCRD) {
+			continue
+		}
 		if err != nil {
 			return clusterInstances{}, err
 		}
@@ -152,9 +175,24 @@ func clusterInstancesFor(ctx context.Context, kubeContext string) (clusterInstan
 
 // declaredInstances lists the Instance declarations in a cluster.
 //
-// 🔴 IT MUST TOLERATE THE CRD BEING ABSENT, because this runs BEFORE stepInstallCore
-// installs it. A virgin cluster has to read as "no instances" rather than as an error,
-// or the boundary would refuse the first bootstrap of every cluster.
+// 🔴 IT USED TO TOLERATE THE CRD BEING ABSENT, AND THAT REVERSED WITH THE OPERATOR.
+// This runs at steps 3 and 4, and the operator used to be installed at step 5 — so a
+// virgin cluster genuinely had no CRD yet, and reading that as "no instances" was the
+// only way the first bootstrap of a cluster could ever proceed.
+//
+// `dcctl install` installs the operator now, and the command layer refuses a cluster
+// without one before this pipeline starts. So an absent CRD no longer means "new
+// cluster"; it means the cluster is not prepared, or something removed the definition
+// underneath a run that had already checked. Neither is "there are no instances here",
+// and answering that would be an absence used as an answer about CONTENTS — the exact
+// shape that lets a second instance be built over a live one.
+//
+// 🔑 IT IS A SIGNAL, NOT A REFUSAL AN OPERATOR READS. firstAnsweringSource recognises
+// it and asks the next source instead, because `dcctl install` legitimately runs on a
+// cluster with no operator and asks this same aggregate whether a re-install would hurt
+// anyone. What must never happen is this source answering "no instances" — that is an
+// absence used as an answer about CONTENTS, and it is how a second instance gets built
+// over a live one. Saying "I cannot be asked" keeps both properties.
 //
 // 🔑 THE DISAMBIGUATION isInstanceNotFound MAKES DOES NOT APPLY TO A LIST, and reusing
 // it verbatim would be wrong rather than merely redundant. That function exists because
@@ -172,7 +210,7 @@ func declaredInstances(ctx context.Context, dyn dynamic.Interface) ([]string, er
 	list, err := dyn.Resource(instanceGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-			return nil, nil
+			return nil, fmt.Errorf("listing the instance declarations in this cluster: %w", errNoInstanceCRD)
 		}
 		return nil, fmt.Errorf("listing the instance declarations in this cluster: %w. Refusing "+
 			"to continue: if a declaration IS there, treating this cluster as empty would "+

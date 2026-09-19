@@ -184,13 +184,13 @@ func keepRecordReason(instance string, found []string, footprintErr error) error
 // error is the ONLY answer that means "nothing here".
 //
 // 🔴 THE DECLARATION IS FIRST BECAUSE OF WHERE IT SITS IN THE PIPELINE, AND THAT ORDERING
-// IS WHAT MAKES THE WHOLE CHECK SAFE. The twelve bootstrap steps write, in order: the
-// cluster claim (2), the core components (5), the DECLARATION (6), the rendered
-// configuration (7), the instance namespace, the infrastructure and the Secrets dcctl
-// mints (8), the Helm release (9). So a run that got far enough to apply OpenTofu — far
+// IS WHAT MAKES THE WHOLE CHECK SAFE. The eleven bootstrap steps write, in order: the
+// cluster claim (2), the DECLARATION (5), the rendered configuration (6), the instance
+// namespace, the infrastructure and the Secrets dcctl mints (7), the Helm release (8).
+// So a run that got far enough to apply OpenTofu — far
 // enough for its local tfstate to describe real cluster objects — necessarily wrote its
 // declaration first, and the declaration check keeps its record. The record can only be
-// cleared for a run that died before step 6, which has written nothing of the instance
+// cleared for a run that died before step 5, which has written nothing of the instance
 // anywhere.
 //
 // The cluster LOCK is deliberately not one of these. It is not durable state, this very
@@ -203,7 +203,7 @@ func instanceFootprint(ctx context.Context, dyn dynamic.Interface, typed kuberne
 	// including an Instance CRD that is not installed — isInstanceNotFound separates a
 	// missing OBJECT from a missing RESOURCE TYPE and only the first reads as absent.
 	// Keeping the record on a cluster with no CRD is the right direction anyway: the
-	// operator installs the CRD before the release (step 5 before step 9), so a cluster
+	// CRD is installed by `dcctl install`, before any release exists, so a cluster
 	// holding a release has one, and a cluster that somehow does not is a cluster whose
 	// answer we do not have.
 	inst, err := readInstanceCR(ctx, dyn, instance)

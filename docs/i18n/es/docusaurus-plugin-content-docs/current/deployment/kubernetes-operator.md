@@ -58,10 +58,11 @@ helm install dc deploy/helm/devicechain \
 ```
 
 Vea [Versiones y actualizaciones](./releases-and-upgrades.md) para el modelo de versionado y el
-procedimiento de actualización. Para una instancia que arrancó con el bootstrap es un único
-`dcctl upgrade`, que mueve a la vez el operador, el documento de configuración y la versión
-desplegada —el operador no forma parte del chart, así que algo externo al chart tiene que mover
-ambas cosas—. Para una instancia gobernada solo desde el chart es `helm upgrade`, con sus
+procedimiento de actualización. Para una instancia que arrancó con el bootstrap son dos
+comandos: `dcctl install` mueve el operador, que pertenece al clúster, y `dcctl upgrade` mueve
+el documento de configuración y la versión desplegada, que pertenecen a la instancia. El
+operador no forma parte del chart, así que algo externo al chart tiene que moverlo. Para una
+instancia gobernada solo desde el chart es `helm upgrade`, con sus
 valores [trasladados a mano](./releases-and-upgrades.md#chart-only-upgrade).
 
 `user-management` y `device-management` son el núcleo requerido; `event-management`, `device-state`, y `command-delivery` son opcionales de forma independiente. El chart **falla el renderizado** si una selección omite un servicio del núcleo requerido o una dependencia dura de un servicio habilitado — de modo que una topología rota se detecta en el momento de instalación, no después de que los pods entren en crash-loop. Los valores se validan contra el `values.schema.json` del chart en el momento de aplicación.
@@ -69,6 +70,16 @@ valores [trasladados a mano](./releases-and-upgrades.md#chart-only-upgrade).
 ## Recursos personalizados
 
 - **`Instance`** (con alcance de clúster; `instances.core.devicechain.io`, nombre corto `dci`) — uno por instalación, declarando la identidad y configuración de la instancia.
+- **`InstanceConfiguration`** (con alcance de clúster; `instanceconfigurations.core.devicechain.io`) — la configuración renderizada a la que se resuelve un `Instance`, y contra la que reconcilia el operador.
+
+Ambas definiciones las instala [`dcctl install`](./bootstrap.md#install), junto con el propio
+controlador, y tienen **alcance de clúster en todos los sentidos**: una sola copia por clúster,
+compartida por todas las instancias que haya en él, versionada con el clúster y no con ninguna
+instancia concreta. Por eso el comando que prepara un clúster es el comando que las mueve.
+`dcctl bootstrap` y `dcctl upgrade` solo las leen: un clúster sin definiciones, o con unas
+identificablemente de otra versión, se rechaza indicando el comando de instalación que hay que
+ejecutar. Las definiciones instaladas a mano no llevan constancia de qué versión las puso, así
+que esas se dejan pasar con una nota que nombra el mismo comando, en lugar de rechazarse.
 
 Los inquilinos **no** son recursos personalizados — son registros de base de datos del plano de control creados a través de la API de administración de instancia y la consola `/admin`, compartiendo los servicios de la instancia (vea [Multitenencia](../concepts/multi-tenancy.md)).
 
@@ -203,4 +214,4 @@ DeviceChain divide deliberadamente cada capa:
 | Ciclo de vida | **Operador** | Agregación de estado de `Instance` y recarga en caliente de configuración |
 | Configuración de negocio | kubectl / UI | inquilinos y sus ajustes |
 
-OpenTofu se ejecuta al instalar un clúster (`dcctl install`, para los requisitos previos que comparten todas las instancias) y al arrancar una instancia (para el bróker y el almacén de eventos propios de esa instancia); el chart renderiza las cargas de trabajo; el operador se ejecuta de forma continua, reconciliando el ciclo de vida. El arranque del clúster nunca vive en el código de la aplicación o del operador — es responsabilidad de la capa de infraestructura. Los módulos de OpenTofu viven en [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); aprovisionan el nivel de base de datos con guardas de retención para que sobreviva al desmontaje de la aplicación (vea [Versiones y actualizaciones](./releases-and-upgrades.md#data-durability)).
+OpenTofu se ejecuta al instalar un clúster (`dcctl install`, para los requisitos previos que comparten todas las instancias) y al arrancar una instancia (para el bróker y el almacén de eventos propios de esa instancia); `dcctl install` aplica además el operador y sus definiciones, a partir de manifiestos incrustados en la CLI y no a través de ninguna de las otras dos capas; el chart renderiza las cargas de trabajo; el operador se ejecuta de forma continua, reconciliando el ciclo de vida. El arranque del clúster nunca vive en el código de la aplicación o del operador — es responsabilidad de la capa de infraestructura. Los módulos de OpenTofu viven en [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); aprovisionan el nivel de base de datos con guardas de retención para que sobreviva al desmontaje de la aplicación (vea [Versiones y actualizaciones](./releases-and-upgrades.md#data-durability)).

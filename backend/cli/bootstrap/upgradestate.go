@@ -31,9 +31,12 @@ import (
 //   - THE PREVIOUS RELEASE holds the handful of values that came out of an
 //     infrastructure apply this verb does not run. See carryForwardFromRelease.
 //
-// 🔴 AND THE ORDER MATTERS FOR ONE REASON: the declaration is read first because a
-// missing one is the cheapest, clearest refusal available. Reading credentials first
-// would report a missing Secret on an instance that does not exist.
+// 🔴 AND THE ORDER MATTERS. The OPERATOR is checked before anything else, because
+// with no Instance CRD there can be no declaration and the declaration's refusal
+// would blame a name that is correct — see the "0." block below. After that the
+// declaration is read before the credentials, because a missing declaration is the
+// cheapest, clearest refusal available: reading credentials first would report a
+// missing Secret on an instance that does not exist.
 func hydrateUpgradeState(
 	ctx context.Context,
 	typed kubernetes.Interface,
@@ -49,6 +52,33 @@ func hydrateUpgradeState(
 		DryRun:       opts.DryRun,
 		DcctlVersion: opts.DcctlVersion,
 		Values:       map[string]string{},
+	}
+
+	// 0. THE OPERATOR, AND IT COMES FIRST FOR A REASON THAT IS NOT PRIORITY.
+	//
+	// 🔴 A MISSING CRD MAKES EVERY LATER REFUSAL LIE. The declaration read below
+	// asks the cluster for an Instance; with no Instance CRD installed, that comes
+	// back NotFound and is reported as "instance %q is not declared — check the
+	// name". The name is fine. The cluster has no operator. Sending an operator to
+	// re-check a correct name, during an upgrade, is advice they cannot act on.
+	//
+	// 🔴 AND IT IS BEFORE ANYTHING Upgrade DEFERS. Once Upgrade has called
+	// recordUpgradedVersion the declaration may say Upgrading, and from that point
+	// every exit has to stamp a terminal phase; a refusal made after it would write
+	// Failed over an instance nothing had touched. Everything in this function runs
+	// ahead of both, which is why the refusal lives here rather than in Upgrade.
+	//
+	// 🔑 THIS IS WHERE THE ONE-COMMAND UPGRADE ENDS. `dcctl upgrade` used to apply
+	// the operator itself, so it could move a cluster and an instance together. It
+	// moved the cluster for every OTHER instance at the same time, which is what it
+	// no longer does.
+	// Through the seam for the reason the declaration read below uses one: what this
+	// selects is WHICH refusal an operator gets, and every other part of that
+	// decision is exercisable without a cluster. Reading around the seam would leave
+	// the wiring between the check and the refusal the one piece no test could reach.
+	if err := requireOperatorFor(ctx, binding.KubeContext, "an upgrade",
+		InstallCommand(provider.Name(), binding)); err != nil {
+		return nil, err
 	}
 
 	// 1. THE DECLARATION.
@@ -105,7 +135,7 @@ func hydrateUpgradeState(
 	}
 	if deployed == nil {
 		// 🔴 A DECLARATION WITH NO DOCUMENT IS A BOOTSTRAP THAT DIED BEFORE ITS
-		// NINTH STEP. The declaration lands at step 6 and the document at step 9
+		// EIGHTH STEP. The declaration lands at step 5 and the document at step 8
 		// (NewDefaultPipeline), so this state is reachable and it is not an upgrade's
 		// to repair: the
 		// credentials the half-built instance is holding were never written down

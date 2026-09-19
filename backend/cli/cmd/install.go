@@ -28,6 +28,9 @@ var (
 	installMaxConnections    int
 	installRestoreRdbFrom    string
 	installRestoreRdbAt      string
+	installRegistry          string
+	installVersion           string
+	installBuild             bool
 )
 
 // installRestoreFlagsFromArgv assembles the relational-store restore inputs from the
@@ -48,6 +51,45 @@ func installRestoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 		RdbTargetTime:  installRestoreRdbAt,
 		BackupsEnabled: backupsEnabled,
 	}
+}
+
+// resolveInstallDevMode checks the --dev preset against the flags the user set
+// explicitly. It returns an error for a contradiction and nothing otherwise; the
+// preset itself is two assignments, and the caller makes them.
+//
+// 🔴 --dev IMPLIES --build, AND IT HAD TO THE MOMENT install GREW AN IMAGE SOURCE.
+// `dcctl bootstrap --dev` has always meant "build from source", and the documented
+// local bring-up is `dcctl install local --dev` followed by `dcctl bootstrap local
+// <id> --dev`. A dcctl built with `make build` deliberately carries no pinned image
+// version — see the Makefile, where that absence is the point — so without this the
+// FIRST of those two commands refuses, and the developer preset becomes the one
+// preset that cannot prepare a developer's cluster.
+//
+// Extracted from RunE for the reason installOptions is: RunE needs a provider and a
+// cluster, so nothing could otherwise exercise the one branch whose absence broke
+// the documented path and both validation rigs at once.
+func resolveInstallDevMode(changed func(string) bool, build bool, version string) (installDevResolution, error) {
+	if changed("build") && !build {
+		return installDevResolution{}, fmt.Errorf(
+			"--dev builds the operator image from source; remove --build=false (or drop --dev)")
+	}
+	if changed("version") {
+		return installDevResolution{}, fmt.Errorf(
+			"--dev builds the operator image from source and tags it \"dev\", so "+
+				"--version %s cannot also apply; drop one of them", version)
+	}
+	return installDevResolution{Build: true, Yes: true}, nil
+}
+
+// installDevResolution is what the --dev preset settles on.
+//
+// 🔴 IT IS RETURNED RATHER THAN ASSIGNED BY THE CHECKER, so that the preset's
+// VALUES are testable and not just its refusals. A checker that only validated
+// contradictions would leave "does --dev actually imply --build" asserted nowhere,
+// which is precisely how that implication came to be missing in the first place.
+type installDevResolution struct {
+	Build bool
+	Yes   bool
 }
 
 // compactModeResolution is the set of flag values the --compact preset settles on.
@@ -94,7 +136,8 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 // the wrong field. That failure is silent in the worst direction: `dcctl install
 // --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
 // EMPTY relational store, during the recovery it was run for.
-func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan) bootstrap.InstallOptions {
+func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
+	img bootstrap.ImageSource) bootstrap.InstallOptions {
 	return bootstrap.InstallOptions{
 		Options: bootstrap.Options{
 			KubeContext:          installKubeContext,
@@ -103,6 +146,9 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 			AssumeYes:            installAssumeYes,
 			NoTLS:                installNoTLS,
 			AllowLegacyDbRemoval: installAllowLegacyDb,
+			ImageRegistry:        img.Registry,
+			ImageVersion:         img.Version,
+			BuildImages:          installBuild,
 		},
 		NoMonitoring:      installNoMonitoring,
 		NoCNPG:            installNoCNPG,
@@ -126,12 +172,18 @@ For the local provider it creates a kind cluster (named by --cluster, default
 "devicechain") if there is none, or uses the one that exists. --kube-context installs
 into an existing cluster instead, which dcctl never creates or deletes.
 
-It installs what every instance on the cluster shares: the relational store and the
-backup object store in namespace dc-system, and the CloudNativePG operator,
-cert-manager, ingress and the monitoring stack each in a namespace of its own. It
-creates the base database identity each instance's own login is made with, and
-records the install in the cluster. Every bootstrap follows that record: an instance
-on an --ha cluster is HA, an instance on a --compact cluster is compact.
+It installs what every instance on the cluster shares: the DeviceChain operator and
+its CRDs, the relational store and the backup object store in namespace dc-system,
+and the CloudNativePG operator, cert-manager, ingress and the monitoring stack each
+in a namespace of its own. It creates the base database identity each instance's own
+login is made with, and records the install in the cluster. Every bootstrap follows
+that record: an instance on an --ha cluster is HA, an instance on a --compact
+cluster is compact.
+
+The operator and its CRDs are the cluster's, not any instance's — there is one copy
+shared by every instance, so the release a cluster is prepared at is chosen here with
+--version, and moving it is this command's job rather than a side effect of building
+or upgrading one instance.
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,
@@ -142,8 +194,12 @@ the cluster, with one exception: the connection budget may be raised.`,
 			return err
 		}
 		if installDev {
-			installAssumeYes = true
-			fmt.Println("dev mode: --yes")
+			res, err := resolveInstallDevMode(cmd.Flags().Changed, installBuild, installVersion)
+			if err != nil {
+				return err
+			}
+			installAssumeYes, installBuild = res.Yes, res.Build
+			fmt.Println("dev mode: --build --yes")
 		}
 		// 🔴 --no-tls ALONE DOES NOTHING TO A CLUSTER, and accepting it would let an
 		// operator believe cert-manager was left out.
@@ -197,13 +253,25 @@ the cluster, with one exception: the connection budget may be raised.`,
 			return err
 		}
 
+		// 🔴 SETTLED FROM ARGV TOO, AND FOR A REASON THIS COMMAND ONLY ACQUIRED WHEN
+		// IT TOOK OVER THE OPERATOR. `dcctl install` deploys a workload now — the
+		// controller Deployment names an image — so the failure ResolveImageSource
+		// exists to catch reaches this verb: a dcctl built from source carries the
+		// unpublished tag "dev", which names no image in any registry and manifests
+		// as an ImagePullBackOff on a controller nobody is watching, minutes after a
+		// cluster was created to hold it.
+		imageSource, err := bootstrap.ResolveImageSource(installRegistry, installVersion, installBuild)
+		if err != nil {
+			return err
+		}
+
 		if !installSkipPreflight {
 			if d := runDoctor(args[0]); d.fails > 0 {
 				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
 			}
 		}
 
-		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan))
+		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan, imageSource))
 	},
 	SilenceUsage: true,
 }
@@ -214,7 +282,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installDryRun, "dry-run", false, "print what would happen without applying changes")
 	installCmd.Flags().BoolVarP(&installAssumeYes, "yes", "y", false, "assume yes for prompts")
 	installCmd.Flags().BoolVar(&installSkipPreflight, "skip-preflight", false, "skip the local-system preflight checks")
-	installCmd.Flags().BoolVar(&installDev, "dev", false, "local-developer preset: --yes")
+	installCmd.Flags().BoolVar(&installDev, "dev", false, "local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags")
 	installCmd.Flags().BoolVar(&installHA, "ha", false, "a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance")
 	installCmd.Flags().BoolVar(&installCompact, "compact", false, "small-footprint preset for the cluster and every instance on it: smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and — unless --no-tls=false — no cert-manager and therefore no database backups. Instances on a compact cluster keep the default profile or a smaller one")
 	installCmd.Flags().BoolVar(&installNoTLS, "no-tls", false, "with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both")
@@ -244,6 +312,21 @@ func init() {
 			"whole archive. For the disaster where the data was destroyed correctly — a bad "+
 			"migration, a mistaken delete — so pick a moment strictly before the damage. Needs "+
 			"--restore-rdb-from")
+	// The image source for the OPERATOR, which is the one workload `dcctl install`
+	// deploys. The service images belong to an instance and are `dcctl bootstrap`'s
+	// to choose — these three flags are spelled the same way there deliberately, but
+	// they select different things, because a cluster and the instances on it are
+	// versioned separately.
+	installCmd.Flags().StringVar(&installRegistry, "registry", "",
+		"pull the operator image from this registry (default: the published registry, or the "+
+			"local one with --build)")
+	installCmd.Flags().StringVar(&installVersion, "version", "",
+		"install the operator at this released tag (default: the release this dcctl was built "+
+			"for). This is the CLUSTER's version — the instances on it carry their own")
+	installCmd.Flags().BoolVar(&installBuild, "build", false,
+		"developer path: ko-build the operator image from this source checkout and push it to a "+
+			"local registry, instead of pulling a published one. Builds ONLY the operator; the "+
+			"service images are an instance's and are built by dcctl bootstrap --build")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 600 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
 
 	rootCmd.AddCommand(installCmd)

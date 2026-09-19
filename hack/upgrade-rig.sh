@@ -1033,7 +1033,17 @@ cmd_up() {
   # the baseline's chart pins, rather than keying on a version number.
   if [[ -f "$baseline_src/backend/cli/cmd/install.go" ]]; then
     note "$baseline_tag has 'dcctl install': installing the cluster, then bootstrapping onto it"
-    "$baseline_dcctl" install local --yes --compact --kube-context "$kube_context"
+    # 🔴 --version, THE SAME ONE THE BOOTSTRAP BELOW GETS, AND FOR A REASON THAT IS NOT
+    # SYMMETRY. Every release that has this command also owns the OPERATOR from it, so
+    # this install is what puts the baseline's controller on the cluster — and this
+    # dcctl was built from the baseline's source by `build_baseline_dcctl`, which pins
+    # no image version (see the Makefile, where that absence is deliberate). Without a
+    # version it has no image to install and refuses, so the cluster the whole drill
+    # runs on would never be prepared. The baseline's operator is the one under test:
+    # the upgrade phase re-installs at the TARGET tag and `cmd_operator` measures that
+    # the controller moved, which it cannot do if both ends were the same build.
+    "$baseline_dcctl" install local --yes --compact \
+      --kube-context "$kube_context" --version "$baseline_tag"
     "$baseline_dcctl" bootstrap local "$instance" --yes \
       --kube-context "$kube_context" --host localhost --no-escrow \
       --version "$baseline_tag" "${area_args[@]}"
@@ -1132,19 +1142,60 @@ $baseline_tag will actually meet."
   resolve_upgrade_target
   printf '%s\n%s\n' "$target_registry" "$target_tag" >"$target_file"
 
-  # THE DOCUMENTED PROCEDURE, AND ALL OF IT. One command moves the operator, the
-  # instance configuration document and the release together. There is deliberately
-  # no second upgrade action in this function: the previous two-step form is what
-  # let the rig and the documentation drift, and a single call cannot drift from
-  # itself.
+  # THE DOCUMENTED PROCEDURE, AND ALL OF IT — WHICH IS NOW TWO COMMANDS.
   #
-  # 🔴 IT IS RUN HERE, NOT IN `cmd_operator`. The operator check must MEASURE, and
-  # a check that performed the upgrade it then asserts would pass unconditionally
-  # — the same instrument-reporting-on-itself shape this rig has already been bitten
-  # by. Keeping the action in `upgrade` and the assertion in `operator` is what
-  # makes the assertion capable of failing.
+  # 🔴 THIS FUNCTION USED TO RUN EXACTLY ONE, AND SAID SO IN A COMMENT ARGUING THAT A
+  # SECOND ACTION WAS THE THING TO AVOID. That argument was about a rig that invented
+  # its own sequence: the old two-step form had the rig applying the operator itself,
+  # with a shape nothing in the documentation described, and a rig performing steps a
+  # release does not ship is a rig that drifts. The rule it was reaching for is the one
+  # that still holds — THE RIG TYPES WHAT AN OPERATOR TYPES, AND NOTHING ELSE — and the
+  # number of commands is a consequence of that rule, never the rule itself.
+  #
+  # The release under test moved the operator out of `dcctl upgrade` and into `dcctl
+  # install`, so what an operator types is now:
+  #
+  #   dcctl install local ...    moves the CLUSTER: the CRDs and the controller, which
+  #                              are one per cluster and shared by every instance on it
+  #   dcctl upgrade local <id>   moves the INSTANCE: its configuration document, its
+  #                              Helm release and its service images
+  #
+  # Both are here because both are the procedure. Leaving the first out would not make
+  # this rig measure a one-command upgrade — it would make it measure an upgrade that
+  # REFUSES, because the second command checks the cluster's operator and declines to
+  # move an instance onto a release the cluster is not carrying. That refusal is real
+  # and is drilled: `cmd_recreate` is the phase that measures a refusal, and it gets its
+  # own baseline and its own damage assertions.
+  #
+  # 🔴 BOTH ARE RUN HERE, NOT IN `cmd_operator`. The operator check must MEASURE, and a
+  # check that performed the install it then asserts would pass unconditionally — the
+  # same instrument-reporting-on-itself shape this rig has already been bitten by.
+  # Keeping the actions in `upgrade` and the assertion in `operator` is what makes the
+  # assertion capable of failing.
   build_target_dcctl
-  say "dcctl upgrade → operator, instance configuration and services to $target_tag"
+
+  # --compact because the cluster was installed compact by `cmd_up`, and this is a
+  # RE-install of a cluster that already exists.
+  #
+  # 🔴 OMITTING IT WOULD NOT EXPAND THE CLUSTER — IT WOULD MAKE THIS STEP REFUSE, and
+  # the difference matters to whoever reads a red here. An install compares the settings
+  # it was given against the ones recorded on the cluster, and a re-install that CHANGES
+  # them while instances run on it is declined by name: every instance was built to the
+  # settings it found and none is rebuilt when they move. So the flag is not protecting
+  # the cluster from this drill; it is what makes the drill's settings match the record
+  # and the install proceed at all. The registry and version are deliberately NOT part
+  # of that comparison, which is why re-installing at the target tag is allowed.
+  say "dcctl install → the cluster's operator and CRDs to $target_tag"
+  "$target_dcctl" install local --yes --compact \
+    --kube-context "$kube_context" \
+    --registry "$target_registry" --version "$target_tag" ||
+    fail "THE CLUSTER INSTALL FAILED, before the instance was touched at all. This is a
+finding: an operator on $baseline_tag following the documented procedure types this
+first and would see exactly this. Read the output above — an image that cannot be
+pulled leaves the controller in ImagePullBackOff on the new tag, and a rollout timeout
+means it never became ready. Nothing was upgraded, so nothing below has run."
+
+  say "dcctl upgrade → instance configuration and services to $target_tag"
   "$target_dcctl" upgrade local "$instance" \
     --kube-context "$kube_context" \
     --registry "$target_registry" --version "$target_tag" ||
@@ -1153,7 +1204,12 @@ running the documented procedure would see exactly this. Read the output above �
 names the phase it stopped in. A render error names the value this release's chart
 requires and the composition did not supply; a rollout timeout means a workload never
 became ready, and its logs will say whether it was the migration or the config; an
-image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag."
+image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag.
+
+🔴 A REFUSAL NAMING THE OPERATOR IS A DIFFERENT FINDING, and it is about the install
+above rather than this command: the upgrade checks that the cluster carries the
+operator this release needs, and the install that just reported success is what puts
+it there. Read the two together before reading either as an upgrade defect."
 
   # The upgrade's exit status is not evidence that the API is serving again: it
   # returns when the workloads report Ready, and the ingress still has to pick the
@@ -1177,8 +1233,18 @@ image that cannot be pulled leaves a workload in ImagePullBackOff on the new tag
 # version is about to do — type `dcctl upgrade` — measured by nothing, on the release
 # where it is guaranteed to fail. The refusal is a product surface: it is the sentence
 # that tells them what to do instead, and if it says the wrong thing, or if the command
-# gets far enough to move the operator before it stops, they find out on their own
+# gets far enough to move something before it stops, they find out on their own
 # cluster.
+#
+# 🔴 THIS DRILL DELIBERATELY DOES NOT RUN `dcctl install` FIRST, though the documented
+# procedure now begins with it and `cmd_upgrade` does exactly that. What is being
+# measured here is the sentence an operator on $baseline_tag meets, and an install
+# would change that sentence in both directions: it would move the cluster's operator,
+# which is the thing the damage half asserts did NOT move, and it would settle the
+# operator check the upgrade makes before it ever reaches the refusal this drill is
+# about. A baseline this old carries no operator identity at all, so that check passes
+# with a note and the refusal below is reached on its own merits — which is the
+# reading this drill needs.
 #
 # 🔴 EVERY ASSERTION HERE IS A PAIR — THE REFUSAL, AND THE INSTANCE AFTERWARDS. A
 # refusal on its own is satisfied by a command that fails for any reason at all,
@@ -1289,10 +1355,18 @@ upgrade that cannot work reported success, which is the worse of the two."
   # non-zero: an unreachable cluster, a missing kubeconfig, a chart that will not
   # render. A drill satisfied by "it failed" would hold just as well against a release
   # that had lost the refusal entirely and was merely failing to connect.
+  # 🔴 `dcctl install` IS IN THE LIST, AND IT IS THE ONE THAT KEEPS THE CONTROL HONEST.
+  # The other three strings were all emitted by the PRE-SPLIT refusal too, so a build
+  # that regressed to the old two-command advice would have satisfied this loop
+  # completely — a control that greps for strings several refusals share is worth less
+  # than it looks. The recipe an operator is given now has three commands in it, and the
+  # middle one is the cluster's; asserting it is what makes this control specific to the
+  # refusal it is named after.
   local want
   for want in \
     "DOES NOT UPGRADE ONTO ITS PREDECESSOR" \
     "dcctl destroy" \
+    "dcctl install" \
     "dcctl bootstrap"; do
     [[ "$out" == *"$want"* ]] ||
       fail "the upgrade was refused, but NOT with the refusal this drill is about: its
@@ -1309,7 +1383,23 @@ tells them what to do instead."
     fail "the refusal told the operator to check the name, for an instance that is
 installed in this cluster. That is the reading this release replaced: the name is
 correct, the cluster is correct, and the advice cannot be acted on."
-  say "REFUSED, FOR THE RIGHT REASON — and it named destroy + bootstrap as the way through"
+  say "REFUSED, FOR THE RIGHT REASON — and it named destroy + install + bootstrap as the way through"
+
+  # 🔴 AND THE UNSTAMPED NOTE, WHICH IS THE ONLY PLACE ANYTHING MEASURES IT. The operator
+  # check has three answers and this drill is the one live run that reaches the middle
+  # one: a baseline cluster carries both definitions and no identity, because the stamp
+  # postdates it. Every piece of prose in this rig, in the gate and in the published
+  # documentation leans on that answer being PROCEED-WITH-A-NOTE rather than a refusal —
+  # and until this assertion existed, nothing anywhere would have noticed it becoming a
+  # refusal. A build that made it one would fail the string check above instead, with a
+  # message about the wrong refusal, which is a confusing way to learn it.
+  [[ "$out" == *"carries no identity"* ]] ||
+    fail "the refusal did not carry the unstamped-operator NOTE. A cluster built by
+$baseline_tag has the operator's definitions and no identity stamp, so the check is
+supposed to say so and carry on — that is the documented behaviour for an operator
+somebody installed by hand, and this is the only run that exercises it. Either the note
+stopped being printed, or the unstamped case stopped being permissive; the second is a
+policy change and belongs in the documentation before it belongs in the code."
 
   # --- and now: did it damage anything? -------------------------------------
   say "THE OTHER HALF — the instance must be exactly as it was a minute ago"
@@ -1343,9 +1433,13 @@ instance and a message telling them nothing happened."
     fail "the refused upgrade MOVED THE OPERATOR:
   before: $images_before
   after:  $images_after
-\`dcctl upgrade\` applies the operator overlay early, so a refusal that lands after that
-leaves this release's controller reconciling the previous release's instance — which
-is precisely the version skew the drill's operator phase exists to refuse."
+🔴 AND THIS RELEASE SAYS IT CANNOT HAPPEN, WHICH IS WHY THE CHECK IS WORTH MORE NOW
+THAN IT WAS. \`dcctl upgrade\` applied the operator overlay itself once, early enough
+that a refusal landing after it left this release's controller reconciling the
+previous release's instance. It no longer applies the overlay at all — the operator
+is \`dcctl install\`'s, and this drill never runs that command. So the claim being
+measured here is not 'the refusal stopped in time' but 'this verb cannot move the
+operator', and a difference is evidence that it still can."
   note "unchanged: $(printf '%s' "$releases_after" | tr '\n' ';'), operator $images_after"
 
   # The API is asked LAST of the three, because it is the slowest and the other two
@@ -1985,9 +2079,8 @@ in either direction."
 # covers "each service image, the operator, the Helm chart, and dcctl", and that
 # there is "no per-service version skew to reason about". The operator is NOT IN
 # THE CHART — dcctl applies it from its own embedded manifests
-# (backend/cli/bootstrap/steps.go renders backend/k8s's overlay) — so it is the
-# half of that promise most able to be quietly left behind, which is what this
-# phase measures.
+# (backend/cli/operator renders backend/k8s's overlay) — so it is the half of that
+# promise most able to be quietly left behind, which is what this phase measures.
 #
 # 🔴 THIS PHASE WAS BUILT KNOWING IT WOULD FAIL, AND THAT IS WHY THE FIX EXISTS.
 # When it was written there was no way to move the operator at all, and no other
@@ -1996,12 +2089,23 @@ in either direction."
 # otherwise. The gate said so out loud instead of recording it as a known
 # limitation, and `dcctl upgrade` is what that produced.
 #
-# That verb has since grown into the whole procedure rather than the missing half
-# of one. Once dcctl owns the instance configuration document the chart stops
-# rendering it, so `helm upgrade` can no longer move it either; `dcctl upgrade`
-# now moves the operator, the document and the release together, reading every
-# credential the instance is running on rather than minting any. `cmd_upgrade`
-# drives that one command, and this phase measures its result.
+# There is a way now, and it is not that verb. Once dcctl owns the instance
+# configuration document the chart stops rendering it, so `helm upgrade` can no
+# longer move it either; `dcctl upgrade` moves the document and the release,
+# reading every credential the instance is running on rather than minting any.
+#
+# 🔴 THE OPERATOR IS MOVED BY `dcctl install`, NOT BY `dcctl upgrade`, AND THIS
+# PHASE IS WHERE THAT DISTINCTION IS MEASURED. The operator is one per CLUSTER,
+# shared by every instance on it, so the verb that moves it is the verb that owns
+# the cluster. An upgrade that moved it would move it for every other instance
+# too, silently, as a side effect of upgrading one — which is what it no longer
+# does. `cmd_upgrade` drives BOTH commands, in that order, and this phase measures
+# the result of the first.
+#
+# 🔑 WHICH MAKES A RED HERE NAME A DIFFERENT CULPRIT THAN IT USED TO. The
+# controller still on the old tag no longer means "the upgrade left it behind" —
+# it means the install did, or the upgrade ran without one. The failure text below
+# says so; it is the sentence that sends whoever reads it to the right command.
 #
 # It still carries its own exit code, and the reason has outlived the finding: a
 # workflow reading `exit 20` knows the release has a version-skew defect, as
@@ -2110,15 +2214,26 @@ skew to reason about.
 🔴 READ THIS AS A REGRESSION, NOT AS THE KNOWN GAP. It once was the known gap:
 \`helm upgrade\` cannot reach the operator (it is not in the chart), and for a while
 no subcommand moved it either, so this phase was red by design. That is closed —
-\`dcctl upgrade\` exists and \`cmd_upgrade\` above RAN IT, successfully, minutes ago.
-So the controller is on the old tag despite an upgrade that reported success, and
-one of these is true:
+and the command that closed it is \`dcctl install\`, which \`cmd_upgrade\` above RAN,
+successfully, minutes ago, before it ran the upgrade. So the controller is on the
+old tag despite an install that reported success, and one of these is true:
 
   • the operator image for $want was never published, or is not public, and the
     new pod is stuck pulling while the old ReplicaSet still serves;
-  • \`dcctl upgrade\` applied a Deployment other than the one measured here — read
+  • \`dcctl install\` applied a Deployment other than the one measured here — read
     the namespace and names above against backend/k8s/config;
+  • \`dcctl install\` reported success without waiting for the new controller to
+    become ready, so the old pod was still the only one serving when this ran;
   • something outside the drill re-applied the baseline's manifests afterwards.
+
+🔴 IT IS THE INSTALL TO READ FIRST, NOT THE UPGRADE. \`dcctl upgrade\` does not move
+the operator at all any more — it only refuses an instance whose cluster is not
+carrying this release's operator. That the upgrade above did not refuse is NOT a
+second opinion agreeing with the install: the check passes an UNSTAMPED operator
+with a note rather than refusing, because it cannot tell a hand-installed one from
+a half-finished one. So a skew reaching this phase means either the install did
+not land, or it landed and something unstamped it — and the note in the upgrade's
+output above, if there is one, is which.
 
 Whichever it is, an operator following the documentation lands exactly here, which
 is why this blocks the release rather than being noted in it."

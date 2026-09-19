@@ -43,9 +43,13 @@ Cada versión es una única etiqueta git de versión semántica (`vX.Y.Z`). Ese 
 `dcctl` se publican todos con la misma versión. No hay desfase de versión por servicio
 del que preocuparse: un despliegue es un único número coherente.
 
-Un solo comando mueve todo ello a la vez: el operador no forma parte del chart, así que algo
-externo al chart tiene que ser lo que mueva ambas cosas. Consulte
-[Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el procedimiento.
+Dos comandos mueven todo ello, y cuál mueve qué se decide por el **tiempo de vida** de cada
+cosa. El operador es un solo controlador por clúster, compartido por todas las instancias que
+haya en él, así que `dcctl install` lo mueve junto con el resto de los requisitos previos del
+clúster. El documento de configuración, la versión desplegada del chart y las imágenes de los
+servicios pertenecen a una instancia, así que `dcctl upgrade` mueve esos, instancia por
+instancia. Consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
+procedimiento.
 
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
   versión estable más reciente.
@@ -146,8 +150,7 @@ Una instancia instalada con `helm install` en lugar de `dcctl bootstrap` se actu
 
 `dcctl upgrade` no se aplica a ella. Ese comando vuelve a leer del clúster la declaración de
 una instancia y su documento de configuración, y una instalación hecha solo con el chart no
-tiene ninguno de los dos; tampoco instala ningún operador, así que no hay una segunda mitad
-que mover.
+tiene ninguno de los dos.
 
 El release de abajo se llama `dc` porque ese es el nombre que eligió el `helm install` de más
 arriba. Una instancia instalada con `dcctl bootstrap` lleva un release con el nombre de la
@@ -228,36 +231,58 @@ correspondiéndole a usted reproducirlas, como hasta ahora.
 
 ## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
 
-Actualizar una instancia que usted arrancó con el bootstrap es **un solo comando**, y el chart
-y los servicios están diseñados para hacer avanzar a los clientes sin perder tráfico. Hay
-cuatro excepciones, todas documentadas más abajo: la transición a la ingesta duradera, que
-sigue siendo una actualización corriente pero tiene un efecto secundario visible, y la
-**`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una versión anterior,
-a las que no se puede actualizar en absoluto**. Consulte las notas de la versión a la que va a
-migrar antes de ejecutarlo:
+Actualizar consiste en **dos comandos** —uno para el clúster y luego uno por cada instancia
+que haya en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
+perder tráfico. Hay cuatro excepciones, todas documentadas más abajo: la transición a la
+ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
+visible, y la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
+versión anterior, a las que no se puede actualizar en absoluto**. Consulte las notas de la
+versión a la que va a migrar antes de ejecutarlo:
 
 ```bash
+dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
 Una versión de DeviceChain es un único número que abarca las imágenes de los servicios, el
-chart, el operador y `dcctl`, y ese comando los mueve todos juntos, en el orden en que tienen
-que moverse:
+chart, el operador y `dcctl`. Los dos comandos se lo reparten según a qué pertenece cada cosa:
 
-1. **el operador** — su namespace, sus CRD, su RBAC y su controlador, aplicados a partir de
-   manifiestos incrustados en `dcctl`. No forma parte del chart de Helm, así que nada dentro
-   del chart puede alcanzarlo. Se aplica el flujo renderizado completo y no solo la imagen del
-   controlador, porque los CRD van en él: un esquema que se quedara en la versión con la que se
-   arrancó la instancia descartaría en silencio cualquier campo que añadiera una versión
-   posterior;
-2. **el documento de configuración** del que cada servicio lee sus credenciales y sus
+**`dcctl install` mueve el clúster.** El operador —su namespace, sus CRD, su RBAC y su
+controlador— se aplica a partir de manifiestos incrustados en `dcctl`. No forma parte del
+chart de Helm, así que nada dentro del chart puede alcanzarlo. Se aplica el flujo renderizado
+completo y no solo la imagen del controlador, porque los CRD van en él: un esquema que se
+quedara en la versión con la que se arrancó la instancia descartaría en silencio cualquier
+campo que añadiera una versión posterior. Este comando mueve además el resto de los requisitos
+previos compartidos del clúster; consulte
+[Instalar el clúster](./bootstrap.md#install).
+
+**`dcctl upgrade` mueve una instancia**, y no mueve nada de lo compartido:
+
+1. **el documento de configuración** del que cada servicio lee sus credenciales y sus
    endpoints, recompuesto a partir del chart de esta versión y escrito por `dcctl`, que es su
    dueño;
-3. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
+2. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
    imágenes nuevas y espera a que cada área termine.
 
-Ejecútelo con `--dry-run` primero si quiere ver qué movería. Toma el clúster de destino del
-propio registro de la instancia en lugar de adivinarlo, y dice cuál es.
+**El orden importa, y la actualización lo comprueba.** El operador es lo que define la
+declaración de la instancia, así que tiene que estar en la versión nueva antes de mover una
+instancia a ella. `dcctl upgrade` lee el operador que lleva el clúster y **rechaza** una
+instancia cuyo clúster no tenga operador alguno, o cuyo operador sea identificablemente el de
+otra versión, nombrando el comando de instalación que hay que ejecutar primero. No aplica el
+operador él mismo: en un clúster con varias instancias eso movería el controlador de todas
+las demás como efecto secundario de actualizar una, en silencio.
+
+Hay un caso que deja pasar con un aviso en lugar de rechazarlo. `dcctl install` deja
+constancia de qué versión instaló las definiciones; un operador puesto en el clúster **a
+mano** no lleva esa constancia, y `dcctl` no puede distinguir una instalación manual
+deliberada de una que un `dcctl` más antiguo sobrescribió. En lugar de pasar por encima de
+una decisión que no puede ver, imprime una nota con el comando de instalación y continúa. Si
+usted no instaló el operador a mano, tome esa nota como el rechazo que habría sido y ejecute
+`dcctl install` antes de seguir.
+
+Ejecute cualquiera de los dos con `--dry-run` primero si quiere ver qué movería. `dcctl
+upgrade` toma el clúster de destino del propio registro de la instancia en lugar de
+adivinarlo, y dice cuál es.
 
 :::tip Lee todas las credenciales y no acuña ninguna
 `dcctl upgrade` conserva aquello sobre lo que la instancia está funcionando: las contraseñas
@@ -327,11 +352,10 @@ Ninguno de esos desenlaces hace fallar la actualización: un problema de depósi
 desastre futuro y la actualización que tiene delante trata de la instancia en funcionamiento, y
 un operador que no puede actualizar rodeará la comprobación en lugar de arreglarla.
 
-:::note Esto solían ser dos comandos, y uno de ellos era un `helm upgrade`
+:::note La mitad de la instancia solía ser un `helm upgrade`
 El procedimiento era: volcar a un archivo los valores de la versión desplegada actual con `helm
 get values`, volver a pasarlos con `-f` junto a la nueva etiqueta de imagen, borrar el archivo
-porque contenía sus secretos, y después ejecutar `dcctl upgrade` una segunda vez para el
-operador.
+porque contenía sus secretos, y después mover el operador por separado.
 
 Ese baile existía únicamente porque la versión desplegada de Helm era donde vivían las
 credenciales generadas de la instancia, y Helm parte de los valores predeterminados del chart
@@ -340,10 +364,13 @@ mano las perdía. Ahora `dcctl` es el dueño del documento de configuración, la
 ya no contiene esas credenciales, y el paso que le decía que escribiera sus secretos en un
 archivo simplemente desaparece.
 
-También cierra un hueco que tenía la forma de dos comandos: una actualización que se detenía
-tras la mitad de `helm` dejaba los servicios nuevos ejecutándose contra el controlador con el
-que se arrancó la instancia por primera vez, indefinidamente y sin ningún error que lo
-indicara.
+El hueco que aquella forma dejaba abierto era una actualización que se detenía tras la mitad
+de `helm`: dejaba los servicios nuevos ejecutándose contra el controlador con el que se arrancó
+la instancia por primera vez, indefinidamente y sin ningún error que lo indicara. Eso es lo que
+cierra el rechazo descrito más arriba: los dos comandos siguen siendo dos, porque el operador
+pertenece al clúster y la versión desplegada pertenece a la instancia, pero `dcctl upgrade`
+lee ahora qué operador lleva el clúster y lo dice: rechaza cuando puede distinguirlos, y avisa
+cuando no puede.
 :::
 
 Lo que hace que el despliegue sea seguro:
@@ -1375,9 +1402,8 @@ intentarlo.
 
 `dcctl bootstrap` registra ahora una **declaración**: un objeto con ámbito de clúster que dice
 lo que la instancia *es* — su perfil, su topología, cómo está expuesta y qué áreas funcionales
-ejecuta. `dcctl upgrade` lee esa declaración para saber qué desplegar, que es lo que permite
-que un solo comando mueva una versión sin tener que indicarle de nuevo la forma de la
-instancia. Las versiones hasta la `v0.16.0` incluida no escribieron ese registro, así que no
+ejecuta. `dcctl upgrade` lee esa declaración para saber qué desplegar, que es lo que le
+permite mover una versión sin tener que indicarle de nuevo la forma de la instancia. Las versiones hasta la `v0.16.0` incluida no escribieron ese registro, así que no
 hay nada que la actualización pueda leer.
 
 Y lo dice, en lugar de tratar su instancia como un nombre que no existe:

@@ -44,7 +44,8 @@ dcctl bootstrap local devicechain --host localhost --no-tls
 ```
 
 `dcctl install` creates the kind cluster and installs what every instance on it shares — the
-relational database, the CloudNativePG operator, cert-manager, monitoring and ingress. It is
+DeviceChain operator and its custom resource definitions, the relational database, the
+CloudNativePG operator, cert-manager, monitoring and ingress. It is
 done once per cluster; `dcctl bootstrap` refuses on a cluster where it has not completed. See
 [Install the cluster](../deployment/bootstrap.md#install).
 

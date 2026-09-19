@@ -310,7 +310,12 @@ cmd_up() {
   ensure_lease_identities
   require_no_instance "$ha_cluster" "$instance" "kind-$ha_cluster"
   say "installing --ha"
-  "$dcctl" install local --yes --ha --kube-context "kind-$ha_cluster"
+  # 🔴 THE IMAGE ARGS GO TO install TOO, NOT JUST TO bootstrap. `dcctl install`
+  # deploys the operator now, so it needs to be told where that image comes from —
+  # and a dcctl built from the working tree carries no pinned image version, so an
+  # install without them is REFUSED before it touches the cluster.
+  "$dcctl" install local --yes --ha --kube-context "kind-$ha_cluster" \
+    "${image_args[@]}"
   say "bootstrapping onto the HA install"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow \
     --kube-context "kind-$ha_cluster" --host localhost --no-tls \
@@ -416,7 +421,8 @@ cmd_control() {
   ensure_lease_identities
   require_no_instance "$control_cluster" "$control_instance" "kind-$control_cluster"
   say "installing the negative control (no --ha, --compact)"
-  "$dcctl" install local --yes --compact --no-tls --kube-context "kind-$control_cluster"
+  "$dcctl" install local --yes --compact --no-tls --kube-context "kind-$control_cluster" \
+    "${image_args[@]}"
   say "bootstrapping the negative control (no --ha, single node)"
   "$dcctl" bootstrap local "$control_instance" --yes --no-escrow \
     --kube-context "kind-$control_cluster" --host localhost --no-tls \

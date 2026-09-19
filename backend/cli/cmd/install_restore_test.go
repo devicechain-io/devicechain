@@ -194,7 +194,7 @@ func TestTheSettledRestorePlanReachesTheInstallEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := installOptions(nil, plan)
+	opts := installOptions(nil, plan, bootstrap.ImageSource{})
 
 	if opts.Restore != plan {
 		t.Fatalf("the install engine was handed %+v, not the settled plan %+v", opts.Restore, plan)
@@ -202,5 +202,73 @@ func TestTheSettledRestorePlanReachesTheInstallEngine(t *testing.T) {
 	if !opts.Restore.RestoresRelationalStore() {
 		t.Fatal("the engine was handed a plan that restores nothing, so the apply would " +
 			"initialise an EMPTY relational store and report success")
+	}
+}
+
+// parseInstallImageFlags is parseInstallRestoreFlags for the operator's image source.
+//
+// Separate rather than folded in, because the flag set each one saves is the flag set
+// it restores: a test that parsed --build through the restore helper would leave the
+// package-level installBuild set for whatever ran next, and the failure would land in
+// a test that never mentioned it.
+func parseInstallImageFlags(t *testing.T, argv ...string) {
+	t.Helper()
+	saved := map[string]string{}
+	for _, n := range []string{"registry", "version", "build"} {
+		f := installCmd.Flags().Lookup(n)
+		if f == nil {
+			t.Fatalf("dcctl install has no --%s flag: the operator's image source was renamed "+
+				"or removed, and a cluster could no longer be prepared at a chosen release", n)
+		}
+		saved[n] = f.Value.String()
+	}
+	t.Cleanup(func() {
+		for n, v := range saved {
+			if err := installCmd.Flags().Set(n, v); err != nil {
+				t.Fatalf("restoring --%s: %v", n, err)
+			}
+			installCmd.Flags().Lookup(n).Changed = false
+		}
+	})
+	if err := installCmd.Flags().Parse(argv); err != nil {
+		t.Fatalf("parsing %v: %v", argv, err)
+	}
+}
+
+// 🔴 THE SAME HOLE, FOR THE OPERATOR'S IMAGE SOURCE. `dcctl install` deploys a
+// workload now — the controller Deployment names an image — and installOptions is
+// the struct literal that carries the settled source across into the engine.
+//
+// Dropped, --registry and --version are accepted, validated, printed in the plan, and
+// then ignored: the cluster is prepared with whatever dcctl was compiled to default
+// to. The install is green and the cluster is running a release nobody chose, which
+// is the shape this arc exists to remove rather than relocate.
+func TestTheSettledImageSourceReachesTheInstallEngine(t *testing.T) {
+	img := bootstrap.ImageSource{Registry: "ghcr.io/example", Version: "v0.17.0"}
+	opts := installOptions(nil, bootstrap.RestorePlan{}, img)
+
+	if opts.ImageRegistry != img.Registry || opts.ImageVersion != img.Version {
+		t.Fatalf("the install engine was told to deploy the operator from %q at %q, "+
+			"not the settled source %q at %q", opts.ImageRegistry, opts.ImageVersion,
+			img.Registry, img.Version)
+	}
+}
+
+// And the developer path's own half of it. --build is read straight off the flag
+// rather than out of the ImageSource — ResolveImageSource consumes it and does not
+// carry it — so it is the one field of the three that a refactor can lose without
+// the other two noticing.
+func TestTheBuildFlagReachesTheInstallEngine(t *testing.T) {
+	parseInstallImageFlags(t, "--build")
+
+	img, err := bootstrap.ResolveImageSource(installRegistry, installVersion, installBuild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := installOptions(nil, bootstrap.RestorePlan{}, img)
+
+	if !opts.BuildImages {
+		t.Fatal("--build was dropped on the way to the install engine, so the operator " +
+			"image would be pulled from a local registry nothing ever pushed to")
 	}
 }
