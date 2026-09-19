@@ -1394,6 +1394,92 @@ a `^6.7.0`**. Si fija maplibre-gl en 6.6.x verá un aviso de dependencia par no 
 fallo de instalación con un gestor de paquetes que las exija estrictamente. Nada más cambió en los
 paquetes.
 
+### v0.17.0 — las instancias dejan de ser dueñas del clúster en el que se ejecutan {#v0170-upgrade}
+
+🔴 **No hay actualización en sitio a la `v0.17.0`.** Toda instancia creada por la `v0.16.0` o una
+versión anterior hay que destruirla y volver a crearla: `dcctl upgrade` se niega e imprime la receta
+en lugar de hacer algo a medias. [La siguiente sección](#pre-declaration-recreate) es la que hay que
+leer, e indica qué exportar antes: no existe ningún camino que conserve su telemetría, sus
+definiciones de dispositivo ni sus paneles a través de esta versión.
+
+Lo que sigue es lo que cambia para usted una vez que esté en ella.
+
+#### `dcctl bootstrap` son ahora dos comandos
+
+`dcctl install <provider>` prepara un **clúster**, una sola vez. `dcctl bootstrap <provider>
+<instance>` crea una **instancia** sobre un clúster ya preparado, tantas veces como instancias
+quiera.
+
+```bash
+dcctl install local
+dcctl bootstrap local my-instance
+```
+
+Todo lo que dimensiona o da forma al clúster se trasladó a `install` y queda registrado ahí, así que
+`--ha`, `--compact`, `--no-monitoring`, `--no-cnpg` y `--max-connections` se fijan **una vez** y
+todas las instancias del clúster los siguen. Un bootstrap ya no tiene banderas para ellos. `dcctl
+bootstrap` se niega en un clúster donde `install` no ha terminado, y la negativa nombra el comando
+que hay que ejecutar.
+
+`dcctl destroy` desmonta ahora la infraestructura propia de una instancia y **deja el clúster en
+pie**. `--keep-cluster` desapareció, porque describe lo que destroy hace siempre.
+
+#### Una actualización futura son dos comandos, y el primero es el del clúster
+
+El operador se movió con la separación. Es **un solo controlador por clúster**, compartido por todas
+las instancias que haya en él, así que `dcctl install` es lo que lo coloca y lo que lo mueve:
+
+```bash
+dcctl install local --version <new-version>
+dcctl upgrade local <instance> --version <new-version>
+```
+
+`dcctl upgrade` ya no aplica el operador. **Lee** el que lleva el clúster y rechaza una instancia
+cuyo clúster no tenga operador, o tenga uno identificablemente de otra versión, nombrando el comando
+de instalación que hay que ejecutar primero. La razón importa si ejecuta varias instancias en un
+clúster: una actualización que aplicara el operador ella misma lo movía para **todas** las instancias
+del clúster, en silencio, como efecto secundario de actualizar una.
+
+Hay un caso que deja pasar con un aviso. Un operador que usted instaló **a mano** no lleva constancia
+de qué versión lo puso, y `dcctl` no puede distinguir eso de un operador que un `dcctl` más antiguo
+sobrescribió, así que imprime una nota con el comando de instalación y continúa. Si usted no lo
+instaló a mano, tome esa nota como el rechazo que habría sido.
+
+#### Un clúster aloja ahora tantas instancias como usted cree
+
+Cada instancia recibe un namespace propio —**`dci-<instance>`**, no el id de la instancia a secas—
+con su propio bróker, su propio almacén de eventos y su propio login y base de datos en el almacén
+relacional compartido. Dos cosas del clúster siguen pudiendo pertenecer a una sola instancia, y un
+bootstrap se niega en lugar de colisionar: el **host de ingress** y el NodePort MQTT local.
+
+El prefijo es la razón de que el namespace no sea simplemente el id de su instancia: una instancia ya
+no puede recibir un nombre que colisione con un namespace que usa el propio clúster.
+
+#### Si concede a `dcctl` un RBAC explícito
+
+En un clúster que administra otra persona, `dcctl` necesita verbos que antes no necesitaba: **`list`,
+`patch` y `delete`** sobre `instances.core.devicechain.io` junto a `get`, `create` y `update`, además
+de **`list` sobre secrets** en `dc-system`. Cada bootstrap y cada actualización preguntan ahora al
+clúster qué instancias aloja ya y qué han reclamado, y esa pregunta es un list. Una cuenta que solo
+tenga el conjunto documentado hasta ahora se rechaza a mitad de un bootstrap.
+
+#### Dos cosas que se movieron y una que desapareció
+
+- **El inicio de sesión único de Grafana a través de DeviceChain desapareció.** A Grafana se llega
+  haciendo port-forward de su Service —no hay ruta de ingress— y se entra con una credencial de
+  administración por clúster que está en el Secret `dc-grafana-admin`. Consulte
+  [Observabilidad](./observability.md).
+- **El estado local de `dcctl` se movió.** Los registros por instancia están bajo
+  `~/.devicechain/instances/<instance>/`, y un directorio nuevo por clúster,
+  `~/.devicechain/clusters/<cluster-uid>/`, guarda el estado de infraestructura del propio clúster.
+  Ese directorio se indexa por la identidad del clúster y no por su nombre, y es la **única** copia de
+  ese estado: ningún respaldo lo contiene. Un clúster instalado solo puede reinstalarse desde la
+  máquina que lo guarda. Consulte [Instalar el clúster](./bootstrap.md#install).
+- **Un bootstrap pregunta al almacén relacional qué contiene ya** antes de acuñar una clave raíz. Una
+  base de datos que esté ahí con el nombre de la instancia solo puede haber sobrevivido al clúster
+  que la creó, así que el bootstrap se detiene en lugar de acuñar una clave que no podría descifrar
+  las filas que ya están ahí.
+
 ### Instancias creadas por la v0.16.0 y anteriores {#pre-declaration-recreate}
 
 Una instancia arrancada por la **`v0.16.0`, o por cualquier versión anterior, no se puede
