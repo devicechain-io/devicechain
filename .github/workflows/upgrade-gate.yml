@@ -41,9 +41,12 @@
 # 🔴 THE `operator` STEP IS NO LONGER EXPECTED TO FAIL, AND THIS PARAGRAPH USED TO
 # SAY THE OPPOSITE. The gap it described was real: the documented upgrade was a
 # `helm upgrade`, the operator is not in the chart, and for a while no dcctl
-# subcommand moved it, so the step was red by design. `dcctl upgrade` closed that
-# — it moves the operator, the instance configuration document and the release
-# together — and the drill now runs exactly that one command.
+# subcommand moved it, so the step was red by design. `dcctl install` closed that:
+# it owns the cluster, and the operator is one per CLUSTER rather than per instance,
+# so that is the verb that moves it. `dcctl upgrade` moves the instance — its
+# configuration document and its release — and refuses an instance whose cluster is
+# not carrying this release's operator. The drill's `upgrade` step runs both, in
+# that order, because both are what the documentation tells an operator to type.
 #
 # 🔴 SO A RED HERE IS A REGRESSION, NOT THE KNOWN GAP, AND THE DISTINCTION IS THE
 # WHOLE VALUE OF THIS STEP. While the text above still said "expected", a genuine
@@ -677,16 +680,18 @@ jobs:
               printf 'Every seeded row survived: the data half of this drill passed. What failed is\n'
               printf 'the operator check, and it is a **finding about the release**, not a broken rig.\n\n'
               printf 'The operator is not in the chart -- dcctl applies it from its own embedded\n'
-              printf 'manifests. **dcctl upgrade** is what moves it, together with the instance\n'
-              printf 'configuration document and the release, and the upgrade step above ran exactly\n'
-              printf 'that one command. Meanwhile the deployment documentation promises one version\n'
-              printf 'covering the services, the operator, the chart and the CLI together, with no\n'
-              printf 'per-service skew to reason about.\n\n'
+              printf 'manifests. **dcctl install** is what moves it: it is one controller per\n'
+              printf 'CLUSTER, shared by every instance on it, so the verb that owns the cluster is\n'
+              printf 'the verb that moves it. The upgrade step above ran that command first and\n'
+              printf '**dcctl upgrade** second. Meanwhile the deployment documentation promises one\n'
+              printf 'version covering the services, the operator, the chart and the CLI together,\n'
+              printf 'with no per-service skew to reason about.\n\n'
               printf 'Read this as a **regression**, not as a known gap -- the gap this check was\n'
-              printf 'born describing is closed. Either the operator image for this tag was never\n'
-              printf 'published or is not public and the new pod is stuck pulling, or the upgrade\n'
-              printf 'applied a Deployment other than the one measured. The step log names the\n'
-              printf 'images.\n'
+              printf 'born describing is closed. Read the **install** half of that step first, not\n'
+              printf 'the upgrade: either the operator image for this tag was never published or is\n'
+              printf 'not public and the new pod is stuck pulling, or the install applied a\n'
+              printf 'Deployment other than the one measured, or it reported success before the new\n'
+              printf 'controller was serving. The step log names the images.\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
