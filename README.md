@@ -211,7 +211,8 @@ is required. The single host prerequisites are **Docker**, **kind**, and
 
 ```bash
 # Prepare a local kind cluster (named "devicechain", created if it does not exist) once:
-# the relational database, CloudNativePG, cert-manager, monitoring and ingress.
+# the DeviceChain operator and its CRDs, the relational database, CloudNativePG,
+# cert-manager, monitoring and ingress. Re-run it to move the cluster to a new release.
 dcctl install local
 
 # Stand up a full instance on it at http://localhost/.
@@ -233,8 +234,9 @@ dcctl destroy local devicechain
 kind delete cluster --name devicechain
 ```
 
-The bootstrap pipeline renders config → `tofu apply` (the instance's NATS + TimescaleDB,
-and its login and database on the shared relational database) → installs the CRDs/operator → `helm install`s the instance → seeds the initial
+The bootstrap pipeline declares the instance → renders config → `tofu apply` (the instance's
+NATS + TimescaleDB, and its login and database on the shared relational database) →
+`helm install`s the instance → seeds the initial
 superuser → waits for readiness → reports the access URL — and is idempotent on
 re-run: it reads back every credential the instance is already running (root key,
 broker auth, service auth) and reuses it rather than minting a replacement, and

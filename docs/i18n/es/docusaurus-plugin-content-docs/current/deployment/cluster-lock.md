@@ -49,15 +49,21 @@ misma máquina no pueda confundirse con la primera.
 
 | Comando | Si el clúster está reclamado por otra persona |
 |---|---|
-| `dcctl bootstrap` | **Se niega**, en su segundo paso —antes de tocar el operador, la infraestructura o el chart. |
+| `dcctl install` | **Se niega**, antes de tocar el operador o los requisitos previos del clúster. |
+| `dcctl bootstrap` | **Se niega**, en su segundo paso —antes de tocar la infraestructura o el chart. |
 | `dcctl destroy` | Avisa y continúa —*«pero si esa ejecución está viva, esto peleará con ella»*. |
 | `dcctl upgrade` | Avisa y continúa, con el mismo aviso. |
 | `dcctl bootstrap --dry-run` | No toma ningún bloqueo, e informa del que *se habría* encontrado. |
 
-(El bloqueo se toma en el *segundo* paso, no en el primero, porque el paso anterior es la
-compilación de imágenes de la ruta de desarrollo `--build`, que no necesita el bloqueo del
-clúster y produce la imagen que después despliega el paso del operador. En la ruta de
-imágenes publicadas ese paso no hace nada en absoluto.)
+(En un arranque inicial el bloqueo se toma en el *segundo* paso, no en el primero, porque el
+paso anterior es la compilación de imágenes de la ruta de desarrollo `--build`, que no
+necesita el bloqueo del clúster y produce las imágenes que después despliega el chart. En la
+ruta de imágenes publicadas ese paso no hace nada en absoluto.)
+
+`dcctl upgrade` avisa en lugar de negarse por el bloqueo, pero tiene una negativa aparte que
+no va del bloqueo en absoluto: no moverá una instancia a una versión cuyo operador no lleve el
+clúster, y nombra `dcctl install` como la salida. Consulta
+[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 La asimetría es deliberada. Un segundo arranque inicial ejecutándose junto al primero
 produce una instancia construida mitad de cada uno, y negarse es la única respuesta útil.
@@ -73,11 +79,12 @@ ejecutando» forma parte de la respuesta a «qué haría esto».
 
 **Un bloqueo por clúster, no uno por instancia.** Un clúster puede alojar varias
 instancias, pero un arranque inicial también toca lo que comparten: la base de datos
-relacional compartida, donde crea el login y la base de datos de la instancia, y el propio
-Deployment del operador de DeviceChain. (El controlador de ingress, cert-manager y el
-operador CloudNativePG los instala una sola vez [`dcctl install`](./bootstrap.md#install),
-no cada arranque inicial.) Dos ejecuciones trabajando a la vez sobre dos instancias *distintas*
-aplicarían ambas esa mitad compartida, así que el bloqueo las pone en fila. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
+relacional compartida, donde crea el login y la base de datos de la instancia. Y `dcctl
+install` no toca *más que* lo compartido: el operador de DeviceChain y sus definiciones, el
+controlador de ingress, cert-manager, el operador CloudNativePG y el resto los instala una
+sola vez [`dcctl install`](./bootstrap.md#install), no cada arranque inicial, y por eso ese
+comando toma el mismo bloqueo. Dos ejecuciones trabajando a la vez sobre dos instancias
+*distintas* aplicarían ambas esa mitad compartida, así que el bloqueo las pone en fila. El id de la instancia se registra en el bloqueo para que la negativa pueda decirte en
 qué instancia está trabajando el titular, pero no es la clave del bloqueo.
 
 :::note Esto impone «una ejecución a la vez»
@@ -87,8 +94,10 @@ base de datos, haya o no alguien reteniendo el bloqueo. Consulta [Varias instanc
 mismo clúster](./bootstrap.md#what-it-does).
 :::
 
-El bloqueo es un `Lease` de Kubernetes llamado `dcctl`, en el namespace donde el operador
-de DeviceChain se instala a sí mismo (`dc-k8s-system`). Puedes leerlo directamente:
+El bloqueo es un `Lease` de Kubernetes llamado `dcctl`, en el namespace que ocupa el operador
+de DeviceChain (`dc-k8s-system`). El namespace lo crea el primer comando que llegue al clúster:
+`dcctl install` pone el operador en él, y un arranque inicial se asegura de que exista para que
+el bloqueo siempre tenga dónde vivir. Puedes leerlo directamente:
 
 ```bash
 kubectl --context <kube-context> get lease dcctl -n dc-k8s-system -o yaml

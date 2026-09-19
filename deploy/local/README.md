@@ -24,7 +24,7 @@ get captured here as we find them.
 cd deploy/local
 dcctl preflight local   # check the host is ready (prints fixes for anything missing)
 dcctl install local                # once: kind cluster + shared prerequisites in dc-system
-dcctl bootstrap local <instance>   # the instance: infra, core, chart, credentials, seed
+dcctl bootstrap local <instance>   # the instance: declaration, infra, chart, credentials, seed
 # ... test ...
 dcctl destroy local <instance>     # removes the instance only; the cluster stays installed
 kind delete cluster --name devicechain   # only if you want the cluster gone too
@@ -143,15 +143,21 @@ What remains here is the part dcctl does not own: the **host diagnosis**, the
 2. **`dcctl install local`** — creates the kind cluster from the embedded copy of
    [`kind-cluster.yaml`](kind-cluster.yaml) (single control-plane node by default)
    if there is none (`--cluster <name>`, default `devicechain`), then installs what
-   every instance shares into `dc-system`: the CloudNativePG operator, the relational
+   every instance shares: the **DeviceChain operator and its two CRDs** in
+   `dc-k8s-system`, and into `dc-system` the CloudNativePG operator, the relational
    store (`dc-rdb`), the backup object store, cert-manager, monitoring and ingress.
    Once per cluster; re-running converges, and changing its settings (`--ha`,
    `--compact`, ...) is refused while any instance exists. `dcctl bootstrap` refuses on
-   a cluster where it has not completed.
+   a cluster where it has not completed. Re-running it is also how the cluster moves to
+   a new release: the operator is one controller for every instance on the cluster, so
+   `dcctl upgrade` reads it and refuses a mismatch rather than moving it.
 3. **`dcctl bootstrap local <instance>`** — everything else, in the order ADR-080
-   settled: CRDs and the operator FIRST, so the definition of an instance exists
-   before anything declares one; then the credentials, minted and written; then the
-   infrastructure apply; then the chart; then the seed.
+   settled: the cluster lock FIRST, then the instance's declaration — which is why
+   step 2 has to have run, since a declaration needs the definition install put there
+   — then the credentials, minted and written; then the infrastructure apply; then the
+   chart; then the seed. It installs nothing cluster-scoped: a cluster with no
+   operator, or with one this build does not recognise, is refused naming `dcctl
+   install`.
 
 `cloud-provider-kind` is **optional and nothing here starts it**. The default
 bootstrap reaches ingress and MQTT through host-port/NodePort mappings, so no

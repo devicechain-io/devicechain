@@ -47,14 +47,21 @@ mistaken for the first one.
 
 | Command | If the cluster is claimed by someone else |
 |---|---|
-| `dcctl bootstrap` | **Refuses**, at its second step — before the operator, the infrastructure or the chart are touched. |
+| `dcctl install` | **Refuses**, before the operator or the cluster's prerequisites are touched. |
+| `dcctl bootstrap` | **Refuses**, at its second step — before the infrastructure or the chart are touched. |
 | `dcctl destroy` | Warns and continues — *"but if that run is live, this will fight it"*. |
 | `dcctl upgrade` | Warns and continues, with the same warning. |
 | `dcctl bootstrap --dry-run` | Takes no lock at all, and reports the claim it *would* have met. |
 
-(The lock is taken at the *second* step, not the first, because the step before it is the
-`--build` developer path's image build, which needs no cluster lock and produces the image
-the operator step then deploys. On the published-image path that step does nothing at all.)
+(In a bootstrap the lock is taken at the *second* step, not the first, because the step
+before it is the `--build` developer path's image build, which needs no cluster lock and
+produces the images the chart later deploys. On the published-image path that step does
+nothing at all.)
+
+`dcctl upgrade` warns rather than refusing on the lock, but it has a separate refusal that
+is not about the lock at all: it will not move an instance onto a release whose operator the
+cluster is not carrying, and it names `dcctl install` as the way through. See
+[Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 The asymmetry is deliberate. A second bootstrap running alongside a first produces one
 instance built half from each, and refusing is the only useful answer. A teardown is
@@ -70,11 +77,12 @@ running" is part of the answer to "what would this do".
 
 **One lock per cluster — not one per instance.** A cluster can hold several instances,
 but a bootstrap also touches what they share: the shared relational database, where it
-creates the instance's login and database, and the DeviceChain operator's own Deployment.
-(The ingress controller, cert-manager and the CloudNativePG operator are installed once by
-[`dcctl install`](./bootstrap.md#install), not by each bootstrap.) Two runs working on two
-*different* instances at once would both apply that shared half, so the lock serializes
-them. The instance id is recorded on the lock so the refusal can
+creates the instance's login and database. And `dcctl install` touches nothing *but* what
+they share — the DeviceChain operator and its definitions, the ingress controller,
+cert-manager, the CloudNativePG operator and the rest are installed once by
+[`dcctl install`](./bootstrap.md#install), not by each bootstrap, which is exactly why that
+command takes the same lock. Two runs working on two *different* instances at once would
+both apply that shared half, so the lock serializes them. The instance id is recorded on the lock so the refusal can
 tell you which instance the holder is working on, but it is not what the lock is keyed
 by.
 
@@ -85,8 +93,10 @@ or not anyone is holding the lock. See [Several instances on one
 cluster](./bootstrap.md#what-it-does).
 :::
 
-The lock is a Kubernetes `Lease` named `dcctl`, in the namespace the DeviceChain
-operator installs itself into (`dc-k8s-system`). You can read it directly:
+The lock is a Kubernetes `Lease` named `dcctl`, in the namespace the DeviceChain operator
+occupies (`dc-k8s-system`). The namespace is created by whichever command reaches the cluster
+first — `dcctl install` puts the operator in it, and a bootstrap ensures it exists so that the
+lock always has somewhere to live. You can read it directly:
 
 ```bash
 kubectl --context <kube-context> get lease dcctl -n dc-k8s-system -o yaml

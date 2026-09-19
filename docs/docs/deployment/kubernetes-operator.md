@@ -57,10 +57,11 @@ helm install dc deploy/helm/devicechain \
 ```
 
 See [Releases & Upgrades](./releases-and-upgrades.md) for the versioning model and the
-upgrade procedure. For an instance you bootstrapped it is a single `dcctl upgrade`, which
-moves the operator, the configuration document and the release together — the operator is not
-part of the chart, so something outside the chart has to move both. For an instance driven
-from the chart alone it is `helm upgrade`, with your values
+upgrade procedure. For an instance you bootstrapped it is two commands: `dcctl install` moves
+the operator, which belongs to the cluster, and `dcctl upgrade` moves the configuration
+document and the release, which belong to the instance. The operator is not part of the
+chart, so something outside the chart has to move it. For an instance driven from the chart
+alone it is `helm upgrade`, with your values
 [carried forward by hand](./releases-and-upgrades.md#chart-only-upgrade).
 
 `user-management` and `device-management` are the required core; `event-management`, `device-state`, and `command-delivery` are independently optional. The chart **fails the render** if a selection omits a required core service or an enabled service's hard dependency — so a broken topology is caught at install time, not after pods crash-loop. Values are validated against the chart's `values.schema.json` at apply time.
@@ -68,6 +69,14 @@ from the chart alone it is `helm upgrade`, with your values
 ## Custom resources
 
 - **`Instance`** (cluster-scoped; `instances.core.devicechain.io`, short name `dci`) — one per installation, declaring the instance identity and configuration.
+- **`InstanceConfiguration`** (cluster-scoped; `instanceconfigurations.core.devicechain.io`) — the rendered configuration an `Instance` resolves to, which the operator reconciles against.
+
+Both definitions are installed by [`dcctl install`](./bootstrap.md#install), together with
+the controller itself, and they are **cluster-scoped in every sense**: one copy per cluster,
+shared by every instance on it, versioned with the cluster rather than with any one instance.
+That is why the command that prepares a cluster is the command that moves them. `dcctl
+bootstrap` and `dcctl upgrade` only read them — a cluster whose definitions are missing, or
+are not the ones the release needs, is refused with the install command to run.
 
 Tenants are **not** custom resources — they are control-plane database records created through the instance admin API and the `/admin` console, sharing the instance's services (see [Multi-Tenancy](../concepts/multi-tenancy.md)).
 
@@ -198,4 +207,4 @@ DeviceChain deliberately splits each layer:
 | Lifecycle | **Operator** | `Instance` status aggregation and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 
-OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).
+OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); `dcctl install` also applies the operator and its definitions, from manifests embedded in the CLI rather than through either of the other two layers; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).

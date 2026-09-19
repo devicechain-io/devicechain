@@ -43,8 +43,9 @@ dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
 
-`dcctl install` crea el clúster de kind e instala lo que comparten todas sus instancias: la base
-de datos relacional, el operador CloudNativePG, cert-manager, la monitorización y el ingress. Se
+`dcctl install` crea el clúster de kind e instala lo que comparten todas sus instancias: el
+operador de DeviceChain y sus definiciones de recurso personalizado, la base de datos
+relacional, el operador CloudNativePG, cert-manager, la monitorización y el ingress. Se
 hace una vez por clúster; `dcctl bootstrap` se niega en un clúster donde no ha terminado.
 Consulte [Instalar el clúster](../deployment/bootstrap.md#install).
 

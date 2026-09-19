@@ -35,7 +35,15 @@ The `gcp` provider is a planned follow-up.
 ## Install the cluster {#install}
 
 `dcctl install <provider>` prepares a cluster to hold DeviceChain instances. It installs
-the prerequisites every instance on the cluster shares, in the `dc-system` namespace:
+the prerequisites every instance on the cluster shares:
+
+- the **DeviceChain operator** and the two custom resource definitions it reconciles —
+  `Instance` and `InstanceConfiguration` — in the `dc-k8s-system` namespace. These are
+  what makes a cluster able to hold an instance at all: `dcctl bootstrap` declares an
+  `Instance`, and it cannot declare one on a cluster where the definition does not exist.
+  See [the operator](./kubernetes-operator.md);
+
+and, in the `dc-system` namespace:
 
 - the CloudNativePG operator;
 - the relational database (`dc-rdb`), which holds one database per instance;
@@ -43,6 +51,11 @@ the prerequisites every instance on the cluster shares, in the `dc-system` names
 - cert-manager;
 - monitoring (Prometheus and Grafana — see [Observability](./observability.md));
 - the ingress controller.
+
+The operator is **one controller per cluster**, shared by every instance on it, which is
+why installing it is the cluster command's job rather than each instance's. It is also
+why moving a cluster to a new release starts here: see
+[Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 It also creates the base database identity that each instance's own database login is
 created with, and records the install in the cluster.
@@ -172,13 +185,13 @@ which step failed if one does.
 It is a create verb. Every credential the instance has is minted here — the database
 passwords, the broker's authority and logins, the cross-service secret, the secret-store
 root key — because none of them exists yet. Point it at an instance that is already
-running and it stops at step 3 — before the operator, the infrastructure or the chart are
-touched — and names the command that does move a live instance: `dcctl upgrade`, covered in
+running and it stops at step 3 — before the infrastructure or the chart are touched — and
+names the command that does move a live instance: `dcctl upgrade`, covered in
 [Releases & Upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 A run that *failed* partway through is a different case, and re-running it is still how
 you repair it. What step 3 refuses is a **live** instance, which it recognises by the
-configuration document written in step 9 — so everything short of that is a half-built
+configuration document written in step 8 — so everything short of that is a half-built
 instance, and running the bootstrap again is the supported way to finish it.
 
 :::warning One-time exception: instances created before the database moved to CloudNativePG
@@ -207,8 +220,9 @@ an instance's namespace from ever colliding with one the cluster itself uses —
 id can take one of them. Each instance connects to the shared relational database with a
 login of its own that owns exactly one database — so no instance can reach another's data.
 What instances share are the cluster's
-prerequisites: the ingress controller, cert-manager, the CloudNativePG operator,
-monitoring, the relational database and the backup object store. [`dcctl install`](#install)
+prerequisites: the DeviceChain operator and its custom resource definitions, the ingress
+controller, cert-manager, the CloudNativePG operator, monitoring, the relational database
+and the backup object store. [`dcctl install`](#install)
 installs them once; every bootstrap reuses them, and follows the settings the cluster was
 installed with — high availability, compact sizing, monitoring and backups.
 
@@ -246,13 +260,13 @@ An instance built before instances had namespaces of their own runs its broker a
 store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
 refuses such an instance and says to destroy it and bootstrap it again.
 
-The steps below are the ones the run prints as it goes (`[5/12] Install core
-components`), so a failure names a step you can find here:
+The steps below are the ones the run prints as it goes (`[8/11] Install instance`),
+so a failure names a step you can find here:
 
 1. **Ensure local registry** — the developer `--build` path only: provision a local
    registry and build every image into it. On the published-image path it does nothing
-   and says so. It goes first because the operator installed four steps later names an
-   image, and on the `--build` path this is the step that produces it.
+   and says so. It goes first because the chart installed later names those images, and
+   on the `--build` path this is the step that produces them.
 2. **Claim the cluster** — create the operator's namespace and take the **cluster
    lock**, before anything is applied. While it is held, a second `dcctl bootstrap`
    against the same cluster is refused rather than quietly applying over this one. See
@@ -273,17 +287,13 @@ components`), so a failure names a step you can find here:
    not stop the run, and is reported. A dry run says what a real run would refuse. See
    **Several instances on one cluster** above, including the label that hands a namespace
    you created yourself to the instance.
-5. **Install core components** — render the operator (CRDs + RBAC + controller) and
-   apply it with the Kubernetes API directly. It runs ahead of the infrastructure apply
-   because the definition of an instance has to exist in the cluster before anything can
-   describe one to it — and describing one is the very next step.
-6. **Declare the instance** — write the instance's **declaration** into the cluster: the
+5. **Declare the instance** — write the instance's **declaration** into the cluster: the
    provider and cluster it belongs to, the profile, the image version, whether its
    databases are being recovered from an archive. It is then read back, and every step
    below works from what came back rather than from the flags that produced it — so the
    cluster, not your laptop, is the record of what this instance is. See [the instance
    declaration](./kubernetes-operator.md#instance-declaration).
-7. **Render configuration** — resolve the instance id, namespace, profile, and every
+6. **Render configuration** — resolve the instance id, namespace, profile, and every
    generated credential: the broker-auth material (the shared service password and the
    callout issuer key), the certificate authority that signs the broker's own TLS
    certificate, the cross-service auth secret, and the **secret-store root key**. All of
@@ -295,28 +305,28 @@ components`), so a failure names a step you can find here:
    simply running it again — the broker is configured before the instance is, and its
    credentials cannot be recovered from the cluster once they are in it. The root key is additionally escrowed to an encrypted file you keep;
    see [Disaster Recovery](./disaster-recovery.md).
-8. **Apply infrastructure** — `tofu apply` the embedded OpenTofu configuration via
+7. **Apply infrastructure** — `tofu apply` the embedded OpenTofu configuration via
    [terraform-exec](https://github.com/hashicorp/terraform-exec), for this instance only:
    its own broker (NATS) and event store (TimescaleDB) in its namespace, with state kept in
    `~/.devicechain/instances/<instance>/infra`. The step also creates the instance's own
    login and database on the shared relational database. The cluster's shared
    prerequisites are not applied here — [`dcctl install`](#install) put them in place.
    Subsequent runs are incremental.
-9. **Install instance (Helm)** — write the instance's **configuration document** — the one
+8. **Install instance (Helm)** — write the instance's **configuration document** — the one
    every service reads its credentials and endpoints from — and then deploy the Helm chart
    via the Helm Go SDK, blocking until the workloads are ready. That document is what makes
    the instance live, and what step 3 looks for on any later run.
-10. **Seed admin credential** — the superuser credential is seeded by the
+9. **Seed admin credential** — the superuser credential is seeded by the
    user-management service on first start; this step settles the values the final report
    prints.
-11. **Wait for readiness** — poll each enabled area's Deployment until it has finished
+10. **Wait for readiness** — poll each enabled area's Deployment until it has finished
     rolling onto the configuration this run produced, as an explicit confirmation gate
     rather than trusting the Helm step's own wait. Having replicas available is not
     enough: where pods are being replaced that is already true of the ones on their way
     out, so the step also waits for the new template to be observed, for every replica to
     be recreated on it, and for no old replica to still be running. `dcctl upgrade` uses
     the same gate for the same reason.
-12. **Report access info** — print the namespace, the superuser credential, and how to
+11. **Report access info** — print the namespace, the superuser credential, and how to
     reach the instance.
 
 :::tip `Ctrl+C` stops a run cleanly
@@ -325,7 +335,7 @@ doing and writes its state — and hands the cluster lock back, so re-running is
 is needed. A **second** `Ctrl+C` exits immediately and gives up both of those. See
 [Interrupting a run](./cluster-lock.md#interrupt).
 
-If the run had already reached step 9, the instance exists and the bootstrap will refuse
+If the run had already reached step 8, the instance exists and the bootstrap will refuse
 the next time you run it. That is not a dead end — the instance is built, and
 `dcctl upgrade` is how you move it from there.
 :::
