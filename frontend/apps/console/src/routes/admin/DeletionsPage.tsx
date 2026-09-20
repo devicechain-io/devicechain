@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
 import { PageShell } from '@/components/ui/page-shell';
+import { Pagination } from '@/components/ui/pagination';
 import { listTenantDeletions } from '@/lib/api/admin';
 import type { AdminTenantDeletion } from '@/lib/api/admin';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -22,7 +23,14 @@ import { formatTime } from '@/lib/utils';
 
 import { isComplete, summarize } from './tenants/deletions';
 
-/** How many records a page shows. */
+/**
+ * How many records a page shows.
+ *
+ * It is a real page now. This list used to ask for 50 and have no way to learn whether there
+ * were 51, so it showed its first page forever without saying so — and because the server's
+ * limit argument was optional and an omitted one meant "no limit", the read behind it was
+ * every deletion record the instance had ever written.
+ */
 const PAGE_SIZE = 50;
 
 type Filter = 'all' | 'inFlight' | 'completed';
@@ -59,11 +67,23 @@ const FILTER_ARG: Record<Filter, boolean | undefined> = {
 export default function DeletionsPage() {
   const { t } = useTranslation('tenants');
   const [filter, setFilter] = useState<Filter>('all');
-  const {
-    data: deletions,
-    loading,
-    error,
-  } = useQuery(() => listTenantDeletions(FILTER_ARG[filter], PAGE_SIZE), [filter]);
+  const [pageNumber, setPageNumber] = useState(1);
+
+  // Changing the filter goes back to page 1, and it happens in the HANDLER rather than in an
+  // effect on [filter]. Page 3 of "all" is not page 3 of "completed", and holding the number
+  // across the change lands past the end of the new set — an empty table over a filter that
+  // has results. An effect would correct it a render late, after this query had already been
+  // issued for the new filter at the old page number and then discarded.
+  const changeFilter = (next: Filter) => {
+    setFilter(next);
+    setPageNumber(1);
+  };
+
+  const { data, loading, error } = useQuery(
+    () => listTenantDeletions({ pageNumber, pageSize: PAGE_SIZE, completed: FILTER_ARG[filter] }),
+    [filter, pageNumber],
+  );
+  const deletions = data?.results;
 
   return (
     <PageShell
@@ -76,7 +96,7 @@ export default function DeletionsPage() {
               key={f}
               variant={filter === f ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setFilter(f)}
+              onClick={() => changeFilter(f)}
             >
               {t(`deletionsFilter_${f}`)}
             </Button>
@@ -91,23 +111,32 @@ export default function DeletionsPage() {
       ) : !deletions || deletions.length === 0 ? (
         <EmptyState description={t('deletionsEmpty')} />
       ) : (
-        <DataTable>
-          <DataTableHead>
-            <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
-            <DataTableHeaderCell>{t('deletionsColRequested')}</DataTableHeaderCell>
-            <DataTableHeaderCell>{t('deletionsColStatus')}</DataTableHeaderCell>
-            <DataTableHeaderCell>{t('deletionColErased')}</DataTableHeaderCell>
-            <DataTableHeaderCell>{t('deletionsColSystems')}</DataTableHeaderCell>
-          </DataTableHead>
-          <DataTableBody>
-            {deletions.map((d) => (
-              // Keyed on (token, epoch), never token alone: a token is released on
-              // completion and reused, so one token carries several records and a
-              // token-keyed list would collapse a predecessor into its successor.
-              <DeletionRow key={`${d.token}|${d.epoch}`} deletion={d} />
-            ))}
-          </DataTableBody>
-        </DataTable>
+        <>
+          <DataTable>
+            <DataTableHead>
+              <DataTableHeaderCell>{t('common:colToken')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('deletionsColRequested')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('deletionsColStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('deletionColErased')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('deletionsColSystems')}</DataTableHeaderCell>
+            </DataTableHead>
+            <DataTableBody>
+              {deletions.map((d) => (
+                // Keyed on (token, epoch), never token alone: a token is released on
+                // completion and reused, so one token carries several records and a
+                // token-keyed list would collapse a predecessor into its successor.
+                <DeletionRow key={`${d.token}|${d.epoch}`} deletion={d} />
+              ))}
+            </DataTableBody>
+          </DataTable>
+          <Pagination
+            pageNumber={pageNumber}
+            pageSize={PAGE_SIZE}
+            pagination={data!.pagination}
+            onPageChange={setPageNumber}
+            className="mt-4"
+          />
+        </>
       )}
     </PageShell>
   );

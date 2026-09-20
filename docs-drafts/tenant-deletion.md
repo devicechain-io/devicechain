@@ -392,7 +392,7 @@ complete on its first pass, so a per-pass count would read zero for every real p
 
 - `tenantDeletion(token, epoch)` — one record with its per-store ledger. Omit the epoch to ask for
   the token's **in-flight** deletion.
-- `tenantDeletions(completed, limit, offset)` — instance-wide history, newest cut first.
+- `tenantDeletions(criteria)` — instance-wide history, newest cut first, one clamped page at a time with a total to page against.
 
 Two computed fields answer the questions the raw ledger does not. `blockedBy` is one sentence per
 store that is not clean, in that store's own words — a note never appears, because a note is a
@@ -445,8 +445,15 @@ There are deliberately **no actions**: no retry (the coordinator already retries
 button implies the absence of one) and no force-complete (the single action that could write a
 deletion record that is false).
 
-What is still missing: nothing renders `elapsesAt` as a live countdown, and the history page has no
-total count to page against — `tenantDeletions` is offset/limit with no envelope.
+What is still missing: nothing renders `elapsesAt` as a live countdown.
+
+The history page's paging gap is closed. `tenantDeletions` used to take `limit`/`offset`, both
+nullable, and an omitted limit reached the store as "no LIMIT" — so the default request read every
+record the instance had ever written, each with a follow-up query for its ledger. It looked
+paginated and was not, and the page had no total to page against either. It now takes the same
+`criteria`/`results` envelope as `auditEvents` and `deadLetters`: `pageSize` is non-null and
+clamped, `pagination.totalRecords` is reported, the page has prev/next, and one query reads the
+whole page's ledger lines.
 
 ## 8b. The erasure fence
 

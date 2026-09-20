@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -182,35 +184,77 @@ func (s *Store) RecordPurgeStore(ctx context.Context, line *TenantPurgeStore) er
 	}).Create(line).Error
 }
 
-// PurgeRecords lists deletion records newest cut first, optionally filtered by whether they
-// have completed.
+// DefaultOrder implements rdb.Sortable: newest cut first, and TOTAL.
 //
 // Newest first because this is read by a human asking "what happened recently", which is the
 // opposite order from the coordinator's work queue (TenantsPurging, oldest first, so a backlog
 // drains in the order the deletions were asked for). The two orderings are deliberate and
 // neither is the other's mistake.
 //
+// 🔴 THE ID IS NOT DECORATION. The epoch is `time.Now().UTC()` at the cut with no truncation,
+// but a scripted teardown cuts several tenants from one loop and nothing stops two epochs
+// landing on the same instant. Ordering by epoch alone would leave the rows inside a tie group
+// free to move between pages — and the unique index is (token, epoch), so the database has no
+// tiebreak of its own to fall back on.
+func (TenantPurge) DefaultOrder() string {
+	return "iam_tenant_purges.epoch DESC, iam_tenant_purges.id DESC"
+}
+
+// PurgeSearchCriteria is one page of the deletion history.
+type PurgeSearchCriteria struct {
+	rdb.Pagination
+	// Completed filters to finished (true) or in-flight (false) deletions; nil is both.
+	Completed *bool
+}
+
+// PurgeSearchResults is one page of deletion records with the span it was taken from.
+type PurgeSearchResults struct {
+	Results    []TenantPurge
+	Pagination rdb.SearchResultsPagination
+}
+
+// PurgeRecords returns one page of deletion records, newest cut first, optionally filtered by
+// whether they have completed.
+//
 // It is instance-wide and cross-tenant by construction: a record OUTLIVES its tenant, so there
 // is no tenant to scope it to, and scoping it to one would hide exactly the records an auditor
 // is looking for.
-func (s *Store) PurgeRecords(ctx context.Context, completed *bool, limit, offset int) ([]TenantPurge, error) {
-	q := s.sys(ctx).Order("epoch DESC, id DESC")
-	if completed != nil {
-		if *completed {
-			q = q.Where("completed_at IS NOT NULL")
-		} else {
-			q = q.Where("completed_at IS NULL")
+//
+// 🔴 IT GOES THROUGH ListOf RATHER THAN APPLYING ITS OWN LIMIT, and that is the whole point of
+// the shape. The earlier form took a bare `limit int` and read `if limit > 0`, so the one value
+// a caller could omit — and the one the GraphQL argument defaulted to when absent — asked for
+// EVERY record with no LIMIT at all. It looked paginated and was not. ListOf is where the
+// never-unlimited rule lives (ADR-029): the page size is defaulted below 1 and clamped above
+// MaxPageSize, so no criteria this function is handed can reach the database unbounded.
+//
+// The envelope is not incidental either. A caller could always ask for 50 records; what it
+// could not do was find out whether there were 51, so the console's history page showed its
+// first page forever with no way to know it was truncating. TotalRecords is that missing half.
+//
+// 🔴 Unbounded IS FORCED OFF, and the reason is that the criteria EMBED rdb.Pagination, which
+// carries it. Without this line the sentence above would be true only of the GraphQL boundary
+// — which builds its Pagination from two int32s and cannot set the flag — while the store this
+// comment is attached to would still honour it for any internal caller that came along later
+// and read the promise rather than the field list. A claim about what a layer guarantees has
+// to be enforced by that layer. This is the same forcing api_group_members.go applies for the
+// same reason.
+func (s *Store) PurgeRecords(ctx context.Context, criteria PurgeSearchCriteria) (*PurgeSearchResults, error) {
+	criteria.Pagination.Unbounded = false // never an unbounded scan, even if a caller asks
+	results := make([]TenantPurge, 0)
+	db, pag := s.db.ListOf(core.WithSystemContext(ctx), &TenantPurge{}, func(q *gorm.DB) *gorm.DB {
+		if criteria.Completed != nil {
+			if *criteria.Completed {
+				return q.Where("completed_at IS NOT NULL")
+			}
+			return q.Where("completed_at IS NULL")
 		}
+		return q
+	}, criteria.Pagination)
+	db.Find(&results)
+	if db.Error != nil {
+		return nil, db.Error
 	}
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	if offset > 0 {
-		q = q.Offset(offset)
-	}
-	var out []TenantPurge
-	err := q.Find(&out).Error
-	return out, err
+	return &PurgeSearchResults{Results: results, Pagination: pag}, nil
 }
 
 // PurgeRecordForToken reads the IN-FLIGHT record for a token — the one whose purge has not
@@ -239,6 +283,42 @@ func (s *Store) PurgeStores(ctx context.Context, purgeID uint) ([]TenantPurgeSto
 	var out []TenantPurgeStore
 	err := s.sys(ctx).Where("tenant_purge_id = ?", purgeID).Order("store").Find(&out).Error
 	return out, err
+}
+
+// PurgeStoresFor reads the ledger lines for a whole PAGE of purges in one query, grouped by
+// purge id and ordered by store name within each, matching PurgeStores.
+//
+// 🔴 IT EXISTS SO THE HISTORY LIST IS NOT N+1, and the bound is what makes the old shape
+// indefensible rather than merely untidy: the list resolver read each record's lines
+// individually, and the list had no LIMIT, so one admin page was one query per deletion the
+// instance had ever performed. Even with the page now clamped that is up to rdb.MaxPageSize
+// round trips for a page a human reads once.
+//
+// A purge has one line per store — single digits — so a page's lines are a small set however
+// the page is filled, which is what makes a single IN query the right trade at every size.
+//
+// A purge with no lines is ABSENT from the map rather than present-and-empty, and callers
+// should rely on that: a record whose first pass has not run yet genuinely has no ledger, and
+// a nil slice ranges and lens exactly like an empty one.
+func (s *Store) PurgeStoresFor(ctx context.Context, purgeIDs []uint) (map[uint][]TenantPurgeStore, error) {
+	out := make(map[uint][]TenantPurgeStore, len(purgeIDs))
+	if len(purgeIDs) == 0 {
+		// Not a safety guard — the spelled-out `IN ?` form renders a match-nothing
+		// predicate on an empty slice, unlike the bare-value form that returns the whole
+		// table (hack/check-inline-id-conditions.sh has the measurements). This just
+		// declines to make the round trip for a page that is past the end of the set.
+		return out, nil
+	}
+	var lines []TenantPurgeStore
+	err := s.sys(ctx).Where("tenant_purge_id IN ?", purgeIDs).
+		Order("tenant_purge_id, store").Find(&lines).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range lines {
+		out[line.TenantPurgeID] = append(out[line.TenantPurgeID], line)
+	}
+	return out, nil
 }
 
 // CompleteTenantPurge closes a purge: it stamps the record complete and REMOVES the

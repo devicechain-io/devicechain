@@ -5,6 +5,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -284,8 +285,9 @@ func TestDeletionsListIsInstanceWideAndNewestFirst(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	recs, err := s.TenantDeletions(ctx, nil, 0, 0)
+	found, err := s.TenantDeletions(ctx, deletionPage(nil))
 	require.NoError(t, err)
+	recs := found.Results
 	require.Len(t, recs, 3, "the list is instance-wide: every tenant's records, not one tenant's")
 	assert.Equal(t, []string{"newest", "middle", "oldest"},
 		[]string{recs[0].Token, recs[1].Token, recs[2].Token},
@@ -311,15 +313,170 @@ func TestDeletionsCanBeFilteredByCompletion(t *testing.T) {
 	require.NoError(t, err)
 
 	yes, no := true, false
-	done, err := s.TenantDeletions(ctx, &yes, 0, 0)
+	done, err := s.TenantDeletions(ctx, deletionPage(&yes))
 	require.NoError(t, err)
-	require.Len(t, done, 1)
-	assert.Equal(t, "finished", done[0].Token)
+	require.Len(t, done.Results, 1)
+	assert.Equal(t, "finished", done.Results[0].Token)
 
-	open, err := s.TenantDeletions(ctx, &no, 0, 0)
+	open, err := s.TenantDeletions(ctx, deletionPage(&no))
 	require.NoError(t, err)
-	require.Len(t, open, 1)
-	assert.Equal(t, "in-flight", open[0].Token)
+	require.Len(t, open.Results, 1)
+	assert.Equal(t, "in-flight", open.Results[0].Token)
+}
+
+// deletionPage asks for the first page at the default size, which is what every test that is
+// not about pagination wants.
+func deletionPage(completed *bool) iam.PurgeSearchCriteria {
+	return iam.PurgeSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: rdb.DefaultPageSize},
+		Completed:  completed,
+	}
+}
+
+// TestTheDeletionHistoryCannotBeAskedForEverything is the regression guard for the defect this
+// API shape was built to remove.
+//
+// 🔴 THE OLD SIGNATURE TOOK A BARE `limit int` AND READ `if limit > 0`, so the request a client
+// makes by leaving the GraphQL argument out — the DEFAULT request — asked for every deletion
+// record the instance had ever written, with a follow-up query each for its ledger. The tests
+// that covered this list all passed `0, 0`, which meant they were exercising the unbounded path
+// and calling it the contract.
+//
+// 🔑 THE CEILING IS ASSERTED THROUGH PageStart, NOT THROUGH len(Results), and that is the whole
+// trick. A page of 105 records cannot distinguish "clamped to 1000" from "honoured at 10000" by
+// its length — both return everything — which is how an earlier draft of this test ended up with
+// a ceiling case that could not fail. But ListOf computes PageStart as (pageNumber-1)*size+1
+// from the EFFECTIVE size, so asking for page 2 reports 1001 when the clamp ran and 10001 when
+// it did not. The arithmetic sees what the row count cannot.
+//
+// TotalRecords is asserted alongside, because a clamp that also hid the true count would trade
+// one wrong answer for another — and the console has no way to page without it.
+func TestTheDeletionHistoryCannotBeAskedForEverything(t *testing.T) {
+	s := newPurgeTestService(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Second)
+	const total = rdb.DefaultPageSize + 5
+	for i := 0; i < total; i++ {
+		_, err := s.iam.EnsurePurgeRecord(ctx, fmt.Sprintf("t%03d", i), base.Add(time.Duration(i)*time.Second))
+		require.NoError(t, err)
+	}
+
+	page := func(t *testing.T, number, size int32) *iam.PurgeSearchResults {
+		t.Helper()
+		found, err := s.TenantDeletions(ctx, iam.PurgeSearchCriteria{
+			Pagination: rdb.Pagination{PageNumber: number, PageSize: size},
+		})
+		require.NoError(t, err)
+		assert.EqualValues(t, total, found.Pagination.TotalRecords,
+			"the clamp bounds the PAGE; the caller still has to be told how many there are")
+		return found
+	}
+
+	for _, size := range []int32{0, -1} {
+		t.Run(fmt.Sprintf("a page size of %d is the default, never 'no limit'", size), func(t *testing.T) {
+			found := page(t, 1, size)
+			assert.Len(t, found.Results, int(rdb.DefaultPageSize))
+			assert.EqualValues(t, 1, found.Pagination.PageStart)
+			assert.EqualValues(t, rdb.DefaultPageSize, found.Pagination.PageEnd)
+		})
+	}
+
+	t.Run("a page size far above the ceiling is clamped to it", func(t *testing.T) {
+		found := page(t, 2, rdb.MaxPageSize*10)
+		assert.EqualValues(t, rdb.MaxPageSize+1, found.Pagination.PageStart,
+			"page 2 starts one past the CEILING, which is only true if the clamp ran")
+		assert.Empty(t, found.Results, "page 2 of a 1000-row page size is past the end of 105 records")
+	})
+
+	t.Run("a caller that asks for an unbounded read does not get one", func(t *testing.T) {
+		// 🔴 THE CRITERIA EMBED rdb.Pagination, WHICH CARRIES Unbounded, so "the store bounds
+		// this" is a claim about a field a caller can set — not about a field it cannot reach.
+		// PurgeRecords forces it off; without that line the comments on PurgeRecords and on
+		// admin.TenantDeletions would be true only of the GraphQL boundary, while the layer
+		// they are written on would hand a future internal caller the whole table.
+		found, err := s.TenantDeletions(ctx, iam.PurgeSearchCriteria{
+			Pagination: rdb.Pagination{PageNumber: 1, PageSize: rdb.DefaultPageSize, Unbounded: true},
+		})
+		require.NoError(t, err)
+		assert.Len(t, found.Results, int(rdb.DefaultPageSize),
+			"Unbounded is forced off, so this is an ordinary clamped page")
+		assert.EqualValues(t, total, found.Pagination.TotalRecords)
+	})
+
+	t.Run("the page number selects the page", func(t *testing.T) {
+		// Without this nothing anywhere reads page 2, so a store that ignored the page number
+		// entirely — returning page 1 forever, which is the symptom this arc set out to fix —
+		// would satisfy every other assertion here.
+		found := page(t, 2, rdb.DefaultPageSize)
+		require.Len(t, found.Results, total-rdb.DefaultPageSize)
+		assert.EqualValues(t, rdb.DefaultPageSize+1, found.Pagination.PageStart)
+		assert.EqualValues(t, total, found.Pagination.PageEnd)
+		assert.Equal(t, []string{"t004", "t003", "t002", "t001", "t000"},
+			[]string{found.Results[0].Token, found.Results[1].Token, found.Results[2].Token,
+				found.Results[3].Token, found.Results[4].Token},
+			"newest first runs ACROSS pages: page 2 carries the five oldest, still descending")
+	})
+}
+
+// TestAPagesLedgerLinesMatchTheOnesReadRecordByRecord pins the batched read against the
+// single-record read it replaced, which is the only thing that makes the N+1 removal safe.
+//
+// The record with NO lines is the case worth having: it is reachable — a deletion whose first
+// pass has not run yet has an empty ledger — and it is the one a map-based grouping gets wrong,
+// by dropping the record rather than giving it no lines.
+func TestAPagesLedgerLinesMatchTheOnesReadRecordByRecord(t *testing.T) {
+	s := newPurgeTestService(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC().Truncate(time.Second)
+	withLines, err := s.iam.EnsurePurgeRecord(ctx, "has-lines", base)
+	require.NoError(t, err)
+	// Seeded ANTI-SORTED — "tsdb" before "rdb", against the declared store-ASC order — which
+	// is rdb's sortable_test.go rule: SQLite hands rows back in insertion order when nothing
+	// names an ORDER BY, so a fixture seeded in its expected order passes whether or not the
+	// code orders anything.
+	//
+	// 🔴 AND ON THIS TABLE THAT IS NOT ENOUGH, WHICH IS WORTH KNOWING BEFORE TRUSTING THE
+	// TECHNIQUE ELSEWHERE. TenantPurgeStore carries a unique index on (tenant_purge_id, store),
+	// and SQLite answers PurgeStoresFor's `WHERE tenant_purge_id IN (…)` with
+	// `SEARCH … USING COVERING INDEX (tenant_purge_id=?)` — measured, not assumed — so the rows
+	// arrive in (tenant_purge_id, store) order for free. DELETING the ORDER BY is therefore
+	// invisible here however the fixture is seeded; only a WRONG order (store DESC) is caught.
+	// The clause still has to be there for Postgres, where a small table is as likely to be
+	// seq-scanned. An anti-sorted fixture proves the order is not ACCIDENTAL; it cannot prove
+	// the clause is load-bearing when an index already covers the query.
+	require.NoError(t, s.iam.RecordPurgeStore(ctx, &iam.TenantPurgeStore{
+		TenantPurgeID: withLines.ID, Store: "tsdb", Complete: false, Deferred: "retained",
+	}))
+	require.NoError(t, s.iam.RecordPurgeStore(ctx, &iam.TenantPurgeStore{
+		TenantPurgeID: withLines.ID, Store: "rdb", Complete: true, Rows: 3,
+	}))
+	noLines, err := s.iam.EnsurePurgeRecord(ctx, "no-lines-yet", base.Add(time.Second))
+	require.NoError(t, err)
+
+	batched, err := s.TenantDeletionStoresFor(ctx, []uint{withLines.ID, noLines.ID})
+	require.NoError(t, err)
+
+	for _, id := range []uint{withLines.ID, noLines.ID} {
+		oneByOne, err := s.TenantDeletionStores(ctx, id)
+		require.NoError(t, err)
+		if len(oneByOne) == 0 {
+			// The per-record read returns an empty non-nil slice and the map returns nil.
+			// Nothing downstream can tell them apart — purge.Waiting ranges the slice, and
+			// both range zero times — so this asserts what actually matters rather than
+			// pinning which of the two representations arrives.
+			assert.Empty(t, batched[id])
+			continue
+		}
+		assert.Equal(t, oneByOne, batched[id],
+			"the batched read must return exactly what the per-record read did")
+		assert.Equal(t, []string{"rdb", "tsdb"}, []string{batched[id][0].Store, batched[id][1].Store},
+			"store ASC, matching the per-record read the history page is compared against")
+	}
+	empty, err := s.TenantDeletionStoresFor(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty, "an empty page reads nothing rather than everything")
 }
 
 func mustTenant(t *testing.T, s *Service, token string) *iam.Tenant {

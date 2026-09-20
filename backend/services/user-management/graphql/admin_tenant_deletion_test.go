@@ -10,20 +10,24 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
+	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // TestTenantDeletionQueriesFailClosed holds both new queries to the plane's rule: an
 // unauthenticated caller is refused, a caller with the wrong authority is refused.
 //
-// It deliberately stops at the authority check rather than going on to a success case. The
-// success leg would need an admin Service in context — these resolvers do reach it — and the
-// behaviour behind it is covered where the ledger lives, in the admin package. What this file
-// is for is the gate.
+// It deliberately stops at the authority check. What this file is for is the gate; the
+// behaviour behind it is covered where the ledger lives, in the admin package —
+// except for the argument mapping, which belongs to the resolver and nothing else could see.
+// TestTheDeletionsCriteriaReachesTheStore, below, is that success leg.
 func TestTenantDeletionQueriesFailClosed(t *testing.T) {
 	r := &AdminResolver{}
 
@@ -44,9 +48,7 @@ func TestTenantDeletionQueriesFailClosed(t *testing.T) {
 
 	t.Run("tenantDeletions", func(t *testing.T) {
 		var args struct {
-			Completed *bool
-			Limit     *int32
-			Offset    *int32
+			Criteria tenantDeletionCriteriaInput
 		}
 
 		_, err := r.TenantDeletions(context.Background(), args)
@@ -217,4 +219,107 @@ func TestTheEpochSurvivesAFormatParseRoundTrip(t *testing.T) {
 	assert.True(t, parsed.Equal(epoch),
 		"the epoch this API publishes must parse back to the same instant; %q lost precision "+
 			"against %v, so a caller handing it back would match no record", published, epoch)
+}
+
+// newDeletionWireService builds the admin Service over an in-memory sqlite database carrying
+// the two purge tables, so a wire test exercises the real store rather than a stub. The store
+// comes back alongside it because the seeding goes in the same way the coordinator writes —
+// through the store — rather than through a fixture that could disagree with it.
+func newDeletionWireService(t *testing.T) (*admin.Service, *iam.Store) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, rdb.RegisterTenantScoping(db))
+	require.NoError(t, rdb.RegisterTokenGrammar(db))
+	require.NoError(t, db.AutoMigrate(&iam.TenantPurge{}, &iam.TenantPurgeStore{}))
+	store := iam.NewStore(&rdb.RdbManager{Database: db})
+	return admin.NewService(store, 300*time.Second, 12*time.Hour, nil), store
+}
+
+// TestTheDeletionsCriteriaReachesTheStore executes the query the console actually sends, with
+// variables, against a real store.
+//
+// 🔴 IT EXISTS BECAUSE NOTHING ELSE EXERCISES THE ARGUMENT MAPPING. The resolver's other test
+// stops at authorization and never reaches a service; every store-level test calls
+// admin.Service directly and so skips the resolver entirely. That left the six lines that copy
+// `args.Criteria` into `iam.PurgeSearchCriteria` covered by nothing — and each of them fails
+// silently rather than loudly:
+//
+//   - swapping pageNumber and pageSize returns a plausible page of the wrong size
+//   - dropping `Completed:` makes the console's two filter tabs show the same rows
+//   - hard-coding `PageNumber: 1` makes next/prev show page 1 forever, which is precisely the
+//     symptom this whole change set out to remove
+//   - setting `Unbounded: true` restores the unbounded read it set out to remove
+//
+// None of those is a compile error and none of them fails any other test in this repo. That is
+// the "nothing exercises the wiring" class, and the fix for it is always a test that goes in
+// through the front door.
+func TestTheDeletionsCriteriaReachesTheStore(t *testing.T) {
+	svc, store := newDeletionWireService(t)
+	ctx := context.WithValue(adminCtx(string(auth.TenantRead)), ContextAdminKey, svc)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	for i, token := range []string{"oldest", "middle", "newest"} {
+		_, err := store.EnsurePurgeRecord(ctx, token, base.Add(time.Duration(i)*time.Hour))
+		require.NoError(t, err)
+	}
+
+	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
+	const query = `query($c: TenantDeletionSearchCriteria!) {
+		tenantDeletions(criteria: $c) {
+			results { token }
+			pagination { pageStart pageEnd totalRecords }
+		}
+	}`
+	exec := func(t *testing.T, vars map[string]any) struct {
+		Results    []struct{ Token string } `json:"results"`
+		Pagination struct {
+			PageStart    *int32 `json:"pageStart"`
+			PageEnd      *int32 `json:"pageEnd"`
+			TotalRecords *int32 `json:"totalRecords"`
+		} `json:"pagination"`
+	} {
+		t.Helper()
+		res := schema.Exec(ctx, query, "", map[string]any{"c": vars})
+		require.Empty(t, res.Errors)
+		var out struct {
+			TenantDeletions struct {
+				Results    []struct{ Token string } `json:"results"`
+				Pagination struct {
+					PageStart    *int32 `json:"pageStart"`
+					PageEnd      *int32 `json:"pageEnd"`
+					TotalRecords *int32 `json:"totalRecords"`
+				} `json:"pagination"`
+			} `json:"tenantDeletions"`
+		}
+		require.NoError(t, json.Unmarshal(res.Data, &out))
+		return out.TenantDeletions
+	}
+
+	t.Run("the page size is the page size and not the page number", func(t *testing.T) {
+		got := exec(t, map[string]any{"pageNumber": 1, "pageSize": 2})
+		require.Len(t, got.Results, 2, "pageSize 2 means two rows; a swap would return one")
+		assert.Equal(t, []string{"newest", "middle"},
+			[]string{got.Results[0].Token, got.Results[1].Token})
+		require.NotNil(t, got.Pagination.TotalRecords)
+		assert.EqualValues(t, 3, *got.Pagination.TotalRecords)
+	})
+
+	t.Run("the page number selects the page", func(t *testing.T) {
+		got := exec(t, map[string]any{"pageNumber": 2, "pageSize": 2})
+		require.Len(t, got.Results, 1, "a resolver that ignored the page number would return two")
+		assert.Equal(t, "oldest", got.Results[0].Token)
+		require.NotNil(t, got.Pagination.PageStart)
+		assert.EqualValues(t, 3, *got.Pagination.PageStart)
+	})
+
+	t.Run("completed filters, in both directions", func(t *testing.T) {
+		// Both directions, because a filter that ignored its argument satisfies either half
+		// alone — and "ignored its argument" is exactly what dropping the field would do.
+		inFlight := exec(t, map[string]any{"pageNumber": 1, "pageSize": 10, "completed": false})
+		assert.Len(t, inFlight.Results, 3, "nothing here has completed")
+
+		done := exec(t, map[string]any{"pageNumber": 1, "pageSize": 10, "completed": true})
+		assert.Empty(t, done.Results, "a completed filter that was dropped would return all three")
+	})
 }
