@@ -109,13 +109,21 @@ func AssertEveryIdentifiedMutationNamesItsRow(t *testing.T, root string, mustVis
 // be matched, and a differently-named wrapper around Updates would not.
 var mutatingMethods = map[string]bool{"Updates": true, "Update": true, "Delete": true}
 
-// primaryKeyCondition matches a SQL fragment that constrains the primary key column.
+// primaryKeyCondition matches a SQL fragment that constrains the primary key to ONE
+// value, which is the only case where the callback has a single key to record.
 //
-// The word boundary is load-bearing and easy to get wrong: it must NOT match
-// "asset_type_id = ?" or "entity_group_id = ?", which are foreign keys naming a
-// DIFFERENT row than the one being mutated. \b does the right thing here only because
-// "_" is a word character, so there is no boundary between "_" and "id".
-var primaryKeyCondition = regexp.MustCompile(`(^|[\s(])id\s*(=|IN)\s*\?`)
+// Two ways to get this wrong, and the check made both before it was right:
+//
+//   - It must NOT match "asset_type_id = ?" or "entity_group_id = ?". Those are foreign
+//     keys naming a DIFFERENT row than the one being mutated. The leading boundary is
+//     what excludes them, and it works only because "_" is a word character, so there is
+//     no boundary between "_" and "id".
+//   - It must NOT match "id IN ?". That is a BATCH — device-management retires a whole
+//     set of credentials that way — and a batch has no single primary key by definition.
+//     auditPrimaryKey returns "" for it deliberately, RowsAffected carries the count, and
+//     an entry naming one of N rows would be worse than one naming none. Flagging it
+//     would have demanded a "fix" that makes the journal less accurate.
+var primaryKeyCondition = regexp.MustCompile(`(^|[\s(])id\s*=\s*\?`)
 
 // anonymousMutationsUnder walks root and reports every audited mutation that names its
 // row by primary key while handing gorm a zero-value model, along with the set of

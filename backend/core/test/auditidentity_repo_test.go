@@ -23,7 +23,7 @@ import (
 // Counts, not line numbers: a line number turns every unrelated edit above it into a
 // failure here, which teaches people to re-run and paste rather than to read.
 //
-// The debt is 21 statements — 20 in six services plus one in a test harness — measured
+// The debt is 20 statements — 19 in six services plus one in a test harness — measured
 // 2026-09-20 by this scanner. Every one holds the row's primary key in a local variable
 // and hands gorm a zero value anyway; none needs an extra query to fix. See
 // AssertEveryIdentifiedMutationNamesItsRow for why this is a guard and not a review note.
@@ -34,7 +34,6 @@ var knownAnonymousMutations = map[string]int{
 	"backend/services/device-management/model/api_group_versions.go":      2,
 	"backend/services/device-management/model/api_profile_versions.go":    2,
 	"backend/services/device-management/model/api_claims.go":              1,
-	"backend/services/device-management/model/api_device_replacement.go":  1,
 	"backend/services/ai-inference/model/api.go":                          1,
 	"backend/services/dashboard-management/model/api.go":                  1,
 	"backend/services/outbound-connectors/model/api.go":                   1,

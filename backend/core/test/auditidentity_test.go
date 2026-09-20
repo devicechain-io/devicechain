@@ -232,3 +232,27 @@ func TestFollowingAVariableDoesNotInventAFinding(t *testing.T) {
 			"statement: %+v", found)
 	}
 }
+
+// 🔴 A BATCH HAS NO SINGLE PRIMARY KEY, so "id IN ?" must not be read as naming the
+// mutated row. This one was caught by applying the guard's own advice to what it
+// reported: device-management retires a set of credentials with Where("id IN ?", ids),
+// and there is no single key to put in the entry — auditPrimaryKey returns "" for it on
+// purpose and RowsAffected carries the count instead.
+//
+// A guard that flagged it would be demanding a change that makes the journal LESS
+// accurate, by naming one row out of N. That is worse than the defect it exists to find.
+func TestABatchIsNotReadAsNamingOneRow(t *testing.T) {
+	body := `_ = tx.Model(&DeviceCredential{}).Where("id IN ?", ids).Update("enabled", false)`
+	if found := scanAuditFixture(t, body); len(found) != 0 {
+		t.Errorf("a batch update was reported as an identified single row; there is no one "+
+			"key the audit callback could record: %+v", found)
+	}
+
+	// The counterweight: the single-row form next to it must still be caught, or this
+	// exclusion could be satisfied by a pattern that stopped matching anything.
+	single := `_ = tx.Model(&DeviceCredential{}).Where("id = ?", id).Update("enabled", false)`
+	if found := scanAuditFixture(t, single); len(found) != 1 {
+		t.Errorf("the single-row form stopped being caught, so the batch exclusion was "+
+			"widened past its purpose: %+v", found)
+	}
+}
