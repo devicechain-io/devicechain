@@ -744,7 +744,7 @@ func fixtureFailsClosedOnAnUnwritableJournal(t *testing.T, ctx context.Context) 
 		t.Fatalf("drop the audit journal's table: %v", err)
 	}
 
-	err := db.WithContext(ctx).Model(&fenceProbe{}).
+	err := db.WithContext(ctx).Model(row).
 		Where("id = ?", row.ID).Update("note", "moved").Error
 	if err == nil {
 		t.Fatal("an update whose journal write could not land reported success — production " +

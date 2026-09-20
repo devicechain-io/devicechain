@@ -5,6 +5,7 @@ package rdb
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -64,10 +65,10 @@ func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 	if err := db.WithContext(ctx).Create(w).Error; err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := db.WithContext(ctx).Model(&widget{}).Where("id = ?", w.ID).Update("name", "w2").Error; err != nil {
+	if err := db.WithContext(ctx).Model(w).Where("id = ?", w.ID).Update("name", "w2").Error; err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if err := db.WithContext(ctx).Delete(&widget{}, w.ID).Error; err != nil {
+	if err := db.WithContext(ctx).Delete(w).Error; err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -95,6 +96,56 @@ func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 		if row.RowsAffected != 1 {
 			t.Errorf("row %d: rows_affected = %d, want 1", i, row.RowsAffected)
 		}
+		// 🔴 THE CLAIM IN THIS TEST'S OWN DOC COMMENT, WHICH IT DID NOT CHECK UNTIL NOW.
+		// It said "with the affected row's primary key" and asserted every other column,
+		// while driving the update through Model(&widget{}) — the one shape that loses
+		// the key. So the assertion that would have failed was the assertion missing, on
+		// the statement that needed it. A test named for a property it never reads is
+		// indistinguishable from one that holds.
+		if row.EntityPK != fmt.Sprint(w.ID) {
+			t.Errorf("row %d (%s): entity_pk = %q, want %q — the journal recorded that "+
+				"something changed without recording which row", i, row.Operation, row.EntityPK, fmt.Sprint(w.ID))
+		}
+	}
+}
+
+// The other half, and the reason the assertion above is about a SPECIFIC shape rather
+// than about auditing in general: when no single row is identified, an empty primary key
+// is the TRUTHFUL entry and RowsAffected carries what is known instead.
+//
+// Keeping both pinned is what makes the pair meaningful. "Always records a key" would be
+// wrong here and is not what the journal promises; "never records one" was the defect.
+// The difference between them is whether the caller had the identity to give.
+func TestAuditRecordsNoPrimaryKeyWhereNoSingleRowIsIdentified(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+
+	for _, name := range []string{"a", "b", "c"} {
+		if err := db.WithContext(ctx).Create(&widget{Name: name}).Error; err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	before := len(readAudit(t, db))
+
+	// A condition-only update over several rows: no one key describes what changed.
+	if err := db.WithContext(ctx).Model(&widget{}).
+		Where("name IN ?", []string{"a", "b"}).
+		Update("name", "z").Error; err != nil {
+		t.Fatalf("bulk update: %v", err)
+	}
+
+	rows := readAudit(t, db)
+	if len(rows) != before+1 {
+		t.Fatalf("expected one audit row for the bulk update, got %d new", len(rows)-before)
+	}
+	row := rows[len(rows)-1]
+	if row.EntityPK != "" {
+		t.Errorf("entity_pk = %q, want empty: two rows changed, so naming one of them "+
+			"would be a less accurate record than naming none", row.EntityPK)
+	}
+	if row.RowsAffected != 2 {
+		t.Errorf("rows_affected = %d, want 2 — it is the only quantity the journal can "+
+			"honestly report here", row.RowsAffected)
 	}
 }
 
