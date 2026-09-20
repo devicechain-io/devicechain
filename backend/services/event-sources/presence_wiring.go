@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/presence"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	nats "github.com/nats-io/nats.go"
@@ -286,7 +287,7 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 		// Closes rt.stopped so stopBrokerPresence's five-second wait does not fire on every
 		// disabled instance — the runtime is shaped the same whether the tap ran or not.
 		defer close(rt.stopped)
-		presence.RunDemoteLoop(runCtx, runner, interval, delay, time.Now)
+		presence.RunDemoteLoop(runCtx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics)
 	}()
 	brokerPresence = rt
 }
@@ -326,7 +327,11 @@ func (r recheckBroker) Run(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	if r.drain == nil {
-		return nil
+		// Skipped, not complete. There is no drain wired on this instance — the tap-off
+		// log tells the operator to run `dcctl presence demote` instead — so reporting
+		// success here would keep a last-success timestamp fresh forever while nothing
+		// was ever released.
+		return core.ErrPassSkipped
 	}
 	return r.drain.Run(ctx, now)
 }
@@ -775,6 +780,8 @@ var (
 	PresenceStillAssertedGauge prometheus.Gauge
 	PresenceCanaryOkCounter    prometheus.Counter
 	PresenceCanaryMissCounter  prometheus.Counter
+	// PresenceDemoteTaskMetrics are the demote drain's pass signals.
+	PresenceDemoteTaskMetrics *core.PeriodicTaskMetrics
 
 	CommandWakeRequestedCounter prometheus.Counter
 	CommandWakeDroppedCounter   prometheus.Counter
@@ -791,6 +798,11 @@ var (
 // healthy or dead; presence_canary_missed_total reads zero only when the chain has been
 // exercised and worked.
 func initializePresenceMetrics() {
+	// The demote drain's pass signals. It cannot adopt core.PeriodicTask — it has no
+	// lifecycle component at all and is launched as a bare goroutine on the tap-OFF path —
+	// but it is a fixed-cadence maintenance pass and an operator asks the same question of
+	// it. Built here, in the initialize phase, like every other collector in this file.
+	PresenceDemoteTaskMetrics = Microservice.NewPeriodicTaskMetrics("presence_demote")
 	PresenceEmittedCounter = Microservice.NewCounterVec(
 		"presence_events_total",
 		"Broker-asserted presence transitions emitted, by state",

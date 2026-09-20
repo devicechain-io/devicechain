@@ -472,3 +472,34 @@ func TestPassResultSeparatesABacklogFromAnOutage(t *testing.T) {
 	assert.NotContains(t, nilErr.Error(), "%!w",
 		"a nil lastErr must not render as a formatting escape, and must still wrap something")
 }
+
+// TestRecordPassOnNilMetricsStillLogs pins the nil-safety the loops that cannot adopt
+// PeriodicTask rely on.
+//
+// 🔑 THE LOG LINE IS NOT A METRIC. Three of the five adopting loops are reachable from tests
+// and fixtures that pass no metrics at all — event-sources' demote loop is called with a nil
+// in four tests — and a task without instruments is still a task doing work. Classifying and
+// logging must survive; only the recording is skipped.
+func TestRecordPassOnNilMetricsStillLogs(t *testing.T) {
+	var m *PeriodicTaskMetrics
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+	}{
+		{"complete", context.Background(), nil},
+		{"failed", context.Background(), errors.New("boom")},
+		{"skipped", context.Background(), ErrPassSkipped},
+		{"partial", context.Background(), ErrPassPartial},
+		{"cancelled", cancelled, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				m.RecordPass(tc.ctx, tc.err, time.Now(), "sweep")
+			})
+		})
+	}
+}

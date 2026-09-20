@@ -35,6 +35,9 @@ var (
 	// StateMetrics is built ONCE, in the initialize phase, and shared by every
 	// StateProcessor the NATS manager's oncreate callback builds. See buildMetrics.
 	StateMetrics *core.ProcessorMetrics
+	// InactivitySweepMetrics is the inactivity monitor's pass signals, built once for the
+	// same reason and in the same place.
+	InactivitySweepMetrics *core.PeriodicTaskMetrics
 )
 
 func main() {
@@ -81,6 +84,7 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	StateMetrics = processor.NewStateMetrics(Microservice)
+	InactivitySweepMetrics = Microservice.NewPeriodicTaskMetrics("inactivity_sweep")
 }
 
 // Create messaging components used by this microservice.
@@ -114,7 +118,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// the process while everything this callback builds belongs to the connection, and
 	// a second registration of the same collector panics.
 	StateProcessor = processor.NewStateProcessor(Microservice, ResolvedEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Api, StateMetrics)
+		core.NewNoOpLifecycleCallbacks(), Api, StateMetrics, InactivitySweepMetrics)
 	err = StateProcessor.Initialize(context.Background())
 	if err != nil {
 		return err
