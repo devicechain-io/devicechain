@@ -135,6 +135,12 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 				pm.Start()(ResultOK)
 			}
 		}},
+		{name: "NewPeriodicTaskMetrics", call: func(t *testing.T, ms *Microservice) {
+			m := ms.NewPeriodicTaskMetrics("literal_task")
+			if assert.NotNil(t, m) {
+				m.record(PassComplete, time.Second, time.Now())
+			}
+		}},
 
 		// --- Safe, and the outcome channel is why. Each of these sends on it or receives
 		// from it, and on a nil channel every one of them parks rather than failing. ---

@@ -6,7 +6,6 @@ package processor
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	emmodel "github.com/devicechain-io/dc-event-management/model"
@@ -26,118 +25,81 @@ import (
 // treating every ref as absent (which would delete all its anchors) — an orphan
 // lingers until the next run instead of a reachable-but-down owner nuking the set.
 type AnchorReconciliationSweep struct {
+	// The embedded task supplies the lifecycle octet and the pass schedule, and its
+	// metrics are how an operator sees this backstop running at all — before it, a
+	// sweep that skipped every tenant because device-management was down logged a
+	// warning per tenant and was otherwise indistinguishable from a clean one.
+	*core.PeriodicTask
+
 	Microservice *core.Microservice
 	Api          emmodel.EventManagementApi
 	client       *svcclient.Client
 	dmURL        string
-	interval     time.Duration
-
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	wg         sync.WaitGroup
-	lifecycle  core.LifecycleManager
 }
 
 // NewAnchorReconciliationSweep builds the sweep. client resolves entity existence
 // against device-management at dmURL; interval is the tick period.
 func NewAnchorReconciliationSweep(ms *core.Microservice, api emmodel.EventManagementApi,
 	client *svcclient.Client, dmURL string, interval time.Duration, callbacks core.LifecycleCallbacks) *AnchorReconciliationSweep {
-	s := &AnchorReconciliationSweep{
-		Microservice: ms, Api: api, client: client, dmURL: dmURL, interval: interval,
-	}
-	s.lifecycle = core.NewLifecycleManager(fmt.Sprintf("%s-anchor-sweep", ms.FunctionalArea), s, callbacks)
+	s := &AnchorReconciliationSweep{Microservice: ms, Api: api, client: client, dmURL: dmURL}
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "anchor-sweep", interval,
+		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("anchor_sweep")))
 	return s
 }
 
-func (s *AnchorReconciliationSweep) Initialize(ctx context.Context) error {
-	return s.lifecycle.Initialize(ctx)
-}
-
-func (s *AnchorReconciliationSweep) ExecuteInitialize(ctx context.Context) error {
-	s.procCtx, s.procCancel = context.WithCancel(ctx)
-	return nil
-}
-
-func (s *AnchorReconciliationSweep) Start(ctx context.Context) error {
-	return s.lifecycle.Start(ctx)
-}
-
-func (s *AnchorReconciliationSweep) ExecuteStart(context.Context) error {
-	s.wg.Add(1)
-	go s.loop()
-	return nil
-}
-
-func (s *AnchorReconciliationSweep) loop() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.procCtx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(s.procCtx)
-		}
-	}
-}
-
-func (s *AnchorReconciliationSweep) Stop(ctx context.Context) error {
-	return s.lifecycle.Stop(ctx)
-}
-
-func (s *AnchorReconciliationSweep) ExecuteStop(context.Context) error {
-	if s.procCancel != nil {
-		s.procCancel()
-	}
-	s.wg.Wait()
-	return nil
-}
-
-func (s *AnchorReconciliationSweep) Terminate(ctx context.Context) error {
-	return s.lifecycle.Terminate(ctx)
-}
-
-func (s *AnchorReconciliationSweep) ExecuteTerminate(context.Context) error {
-	return nil
-}
-
 // runOnce sweeps every tenant that currently has anchors.
-func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) {
+//
+// 🔑 IT REPORTS WHAT IT MANAGED, and the three answers are not decoration. A sweep that
+// could not reach device-management skips every tenant — by design, because deleting on an
+// unconfirmed absence would erase a live tenant's whole anchor set — and before this it said
+// so only in a warning per tenant. The backstop being down for a week looked exactly like the
+// backstop finding nothing, which is the state it is normally in.
+func (s *AnchorReconciliationSweep) runOnce(ctx context.Context) error {
 	tenants, err := s.Api.DistinctAnchorTenants(core.WithSystemContext(ctx))
 	if err != nil {
-		log.Error().Err(err).Msg("Anchor sweep: failed to list tenants")
-		return
+		return fmt.Errorf("listing tenants with anchors: %w", err)
 	}
+	var visited, failed int
+	var lastErr error
 	for _, tenant := range tenants {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
-			s.sweepTenant(ctx, tenant)
+		}
+		visited++
+		if err := s.sweepTenant(ctx, tenant); err != nil {
+			failed++
+			lastErr = err
 		}
 	}
+	return core.PassResult(visited, failed, lastErr)
 }
 
 // sweepTenant reconciles one tenant's anchors against device-management.
-func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant string) {
+func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant string) error {
 	tctx := core.WithTenant(ctx, tenant)
 	refs, err := s.Api.DistinctAnchorRefs(tctx)
 	if err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Msg("Anchor sweep: failed to collect refs")
-		return
+		return err
 	}
 	refs = dedupeRefs(refs)
 	if len(refs) == 0 {
-		return
+		return nil
 	}
 	existing, err := s.resolveExisting(ctx, tenant, refs)
 	if err != nil {
 		// Fail safe: never delete when we can't confirm existence.
 		log.Warn().Err(err).Str("tenant", tenant).Msg("Anchor sweep: device-management unreachable; skipping tenant")
-		return
+		return err
 	}
 	var removed int64
+	// A ref that could not be deleted is an orphan still present, so it counts as work the
+	// pass did not do. Without this the tenant loop would tally only the tenants it could
+	// ENUMERATE, and a sweep that reached every tenant and deleted nothing would report
+	// itself complete.
+	var deleteErr error
 	for _, r := range refs {
 		if existing[refKey(r.Type, r.Token)] {
 			continue
@@ -149,6 +111,7 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Str("type", r.Type).Str("token", r.Token).
 				Msg("Anchor sweep: delete failed")
+			deleteErr = err
 			continue
 		}
 		removed += n
@@ -157,6 +120,7 @@ func (s *AnchorReconciliationSweep) sweepTenant(ctx context.Context, tenant stri
 		log.Info().Str("tenant", tenant).Int64("anchorsRemoved", removed).
 			Msg("Anchor sweep reconciled orphaned anchors")
 	}
+	return deleteErr
 }
 
 func refKey(t string, token string) string { return t + "|" + token }

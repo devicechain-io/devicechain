@@ -6,7 +6,6 @@ package purge
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -44,11 +43,16 @@ const coordinatorLockName = "user-management-tenant-purge"
 // the purge would stall until someone noticed. A pass is short, purges are rare, and a
 // stalled purge is the one failure mode this design cannot tolerate quietly.
 type Coordinator struct {
+	// The embedded task supplies the lifecycle octet, the schedule and the pass metrics.
+	// It is built WithImmediateFirstPass: an operator who just deleted a tenant is
+	// watching, and a purge that appears to do nothing for a minute is indistinguishable
+	// from one that is broken.
+	*core.PeriodicTask
+
 	iam    *iam.Store
 	db     *rdb.RdbManager
 	stores []Store
 
-	interval time.Duration
 	// settle is how long every store must have been reporting clean before the purge can
 	// complete — see iam.TenantPurgeStore.CleanSince for why one clean observation is not
 	// the claim it looks like.
@@ -59,11 +63,6 @@ type Coordinator struct {
 	// until its broker credential expires, and completion is what removes the fence that
 	// was refusing it. See config.defaultTenantPurgeTokenHoldSeconds.
 	tokenHold time.Duration
-
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	wg         sync.WaitGroup
-	lifecycle  core.LifecycleManager
 
 	// now is time.Now, replaced in tests. The settle window is a comparison between two
 	// clocks' worth of timestamps, so a test that cannot move time can only assert the
@@ -81,75 +80,33 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 		iam:       store,
 		db:        db,
 		stores:    stores,
-		interval:  interval,
 		settle:    settle,
 		tokenHold: tokenHold,
 		now:       time.Now,
 	}
-	c.lifecycle = core.NewLifecycleManager(fmt.Sprintf("%s-tenant-purge", ms.FunctionalArea), c, callbacks)
+	c.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "tenant-purge", interval,
+		c.RunOnce, callbacks, core.WithImmediateFirstPass(),
+		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("tenant_purge")))
 	return c
 }
 
-func (c *Coordinator) Initialize(ctx context.Context) error { return c.lifecycle.Initialize(ctx) }
-
-func (c *Coordinator) ExecuteInitialize(ctx context.Context) error {
-	c.procCtx, c.procCancel = context.WithCancel(ctx)
-	return nil
-}
-
-func (c *Coordinator) Start(ctx context.Context) error { return c.lifecycle.Start(ctx) }
-
-func (c *Coordinator) ExecuteStart(context.Context) error {
-	c.wg.Add(1)
-	go c.loop()
-	return nil
-}
-
-// loop runs a pass immediately and then on every tick. The first pass is not deferred to
-// the first tick because an operator who just deleted a tenant is watching, and a purge
-// that appears to do nothing for a minute is indistinguishable from one that is broken.
-func (c *Coordinator) loop() {
-	defer c.wg.Done()
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-	c.RunOnce(c.procCtx)
-	for {
-		select {
-		case <-c.procCtx.Done():
-			return
-		case <-ticker.C:
-			c.RunOnce(c.procCtx)
-		}
-	}
-}
-
-func (c *Coordinator) Stop(ctx context.Context) error { return c.lifecycle.Stop(ctx) }
-
-func (c *Coordinator) ExecuteStop(context.Context) error {
-	if c.procCancel != nil {
-		c.procCancel()
-	}
-	c.wg.Wait()
-	return nil
-}
-
-func (c *Coordinator) Terminate(ctx context.Context) error { return c.lifecycle.Terminate(ctx) }
-
-func (c *Coordinator) ExecuteTerminate(context.Context) error { return nil }
-
 // RunOnce makes one pass over every purging tenant, if no peer replica is already doing
 // so. Exported so a test drives the real pass rather than a reconstruction of it.
-func (c *Coordinator) RunOnce(ctx context.Context) {
+func (c *Coordinator) RunOnce(ctx context.Context) error {
 	ran, err := c.db.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(coordinatorLockName), func() error {
 		return c.pass(ctx)
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("Tenant purge pass failed")
-		return
+		return err
 	}
 	if !ran {
-		log.Debug().Msg("Tenant purge pass skipped: another replica holds the lock")
+		// 🔑 SKIPPED, NOT SUCCEEDED. Reported as success this would move the last-success
+		// timestamp, so an instance where every replica was declining — a lock nobody
+		// released — would report itself freshly swept forever, which is the outage that
+		// timestamp exists to reveal.
+		return core.ErrPassSkipped
 	}
+	return nil
 }
 
 // pass sweeps every purging tenant once. One tenant's failure does not stop the others:
@@ -159,17 +116,22 @@ func (c *Coordinator) pass(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing purging tenants: %w", err)
 	}
+	var visited, failed int
+	var lastErr error
 	for i := range tenants {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
+		visited++
 		if err := c.PurgeTenant(ctx, &tenants[i]); err != nil {
 			log.Error().Err(err).Str("tenant", tenants[i].Token).Msg("Tenant purge did not complete this pass")
+			failed++
+			lastErr = err
 		}
 	}
-	return nil
+	return core.PassResult(visited, failed, lastErr)
 }
 
 // PurgeTenant runs one pass of one tenant's purge: every store erases, the ledger

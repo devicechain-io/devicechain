@@ -6,7 +6,6 @@ package processor
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -42,16 +41,13 @@ import (
 // tier): overlapping pods race on the claim and exactly one wins, so no operator is paged
 // twice. No leader election is required.
 type EscalationScheduler struct {
+	// The embedded task supplies the lifecycle octet, the schedule and the pass metrics.
+	*core.PeriodicTask
+
 	Microservice *core.Microservice
 	Api          *model.Api
 	Notifier     *PolicyNotifier
-	interval     time.Duration
 	defaultMax   int
-
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	wg         sync.WaitGroup
-	lifecycle  core.LifecycleManager
 }
 
 // NewEscalationScheduler builds the scheduler. interval is the tick period (the
@@ -59,87 +55,37 @@ type EscalationScheduler struct {
 // escalation cap applied to a policy that does not set its own MaxEscalations.
 func NewEscalationScheduler(ms *core.Microservice, api *model.Api, notifier *PolicyNotifier,
 	interval time.Duration, defaultMax int, callbacks core.LifecycleCallbacks) *EscalationScheduler {
-	s := &EscalationScheduler{
-		Microservice: ms, Api: api, Notifier: notifier, interval: interval, defaultMax: defaultMax,
-	}
-	s.lifecycle = core.NewLifecycleManager(fmt.Sprintf("%s-escalation-scheduler", ms.FunctionalArea), s, callbacks)
+	s := &EscalationScheduler{Microservice: ms, Api: api, Notifier: notifier, defaultMax: defaultMax}
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "escalation-scheduler", interval,
+		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("escalation_scheduler")))
 	return s
-}
-
-func (s *EscalationScheduler) Initialize(ctx context.Context) error {
-	return s.lifecycle.Initialize(ctx)
-}
-
-func (s *EscalationScheduler) ExecuteInitialize(ctx context.Context) error {
-	s.procCtx, s.procCancel = context.WithCancel(ctx)
-	return nil
-}
-
-func (s *EscalationScheduler) Start(ctx context.Context) error {
-	return s.lifecycle.Start(ctx)
-}
-
-func (s *EscalationScheduler) ExecuteStart(context.Context) error {
-	s.wg.Add(1)
-	go s.loop()
-	return nil
-}
-
-func (s *EscalationScheduler) loop() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.procCtx.Done():
-			return
-		case <-ticker.C:
-			s.runOnce(s.procCtx)
-		}
-	}
-}
-
-func (s *EscalationScheduler) Stop(ctx context.Context) error {
-	return s.lifecycle.Stop(ctx)
-}
-
-func (s *EscalationScheduler) ExecuteStop(context.Context) error {
-	if s.procCancel != nil {
-		s.procCancel()
-	}
-	s.wg.Wait()
-	return nil
-}
-
-func (s *EscalationScheduler) Terminate(ctx context.Context) error {
-	return s.lifecycle.Terminate(ctx)
-}
-
-func (s *EscalationScheduler) ExecuteTerminate(context.Context) error {
-	return nil
 }
 
 // runOnce re-notifies every tenant's due open alarms. It loads each tenant's enabled
 // policies once and, only when at least one has escalation enabled, its open alarm
 // states — so a tenant that uses no escalation costs one policy query and no per-alarm
 // work.
-func (s *EscalationScheduler) runOnce(ctx context.Context) {
+func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 	now := time.Now()
 	tenants, err := s.Api.DistinctStateTenants(core.WithSystemContext(ctx))
 	if err != nil {
-		log.Error().Err(err).Msg("Escalation scheduler: failed to list tenants")
-		return
+		return fmt.Errorf("listing tenants with notification state: %w", err)
 	}
+	var visited, failed int
+	var lastErr error
 	for _, tenant := range tenants {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		default:
 		}
+		visited++
 		tctx := core.WithTenant(ctx, tenant)
 		policies, err := s.Api.EnabledNotificationPolicies(tctx)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load policies")
+			failed++
+			lastErr = err
 			continue
 		}
 		if !anyEscalationEnabled(policies) {
@@ -148,20 +94,34 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) {
 		states, err := s.Api.OpenNotificationStates(tctx)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load open states")
+			failed++
+			lastErr = err
 			continue
 		}
+		// 🔑 A TENANT WHOSE RE-NOTIFICATIONS FAILED IS A TENANT THAT WAS NOT SERVED, and it
+		// counts. Tallying only the tenant ENUMERATION would report a pass that reached
+		// every tenant and escalated nothing as complete — moving the last-success gauge
+		// while no operator was paged about anything. That is the false-healthy this whole
+		// change exists to remove, one layer further in.
+		escalationFailed := false
 		for _, state := range states {
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			default:
 			}
 			if err := s.Notifier.Escalate(tctx, state, policies, now, s.defaultMax); err != nil {
 				log.Warn().Err(err).Str("tenant", tenant).Str("alarm", state.AlarmToken).
 					Msg("Escalation scheduler: re-notification failed; will retry next tick")
+				escalationFailed = true
+				lastErr = err
 			}
 		}
+		if escalationFailed {
+			failed++
+		}
 	}
+	return core.PassResult(visited, failed, lastErr)
 }
 
 // anyEscalationEnabled reports whether any policy has escalation configured, so the

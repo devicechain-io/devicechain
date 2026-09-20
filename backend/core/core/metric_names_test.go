@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -46,11 +47,12 @@ func TestMetricConstructorsRefuseAnIllegalName(t *testing.T) {
 			// Each constructor separately: a guard added to one of five is a guard
 			// four callers can still walk around.
 			constructors := map[string]func(ms *Microservice){
-				"NewProcessorMetrics": func(ms *Microservice) { ms.NewProcessorMetrics(tc.name) },
-				"NewCounter":          func(ms *Microservice) { ms.NewCounter(tc.name, "help") },
-				"NewCounterVec":       func(ms *Microservice) { ms.NewCounterVec(tc.name, "help", []string{"result"}) },
-				"NewGauge":            func(ms *Microservice) { ms.NewGauge(tc.name, "help") },
-				"NewGaugeVec":         func(ms *Microservice) { ms.NewGaugeVec(tc.name, "help", []string{"result"}) },
+				"NewProcessorMetrics":    func(ms *Microservice) { ms.NewProcessorMetrics(tc.name) },
+				"NewPeriodicTaskMetrics": func(ms *Microservice) { ms.NewPeriodicTaskMetrics(tc.name) },
+				"NewCounter":             func(ms *Microservice) { ms.NewCounter(tc.name, "help") },
+				"NewCounterVec":          func(ms *Microservice) { ms.NewCounterVec(tc.name, "help", []string{"result"}) },
+				"NewGauge":               func(ms *Microservice) { ms.NewGauge(tc.name, "help") },
+				"NewGaugeVec":            func(ms *Microservice) { ms.NewGaugeVec(tc.name, "help", []string{"result"}) },
 			}
 			for ctor, call := range constructors {
 				func() {
@@ -145,6 +147,30 @@ func TestEveryProcessorLoopNameStillRegisters(t *testing.T) {
 		for _, suffix := range []string{"_messages_total", "_inflight", "_duration_seconds_count"} {
 			want := "devicechain_devicemanagement_" + loop + suffix
 			if !strings.Contains(body, want) {
+				t.Errorf("the exposition does not contain %q", want)
+			}
+		}
+	}
+
+	// The periodic-task suffixes, pinned the same way and for the same reason: these three
+	// series are what a maintenance-sweep dashboard and its alerts are written against, so a
+	// rename is a silent break for everyone downstream. Verified by mutation — renaming
+	// _passes_total to _runs_total passed every other test in the package.
+	{
+		taskMs := &Microservice{FunctionalArea: "device-management"}
+		taskReg := prometheus.NewRegistry()
+		taskMs.UseMetricsRegistry(taskReg)
+		tm := taskMs.NewPeriodicTaskMetrics("anchor_sweep")
+		tm.record(PassComplete, time.Second, time.Now())
+
+		rec := httptest.NewRecorder()
+		taskMs.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		taskBody := rec.Body.String()
+		for _, suffix := range []string{
+			"_passes_total", "_pass_duration_seconds_count", "_last_success_timestamp_seconds",
+		} {
+			want := "devicechain_devicemanagement_anchor_sweep" + suffix
+			if !strings.Contains(taskBody, want) {
 				t.Errorf("the exposition does not contain %q", want)
 			}
 		}
