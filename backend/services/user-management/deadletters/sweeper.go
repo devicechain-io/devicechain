@@ -6,7 +6,6 @@ package deadletters
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -23,74 +22,41 @@ import (
 // It is the same shape as notification-management's retention sweeper and the purge
 // coordinator: a ticker, a cancellable loop, and a join on stop.
 type Sweeper struct {
+	// The embedded task supplies the lifecycle octet, the schedule and the pass metrics.
+	//
+	// 🔑 IT IS BUILT WITH WithDetachedContext, WHICH PRESERVES THIS SWEEPER'S EXISTING
+	// BEHAVIOUR RATHER THAN CHANGING IT. Its ExecuteInitialize took a context.Context it
+	// did not name and derived its loop from context.Background() instead, so the loop
+	// outlived the root cancellation that precedes teardown and ended only at Stop. That
+	// was indistinguishable from an oversight; naming the option makes it a decision.
+	*core.PeriodicTask
+
 	Microservice *core.Microservice
 	store        *Store
 	retention    time.Duration
-	interval     time.Duration
-
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	wg         sync.WaitGroup
-
-	lifecycle core.LifecycleManager
 }
 
 // NewSweeper builds the sweeper. retention is how long a letter is kept, measured from
 // when the platform gave up on it.
 func NewSweeper(ms *core.Microservice, store *Store, retention, interval time.Duration,
 	callbacks core.LifecycleCallbacks) *Sweeper {
-	s := &Sweeper{Microservice: ms, store: store, retention: retention, interval: interval}
-	s.lifecycle = core.NewLifecycleManager(
-		fmt.Sprintf("%s-%s", ms.FunctionalArea, "dead-letter-sweep"), s, callbacks)
+	s := &Sweeper{Microservice: ms, store: store, retention: retention}
+	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "dead-letter-sweep", interval,
+		s.RunOnce, callbacks, core.WithDetachedContext(),
+		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("dead_letter_sweep")))
 	return s
 }
 
-func (s *Sweeper) Initialize(ctx context.Context) error { return s.lifecycle.Initialize(ctx) }
-func (s *Sweeper) ExecuteInitialize(context.Context) error {
-	s.procCtx, s.procCancel = context.WithCancel(context.Background())
-	return nil
-}
-func (s *Sweeper) Start(ctx context.Context) error { return s.lifecycle.Start(ctx) }
-func (s *Sweeper) ExecuteStart(context.Context) error {
-	s.wg.Add(1)
-	go s.loop()
-	return nil
-}
-func (s *Sweeper) Stop(ctx context.Context) error { return s.lifecycle.Stop(ctx) }
-func (s *Sweeper) ExecuteStop(context.Context) error {
-	if s.procCancel != nil {
-		s.procCancel()
-	}
-	s.wg.Wait()
-	return nil
-}
-func (s *Sweeper) Terminate(ctx context.Context) error    { return s.lifecycle.Terminate(ctx) }
-func (s *Sweeper) ExecuteTerminate(context.Context) error { return nil }
-
-func (s *Sweeper) loop() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.procCtx.Done():
-			return
-		case <-ticker.C:
-			s.RunOnce(s.procCtx)
-		}
-	}
-}
-
 // RunOnce deletes everything older than the retention window.
-func (s *Sweeper) RunOnce(ctx context.Context) {
+func (s *Sweeper) RunOnce(ctx context.Context) error {
 	before := time.Now().UTC().Add(-s.retention)
 	n, err := s.store.Prune(ctx, before)
 	if err != nil {
-		log.Error().Err(err).Msg("Dead-letter retention sweep failed; retrying on the next tick.")
-		return
+		return fmt.Errorf("pruning dead letters older than %s: %w", before.Format(time.RFC3339), err)
 	}
 	if n > 0 {
 		log.Info().Int64("removed", n).Time("before", before).
 			Msg("Pruned dead letters past their retention window.")
 	}
+	return nil
 }

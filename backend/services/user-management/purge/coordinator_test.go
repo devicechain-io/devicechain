@@ -122,9 +122,27 @@ func (h *harness) deleteTenant(token string) *iam.Tenant {
 // pass runs one coordinator pass over every purging tenant — the real loop, reached the
 // way the ticker reaches it, minus the Postgres advisory lock the in-memory database has
 // no equivalent for.
+//
+// 🔴 IT NO LONGER ASSERTS NoError, AND THE INVARIANT MOVED RATHER THAN WEAKENED. A pass now
+// REPORTS the tenants it could not purge — partial when some failed, a plain failure when
+// every one did, which for a single-tenant fixture is the same event — instead of only
+// logging them. That reporting is the whole point: "falling behind on one tenant" and "not
+// running at all" were indistinguishable while both were a log line and a nil return.
+//
+// So a non-nil return no longer means the pass aborted, and asserting on it here would only
+// pin which fixtures happen to have one tenant. The thing that must not change is that a
+// failing tenant does not STOP THE QUEUE, and that is asserted where it is actually visible:
+// by every test whose later tenants still complete, TestATenantThePassCannotEvenStartDoes-
+// NotAbortIt most directly. TestAPassReportsWhatItCouldNotPurge covers the return value.
 func (h *harness) pass() {
 	h.t.Helper()
-	require.NoError(h.t, h.coord.pass(context.Background()))
+	_ = h.coord.pass(context.Background())
+}
+
+// passResult is pass() for a test that wants to assert WHAT the pass reported.
+func (h *harness) passResult() error {
+	h.t.Helper()
+	return h.coord.pass(context.Background())
 }
 
 // exists reports whether the tenant row is still there, which is the same question as
@@ -418,6 +436,61 @@ func TestATenantThePassCannotEvenStartDoesNotAbortIt(t *testing.T) {
 
 	require.True(t, h.exists("corrupt"), "a tenant the coordinator refuses keeps its token")
 	require.False(t, h.exists("healthy"), "a refusal must not stop the rest of the queue")
+}
+
+// TestAPassReportsWhatItCouldNotPurge pins the outcome the pass now returns, which nothing
+// else asserts once the harness stopped requiring NoError.
+//
+// Three cases, because the interesting one is only interesting against the other two: a clean
+// pass reports nothing, a pass where SOME tenants failed reports partial, and a pass where
+// EVERY tenant failed reports a plain failure. That last distinction is what keeps "the
+// dependency is down" off the same series as "one tenant is wedged" — the first is one cause
+// and pages, the second is a backlog and does not.
+func TestAPassReportsWhatItCouldNotPurge(t *testing.T) {
+	t.Run("a clean pass reports nothing", func(t *testing.T) {
+		h := newHarness(t, &fakeStore{name: "rdb"})
+		h.deleteTenant("healthy")
+		require.NoError(t, h.passResult())
+	})
+
+	t.Run("every tenant failing is a failure, not a partial", func(t *testing.T) {
+		// TWO tenants, deliberately: core.PassResult refuses the all-failed inference from a
+		// population of one, because one item failing says nothing about a common cause —
+		// and a single purging tenant is this coordinator's ordinary state.
+		h := newHarness(t) // no stores registered: the coordinator refuses every tenant
+		h.deleteTenant("acme")
+		h.clock = h.clock.Add(time.Minute)
+		h.deleteTenant("globex")
+		err := h.passResult()
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, core.ErrPassPartial,
+			"with every tenant refused there is one cause, and it belongs on the failure series")
+	})
+
+	t.Run("a single wedged tenant is a backlog, not an outage", func(t *testing.T) {
+		h := newHarness(t)
+		h.deleteTenant("acme")
+		err := h.passResult()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, core.ErrPassPartial,
+			"one purging tenant is the common case here; treating its failure as 'everything "+
+				"is down' would page every minute for one stuck deletion")
+	})
+
+	t.Run("some tenants failing is a partial", func(t *testing.T) {
+		h := newHarness(t, &fakeStore{name: "rdb"})
+		h.deleteTenant("corrupt")
+		h.clock = h.clock.Add(time.Minute)
+		h.deleteTenant("healthy")
+		// A purging row with no epoch is one the coordinator refuses outright.
+		require.NoError(t, h.coord.db.Database.Model(&iam.Tenant{}).
+			Where("token = ?", "corrupt").Update("purge_epoch", nil).Error)
+
+		err := h.passResult()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, core.ErrPassPartial,
+			"one refused tenant among several is a backlog, not an outage")
+	})
 }
 
 // TestACoordinatorWithNoStoresRefusesToCompleteAnything is the failure this whole design
