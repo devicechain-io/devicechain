@@ -177,7 +177,7 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		RelationshipTypeId: rtMatches[0].ID,
 	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&DeviceClaim{}).
+		res := tx.Model(claim).
 			Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
 			Updates(map[string]interface{}{
 				"status":                 string(ClaimStatusClaimed),

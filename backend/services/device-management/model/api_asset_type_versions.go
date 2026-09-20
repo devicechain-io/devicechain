@@ -94,7 +94,7 @@ func (api *Api) PublishAssetType(ctx context.Context, token string,
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		res := tx.Model(&AssetType{}).Where("id = ?", assetType.ID).
+		res := tx.Model(assetType).Where("id = ?", assetType.ID).
 			Update("active_version", version.Version)
 		if res.Error != nil {
 			return res.Error
@@ -149,7 +149,7 @@ func (api *Api) RollbackAssetType(ctx context.Context, token string, version int
 		return nil, fmt.Errorf("%w: asset type %q has no version %d", gorm.ErrRecordNotFound, token, version)
 	}
 
-	res := api.RDB.DB(ctx).Model(&AssetType{}).Where("id = ?", assetType.ID).
+	res := api.RDB.DB(ctx).Model(assetType).Where("id = ?", assetType.ID).
 		Update("active_version", version)
 	if res.Error != nil {
 		return nil, res.Error

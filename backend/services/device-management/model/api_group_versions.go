@@ -94,7 +94,7 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		res := tx.Model(&EntityGroup{}).Where("id = ?", group.ID).
+		res := tx.Model(group).Where("id = ?", group.ID).
 			Update("active_version", version.Version)
 		if res.Error != nil {
 			return res.Error
@@ -141,7 +141,7 @@ func (api *Api) RollbackEntityGroup(ctx context.Context, token string, version i
 		return nil, fmt.Errorf("%w: entity group %q has no version %d", gorm.ErrRecordNotFound, token, version)
 	}
 
-	res := api.RDB.DB(ctx).Model(&EntityGroup{}).Where("id = ?", group.ID).
+	res := api.RDB.DB(ctx).Model(group).Where("id = ?", group.ID).
 		Update("active_version", version)
 	if res.Error != nil {
 		return nil, res.Error

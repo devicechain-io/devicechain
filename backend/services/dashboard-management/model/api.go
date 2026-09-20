@@ -195,7 +195,7 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	// last-write-wins (backward-compatible; used by non-interactive callers that don't
 	// track a version), and zero rows can then only mean the row was deleted since the
 	// read.
-	write := api.RDB.DB(ctx).Model(&Dashboard{}).Where("id = ?", current.ID)
+	write := api.RDB.DB(ctx).Model(current).Where("id = ?", current.ID)
 	if expectedUpdatedAt != nil {
 		write = write.Where("updated_at = ?", current.UpdatedAt)
 	}

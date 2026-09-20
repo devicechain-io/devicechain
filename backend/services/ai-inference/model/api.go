@@ -249,8 +249,17 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 		"enabled":     enabled,
 	}
 
-	// No precondition → unconditional last-write-wins. Save the loaded row (its PK +
-	// AuditLabel reach the audit journal, unlike a map Updates) with the new fields.
+	// No precondition → unconditional last-write-wins: save the loaded row with the new
+	// fields.
+	//
+	// 🔴 THIS COMMENT USED TO SAY "unlike a map Updates", AND THAT RULE IS WRONG. What
+	// reaches the audit journal is decided by the value handed to Save or Model — the
+	// callback reads the primary key and the label off THAT — not by whether the update
+	// carries a struct or a map. The guarded branch below is a map Updates and records
+	// both, because it hands over `current` as well. The old wording named the wrong
+	// cause, which is how the branch twelve lines down came to be written through a
+	// zero-value model while the comment above it looked like a warning that had been
+	// heeded.
 	if expectedUpdatedAt == nil {
 		current.Name = name
 		current.Description = description
@@ -276,7 +285,7 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
-	res := api.sys(ctx).Model(&AIProvider{}).
+	res := api.sys(ctx).Model(current).
 		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
 		Updates(fields)
 	if res.Error != nil {

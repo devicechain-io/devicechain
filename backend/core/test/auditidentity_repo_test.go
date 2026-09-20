@@ -23,21 +23,14 @@ import (
 // Counts, not line numbers: a line number turns every unrelated edit above it into a
 // failure here, which teaches people to re-run and paste rather than to read.
 //
-// The debt is 20 statements — 19 in six services plus one in a test harness — measured
-// 2026-09-20 by this scanner. Every one holds the row's primary key in a local variable
-// and hands gorm a zero value anyway; none needs an extra query to fix. See
-// AssertEveryIdentifiedMutationNamesItsRow for why this is a guard and not a review note.
+// The debt is 9 statements, all in command-delivery, measured 2026-09-20 by this
+// scanner. They are the command state transitions, whose conditions carry a CAS
+// precondition alongside the key — the group that wants reading rather than a sweep.
+// See AssertEveryIdentifiedMutationNamesItsRow for why this is a guard and not a
+// review note.
 var knownAnonymousMutations = map[string]int{
-	"backend/services/command-delivery/model/api.go":                      7,
-	"backend/services/command-delivery/model/api_batch_cancel.go":         2,
-	"backend/services/device-management/model/api_asset_type_versions.go": 2,
-	"backend/services/device-management/model/api_group_versions.go":      2,
-	"backend/services/device-management/model/api_profile_versions.go":    2,
-	"backend/services/device-management/model/api_claims.go":              1,
-	"backend/services/ai-inference/model/api.go":                          1,
-	"backend/services/dashboard-management/model/api.go":                  1,
-	"backend/services/outbound-connectors/model/api.go":                   1,
-	"backend/core/rdb/partialupdatetest/harness.go":                       1,
+	"backend/services/command-delivery/model/api.go":              7,
+	"backend/services/command-delivery/model/api_batch_cancel.go": 2,
 }
 
 // Every audited mutation that identifies its row must let the journal name it.

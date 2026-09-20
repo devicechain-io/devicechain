@@ -237,7 +237,7 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
-		res := tx.Model(&DeviceProfile{}).Where("id = ?", profile.ID).
+		res := tx.Model(profile).Where("id = ?", profile.ID).
 			Update("active_version", version.Version)
 		if res.Error != nil {
 			return res.Error
@@ -345,7 +345,7 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	var evictions []membershipEviction
 	var changed bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&DeviceProfile{}).Where("id = ?", profile.ID).
+		res := tx.Model(profile).Where("id = ?", profile.ID).
 			Update("active_version", version)
 		if res.Error != nil {
 			return res.Error

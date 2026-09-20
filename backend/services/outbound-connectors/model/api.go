@@ -220,7 +220,7 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
 		return nil, ErrConflict
 	}
-	res := api.RDB.DB(ctx).Model(&Connector{}).
+	res := api.RDB.DB(ctx).Model(current).
 		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
 		Updates(map[string]any{
 			"name":        name,
