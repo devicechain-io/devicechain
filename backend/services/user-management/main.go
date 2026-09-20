@@ -509,8 +509,14 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := GraphQLManager.Stop(ctx); err != nil {
 		return err
 	}
-	// Before the database it sweeps through and the broker, in the reverse of the start
-	// order: its pass holds an advisory lock on a pooled connection.
+	// Before the database it sweeps through and the broker: its pass holds an advisory lock
+	// on a pooled connection.
+	//
+	// 🔑 NOT the reverse of the start order, and the difference is worth naming because the
+	// two neighbours below ARE reversed. The coordinator starts before the dead-letter pair
+	// and stops before them too. Nothing about it is ordered against them — what it is
+	// ordered against is Rdb and Nats, which is what the sentence above says. Reading it as
+	// "reverse order" invites someone to restore a symmetry that was never the reason.
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Stop(ctx); err != nil {
 			return err

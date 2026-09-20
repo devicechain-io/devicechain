@@ -1338,11 +1338,17 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// beforeMicroserviceStopped drains readiness, unwinds leadership (self-evict: stop the transport
-// and registry timers, release the lease) or the inert transport, stops the NATS manager, and
-// shuts the HTTP server down.
+// beforeMicroserviceStopped unwinds leadership (self-evict: stop the transport and registry
+// timers, release the lease) or the inert transport, stops the NATS manager, and shuts the HTTP
+// server down.
+//
+// It does NOT drain readiness. core/core/microservice.go flips the gate to 503 and waits out the
+// drain window before it cancels the root context and calls teardown, and teardown is the only
+// path that reaches this hook — so a BeginDrain here could only ever be the second one. It used
+// to make one anyway, which was harmless (the gate is idempotent) and misleading: it read as
+// though draining were each service's job, when twelve of the fourteen never did it and were
+// drained correctly regardless.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	Microservice.Readiness.BeginDrain()
 	// When leadership is running, cancelling it makes the loop self-evict (stop the transport +
 	// registry timers, release the lease) and exit; wait for that to unwind. With no credentials
 	// there is no leadership loop, so stop the inert transport directly.

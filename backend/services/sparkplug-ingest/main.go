@@ -573,8 +573,10 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // beforeMicroserviceStopped announces OFFLINE on every source, disconnects them,
 // and shuts the HTTP server down.
+//
+// Readiness is NOT drained here: core drains the gate and waits out the window before teardown
+// reaches this hook, so a call here could only be the second one.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	Microservice.Readiness.BeginDrain()
 	// Stop the sources first (announce OFFLINE, disconnect) so no further message can
 	// be emitted, THEN stop the writer. When leadership is running, cancelling it makes
 	// the loop self-evict (Manager.Stop + lease Release) and exit; we wait for that to
