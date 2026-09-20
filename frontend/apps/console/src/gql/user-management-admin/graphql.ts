@@ -96,6 +96,12 @@ export type DeletionWait =
   | 'STORES'
   | 'TOKEN_HOLD';
 
+export type TenantDeletionSearchCriteria = {
+  completed?: boolean | null | undefined;
+  pageNumber: number;
+  pageSize: number;
+};
+
 export type IdentitiesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -312,13 +318,11 @@ export type TenantDeletionQueryVariables = Exact<{
 export type TenantDeletionQuery = { tenantDeletion: { token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> } | null };
 
 export type TenantDeletionsQueryVariables = Exact<{
-  completed?: boolean | null | undefined;
-  limit?: number | null | undefined;
-  offset?: number | null | undefined;
+  criteria: TenantDeletionSearchCriteria;
 }>;
 
 
-export type TenantDeletionsQuery = { tenantDeletions: Array<{ token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }> };
+export type TenantDeletionsQuery = { tenantDeletions: { results: Array<{ token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AdminFunctionalAreasQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -823,24 +827,31 @@ export const TenantDeletionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<TenantDeletionQuery, TenantDeletionQueryVariables>;
 export const TenantDeletionsDocument = new TypedDocumentString(`
-    query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {
-  tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {
-    token
-    epoch
-    completedAt
-    rowsErased
-    awaiting
-    elapsesAt
-    blockedBy
-    stores {
-      store
-      complete
+    query TenantDeletions($criteria: TenantDeletionSearchCriteria!) {
+  tenantDeletions(criteria: $criteria) {
+    results {
+      token
+      epoch
+      completedAt
       rowsErased
-      retaining
-      lastError
-      note
-      attemptedAt
-      cleanSince
+      awaiting
+      elapsesAt
+      blockedBy
+      stores {
+        store
+        complete
+        rowsErased
+        retaining
+        lastError
+        note
+        attemptedAt
+        cleanSince
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
     }
   }
 }

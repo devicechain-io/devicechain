@@ -513,6 +513,18 @@ type DeadLetterSearchResults {
     pagination: SearchResultsPagination!
 }
 
+input TenantDeletionSearchCriteria {
+    pageNumber: Int!
+    pageSize: Int!
+    # Filter to finished (true) or in-flight (false) deletions. Omit for both.
+    completed: Boolean
+}
+
+type TenantDeletionSearchResults {
+    results: [TenantDeletion!]!
+    pagination: SearchResultsPagination!
+}
+
 # A registered OAuth 2.1 client (ADR-047): the allowlist entry the Authorization
 # Server validates the authorization-code flow against. redirectUris is the
 # exact-match allowlist; scopes is the set the client may request. hasSecret tells
@@ -719,7 +731,7 @@ type Query {
     # Deletion records newest cut first (requires tenant:read). Instance-wide and
     # cross-tenant, because a record outlives the tenant it describes — there is no tenant to
     # scope it to. Pass completed to filter to finished or in-flight deletions.
-    tenantDeletions(completed: Boolean, limit: Int, offset: Int): [TenantDeletion!]!
+    tenantDeletions(criteria: TenantDeletionSearchCriteria!): TenantDeletionSearchResults!
     # List the OAuth 2.1 client registry (requires client:read).
     oauthClients: [AdminOAuthClient!]!
 }

@@ -127,15 +127,24 @@ func (s *Service) TenantDeletion(ctx context.Context, token string, epoch *time.
 	return rec, lines, nil
 }
 
-// TenantDeletions lists deletion records newest cut first, optionally filtered by completion.
-func (s *Service) TenantDeletions(ctx context.Context, completed *bool, limit, offset int) (
-	[]iam.TenantPurge, error) {
-	return s.iam.PurgeRecords(ctx, completed, limit, offset)
+// TenantDeletions returns one page of deletion records, newest cut first, optionally filtered
+// by completion. The store bounds the page (ADR-029) whatever the caller asks for — including
+// a caller that sets the embedded Pagination's Unbounded, which PurgeRecords forces off.
+func (s *Service) TenantDeletions(ctx context.Context, criteria iam.PurgeSearchCriteria) (
+	*iam.PurgeSearchResults, error) {
+	return s.iam.PurgeRecords(ctx, criteria)
 }
 
 // TenantDeletionStores reads one deletion's per-store ledger lines.
 func (s *Service) TenantDeletionStores(ctx context.Context, purgeID uint) ([]iam.TenantPurgeStore, error) {
 	return s.iam.PurgeStores(ctx, purgeID)
+}
+
+// TenantDeletionStoresFor reads the ledger lines for a page of deletions in one query, keyed by
+// deletion id. A deletion with no lines yet is absent from the map.
+func (s *Service) TenantDeletionStoresFor(ctx context.Context, purgeIDs []uint) (
+	map[uint][]iam.TenantPurgeStore, error) {
+	return s.iam.PurgeStoresFor(ctx, purgeIDs)
 }
 
 // TenantDeletionProgress reports what a deletion is waiting on, through the coordinator's own

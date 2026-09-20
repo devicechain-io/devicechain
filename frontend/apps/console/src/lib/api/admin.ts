@@ -28,6 +28,8 @@ import type {
   AdminTenantTierUpdateRequest,
   CreateTenantMutation,
   TenantDeletionQuery,
+  TenantDeletionsQuery,
+  TenantDeletionSearchCriteria,
 } from '@/gql/user-management-admin/graphql';
 
 // Public types derive from the generated operation results so they can never
@@ -51,6 +53,7 @@ export type AdminAuditEventSearchResults = AdminAuditEventsQuery['auditEvents'];
 
 export type {
   AdminAuditEventSearchCriteria,
+  TenantDeletionSearchCriteria,
   AdminIdentityCreateRequest,
   AdminRoleCreateRequest,
   AdminRoleUpdateRequest,
@@ -249,6 +252,8 @@ export type AdminTenantTierDetail = TenantTierCatalogQuery['tenantTiers'][number
 export type AdminTenantDeletion = NonNullable<TenantDeletionQuery['tenantDeletion']>;
 /** One storage system's line in a deletion's ledger. */
 export type AdminTenantDeletionStore = AdminTenantDeletion['stores'][number];
+/** One page of the deletion history, with the span it was taken from. */
+export type TenantDeletionSearchResults = TenantDeletionsQuery['tenantDeletions'];
 
 export async function listTenantTierCatalog(): Promise<AdminTenantTierDetail[]> {
   const data = await gql('user-management/admin', TENANT_TIER_CATALOG, undefined, { identity: true });
@@ -867,24 +872,31 @@ const TENANT_DELETION = graphql(`
 `);
 
 const TENANT_DELETIONS = graphql(`
-  query TenantDeletions($completed: Boolean, $limit: Int, $offset: Int) {
-    tenantDeletions(completed: $completed, limit: $limit, offset: $offset) {
-      token
-      epoch
-      completedAt
-      rowsErased
-      awaiting
-      elapsesAt
-      blockedBy
-      stores {
-        store
-        complete
+  query TenantDeletions($criteria: TenantDeletionSearchCriteria!) {
+    tenantDeletions(criteria: $criteria) {
+      results {
+        token
+        epoch
+        completedAt
         rowsErased
-        retaining
-        lastError
-        note
-        attemptedAt
-        cleanSince
+        awaiting
+        elapsesAt
+        blockedBy
+        stores {
+          store
+          complete
+          rowsErased
+          retaining
+          lastError
+          note
+          attemptedAt
+          cleanSince
+        }
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
       }
     }
   }
@@ -914,16 +926,21 @@ export async function getTenantDeletion(
   return data.tenantDeletion ?? null;
 }
 
-/** Lists deletion records newest cut first, optionally filtered by completion. */
+/**
+ * Lists one page of deletion records, newest cut first, optionally filtered by completion.
+ *
+ * The page size is not advisory — the server clamps it and reports `pagination.totalRecords`,
+ * which is what lets this page know whether it is truncating. It previously asked for 50 and
+ * could never learn there was a 51st, so the history showed its first page and said nothing;
+ * worse, an omitted limit reached the server as "every record ever written".
+ */
 export async function listTenantDeletions(
-  completed?: boolean,
-  limit?: number,
-  offset?: number,
-): Promise<AdminTenantDeletion[]> {
+  criteria: TenantDeletionSearchCriteria,
+): Promise<TenantDeletionSearchResults> {
   const data = await gql(
     'user-management/admin',
     TENANT_DELETIONS,
-    { completed: completed ?? null, limit: limit ?? null, offset: offset ?? null },
+    { criteria },
     { identity: true },
   );
   return data.tenantDeletions;

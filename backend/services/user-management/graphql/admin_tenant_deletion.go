@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
 	"gorm.io/gorm"
@@ -155,42 +156,76 @@ func (r *AdminResolver) TenantDeletion(ctx context.Context, args struct {
 	}, nil
 }
 
-// TenantDeletions lists deletion records, newest cut first (requires tenant:read).
+// AdminTenantDeletionSearchResultsResolver is one page of the deletion history.
+type AdminTenantDeletionSearchResultsResolver struct {
+	results    []*AdminTenantDeletionResolver
+	pagination rdb.SearchResultsPagination
+}
+
+func (r *AdminTenantDeletionSearchResultsResolver) Results() []*AdminTenantDeletionResolver {
+	return r.results
+}
+
+func (r *AdminTenantDeletionSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
+	return &SearchResultsPaginationResolver{M: r.pagination}
+}
+
+// tenantDeletionCriteriaInput is the wire shape of TenantDeletionSearchCriteria.
+type tenantDeletionCriteriaInput struct {
+	PageNumber int32
+	PageSize   int32
+	Completed  *bool
+}
+
+// TenantDeletions returns one page of deletion records, newest cut first (requires tenant:read).
+//
+// 🔴 IT TAKES A CRITERIA ENVELOPE RATHER THAN limit/offset, and the change was a defect fix
+// rather than a tidy-up. The previous arguments were `limit: Int, offset: Int`, both nullable,
+// and an absent limit reached the store as 0, which the store read as "no LIMIT" — so the one
+// request a client makes by leaving an argument out was the one that read every deletion record
+// the instance had ever written, each with its own follow-up query for its ledger. It looked
+// paginated and was not. pageSize is non-null here and clamped by rdb.EffectivePageSize, so no
+// input, present or absent, can ask for an unbounded read.
+//
+// The envelope also closes the half the console was missing: it could ask for 50 records but had
+// no way to learn there were 51, so the history page silently showed its first page forever.
 func (r *AdminResolver) TenantDeletions(ctx context.Context, args struct {
-	Completed *bool
-	Limit     *int32
-	Offset    *int32
-}) ([]*AdminTenantDeletionResolver, error) {
+	Criteria tenantDeletionCriteriaInput
+}) (*AdminTenantDeletionSearchResultsResolver, error) {
 	if err := auth.Authorize(ctx, auth.TenantRead); err != nil {
 		return nil, err
 	}
 	svc := r.getAdminService(ctx)
-	recs, err := svc.TenantDeletions(ctx, args.Completed, intArg(args.Limit), intArg(args.Offset))
+	found, err := svc.TenantDeletions(ctx, iam.PurgeSearchCriteria{
+		Pagination: rdb.Pagination{
+			PageNumber: args.Criteria.PageNumber,
+			PageSize:   args.Criteria.PageSize,
+		},
+		Completed: args.Criteria.Completed,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*AdminTenantDeletionResolver, 0, len(recs))
-	for i := range recs {
-		// Each record's lines are read individually. That is one query per record and it is
-		// the right trade at this size: an instance accumulates one record per deletion, the
-		// list is paged, and the alternative — one query over every line and a group-by in
-		// Go — buys nothing until the page is large enough that nobody would read it.
-		lines, err := svc.TenantDeletionStores(ctx, recs[i].ID)
-		if err != nil {
-			return nil, err
-		}
+
+	// One query for the whole page's ledger lines, not one per record. A deletion with no
+	// lines yet — its first pass has not run — is absent from the map, and a nil slice is
+	// exactly what the resolver wants for it.
+	ids := make([]uint, 0, len(found.Results))
+	for i := range found.Results {
+		ids = append(ids, found.Results[i].ID)
+	}
+	byPurge, err := svc.TenantDeletionStoresFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*AdminTenantDeletionResolver, 0, len(found.Results))
+	for i := range found.Results {
+		rec := found.Results[i]
+		lines := byPurge[rec.ID]
 		out = append(out, &AdminTenantDeletionResolver{
-			M: recs[i], lines: lines, progress: svc.TenantDeletionProgress(&recs[i], lines),
+			M: rec, lines: lines, progress: svc.TenantDeletionProgress(&rec, lines),
 		})
 	}
-	return out, nil
-}
-
-// intArg adapts an optional GraphQL Int to the store's int, mapping absent to 0 — which the
-// store reads as "unbounded" for a limit and "from the start" for an offset.
-func intArg(v *int32) int {
-	if v == nil {
-		return 0
-	}
-	return int(*v)
+	return &AdminTenantDeletionSearchResultsResolver{results: out, pagination: found.Pagination}, nil
 }
