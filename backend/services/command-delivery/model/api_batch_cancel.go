@@ -247,7 +247,7 @@ func (c *BatchCancellation) observe(counts map[string]int) {
 // what decides who owns the count: a conditional UPDATE's RowsAffected cannot be
 // confused by a concurrent cancel the way "is it null now?" can.
 func stampBatchCancelled(tx *gorm.DB, batchId uint) (bool, error) {
-	res := tx.Model(&CommandBatch{}).
+	res := tx.Model(&CommandBatch{Model: gorm.Model{ID: batchId}}).
 		Where("id = ? AND cancelled_at IS NULL", batchId).
 		Update("cancelled_at", sql.NullTime{Time: time.Now(), Valid: true})
 	if res.Error != nil {
@@ -266,7 +266,7 @@ func stampBatchCancelled(tx *gorm.DB, batchId uint) (bool, error) {
 // CANCELLED long after this number was written. That matches the rest of the record,
 // whose counts are all stored facts about a moment rather than queries pretending to be.
 func recordBatchCancelledCount(tx *gorm.DB, batchId uint, cancelled int) error {
-	return tx.Model(&CommandBatch{}).
+	return tx.Model(&CommandBatch{Model: gorm.Model{ID: batchId}}).
 		Where("id = ?", batchId).
 		Update("cancelled_count", sql.NullInt32{Int32: int32(cancelled), Valid: true}).Error
 }

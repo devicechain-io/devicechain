@@ -23,15 +23,19 @@ import (
 // Counts, not line numbers: a line number turns every unrelated edit above it into a
 // failure here, which teaches people to re-run and paste rather than to read.
 //
-// The debt is 9 statements, all in command-delivery, measured 2026-09-20 by this
-// scanner. They are the command state transitions, whose conditions carry a CAS
-// precondition alongside the key — the group that wants reading rather than a sweep.
-// See AssertEveryIdentifiedMutationNamesItsRow for why this is a guard and not a
-// review note.
-var knownAnonymousMutations = map[string]int{
-	"backend/services/command-delivery/model/api.go":              7,
-	"backend/services/command-delivery/model/api_batch_cancel.go": 2,
-}
+// 🔴 THE DEBT IS ZERO as of 2026-09-20, and the map is deliberately kept rather than
+// deleted along with it. It is the difference between "nothing is listed" and "nothing
+// was found", and the next person to add an entry should have to write it here — where
+// the rule above says it has to come back out again — rather than discover the mechanism
+// from scratch and reach for a //nolint.
+//
+// All 21 the scanner originally found are fixed: 11 by handing over the loaded row
+// (which supplies the label as well), 9 command-delivery state transitions by seeding
+// the key into the literal, since those run on the dispatch path and loading a row for a
+// label would buy one query per transition. The twenty-first was not a defect at all —
+// a batch update, excluded from the check itself. See
+// AssertEveryIdentifiedMutationNamesItsRow for why this is a guard and not a review note.
+var knownAnonymousMutations = map[string]int{}
 
 // Every audited mutation that identifies its row must let the journal name it.
 //
