@@ -1056,7 +1056,7 @@ func drainableStatusStrings() []string {
 // nonce, and the caller must not publish.
 func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
@@ -1357,7 +1357,7 @@ func (api *Api) retireClaim(ctx context.Context, where string, args []any,
 // A false return is a benign race, not an error — the row left QUEUED between the scan
 // and this write, and whoever moved it is welcome to it.
 func (api *Api) HoldCommand(ctx context.Context, id uint) (bool, error) {
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, CommandQueued.String()).
 		Update("status", CommandHeld.String())
 	if res.Error != nil {
@@ -1385,7 +1385,7 @@ func (api *Api) HoldCommand(ctx context.Context, id uint) (bool, error) {
 //
 // From-state predicated on QUEUED, for exactly the reason HoldCommand is.
 func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (bool, error) {
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, CommandQueued.String()).
 		Updates(map[string]any{
 			"status": CommandFailed.String(),
@@ -1487,7 +1487,7 @@ func (api *Api) MarkResponseLost(ctx context.Context, token string) (bool, error
 // release path that published would be a second dispatcher with its own copy of those
 // rules, which is how the two answers drift apart.
 func (api *Api) ReleaseHold(ctx context.Context, id uint) (bool, error) {
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, CommandHeld.String()).
 		Update("status", CommandQueued.String())
 	if res.Error != nil {
@@ -1839,7 +1839,7 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispa
 	// the command between this read and this write moves it onto a new nonce and the
 	// answer correctly matches nothing. A NULL nonce — a row never dispatched — matches
 	// nothing either, which is SQL's three-valued logic landing on the right side here.
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: found.ID}}).
 		Where("id = ? AND device_token = ? AND dispatch_nonce = ? AND status IN ?",
 			found.ID, responder, dispatchNonce, nonceAnswerableStatusStrings()).
 		Updates(updates)
@@ -1930,7 +1930,7 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 	if !cancellable(found.Status) {
 		return found, nil
 	}
-	if res := api.RDB.DB(ctx).Model(&Command{}).
+	if res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: found.ID}}).
 		Where("id = ? AND status IN ?", found.ID, cancellableStatusStrings()).
 		Updates(map[string]any{"status": CommandCancelled.String()}); res.Error != nil {
 		return nil, res.Error
@@ -2090,7 +2090,7 @@ func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string)
 	// MarkResponse's terminal guard: a lost response AND a mis-attributed count.
 	// Pinning the from-state makes this write lose the race instead, leaving the row
 	// live to expire on a later pass with the terminal its new state deserves.
-	res := api.RDB.DB(ctx).Model(&Command{}).
+	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, fromStatus).
 		Update("status", next)
 	if res.Error != nil {
