@@ -43,10 +43,28 @@ var (
 // returning turns the loop into a spin: it burns a core and writes one log line per
 // iteration, flooding the log pipeline at the exact moment an operator needs to read it.
 // Pausing fixes that. But a pause alone leaves the OTHER failure mode untouched — an error
-// that is never going to clear (a consumer deleted and un-recreatable, a credential
-// revoked, a subscription the reader's own self-heal does not cover) now spins slowly
-// instead of quickly, and the pod goes on reporting ready while consuming nothing. Spinning
-// slower is not making progress.
+// that is never going to clear now spins slowly instead of quickly, and the pod goes on
+// reporting ready while consuming nothing. Spinning slower is not making progress.
+//
+// 🔴 WHICH ERRORS THOSE ACTUALLY ARE IS NARROWER THAN THIS COMMENT ONCE CLAIMED, and the
+// wrong version was copied into four other files before anyone checked it against the
+// reader. It named "a consumer deleted and un-recreatable" and "a credential revoked".
+// Neither reaches a pacer through messaging.natsReader:
+//
+//   - A DELETED CONSUMER never gets here. ReadMessage recognises it (isConsumerGone) and
+//     calls rebindWithBackoff, which by its own doc "never gives up on its own" — it
+//     retries inside the read, and the few conditions that do end it (shutdown, a closed
+//     or draining connection, an unbound term) surface as io.EOF, which every loop treats
+//     as a clean exit. So that case is either healed or quiet; it is never paced.
+//   - A REVOKED CREDENTIAL arrives as an async -ERR rather than a Fetch return, so the
+//     fetch simply times out and reads as an IDLE stream.
+//
+// What does reach a pacer is everything natsReader hands back rather than healing: the
+// JetStream API errors, the 409 family (a stream at its MaxAckPending or MaxWaiting
+// ceiling), a consumer whose leadership keeps moving, a subscription it cannot rebuild.
+// Those are worth bounding — a run of them that outlasts the budget is a real outage — but
+// do not write the wider claim back in. If a pacer should cover a deleted consumer too,
+// that is a change to natsReader's rebind, not to this comment.
 //
 // So a pacer does both: it spaces the retries out, and it puts a ceiling on how long a
 // single unbroken run of them may last. Past that ceiling the loop stops and the process

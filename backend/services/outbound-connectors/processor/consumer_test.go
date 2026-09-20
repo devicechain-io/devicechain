@@ -23,14 +23,14 @@ import (
 // nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, nil, 5*time.Second, nil, 1, 1, nil)
+	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, nil, 5*time.Second, nil, 1, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 // newTestConsumerWithRate builds a consumer with an egress rate limiter and wait budget, to exercise
 // the SD-3 rate gate.
 func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, rate, waitBudget, nil, 1, 1, nil)
+	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, rate, waitBudget, nil, 1, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 // newTestConsumerWithGate builds a consumer carrying the ADR-077 lifecycle gate, with egress rate
@@ -41,7 +41,7 @@ func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStor
 // `tenantDeleted: tenantDeleted` deletable from NewDispatchConsumer with the whole suite still green.
 func newTestConsumerWithGate(dead messaging.MessageWriter, store *fakeSecretStore, tenantDeleted func(string) bool) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, nil, 5*time.Second, tenantDeleted, 1, 1, nil)
+	return NewDispatchConsumer(&fakeReader{}, dead, nil, e, nil, 5*time.Second, tenantDeleted, 1, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 // countingServer is an httptest server that records how many outbound sends actually reached it.
@@ -412,7 +412,7 @@ func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 	dead := &fakeWriter{}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, dead, nil, e, rl, 40*time.Millisecond,
-		func(string) bool { return true }, 1, 1, nil)
+		func(string) bool { return true }, 1, 1, nil, core.NewReadPacer(nil, "test"))
 	ack := &fakeAck{}
 
 	c.handle(context.Background(), httpDispatch(t, srv.URL, ack))

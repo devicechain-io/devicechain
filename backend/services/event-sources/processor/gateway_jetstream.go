@@ -219,7 +219,7 @@ func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan str
 			// 🔴 THE PACER IS WHAT MAKES THAT SAFE, and it is here rather than in the
 			// comment above because the comment above used to be the whole answer. The
 			// reader's own self-heal covers empty fetches and a deleted consumer;
-			// anything else — a broker refusing fetches, a revoked credential, a
+			// anything else — a broker refusing fetches, a
 			// subscription it cannot rebuild — arrives here unchanged on every
 			// iteration, and returns instantly while it does. Without the pause that is
 			// the hot spin the EOF branch above already refuses to allow. Past the

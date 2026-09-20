@@ -171,10 +171,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Its counters were built once in afterMicroserviceInitialized and are handed in,
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
+	//
+	// Its read pacer is handed in for a different reason and is built HERE, per connection,
+	// precisely BECAUSE this callback is connection-scoped: a pacer holds the state of one
+	// unbroken run of read failures, so a reconnect should start a fresh one rather than inherit
+	// the failures of the connection that just went away. It is passed rather than built inside
+	// the consumer because the consumer deliberately holds no Microservice, and reporting an
+	// exhausted budget is the one thing a pacer needs one for.
 	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,
-		DispatchMetrics)
+		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
 	return nil
 }
 
