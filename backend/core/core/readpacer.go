@@ -76,14 +76,21 @@ var (
 // A ReadPacer is used from ONE goroutine — the loop's own — which is the same constraint
 // messaging.MessageReader.ReadMessage already places on its caller. It holds no lock.
 type ReadPacer struct {
-	// what names the stream in log lines and in the error handed to FailNow.
+	// what names the stream in log lines and in the error handed to the fail sink.
 	what string
 
-	// ms receives the give-up. It MAY BE NIL: these processors are assembled by struct
-	// literal in their own tests, where there is no microservice to fail. A nil sink
-	// still stops the loop — the loop's behaviour is the part under test — and says so
-	// at error level.
-	ms *Microservice
+	// fail reports an exhausted retry budget, which in production ends the process.
+	//
+	// It is a FUNCTION rather than the *Microservice it is derived from, and that is what
+	// makes the reporting half of this type testable at all. The production sink ends the
+	// process, so a test that called it would take the test binary with it — which is why
+	// the branch went untested at every adopter until it was given this shape.
+	//
+	// It MAY BE NIL, and NewReadPacer leaves it nil when there is no microservice: these
+	// processors are assembled by struct literal in their own tests, where there is
+	// nothing to fail. A nil sink still stops the loop — the loop's behaviour is the part
+	// under test — and says so at error level.
+	fail func(error)
 
 	// now and sleep are the clock, replaceable by UseClock. sleep reports false when
 	// the wait ended in cancellation rather than elapsing.
@@ -97,10 +104,36 @@ type ReadPacer struct {
 }
 
 // NewReadPacer builds a pacer for a read loop, naming the stream it drains for the log.
-// ms is where an exhausted retry budget is reported; see the ms field for why nil is
+// ms is where an exhausted retry budget is reported; see the fail field for why nil is
 // tolerated.
+//
+// The sink is resolved HERE rather than at the point of failure for one reason only: it
+// is what makes the reporting half testable. There is no safety argument on top of that —
+// the parameter is a concrete *Microservice either way, and checking it here or in giveUp
+// is the same check.
 func NewReadPacer(ms *Microservice, what string) *ReadPacer {
-	return &ReadPacer{what: what, ms: ms, now: time.Now, sleep: sleepUntilCancelled}
+	p := &ReadPacer{what: what, now: time.Now, sleep: sleepUntilCancelled}
+	if ms != nil {
+		p.fail = ms.FailNow
+	}
+	return p
+}
+
+// reportTo replaces the sink an exhausted budget is reported to, and returns the pacer so
+// it can be installed in one expression.
+//
+// It is a test seam and it is unexported on purpose: no service should be choosing where
+// its own give-up goes. It exists for the tests that must OBSERVE the report while it is
+// in flight — the one pinning that the report is not made on the read goroutine has to
+// hold the sink open, which a real microservice will not do.
+//
+// It is NOT needed merely to see that a report happened: FailNow on a struct-literal
+// Microservice records its outcome and returns, so a test can call the real thing and
+// read it back with waitForShutdown. TestAMicroserviceBackedPacerReportsThroughIt does
+// exactly that, and an earlier version of this comment wrongly said it could not.
+func (p *ReadPacer) reportTo(f func(error)) *ReadPacer {
+	p.fail = f
+	return p
 }
 
 // UseClock replaces the pacer's clock and its sleep, and returns the pacer so it can be
@@ -159,17 +192,26 @@ func (p *ReadPacer) PauseAfterError(ctx context.Context, err error) (stop bool) 
 func (p *ReadPacer) giveUp(err error, elapsed time.Duration) {
 	fatal := fmt.Errorf("core: the %s read loop failed continuously for %s over %d consecutive reads "+
 		"and is not recovering; last error: %w", p.what, elapsed.Round(time.Second), p.failures, err)
-	if p.ms == nil {
+	if p.fail == nil {
 		log.Error().Err(fatal).Msg("A message-read loop exhausted its retry budget with no microservice " +
 			"to report it to; the loop is stopping.")
 		return
 	}
 	// 🔴 ON ITS OWN GOROUTINE, AND THAT IS NOT STYLE. FailNow tears the process down, and
-	// teardown runs this component's ExecuteStop, which waits on the read goroutine —
-	// the one calling this. Inline, that is a self-deadlock: the shutdown waits for a
-	// loop that is waiting inside the shutdown. The caller returns true immediately
-	// afterwards, which is what lets that wait complete.
-	go p.ms.FailNow(fatal)
+	// teardown runs this component's ExecuteStop, which waits on the read goroutine — the
+	// one calling this. Inline, that is a loop waiting on a shutdown that is waiting on
+	// the loop. The caller returns true immediately afterwards, which is what lets that
+	// wait complete.
+	//
+	// 🔑 IT IS NOT A HANG, AND SAYING SO WOULD BE WRONG — Microservice.teardown already
+	// runs Stop on its own goroutine behind the teardown budget, precisely so a component
+	// that blocks cannot hold the process. What an inline report costs is subtler and is
+	// the reason to keep the `go`: the exit is delayed by the whole budget, Terminate
+	// never runs, and — worst of the three — the outcome carried out of the process
+	// becomes "teardown did not finish within Ns" instead of the read-loop error built
+	// just above. The operator is then told the shutdown was slow, not which stream
+	// stopped draining, which is the one thing this error exists to tell them.
+	go p.fail(fatal)
 }
 
 // sleepUntilCancelled waits for d, reporting false if ctx was cancelled first. A
