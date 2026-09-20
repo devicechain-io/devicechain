@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -18,10 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
-
-// writebackReadErrorBackoff paces a retry after a read failure, so a broker that is
-// briefly away does not spin this loop.
-const writebackReadErrorBackoff = time.Second
 
 // CommandDispositionWriter is the one write this consumer performs. It is declared here,
 // at the point of use, rather than added to CommandDeliveryApi: the write-back needs
@@ -76,6 +71,11 @@ type DeadLetterWriteback struct {
 	// after a failed one; a counter belongs to the PROCESS, and MustRegister panics on
 	// the second registration.
 	*WritebackMetrics
+
+	// readPacer spaces out retries after a failing read and ends the loop once the
+	// failures stop looking transient. Built on first use by writebackPacer(), because
+	// this struct is also assembled by literal in tests that never run the constructor.
+	readPacer *core.ReadPacer
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -256,18 +256,36 @@ func (w *DeadLetterWriteback) loop() {
 				return
 			}
 			w.reader.HandleResponse(err)
-			w.pause()
+			// A run of failures that outlasts the pacer's budget ends the loop, and the
+			// pacer has already reported the process unfit by the time this returns true.
+			// 🔴 A SILENT LOOP HERE PRODUCES WRONG DATA, NOT MISSING DATA — the same
+			// mis-attribution this consumer exists to remove. Every command whose answer
+			// was dead-lettered goes on reading SENT and terminalizes as TIMEOUT, which
+			// blames a device that replied. Stopping makes the fault visible as a restart
+			// instead of as a fleet of rows that each look individually plausible.
+			if w.writebackPacer().PauseAfterError(w.procCtx, err) {
+				return
+			}
 			continue
 		}
+		// Clear the run of failures, so a write-back that rides out an ordinary broker
+		// blip does not carry it on the tally towards a give-up it never earned.
+		w.writebackPacer().Succeeded()
 		w.Handle(msg)
 	}
 }
 
-func (w *DeadLetterWriteback) pause() {
-	select {
-	case <-time.After(writebackReadErrorBackoff):
-	case <-w.procCtx.Done():
+// writebackPacer returns the read loop's error pacer, building it on first use. It is
+// touched only by the single read goroutine, which is the pacer's own contract.
+//
+// It is not called pacer() because CommandDeliveryProcessor, in this same package, already
+// has one for the command-responses loop; two read loops in one service each keep their
+// own, since a pacer holds the state of ONE unbroken run of failures.
+func (w *DeadLetterWriteback) writebackPacer() *core.ReadPacer {
+	if w.readPacer == nil {
+		w.readPacer = core.NewReadPacer(w.Microservice, "command dead letters")
 	}
+	return w.readPacer
 }
 
 // Handle applies one letter's disposition to the command it is about. Exported so the

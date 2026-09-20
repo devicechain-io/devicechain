@@ -17,10 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// readErrorBackoff is how long the read loop waits after a transient read error before retrying, so
-// a flapping broker connection does not hot-spin the loop.
-const readErrorBackoff = time.Second
-
 // deadLetterWriteBackoff is the short pause between bounded dead-letter write retries on the final
 // delivery (see deadLetter).
 const deadLetterWriteBackoff = 100 * time.Millisecond
@@ -60,6 +56,22 @@ type DispatchConsumer struct {
 	// gate existed. Read through the tenantIsDeleted accessor, never directly.
 	tenantDeleted func(string) bool
 
+	// readPacer spaces out retries after a failing read and ends the loop once the failures stop
+	// looking transient.
+	//
+	// 🔴 IT IS HANDED IN RATHER THAN BUILT HERE, and the reason is the same one that keeps a
+	// Microservice out of this struct: a pacer needs one only to report an exhausted budget, and
+	// taking the Microservice back to get it would put the hook the metrics defect hung on right
+	// back where it was. Passing the pacer gives this consumer the capability it needs and none of
+	// the one it must not have.
+	//
+	// 🔴 AND IT IS THE OPPOSITE OF metrics IN THE ONE WAY THAT MATTERS, though both are built
+	// outside and handed in. Counters belong to the PROCESS and must be shared across every
+	// consumer this callback builds; a pacer holds the state of ONE unbroken run of failures on ONE
+	// goroutine, so each consumer needs its OWN. Sharing one would let two loops' failures add up
+	// into a give-up neither earned, and would race besides.
+	readPacer *core.ReadPacer
+
 	backlog int
 
 	procCtx    context.Context
@@ -92,7 +104,13 @@ type DispatchConsumer struct {
 // added later cannot be constructed without answering the question.
 func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageWriter,
 	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
-	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics) *DispatchConsumer {
+	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics,
+	readPacer *core.ReadPacer) *DispatchConsumer {
+	// A nil pacer is the unit-test shape: the loop is still paced and still ends, it just has no
+	// microservice to report the give-up to and says so at error level instead. See core.ReadPacer.
+	if readPacer == nil {
+		readPacer = core.NewReadPacer(nil, "connector dispatch")
+	}
 	var index *deadletter.Sink
 	if deadIndex != nil {
 		index = deadletter.NewSink(deadIndex, func(error) { metrics.recordOutcome(actionUnknown, outcomeDeadIndexFailed) })
@@ -106,6 +124,7 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 		rate:          rate,
 		waitBudget:    waitBudget,
 		tenantDeleted: tenantDeleted,
+		readPacer:     readPacer,
 		backlog:       backlog,
 		workers:       workers,
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
@@ -153,7 +172,8 @@ func (c *DispatchConsumer) Stop(ctx context.Context) error {
 }
 
 // run drains the dispatch stream, handing each message to the worker pool. An EOF (reader closed) or
-// a cancelled context exits; a transient read error backs off and retries.
+// a cancelled context exits; a transient read error is paced and retried, and a run of them that
+// outlasts the pacer's budget ends the loop and the process.
 func (c *DispatchConsumer) run() {
 	defer c.readerWG.Done()
 	for {
@@ -163,13 +183,19 @@ func (c *DispatchConsumer) run() {
 		}
 		if err != nil {
 			c.reader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-c.procCtx.Done():
+			// 🔴 STOPPING IS THE POINT. This service EMITS, and a read loop that spins silently on
+			// an error it will never clear leaves a ready pod dispatching nothing — every
+			// connector the tenant configured quietly does not fire, and the stream's per-tenant
+			// bound then discards the requests. A restart is visible; a ready pod delivering
+			// nothing is not.
+			if c.readPacer.PauseAfterError(c.procCtx, err) {
 				return
 			}
 			continue
 		}
+		// Clear the run of failures, so an ordinary broker blip does not accumulate across a long
+		// uptime into a give-up the consumer never earned.
+		c.readPacer.Succeeded()
 		// Hand off to a worker, abandoning on shutdown so the loop can exit rather than block on a
 		// full channel; the message is unacked, so it redelivers after restart.
 		select {
