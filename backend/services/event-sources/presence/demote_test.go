@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -168,9 +170,18 @@ func TestAnUnreadableTenantDoesNotStopTheOthers(t *testing.T) {
 		rows: map[string][]StoredDevice{"beta": rows("b1", "b2")}}
 	d, e, _ := demoterFor(t, w, allow, "acme", "beta")
 
-	require.NoError(t, d.Run(context.Background(), time.Unix(1_700_000_000, 0)),
-		"one unreadable tenant failed the whole pass")
-	require.Len(t, e.all(), 2)
+	// 🔑 THE PASS REPORTS THE TENANT IT COULD NOT READ, AND STILL DRAINS THE OTHER. Those
+	// are two different claims and this test makes both. A pass that returned nil here
+	// would be filed as a completed drain and would stamp the last-success gauge, so an
+	// instance whose projection store was unreachable for EVERY tenant would look freshly
+	// drained — which is why the report exists. What must not change is that one failure
+	// does not stop the queue, and that is the assertion on "beta" below.
+	err := d.Run(context.Background(), time.Unix(1_700_000_000, 0))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, core.ErrPassPartial,
+		"one unreadable tenant out of two is a backlog, not an outage")
+
+	require.Len(t, e.all(), 2, "one unreadable tenant failed the whole pass")
 	for _, rec := range e.all() {
 		require.Equal(t, "beta", rec.Tenant)
 	}
@@ -314,7 +325,7 @@ func TestTheLoopWaitsOutTheStartDelayThenRunsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RunDemoteLoop(ctx, r, time.Hour, 60*time.Millisecond, time.Now)
+	go RunDemoteLoop(ctx, r, time.Hour, 60*time.Millisecond, time.Now, nil)
 
 	// Before the delay elapses, nothing has run.
 	time.Sleep(20 * time.Millisecond)
@@ -338,7 +349,7 @@ func TestTheLoopKeepsGoingAfterAFailedPass(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RunDemoteLoop(ctx, r, 15*time.Millisecond, 0, time.Now)
+	go RunDemoteLoop(ctx, r, 15*time.Millisecond, 0, time.Now, nil)
 
 	for i := 0; i < 3; i++ {
 		select {
@@ -355,7 +366,7 @@ func TestTheLoopHonoursCancellationDuringTheStartDelay(t *testing.T) {
 	r := &countingRunner{fired: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { RunDemoteLoop(ctx, r, time.Hour, time.Hour, time.Now); close(done) }()
+	go func() { RunDemoteLoop(ctx, r, time.Hour, time.Hour, time.Now, nil); close(done) }()
 
 	cancel()
 	select {

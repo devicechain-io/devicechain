@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
@@ -145,7 +146,8 @@ func (d *Demoter) Run(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("listing tenants to release asserted presence: %w", err)
 	}
 
-	var walked, released int
+	var walked, released, failed int
+	var lastErr error
 	for _, tenant := range tenants {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -166,6 +168,13 @@ func (d *Demoter) Run(ctx context.Context, now time.Time) error {
 			log.Warn().Err(err).Str("tenant", tenant).Str("source", d.source).
 				Msg("Could not read this tenant's asserted devices to release them; its rows stay " +
 					"asserted until the next pass.")
+			// 🔴 COUNTED, NOT ONLY LOGGED. A per-tenant warn-and-continue is right per
+			// tenant and wrong in aggregate: with the projection store unreachable EVERY
+			// tenant fails, and a pass that released nothing would otherwise return nil and
+			// be filed as a completed drain. core.PassResult is what separates that from a
+			// backlog of one stuck tenant.
+			failed++
+			lastErr = err
 		}
 	}
 
@@ -176,7 +185,7 @@ func (d *Demoter) Run(ctx context.Context, now time.Time) error {
 		log.Info().Str("source", d.source).Int("stillAsserted", walked).Int("released", released).
 			Msg("Released devices from asserted presence because this source is no longer reading the broker.")
 	}
-	return nil
+	return core.PassResult(len(tenants), failed, lastErr)
 }
 
 type drainCount struct{ walked, released int }
@@ -241,7 +250,8 @@ func StartDelayFor(reason TapOffReason, jitter time.Duration) time.Duration {
 // interval. The interval here is the reconciler's, measured in minutes, and it is the
 // right pace for a repair that never finishes; it is the wrong pace for the first look at
 // a fleet that is frozen right now.
-func RunDemoteLoop(ctx context.Context, d DemoteRunner, interval, startDelay time.Duration, now func() time.Time) {
+func RunDemoteLoop(ctx context.Context, d DemoteRunner, interval, startDelay time.Duration,
+	now func() time.Time, metrics *core.PeriodicTaskMetrics) {
 	if now == nil {
 		now = time.Now
 	}
@@ -258,11 +268,19 @@ func RunDemoteLoop(ctx context.Context, d DemoteRunner, interval, startDelay tim
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// 🔑 RecordPass SUBSUMES THE `&& ctx.Err() == nil` GUARD THIS LOOP USED TO CARRY INLINE.
+	// That guard is the same rule as the cancelled outcome — a pass cut short by shutdown is
+	// not a fault — written as a suppressed log line instead of a classification. Expressing
+	// it once, in the place that also files the metric, is what stops the two from drifting:
+	// a loop can otherwise suppress the log and still increment a failure counter.
 	runOnce := func() {
-		if err := d.Run(ctx, now()); err != nil && ctx.Err() == nil {
-			log.Error().Err(err).Msg("A pass to release asserted presence failed; the devices it did " +
-				"not reach stay asserted until the next pass.")
-		}
+		started := time.Now()
+		// RecordPass logs the failure itself, at the level the outcome deserves, and
+		// suppresses it for a pass that was merely cancelled — which is what the
+		// `&& ctx.Err() == nil` guard that used to live here was doing by hand. Keeping
+		// both produced two Error lines for one failure, and left the guard free to drift
+		// from the classification it duplicates.
+		metrics.RecordPass(ctx, d.Run(ctx, now()), started, "presence-demote")
 	}
 	runOnce()
 

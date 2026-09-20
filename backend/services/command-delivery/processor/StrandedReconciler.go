@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -123,22 +124,22 @@ const (
 // Its cadence is minutes, like the hold reconciler's and for the same reason: this asks
 // "has something been abandoned?", where the answer is almost always no and asking
 // cheaply matters more than asking quickly.
-func (cproc *CommandDeliveryProcessor) reconcileStranded(ctx context.Context) {
+func (cproc *CommandDeliveryProcessor) reconcileStranded(ctx context.Context) error {
 	ran, err := cproc.Api.TryStrandedLock(ctx, func() error {
-		cproc.reconcileStrandedPage(ctx)
-		return nil
+		return cproc.reconcileStrandedPage(ctx)
 	})
-	if err != nil {
-		log.Error().Err(err).Msg("could not acquire the stranded-reconcile lock")
-		return
-	}
+	// `ran` before `err`: see sweepLocked.
 	if !ran {
-		log.Debug().Msg("Another replica holds the stranded-reconcile lock; skipping this pass.")
+		if err != nil {
+			return fmt.Errorf("acquiring the stranded-reconcile lock: %w", err)
+		}
+		return core.ErrPassSkipped
 	}
+	return err
 }
 
 // reconcileStrandedPage walks one bounded page of long-lived SENT commands.
-func (cproc *CommandDeliveryProcessor) reconcileStrandedPage(ctx context.Context) {
+func (cproc *CommandDeliveryProcessor) reconcileStrandedPage(ctx context.Context) error {
 	// 🔴 NO PRESENCE MEANS NO TRANSPORT, AND NO TRANSPORT MEANS DO NOTHING. The gate
 	// below is an ALLOW list keyed on the device's projected source, and the projection
 	// is the only place that value exists — command-delivery persists no transport of its
@@ -152,22 +153,25 @@ func (cproc *CommandDeliveryProcessor) reconcileStrandedPage(ctx context.Context
 	// withhold; this pass's new behaviour is PARKING, so missing information means don't
 	// park. Both degrade to the behaviour that existed before the mechanism did.
 	if cproc.Presence == nil {
-		return
+		// Skipped, not complete: nothing to allow on, so this pass declined rather than
+		// finished. See reconcileOnePage.
+		return core.ErrPassSkipped
 	}
 	stranded, next, err := cproc.Api.StrandedSentCommands(core.WithSystemContext(ctx),
 		cproc.strandedCursor, time.Now().Add(-StrandedSentGrace), strandedPageSize)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to read long-lived SENT commands for reconciliation")
-		return
+		return fmt.Errorf("reading long-lived SENT commands: %w", err)
 	}
 	cproc.strandedCursor = next
 	if len(stranded) == 0 {
-		return
+		return nil
 	}
 	incr(cproc.StrandedObserved, float64(len(stranded)))
 	for _, batch := range groupByTenant(stranded, cproc.tenantDeleted) {
 		cproc.reconcileStrandedTenantBatch(ctx, batch)
 	}
+	return nil
 }
 
 // reconcileStrandedTenantBatch parks one tenant's stranded commands where it may.

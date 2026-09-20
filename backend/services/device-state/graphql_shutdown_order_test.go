@@ -260,7 +260,8 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	// about what happens AFTER it stops, and a stop from Initialized is legal precisely
 	// so a half-started service still tears itself down.
 	StateProcessor = processor.NewStateProcessor(Microservice, nil,
-		core.NewNoOpLifecycleCallbacks(), nil, processor.NewStateMetrics(Microservice))
+		core.NewNoOpLifecycleCallbacks(), nil, processor.NewStateMetrics(Microservice),
+		Microservice.NewPeriodicTaskMetrics("inactivity_sweep"))
 	require.NoError(t, StateProcessor.Initialize(context.Background()))
 
 	// Leave nothing behind for the rest of the package: a failed require unwinds through

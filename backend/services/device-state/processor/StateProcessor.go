@@ -47,6 +47,13 @@ type StateProcessor struct {
 	// RED metrics for the per-message merge path (E13).
 	metrics *core.ProcessorMetrics
 
+	// sweepMetrics are the inactivity sweep's pass signals, built once in the initialize
+	// phase for the same reason metrics is. The monitor cannot adopt core.PeriodicTask —
+	// its lifecycle octet is shared with the reader/worker pipeline and a carefully ordered
+	// teardown, so there is nothing to delete — but the question an operator asks of it is
+	// the same one, and RecordPass keeps the classification in one place.
+	sweepMetrics *core.PeriodicTaskMetrics
+
 	messages chan messaging.Message
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
@@ -104,17 +111,23 @@ func NewStateMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 
 // Create a new device-state processor.
 //
+// sweepMetrics are the inactivity sweep's pass signals, built once in the initialize phase
+// for the same reason metrics is. The monitor cannot adopt core.PeriodicTask — its lifecycle
+// octet is shared with the reader/worker pipeline and a carefully ordered teardown, so there
+// is nothing to delete — but the question an operator asks of it is the same one.
+//
 // metrics is built once in the initialize phase (see NewStateMetrics) and shared by
 // every processor this service constructs, because that callback is connection-scoped
 // and the instruments are not.
 func NewStateProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceStateApi,
-	metrics *core.ProcessorMetrics) *StateProcessor {
+	metrics *core.ProcessorMetrics, sweepMetrics *core.PeriodicTaskMetrics) *StateProcessor {
 	sp := &StateProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
 		Api:                  api,
 		metrics:              metrics,
+		sweepMetrics:         sweepMetrics,
 	}
 
 	// Create lifecycle manager.
@@ -443,12 +456,14 @@ func (sp *StateProcessor) runInactivityMonitor(ctx context.Context) {
 		case <-sp.quit:
 			return
 		case <-ticker.C:
-			count, err := sp.Api.SweepInactive(core.WithSystemContext(ctx), time.Now())
-			if err != nil {
-				log.Error().Err(err).Msg("Inactivity sweep failed")
-			} else if count > 0 {
+			started := time.Now()
+			count, err := sp.Api.SweepInactive(core.WithSystemContext(ctx), started)
+			if err == nil && count > 0 {
 				log.Info().Msg(fmt.Sprintf("Inactivity monitor marked %d device(s) inactive", count))
 			}
+			// RecordPass logs the failure, and classifies a sweep cut short by shutdown as
+			// cancelled rather than failed — which the bare log.Error here could not do.
+			sp.sweepMetrics.RecordPass(ctx, err, started, "inactivity-sweep")
 		}
 	}
 }

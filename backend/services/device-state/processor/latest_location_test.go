@@ -70,7 +70,8 @@ func newLocationProcessor(t *testing.T) *StateProcessor {
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	return NewStateProcessor(deviceStateMicroservice, nil, core.NewNoOpLifecycleCallbacks(), api,
-		NewStateMetrics(deviceStateMicroservice))
+		NewStateMetrics(deviceStateMicroservice),
+		deviceStateMicroservice.NewPeriodicTaskMetrics("inactivity_sweep"))
 }
 
 // str is a pointer to a literal, the shape every resolved location coordinate arrives in.

@@ -70,6 +70,13 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 		"devicechain_commanddelivery_command_delivery_holds_placed_total",
 		"devicechain_commanddelivery_command_delivery_nudges_requested_total",
 		"devicechain_commanddelivery_command_response_lost_settled_total",
+		// The three maintenance tickers' pass signals. Their last-success gauges
+		// qualify as probes for the same reason the others do: a Gauge exports a
+		// sample the moment it is built — NaN here, which is exactly "no pass has
+		// succeeded yet" — so its absence means the collector was never created.
+		"devicechain_commanddelivery_command_sweep_last_success_timestamp_seconds",
+		"devicechain_commanddelivery_hold_reconcile_last_success_timestamp_seconds",
+		"devicechain_commanddelivery_stranded_reconcile_last_success_timestamp_seconds",
 	}
 	families, err := reg.Gather()
 	if err != nil {

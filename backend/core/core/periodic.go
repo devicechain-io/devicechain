@@ -344,19 +344,39 @@ func (t *PeriodicTask) next() time.Duration {
 func (t *PeriodicTask) once() {
 	start := time.Now()
 	err := t.run(t.procCtx)
-	outcome := classifyPass(t.procCtx, err)
-	t.metrics.record(outcome, time.Since(start), time.Now())
+	t.metrics.RecordPass(t.procCtx, err, start, t.name)
+}
+
+// RecordPass classifies one pass and files it — the counter, the duration, the last-success
+// stamp, and the log line that matches the outcome. Nil-safe: a nil *PeriodicTaskMetrics still
+// logs, because the log line is not a metric and a task built without metrics is still running.
+//
+// 🔴 IT IS EXPORTED FOR THE LOOPS THAT CANNOT ADOPT PeriodicTask, AND THAT IS THE WHOLE
+// REASON IT IS A METHOD RATHER THAN THREE CALLS. Eight of the thirteen maintenance loops in
+// this tree are not schedulable by this type — one is an arm of a single-writer select whose
+// whole point is that processing and checkpointing share a goroutine, three share a quit
+// channel with a consumer, one is welded to a reader/worker pipeline's teardown, and the
+// presence loops are deliberately abandonable. They still need the same signals, and if each
+// of them writes its own `if err != nil { failures.Inc() }` then the rule that outranks all
+// the others — a pass cut short by SHUTDOWN is not a fault — is lost in whichever one the
+// author wrote last, and that loop pages on every deploy for the life of the service.
+//
+// Pass the context the work ran under, not a fresh one: it is what distinguishes cancelled
+// from failed, and every other property of this design depends on that distinction holding.
+func (m *PeriodicTaskMetrics) RecordPass(ctx context.Context, err error, started time.Time, name string) {
+	outcome := classifyPass(ctx, err)
+	m.record(outcome, time.Since(started), time.Now())
 
 	switch outcome {
 	case PassComplete, PassCancelled:
 		// Nothing to say. A completed pass logs its own findings if it has any, and a
 		// cancelled one is the operator's own deploy.
 	case PassSkipped:
-		log.Debug().Str("task", t.name).Msg("Maintenance pass skipped; another replica holds the lock.")
+		log.Debug().Str("task", name).Msg("Maintenance pass skipped; another replica holds the lock.")
 	case PassPartial:
-		log.Warn().Err(err).Str("task", t.name).Msg("Maintenance pass completed only part of its work.")
+		log.Warn().Err(err).Str("task", name).Msg("Maintenance pass completed only part of its work.")
 	default:
-		log.Error().Err(err).Str("task", t.name).Msg("Maintenance pass failed.")
+		log.Error().Err(err).Str("task", name).Msg("Maintenance pass failed.")
 	}
 }
 

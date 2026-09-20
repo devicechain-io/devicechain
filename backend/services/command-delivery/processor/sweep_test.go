@@ -23,6 +23,9 @@ type fakeApi struct {
 
 	lockAvailable bool
 	pending       []*model.Command
+	// pendingErr makes the delivery half'+chr(39)+'s FIRST read fail, which is the shape a pass
+	// reports as a plain failure rather than completing over.
+	pendingErr error
 
 	// The reconcile pass's half: its own lock, the withheld set it walks, and what it
 	// released. The lock defaults to UNAVAILABLE so the delivery tests above are
@@ -272,6 +275,9 @@ func (f *fakeApi) PendingCommands(context.Context) ([]*model.Command, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pendingReads++
+	if f.pendingErr != nil {
+		return nil, f.pendingErr
+	}
 	return f.pending, nil
 }
 

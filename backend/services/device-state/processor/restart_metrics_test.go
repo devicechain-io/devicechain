@@ -40,11 +40,16 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// The initialize phase. It runs once (lifecycle.go's initializeFrom is
 	// Uninitialized alone), which is what makes it the safe place to register.
 	metrics := NewStateMetrics(ms)
+	// The inactivity sweep's pass signals go through the same door, and for the same
+	// reason: built in the initialize phase and handed in, so the second construction of
+	// the processor registers nothing.
+	sweepMetrics := ms.NewPeriodicTaskMetrics("inactivity_sweep")
 
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
 	for start := 1; start <= 2; start++ {
-		if p := NewStateProcessor(ms, nil, core.NewNoOpLifecycleCallbacks(), nil, metrics); p == nil {
+		if p := NewStateProcessor(ms, nil, core.NewNoOpLifecycleCallbacks(), nil,
+			metrics, sweepMetrics); p == nil {
 			t.Fatalf("start %d built no processor", start)
 		}
 	}
@@ -53,18 +58,27 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// metrics at all would satisfy everything above — the other way to make a
 	// collision impossible, and one that leaves the service exporting nothing.
 	//
-	// The in-flight gauge is the probe because a Gauge exports a sample as soon as it
-	// is built; the loop's counter is a CounterVec, which exports nothing until a
-	// message is handled and so could not tell "registered" from "not registered".
-	const want = "devicechain_devicestate_state_inflight"
+	// Gauges are the probes because a Gauge exports a sample as soon as it is built; the
+	// loop's counter is a CounterVec, which exports nothing until a message is handled and
+	// so could not tell "registered" from "not registered". The sweep's last-success gauge
+	// qualifies for the same reason — it exports NaN, which is exactly "no pass has
+	// succeeded yet" — and it is listed SEPARATELY so neither builder can go missing
+	// behind the other.
+	want := []string{
+		"devicechain_devicestate_state_inflight",
+		"devicechain_devicestate_inactivity_sweep_last_success_timestamp_seconds",
+	}
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("gathering the registry: %v", err)
 	}
+	have := map[string]bool{}
 	for _, f := range families {
-		if f.GetName() == want {
-			return
+		have[f.GetName()] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			t.Errorf("the registry does not hold %q; those instruments went somewhere else, or nowhere", w)
 		}
 	}
-	t.Errorf("the registry does not hold %q; the processor's instruments went somewhere else, or nowhere", want)
 }

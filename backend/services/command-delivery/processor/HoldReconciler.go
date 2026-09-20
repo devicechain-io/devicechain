@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-command-delivery/presence"
@@ -37,22 +38,23 @@ const reconcilePageSize = 500
 // latency is the product. This asks "has the world changed underneath a decision I made
 // earlier?", where the answer is usually no and asking cheaply matters more than asking
 // quickly.
-func (cproc *CommandDeliveryProcessor) reconcileHolds(ctx context.Context) {
+func (cproc *CommandDeliveryProcessor) reconcileHolds(ctx context.Context) error {
 	ran, err := cproc.Api.TryReconcileLock(ctx, func() error {
-		cproc.reconcileOnePage(ctx)
-		return nil
+		return cproc.reconcileOnePage(ctx)
 	})
-	if err != nil {
-		log.Error().Err(err).Msg("could not acquire the hold-reconcile lock")
-		return
-	}
+	// `ran` before `err`: TryAdvisoryLock returns `true, fn()`, so a non-nil error is the
+	// lock's only when the body never ran. See sweepLocked.
 	if !ran {
-		log.Debug().Msg("Another replica holds the hold-reconcile lock; skipping this pass.")
+		if err != nil {
+			return fmt.Errorf("acquiring the hold-reconcile lock: %w", err)
+		}
+		return core.ErrPassSkipped
 	}
+	return err
 }
 
 // reconcileOnePage walks one bounded page of held commands and releases what it can.
-func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) {
+func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) error {
 	// 🔴 NOTHING TO RECONCILE AGAINST MEANS RECONCILE NOTHING. With no presence reader
 	// there is no basis on which to undo a hold, and releasing on that basis would throw
 	// an absent fleet's whole accumulated backlog back into the dispatch path, where it
@@ -74,20 +76,24 @@ func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) {
 	// front of it, and every one would land in SENT and then TIMEOUT — the record that
 	// blames the device, which is the thing this whole path exists to stop writing.
 	if cproc.Presence == nil {
-		return
+		// Skipped, not complete: there is nothing to reconcile AGAINST, so this pass did
+		// not do its work — it correctly declined to. Reported as success it would keep
+		// the last-success gauge fresh on an instance where holds are lapsing to EXPIRED.
+		return core.ErrPassSkipped
 	}
 	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to read withheld commands for reconciliation")
-		return
+		return fmt.Errorf("reading withheld commands: %w", err)
 	}
 	cproc.reconcileCursor = next
 	if len(held) == 0 {
-		return
+		return nil
 	}
 	for _, batch := range groupByTenant(held, cproc.tenantDeleted) {
 		cproc.reconcileTenantBatch(ctx, batch)
 	}
+	return nil
 }
 
 // reconcileTenantBatch releases one tenant's holds whose devices are no longer absent.

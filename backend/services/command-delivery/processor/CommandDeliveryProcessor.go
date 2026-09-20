@@ -69,10 +69,20 @@ type responseEnvelope struct {
 // queued commands to devices, consumes device responses, and runs a background
 // expiry + redelivery sweep (ADR-012 #4).
 type CommandDeliveryProcessor struct {
-	Microservice           *core.Microservice
-	CommandResponsesReader messaging.MessageReader
-	DeviceCommandsWriter   messaging.MessageWriter
-	Api                    model.CommandDeliveryApi
+	Microservice *core.Microservice
+
+	// Pass signals for the three maintenance tickers. They cannot adopt core.PeriodicTask —
+	// all three share cproc.quit and the WaitGroup ExecuteStop joins with the response
+	// consumer, so one close and one Wait serve them all and there is no octet to delete —
+	// but the question an operator asks of them is the same one, so the answer has the same
+	// shape. RecordPass keeps the classification (above all, that a pass cut short by
+	// shutdown is not a fault) in one place rather than three.
+	commandSweepMetrics      *core.PeriodicTaskMetrics
+	holdReconcileMetrics     *core.PeriodicTaskMetrics
+	strandedReconcileMetrics *core.PeriodicTaskMetrics
+	CommandResponsesReader   messaging.MessageReader
+	DeviceCommandsWriter     messaging.MessageWriter
+	Api                      model.CommandDeliveryApi
 
 	// DeliveryMetrics is every Prometheus instrument this processor exports. It is
 	// EMBEDDED BY VALUE, so every reader below still says cproc.ClaimsLost, and a
@@ -242,15 +252,22 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 // Callers MUST hold the sweep lock (see sweepLocked). Publishing a command is a
 // physical actuation, so running this concurrently on two pods sends the device the
 // command twice.
-func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Context) {
+// 🔴 IT RETURNS THE READ FAILURE RATHER THAN ONLY LOGGING IT. A pass whose very first query
+// failed did none of its work, and swallowing that made the sweep report "complete" and stamp
+// its last-success gauge every 30 seconds while the database was unreachable. That is the one
+// state PassResult's doc calls out as the pair an operator most needs to tell apart, asserted
+// on the series they alert from. Per-COMMAND errors are still logged and skipped: one bad
+// command must not abort the batch, and it is not a fact about the pass.
+func (cproc *CommandDeliveryProcessor) deliverPendingCommands(ctx context.Context) error {
 	pending, err := cproc.Api.PendingCommands(core.WithSystemContext(ctx))
 	if err != nil {
 		log.Error().Err(err).Msg("unable to load pending commands for delivery")
-		return
+		return fmt.Errorf("loading pending commands: %w", err)
 	}
 	for _, batch := range groupByTenant(pending, cproc.tenantDeleted) {
 		cproc.deliverTenantBatch(ctx, batch, pathSweep)
 	}
+	return nil
 }
 
 // Nudger is the seam CreateCommand is bound to (model.CommandNudger). Wire it once the
@@ -966,11 +983,17 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 // leaves the row SENT until ReleaseClaim returns it. Command delivery is therefore
 // at-least-once, as it was before; what the sweep lock removes is the guaranteed,
 // every-single-tick duplication of running N sweepers by design.
-func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
+func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
+	var expiryErr error
 	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
 		count, byFromStatus, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now())
 		if err != nil {
 			log.Error().Err(err).Msg("command expiry sweep failed")
+			// Carried out rather than returned: delivery below still runs, and it is the
+			// half an operator notices. The pass did SOME of its work, which is what
+			// ErrPassPartial means — and reporting nothing at all here is how a sweep
+			// whose expiry half has been broken for a week looks exactly like a healthy one.
+			expiryErr = err
 		}
 		// Report the breakdown, not just the total. A command that lapsed out of HELD was
 		// never dispatched — the device was absent for its whole TTL; one that lapsed out
@@ -983,16 +1006,25 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) {
 			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
 				Msg("Command expiry sweep reached a terminal state for stale commands.")
 		}
-		cproc.deliverPendingCommands(ctx)
-		return nil
+		return cproc.deliverPendingCommands(ctx)
 	})
-	if err != nil {
-		log.Error().Err(err).Msg("could not acquire the command sweep lock")
-		return
-	}
+	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
+	// non-nil error means the LOCK failed only when the body never ran. Labelling every
+	// error as a lock-acquisition failure was harmless while the body always returned nil,
+	// and became wrong the moment the body started reporting its own failures.
 	if !ran {
-		log.Debug().Msg("Another replica holds the command sweep lock; skipping this pass.")
+		if err != nil {
+			return fmt.Errorf("acquiring the command sweep lock: %w", err)
+		}
+		return core.ErrPassSkipped
 	}
+	if err != nil {
+		return err
+	}
+	if expiryErr != nil {
+		return fmt.Errorf("expiring stale commands: %v: %w", expiryErr, core.ErrPassPartial)
+	}
+	return nil
 }
 
 // runSweepTicker drives the expiry + delivery sweep on the configured cadence until the
@@ -1012,7 +1044,8 @@ func (cproc *CommandDeliveryProcessor) runSweepTicker(ctx context.Context) {
 		case <-cproc.quit:
 			return
 		case <-ticker.C:
-			cproc.sweepLocked(ctx)
+			started := time.Now()
+			cproc.DeliveryMetrics.CommandSweep.RecordPass(ctx, cproc.sweepLocked(ctx), started, "command-sweep")
 		}
 	}
 }
@@ -1031,7 +1064,8 @@ func (cproc *CommandDeliveryProcessor) runHoldReconcileTicker(ctx context.Contex
 		case <-cproc.quit:
 			return
 		case <-ticker.C:
-			cproc.reconcileHolds(ctx)
+			started := time.Now()
+			cproc.DeliveryMetrics.HoldReconcile.RecordPass(ctx, cproc.reconcileHolds(ctx), started, "hold-reconcile")
 		}
 	}
 }
@@ -1050,7 +1084,8 @@ func (cproc *CommandDeliveryProcessor) runStrandedReconcileTicker(ctx context.Co
 		case <-cproc.quit:
 			return
 		case <-ticker.C:
-			cproc.reconcileStranded(ctx)
+			started := time.Now()
+			cproc.DeliveryMetrics.StrandedReconcile.RecordPass(ctx, cproc.reconcileStranded(ctx), started, "stranded-reconcile")
 		}
 	}
 }

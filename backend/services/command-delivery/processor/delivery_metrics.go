@@ -21,6 +21,24 @@ type DeliveryMetrics struct {
 	// RED metrics for the response-consumer path (E13).
 	metrics *core.ProcessorMetrics
 
+	// Pass signals for the three maintenance tickers (sweep, hold-reconcile,
+	// stranded-reconcile). They cannot adopt core.PeriodicTask — all three share
+	// cproc.quit and the WaitGroup ExecuteStop joins with the response consumer, so one
+	// close and one Wait serve them all and there is no lifecycle octet to delete — but
+	// the question an operator asks of them is the same one, so the answer has the same
+	// shape, and core.PeriodicTaskMetrics.RecordPass keeps the classification in one place.
+	//
+	// 🔴 THEY LIVE HERE, NOT IN THE PROCESSOR'S CONSTRUCTOR, AND THE REASON IS THE TEST
+	// NEXT DOOR. NewCommandDeliveryProcessor runs inside the NATS manager's oncreate
+	// callback, which fires on EVERY start — so a start retried after a failure builds the
+	// processor a second time, and promauto's MustRegister panics on the duplicate and
+	// takes the process down. This struct is built once in the initialize phase and handed
+	// in, which is what makes the second construction free.
+	// See TestSecondStartDoesNotReRegisterMetrics.
+	CommandSweep      *core.PeriodicTaskMetrics
+	HoldReconcile     *core.PeriodicTaskMetrics
+	StrandedReconcile *core.PeriodicTaskMetrics
+
 	// ClaimsLost counts dispatches abandoned because another dispatcher claimed the
 	// command first, BY DISPATCH PATH, and ClaimsStranded counts commands left reading
 	// SENT because the publish failed AND the release failed too.
@@ -225,7 +243,10 @@ type DeliveryMetrics struct {
 // the first duplicate.
 func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 	return DeliveryMetrics{
-		metrics: ms.NewProcessorMetrics("response"),
+		metrics:           ms.NewProcessorMetrics("response"),
+		CommandSweep:      ms.NewPeriodicTaskMetrics("command_sweep"),
+		HoldReconcile:     ms.NewPeriodicTaskMetrics("hold_reconcile"),
+		StrandedReconcile: ms.NewPeriodicTaskMetrics("stranded_reconcile"),
 		ClaimsLost: ms.NewCounterVec("command_delivery_claims_lost_total",
 			"Dispatches abandoned because another dispatcher claimed the command first, by the "+
 				"dispatch path that lost. \"sweep\" is the periodic pass, \"nudge\" is the dispatch "+

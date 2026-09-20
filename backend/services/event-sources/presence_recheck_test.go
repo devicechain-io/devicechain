@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/presence"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,7 +96,12 @@ func TestARecheckOnlyLoopHasNothingToDrain(t *testing.T) {
 		reachable: func(context.Context) bool { return false },
 		recovered: func() { recovered++ },
 	}
-	require.NoError(t, r.Run(context.Background(), time.Now()), "a nil drain is a no-op, not a panic")
+	// A nil drain is still a no-op rather than a panic — the original point of this line —
+	// but it now says so as a SKIP rather than as success. Reported as success it would
+	// keep presence_demote_last_success_timestamp_seconds fresh forever on an instance
+	// that has never released anything and never will.
+	err := r.Run(context.Background(), time.Now())
+	assert.ErrorIs(t, err, core.ErrPassSkipped, "a nil drain is a no-op, not a panic")
 	assert.Equal(t, 0, recovered)
 
 	r.reachable = func(context.Context) bool { return true }
@@ -129,7 +135,7 @@ func TestTheRecheckRunsBeforeTheFirstPass(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		presence.RunDemoteLoop(ctx, r, time.Hour, time.Millisecond, time.Now)
+		presence.RunDemoteLoop(ctx, r, time.Hour, time.Millisecond, time.Now, nil)
 	}()
 
 	select {
