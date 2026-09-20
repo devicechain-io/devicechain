@@ -14,7 +14,7 @@ import (
 
 // 🔴 WHAT THIS FILE IS FOR. Both read loops in this package used to treat every error that
 // was not io.EOF the same way: log it, read again, immediately. A read error that returns
-// instantly and keeps returning — a broker refusing fetches, a revoked credential, a
+// instantly and keeps returning — a broker refusing fetches, a
 // subscription the reader's own self-heal cannot rebuild — therefore became a spin that
 // burned a core and wrote one log line per iteration. It never stopped: persistence lost the
 // tail of every tenant's history and the anchors of deleted entities piled up, behind a pod

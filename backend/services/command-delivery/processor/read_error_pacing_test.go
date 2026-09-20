@@ -15,7 +15,7 @@ import (
 
 // 🔴 WHAT THIS FILE IS FOR. The command-responses read loop used to treat every error that
 // was not io.EOF the same way: log it, read again, immediately. A read error that returns
-// instantly and keeps returning — a broker refusing fetches, a revoked credential, a
+// instantly and keeps returning — a broker refusing fetches, a
 // subscription the reader's own self-heal cannot rebuild — therefore became a spin that
 // burned a core and wrote one log line per iteration, forever.
 //
@@ -75,9 +75,16 @@ type intermittentReader struct {
 
 func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 {
+	// 🔑 THE EOFAfter GUARD IS LOAD-BEARING AND EASY TO DROP. Without "> 0" the comparison
+	// Reads+1 >= EOFAfter is TRUE for an unset EOFAfter, so every read would fail and the
+	// alternation this fake exists for would silently stop happening — the response-loop
+	// test above uses it with no EOF at all.
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
+	// Counted, so Reads means "calls" at every caller. It used to count only the failures,
+	// which made the write-back test below report half the reads it had actually done.
+	r.Reads++
 	return messaging.Message{}, nil
 }
 

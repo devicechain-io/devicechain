@@ -16,9 +16,12 @@ import (
 // 🔴 WHAT THIS FILE IS FOR. The dead-letter store loop used to treat every error that was not
 // io.EOF the same way: log it, pause a fixed second, read again, forever. The fixed pause
 // takes the hot-spin off the table and leaves the other failure mode untouched — an error
-// that is never going to clear (a consumer deleted and un-recreatable, a revoked credential,
-// a subscription the reader's own self-heal does not cover) now spins slowly instead of
-// quickly, and the pod goes on reporting ready while consuming nothing.
+// that is never going to clear — a 409 from a stream at its MaxAckPending ceiling, a
+// consumer whose leadership keeps moving, a subscription the reader hands back rather than
+// rebuilding — now spins slowly instead of quickly, and the pod goes on reporting ready
+// while consuming nothing. (A DELETED consumer is deliberately not in that list: natsReader
+// rebinds through it without ever returning, so it never reaches a pacer. core.ReadPacer's
+// own doc has the full account; an earlier version of it claimed otherwise.)
 //
 // 🔑 AND THIS IS THE CONSUMER WHERE THAT COSTS THE MOST. It is the one that records
 // everybody else's give-ups, so a copy of it that has quietly stopped is the single failure
@@ -108,7 +111,7 @@ type intermittentReader struct {
 
 func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 || r.Reads+1 >= r.EOFAfter {
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
 	r.Reads++

@@ -14,7 +14,7 @@ import (
 
 // 🔴 WHAT THIS FILE IS FOR. The alarm-events read loop used to treat every error that was not
 // io.EOF the same way: log it, read again, immediately. A read error that returns instantly
-// and keeps returning — a broker refusing fetches, a revoked credential, a subscription the
+// and keeps returning — a broker refusing fetches, a subscription the
 // reader's own self-heal cannot rebuild — therefore became a spin that burned a core and
 // wrote one log line per iteration. It never stopped, and nobody was paged for any alarm in
 // the meantime, behind a pod that reported ready.

@@ -15,10 +15,12 @@ import (
 // 🔴 WHAT THIS FILE IS FOR. The dispatch read loop used to treat every error that was not
 // io.EOF the same way: log it, pause a fixed second, read again, forever. The fixed pause
 // takes the hot-spin off the table and leaves the other failure mode untouched — an error
-// that is never going to clear (a consumer deleted and un-recreatable, a revoked credential,
-// a subscription the reader's own self-heal does not cover) now spins slowly instead of
-// quickly, and the pod goes on reporting ready while dispatching nothing. Spinning slower is
-// not making progress.
+// that is never going to clear — a 409 from a stream at its MaxAckPending ceiling, a
+// consumer whose leadership keeps moving, a subscription the reader hands back rather than
+// rebuilding — now spins slowly instead of quickly, and the pod goes on reporting ready
+// while dispatching nothing. Spinning slower is not making progress. (A DELETED consumer is
+// deliberately not in that list: natsReader rebinds through it without ever returning, so it
+// never reaches a pacer. core.ReadPacer's own doc has the full account.)
 //
 // 🔑 AND THIS SERVICE EMITS, SO ITS SILENCE IS NOT RECOVERABLE LATER. A consumer that
 // retains can be caught up once it comes back; a connector that never fired is a webhook
@@ -102,9 +104,25 @@ type intermittentDispatchReader struct {
 
 func (r *intermittentDispatchReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 || r.Reads+1 >= r.EOFAfter {
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
 	r.Reads++
 	return messaging.Message{}, nil
+}
+
+// 🔑 THE REFUSAL HAS TO BE EXERCISED OR IT IS JUST A COMMENT. NewDispatchConsumer panics on a
+// nil pacer rather than substituting one, because a substitute paces the loop but cannot call
+// FailNow — so a forgotten argument would read as working and leave a ready pod dispatching
+// nothing. That is worth a test precisely because the branch is unreachable from every other
+// one: nothing else in this package constructs a consumer without a pacer.
+func TestAConsumerCannotBeBuiltWithoutAReadPacer(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewDispatchConsumer accepted a nil read pacer; a consumer built that way " +
+				"cannot report an exhausted retry budget, and the pod stays ready while it " +
+				"dispatches nothing")
+		}
+	}()
+	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, nil, nil, 0, nil, 1, 1, nil, nil)
 }

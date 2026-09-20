@@ -15,7 +15,7 @@ import (
 // 🔴 WHAT THIS FILE IS FOR. The gateway capture read loop named the hot-spin hazard in its
 // own comment, on the EOF branch — and then, one branch further down, logged a non-EOF error
 // and read again immediately. The reader's self-heal covers empty fetches and a deleted
-// consumer; anything else (a broker refusing fetches, a revoked credential, a subscription
+// consumer; anything else (a broker refusing fetches, a subscription
 // it cannot rebuild) arrives unchanged on every iteration and returns instantly while it
 // does, which is the same spin the branch above refuses to allow.
 //
@@ -85,7 +85,7 @@ type intermittentReader struct {
 
 func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 || r.Reads+1 >= r.EOFAfter {
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
 	r.Reads++

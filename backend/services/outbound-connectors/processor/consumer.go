@@ -106,10 +106,20 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
 	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics,
 	readPacer *core.ReadPacer) *DispatchConsumer {
-	// A nil pacer is the unit-test shape: the loop is still paced and still ends, it just has no
-	// microservice to report the give-up to and says so at error level instead. See core.ReadPacer.
+	// 🔴 A NIL PACER IS REFUSED RATHER THAN DEFAULTED, and an earlier version of this defaulted it.
+	// Defaulting looks harmless — the substitute still paces and still ends the loop — but it
+	// drops the one thing the pacer is here for: with no microservice it cannot call FailNow, so
+	// an exhausted budget becomes a single Error line and a pod that stays READY with a dead
+	// consumer. That is the exact failure this consumer adopted a pacer to remove, arrived at by
+	// forgetting an argument. Refusing means a call site that omits it dies at startup, where the
+	// stack names the line, instead of dispatching nothing six months later.
+	//
+	// A pacer built with a nil MICROSERVICE is still fine and is the documented unit-test shape;
+	// what is refused is no pacer at all.
 	if readPacer == nil {
-		readPacer = core.NewReadPacer(nil, "connector dispatch")
+		panic("outbound-connectors: NewDispatchConsumer needs a read pacer; without one an " +
+			"exhausted retry budget cannot end the process, and the pod reports ready while " +
+			"dispatching nothing")
 	}
 	var index *deadletter.Sink
 	if deadIndex != nil {
@@ -184,7 +194,8 @@ func (c *DispatchConsumer) run() {
 		if err != nil {
 			c.reader.HandleResponse(err)
 			// 🔴 STOPPING IS THE POINT. This service EMITS, and a read loop that spins silently on
-			// an error it will never clear leaves a ready pod dispatching nothing — every
+			// an error the reader hands back and that never clears leaves a ready pod
+			// dispatching nothing — every
 			// connector the tenant configured quietly does not fire, and the stream's per-tenant
 			// bound then discards the requests. A restart is visible; a ready pod delivering
 			// nothing is not.
