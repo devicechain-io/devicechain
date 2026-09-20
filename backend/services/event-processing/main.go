@@ -600,8 +600,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	// Unsubscribe the eviction responder first, symmetric with start: past this point the loop
-	// is stopping, so an accepted request could only be answered with a failure.
+	// Unsubscribe the eviction responder first: past this point the loop is stopping, so an
+	// accepted request could only be answered with a failure.
+	//
+	// 🔑 THAT IS DELIBERATELY ASYMMETRIC WITH START, not symmetric with it. The responder is
+	// started BEFORE the REACT dispatcher and stopped BEFORE it as well, so a mirror of the
+	// start order would stop it second. The reason above is what decides it, and it outranks
+	// the mirror: the window in which the responder can accept work it cannot finish is the
+	// thing being closed, and that window opens the moment shutdown begins.
 	if TenantPurgeResponder != nil {
 		if err := TenantPurgeResponder.Stop(); err != nil {
 			return err
