@@ -151,7 +151,7 @@ func TestTheProductionWaitReturnsOnCancellationRatherThanElapsing(t *testing.T) 
 // 🔴 THE REPORTING HALF, WHICH NOTHING EXERCISED UNTIL THIS BLOCK EXISTED. Every test
 // above builds its pacer with NewReadPacer(nil, ...), so all of them measure a pacer that
 // STOPS and none of them measure one that SAYS SO. That gap ran the whole depth of the
-// tree: twelve loops had adopted this type, each one's tests pinning that it stops, and
+// tree: eleven loops had adopted this type, each one's tests pinning that it stops, and
 // the line the whole design turns on — the give-up reaching the microservice — had never
 // been executed by any test at any layer.
 //
@@ -211,6 +211,9 @@ func TestAnExhaustedBudgetIsReportedAndNotOnlyLogged(t *testing.T) {
 		}
 	}
 
+	// Let a second report land if one is coming, so "exactly once" is an assertion rather
+	// than a race the first read usually wins.
+	time.Sleep(10 * time.Millisecond)
 	got := sink.reported()
 	if len(got) != 1 {
 		t.Fatalf("the give-up was reported %d times, want exactly 1: a repeated report races "+
@@ -232,15 +235,20 @@ func TestAnExhaustedBudgetIsReportedAndNotOnlyLogged(t *testing.T) {
 	}
 }
 
-// 🔴 THE SELF-DEADLOCK GUARD, AND IT IS THE REASON giveUp SPAWNS A GOROUTINE. The sink
-// tears the process down, and teardown runs the component's ExecuteStop, which waits on
-// the very read goroutine that is reporting. Called inline, the shutdown waits for a loop
-// that is parked inside the shutdown, and the pod hangs until its grace period kills it —
-// turning a clean non-zero exit into a SIGKILL, which is the reporting this type exists
-// for, lost at the last step.
+// 🔴 THE REASON giveUp SPAWNS A GOROUTINE. The sink tears the process down, and teardown
+// runs the component's ExecuteStop, which waits on the very read goroutine that is
+// reporting. Called inline, that is a loop waiting on a shutdown that is waiting on the
+// loop.
 //
-// Delete the `go` in giveUp and this test hangs and then fails; nothing else in this file
-// notices.
+// 🔑 IT DOES NOT HANG THE POD, AND AN EARLIER VERSION OF THIS COMMENT SAID IT DID.
+// Microservice.teardown already runs Stop on its own goroutine behind the teardown
+// budget, so the process still exits non-zero. What the inline call actually costs is the
+// whole budget in delay, a Terminate that never runs, and an outcome that reads "teardown
+// did not finish within Ns" instead of naming the stream that stopped draining — so the
+// operator is told the shutdown was slow rather than what broke.
+//
+// Delete the `go` in giveUp and this test blocks and then fails; nothing else in this
+// file notices.
 func TestTheGiveUpDoesNotBlockTheLoopThatRaisedIt(t *testing.T) {
 	sink := newRecordingSink() // release is NOT closed: the sink blocks, as a teardown would
 	p := NewReadPacer(nil, "test stream").UseClock(VirtualClock()).reportTo(sink.report)
@@ -297,16 +305,60 @@ func TestARecoveringLoopIsNeverReported(t *testing.T) {
 
 // 🔴 THE WIRING ITSELF, which is the half a sink-based test cannot see. Every test above
 // installs its own sink, so all of them would keep passing if NewReadPacer stopped
-// deriving one from the microservice entirely — and then every production pacer would
-// stop, log, and report to nobody, exactly as before this type existed.
+// deriving one from the microservice — and then every production pacer would stop, log,
+// and report to nobody, exactly as before this type existed.
 //
-// The sink is only INSPECTED here, never called: calling it would end the test process,
-// which is the whole reason the seam above exists.
-func TestAMicroserviceBackedPacerHasSomewhereToReport(t *testing.T) {
-	if p := NewReadPacer(&Microservice{}, "test stream"); p.fail == nil {
+// 🔑 IT GOES THROUGH THE REAL FailNow, AND AN EARLIER VERSION OF THIS TEST DID NOT. That
+// version asserted only that the sink was non-nil, which a stub satisfies: wiring
+// func(error){} in place of ms.FailNow passed it — and that mutant is WORSE than the
+// defect this commit fixes, because the give-up then reaches neither the process nor the
+// nil branch's log line and the loop stops in complete silence.
+//
+// Calling it is safe, which the earlier version's excuse got wrong: FailNow on a
+// struct-literal Microservice takes the not-yet-started branch, records the outcome and
+// returns. It does not exit — only Run does. struct_literal_test.go already catalogues
+// FailNow that way, which is where this recipe comes from.
+func TestAMicroserviceBackedPacerReportsThroughIt(t *testing.T) {
+	ms := &Microservice{}
+	p := NewReadPacer(ms, "test stream")
+	if p.fail == nil {
 		t.Fatal("a pacer built with a microservice has no report sink: every give-up in " +
 			"production would be logged and dropped, and the pod would stay up")
 	}
+
+	p.fail(errors.New("the read loop is unfit"))
+
+	// The outcome is what the process exits on, so this is what says the report reached the
+	// thing that actually ends the pod.
+	//
+	// 🔑 RECEIVED WITH A DEADLINE RATHER THAN waitForShutdown's BARE BLOCKING RECEIVE. A
+	// sink that reports nowhere — the no-op stub this test exists to kill — produces no
+	// outcome at all, and the bare receive then parks until the whole package times out.
+	// That is a failure that names nothing; this one names the defect.
+	var err error
+	select {
+	case err = <-ms.outcomeCh():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the give-up produced no outcome at all: the sink swallowed it, so the loop " +
+			"stops in silence and the process keeps running as though nothing happened")
+	}
+	if err == nil {
+		t.Fatal("the give-up left a nil outcome, so the process would exit 0 — " +
+			"indistinguishable from an orderly stop, which is the reporting this type exists " +
+			"to provide")
+	}
+	if !strings.Contains(err.Error(), "the read loop is unfit") {
+		t.Errorf("the outcome does not carry the give-up's own error, so the exit would not "+
+			"say what failed: %v", err)
+	}
+	// FailNow CLAIMS the process. A sink wired to something that merely records an outcome
+	// — ms.finished, say — would satisfy the assertions above and leave the process
+	// unclaimed, skipping the teardown entirely.
+	if ph := ms.phase.Load(); ph != phaseStopping {
+		t.Errorf("the microservice is in phase %d rather than phaseStopping: the report went "+
+			"somewhere that does not actually shut the process down", ph)
+	}
+
 	if p := NewReadPacer(nil, "test stream"); p.fail != nil {
 		t.Fatal("a pacer built without a microservice invented a sink; the documented nil " +
 			"case is what lets processors be assembled by literal in their own tests")

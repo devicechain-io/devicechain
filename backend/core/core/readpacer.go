@@ -107,11 +107,10 @@ type ReadPacer struct {
 // ms is where an exhausted retry budget is reported; see the fail field for why nil is
 // tolerated.
 //
-// The sink is resolved HERE rather than at the point of failure, so the nil question is
-// answered once, against the concrete *Microservice the caller passed. Storing the
-// microservice and deciding later would mean a typed-nil pointer behind an interface
-// could pass a nil check and then panic inside the give-up — in the one code path that
-// only ever runs when the service is already in trouble.
+// The sink is resolved HERE rather than at the point of failure for one reason only: it
+// is what makes the reporting half testable. There is no safety argument on top of that —
+// the parameter is a concrete *Microservice either way, and checking it here or in giveUp
+// is the same check.
 func NewReadPacer(ms *Microservice, what string) *ReadPacer {
 	p := &ReadPacer{what: what, now: time.Now, sleep: sleepUntilCancelled}
 	if ms != nil {
@@ -124,9 +123,14 @@ func NewReadPacer(ms *Microservice, what string) *ReadPacer {
 // it can be installed in one expression.
 //
 // It is a test seam and it is unexported on purpose: no service should be choosing where
-// its own give-up goes. It exists because the production sink ENDS THE PROCESS, so the
-// only way to assert that a give-up is actually reported — rather than merely logged — is
-// to stand somewhere else in its place.
+// its own give-up goes. It exists for the tests that must OBSERVE the report while it is
+// in flight — the one pinning that the report is not made on the read goroutine has to
+// hold the sink open, which a real microservice will not do.
+//
+// It is NOT needed merely to see that a report happened: FailNow on a struct-literal
+// Microservice records its outcome and returns, so a test can call the real thing and
+// read it back with waitForShutdown. TestAMicroserviceBackedPacerReportsThroughIt does
+// exactly that, and an earlier version of this comment wrongly said it could not.
 func (p *ReadPacer) reportTo(f func(error)) *ReadPacer {
 	p.fail = f
 	return p
@@ -194,10 +198,19 @@ func (p *ReadPacer) giveUp(err error, elapsed time.Duration) {
 		return
 	}
 	// 🔴 ON ITS OWN GOROUTINE, AND THAT IS NOT STYLE. FailNow tears the process down, and
-	// teardown runs this component's ExecuteStop, which waits on the read goroutine —
-	// the one calling this. Inline, that is a self-deadlock: the shutdown waits for a
-	// loop that is waiting inside the shutdown. The caller returns true immediately
-	// afterwards, which is what lets that wait complete.
+	// teardown runs this component's ExecuteStop, which waits on the read goroutine — the
+	// one calling this. Inline, that is a loop waiting on a shutdown that is waiting on
+	// the loop. The caller returns true immediately afterwards, which is what lets that
+	// wait complete.
+	//
+	// 🔑 IT IS NOT A HANG, AND SAYING SO WOULD BE WRONG — Microservice.teardown already
+	// runs Stop on its own goroutine behind the teardown budget, precisely so a component
+	// that blocks cannot hold the process. What an inline report costs is subtler and is
+	// the reason to keep the `go`: the exit is delayed by the whole budget, Terminate
+	// never runs, and — worst of the three — the outcome carried out of the process
+	// becomes "teardown did not finish within Ns" instead of the read-loop error built
+	// just above. The operator is then told the shutdown was slow, not which stream
+	// stopped draining, which is the one thing this error exists to tell them.
 	go p.fail(fatal)
 }
 
