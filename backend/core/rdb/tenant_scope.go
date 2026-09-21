@@ -17,12 +17,15 @@ import (
 // TenantScoped type, and the spelling almost every model in the tree uses.
 const tenantFieldName = "TenantId"
 
-// plainTenantFieldName is event-processing's spelling. Its tables predate nothing and
-// are not irregular by accident: they are read-models keyed by their own natural keys,
-// embedding no core mixins, with the tenant as a plain column called `tenant`. The
-// snapshot rule that governs migrations forbids renaming a column in place, so the
-// second spelling is permanent and the question is only whether the mechanisms that
-// enforce isolation know about it.
+// plainTenantFieldName is event-processing's spelling. Its tables are not irregular by
+// accident: they are read-models keyed by their own natural keys, embedding no core
+// mixins, with the tenant as a plain column called `tenant` that is part of the composite
+// primary key.
+//
+// Renaming it is possible — an appended migration could — but it would be a schema change
+// to six tables and a primary-key column, bought for nothing. The spelling is a choice
+// this area is entitled to make; the only question that matters is whether the mechanisms
+// enforcing isolation know about it, and for a long time one of the three did not.
 const plainTenantFieldName = "Tenant"
 
 // tenantFieldNames are the two spellings, in lookup order.
@@ -42,10 +45,28 @@ var tenantFieldNames = []string{tenantFieldName, plainTenantFieldName}
 
 // TenantColumnNames are the database column names the two spellings produce, for the
 // callers that work from the database catalog rather than from a parsed gorm schema —
-// tenantpurge's sweep, above all. They are derived here so the sweep cannot come to
-// classify a table the scope callback does not, which is the divergence this file
-// exists to end.
-var TenantColumnNames = []string{"tenant_id", "tenant"}
+// tenantpurge's sweep, above all.
+//
+// 🔴 THEY ARE COMPUTED FROM tenantFieldNames, not written out beside them. A second
+// literal reading {"tenant_id", "tenant"} would be a third list to keep in step with the
+// other two, which is the exact failure this file exists to end — and review caught this
+// file committing it while claiming otherwise. Adding a field name now adds its column
+// name, so the sweep cannot come to classify a different set from the one the callback
+// scopes.
+//
+// gorm's NamingStrategy is the authority on the mapping because it is what actually named
+// the columns; TablePrefix does not affect ColumnName, so the zero value is the right one
+// to ask.
+var TenantColumnNames = tenantColumnNames()
+
+func tenantColumnNames() []string {
+	var ns schema.NamingStrategy
+	out := make([]string, 0, len(tenantFieldNames))
+	for _, name := range tenantFieldNames {
+		out = append(out, ns.ColumnName("", name))
+	}
+	return out
+}
 
 // ErrUnscopedStatement is the refusal for a statement this callback cannot classify:
 // one that names a table but whose destination gorm could not parse into a schema, so

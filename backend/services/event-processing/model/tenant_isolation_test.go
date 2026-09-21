@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -173,8 +174,8 @@ func TestAProjectionWriteCannotLandUnderAnotherTenant(t *testing.T) {
 	err := mgr.DB(dccore.WithTenant(context.Background(), "mine")).Create(&DeviceRoster{
 		Tenant: "theirs", DeviceToken: "d", ProfileToken: "p", ExpectedSince: at, LastEventAt: at,
 	}).Error
-	if err == nil {
-		t.Fatal("a row naming another tenant was written under this tenant's context")
+	if !errors.Is(err, rdb.ErrTenantMismatch) {
+		t.Fatalf("a row naming another tenant: got %v, want rdb.ErrTenantMismatch", err)
 	}
 
 	// The counterweight: the same write under its own tenant is accepted, so the refusal
@@ -194,7 +195,52 @@ func TestAProjectionReadWithNoTenantIsRefused(t *testing.T) {
 	mgr := isolationDB(t)
 	var rules []DetectRule
 	err := mgr.DB(context.Background()).Where("profile_version_token = ?", "p@1").Find(&rules).Error
-	if err == nil {
-		t.Fatal("a scoped read with no tenant in context was answered instead of refused")
+	if !errors.Is(err, dccore.ErrNoTenant) {
+		t.Fatalf("a scoped read with no tenant in context: got %v, want core.ErrNoTenant", err)
+	}
+}
+
+// 🔴 A SYSTEM CONTEXT BEATS A TENANT ONE, and the order is worth pinning because nothing
+// about core.WithTenant says so: it adds a value, it does not clear the system marker, so
+// wrapping a system context in WithTenant yields a context that is BOTH and the callback
+// takes the bypass. That is the documented contract — scopedTenant tests the marker before
+// it classifies anything — but it means a store handed a system context would derive its
+// tenant, inject no predicate, and read every tenant's rows.
+//
+// No caller does that today: each of the four system contexts in this area is created
+// inside the LoadAll that uses it and never escapes. This test exists so that if one ever
+// does escape, the behaviour it runs into is one somebody wrote down rather than one
+// nobody knew about.
+func TestASystemContextBeatsATenantWrappedAroundIt(t *testing.T) {
+	mgr := isolationDB(t)
+	at := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	rosters := NewDeviceRosterStore(mgr)
+
+	for _, tenant := range []string{"mine", "theirs"} {
+		if err := rosters.Upsert(context.Background(), &DeviceRoster{
+			Tenant: tenant, DeviceToken: "shared-token", ProfileToken: "p", ExpectedSince: at,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", tenant, err)
+		}
+	}
+
+	both := dccore.WithTenant(dccore.WithSystemContext(context.Background()), "mine")
+	var rows []DeviceRoster
+	if err := mgr.DB(both).Find(&rows).Error; err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2: the system marker must win over a tenant wrapped "+
+			"around it, so no predicate is injected", len(rows))
+	}
+
+	// The counterweight: the same read with only the tenant is scoped, so the result above
+	// is the system marker's doing and not a broken predicate.
+	rows = nil
+	if err := mgr.DB(dccore.WithTenant(context.Background(), "mine")).Find(&rows).Error; err != nil {
+		t.Fatalf("scoped read: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Tenant != "mine" {
+		t.Fatalf("got %d rows %v, want exactly mine's", len(rows), rows)
 	}
 }

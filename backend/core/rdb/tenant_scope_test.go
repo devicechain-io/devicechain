@@ -212,3 +212,57 @@ func TestTenantIsolation_UnscopedDeleteStaysInTenant(t *testing.T) {
 		t.Fatalf("A's row should be hard-deleted (no soft-deleted remnant); got count=%d", aCount)
 	}
 }
+
+// tenantIdModel and plainTenantModel are the two spellings as gorm sees them, used to
+// check the column names this package publishes against what gorm actually derives.
+type tenantIdModel struct {
+	TenantScoped
+	Name string
+}
+
+type plainTenantModel struct {
+	Tenant string `gorm:"primaryKey;size:256"`
+	Name   string
+}
+
+// TenantColumnNames must name the columns the tenant FIELDS actually produce.
+//
+// 🔴 WHY THIS IS NOT A RESTATEMENT OF THE CODE. The list is computed from
+// tenantFieldNames through gorm's NamingStrategy, which makes the two lists the same
+// length and the same order by construction — but it does not make either of them RIGHT.
+// This asks gorm to parse a real struct for each spelling and checks that the column it
+// derives is the one tenantpurge will go looking for in the catalog.
+//
+// It exists because the pairing was two hand-written literals until review pointed out
+// that the comment claimed otherwise. Computing one from the other closed the drift; this
+// closes the case where a field name is added whose column is not what anyone assumed.
+func TestTheTenantColumnNamesAreTheColumnsTheTenantFieldsProduce(t *testing.T) {
+	if len(TenantColumnNames) != len(tenantFieldNames) {
+		t.Fatalf("%d column names for %d field names", len(TenantColumnNames), len(tenantFieldNames))
+	}
+
+	models := []any{&tenantIdModel{}, &plainTenantModel{}}
+	if len(models) != len(tenantFieldNames) {
+		t.Fatalf("this test carries %d models for %d spellings; a spelling was added to "+
+			"tenantFieldNames without a model here to derive its column from",
+			len(models), len(tenantFieldNames))
+	}
+
+	db := newTestDB(t)
+	for i, field := range tenantFieldNames {
+		stmt := &gorm.Statement{DB: db}
+		if err := stmt.Parse(models[i]); err != nil {
+			t.Fatalf("parsing the model for %s: %v", field, err)
+		}
+		parsed, ok := stmt.Schema.FieldsByName[field]
+		if !ok {
+			t.Fatalf("the model for %s does not carry that field", field)
+		}
+		if parsed.DBName != TenantColumnNames[i] {
+			t.Errorf("field %s produces column %q, but TenantColumnNames[%d] is %q — "+
+				"tenantpurge looks for the latter in the catalog, so a table carrying this "+
+				"field would be scoped by the callback and missed by the sweep",
+				field, parsed.DBName, i, TenantColumnNames[i])
+		}
+	}
+}

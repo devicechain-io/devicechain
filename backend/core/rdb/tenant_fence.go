@@ -225,20 +225,29 @@ func fenceExempt(db *gorm.DB) bool {
 
 // statementTenants returns every tenant token this statement could write a row for.
 //
-// 🔴 IT LOOKS IN TWO PLACES BECAUSE THERE ARE TWO SPELLINGS, and missing the second one
-// would leave the fence silently off for the area that needs it most. Most models embed
-// rdb.TenantScoped and carry TenantId, and for those the tenant is in the context — the
-// scoping callback injects it. event-processing's projections carry a plain `Tenant`
-// composite-PK column and no embed, deliberately (see its baseline_snapshot.go), so the
-// scoping callbacks do not apply to them at all and no tenant need be in their context:
-// they are written from the resolved-event stream by ON CONFLICT ... DO UPDATE upserts,
-// which is verified resurrection vector 4. Their tenant is in the ROW.
+// 🔴 IT LOOKS IN TWO PLACES BECAUSE A STATEMENT CAN NAME ITS TENANT IN EITHER. Most
+// statements carry it in the CONTEXT and the scope callback injects the predicate from
+// there. But a create also carries it on the ROWS, and the two are not interchangeable:
 //
-// Both sources are consulted for every statement rather than one being chosen by shape.
-// The context alone would miss the row-carried spelling; the rows alone would miss an
-// Updates(map) that names no tenant column, and would depend on this callback running
-// after the one that stamps TenantId, which is a registration-order assumption no test
-// would notice breaking.
+//   - A statement under a SYSTEM context has no context tenant by design, and its rows
+//     are then the only thing naming one. event-processing's projections — plain `Tenant`
+//     composite-PK columns, written from the resolved-event stream by
+//     ON CONFLICT ... DO UPDATE upserts, verified resurrection vector 4 — are read that
+//     way by the engine's four cross-tenant startup loads.
+//   - An Updates(map) names no tenant column at all, so the rows give nothing and the
+//     context is all there is.
+//
+// So both sources are consulted for every statement rather than one being chosen by
+// shape. Reading the rows alone would also depend on this callback running after the one
+// that stamps the tenant, which is a registration-order assumption no test would notice
+// breaking.
+//
+// 🔴 THIS COMMENT USED TO SAY event-processing's tables were outside the scoping
+// callbacks entirely and needed no tenant in their context. That was true when it was
+// written and is now false in both halves: the callback recognises both spellings, those
+// tables are scoped, and a missing tenant is core.ErrNoTenant. The old text survived the
+// change that falsified it by forty lines and was caught in review — which is the case
+// for saying what a comment is FOR rather than what the world around it happens to be.
 func statementTenants(db *gorm.DB) []string {
 	field := tenantFieldOf(db)
 	if field == "" {

@@ -46,11 +46,6 @@ func (s *DetectRuleStore) Upsert(ctx context.Context, rules []DetectRule) error 
 	// the context's tenant onto every row of a create, so a spanning batch would otherwise
 	// be rewritten to whichever tenant came first and land each rewritten row on a primary
 	// key this ON CONFLICT target does not name.
-	//
-	// This file used to re-check that here as well. The duplicate was removed once mutation
-	// testing showed the test written for it could not tell the two apart — it passed
-	// whether the local check was present or not, because the callback's refusal was doing
-	// the work either way.
 	return s.rdb.DB(dccore.WithTenant(ctx, rules[0].Tenant)).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "rule_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"definition", "entity_group_token", "entity_group_version", "updated_at"}),

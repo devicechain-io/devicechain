@@ -62,8 +62,11 @@ func NewDeviceAttributeStore(r *rdb.RdbManager) *DeviceAttributeStore {
 // sweep to commit before its own fence write, contradicting its fixed order. A newer token-reuse
 // write to the same key (LastEventAt > the fence) is preserved by the delete's `<=` bound.
 func (s *DeviceAttributeStore) Upsert(ctx context.Context, attr *DeviceAttribute) error {
-	// Set once here so every statement this method reaches — the fence reads, the insert,
-	// the straggler sweep — is scoped by the storage callback from the same tenant.
+	// Scope the whole method from the row's tenant, so the insert below is scoped without
+	// each statement repeating it. The helpers this method calls — deletionFence and
+	// sweepStraggler — set it from their own arguments too, deliberately: they are also
+	// reached from Remove, and a helper that is correct only when its caller remembered
+	// something is a helper that will one day be called by someone who did not.
 	ctx = dccore.WithTenant(ctx, attr.Tenant)
 	deletedAt, fenced, err := s.deletionFence(ctx, attr.Tenant, attr.DeviceToken, attr.LastEventAt)
 	if err != nil {
