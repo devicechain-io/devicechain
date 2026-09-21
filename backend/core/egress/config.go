@@ -30,9 +30,14 @@ func FromConfig(cfg config.EgressConfiguration) (*Guard, error) {
 // A prefix is rejected unless it is in canonical masked form — `10.1.2.0/24`, never
 // `10.1.2.3/24`. netip.ParsePrefix accepts the second and silently ignores the host bits,
 // so an operator who meant to allow one address and mistyped the length would grant a
-// whole /24 with nothing anywhere to show it. On a deny-by-default boundary that is the
-// error worth being pedantic about: it is silent, it is in the widening direction, and
-// the written config still reads like the narrow grant that was intended.
+// whole /24 with nothing anywhere to show it. That is the error worth being pedantic
+// about: it is silent, it is in the widening direction, and the written config still
+// reads like the narrow grant that was intended.
+//
+// It widens more than it looks like it does, because an allow entry is not a grant — it
+// is an EXEMPTION from `denied`, checked before every refusal the guard can make. A /24
+// mistyped here can therefore re-open private space to a tenant, which is the whole
+// boundary, from a line that reads as a single host.
 func ParsePrefixes(raw []string) ([]netip.Prefix, error) {
 	out := make([]netip.Prefix, 0, len(raw))
 	for _, entry := range raw {

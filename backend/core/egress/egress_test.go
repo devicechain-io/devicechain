@@ -376,6 +376,12 @@ func TestEveryDeniedPrefixIsRefused(t *testing.T) {
 
 // The counterweight: the sweep above is only meaningful while the guard still admits
 // ordinary public addresses. A guard that refused everything would satisfy it perfectly.
+//
+// It is also the positive statement of the guard's terminal, and worth reading as one:
+// an address matching no allow prefix, no categorical check and no row of `denied` is
+// DIALABLE. That is the design — a tenant's webhook destination is an arbitrary public
+// host — and it is what makes `denied` the boundary rather than a second opinion on it.
+// See the note on Guard.
 func TestTheDenySweepIsNotVacuous(t *testing.T) {
 	g := NewGuard(nil)
 	for _, addr := range []string{"1.1.1.1", "8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"} {
