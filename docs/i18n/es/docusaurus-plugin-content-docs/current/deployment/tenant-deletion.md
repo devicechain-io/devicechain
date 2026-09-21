@@ -153,6 +153,24 @@ Ninguno de estos casos pierde la eliminación. La lista de trabajo es el propio 
 inquilino, así que un coordinador detenido, una réplica reprogramada y un sistema caído
 durante una semana convergen todos en la siguiente pasada.
 
+### Cómo se entera {#stalled-alert}
+
+Una eliminación que no termina no hace que nada más parezca averiado, y precisamente por eso
+merece una alerta. El coordinador visita al inquilino en cada pasada, no encuentra nada que
+pueda notificar como error y la pasada termina bien, así que las métricas de tarea
+programada —las que le dirían que el coordinador se ha parado— siguen en verde todo el
+tiempo. Responden a otra pregunta.
+
+`TenantPurgeStalled` responde a esta. Se dispara cuando la eliminación abierta más antigua
+lleva abierta más del doble de la retención de token configurada, bastante más allá del
+punto en que ya han transcurrido todas las esperas obligatorias. La consulta
+`tenantDeletions` de la API de administración indica entonces qué inquilino y qué sistema de
+almacenamiento siguen pendientes.
+
+Tiene un contrapeso, `TenantPurgeVisibilityLost`, que se dispara cuando esas cifras dejan de
+recogerse. Sin él, un servicio user-management que no se estuviera consultando se vería
+exactamente igual que uno sin ninguna eliminación abierta.
+
 ## Configuración {#configuration}
 
 Estos ajustes residen bajo `tenantPurge` en el servicio user-management. `0` significa

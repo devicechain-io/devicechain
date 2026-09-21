@@ -42,7 +42,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A tenant deletion has been open for more than twice its token hold"
-            description: "The oldest open tenant deletion is older than {{ $stalled }}s, which is twice the configured token hold ({{ $hold }}s) and therefore well past the point where every mandatory wait has elapsed. The purge is not progressing: some store is not reporting clean, or is reporting clean and then dirty again. The tenant's data has NOT been erased and its token is still reserved. The coordinator's own pass metrics will look healthy throughout, because a tenant it cannot finish is still a tenant it visited without error -- this alert is the only signal that the deletion is stuck. Query adminTenantDeletions to see which tenant and which store is outstanding."
+            description: "The oldest open tenant deletion is older than {{ $stalled }}s, which is twice the configured token hold ({{ $hold }}s) and therefore well past the point where every mandatory wait has elapsed. The purge is not progressing: some store is not reporting clean, or is reporting clean and then dirty again. The tenant's data has NOT been erased and its token is still reserved. The coordinator's own pass metrics will look healthy throughout, because a tenant it cannot finish is still a tenant it visited without error -- this alert is the only signal that the deletion is stuck. The admin API's tenantDeletions query names the tenant and the store still outstanding."
         - alert: TenantPurgeVisibilityLost
           expr: absent(devicechain_usermanagement_tenant_purge_in_flight{namespace="{{ $ns }}"})
           for: 15m
