@@ -38,7 +38,7 @@ func routesMux(t *testing.T, resource string) *http.ServeMux {
 	t.Helper()
 	_, validator := mustIssuerValidator(t)
 	mux := http.NewServeMux()
-	Routes(mux, resource, "https://iot.example.com/api/user-management", validator)
+	Routes(mux, resource, "https://iot.example.com/api/user-management", validator, NewGraphQLClient())
 	for _, p := range sidecarPatterns {
 		mux.HandleFunc(p, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	}
