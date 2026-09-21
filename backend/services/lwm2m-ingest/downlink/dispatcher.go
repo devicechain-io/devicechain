@@ -212,9 +212,6 @@ const (
 	responsePublishAttempts = 3
 	// responsePublishBackoff paces the local response-publish retry.
 	responsePublishBackoff = 250 * time.Millisecond
-	// readErrorBackoff paces the command-reader loop after a read error, so a persistent failure is
-	// a slow retry rather than a tight busy-loop.
-	readErrorBackoff = time.Second
 	// dedupeTTL bounds how long a just-dispatched (deviceToken, commandToken) suppresses a
 	// re-dispatch of the SAME command by the other path — a wake drain fetching a row the live
 	// stream is also delivering, or vice versa. It only needs to cover the window between an op
@@ -247,6 +244,9 @@ type Dispatcher struct {
 	claimer   commandClaimer
 	parker    commandParker
 	metrics   Metrics
+	// readPacer bounds a run of failing reads and ends the process once they stop looking
+	// transient. See Options.ReadPacer for why this is not optional in production.
+	readPacer *core.ReadPacer
 	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// Never nil; see NewDispatcher.
 	tenantDeleted func(tenant string) bool
@@ -270,6 +270,19 @@ type Dispatcher struct {
 type Options struct {
 	Workers   int
 	OpTimeout time.Duration
+	// ReadPacer bounds how long the command-reader loop will retry a failing read before
+	// declaring this process unfit. REQUIRED whenever a real reader is supplied;
+	// NewDispatcher refuses the combination rather than defaulting it.
+	//
+	// 🔴 THE REFUSAL IS THE POINT, AND IT FOLLOWS THIS TYPE'S OWN RULE. The comment on
+	// Parker below draws the line: positional when omitting it fails CLOSED, optional when
+	// omitting it degrades visibly. A missing pacer fails closed and then hides — the loop
+	// retries forever behind a pod that reports Ready, leader and serving, while consuming
+	// no commands, and Metrics has no read-error counter to show it. It is an Option rather
+	// than a positional parameter only because twenty-seven tests construct a dispatcher
+	// with a NIL reader to exercise the drain and park paths, and those never read at all;
+	// the refusal below is what keeps that convenience from reaching production.
+	ReadPacer *core.ReadPacer
 	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// A closure rather than the governance resolver type so this package is testable
 	// without a live user-management. Nil disables the gate; see NewDispatcher.
@@ -317,6 +330,11 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 	if opts.OpTimeout <= 0 {
 		opts.OpTimeout = DefaultOpTimeout
 	}
+	if rdr != nil && opts.ReadPacer == nil {
+		panic("lwm2m-ingest: NewDispatcher needs a read pacer when it is given a reader; without " +
+			"one a command-reader loop whose consumer is broken retries forever while the term " +
+			"stays healthy, and the pod reports leader and serving while dispatching nothing")
+	}
 	return &Dispatcher{
 		reader:        rdr,
 		responses:     responses,
@@ -326,6 +344,7 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		claimer:       claimer,
 		parker:        opts.Parker,
 		metrics:       metrics,
+		readPacer:     opts.ReadPacer,
 		tenantDeleted: opts.TenantDeleted,
 		workers:       opts.Workers,
 		opTimeout:     opts.OpTimeout,
@@ -369,6 +388,18 @@ type task struct {
 // evicted replica stops pulling promptly; the durable consumer is bound (not owned), so its cursor
 // survives the term and the next leader resumes from the last ack.
 func (d *Dispatcher) Run(ctx context.Context) {
+	// The workers run on a ctx this function can end on its own, not just on the term's.
+	// Before the read loop could give up, "the loop stopped" and "the term ended" were the
+	// same event, so a worker ctx derived from the caller's was enough. They are no longer
+	// the same: an exhausted read budget breaks the loop with the term still held, and
+	// workers parked on the caller's ctx would hold wg.Wait() open behind it -- and
+	// serveAsLeader waits on this function returning before it unwinds the term. The
+	// process is on its way down at that point either way, but a shutdown that has to wait
+	// for its own budget to expire reports "teardown did not finish" instead of the read
+	// error that caused it, which is the one thing the operator needed.
+	runCtx, stopWorkers := context.WithCancel(ctx)
+	defer stopWorkers()
+
 	queues := make([]chan task, d.workers)
 	var wg sync.WaitGroup
 	for i := range queues {
@@ -383,10 +414,10 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			// is re-fired by the next wake. Either is safe.
 			for {
 				select {
-				case <-ctx.Done():
+				case <-runCtx.Done():
 					return
 				case t := <-ch:
-					d.process(ctx, t)
+					d.process(runCtx, t)
 				}
 			}
 		}(queues[i])
@@ -404,18 +435,29 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			if ctx.Err() != nil {
 				break // evicted / shutting down
 			}
-			// A read error — a NATS blip, an io.EOF from a closed/draining connection, or a failed
-			// rebind. Record it and back off BEFORE retrying, so a persistent error is a paced retry,
-			// not a tight busy-loop (ReadMessage returns some of these instantly and repeatedly). A
-			// transient error self-heals when the next ReadMessage re-binds; a durable NATS outage
-			// also stalls this term's lease renewal, which evicts the term (ctx cancel) and ends the
-			// loop — so this never spins forever on a dead broker.
+			// A read error — a JetStream API error, a 409 from a stream at its MaxAckPending or
+			// MaxWaiting ceiling, a consumer whose leadership keeps moving, or an io.EOF from a
+			// rebind that gave up. Record it, then let the pacer space the retries out AND decide
+			// when the run of them has stopped looking transient.
+			//
+			// 🔴 THE PACER IS NOT REDUNDANT WITH LEASE EVICTION, WHICH IS WHAT THIS COMMENT USED
+			// TO CLAIM. It said a durable NATS outage stalls this term's lease renewal, which
+			// evicts the term and ends the loop, "so this never spins forever on a dead broker."
+			// That is true and it is beside the point. The lease renews over the SAME connection
+			// the reader uses, so it covers exactly the case where the whole broker is gone — and
+			// every error listed above happens on a connection that is perfectly HEALTHY.
+			// Lease.KeepAlive gives up only when Renew FAILS and the TTL window has passed
+			// (core/messaging/lease.go), so with the broker up the term is renewed indefinitely
+			// while this loop retries a broken consumer once a second, forever, behind a pod
+			// reporting leader and serving. Metrics carries no read-error counter, so nothing
+			// shows it either.
 			d.reader.HandleResponse(err)
-			if !sleepCtx(ctx, readErrorBackoff) {
+			if d.readPacer.PauseAfterError(ctx, err) {
 				break
 			}
 			continue
 		}
+		d.readPacer.Succeeded()
 		w, ok := d.parse(msg)
 		if !ok {
 			continue // poison — already acked + counted in parse
@@ -452,6 +494,9 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		}
 	}
 
+	// Ends the workers whether the loop left because the term was evicted or because the
+	// read budget was exhausted.
+	stopWorkers()
 	wg.Wait()
 }
 
@@ -878,18 +923,6 @@ func (d *Dispatcher) park(ctx context.Context, w work) {
 		incr(d.metrics.ParkSettled, 1)
 	}
 	settle()
-}
-
-// sleepCtx waits for d or ctx cancellation; it returns false if ctx was cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }
 
 // shard maps a device token to a worker index so all of a device's commands run in stream order on

@@ -6,7 +6,6 @@ package processor
 import (
 	"errors"
 	"io"
-	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
@@ -205,6 +204,7 @@ func (rp *ResolvedEventsProcessor) runFenceSetConsumer() {
 // its errors on rp.FenceSetReader, so the two could disagree with nothing to notice. Folded back
 // onto the field it was always given.
 func (rp *ResolvedEventsProcessor) drainFenceSetStream() {
+	pacer := rp.pacerFor("geofence sets")
 	for {
 		msg, err := rp.FenceSetReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
@@ -212,13 +212,12 @@ func (rp *ResolvedEventsProcessor) drainFenceSetStream() {
 		}
 		if err != nil {
 			rp.FenceSetReader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		if !rp.handleFenceSetFact(msg) {
 			return // shutdown mid-send: leave unacked; it redelivers next start
 		}

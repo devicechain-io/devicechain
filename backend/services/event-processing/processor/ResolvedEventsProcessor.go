@@ -22,9 +22,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// readErrorBackoff caps the retry rate after a non-EOF read error the reader's own
-// self-heal does not resolve, so a persistent instant error cannot hot-spin.
-const readErrorBackoff = 200 * time.Millisecond
+// persistRetryBackoffBase is the first pause when a fact projection cannot be written,
+// doubling from there to maxRulePersistBackoff.
+//
+// It was called readErrorBackoff and was shared with six read loops, which is how those
+// loops came to retry an unclearable read forever: a fixed pause bounds the RATE of the
+// retries and says nothing about how many of them there may be. The read loops now use
+// core.ReadPacer, which bounds both. This is the persist path only, and its retry is
+// deliberately unbounded -- a fact that cannot be written stays unacked and redelivers, so
+// retrying is how the message survives rather than a way of ignoring the failure.
+const persistRetryBackoffBase = 200 * time.Millisecond
 
 // fenceReconcileInterval is how often the live loop re-seeds the geofence projection from
 // device-management's frozen fence-set archive, on top of the two reconciles startup already runs.
@@ -443,7 +450,17 @@ type ResolvedEventsProcessor struct {
 	// responder, however, reads from its own goroutine at any time, so a plain field
 	// re-assignment here would be a data race with it. Tests that drive the processor
 	// without a lease still assign the fields directly during single-threaded setup.
-	procMu     sync.RWMutex
+	procMu sync.RWMutex
+	// newPacer builds the read pacer for one of this processor's streams. It is a FIELD
+	// rather than a direct call to core.NewReadPacer for one reason: a pacer on the real
+	// clock makes a test that measures the retry budget take the retry budget. A test
+	// installs one that returns virtual-clock pacers; nil means the real thing.
+	//
+	// It returns a NEW pacer per call, and every caller keeps its own. A pacer's budget
+	// measures one unbroken run on one stream, and a shared one would let a wedged stream
+	// tear the process down over a healthy one's shoulder.
+	newPacer func(what string) *core.ReadPacer
+
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	readerWG   sync.WaitGroup
@@ -467,6 +484,15 @@ type ResolvedEventsProcessor struct {
 type readItem struct {
 	msg messaging.Message
 	err error
+}
+
+// pacerFor builds a read pacer for one of this processor's streams, through the newPacer
+// seam when a test has installed one.
+func (rp *ResolvedEventsProcessor) pacerFor(what string) *core.ReadPacer {
+	if rp.newPacer != nil {
+		return rp.newPacer(what)
+	}
+	return core.NewReadPacer(rp.Microservice, what)
 }
 
 // ruleUpdate is one live change to the rule set, applied on the single-writer loop
@@ -1528,6 +1554,7 @@ func (rp *ResolvedEventsProcessor) run() {
 // loop that has already stopped receiving.
 func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- struct{}) {
 	defer close(done)
+	pacer := rp.pacerFor("resolved events")
 	for {
 		msg, err := rp.ResolvedEventsReader.ReadMessage(rp.pctx())
 		select {
@@ -1539,16 +1566,17 @@ func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- s
 			return
 		}
 		if err != nil {
-			// A non-EOF read error was handed to the loop (which logs it via
-			// HandleResponse); back off before the next read so a persistent,
-			// instantly-returning error (e.g. a bad subscription the reader's own
-			// self-heal does not cover) cannot hot-spin the CPU and flood logs.
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			// The error has already gone to the loop, which logs it via HandleResponse.
+			// Pacing here spaces the retries out AND ends the pump once the failures
+			// stop looking transient: a bad subscription the reader's own self-heal
+			// does not cover used to spin here for as long as the pod lived, with the
+			// loop dutifully logging every one of them.
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
+			continue
 		}
+		pacer.Succeeded()
 	}
 }
 
@@ -2030,6 +2058,7 @@ func (rp *ResolvedEventsProcessor) retryAttrRechecks(deadline time.Time) {
 // still persists them, so the startup rebuild and the live path stay symmetric.
 func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 	defer rp.readerWG.Done()
+	pacer := rp.pacerFor("rule updates")
 	for {
 		msg, err := rp.RuleUpdatesReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
@@ -2037,13 +2066,12 @@ func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 		}
 		if err != nil {
 			rp.RuleUpdatesReader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		if !rp.handleRuleFact(msg, true) {
 			return // shutdown mid-persist/-send: leave unacked; the rows rebuild it next start
 		}

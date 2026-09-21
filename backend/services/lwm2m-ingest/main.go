@@ -607,6 +607,11 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			// fires them when a sleeping device next registers — which can be long after
 			// the delete, off a (tenant, token) remembered from before it.
 			TenantDeleted: tenantGate,
+			// Built per leadership term, like the dispatcher it belongs to: a pacer's
+			// budget measures ONE unbroken run on ONE subscription, and carrying a dead
+			// term's failures into the term that replaced it would end a healthy process
+			// for a fault it never saw.
+			ReadPacer: core.NewReadPacer(Microservice, "device commands"),
 		}
 		// Typed-nil care, as above: assign through the interface only when the concrete
 		// parker exists, so a missing command-delivery endpoint leaves a TRUE nil that the

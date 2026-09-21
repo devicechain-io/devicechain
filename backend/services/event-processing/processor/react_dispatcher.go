@@ -44,6 +44,13 @@ type ReactDispatcher struct {
 	// the kind moves.
 	area string
 
+	// readPacer bounds a run of failing reads and ends the process once they stop
+	// looking transient. Built per dispatcher, like the reader it paces and unlike the
+	// metrics above, because a pacer's budget measures ONE unbroken run on ONE
+	// subscription; sharing it across connections would carry a dead subscription's
+	// failures into the one that replaced it.
+	readPacer *core.ReadPacer
+
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	wg         sync.WaitGroup
@@ -68,6 +75,7 @@ func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 	}
+	rd.readPacer = core.NewReadPacer(ms, "react dispatch")
 	if ms != nil {
 		rd.area = ms.FunctionalArea
 	}
@@ -100,6 +108,7 @@ func (rd *ReactDispatcher) Stop(ctx context.Context) error {
 // backs off and retries.
 func (rd *ReactDispatcher) run() {
 	defer rd.wg.Done()
+	pacer := rd.pacer()
 	for {
 		msg, err := rd.reader.ReadMessage(rd.procCtx)
 		if errors.Is(err, io.EOF) {
@@ -107,18 +116,34 @@ func (rd *ReactDispatcher) run() {
 		}
 		if err != nil {
 			rd.reader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rd.procCtx.Done():
+			if pacer.PauseAfterError(rd.procCtx, err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		rd.handle(msg)
 		if rd.procCtx.Err() != nil {
 			return
 		}
 	}
+}
+
+// pacer returns the dispatcher's read pacer, building a reportless one if this dispatcher
+// was assembled by struct literal rather than by NewReactDispatcher.
+//
+// The fallback is for the tests that build a ReactDispatcher directly to exercise handle().
+// None of them drives the read loop today, so the nil would never be dereferenced -- which
+// is exactly why it is worth closing now, while the reason is visible, rather than leaving
+// a nil pointer for the first test that does.
+//
+// Called once, from run(), on the goroutine that owns the loop. A ReadPacer is
+// single-goroutine by contract and this does not change that.
+func (rd *ReactDispatcher) pacer() *core.ReadPacer {
+	if rd.readPacer == nil {
+		rd.readPacer = core.NewReadPacer(nil, "react dispatch")
+	}
+	return rd.readPacer
 }
 
 // handle dispatches one derived event and acks it or leaves it unacked. An undecodable or

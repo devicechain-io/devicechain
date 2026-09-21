@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/core"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -165,7 +166,11 @@ func (e *fakeExecutor) callCount() int {
 }
 
 func newDispatcher(rdr reader, pub responsePublisher, look connLookup, exec executor) *Dispatcher {
-	return NewDispatcher(rdr, pub, look, exec, nil, nil, Metrics{}, Options{})
+	// A reportless pacer on a virtual clock: these tests exercise routing and dispatch, not
+	// pacing, and a real clock would make any read error in one of them cost a real pause.
+	// read_error_pacing_test.go is where the pacing itself is measured.
+	return NewDispatcher(rdr, pub, look, exec, nil, nil, Metrics{},
+		Options{ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 }
 
 // fakeFetcher is a stand-in wake-drain source: it returns a canned command list (or an error).
@@ -1017,7 +1022,8 @@ func TestRunRoutesAnOfflineServedDeviceToItsWorker(t *testing.T) {
 	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
 	parker := &fakeParker{parked: true}
 	m := parkMetrics()
-	d := NewDispatcher(rdr, &fakePublisher{}, look, exec, nil, nil, m, Options{Parker: parker})
+	d := NewDispatcher(rdr, &fakePublisher{}, look, exec, nil, nil, m,
+		Options{Parker: parker, ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -1154,7 +1160,8 @@ func TestWakeDrainEndToEnd(t *testing.T) {
 		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
 	}}
 	// An empty reader so Run's consume loop just parks on ctx — the drain is driven purely by the wake.
-	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
+	d := NewDispatcher(&scriptReader{}, pub, connTable, exec, ff, &fakeClaimer{won: true}, Metrics{},
+		Options{ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 	connTable.SetOnLive(d.Drain)
 
 	ctx, cancel := context.WithCancel(context.Background())
