@@ -164,7 +164,7 @@ func (suite *InboundEventsProcessorTestSuite) TestCredentialStillAuthenticatesAn
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(credentialLocationMessage(suite, 1), nil)
 	suite.API.Mock.On("AuthenticateDevice").Return(buildDevice(), nil)
 	suite.Resolved.Mock.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
-	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{*buildDeviceRelationship()}}, nil)
 	// The token lookup is stubbed deliberately, and it is what gives the last
 	// assertion its teeth. This suite runs in the mode where an event with no

@@ -51,19 +51,15 @@ func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
 	return rdb.Database.WithContext(ctx)
 }
 
-// Query for a list of models based on filter and pagination criteria.
+// countAndOrder builds the COUNT and the ordered data query that ListOf and ListAllOf
+// share, returning the data query and the total number of matching rows.
 //
-// The model is a Sortable, not an interface{}, because LIMIT/OFFSET without an
-// ORDER BY returns rows in an unspecified order that may differ between two calls —
-// so a paged read can repeat a row on one page and skip another. Every model
-// therefore declares the order its lists are read in, and this applies it. See
-// sortable.go for why that is a compile-time requirement rather than a convention.
-func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
-	// Sanity check page number.
-	if pag.PageNumber < 1 {
-		pag.PageNumber = 1
-	}
-
+// Splitting it out is what lets the two entry points differ in exactly one thing:
+// whether a LIMIT is applied. While the all-rows read was a branch INSIDE ListOf,
+// everything above that branch was shared by accident of layout rather than by
+// construction, and the ordering note below had to claim the sharing in prose.
+func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
+	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, int32) {
 	// Bind the context once (so the tenant-scope callbacks see it) and reuse it
 	// for both the count and data queries; each Model(...) clones a fresh stmt.
 	base := rdb.Database.WithContext(ctx)
@@ -93,22 +89,32 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db
 	// sanctioned per-query override. Ordering these two the other way round would
 	// silently demote every caller's order to a tiebreak behind the default.
 	//
-	// This sits outside the Unbounded branch on purpose: an unbounded read has no
-	// LIMIT, but it still has consumers that care which row they see first, and one
-	// of them picks a provisioning credential off the front of the set.
-	result = result.Order(mdl.DefaultOrder())
+	// Both entry points order, and an unbounded read needs it every bit as much as a
+	// paged one: it has consumers that care which row they see first, and one of them
+	// picks a provisioning credential off the front of the set.
+	return result.Order(mdl.DefaultOrder()), total
+}
 
-	result.Scopes(Paginate(pag))
-
-	// Short-circuit for the explicit internal all-rows path (Paginate applied no
-	// LIMIT). External requests never set Unbounded and so are always bounded below.
-	if pag.Unbounded {
-		return result, SearchResultsPagination{
-			PageStart:    1,
-			PageEnd:      total,
-			TotalRecords: total,
-		}
+// Query for one PAGE of models based on filter and pagination criteria.
+//
+// The model is a Sortable, not an interface{}, because LIMIT/OFFSET without an
+// ORDER BY returns rows in an unspecified order that may differ between two calls —
+// so a paged read can repeat a row on one page and skip another. Every model
+// therefore declares the order its lists are read in, and this applies it. See
+// sortable.go for why that is a compile-time requirement rather than a convention.
+//
+// 🔴 THERE IS NO ARGUMENT THAT TURNS THIS INTO A FULL SCAN. A LIMIT is always applied.
+// The flag that used to lift it lived on Pagination, where thirty-five criteria types
+// inherited it; it is gone, and a caller that needs every row calls ListAllOf instead
+// and is legible as having done so.
+func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db *gorm.DB) *gorm.DB, pag Pagination) (*gorm.DB, SearchResultsPagination) {
+	// Sanity check page number.
+	if pag.PageNumber < 1 {
+		pag.PageNumber = 1
 	}
+
+	result, total := rdb.countAndOrder(ctx, mdl, filters)
+	result.Scopes(Paginate(pag))
 
 	// Use the effective (defaulted/clamped) page size so the reported span matches
 	// the LIMIT/OFFSET Paginate actually applied (ADR-029).
@@ -124,6 +130,38 @@ func (rdb *RdbManager) ListOf(ctx context.Context, mdl Sortable, filters func(db
 		TotalRecords: total,
 	}
 	return result, srpag
+}
+
+// ListAllOf queries EVERY row matching the filters, with no LIMIT.
+//
+// 🔴 IT TAKES NO Pagination, AND THAT ABSENT PARAMETER IS THE DESIGN. The all-rows read
+// used to be a bool on the Pagination that every criteria type embeds, so thirty-five
+// criteria types could ask for one and three stores wrote a line forcing it back off.
+// Here the capability is reachable only by naming this function: a store that must never
+// scan its table simply never calls it, and a grep for ListAllOf enumerates every
+// unbounded read THROUGH THIS API without a ledger to maintain, since the capability can
+// no longer be acquired by embedding a struct.
+//
+// 🔴 THAT SCOPE IS NOT THE WHOLE TREE, AND SAYING OTHERWISE WOULD BE THE MORE COMFORTABLE
+// LIE. A raw gorm read — tx.Where(...).Find(...) — never touches this API and is bounded
+// by nothing here; device replacement does exactly that inside its own transaction, and
+// has to, because ListAllOf binds the manager's connection rather than a caller's tx. So
+// this is the complete list of unbounded reads that go through rdb's list API, which is a
+// narrower claim than the one a reader wants it to be making.
+//
+// Since there is no page, the returned SearchResultsPagination spans the whole set:
+// PageStart 1 through the total. Use it only where the full set is genuinely required
+// AND is bounded by something other than a LIMIT — a device's tracked relationships, a
+// device's live credentials of one type. It is not a shortcut around paging a table
+// that grows with the tenant.
+func (rdb *RdbManager) ListAllOf(ctx context.Context, mdl Sortable,
+	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, SearchResultsPagination) {
+	result, total := rdb.countAndOrder(ctx, mdl, filters)
+	return result, SearchResultsPagination{
+		PageStart:    1,
+		PageEnd:      total,
+		TotalRecords: total,
+	}
 }
 
 // Initialize component.
@@ -384,9 +422,6 @@ func (rdb *RdbManager) ExecuteTerminate(context.Context) error {
 // it; an unbounded row set still belongs behind ListOf's LIMIT.
 func PageSlice[T any](items []T, pag Pagination) ([]T, SearchResultsPagination) {
 	total := int32(len(items))
-	if pag.Unbounded {
-		return items, SearchResultsPagination{PageStart: 1, PageEnd: total, TotalRecords: total}
-	}
 	if pag.PageNumber < 1 {
 		pag.PageNumber = 1
 	}

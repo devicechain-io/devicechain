@@ -128,10 +128,14 @@ func TestClosureOrderLeadsAndDefaultTiebreaks(t *testing.T) {
 // An unbounded read is ordered too. It applies no LIMIT, so it cannot duplicate or
 // skip — but its consumers still read off the front of the set, and one of them picks
 // which provisioning credential a device gets.
-func TestListOfOrdersUnboundedReads(t *testing.T) {
+//
+// The ordering is now shared by construction (countAndOrder) rather than by sitting
+// above a branch, but that is exactly why it still needs its own test: a refactor that
+// moved the Order call into ListOf alone would leave every paged test green.
+func TestListAllOfOrdersItsReads(t *testing.T) {
 	rdb := newSortableDB(t)
 	results := make([]sortableRow, 0)
-	db, _ := rdb.ListOf(context.Background(), &sortableRow{}, nil, Pagination{Unbounded: true})
+	db, _ := rdb.ListAllOf(context.Background(), &sortableRow{}, nil)
 	if err := db.Find(&results).Error; err != nil {
 		t.Fatalf("find: %v", err)
 	}

@@ -18,9 +18,10 @@ import (
 // mutations that invalidate) the two hot lookups:
 //
 //   - DevicesByToken: device-token -> *Device (positive hits only).
-//   - EntityRelationships: a device's tracked relationships, only for the
-//     specific (SourceType=device, SourceId set, Tracked=true) shape the resolver
-//     issues; every other query shape falls through to the DB.
+//   - TrackedRelationshipsForDevice: a device's tracked relationships, the full set
+//     the resolver denormalizes onto every event. It is one named method rather than
+//     a recognized shape of the general relationship search; the search itself is not
+//     cached and goes to the DB by promotion.
 //
 // AuthenticateDevice is deliberately NOT cached: credential validation is
 // security-sensitive (caching would delay the effect of revocation/expiry), so it
@@ -238,36 +239,39 @@ func (capi *CachedApi) getDevice(ctx context.Context, key string) *Device {
 	return nil
 }
 
-// isTrackedSourceDeviceShape reports whether criteria is exactly the shape the
-// resolver issues for a device's tracked relationships
-// (SourceType=device, SourceId set, Tracked=true). Only this shape is served from
-// or written to the relationships cache; any other shape falls through to the DB
-// so unrelated query shapes are never mis-cached.
-func isTrackedSourceDeviceShape(criteria EntityRelationshipSearchCriteria) bool {
-	return criteria.SourceId != nil &&
-		criteria.Tracked != nil && *criteria.Tracked &&
-		criteria.SourceType != nil && *criteria.SourceType == string(entity.TypeDevice) &&
-		criteria.TargetType == nil &&
-		criteria.RelationshipType == nil
-}
-
-// EntityRelationships serves the resolver's tracked-source-device relationship
-// lookup from cache (positive results only, keyed by tenant + source device id),
-// and falls through to the DB for any other query shape or when no tenant is in
-// context.
-func (capi *CachedApi) EntityRelationships(ctx context.Context,
-	criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error) {
+// TrackedRelationshipsForDevice serves the resolver's tracked-relationship lookup from
+// cache (positive results only, keyed by tenant + source device id), falling through to
+// the DB when no tenant is in context.
+//
+// 🔑 THIS USED TO BE A SHAPE-SNIFFING OVERRIDE OF THE GENERIC SEARCH, and deleting that
+// predicate is half the reason the read was given a name. Because the resolver expressed
+// its lookup as an ordinary EntityRelationshipSearchCriteria, the only way to recognize
+// the one query worth caching was to compare five criteria fields against the shape the
+// resolver happened to send (isTrackedSourceDeviceShape). That predicate was a second,
+// informal definition of this method, living in a different package from the caller it
+// described and kept in step with it by hand.
+//
+// 🔴 AND IT DID NOT COMPARE THE PAGINATION. The cache key is (tenant, source device) with
+// no room for a page, so any caller issuing that field shape with a page size would have
+// had its PAGE written to the entry the resolver reads as the COMPLETE tracked set —
+// silently dropping anchors from every event until the entry expired. Nothing does that
+// today: GraphQL reads deliberately go through the uncached Api (see GetApi; only the
+// profile publish/rollback MUTATIONS take GetCachedApi, for its eviction), so
+// this was one caller away rather than broken. A read that must be complete and a read
+// that may be paged are now different methods, so there is no shape left to confuse.
+func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
+	deviceId uint) (*EntityRelationshipSearchResults, error) {
 	tenant, hasTenant := core.TenantFromContext(ctx)
-	if !hasTenant || !isTrackedSourceDeviceShape(criteria) {
-		return capi.Api.EntityRelationships(ctx, criteria)
+	if !hasTenant {
+		return capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	}
 
-	key := relationshipsBySourceKey(tenant, *criteria.SourceId)
+	key := relationshipsBySourceKey(tenant, deviceId)
 	if results := capi.getRelationships(ctx, key); results != nil {
 		return results, nil
 	}
 
-	results, err := capi.Api.EntityRelationships(ctx, criteria)
+	results, err := capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	if err != nil {
 		return nil, err
 	}

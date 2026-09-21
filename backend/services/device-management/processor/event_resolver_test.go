@@ -199,7 +199,7 @@ func measurementEvent(key, value string) *esmodel.UnresolvedEvent {
 // engine can select the applicable rules without a graph read (ADR-051).
 func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{DeviceTypeToken: "sensor-type", ProfileVersionToken: "temp-profile@3"}
 
@@ -225,7 +225,7 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	// One tracked anchor: the device is located-in an area (row id 900).
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
 		}}, nil)
@@ -287,7 +287,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMemb
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
 	// The complete stamp reads the device's existing tracked anchors first; that read
 	// succeeds and the membership union (via the AnyScopedGroups gate) is what fails.
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	suite.API.AnyScopedGroupsErr = errors.New("transient membership lookup failure")
 
@@ -311,7 +311,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMemb
 // create, or a redelivery would mint a duplicate (fresh-token) relationship (ADR-062 S5).
 func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnAnchorError() {
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		(*dmodel.EntityRelationshipSearchResults)(nil), errors.New("transient anchor lookup failure"))
 
 	event := &esmodel.UnresolvedEvent{
@@ -339,7 +339,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnAnch
 func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMemberships() {
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
 	// The device is already located-in an arid area (row id 900) BEFORE this assignment.
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
 		}}, nil)
@@ -399,7 +399,7 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
 
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_Invalid), reason)
-	suite.API.AssertNotCalled(suite.T(), "EntityRelationships")
+	suite.API.AssertNotCalled(suite.T(), "TrackedRelationshipsForDevice")
 }
 
 // A conforming measurement passes validation and resolves. With no tracked
@@ -408,7 +408,7 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
 func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
 	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
@@ -550,7 +550,7 @@ func trackedRel(id uint, targetType string, targetToken string) dmodel.EntityRel
 // belongs to the device and still persists/projects (ADR-013 addendum 2026-07-01).
 func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
 	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
@@ -565,7 +565,7 @@ func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
 // A single assignment anchors the one resolved event on that relationship's target.
 func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			trackedRel(7, "customer", "cust-3"),
 		}}, nil)
@@ -584,7 +584,7 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 // event is queryable by every dimension (customer, area, asset) — ADR-013 addendum.
 func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			trackedRel(5, "area", "area-9"),
 			trackedRel(2, "customer", "cust-3"),
@@ -607,7 +607,7 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 // (an undeclared/untyped fleet is unaffected).
 func (suite *EventResolverTestSuite) TestMeasurementNoDefinitionsSkipsValidation() {
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships").Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
 	_, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(

@@ -36,7 +36,32 @@ import (
 // this bucket onto the jetstream package's KV, whose methods do take a context; that
 // is a migration, not an edit.
 type Cache struct {
-	kv nats.KeyValue
+	kv cacheStore
+}
+
+// cacheStore is the part of nats.KeyValue a Cache actually uses: three methods out of
+// the interface's twenty-odd. nats.KeyValue satisfies it structurally, so NewCache still
+// hands the real bucket straight in and nothing about production changes.
+//
+// 🔑 IT IS NARROWED SO THE CACHE CAN BE TESTED AT ALL. Wrapping the full nats.KeyValue
+// meant a Cache could only exist with a live JetStream connection behind it, which is why
+// nothing in the repository had ever tested a Cache, or any of the decorators built on one
+// — and a caching override that silently stopped overriding would have gone on passing
+// every test. Depending on the three methods actually called is what makes an in-memory
+// double a dozen lines instead of a JetStream server.
+type cacheStore interface {
+	Put(key string, value []byte) (uint64, error)
+	Get(key string) (nats.KeyValueEntry, error)
+	Delete(key string, opts ...nats.DeleteOpt) error
+}
+
+// NewCacheOver builds a Cache over any store providing the three methods a Cache uses.
+//
+// It exists for tests: production goes through NewCache, which supplies the real
+// JetStream bucket. It is exported because the decorators worth testing this way live in
+// the service modules, not in core.
+func NewCacheOver(store cacheStore) *Cache {
+	return &Cache{kv: store}
 }
 
 // NewCache returns a Cache over a JetStream KV bucket named for this instance,

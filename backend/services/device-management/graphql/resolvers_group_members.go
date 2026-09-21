@@ -23,8 +23,9 @@ type PaginationInput struct {
 	PageSize   int32
 }
 
-// rdbPagination maps the GraphQL pagination input to the core pagination request. It never
-// sets Unbounded — an external request is always bounded (the model clamps regardless).
+// rdbPagination maps the GraphQL pagination input to the core pagination request. An
+// external request is always bounded, and rdb.Pagination now has no field that could make
+// it anything else (the model clamps the size regardless).
 func rdbPagination(in PaginationInput) rdb.Pagination {
 	return rdb.Pagination{PageNumber: in.PageNumber, PageSize: in.PageSize}
 }
@@ -70,7 +71,8 @@ func (r *EntityGroupMemberSearchResultsResolver) Pagination() *SearchResultsPagi
 
 // Members resolves this group's members transparently over either mode — a static group's
 // "member" edges or a dynamic group's eval-on-read selector matches. The page is always
-// bounded (the model forces Unbounded off and applies the platform page-size clamp).
+// bounded: the pagination type cannot express a full scan, and the model applies the
+// platform page-size clamp on top.
 func (r *EntityGroupResolver) Members(ctx context.Context, args struct {
 	Pagination PaginationInput
 }) (*EntityGroupMemberSearchResultsResolver, error) {

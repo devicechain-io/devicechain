@@ -271,7 +271,7 @@ func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg messaging.
 	// No declared metric definitions, so a measurement event skips validation
 	// (ADR-016) and flows through as before.
 	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
-	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(&dmodel.EntityRelationshipSearchResults{
+	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(&dmodel.EntityRelationshipSearchResults{
 		Results: []dmodel.EntityRelationship{*buildDeviceRelationship()},
 	}, nil)
 
@@ -299,7 +299,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidNewAssignmentEvent() {
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
 	suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(buildDeviceRelationship(), nil)
 	// The complete membership stamp (ADR-062 S5) reads the device's existing tracked anchors.
-	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
 	// Send message and wait for event to be processed by resolver.

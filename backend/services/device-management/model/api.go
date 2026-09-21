@@ -324,6 +324,10 @@ type DeviceManagementApi interface {
 	DeviceCredentialsById(ctx context.Context, ids []uint) ([]*DeviceCredential, error)
 	DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error)
 	DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error)
+	// EnabledDeviceCredentialsOfType is the full-set read behind provisioning's reuse
+	// check. It is a separate method rather than a flag on the search above because a
+	// page could miss a reusable credential and mint a duplicate; see its implementation.
+	EnabledDeviceCredentialsOfType(ctx context.Context, deviceToken string, credentialType string) (*DeviceCredentialSearchResults, error)
 	DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)
 
 	// Device authentication (transport security, ADR-014).
@@ -333,6 +337,10 @@ type DeviceManagementApi interface {
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)
 	EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*EntityRelationship, error)
 	EntityRelationships(ctx context.Context, criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error)
+	// TrackedRelationshipsForDevice is the full-set read behind event resolution's
+	// anchor denormalization, and the one relationship read served from cache. It is a
+	// separate method rather than a flag on the search above; see its implementation.
+	TrackedRelationshipsForDevice(ctx context.Context, deviceId uint) (*EntityRelationshipSearchResults, error)
 	CreateEntityRelationship(ctx context.Context, request *EntityRelationshipCreateRequest) (*EntityRelationship, error)
 	EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*EntityRelationshipType, error)
 

@@ -178,10 +178,19 @@ func TestPreviewSelector(t *testing.T) {
 	assert.Error(t, err, "an unknown member family is rejected")
 }
 
-// A dynamic resolve never runs an unbounded scan even if a caller requests one.
-func TestResolveGroupMembers_ForcesBounded(t *testing.T) {
+// A dynamic group's resolve is bounded by the page it is handed.
+//
+// 🔑 THIS TEST USED TO ASSERT THE DEFENCE RATHER THAN THE BEHAVIOUR. rdb.Pagination
+// carried an Unbounded flag, this function's first statement forced it back off, and the
+// test set the flag and checked the forcing had happened. With the flag gone from the
+// type that assertion cannot be written — and is not worth writing, because the thing it
+// stood in for was never checked: that a page size is actually honoured over the member
+// family. Seeding one member could not have caught a missing LIMIT at all.
+func TestResolveGroupMembers_IsBoundedByItsPage(t *testing.T) {
 	api, ctx := newGroupMemberTestApi(t)
-	seedDeviceWithClimate(t, api, ctx, "d-arid", "arid")
+	for _, token := range []string{"d-arid-1", "d-arid-2", "d-arid-3"} {
+		seedDeviceWithClimate(t, api, ctx, token, "arid")
+	}
 
 	dynamic := string(MembershipDynamic)
 	sel := `"climate" in attr`
@@ -191,10 +200,12 @@ func TestResolveGroupMembers_ForcesBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	res, err := api.ResolveGroupMembers(ctx, g, rdb.Pagination{PageNumber: 1, PageSize: 100, Unbounded: true})
+	res, err := api.ResolveGroupMembers(ctx, g, rdb.Pagination{PageNumber: 1, PageSize: 2})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	// Unbounded was forced off, so the page reports a real bounded span, not the all-rows form.
-	assert.Equal(t, int32(1), res.Pagination.TotalRecords)
+	// Two of the three: the page is applied to the member family, and the envelope still
+	// reports the full count so a caller can tell its page was truncated.
+	assert.Len(t, res.Results, 2)
+	assert.Equal(t, int32(3), res.Pagination.TotalRecords)
 }

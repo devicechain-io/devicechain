@@ -245,11 +245,15 @@ func newDeletionWireService(t *testing.T) (*admin.Service, *iam.Store) {
 // `args.Criteria` into `iam.PurgeSearchCriteria` covered by nothing — and each of them fails
 // silently rather than loudly:
 //
+// (A fourth entry stood here: setting Unbounded on the pagination, which restored the
+// unbounded read this change set out to remove. rdb.Pagination no longer has that field, so
+// the mutation will not compile — and a mutation that cannot be written is not one this test
+// can take credit for catching.)
+//
 //   - swapping pageNumber and pageSize returns a plausible page of the wrong size
 //   - dropping `Completed:` makes the console's two filter tabs show the same rows
 //   - hard-coding `PageNumber: 1` makes next/prev show page 1 forever, which is precisely the
 //     symptom this whole change set out to remove
-//   - setting `Unbounded: true` restores the unbounded read it set out to remove
 //
 // None of those is a compile error and none of them fails any other test in this repo. That is
 // the "nothing exercises the wiring" class, and the fix for it is always a test that goes in

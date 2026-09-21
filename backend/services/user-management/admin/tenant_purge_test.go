@@ -389,20 +389,12 @@ func TestTheDeletionHistoryCannotBeAskedForEverything(t *testing.T) {
 		assert.Empty(t, found.Results, "page 2 of a 1000-row page size is past the end of 105 records")
 	})
 
-	t.Run("a caller that asks for an unbounded read does not get one", func(t *testing.T) {
-		// 🔴 THE CRITERIA EMBED rdb.Pagination, WHICH CARRIES Unbounded, so "the store bounds
-		// this" is a claim about a field a caller can set — not about a field it cannot reach.
-		// PurgeRecords forces it off; without that line the comments on PurgeRecords and on
-		// admin.TenantDeletions would be true only of the GraphQL boundary, while the layer
-		// they are written on would hand a future internal caller the whole table.
-		found, err := s.TenantDeletions(ctx, iam.PurgeSearchCriteria{
-			Pagination: rdb.Pagination{PageNumber: 1, PageSize: rdb.DefaultPageSize, Unbounded: true},
-		})
-		require.NoError(t, err)
-		assert.Len(t, found.Results, int(rdb.DefaultPageSize),
-			"Unbounded is forced off, so this is an ordinary clamped page")
-		assert.EqualValues(t, total, found.Pagination.TotalRecords)
-	})
+	// A subtest stood here named "a caller that asks for an unbounded read does not get
+	// one". It set Pagination.Unbounded and checked PurgeRecords had forced it back off.
+	// That field is gone from rdb.Pagination, so the subtest cannot be written — and what
+	// it protected is now covered where it belongs: rdb's own TestPaginateAppliesBounds is
+	// a claim over EVERY value of the type rather than over one branch of it. The clamp
+	// subtests above still cover this store's side.
 
 	t.Run("the page number selects the page", func(t *testing.T) {
 		// Without this nothing anywhere reads page 2, so a store that ignored the page number

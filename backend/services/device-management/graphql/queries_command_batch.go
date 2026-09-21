@@ -22,8 +22,8 @@ const maxBatchValidationTokens = 2000
 
 // maxGroupTargetPageSize bounds one page of a group-target walk, matching the rdb
 // page-size clamp so a caller cannot turn the keyset walk into an unbounded scan by
-// asking for one enormous page — the same protection ResolveGroupMembers gets by forcing
-// Unbounded off.
+// asking for one enormous page — the same protection ResolveGroupMembers gets from the
+// rdb clamp, which no pagination value can now lift.
 const maxGroupTargetPageSize = 1000
 
 // BatchEnqueueRefusalResolver exposes one device's refusal within a batch.

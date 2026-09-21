@@ -179,7 +179,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDecodableEventStillTakesTheNor
 		Subject: testTenantSubject, Value: encoded, StreamSeq: undecodableStreamSeq,
 	}, nil)
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
-	suite.API.Mock.On("EntityRelationships", mock.Anything, mock.Anything).Return(
+	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{*buildDeviceRelationship()}}, nil)
 
 	suite.IP.ProcessMessage(context.Background())

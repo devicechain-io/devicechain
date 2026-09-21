@@ -128,8 +128,8 @@ func (s *Service) TenantDeletion(ctx context.Context, token string, epoch *time.
 }
 
 // TenantDeletions returns one page of deletion records, newest cut first, optionally filtered
-// by completion. The store bounds the page (ADR-029) whatever the caller asks for — including
-// a caller that sets the embedded Pagination's Unbounded, which PurgeRecords forces off.
+// by completion. The store bounds the page (ADR-029) whatever the caller asks for, and there
+// is no longer any value of the embedded Pagination that asks for something else.
 func (s *Service) TenantDeletions(ctx context.Context, criteria iam.PurgeSearchCriteria) (
 	*iam.PurgeSearchResults, error) {
 	return s.iam.PurgeRecords(ctx, criteria)
