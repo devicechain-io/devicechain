@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -90,6 +89,7 @@ func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string)
 // so a rule's dynamic bound tracks the current value.
 func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 	defer rp.readerWG.Done()
+	pacer := rp.pacerFor("device attributes")
 	for {
 		msg, err := rp.AttributeReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
@@ -97,13 +97,12 @@ func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 		}
 		if err != nil {
 			rp.AttributeReader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		tenant, ev, ok := decodeAttributeFact(rp, msg)
 		if !ok {
 			// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.

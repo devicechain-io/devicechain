@@ -25,25 +25,30 @@ import (
 // a bare count cannot tell you WHICH loop moved, which is the only thing worth knowing
 // when the number changes.
 //
-// 🔴 THE EIGHT BELOW ARE ONE DEFECT, NOT EIGHT. Seven share a package-local
-// readErrorBackoff constant in event-processing and the eighth is lwm2m-ingest's downlink
-// dispatcher; all of them surface the error, wait a fixed interval, and go round again with
-// no ceiling. The fix is the same at each: a core.ReadPacer field, PauseAfterError on the
-// error path, Succeeded on the good one.
+// 🔴 IT IS EMPTY, AND THE MAP IS DELIBERATELY KEPT RATHER THAN DELETED WITH ITS LAST
+// ENTRY. It is the difference between "nothing is listed" and "nothing was found", and the
+// next person to add an unpaced read loop should have to write it here — where the rule
+// above says it has to come back out again — rather than discover the mechanism from
+// scratch and reach for a way to silence the test.
 //
-// 🔴 lwm2m-ingest's Dispatcher.Run CARRIES A CLAIM THIS GUARD CANNOT CHECK — that a
-// durable broker outage stalls the term's lease renewal, which evicts the term and ends
-// the loop, so it never spins forever. That is plausible and it is UNVERIFIED. Whoever
-// takes this entry should test the claim before either pacing it or exempting it; a bound
-// nothing exercises is a bound nobody knows they have lost.
-var knownUnpacedReadLoops = map[string][]string{
-	"backend/services/event-processing/processor/ResolvedEventsProcessor.go": {"readPump", "runRuleConsumer"},
-	"backend/services/event-processing/processor/attribute_consumer.go":      {"runAttributeConsumer"},
-	"backend/services/event-processing/processor/geofence_set_consumer.go":   {"drainFenceSetStream"},
-	"backend/services/event-processing/processor/react_dispatcher.go":        {"run"},
-	"backend/services/event-processing/processor/roster_consumer.go":         {"runEntityDeletedConsumer", "runRosterConsumer"},
-	"backend/services/lwm2m-ingest/downlink/dispatcher.go":                   {"Run"},
-}
+// All nine the scanner originally found are resolved. Seven in event-processing shared one
+// package-local readErrorBackoff constant, which is how they came to have the same defect:
+// a fixed pause bounds the RATE of the retries and says nothing about how many there may
+// be. The constant survives under an honest name, persistRetryBackoffBase, on the persist
+// path it actually describes.
+//
+// The eighth was lwm2m-ingest's Dispatcher.Run, whose entry recorded a claim this guard
+// could not check: that a durable broker outage stalls the term's lease renewal, which
+// evicts the term and ends the loop. Tested rather than inherited, and it did not earn the
+// exemption. Lease.KeepAlive gives up only when Renew FAILS past its TTL window, and the
+// lease renews over the SAME connection the reader uses — so it covers a dead broker and
+// nothing else. Every error that actually reaches this loop (a 409 at a MaxAckPending or
+// MaxWaiting ceiling, a consumer whose leadership keeps moving, a subscription that cannot
+// be rebuilt) happens on a HEALTHY connection, where the term renews indefinitely while
+// the loop retries once a second forever. It is paced.
+//
+// The ninth was never a defect: see boundedByOtherMeans.
+var knownUnpacedReadLoops = map[string][]string{}
 
 // boundedByOtherMeans is the ONE read loop that is not a defect and that this scanner
 // cannot see is not a defect. It is deliberately a SEPARATE list from the debt ledger

@@ -77,7 +77,7 @@ func validRosterToken(tok string) bool { return len(tok) <= core.MaxTokenLen }
 // drain even in principle. The fact is dropped and acked: the projection row it would have
 // written is one the sweep is in the middle of erasing.
 func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error) bool {
-	backoff := readErrorBackoff
+	backoff := persistRetryBackoffBase
 	for err := op(); err != nil; err = op() {
 		if errors.Is(err, rdb.ErrTenantPurged) {
 			log.Warn().Str("what", desc).Err(err).
@@ -107,6 +107,7 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 // observation off the reorderable stream directly.
 func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 	defer rp.readerWG.Done()
+	pacer := rp.pacerFor("device roster")
 	for {
 		msg, err := rp.RosterReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
@@ -114,13 +115,12 @@ func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 		}
 		if err != nil {
 			rp.RosterReader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		if !rp.handleRosterFact(msg, true) {
 			return // shutdown mid-persist/-send: leave unacked; the row redelivers next start
 		}
@@ -178,6 +178,7 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 // are idempotent (removing/purging absent rows is a no-op), persisted before ack.
 func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 	defer rp.readerWG.Done()
+	pacer := rp.pacerFor("entity deletions")
 	for {
 		msg, err := rp.EntityDeletedReader.ReadMessage(rp.pctx())
 		if errors.Is(err, io.EOF) {
@@ -185,13 +186,12 @@ func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 		}
 		if err != nil {
 			rp.EntityDeletedReader.HandleResponse(err)
-			select {
-			case <-time.After(readErrorBackoff):
-			case <-rp.pctx().Done():
+			if pacer.PauseAfterError(rp.pctx(), err) {
 				return
 			}
 			continue
 		}
+		pacer.Succeeded()
 		if !rp.handleEntityDeletedFact(msg, true) {
 			return // shutdown mid-persist/-send: leave unacked; the deletion redelivers next start
 		}
