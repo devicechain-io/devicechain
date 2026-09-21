@@ -10,15 +10,67 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 // tenantFieldName is the Go struct field name contributed by the embedded
-// TenantScoped type. A schema that contains this field is tenant-scoped.
+// TenantScoped type, and the spelling almost every model in the tree uses.
 const tenantFieldName = "TenantId"
+
+// plainTenantFieldName is event-processing's spelling. Its tables are not irregular by
+// accident: they are read-models keyed by their own natural keys, embedding no core
+// mixins, with the tenant as a plain column called `tenant` that is part of the composite
+// primary key.
+//
+// Renaming it is possible — an appended migration could — but it would be a schema change
+// to six tables and a primary-key column, bought for nothing. The spelling is a choice
+// this area is entitled to make; the only question that matters is whether the mechanisms
+// enforcing isolation know about it, and for a long time one of the three did not.
+const plainTenantFieldName = "Tenant"
+
+// tenantFieldNames are the two spellings, in lookup order.
+//
+// 🔴 THIS IS THE ONE PLACE THAT DECIDES WHAT "TENANT-SCOPED" MEANS, and it is one place
+// because it used to be three that disagreed. The erasure fence and the tenant purge
+// both learned the second spelling when event-processing's tables arrived; this
+// callback — the only one of the three that FAILS CLOSED — did not. The result was not
+// a refusal but a silence: a model carrying real tenant data was classified exactly
+// like a migration bookkeeping table, so it got the fence and the sweep and no
+// predicate, and six tables' isolation rested on hand-written WHERE clauses that
+// nothing checked were there.
+//
+// A mechanism that answers a question differently from its neighbours is not a
+// difference in policy, it is a bug waiting for the table that lands between them.
+var tenantFieldNames = []string{tenantFieldName, plainTenantFieldName}
+
+// TenantColumnNames are the database column names the two spellings produce, for the
+// callers that work from the database catalog rather than from a parsed gorm schema —
+// tenantpurge's sweep, above all.
+//
+// 🔴 THEY ARE COMPUTED FROM tenantFieldNames, not written out beside them. A second
+// literal reading {"tenant_id", "tenant"} would be a third list to keep in step with the
+// other two, which is the exact failure this file exists to end — and review caught this
+// file committing it while claiming otherwise. Adding a field name now adds its column
+// name, so the sweep cannot come to classify a different set from the one the callback
+// scopes.
+//
+// gorm's NamingStrategy is the authority on the mapping because it is what actually named
+// the columns; TablePrefix does not affect ColumnName, so the zero value is the right one
+// to ask.
+var TenantColumnNames = tenantColumnNames()
+
+func tenantColumnNames() []string {
+	var ns schema.NamingStrategy
+	out := make([]string, 0, len(tenantFieldNames))
+	for _, name := range tenantFieldNames {
+		out = append(out, ns.ColumnName("", name))
+	}
+	return out
+}
 
 // ErrUnscopedStatement is the refusal for a statement this callback cannot classify:
 // one that names a table but whose destination gorm could not parse into a schema, so
-// there is no TenantId field to look for and no way to tell whether a predicate is
+// there is no tenant field to look for and no way to tell whether a predicate is
 // owed. It names both ways out, because a developer meeting it needs to know which of
 // the two situations they are in rather than which line to delete.
 var ErrUnscopedStatement = errors.New("tenant isolation could not be applied: gorm built no schema for this " +
@@ -27,28 +79,38 @@ var ErrUnscopedStatement = errors.New("tenant isolation could not be applied: go
 	"it under core.WithSystemContext if it is genuinely instance-scoped — schema migration is, including " +
 	"gorm's own AutoMigrate, which reads an existing table's columns through a statement of exactly this shape")
 
+// ErrTenantMismatch is the refusal for a create whose row names one tenant while the
+// context names another. See conflictingRowTenant for why this is an error rather than
+// the silent overwrite it used to be.
+var ErrTenantMismatch = errors.New("tenant isolation refused the write: a row being created names a " +
+	"different tenant from the one in context. Create it under that tenant's context, or leave the " +
+	"tenant unset on the row and let the callback stamp it")
+
 // RegisterTenantScoping installs global GORM callbacks that enforce per-tenant
-// row-level isolation for any model whose schema embeds TenantScoped (i.e.
-// exposes a TenantId field). It is applied once here, not at each call site.
+// row-level isolation for any model carrying a tenant field — TenantId from the
+// embedded TenantScoped type, or the plain Tenant that event-processing's projections
+// use. See tenantFieldNames. It is applied once here, not at each call site.
 //
-//   - Query / Row / Update / Delete: a "WHERE tenant_id = ?" predicate is
-//     injected from the tenant in db.Statement.Context. A missing tenant aborts
-//     the statement with core.ErrNoTenant (fail-closed) so that an unscoped read
-//     can never leak another tenant's rows.
+//   - Query / Row / Update / Delete: a "WHERE <tenant column> = ?" predicate is
+//     injected from the tenant in db.Statement.Context, naming whichever column the
+//     model's own schema carries. A missing tenant aborts the statement with
+//     core.ErrNoTenant (fail-closed) so that an unscoped read can never leak another
+//     tenant's rows.
 //   - Create: the tenant from context is stamped onto every row (struct, slice,
-//     or array). A missing tenant aborts with core.ErrNoTenant.
+//     or array). A missing tenant aborts with core.ErrNoTenant, and a row naming a
+//     DIFFERENT tenant aborts with ErrTenantMismatch rather than being rewritten.
 //
-// Models without a TenantId field (e.g. migration bookkeeping tables) pass
-// through untouched.
+// Models with no tenant field in either spelling (migration bookkeeping tables, and
+// event-processing's partition-keyed DetectSnapshot) pass through untouched.
 //
 // 🔴 WHAT IT DOES AND DOES NOT COVER, said here rather than left to be discovered — the
 // same sentence tenant_fence.go writes about the erasure fence, because it is the same
 // gap. APPLICABILITY IS A PROPERTY OF THE DESTINATION TYPE, NOT OF THE CALL, and the
 // invariant is a biconditional, not a promise: THE PREDICATE IS APPLIED IF AND ONLY IF
-// THE DESTINATION'S SCHEMA CARRIES TenantId. gorm decides what a statement is by parsing
-// Statement.Model or Statement.Dest, and these callbacks can only ask the resulting
-// schema for that one field. Three ways a statement over a tenant-scoped table lands
-// outside it, and only the second is refused:
+// THE DESTINATION'S SCHEMA CARRIES ONE OF THE TENANT FIELDS. gorm decides what a
+// statement is by parsing Statement.Model or Statement.Dest, and these callbacks can
+// only ask the resulting schema for those names. Three ways a statement over a
+// tenant-scoped table lands outside it, and only the second is refused:
 //
 //   - Raw SQL (Exec, and Raw with the SQL already written). Exec runs on gorm's Raw
 //     processor, which has no callbacks registered on it at all, and a statement whose
@@ -64,7 +126,7 @@ var ErrUnscopedStatement = errors.New("tenant isolation could not be applied: go
 //   - A destination that DOES parse but whose schema is not the table's: a projection
 //     struct (Table("widgets").Find(&[]struct{ Name string }{})) or a model that does not
 //     match the table it is pointed at. NOT refused, and deliberately so — the schema is
-//     well-formed and carries no TenantId, which is indistinguishable from an honest read
+//     well-formed and carries no tenant field, which is indistinguishable from an honest read
 //     of a genuinely unscoped table. Nothing here can tell the two apart, so the predicate
 //     is simply not owed. Naming the entity type in the destination is what earns it.
 //
@@ -120,13 +182,24 @@ func ensureSchema(db *gorm.DB) bool {
 	return db.Statement.Schema != nil
 }
 
-// isTenantScoped reports whether the statement's schema embeds TenantScoped.
-func isTenantScoped(db *gorm.DB) bool {
+// tenantField returns the schema field carrying this statement's tenant, or nil when
+// the model has none and is therefore not tenant-scoped.
+//
+// The FIELD is returned rather than a bool because both callbacks need more than the
+// yes/no: the predicate needs the column name to write WHERE against, and the create
+// stamp needs the Go field name to set. Returning the field is what keeps those two
+// from re-deriving the spelling independently and drifting apart — which is the
+// smaller, in-file version of the divergence tenantFieldNames documents.
+func tenantField(db *gorm.DB) *schema.Field {
 	if !ensureSchema(db) {
-		return false
+		return nil
 	}
-	_, ok := db.Statement.Schema.FieldsByName[tenantFieldName]
-	return ok
+	for _, name := range tenantFieldNames {
+		if field, ok := db.Statement.Schema.FieldsByName[name]; ok {
+			return field
+		}
+	}
+	return nil
 }
 
 // namesATableWithoutASchema reports the one case this callback must refuse rather than
@@ -164,13 +237,13 @@ func statementTable(stmt *gorm.Statement) string {
 	return ""
 }
 
-// scopedTenant returns the context tenant when db is a live, tenant-scoped
-// statement. ok=false means the callback should return without acting; any
+// scopedTenant returns the tenant field and the context tenant when db is a live,
+// tenant-scoped statement. ok=false means the callback should return without acting; any
 // fail-closed error (no tenant in context for a tenant-scoped model, or a statement
 // that cannot be classified at all) has already been recorded on db.
-func scopedTenant(db *gorm.DB) (string, bool) {
+func scopedTenant(db *gorm.DB) (*schema.Field, string, bool) {
 	if db.Error != nil {
-		return "", false
+		return nil, "", false
 	}
 	// A deliberate system context (core.WithSystemContext) runs unscoped: no
 	// predicate is injected and the fail-closed check is skipped. This is the
@@ -187,35 +260,40 @@ func scopedTenant(db *gorm.DB) (string, bool) {
 	// library rather than from a call site anyone here could retype. rdb.go runs the
 	// whole migration under a system context, which is what makes them legal.
 	if core.IsSystemContext(db.Statement.Context) {
-		return "", false
+		return nil, "", false
 	}
-	if !isTenantScoped(db) {
+	field := tenantField(db)
+	if field == nil {
 		// Not tenant-scoped, or not classifiable. Only the second is a problem, and
 		// only when a table is named — see namesATableWithoutASchema.
 		if namesATableWithoutASchema(db) {
 			_ = db.AddError(fmt.Errorf("%w (table %q)", ErrUnscopedStatement, statementTable(db.Statement)))
 		}
-		return "", false
+		return nil, "", false
 	}
 	tenant, ok := core.TenantFromContext(db.Statement.Context)
 	if !ok {
 		_ = db.AddError(core.ErrNoTenant)
-		return "", false
+		return nil, "", false
 	}
-	return tenant, true
+	return field, tenant, true
 }
 
 // tenantScopeQuery injects the tenant predicate for read/update/delete-style
 // statements and fails closed when no tenant is present.
 func tenantScopeQuery(db *gorm.DB) {
-	tenant, ok := scopedTenant(db)
+	field, tenant, ok := scopedTenant(db)
 	if !ok {
 		return
 	}
 	db.Statement.AddClause(clause.Where{
 		Exprs: []clause.Expression{
 			clause.Eq{
-				Column: clause.Column{Table: db.Statement.Table, Name: "tenant_id"},
+				// The column comes from the schema, not from a literal. A literal
+				// "tenant_id" here silently produced NO predicate at all for a model
+				// spelling it "tenant" — the statement would have referenced a column
+				// that does not exist on the table.
+				Column: clause.Column{Table: db.Statement.Table, Name: field.DBName},
 				Value:  tenant,
 			},
 		},
@@ -226,9 +304,38 @@ func tenantScopeQuery(db *gorm.DB) {
 // handles struct, slice and array destinations, i.e. batch inserts) and fails
 // closed when no tenant is present.
 func tenantScopeCreate(db *gorm.DB) {
-	tenant, ok := scopedTenant(db)
+	field, tenant, ok := scopedTenant(db)
 	if !ok {
 		return
 	}
-	db.Statement.SetColumn(tenantFieldName, tenant, true)
+	if named, conflicts := conflictingRowTenant(db, field.Name, tenant); conflicts {
+		_ = db.AddError(fmt.Errorf("%w: a row names tenant %q while the context names %q",
+			ErrTenantMismatch, named, tenant))
+		return
+	}
+	db.Statement.SetColumn(field.Name, tenant, true)
+}
+
+// conflictingRowTenant reports a tenant named on one of the rows being created that is
+// not the context's, which is always a caller bug and must not be papered over.
+//
+// The stamp below OVERWRITES, and for most of this tree that is both intended and
+// harmless: a model embedding TenantScoped leaves TenantId zero and lets the callback
+// fill it, so there is nothing to disagree with. It stops being harmless for a model
+// that carries its tenant as part of the PRIMARY KEY and sets it by hand — a silent
+// rewrite there does not just relabel the row, it moves it to a different key, where
+// the ON CONFLICT target the caller wrote will not find it. The write then succeeds and
+// the projection is quietly wrong for two tenants at once.
+//
+// Refusing is not a security measure; the stamp was already safe in that sense, since
+// a row can only ever be rewritten TOWARDS the context's own tenant and never away from
+// it. It is a correctness measure, and it converts an invisible data defect into an
+// error at the call site that caused it.
+func conflictingRowTenant(db *gorm.DB, field, tenant string) (string, bool) {
+	for _, named := range destTenants(db.Statement.Dest, field) {
+		if named != "" && named != tenant {
+			return named, true
+		}
+	}
+	return "", false
 }

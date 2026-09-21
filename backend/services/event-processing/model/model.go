@@ -25,8 +25,10 @@ import (
 // out of the blob purely so the operations surface (Slice 8) can read watermark
 // lag without deserializing the payload.
 //
-// It is not tenant-scoped (no TenantId), so the tenant-scope callbacks pass it
-// through, and it carries no Token, so the token-grammar callbacks ignore it.
+// It carries no tenant column in either spelling — a checkpoint belongs to a partition,
+// not to a tenant — so the tenant-scope callbacks pass it through, and it carries no
+// Token, so the token-grammar callbacks ignore it. It is the one table in this area that
+// is genuinely unscoped; its six siblings are scoped on the plain `tenant` column.
 type DetectSnapshot struct {
 	// PartitionId identifies the single-writer partition this checkpoint belongs to.
 	// GA ships one active DETECT per Instance (a single partition); the column exists
@@ -62,9 +64,14 @@ func (DetectSnapshot) AuditExempt() bool { return true }
 // rule set is rebuilt from this table at startup. The fact stream then only has to deliver
 // each fact once to a live consumer; durability lives here.
 //
-// Like DetectSnapshot it is NOT tenant-scoped (the engine is a per-Instance singleton and
-// the tenant is carried on the rule id / stored as a plain column), and it is audit-exempt
-// (a derived projection, not a control-plane mutation). Retain-superseded means rows are
+// It IS tenant-scoped, though it carries the tenant as a plain `tenant` column rather
+// than through the rdb.TenantScoped embed. The scope callback recognises both spellings,
+// so reads and writes get the fail-closed predicate like anything else; the engine's
+// startup loads, which must span every tenant, say so with an explicit system context.
+// It was NOT scoped until that spelling was taught to the callback, and its isolation
+// rested on a hand-written WHERE in each read.
+//
+// It is audit-exempt (a derived projection, not a control-plane mutation). Retain-superseded means rows are
 // only upserted, never deleted, in this slice; bounding row growth is the deferred
 // governance concern (ADR-023/052), the same as the fact-stream version-count growth.
 type DetectRule struct {
@@ -129,10 +136,15 @@ func (DetectRule) AuditExempt() bool { return true }
 // order. LoadAll returns only live (Deleted=false) rows. Tombstones are retained (bounding their
 // growth is the deferred governance concern, ADR-023/052, like the rule projection's).
 //
-// Like the other event-processing projections it is NOT tenant-scoped (the engine is a
-// per-Instance singleton; tenant is a plain column, keyed into the composite primary key so a
-// device token that repeats across tenants stays distinct) and it is audit-exempt (a derived
-// mirror, not a control-plane mutation).
+// It IS tenant-scoped, though it carries the tenant as a plain `tenant` column rather
+// than through the rdb.TenantScoped embed. The scope callback recognises both spellings,
+// so reads and writes get the fail-closed predicate like anything else; the engine's
+// startup loads, which must span every tenant, say so with an explicit system context.
+// It was NOT scoped until that spelling was taught to the callback, and its isolation
+// rested on a hand-written WHERE in each read.
+//
+// The tenant is keyed into the composite primary key, so a device token that repeats across
+// tenants stays distinct. It is audit-exempt (a derived mirror, not a control-plane mutation).
 type DeviceRoster struct {
 	// Tenant + DeviceToken are the composite primary key: a device token is unique only per
 	// tenant (ADR-042), so both are needed to identify a row, and a re-type fact for the same
@@ -178,8 +190,14 @@ func (DeviceRoster) AuditExempt() bool { return true }
 // PublishedAt)+Timeout, so a newly published absence rule gives existing quiet devices one
 // timeout of grace instead of firing a fleet-wide burst the instant it lands.
 //
-// Like the other event-processing projections it is NOT tenant-scoped (tenant is a plain column
-// in the composite key) and audit-exempt.
+// It IS tenant-scoped, though it carries the tenant as a plain `tenant` column rather
+// than through the rdb.TenantScoped embed. The scope callback recognises both spellings,
+// so reads and writes get the fail-closed predicate like anything else; the engine's
+// startup loads, which must span every tenant, say so with an explicit system context.
+// It was NOT scoped until that spelling was taught to the callback, and its isolation
+// rested on a hand-written WHERE in each read.
+//
+// The tenant is part of the composite key. Audit-exempt.
 type ProfileActive struct {
 	// Tenant + ProfileToken are the composite primary key: a profile token is unique per tenant
 	// (ADR-042), and each publish for a profile upserts its single active-version row in place.
@@ -234,9 +252,15 @@ func (ProfileActive) AuditExempt() bool { return true }
 // dead device — reordered after the deletion, for a key that had no row to tombstone — cannot
 // resurrect a phantom value a reused token would then inherit. See DeviceAttributeStore.
 //
-// Like the other event-processing projections it is NOT tenant-scoped (the engine is a per-Instance
-// singleton; tenant is a plain column keyed into the composite primary key so a device token that
-// repeats across tenants stays distinct) and it is audit-exempt (a derived mirror).
+// It IS tenant-scoped, though it carries the tenant as a plain `tenant` column rather
+// than through the rdb.TenantScoped embed. The scope callback recognises both spellings,
+// so reads and writes get the fail-closed predicate like anything else; the engine's
+// startup loads, which must span every tenant, say so with an explicit system context.
+// It was NOT scoped until that spelling was taught to the callback, and its isolation
+// rested on a hand-written WHERE in each read.
+//
+// The tenant is keyed into the composite primary key, so a device token that repeats across
+// tenants stays distinct. Audit-exempt (a derived mirror).
 type DeviceAttribute struct {
 	// Tenant + DeviceToken + Scope + AttrKey are the composite primary key: a device token is
 	// unique only per tenant (ADR-042), and a device holds an attribute per (scope, key), so all
@@ -277,7 +301,8 @@ func (DeviceAttribute) AuditExempt() bool { return true }
 // are never pruned — the same unbounded-tombstone posture the roster projection accepts, with
 // bounding deferred to the governance concern (ADR-023/052).
 //
-// Not tenant-scoped (tenant in the composite key) and audit-exempt, like the projection it guards.
+// Tenant-scoped on the plain `tenant` column (which is also part of the composite key) and
+// audit-exempt, like the projection it guards.
 type DeviceAttributeDeletion struct {
 	// Tenant + DeviceToken are the composite primary key: the fence is per device, per tenant.
 	Tenant      string `gorm:"primaryKey;size:256;not null"`

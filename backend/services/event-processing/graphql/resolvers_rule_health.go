@@ -25,9 +25,9 @@ const (
 // RuleHealth resolves the per-rule health of a device profile's ACTIVE published version
 // (ADR-051 slice 7b): for each live DETECT rule it composes a status from a re-compile check
 // and joins the durable RuleStat firing projection for last-fired / fire-count. It is
-// tenant-scoped to the caller's tenant (the storage-layer tenant predicate, applied
-// explicitly since these projections are not tenant-scoped models) and gated on device:read —
-// the least-privilege authority for a read over the profile aggregate the rules belong to.
+// tenant-scoped to the caller's tenant (the storage-layer predicate, injected from the
+// tenant the stores put in the context) and gated on device:read — the least-privilege
+// authority for a read over the profile aggregate the rules belong to.
 func (r *SchemaResolver) RuleHealth(ctx context.Context, args struct {
 	ProfileToken string
 }) ([]*RuleHealthResolver, error) {

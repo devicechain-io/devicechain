@@ -179,11 +179,15 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 		return
 	}
 	// The runtime tenant backstop, mirrored on the consume side (derived.go enforces it at publish):
-	// the rule id's tenant prefix MUST equal the event's tenant. Without it, an event forged onto
-	// tenant X's derived-events subject but carrying tenant Y's rule id would resolve Y's rule
-	// (LoadByID is a global point read) and enqueue Y's authored command content under X — a
-	// cross-tenant leak of rule content. Reaching this needs broker write access (DETECT's own
-	// publisher can never emit it), so it is defense-in-depth; drop fail-closed.
+	// the rule id's tenant prefix MUST equal the event's tenant. An event forged onto tenant X's
+	// derived-events subject but carrying tenant Y's rule id would otherwise be dispatched under X.
+	//
+	// It was written when LoadByID was a GLOBAL POINT READ, and it was then the only thing stopping
+	// that forged event from resolving Y's rule and enqueueing Y's authored command content under X.
+	// LoadByID is tenant-scoped now, so the storage layer refuses it too and this check is genuine
+	// defense in depth rather than the sole barrier. It stays: the two fail independently, and
+	// reaching either needs broker write access (DETECT's own publisher can never emit it). Drop
+	// fail-closed.
 	if idTenant, ok := runtime.RuleTenant(ev.RuleID); !ok || idTenant != tenant {
 		log.Error().Str("tenant", tenant).Str("rule", ev.RuleID).
 			Msg("Dropping derived event whose rule-id tenant disagrees with the event tenant (backstop).")

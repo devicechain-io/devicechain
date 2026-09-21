@@ -257,7 +257,15 @@ func (p *Plan) OfClass(c Class) []Entry {
 // catalog and then cross-checked: a third spelling appearing in a future model would
 // leave its table with no recognised tenant column, which lands it in
 // ClassUnclassified and fails the purge — loudly, and before it ships.
-var tenantColumns = []string{"tenant_id", "tenant"}
+//
+// 🔴 IT IS TAKEN FROM rdb RATHER THAN RESTATED HERE, and the reason is the bug this
+// list used to be half of. The sweep and the erasure fence both knew both spellings;
+// the fail-closed scope callback knew only the first, so the tables it did not
+// recognise were swept and fenced but never scoped. Three mechanisms, two of them
+// agreeing by coincidence of maintenance rather than by construction. Sharing the
+// definition is what makes "the purge classifies exactly what the callback scopes" a
+// fact instead of a thing to re-check by hand.
+var tenantColumns = rdb.TenantColumnNames
 
 // systemSchemas are never classified: they belong to PostgreSQL and TimescaleDB, not
 // to an instance's functional areas.

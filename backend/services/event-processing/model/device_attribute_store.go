@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm/clause"
 )
@@ -61,6 +62,12 @@ func NewDeviceAttributeStore(r *rdb.RdbManager) *DeviceAttributeStore {
 // sweep to commit before its own fence write, contradicting its fixed order. A newer token-reuse
 // write to the same key (LastEventAt > the fence) is preserved by the delete's `<=` bound.
 func (s *DeviceAttributeStore) Upsert(ctx context.Context, attr *DeviceAttribute) error {
+	// Scope the whole method from the row's tenant, so the insert below is scoped without
+	// each statement repeating it. The helpers this method calls — deletionFence and
+	// sweepStraggler — set it from their own arguments too, deliberately: they are also
+	// reached from Remove, and a helper that is correct only when its caller remembered
+	// something is a helper that will one day be called by someone who did not.
+	ctx = dccore.WithTenant(ctx, attr.Tenant)
 	deletedAt, fenced, err := s.deletionFence(ctx, attr.Tenant, attr.DeviceToken, attr.LastEventAt)
 	if err != nil {
 		return err
@@ -102,9 +109,9 @@ func (s *DeviceAttributeStore) Upsert(ctx context.Context, attr *DeviceAttribute
 // already-swept row is a no-op — so both Upsert's fenced pre-check (retry safety) and its post-insert
 // verify can call it freely.
 func (s *DeviceAttributeStore) sweepStraggler(ctx context.Context, attr *DeviceAttribute, deletedAt time.Time) error {
-	return s.rdb.DB(ctx).Where(
-		"tenant = ? AND device_token = ? AND scope = ? AND attr_key = ? AND last_event_at <= ?",
-		attr.Tenant, attr.DeviceToken, attr.Scope, attr.AttrKey, deletedAt).
+	return s.rdb.DB(dccore.WithTenant(ctx, attr.Tenant)).Where(
+		"device_token = ? AND scope = ? AND attr_key = ? AND last_event_at <= ?",
+		attr.DeviceToken, attr.Scope, attr.AttrKey, deletedAt).
 		Delete(&DeviceAttribute{}).Error
 }
 
@@ -121,6 +128,7 @@ func (s *DeviceAttributeStore) sweepStraggler(ctx context.Context, attr *DeviceA
 // LoadAll and a newer token-reuse set overwrites it via the monotonic guard, so it never surfaces as
 // a live value (only a live phantom, which Upsert's verify closes, would).
 func (s *DeviceAttributeStore) Remove(ctx context.Context, tenant, deviceToken, scope, attrKey string, removedAt time.Time) error {
+	ctx = dccore.WithTenant(ctx, tenant)
 	_, fenced, err := s.deletionFence(ctx, tenant, deviceToken, removedAt)
 	if err != nil || fenced {
 		return err
@@ -149,6 +157,7 @@ func (s *DeviceAttributeStore) Remove(ctx context.Context, tenant, deviceToken, 
 // the row delete then removes what already landed. Both key columns are matched so a repeated token
 // across tenants is not over-purged.
 func (s *DeviceAttributeStore) PurgeDevice(ctx context.Context, tenant, deviceToken string, deletedTime time.Time) error {
+	ctx = dccore.WithTenant(ctx, tenant)
 	fence := &DeviceAttributeDeletion{Tenant: tenant, DeviceToken: deviceToken, DeletedAt: deletedTime}
 	if err := s.rdb.DB(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant"}, {Name: "device_token"}},
@@ -160,7 +169,7 @@ func (s *DeviceAttributeStore) PurgeDevice(ctx context.Context, tenant, deviceTo
 		return err
 	}
 	return s.rdb.DB(ctx).Where(
-		"tenant = ? AND device_token = ? AND last_event_at <= ?", tenant, deviceToken, deletedTime).
+		"device_token = ? AND last_event_at <= ?", deviceToken, deletedTime).
 		Delete(&DeviceAttribute{}).Error
 }
 
@@ -172,7 +181,7 @@ func (s *DeviceAttributeStore) PurgeDevice(ctx context.Context, tenant, deviceTo
 // the sweep bound Upsert's verify step uses.
 func (s *DeviceAttributeStore) deletionFence(ctx context.Context, tenant, deviceToken string, at time.Time) (time.Time, bool, error) {
 	var fence DeviceAttributeDeletion
-	tx := s.rdb.DB(ctx).Where("tenant = ? AND device_token = ?", tenant, deviceToken).Limit(1).Find(&fence)
+	tx := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where("device_token = ?", deviceToken).Limit(1).Find(&fence)
 	if tx.Error != nil {
 		return time.Time{}, false, tx.Error
 	}
@@ -184,11 +193,14 @@ func (s *DeviceAttributeStore) deletionFence(ctx context.Context, tenant, device
 }
 
 // LoadAll returns every LIVE device attribute (tombstones excluded) — the full set the engine's
-// dynamic-threshold view is rebuilt from at startup (slice 4c-3b-2). Not tenant-scoped (the
-// projection spans every tenant, tenant on the row), so it reads the whole table.
+// dynamic-threshold view is rebuilt from at startup (slice 4c-3b-2).
+//
+// 🔴 IT READS EVERY TENANT'S ROWS, declared with a system context: the engine rebuilds the
+// whole view at startup with no tenant of its own. Declared in sanctionedSystemContexts
+// (backend/core/test).
 func (s *DeviceAttributeStore) LoadAll(ctx context.Context) ([]DeviceAttribute, error) {
 	var attrs []DeviceAttribute
-	if err := s.rdb.DB(ctx).Where("deleted = ?", false).Find(&attrs).Error; err != nil {
+	if err := s.rdb.DB(dccore.WithSystemContext(ctx)).Where("deleted = ?", false).Find(&attrs).Error; err != nil {
 		return nil, err
 	}
 	return attrs, nil
@@ -202,8 +214,8 @@ func (s *DeviceAttributeStore) LoadAll(ctx context.Context) ([]DeviceAttribute, 
 // converged projection. Keyed by (tenant, device) so a token reused across tenants is not conflated.
 func (s *DeviceAttributeStore) LoadDevice(ctx context.Context, tenant, deviceToken string) ([]DeviceAttribute, error) {
 	var attrs []DeviceAttribute
-	if err := s.rdb.DB(ctx).Where(
-		"tenant = ? AND device_token = ? AND deleted = ?", tenant, deviceToken, false).
+	if err := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where(
+		"device_token = ? AND deleted = ?", deviceToken, false).
 		Find(&attrs).Error; err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -55,8 +56,10 @@ type RuleStat struct {
 func (RuleStat) AuditExempt() bool { return true }
 
 // RuleStatStore persists per-rule firing stats. Like the sibling DetectRule projection it is
-// NOT tenant-scoped at the storage callback (the projection spans every tenant, tenant on the
-// row); the ruleHealth read applies the tenant predicate explicitly.
+// tenant-scoped at the storage callback on its plain `tenant` column: RecordFire and LoadByIDs
+// each put their tenant argument in the context and the predicate is injected from there. The
+// ruleHealth read used to apply that predicate by hand, which is what made a forgotten clause a
+// silent cross-tenant read rather than an error.
 type RuleStatStore struct {
 	rdb *rdb.RdbManager
 }
@@ -80,7 +83,7 @@ func (s *RuleStatStore) RecordFire(ctx context.Context, ruleID, tenant string, a
 	// incoming one — both databases agree on that — and CASE stands in for Postgres GREATEST,
 	// which sqlite lacks. last_fired_at/last_edge advance only when the incoming fire is at least
 	// as recent, so replaying an older detection cannot rewind them; fire_count always increments.
-	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
+	return s.rdb.DB(dccore.WithTenant(ctx, tenant)).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "rule_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"fire_count":    gorm.Expr("fire_count + 1"),
@@ -100,7 +103,7 @@ func (s *RuleStatStore) LoadByIDs(ctx context.Context, tenant string, ids []stri
 		return out, nil
 	}
 	var stats []RuleStat
-	if err := s.rdb.DB(ctx).Where("tenant = ? AND rule_id IN ?", tenant, ids).Find(&stats).Error; err != nil {
+	if err := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where("rule_id IN ?", ids).Find(&stats).Error; err != nil {
 		return nil, err
 	}
 	for _, st := range stats {

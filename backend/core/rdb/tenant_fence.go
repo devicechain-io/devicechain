@@ -225,20 +225,29 @@ func fenceExempt(db *gorm.DB) bool {
 
 // statementTenants returns every tenant token this statement could write a row for.
 //
-// 🔴 IT LOOKS IN TWO PLACES BECAUSE THERE ARE TWO SPELLINGS, and missing the second one
-// would leave the fence silently off for the area that needs it most. Most models embed
-// rdb.TenantScoped and carry TenantId, and for those the tenant is in the context — the
-// scoping callback injects it. event-processing's projections carry a plain `Tenant`
-// composite-PK column and no embed, deliberately (see its baseline_snapshot.go), so the
-// scoping callbacks do not apply to them at all and no tenant need be in their context:
-// they are written from the resolved-event stream by ON CONFLICT ... DO UPDATE upserts,
-// which is verified resurrection vector 4. Their tenant is in the ROW.
+// 🔴 IT LOOKS IN TWO PLACES BECAUSE A STATEMENT CAN NAME ITS TENANT IN EITHER. Most
+// statements carry it in the CONTEXT and the scope callback injects the predicate from
+// there. But a create also carries it on the ROWS, and the two are not interchangeable:
 //
-// Both sources are consulted for every statement rather than one being chosen by shape.
-// The context alone would miss the row-carried spelling; the rows alone would miss an
-// Updates(map) that names no tenant column, and would depend on this callback running
-// after the one that stamps TenantId, which is a registration-order assumption no test
-// would notice breaking.
+//   - A statement under a SYSTEM context has no context tenant by design, and its rows
+//     are then the only thing naming one. event-processing's projections — plain `Tenant`
+//     composite-PK columns, written from the resolved-event stream by
+//     ON CONFLICT ... DO UPDATE upserts, verified resurrection vector 4 — are read that
+//     way by the engine's four cross-tenant startup loads.
+//   - An Updates(map) names no tenant column at all, so the rows give nothing and the
+//     context is all there is.
+//
+// So both sources are consulted for every statement rather than one being chosen by
+// shape. Reading the rows alone would also depend on this callback running after the one
+// that stamps the tenant, which is a registration-order assumption no test would notice
+// breaking.
+//
+// 🔴 THIS COMMENT USED TO SAY event-processing's tables were outside the scoping
+// callbacks entirely and needed no tenant in their context. That was true when it was
+// written and is now false in both halves: the callback recognises both spellings, those
+// tables are scoped, and a missing tenant is core.ErrNoTenant. The old text survived the
+// change that falsified it by forty lines and was caught in review — which is the case
+// for saying what a comment is FOR rather than what the world around it happens to be.
 func statementTenants(db *gorm.DB) []string {
 	field := tenantFieldOf(db)
 	if field == "" {
@@ -268,23 +277,18 @@ func statementTenants(db *gorm.DB) []string {
 }
 
 // tenantFieldOf returns the Go field name carrying this model's tenant, or "" when the
-// model has none and is therefore not fenceable. The order matches the two spellings
-// tenantpurge classifies by, so a table this fence ignores is a table the sweep also
-// leaves alone.
+// model has none and is therefore not fenceable.
+//
+// It asks tenantField, which is the single authority on what "tenant-scoped" means, so
+// a table this fence ignores is exactly a table the scope callback leaves unscoped and
+// the sweep leaves alone. That used to be three separate lists, and they disagreed.
 func tenantFieldOf(db *gorm.DB) string {
-	if !ensureSchema(db) {
+	field := tenantField(db)
+	if field == nil {
 		return ""
 	}
-	for _, name := range []string{tenantFieldName, plainTenantFieldName} {
-		if _, ok := db.Statement.Schema.FieldsByName[name]; ok {
-			return name
-		}
-	}
-	return ""
+	return field.Name
 }
-
-// plainTenantFieldName is event-processing's spelling of the tenant column.
-const plainTenantFieldName = "Tenant"
 
 // destTenants pulls tenant values out of the statement's destination, which is a struct,
 // a pointer to one, a slice or array of either (a batch insert), or a map of columns
@@ -314,7 +318,7 @@ func destTenants(dest any, field string) []string {
 			}
 		case reflect.Map:
 			// Updates(map[string]any{...}) is keyed by COLUMN name, not field name.
-			for _, key := range []string{"tenant_id", "tenant"} {
+			for _, key := range TenantColumnNames {
 				mv := v.MapIndex(reflect.ValueOf(key))
 				if !mv.IsValid() {
 					continue
