@@ -279,9 +279,9 @@ type Options struct {
 	// omitting it degrades visibly. A missing pacer fails closed and then hides — the loop
 	// retries forever behind a pod that reports Ready, leader and serving, while consuming
 	// no commands, and Metrics has no read-error counter to show it. It is an Option rather
-	// than a positional parameter only because twenty-seven tests construct a dispatcher
-	// with a NIL reader to exercise the drain and park paths, and those never read at all;
-	// the refusal below is what keeps that convenience from reaching production.
+	// than a positional parameter only because the routing, drain and park tests construct a
+	// dispatcher with a NIL reader and never read at all; the refusal below is what keeps
+	// that convenience from reaching production.
 	ReadPacer *core.ReadPacer
 	// TenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// A closure rather than the governance resolver type so this package is testable
@@ -389,14 +389,21 @@ type task struct {
 // survives the term and the next leader resumes from the last ack.
 func (d *Dispatcher) Run(ctx context.Context) {
 	// The workers run on a ctx this function can end on its own, not just on the term's.
+	//
 	// Before the read loop could give up, "the loop stopped" and "the term ended" were the
-	// same event, so a worker ctx derived from the caller's was enough. They are no longer
-	// the same: an exhausted read budget breaks the loop with the term still held, and
-	// workers parked on the caller's ctx would hold wg.Wait() open behind it -- and
-	// serveAsLeader waits on this function returning before it unwinds the term. The
-	// process is on its way down at that point either way, but a shutdown that has to wait
-	// for its own budget to expire reports "teardown did not finish" instead of the read
-	// error that caused it, which is the one thing the operator needed.
+	// same event, so deriving the workers' ctx from the caller's was enough. They are no
+	// longer the same: an exhausted read budget breaks the loop with the term still HELD.
+	// Without this, Run would then sit on wg.Wait() until something else cancelled the
+	// term -- which does happen (the give-up calls FailNow, whose teardown reaches
+	// leadershipCancel), so this is NOT a hang, and an earlier version of this comment was
+	// wrong to imply one. What it buys is narrower and still worth having: Run's contract
+	// becomes "returns when its loop ends" rather than "returns once a third party
+	// cancels", which is what lets the give-up be tested at all.
+	//
+	// The one behaviour change is stated rather than hidden: an in-flight d.process is
+	// aborted when the budget is exhausted instead of when teardown arrives. That is the
+	// same abort eviction already performs -- the command is left unacked and redelivers
+	// to the next leader.
 	runCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
 
@@ -494,8 +501,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		}
 	}
 
-	// Ends the workers whether the loop left because the term was evicted or because the
-	// read budget was exhausted.
+	// Ends the workers on both exits: an evicted term, where the caller's ctx is already
+	// cancelled and this is a no-op, and an exhausted read budget, where it is not.
 	stopWorkers()
 	wg.Wait()
 }

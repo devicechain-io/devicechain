@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
@@ -192,4 +193,62 @@ func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message
 	}
 	r.Reads++
 	return messaging.Message{}, nil
+}
+
+// 🔴 THE SEVENTH LOOP, AND IT WAS PACED BUT UNMEASURED WHEN THIS FILE FIRST SHIPPED. The
+// table above covers the six read loops on ResolvedEventsProcessor; ReactDispatcher is a
+// different type with its own reader and its own loop, so it fell outside — and nothing
+// else in this package drives run() either. Removing Succeeded() from it left every test
+// in the repository green, including the repository-wide guard, which checks that the
+// pacer is CALLED and not that the failure run is ever cleared.
+//
+// That is the mutant this file's own header calls the riskiest line in the change, alive
+// in the one loop the table did not reach. A test table is a claim about coverage, and a
+// loop that is not in it is not covered by it however similar it looks.
+func pacingReactDispatcher(t *testing.T, reader messaging.MessageReader) *ReactDispatcher {
+	t.Helper()
+	rd := &ReactDispatcher{
+		reader:     reader,
+		dispatcher: react.NewDispatcher(nil, nil, nil, nil, nil, NewReactMetrics(nil)),
+		newPacer: func() *core.ReadPacer {
+			return core.NewReadPacer(nil, "react dispatch").UseClock(core.VirtualClock())
+		},
+	}
+	rd.procCtx, rd.procCancel = context.WithCancel(context.Background())
+	t.Cleanup(rd.procCancel)
+	rd.wg.Add(1)
+	return rd
+}
+
+func TestTheReactDispatchLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
+	rd := pacingReactDispatcher(t, reader)
+
+	rd.run()
+
+	if reader.Reads >= readCap {
+		t.Fatalf("the REACT dispatch loop read %d times against an error that never clears and "+
+			"only stopped because the test's reader ran out: every rule's actions — raise-alarm, "+
+			"send-command, connector dispatch — go undelivered behind a ready pod", reader.Reads)
+	}
+	if reader.Reads > pacedReads {
+		t.Fatalf("the REACT dispatch loop took %d reads to stop, too many to be a paced retry",
+			reader.Reads)
+	}
+	t.Logf("stopped after %d reads", reader.Reads)
+}
+
+func TestASuccessfulReadKeepsTheReactDispatchLoopRunning(t *testing.T) {
+	const eofAt = 800
+	reader := &intermittentReader{}
+	reader.EOFAfter = eofAt
+	rd := pacingReactDispatcher(t, reader)
+
+	rd.run()
+
+	if reader.Reads < eofAt {
+		t.Fatalf("the REACT dispatch loop gave up after %d reads while every other read was "+
+			"succeeding; a loop that does not clear its failure run tears the process down for "+
+			"faults it already recovered from", reader.Reads)
+	}
 }

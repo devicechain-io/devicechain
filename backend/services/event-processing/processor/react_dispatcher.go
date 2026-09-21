@@ -44,12 +44,19 @@ type ReactDispatcher struct {
 	// the kind moves.
 	area string
 
-	// readPacer bounds a run of failing reads and ends the process once they stop
-	// looking transient. Built per dispatcher, like the reader it paces and unlike the
-	// metrics above, because a pacer's budget measures ONE unbroken run on ONE
-	// subscription; sharing it across connections would carry a dead subscription's
-	// failures into the one that replaced it.
-	readPacer *core.ReadPacer
+	// newPacer builds the read pacer that bounds a run of failing reads and ends the
+	// process once they stop looking transient.
+	//
+	// A FACTORY rather than a pacer, so each run() gets a fresh one. A pacer's budget
+	// measures one unbroken run; a dispatcher started again after a stop would otherwise
+	// inherit the failure count and start time of the run that ended, and its first error
+	// would be measured against a window that closed long ago. Nothing restarts a
+	// dispatcher today, which is why this is worth closing now rather than after something
+	// does.
+	//
+	// It is also the seam the pacing tests use: a pacer on the real clock makes a test that
+	// measures the retry budget take the retry budget.
+	newPacer func() *core.ReadPacer
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -75,7 +82,7 @@ func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 	}
-	rd.readPacer = core.NewReadPacer(ms, "react dispatch")
+	rd.newPacer = func() *core.ReadPacer { return core.NewReadPacer(ms, "react dispatch") }
 	if ms != nil {
 		rd.area = ms.FunctionalArea
 	}
@@ -129,21 +136,16 @@ func (rd *ReactDispatcher) run() {
 	}
 }
 
-// pacer returns the dispatcher's read pacer, building a reportless one if this dispatcher
-// was assembled by struct literal rather than by NewReactDispatcher.
-//
-// The fallback is for the tests that build a ReactDispatcher directly to exercise handle().
-// None of them drives the read loop today, so the nil would never be dereferenced -- which
-// is exactly why it is worth closing now, while the reason is visible, rather than leaving
-// a nil pointer for the first test that does.
+// pacer builds a read pacer for one run of the loop, falling back to a reportless one when
+// this dispatcher was assembled by struct literal rather than by NewReactDispatcher.
 //
 // Called once, from run(), on the goroutine that owns the loop. A ReadPacer is
 // single-goroutine by contract and this does not change that.
 func (rd *ReactDispatcher) pacer() *core.ReadPacer {
-	if rd.readPacer == nil {
-		rd.readPacer = core.NewReadPacer(nil, "react dispatch")
+	if rd.newPacer == nil {
+		return core.NewReadPacer(nil, "react dispatch")
 	}
-	return rd.readPacer
+	return rd.newPacer()
 }
 
 // handle dispatches one derived event and acks it or leaves it unacked. An undecodable or

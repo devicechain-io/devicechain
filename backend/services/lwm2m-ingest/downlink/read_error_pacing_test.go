@@ -63,6 +63,13 @@ func pacingDispatcher(t *testing.T, reader reader) *Dispatcher {
 // runWithin runs the dispatcher and fails if it does not return, rather than hanging the
 // package for the go test timeout. A loop that never gives up is the defect under test, so
 // the failure mode has to be an assertion and not a stuck run.
+//
+// 🔑 RETURNING IS PART OF WHAT IS BEING ASSERTED, not just how the test avoids hanging.
+// Run ends by waiting on its workers, and those workers are ended by the read loop exiting
+// — so a Run that stopped reading but left them parked would never return here. Unlike the
+// other seven loops, this one does not treat io.EOF as a clean exit (every error goes to
+// the pacer), so an unpaced Run does not end when the fake reader runs out either: it
+// retries the EOF forever. Both regressions surface as this timeout.
 func runWithin(t *testing.T, d *Dispatcher, ctx context.Context, budget time.Duration) {
 	t.Helper()
 	done := make(chan struct{})
@@ -88,11 +95,10 @@ func TestTheCommandReadLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing
 		t.Fatal("the term context was cancelled, so this proves nothing about a loop that has " +
 			"to stop while the term is still HELD — which is the whole case the lease does not cover")
 	}
-	if reader.Reads >= readCap {
-		t.Fatalf("the command-reader loop read %d times against an error that never clears and "+
-			"only stopped because the test's reader ran out: it retries forever while this replica "+
-			"holds the lease and reports itself leader and serving", reader.Reads)
-	}
+	// No "ran out of reader" branch here, unlike the six loops in event-processing: this one
+	// has no io.EOF escape, so a loop that never gives up does not stop at EOFAfter — it
+	// retries the EOF. runWithin's timeout is what catches that, and EOFAfter is only a
+	// bound on how much the fake will produce.
 	if reader.Reads > pacedReads {
 		t.Fatalf("the command-reader loop took %d reads to stop, too many to be a paced retry",
 			reader.Reads)
@@ -119,37 +125,6 @@ func TestASuccessfulReadKeepsTheCommandReadLoopRunning(t *testing.T) {
 		t.Fatalf("the command-reader loop gave up after %d reads while every other read was "+
 			"succeeding; a loop that does not clear its failure run ends a term for faults it "+
 			"already recovered from", reader.Reads)
-	}
-}
-
-// 🔑 RUN MUST RETURN, NOT JUST STOP READING. serveAsLeader waits on Run before it unwinds the
-// term, and the workers park on a context of their own. Before the pacer, "the loop stopped"
-// and "the term was cancelled" were the same event and the distinction could not arise; now
-// the loop can stop with the term still held, and a Run that stayed parked on wg.Wait would
-// make the shutdown report its own budget expiring instead of the read error that caused it.
-//
-// runWithin above would catch the regression, but it would report it as "Run did not return"
-// with no hint of why. This names it.
-func TestGivingUpOnTheReadEndsTheWorkersRatherThanParkingOnThem(t *testing.T) {
-	reader := &msgtest.FailingReader{EOFAfter: readCap}
-	d := NewDispatcher(reader, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, nil, nil, Metrics{},
-		Options{
-			Workers:   4, // more than one, so a Run that waits on them cannot pass by luck
-			ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock()),
-		})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() { defer close(done); d.Run(ctx) }()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("Run stopped reading but never returned: its workers are still parked on a term " +
-			"context nobody has cancelled, and serveAsLeader is waiting on this")
-	}
-	if ctx.Err() != nil {
-		t.Fatal("the term was cancelled, so the workers would have exited anyway and this asserts nothing")
 	}
 }
 
