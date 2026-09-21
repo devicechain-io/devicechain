@@ -154,7 +154,15 @@ func (s *Store) Record(ctx context.Context, tenant string, streamSeq uint64,
 // shares an instant — so ordering by it leaves the rows within a tie group free to move
 // between pages, which is the unstable-pagination defect this project has been bitten by
 // before wearing an ORDER BY.
-func (DeadLetter) DefaultOrder() string { return "occurred_time DESC, id DESC" }
+//
+// 🔴 AND THE TABLE NAME IS NOT DECORATION EITHER. Of the thirty-eight DefaultOrder
+// implementations in the tree's production code, this was the one that named columns bare. ListOf applies the clause to a
+// statement a filters closure is free to have joined, and `id` against a join is not a
+// wrong order but an ambiguous-column refusal from Postgres — on whichever read grew the
+// join, far from here. It was correct only while nothing joined this table.
+func (DeadLetter) DefaultOrder() string {
+	return "dead_letters.occurred_time DESC, dead_letters.id DESC"
+}
 
 // List returns one page, newest first.
 func (s *Store) List(ctx context.Context, criteria SearchCriteria) (*SearchResults, error) {
