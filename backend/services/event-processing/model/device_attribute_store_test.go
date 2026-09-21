@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -220,7 +221,9 @@ func TestDeviceAttributeStore_FencedRetrySweepsPriorPhantom(t *testing.T) {
 	}
 	// The phantom a prior attempt's insert left (live, straggler t <= deletion) before erroring.
 	phantom := &DeviceAttribute{Tenant: "acme", DeviceToken: "d1", Scope: "SHARED", AttrKey: "k", Value: 9, LastEventAt: attrBase}
-	if err := s.rdb.DB(ctx).Create(phantom).Error; err != nil {
+	// A raw create goes through the tenant-scope callback like any other, so it needs the
+	// tenant in context; the store methods below set it from their own arguments.
+	if err := s.rdb.DB(dccore.WithTenant(ctx, "acme")).Create(phantom).Error; err != nil {
 		t.Fatalf("seed phantom: %v", err)
 	}
 	if _, ok := find(t, s, "acme", "d1", "SHARED", "k"); !ok {

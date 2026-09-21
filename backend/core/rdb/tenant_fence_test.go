@@ -212,26 +212,81 @@ func TestTheLiftedFenceTestWouldFailWithTheFenceStanding(t *testing.T) {
 }
 
 // 🔴 THE SPELLING THAT MATTERS MOST. event-processing carries the tenant as a plain
-// column with no embed, so the scoping callbacks do not fire and its consumer path puts
-// no tenant in the context. Its tenant is in the ROW, and a fence reading only the
-// context would be silently off for the area holding two of the four verified
-// resurrection vectors.
-func TestARowCarriedTenantIsFencedWithNoTenantInContext(t *testing.T) {
+// column with no embed. Its tenant is in the ROW, and a fence reading only the context
+// would be silently off for the area holding two of the four verified resurrection
+// vectors.
+//
+// The statement runs under a SYSTEM context, which is where a row-carried tenant is now
+// the only source there is: the scope callback reads no tenant from a system context by
+// design, so if the fence did not read the rows it would have nothing to go on. This
+// test used to run with no context at all, back when the scope callback did not
+// recognise this spelling and simply waved the statement through. It now fails closed
+// instead, which is what TestARowCarriedCreateWithNoTenantAnywhereIsRefused pins — so
+// the row-carried claim needs the one shape where an absent context tenant is legal.
+func TestARowCarriedTenantIsFencedUnderASystemContext(t *testing.T) {
 	db := newFenceDB(t)
 	plant(t, db, "acme")
+	sys := core.WithSystemContext(context.Background())
 
-	err := db.Create(&projection{Tenant: "acme", DeviceToken: "sensor-1", Value: "42"}).Error
+	err := db.WithContext(sys).Create(&projection{Tenant: "acme", DeviceToken: "sensor-1", Value: "42"}).Error
 	if !errors.Is(err, ErrTenantPurged) {
 		t.Fatalf("row-carried tenant: got %v, want ErrTenantPurged", err)
 	}
 
-	if err := db.Create(&projection{Tenant: "other", DeviceToken: "sensor-1"}).Error; err != nil {
+	if err := db.WithContext(sys).Create(&projection{Tenant: "other", DeviceToken: "sensor-1"}).Error; err != nil {
 		t.Fatalf("an unfenced tenant's projection write was refused: %v", err)
+	}
+}
+
+// The other half of the change that moved the test above: a plain-`Tenant` model is now
+// tenant-scoped like any other, so writing one with no tenant in context and no system
+// marker is refused rather than waved through. Before, this spelling was invisible to
+// the scope callback, and six tables' isolation rested entirely on hand-written WHERE
+// clauses that nothing checked were present.
+func TestARowCarriedCreateWithNoTenantAnywhereIsRefused(t *testing.T) {
+	db := newFenceDB(t)
+
+	err := db.Create(&projection{Tenant: "unfenced", DeviceToken: "sensor-1"}).Error
+	if !errors.Is(err, core.ErrNoTenant) {
+		t.Fatalf("a plain-Tenant create with no tenant in context: got %v, want ErrNoTenant", err)
+	}
+}
+
+// A create whose row names a different tenant from the context is a caller bug, and for
+// a model carrying the tenant in its PRIMARY KEY the old silent overwrite moved the row
+// to a key the caller's ON CONFLICT target would not find.
+func TestACreateNamingADifferentTenantFromTheContextIsRefused(t *testing.T) {
+	db := newFenceDB(t)
+	ctx := core.WithTenant(context.Background(), "mine")
+
+	err := db.WithContext(ctx).Create(&projection{Tenant: "theirs", DeviceToken: "sensor-1"}).Error
+	if !errors.Is(err, ErrTenantMismatch) {
+		t.Fatalf("row/context tenant disagreement: got %v, want ErrTenantMismatch", err)
+	}
+
+	// The counterweight: agreeing is not a disagreement, and a row that leaves the
+	// tenant unset is stamped as it always was.
+	if err := db.WithContext(ctx).Create(&projection{Tenant: "mine", DeviceToken: "a"}).Error; err != nil {
+		t.Fatalf("a row naming the context's own tenant was refused: %v", err)
+	}
+	if err := db.WithContext(ctx).Create(&projection{DeviceToken: "b"}).Error; err != nil {
+		t.Fatalf("a row leaving the tenant unset was refused: %v", err)
+	}
+	var stamped projection
+	if err := db.WithContext(ctx).Where("device_token = ?", "b").Take(&stamped).Error; err != nil {
+		t.Fatalf("reading back the stamped row: %v", err)
+	}
+	if stamped.Tenant != "mine" {
+		t.Fatalf("unset tenant was stamped %q, want \"mine\"", stamped.Tenant)
 	}
 }
 
 // A batch insert is one statement, and one fenced row in it must refuse the whole thing —
 // a per-statement check that looked only at the first row would admit the rest.
+//
+// A system context, for the same reason as the row-carried test above: a batch spanning
+// tenants has no single context tenant it could run under, and under a tenant context
+// the create stamp would now refuse it as a mismatch before the fence ever saw it.
 func TestABatchIsRefusedWhenAnyRowNamesAFencedTenant(t *testing.T) {
 	db := newFenceDB(t)
 	plant(t, db, "acme")
@@ -241,7 +296,8 @@ func TestABatchIsRefusedWhenAnyRowNamesAFencedTenant(t *testing.T) {
 		{Tenant: "acme", DeviceToken: "b"},
 		{Tenant: "third", DeviceToken: "c"},
 	}
-	if err := db.Create(&batch).Error; !errors.Is(err, ErrTenantPurged) {
+	sys := core.WithSystemContext(context.Background())
+	if err := db.WithContext(sys).Create(&batch).Error; !errors.Is(err, ErrTenantPurged) {
 		t.Fatalf("batch containing a fenced tenant: got %v, want ErrTenantPurged", err)
 	}
 

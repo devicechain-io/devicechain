@@ -31,7 +31,7 @@ import (
 // failure should be read: finding a new site is not "someone added a known-bad thing",
 // it is "someone turned tenant isolation off somewhere, and this is the review". The
 // justification belongs at the call site, in a comment a reader meets when they open
-// the file — not here, where twenty-eight paragraphs would be skimmed as one.
+// the file — not here, where thirty-two paragraphs would be skimmed as one.
 //
 // Names, not counts or line numbers. A line number turns every unrelated edit above it
 // into a failure here, which teaches people to re-run and paste rather than to read;
@@ -47,13 +47,22 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/command-delivery/processor/CommandDeliveryProcessor.go": {
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 	},
-	"backend/services/command-delivery/processor/HoldReconciler.go":              {"CommandDeliveryProcessor.reconcileOnePage"},
-	"backend/services/command-delivery/processor/StrandedReconciler.go":          {"CommandDeliveryProcessor.reconcileStrandedPage"},
-	"backend/services/device-management/model/api_provisioning.go":               {"Api.ProvisionDeviceBootstrap"},
-	"backend/services/device-state/processor/StateProcessor.go":                  {"StateProcessor.runInactivityMonitor"},
-	"backend/services/event-management/model/analytics.go":                       {"ReconcileAnalyticsSurface"},
-	"backend/services/event-management/model/lifecycle.go":                       {"ApplyDataLifecyclePolicies"},
-	"backend/services/event-management/processor/AnchorReconciliationSweep.go":   {"AnchorReconciliationSweep.runOnce"},
+	"backend/services/command-delivery/processor/HoldReconciler.go":            {"CommandDeliveryProcessor.reconcileOnePage"},
+	"backend/services/command-delivery/processor/StrandedReconciler.go":        {"CommandDeliveryProcessor.reconcileStrandedPage"},
+	"backend/services/device-management/model/api_provisioning.go":             {"Api.ProvisionDeviceBootstrap"},
+	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
+	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
+	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
+	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
+	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
+	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
+	// tenant's rows, so each of these four reads the whole projection. They are the only
+	// reads in that service that do; everything else there is scoped from the context
+	// like the rest of the tree.
+	"backend/services/event-processing/model/detect_rule_store.go":               {"DetectRuleStore.LoadAll"},
+	"backend/services/event-processing/model/device_attribute_store.go":          {"DeviceAttributeStore.LoadAll"},
+	"backend/services/event-processing/model/device_roster_store.go":             {"DeviceRosterStore.LoadAll"},
+	"backend/services/event-processing/model/profile_active_store.go":            {"ProfileActiveStore.LoadAll"},
 	"backend/services/notification-management/processor/RetentionSweeper.go":     {"RetentionSweeper.runOnce"},
 	"backend/services/notification-management/processor/escalation_scheduler.go": {"EscalationScheduler.runOnce"},
 	"backend/services/user-management/deadletters/context.go":                    {"systemCtx"},

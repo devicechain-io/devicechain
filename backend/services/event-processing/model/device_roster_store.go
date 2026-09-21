@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm/clause"
 )
@@ -48,7 +49,7 @@ func NewDeviceRosterStore(r *rdb.RdbManager) *DeviceRosterStore {
 func (s *DeviceRosterStore) Upsert(ctx context.Context, roster *DeviceRoster) error {
 	roster.Deleted = false
 	roster.LastEventAt = roster.ExpectedSince
-	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
+	return s.rdb.DB(dccore.WithTenant(ctx, roster.Tenant)).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant"}, {Name: "device_token"}},
 		DoUpdates: clause.AssignmentColumns([]string{"profile_token", "expected_since", "deleted", "last_event_at", "updated_at"}),
 		Where:     rosterMonotonicGuard,
@@ -75,7 +76,7 @@ func (s *DeviceRosterStore) Delete(ctx context.Context, tenant, deviceToken stri
 		Deleted:       true,
 		LastEventAt:   deletedTime,
 	}
-	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
+	return s.rdb.DB(dccore.WithTenant(ctx, tenant)).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant"}, {Name: "device_token"}},
 		DoUpdates: clause.AssignmentColumns([]string{"deleted", "last_event_at", "updated_at"}),
 		Where:     rosterMonotonicGuard,
@@ -92,7 +93,7 @@ func (s *DeviceRosterStore) Delete(ctx context.Context, tenant, deviceToken stri
 // it; the returned row's ProfileToken/ExpectedSince are meaningful only when live is true.
 func (s *DeviceRosterStore) Load(ctx context.Context, tenant, deviceToken string) (roster DeviceRoster, live bool, err error) {
 	var row DeviceRoster
-	tx := s.rdb.DB(ctx).Where("tenant = ? AND device_token = ?", tenant, deviceToken).Limit(1).Find(&row)
+	tx := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where("device_token = ?", deviceToken).Limit(1).Find(&row)
 	if tx.Error != nil {
 		return DeviceRoster{}, false, tx.Error
 	}
@@ -103,11 +104,14 @@ func (s *DeviceRosterStore) Load(ctx context.Context, tenant, deviceToken string
 }
 
 // LoadAll returns every LIVE rostered device (tombstones excluded) — the full set the engine's
-// dead-man arming is rebuilt from at startup. Like the rule projection it is not tenant-scoped
-// (the projection spans every tenant, tenant on the row), so it reads the whole table.
+// dead-man arming is rebuilt from at startup.
+//
+// 🔴 IT READS EVERY TENANT'S ROWS, declared with a system context: the engine is a
+// per-Instance singleton rebuilding arming for all tenants at startup, so it has no
+// tenant of its own to read under. Declared in sanctionedSystemContexts (backend/core/test).
 func (s *DeviceRosterStore) LoadAll(ctx context.Context) ([]DeviceRoster, error) {
 	var rosters []DeviceRoster
-	if err := s.rdb.DB(ctx).Where("deleted = ?", false).Find(&rosters).Error; err != nil {
+	if err := s.rdb.DB(dccore.WithSystemContext(ctx)).Where("deleted = ?", false).Find(&rosters).Error; err != nil {
 		return nil, err
 	}
 	return rosters, nil

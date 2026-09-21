@@ -19,12 +19,20 @@ import (
 // This area embeds no core mixins at all — no gorm.Model, no rdb.TenantScoped — so unlike
 // the other baselines there is nothing to inline. That is a property of the engine's tables
 // rather than an oversight: they are read-models keyed by their own natural keys, they are
-// not soft-deletable, and the tenant is a plain column named `tenant` (not `tenant_id`)
-// because these tables are NOT tenant-scoped in the rdb sense — the DETECT engine is a
-// per-Instance singleton that spans every tenant, so the global tenant-scope callback must
-// not apply to them. Do not "regularise" that to rdb.TenantScoped: it would rename the
-// column and pull the tables into a scoping callback that would then filter the engine's own
-// cross-tenant reads down to nothing.
+// not soft-deletable, and the tenant is a plain column named `tenant` (not `tenant_id`),
+// keyed into the composite primary key.
+//
+// 🔴 DO NOT "REGULARISE" THAT TO rdb.TenantScoped. The reason is the column, not the
+// scoping: renaming it is a schema change these snapshots forbid, and it would buy nothing.
+// The scope callback recognises BOTH spellings, so these tables are tenant-scoped and
+// fail closed exactly like every other area's. The DETECT engine is still a per-Instance
+// singleton that must read every tenant at startup, and its four cross-tenant loads say so
+// with an explicit system context rather than by being unscoped.
+//
+// That was not always true. The callback knew only `tenant_id`, so these six tables were
+// classified like migration bookkeeping and got no predicate at all — while the erasure
+// fence and the tenant purge, which both knew the second spelling, treated them as
+// tenant-bearing. Isolation here rested on a hand-written WHERE in each read.
 //
 // 🔴 NO TYPE HERE HAS A TableName METHOD. core/rdb pins the gorm NamingStrategy's TablePrefix
 // to the functional area, and that prefix applies only when gorm DERIVES a table name; an

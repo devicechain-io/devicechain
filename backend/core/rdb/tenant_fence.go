@@ -268,23 +268,18 @@ func statementTenants(db *gorm.DB) []string {
 }
 
 // tenantFieldOf returns the Go field name carrying this model's tenant, or "" when the
-// model has none and is therefore not fenceable. The order matches the two spellings
-// tenantpurge classifies by, so a table this fence ignores is a table the sweep also
-// leaves alone.
+// model has none and is therefore not fenceable.
+//
+// It asks tenantField, which is the single authority on what "tenant-scoped" means, so
+// a table this fence ignores is exactly a table the scope callback leaves unscoped and
+// the sweep leaves alone. That used to be three separate lists, and they disagreed.
 func tenantFieldOf(db *gorm.DB) string {
-	if !ensureSchema(db) {
+	field := tenantField(db)
+	if field == nil {
 		return ""
 	}
-	for _, name := range []string{tenantFieldName, plainTenantFieldName} {
-		if _, ok := db.Statement.Schema.FieldsByName[name]; ok {
-			return name
-		}
-	}
-	return ""
+	return field.Name
 }
-
-// plainTenantFieldName is event-processing's spelling of the tenant column.
-const plainTenantFieldName = "Tenant"
 
 // destTenants pulls tenant values out of the statement's destination, which is a struct,
 // a pointer to one, a slice or array of either (a batch insert), or a map of columns
@@ -314,7 +309,7 @@ func destTenants(dest any, field string) []string {
 			}
 		case reflect.Map:
 			// Updates(map[string]any{...}) is keyed by COLUMN name, not field name.
-			for _, key := range []string{"tenant_id", "tenant"} {
+			for _, key := range TenantColumnNames {
 				mv := v.MapIndex(reflect.ValueOf(key))
 				if !mv.IsValid() {
 					continue

@@ -5,8 +5,10 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -59,7 +61,10 @@ func TestDetectRuleStore_UpsertIsIdempotentAndLoads(t *testing.T) {
 // found=false for an unknown id, never an error.
 func TestDetectRuleStore_LoadByID(t *testing.T) {
 	s := newTestRuleStore(t)
-	ctx := context.Background()
+	// LoadByID is a scoped read now, so it needs the tenant the rule belongs to. It used
+	// to be a global point read and the REACT dispatcher carried a hand-written backstop
+	// to make up for it.
+	ctx := dccore.WithTenant(context.Background(), "acme")
 	rule := DetectRule{RuleId: "acme/p@1/hot", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "hot", Definition: `{"actions":[]}`}
 	if err := s.Upsert(ctx, []DetectRule{rule}); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -80,6 +85,36 @@ func TestDetectRuleStore_LoadByID(t *testing.T) {
 	}
 }
 
+// A batch that spans tenants is refused rather than silently rewritten. The storage
+// callback stamps the context's tenant onto every row of a create, so such a batch would
+// land every row under one tenant — on primary keys the caller's ON CONFLICT target does
+// not name, leaving two tenants' projections quietly wrong.
+//
+// It asserts the SPECIFIC error, which is the whole point. An `err != nil` assertion here
+// passed against a redundant local check that has since been deleted, and would have gone
+// on passing if the callback's refusal were removed instead — naming rdb.ErrTenantMismatch
+// is what ties this test to the mechanism that actually does the work.
+func TestDetectRuleStore_RefusesABatchSpanningTenants(t *testing.T) {
+	s := newTestRuleStore(t)
+	ctx := dccore.WithTenant(context.Background(), "acme")
+	err := s.Upsert(ctx, []DetectRule{
+		{RuleId: "acme/p@1/r", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "r", Definition: `{}`},
+		{RuleId: "beta/q@1/r", Tenant: "beta", ProfileVersionToken: "q@1", RuleToken: "r", Definition: `{}`},
+	})
+	if !errors.Is(err, rdb.ErrTenantMismatch) {
+		t.Fatalf("a batch naming two tenants: got %v, want rdb.ErrTenantMismatch", err)
+	}
+
+	// The counterweight: a single-tenant batch of the same size is not refused, so the
+	// check rejects the spanning shape rather than batches in general.
+	if err := s.Upsert(ctx, []DetectRule{
+		{RuleId: "acme/p@1/r", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "r", Definition: `{}`},
+		{RuleId: "acme/p@2/r", Tenant: "acme", ProfileVersionToken: "p@2", RuleToken: "r", Definition: `{}`},
+	}); err != nil {
+		t.Fatalf("a single-tenant batch was refused: %v", err)
+	}
+}
+
 // An empty batch is a no-op, and rules across tenants/versions all load (retain-superseded).
 func TestDetectRuleStore_EmptyAndMultiScope(t *testing.T) {
 	s := newTestRuleStore(t)
@@ -87,13 +122,20 @@ func TestDetectRuleStore_EmptyAndMultiScope(t *testing.T) {
 	if err := s.Upsert(ctx, nil); err != nil {
 		t.Fatalf("empty upsert should be a no-op: %v", err)
 	}
-	rows := []DetectRule{
+	// One published-rule fact carries one tenant's rules, so each tenant is its own
+	// upsert — which is also how the producer builds them (factRuleRows takes a tenant).
+	acme := []DetectRule{
 		{RuleId: "acme/p@1/r", Tenant: "acme", ProfileVersionToken: "p@1", RuleToken: "r", Definition: `{}`},
 		{RuleId: "acme/p@2/r", Tenant: "acme", ProfileVersionToken: "p@2", RuleToken: "r", Definition: `{}`},
+	}
+	if err := s.Upsert(ctx, acme); err != nil {
+		t.Fatalf("upsert acme: %v", err)
+	}
+	beta := []DetectRule{
 		{RuleId: "beta/q@1/r", Tenant: "beta", ProfileVersionToken: "q@1", RuleToken: "r", Definition: `{}`},
 	}
-	if err := s.Upsert(ctx, rows); err != nil {
-		t.Fatalf("upsert: %v", err)
+	if err := s.Upsert(ctx, beta); err != nil {
+		t.Fatalf("upsert beta: %v", err)
 	}
 	all, err := s.LoadAll(ctx)
 	if err != nil {

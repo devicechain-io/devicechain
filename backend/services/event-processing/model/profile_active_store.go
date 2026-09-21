@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 
+	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm/clause"
 )
@@ -33,7 +34,7 @@ func NewProfileActiveStore(r *rdb.RdbManager) *ProfileActiveStore {
 // (equal PublishedAt rewrites identical values). A zero PublishedAt (a pre-4c-2a fact without the
 // field) can insert but never overwrites a real publish time, and is clamped downstream at arming.
 func (s *ProfileActiveStore) Upsert(ctx context.Context, active *ProfileActive) error {
-	return s.rdb.DB(ctx).Clauses(clause.OnConflict{
+	return s.rdb.DB(dccore.WithTenant(ctx, active.Tenant)).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant"}, {Name: "profile_token"}},
 		DoUpdates: clause.AssignmentColumns([]string{"active_version_token", "published_at", "updated_at"}),
 		Where: clause.Where{Exprs: []clause.Expression{
@@ -50,7 +51,7 @@ func (s *ProfileActiveStore) Upsert(ctx context.Context, active *ProfileActive) 
 // named. found is false when no publish has been recorded for the profile yet.
 func (s *ProfileActiveStore) Load(ctx context.Context, tenant, profileToken string) (active ProfileActive, found bool, err error) {
 	var row ProfileActive
-	tx := s.rdb.DB(ctx).Where("tenant = ? AND profile_token = ?", tenant, profileToken).Limit(1).Find(&row)
+	tx := s.rdb.DB(dccore.WithTenant(ctx, tenant)).Where("profile_token = ?", profileToken).Limit(1).Find(&row)
 	if tx.Error != nil {
 		return ProfileActive{}, false, tx.Error
 	}
@@ -61,10 +62,13 @@ func (s *ProfileActiveStore) Load(ctx context.Context, tenant, profileToken stri
 }
 
 // LoadAll returns every profile's active-version row — the set the engine's arming cross-
-// references at startup. Not tenant-scoped (tenant on the row), so it reads the whole table.
+// references at startup.
+//
+// 🔴 IT READS EVERY TENANT'S ROWS, declared with a system context for the same reason as
+// its sibling projections. Declared in sanctionedSystemContexts (backend/core/test).
 func (s *ProfileActiveStore) LoadAll(ctx context.Context) ([]ProfileActive, error) {
 	var actives []ProfileActive
-	if err := s.rdb.DB(ctx).Find(&actives).Error; err != nil {
+	if err := s.rdb.DB(dccore.WithSystemContext(ctx)).Find(&actives).Error; err != nil {
 		return nil, err
 	}
 	return actives, nil
