@@ -19,7 +19,7 @@ import (
 // wiring (verifier + audience + scope option) so none of it can be silently removed.
 func TestServerNew_AuthMiddlewareGatesRequests(t *testing.T) {
 	iss, validator := mustIssuerValidator(t)
-	mcpHandler, _ := New(testResource, "https://as.example.com", validator)
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator, NewGraphQLClient())
 	ts := httptest.NewServer(mcpHandler)
 	defer ts.Close()
 

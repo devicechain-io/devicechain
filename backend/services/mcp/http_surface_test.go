@@ -71,7 +71,8 @@ func serveMcp(t *testing.T) string {
 
 	// Read back through the gate, exactly as afterMicroserviceInitialized does, rather
 	// than closing over a second validator built here.
-	registerHttpRoutes(testResource, testIssuer, Microservice.Readiness.Validator)
+	registerHttpRoutes(testResource, testIssuer, Microservice.Readiness.Validator,
+		server.NewGraphQLClient())
 	require.NoError(t, startHttpServer(0))
 	t.Cleanup(func() { _ = httpServer.Shutdown(context.Background()) })
 

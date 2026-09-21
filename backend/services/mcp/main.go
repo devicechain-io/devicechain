@@ -73,7 +73,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
 	// registerHttpRoutes for why it is here and not where the server starts.
-	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator)
+	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator,
+		server.NewGraphQLClient())
 	return nil
 }
 
@@ -111,8 +112,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // went back to http.DefaultServeMux, which is exactly the regression the switchover
 // exists to prevent. The uncovered remainder is one line — that the initializer calls
 // this — because the initializer needs configuration and a JWKS endpoint.
-func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator) {
-	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator)
+func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator,
+	gql *server.GraphQLClient) {
+	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql)
 	Microservice.RegisterProbes(Microservice.Readiness)
 }
 

@@ -31,7 +31,7 @@ import (
 // only ever hold what register declared, so an extra SERVED tool has no entry in it.
 func servedCatalog(t *testing.T) ([]string, *Catalog, []*mcp.Tool) {
 	t.Helper()
-	_, c := newServer()
+	_, c := newServer(NewGraphQLClient())
 	names, tools := listServedTools(t)
 	return names, c, tools
 }
@@ -42,7 +42,7 @@ func listServedTools(t *testing.T) ([]string, []*mcp.Tool) {
 	t.Helper()
 	ctx := context.Background()
 	iss, validator := mustIssuerValidator(t)
-	mcpHandler, _ := New(testResource, "https://as.example.com", validator)
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator, NewGraphQLClient())
 	ts := httptest.NewServer(mcpHandler)
 	t.Cleanup(ts.Close)
 

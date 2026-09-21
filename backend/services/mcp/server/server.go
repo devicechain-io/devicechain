@@ -32,17 +32,24 @@ const sessionTimeout = 30 * time.Minute
 //   - resourceID is this server's identifier (the audience tokens must be bound to).
 //   - issuer is the Authorization Server that issues tokens for it.
 //   - validator is the late-bound JWKS validator (nil until the readiness gate opens).
+//   - gql reaches the per-area GraphQL endpoints the tools read through.
+//
+// gql is a PARAMETER rather than something this function builds, and that is what makes
+// a tool call testable end to end. Every assertion about what a tool RETURNS used to be
+// made by invoking the tool's Go method directly, because the only way to reach a fake
+// upstream was to construct a Tools by hand — which meant no test could call a tool
+// through the handler this function serves. calltool_wire_test.go is what that enables.
 //
 // It returns (mcpHandler, metadataHandler) as bare handlers. WHERE they get mounted is
 // Routes' business, not the caller's — the paths are load-bearing (they have to match
 // what the ingress delivers and what the 401 challenge advertises), and leaving them to
 // each caller is how the endpoint came to be served at a path nothing published.
-func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHandler, metadataHandler http.Handler) {
+func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient) (mcpHandler, metadataHandler http.Handler) {
 	// The catalog of risk declarations is not needed here: it is published on each tool's
 	// own listing at registration, so nothing at runtime consults it, and it is dropped
 	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
 	// newServer itself, and gets the tool NAMES from the handler built below.
-	mcpServer, _ := newServer()
+	mcpServer, _ := newServer(gql)
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
@@ -74,9 +81,9 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator) (mcpHa
 // test green. Construction lives here now, New only wires HTTP in front of it, and the
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
-func newServer() (*mcp.Server, *Catalog) {
+func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	return s, registerTools(s, NewTools(NewGraphQLClient()))
+	return s, registerTools(s, NewTools(gql))
 }
 
 // registerTools wires every read tool onto the server, each with its declared risk
@@ -220,8 +227,9 @@ func metadataURL(resourceID string) string {
 //
 // The probe and metrics handlers main.go adds are more specific patterns, so
 // ServeMux still routes them ahead of this catch-all.
-func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator) {
-	mcpHandler, metadataHandler := New(resourceID, issuer, validator)
+func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
+	gql *GraphQLClient) {
+	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql)
 	mux.Handle("/", mcpHandler)
 
 	// TWO metadata locations, deliberately, because two different things reach this
