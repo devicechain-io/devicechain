@@ -27,8 +27,8 @@ import (
 //
 // 🔴 THE EIGHT BELOW ARE ONE DEFECT, NOT EIGHT. Seven share a package-local
 // readErrorBackoff constant in event-processing and the eighth is lwm2m-ingest's downlink
-// dispatcher; all of them log the error, wait a fixed interval, and go round again with no
-// ceiling. The fix is the same at each: a core.ReadPacer field, PauseAfterError on the
+// dispatcher; all of them surface the error, wait a fixed interval, and go round again with
+// no ceiling. The fix is the same at each: a core.ReadPacer field, PauseAfterError on the
 // error path, Succeeded on the good one.
 //
 // 🔴 lwm2m-ingest's Dispatcher.Run CARRIES A CLAIM THIS GUARD CANNOT CHECK — that a
@@ -43,6 +43,31 @@ var knownUnpacedReadLoops = map[string][]string{
 	"backend/services/event-processing/processor/react_dispatcher.go":        {"run"},
 	"backend/services/event-processing/processor/roster_consumer.go":         {"runEntityDeletedConsumer", "runRosterConsumer"},
 	"backend/services/lwm2m-ingest/downlink/dispatcher.go":                   {"Run"},
+}
+
+// boundedByOtherMeans is the ONE read loop that is not a defect and that this scanner
+// cannot see is not a defect. It is deliberately a SEPARATE list from the debt ledger
+// above: "already correct" and "still to fix" are different claims, and a single list
+// holding both teaches the next reader to treat every line as noise.
+//
+// 🔴 IT EXISTS BECAUSE THE SCANNER USED TO GET THIS RIGHT BY ACCIDENT. drainFactToHead
+// ends its inner read loop with a `break`, and an earlier version of this guard read that
+// as leaving the read loop — so the function was exempted, and the commit that introduced
+// the guard claimed the exemption was "computed from the loop'"'"'s own control flow, so it
+// cannot be claimed by a loop that does not earn it". That was wrong twice over. The
+// `break` leaves the INNER loop and lands in an outer one that reads again, and the same
+// reasoning silently exempted every read loop nested inside a second loop.
+//
+// What actually bounds it is a pass counter the scanner never looks at: the outer loop
+// probes, drains what is available, and returns when a pass read NOTHING
+// (`if read == 0`), either concluding the catch-up or failing closed on a degraded
+// broker. A non-EOF read error returns immediately. So it terminates, and a pacer would
+// add nothing.
+//
+// A line here is a claim that someone READ the function and found the bound. It is worth
+// less than a computed exemption, which is why there is exactly one.
+var boundedByOtherMeans = map[string][]string{
+	"backend/services/event-processing/processor/ResolvedEventsProcessor.go": {"drainFactToHead"},
 }
 
 // Every read loop in the repository must bound how long it will retry a failing read.
@@ -77,7 +102,7 @@ func TestEveryReadLoopInTheRepositoryBoundsItsRetries(t *testing.T) {
 		}
 	}
 
-	byFile := map[string][]UnpacedReadLoop{}
+	byFile := map[string][]unpacedReadLoop{}
 	for _, u := range found {
 		rel, err := filepath.Rel(root, u.File)
 		if err != nil {
@@ -90,6 +115,9 @@ func TestEveryReadLoopInTheRepositoryBoundsItsRetries(t *testing.T) {
 	for _, file := range sortedKeys(byFile) {
 		allowed := map[string]bool{}
 		for _, name := range knownUnpacedReadLoops[file] {
+			allowed[name] = true
+		}
+		for _, name := range boundedByOtherMeans[file] {
 			allowed[name] = true
 		}
 		for _, u := range byFile[file] {
@@ -125,13 +153,42 @@ func TestEveryReadLoopInTheRepositoryBoundsItsRetries(t *testing.T) {
 		}
 	}
 
-	// A ledger entry naming a file the scan never parsed would sit here forever looking
-	// like outstanding work. The loop above catches that only if the file still exists;
-	// this catches the rename.
+	// The exemption list rots the same way the ledger does, so it is checked the same way:
+	// a name here that the scan no longer reports means the loop was paced, rewritten or
+	// deleted, and the hand-read justification above it now describes nothing.
+	for _, file := range sortedKeys(boundedByOtherMeans) {
+		present := map[string]bool{}
+		for _, u := range byFile[file] {
+			present[u.Function] = true
+		}
+		for _, name := range boundedByOtherMeans[file] {
+			if present[name] {
+				continue
+			}
+			t.Errorf("boundedByOtherMeans exempts %s in %s, but the scan no longer reports it "+
+				"at all. The exemption is inert and the paragraph justifying it now describes "+
+				"nothing: delete the entry", name, file)
+		}
+	}
+
+	// An entry whose slice is empty lists nothing that can be found or missed, so it slips
+	// past both loops above and sits here forever looking like outstanding work.
 	for _, file := range sortedKeys(knownUnpacedReadLoops) {
 		if len(knownUnpacedReadLoops[file]) == 0 {
 			t.Errorf("knownUnpacedReadLoops has an empty entry for %s; delete the line rather "+
 				"than leaving a file listed with nothing outstanding in it", file)
 		}
+	}
+}
+
+// A scan that parsed nothing reports no findings, which reads exactly like a scan that
+// found nothing wrong. unpacedReadLoopsUnder refuses rather than returning that answer,
+// and this is the test that the refusal works — it had none until a review pointed out
+// that the sibling guard tests its equivalent and this one did not.
+func TestAScanThatParsesNothingRefusesRatherThanReportingClean(t *testing.T) {
+	found, _, err := unpacedReadLoopsUnder(t.TempDir())
+	if err == nil {
+		t.Fatalf("scanning an empty directory returned %d findings and no error; a scan that "+
+			"read no files must say so, because silence is this guard's failure mode", len(found))
 	}
 }
