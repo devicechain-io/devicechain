@@ -90,8 +90,18 @@ func (api *MockApi) DistinctAnchorTenants(ctx context.Context) ([]string, error)
 	return args.Get(0).([]string), args.Error(1)
 }
 
-func (api *MockApi) DistinctAnchorRefs(ctx context.Context) ([]emmodel.AnchorRef, error) {
-	args := api.Mock.Called()
+// The two paged anchor reads pass their CURSOR to Called, so an expectation is set per
+// cursor value. That is deliberate: a sweep that failed to advance its cursor, or
+// advanced it to the wrong ref, would call with an argument no expectation matches and
+// the mock fails the test — which is the failure a stub that ignored the cursor and
+// replayed one canned page could not produce.
+func (api *MockApi) DistinctAnchorTargetsAfter(ctx context.Context, afterType, afterToken string) ([]emmodel.AnchorRef, error) {
+	args := api.Mock.Called(afterType, afterToken)
+	return args.Get(0).([]emmodel.AnchorRef), args.Error(1)
+}
+
+func (api *MockApi) DistinctAnchorDeviceTokensAfter(ctx context.Context, after string) ([]emmodel.AnchorRef, error) {
+	args := api.Mock.Called(after)
 	return args.Get(0).([]emmodel.AnchorRef), args.Error(1)
 }
 
