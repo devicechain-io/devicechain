@@ -1,0 +1,142 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the tenant-purge alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# TenantPurgeStalled is a threshold over a gauge that RISES ON ITS OWN. Age climbs one
+# second per second for as long as a deletion is open, so the alert is not "did something
+# go wrong" but "has this been open longer than it can legitimately take". That makes the
+# quiet cases the ones worth writing down: a healthy deletion spends hours above zero and
+# must not page, and it is the only alert in this repository whose subject is normal for
+# most of its life.
+#
+# 🔴 THE QUIET CASES ARE THE HALF THAT CAN ROT. "It fires on a stuck purge" survives
+# almost any edit to the threshold — halve it and every firing case below still passes.
+# What goes red is "a deletion inside its token hold must stay quiet", which is the case
+# that separates this alert from one that pages on every tenant anyone ever deletes.
+#
+# THE SERIES, and what is known about each:
+#
+#   - devicechain_usermanagement_tenant_purge_oldest_age_seconds — an unlabelled Gauge,
+#     registered at process start, so it EXISTS and reads 0 on an instance with no open
+#     deletions rather than being absent. That is why the quiet scenarios below carry it
+#     AT ZERO instead of omitting it: an alert that is silent because its series is
+#     missing and one that is silent because the platform is healthy look identical, and
+#     only one of them is a working alert.
+#   - devicechain_usermanagement_tenant_purge_in_flight — same shape, same reason. It is
+#     what TenantPurgeVisibilityLost watches, precisely because a gauge that always
+#     exists is one whose ABSENCE means something.
+#
+# 🔑 THE THRESHOLD IS 86400 BECAUSE THE CHART DERIVES IT as twice the configured token
+# hold, whose default is 43200 (the NATS credential lifetime). These tests run against
+# the RENDERED rule, so if that derivation changes they go red rather than drifting — the
+# numbers below are the rendered ones, not a second copy of the policy.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional and its absence is not an error: promtool with no rule_files loads no rules,
+# every alert_rule_test then expects an alert and gets none, and the failure reads as
+# "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A deletion that is stuck: open well past twice its token hold.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # Starts at 30h and climbs, which is what a stuck deletion looks like.
+      - series: 'devicechain_usermanagement_tenant_purge_oldest_age_seconds{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '108000+60x60'
+      - series: 'devicechain_usermanagement_tenant_purge_in_flight{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '1x60'
+    alert_rule_test:
+      # Over the threshold from the first sample, but `for: 15m` has not elapsed.
+      - eval_time: 10m
+        alertname: TenantPurgeStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantPurgeStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A tenant deletion has been open for more than twice its token hold"
+              description: "The oldest open tenant deletion is older than 86400s, which is twice the configured token hold (43200s) and therefore well past the point where every mandatory wait has elapsed. The purge is not progressing: some store is not reporting clean, or is reporting clean and then dirty again. The tenant's data has NOT been erased and its token is still reserved. The coordinator's own pass metrics will look healthy throughout, because a tenant it cannot finish is still a tenant it visited without error -- this alert is the only signal that the deletion is stuck. The admin API's tenantDeletions query names the tenant and the store still outstanding."
+      # The gauges are being scraped throughout, so the visibility alert stays quiet.
+      - eval_time: 20m
+        alertname: TenantPurgeVisibilityLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE CASE THAT MAKES THE ALERT USABLE: a deletion that is progressing
+  # normally is ABOVE ZERO for its whole life and must never page.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # Six hours in, climbing: inside the 12h token hold, so it cannot have completed
+      # yet and nothing is wrong.
+      - series: 'devicechain_usermanagement_tenant_purge_oldest_age_seconds{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '21600+60x60'
+      - series: 'devicechain_usermanagement_tenant_purge_in_flight{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantPurgeStalled
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: TenantPurgeVisibilityLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Nothing purging: both gauges present and zero. The healthy steady state.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_tenant_purge_oldest_age_seconds{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x60'
+      - series: 'devicechain_usermanagement_tenant_purge_in_flight{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantPurgeStalled
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: TenantPurgeVisibilityLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The counterweight to the whole group: user-management stops being scraped.
+  # TenantPurgeStalled goes quiet because its series is gone, which is exactly
+  # the silence that must not read as health.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantPurgeVisibilityLost
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantPurgeVisibilityLost
+        exp_alerts:
+          # 🔑 namespace IS ON THIS ALERT AND NOT ON THE OTHER ONE. absent() returns a
+          # vector carrying the label matchers from its argument, so the selector's
+          # namespace survives into the alert; TenantPurgeStalled goes through max(),
+          # which drops every label it was not told to keep. Two rules over the same
+          # series, two different label sets, and promtool is the only thing that says so.
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+            exp_annotations:
+              summary: "Nothing is reporting whether tenant deletions are progressing"
+              description: "The tenant-purge gauges have not been scraped for 15m, so TenantPurgeStalled above cannot fire and an open deletion would be invisible rather than green. This is the absent() counterweight: the in-flight gauge is unlabelled and registered at process start, so it reads 0 on a healthy instance rather than going missing -- its absence means user-management is not being scraped at all, not that no deletion is open."
+      - eval_time: 20m
+        alertname: TenantPurgeStalled
+        exp_alerts: []

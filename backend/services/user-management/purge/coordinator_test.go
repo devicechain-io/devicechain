@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -88,6 +89,7 @@ type harness struct {
 	iam   *iam.Store
 	coord *Coordinator
 	clock time.Time
+	reg   *prometheus.Registry
 }
 
 func newHarness(t *testing.T, stores ...Store) *harness {
@@ -101,7 +103,15 @@ func newHarness(t *testing.T, stores ...Store) *harness {
 	mgr := &rdb.RdbManager{Database: db}
 	store := iam.NewStore(mgr)
 	h := &harness{t: t, iam: store, clock: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)}
-	h.coord = NewCoordinator(&core.Microservice{FunctionalArea: "user-management"}, store, mgr,
+	// A registry of its own, so the coordinator's gauges are readable here. Without it
+	// MetricsRegisterer returns nil and promauto builds them UNREGISTERED — they would
+	// still Set correctly and testutil.ToFloat64 would still read them, so the tests
+	// below would pass either way; the registry is what lets a test also assert a metric
+	// was EXPORTED under the name an alert would use.
+	ms := &core.Microservice{FunctionalArea: "user-management"}
+	h.reg = prometheus.NewRegistry()
+	ms.UseMetricsRegistry(h.reg)
+	h.coord = NewCoordinator(ms, store, mgr,
 		stores, time.Minute, settleWindow, tokenHoldWindow, core.NewNoOpLifecycleCallbacks())
 	h.coord.now = func() time.Time { return h.clock }
 	return h
@@ -834,4 +844,159 @@ func TestEveryFencingStoreIsLiftedBeforeTheTokenIsReleased(t *testing.T) {
 	require.Equal(t, []string{"acme"}, lifter.lifted,
 		"the fence-planting store was not asked to lift, so the token was released behind a "+
 			"standing fence")
+}
+
+// gaugeValue reads one of the coordinator's gauges out of the harness registry BY NAME —
+// the same string an alert rule would carry — rather than off the struct field.
+//
+// 🔑 Reading the field would pass for a gauge that was never registered, and an
+// unregistered gauge Sets and reads exactly like a registered one (see MetricsRegisterer:
+// promauto builds it, registers it nowhere, and it still counts). A metric nothing can
+// scrape is indistinguishable from a working one at the call site, which is precisely the
+// failure these tests exist to prevent.
+func gaugeValue(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			return m.GetGauge().GetValue()
+		}
+	}
+	t.Fatalf("no gauge named %q was registered; the ones that were: %v", name, gatheredNames(reg))
+	return 0
+}
+
+func gatheredNames(reg *prometheus.Registry) []string {
+	families, _ := reg.Gather()
+	out := make([]string, 0, len(families))
+	for _, f := range families {
+		out = append(out, f.GetName())
+	}
+	return out
+}
+
+const (
+	inFlightMetric  = "devicechain_usermanagement_tenant_purge_in_flight"
+	oldestAgeMetric = "devicechain_usermanagement_tenant_purge_oldest_age_seconds"
+)
+
+// TestAPurgeThatCanNeverFinishIsVISIBLEEvenThoughItsPassCOMPLETES is the whole point of
+// these gauges, and it asserts both halves of the discrepancy in one test on purpose.
+//
+// 🔴 THE PASS SUCCEEDS. A tenant whose store never goes clean is visited on every pass,
+// produces no error, and leaves the pass COMPLETE — so the periodic task's own
+// last-success gauge keeps moving while the tenant's data is not erased. Asserting only
+// that the age gauge rises would leave the reader to take that on trust; asserting that
+// the pass returned nil ALONGSIDE it is what shows the two signals disagreeing, which is
+// the reason the domain gauge has to exist at all.
+func TestAPurgeThatCanNeverFinishIsVisibleEvenThoughItsPassCompletes(t *testing.T) {
+	// A store that never reports clean: the purge can never complete.
+	h := newHarness(t, &fakeStore{name: "never-clean", rows: 1})
+	h.deleteTenant("acme")
+
+	require.NoError(t, h.passResult(), "the pass itself succeeds")
+	require.EqualValues(t, 1, gaugeValue(t, h.reg, inFlightMetric))
+
+	// A week later the purge is no closer, and the pass is still clean.
+	h.clock = h.clock.Add(7 * 24 * time.Hour)
+	require.NoError(t, h.passResult(), "still no error after a week")
+
+	require.EqualValues(t, 1, gaugeValue(t, h.reg, inFlightMetric),
+		"the deletion is still open")
+	age := gaugeValue(t, h.reg, oldestAgeMetric)
+	require.InDelta(t, (7 * 24 * time.Hour).Seconds(), age, float64(time.Hour/time.Second),
+		"the age gauge must show a week; this is the only signal that anything is wrong")
+}
+
+// A completed purge leaves nothing behind for the gauges to report, because completion is
+// what removes the row they count.
+func TestTheGaugesReturnToZeroWhenNothingIsPurging(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.passResult())
+	require.EqualValues(t, 0, gaugeValue(t, h.reg, inFlightMetric))
+	require.EqualValues(t, 0, gaugeValue(t, h.reg, oldestAgeMetric))
+}
+
+// 🔴 THE OLDEST IS FOUND BY SCANNING, NOT BY TAKING THE FIRST ROW, and this is the test
+// that can tell the difference.
+//
+// TenantsPurging orders by purge_epoch, so tenants[0] looks like the oldest and is, for
+// every tenant that has an epoch. A purging tenant with a NULL epoch is the exception, and
+// it sorts FIRST on SQLite and LAST on Postgres — so an implementation that trusted the
+// first row would read the NULL row here (and report an age of zero, the most reassuring
+// possible answer) while behaving correctly in production. The tests run on SQLite and
+// production runs on Postgres, which is the arrangement where that gap is least likely to
+// be noticed.
+func TestTheOldestPurgeIsFoundEvenWhenAnEpochlessTenantSortsAheadOfIt(t *testing.T) {
+	h := newHarness(t, &fakeStore{name: "never-clean", rows: 1})
+	h.deleteTenant("acme")
+	h.clock = h.clock.Add(48 * time.Hour)
+
+	// A second purging tenant with NO epoch, which is refused by PurgeTenant but still
+	// appears in the work list — and sorts ahead of acme on this database.
+	sys := core.WithSystemContext(context.Background())
+	require.NoError(t, h.coord.db.DB(sys).Create(&iam.Tenant{
+		Token: "epochless", PurgeState: iam.PurgePurging,
+	}).Error)
+
+	h.pass()
+
+	require.EqualValues(t, 2, gaugeValue(t, h.reg, inFlightMetric))
+	require.InDelta(t, (48 * time.Hour).Seconds(), gaugeValue(t, h.reg, oldestAgeMetric),
+		float64(time.Hour/time.Second),
+		"the epochless tenant must be skipped, not treated as the oldest")
+}
+
+// cancellingStore cancels the pass's context the first time it is asked to erase, so a
+// test can reach the one path where WHEN the gauges are written matters.
+type cancellingStore struct {
+	name   string
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (c *cancellingStore) Name() string { return c.name }
+
+func (c *cancellingStore) Erase(_ context.Context, _ string, _ time.Time) (Outcome, error) {
+	c.calls++
+	if c.calls == 1 {
+		c.cancel()
+	}
+	return Outcome{Rows: 1}, nil
+}
+
+// TestACancelledPassStillLeavesTheInFlightPictureItRead pins the reason observe is called
+// where it is, rather than leaving that to a comment.
+//
+// 🔴 WITHOUT THIS TEST THE PLACEMENT IS UNTESTED, AND IT WAS. Moving the observe call from
+// before the sweep to after it changed nothing any test could see — the mutant survived —
+// because every other test here runs a pass that reaches the end, and at the end the two
+// positions publish the identical slice. The only path that distinguishes them is a pass
+// that returns EARLY, which is the tenant loop's ctx.Done() check, which needs a sweep
+// that cancels partway and a second tenant for the loop to notice before reaching.
+//
+// The consequence it protects is small but real: a service being shut down, or restarted
+// repeatedly, would otherwise leave these gauges holding whatever the last pass that ran
+// to completion saw — which for a purge that began during the churn is a reading of zero
+// open deletions while one is open.
+func TestACancelledPassStillLeavesTheInFlightPictureItRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h := newHarness(t, &cancellingStore{name: "cancels", cancel: cancel})
+	h.deleteTenant("acme")
+	h.deleteTenant("globex")
+	h.clock = h.clock.Add(72 * time.Hour)
+
+	err := h.coord.pass(ctx)
+	require.ErrorIs(t, err, context.Canceled, "the pass must have returned early, or this test proves nothing")
+
+	require.EqualValues(t, 2, gaugeValue(t, h.reg, inFlightMetric),
+		"the pass read two open deletions before it was cancelled; the gauge must say so")
+	require.InDelta(t, (72 * time.Hour).Seconds(), gaugeValue(t, h.reg, oldestAgeMetric),
+		float64(time.Hour/time.Second), "and the age it read, too")
 }

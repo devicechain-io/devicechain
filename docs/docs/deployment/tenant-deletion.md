@@ -142,6 +142,23 @@ None of these lose the deletion. The work list is the tenant's own record, so a
 coordinator that was stopped, a replica that was rescheduled, and a system that was down
 for a week all converge on the next pass.
 
+### How you are told {#stalled-alert}
+
+A deletion that is not finishing makes nothing else look broken, and that is what makes it
+worth alerting on. The coordinator visits the tenant on every pass, finds nothing it can
+report as an error, and the pass succeeds — so the scheduled-task metrics that would tell
+you the coordinator had stopped stay healthy throughout. They are answering a different
+question.
+
+`TenantPurgeStalled` is the one that answers this one. It fires when the oldest open
+deletion has been open for more than twice the configured token hold, which is well past
+the point where every mandatory wait has elapsed. The admin API's `tenantDeletions` query
+then names the tenant and the storage system still outstanding.
+
+It has a counterweight, `TenantPurgeVisibilityLost`, which fires when those figures stop
+being collected at all. Without it, a user-management service that was not being scraped
+would look exactly like one with no deletions open.
+
 ## Configuration {#configuration}
 
 These settings live under `tenantPurge` in the user-management service. `0` means "use
