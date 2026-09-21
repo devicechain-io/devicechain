@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -68,6 +69,10 @@ type Coordinator struct {
 	// clocks' worth of timestamps, so a test that cannot move time can only assert the
 	// window by sleeping through it.
 	now func() time.Time
+
+	// inFlight and oldestAge are what an ALERT can be written against. See observe.
+	inFlight  prometheus.Gauge
+	oldestAge prometheus.Gauge
 }
 
 // NewCoordinator builds the purge loop. interval is the tick period; settle is how long
@@ -87,7 +92,55 @@ func NewCoordinator(ms *core.Microservice, store *iam.Store, db *rdb.RdbManager,
 	c.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "tenant-purge", interval,
 		c.RunOnce, callbacks, core.WithImmediateFirstPass(),
 		core.WithPassMetrics(ms.NewPeriodicTaskMetrics("tenant_purge")))
+	c.inFlight = ms.NewGauge("tenant_purge_in_flight",
+		"Tenant deletions currently open (a row in iam_tenants whose purge_state is purging)")
+	c.oldestAge = ms.NewGauge("tenant_purge_oldest_age_seconds",
+		"Age of the oldest open tenant deletion, measured from its cut; 0 when none are open")
 	return c
+}
+
+// observe publishes what the pass metrics structurally cannot say.
+//
+// 🔴 THE PASS METRICS MEASURE THE LOOP, NOT THE WORK, AND THAT IS THE GAP THIS FILLS. A
+// tenant whose purge can never finish — a store that stays unclean forever — is visited on
+// every pass, returns no error, and leaves the pass COMPLETE. So the last-success gauge
+// stays green while the tenant's data is not erased, which is the one outcome that is a
+// legal problem rather than an operational one. ErrPassSkipped was added so a replica
+// declining the lock could not move that gauge; nothing did the equivalent for a tenant
+// that is being visited and never finishing. This is that.
+//
+// 🔴 NO TENANT LABEL, AND THAT IS NOT A CARDINALITY DECISION. A series labelled by tenant
+// token outlives the thing it describes: Prometheus keeps it for the retention period
+// after the purge completes, so the metric would preserve — in a second datastore, outside
+// every fence and sweep — exactly the identifier the purge exists to erase. The numbers
+// here are deliberately anonymous; the admin GraphQL surface is where an operator asks
+// WHICH tenant, under the caller's own authority and against live rows.
+//
+// It is called with the pass's own tenant list rather than issuing a second read, so the
+// gauges cannot disagree with the work the pass then does.
+func (c *Coordinator) observe(tenants []iam.Tenant) {
+	c.inFlight.Set(float64(len(tenants)))
+
+	// 🔴 SCAN FOR THE OLDEST; DO NOT TRUST THE FIRST ROW. TenantsPurging orders by
+	// purge_epoch, so tenants[0] looks like the answer — but a NULL epoch sorts FIRST on
+	// SQLite and LAST on Postgres, so on one of the two the first row can be a tenant with
+	// no epoch at all. The tests run on SQLite and production runs on Postgres, which is
+	// the arrangement where that difference is least likely to be noticed.
+	var oldest time.Time
+	for i := range tenants {
+		epoch := tenants[i].PurgeEpoch
+		if epoch == nil {
+			continue
+		}
+		if oldest.IsZero() || epoch.Before(oldest) {
+			oldest = *epoch
+		}
+	}
+	if oldest.IsZero() {
+		c.oldestAge.Set(0)
+		return
+	}
+	c.oldestAge.Set(c.now().Sub(oldest).Seconds())
 }
 
 // RunOnce makes one pass over every purging tenant, if no peer replica is already doing
@@ -116,6 +169,10 @@ func (c *Coordinator) pass(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing purging tenants: %w", err)
 	}
+	// Published BEFORE the sweep, not after, so a pass that dies partway still leaves the
+	// in-flight picture it read rather than the one from whenever it last got to the end.
+	c.observe(tenants)
+
 	var visited, failed int
 	var lastErr error
 	for i := range tenants {

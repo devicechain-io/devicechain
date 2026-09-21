@@ -1,0 +1,55 @@
+{{/*
+Alerting rules for the tenant-purge coordinator.
+
+WHY THIS GROUP EXISTS AT ALL. The coordinator already publishes the periodic-task
+metrics every scheduled loop in this platform publishes, and for this one loop they
+answer the wrong question. A tenant whose purge can never finish is visited on every
+pass, returns no error, and leaves the pass COMPLETE -- so the task's last-success
+gauge keeps moving while the tenant's data is not erased. Deleting a tenant is an
+obligation with a deadline attached, and "the loop is running" is not evidence that the
+obligation is being met. These two gauges are; this file is what watches them.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+{{/*
+  🔴 THE THRESHOLD IS DERIVED FROM THE WAIT, NOT WRITTEN DOWN BESIDE IT. A purge cannot
+  complete before its token hold elapses -- that window is measured from the cut and is
+  the dominant one (the settle window is minutes against its hours) -- so a fixed number
+  here would fire on every deletion the day an operator raised tokenHoldSeconds, and the
+  alert would be tuned by silencing it. Reading the same value the coordinator reads
+  means the two cannot disagree. The default mirrors the service's own
+  defaultTenantPurgeTokenHoldSeconds, which is the NATS credential lifetime.
+*/}}
+{{- $hold := dig "user-management" "config" "tenantPurge" "tokenHoldSeconds" 43200 .Values.functionalAreas }}
+{{- $stalled := mul $hold 2 }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tenant-purge
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.tenant-purge
+      rules:
+        - alert: TenantPurgeStalled
+          expr: max(devicechain_usermanagement_tenant_purge_oldest_age_seconds{namespace="{{ $ns }}"}) > {{ $stalled }}
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A tenant deletion has been open for more than twice its token hold"
+            description: "The oldest open tenant deletion is older than {{ $stalled }}s, which is twice the configured token hold ({{ $hold }}s) and therefore well past the point where every mandatory wait has elapsed. The purge is not progressing: some store is not reporting clean, or is reporting clean and then dirty again. The tenant's data has NOT been erased and its token is still reserved. The coordinator's own pass metrics will look healthy throughout, because a tenant it cannot finish is still a tenant it visited without error -- this alert is the only signal that the deletion is stuck. Query adminTenantDeletions to see which tenant and which store is outstanding."
+        - alert: TenantPurgeVisibilityLost
+          expr: absent(devicechain_usermanagement_tenant_purge_in_flight{namespace="{{ $ns }}"})
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Nothing is reporting whether tenant deletions are progressing"
+            description: "The tenant-purge gauges have not been scraped for 15m, so TenantPurgeStalled above cannot fire and an open deletion would be invisible rather than green. This is the absent() counterweight: the in-flight gauge is unlabelled and registered at process start, so it reads 0 on a healthy instance rather than going missing -- its absence means user-management is not being scraped at all, not that no deletion is open."
+{{- end }}
