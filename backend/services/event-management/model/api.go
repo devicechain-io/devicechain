@@ -61,10 +61,12 @@ type EventManagementApi interface {
 	DeleteAnchorsForEntity(ctx context.Context, entityType string, entityToken string, before time.Time) (int64, error)
 
 	// DistinctAnchorTenants returns every tenant with event_anchors (cross-tenant;
-	// needs a system context). DistinctAnchorRefs returns the current tenant's
-	// distinct entity references. Both feed the reconciliation sweep (ADR-044).
+	// needs a system context). The two reads after it return ONE PAGE each of the
+	// current tenant's distinct refs — targets by (type, token), sources by device
+	// token — resumed by a keyset cursor, so neither loads a whole tenant at once.
 	DistinctAnchorTenants(ctx context.Context) ([]string, error)
-	DistinctAnchorRefs(ctx context.Context) ([]AnchorRef, error)
+	DistinctAnchorTargetsAfter(ctx context.Context, afterType, afterToken string) ([]AnchorRef, error)
+	DistinctAnchorDeviceTokensAfter(ctx context.Context, after string) ([]AnchorRef, error)
 
 	// PersistInTx runs fn inside a single database transaction whose handle
 	// carries the supplied (tenant-scoped) context, so a message's events are
