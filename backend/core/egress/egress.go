@@ -72,9 +72,22 @@ func (e *BlockedError) Unwrap() error { return ErrBlocked }
 
 // Guard decides whether one resolved address may be dialed.
 //
-// The decision order is allow, then deny, then default-deny. The allow list is the
-// operator's escape hatch and is checked FIRST, because an operator who has deliberately
-// permitted an address has more context than this package does.
+// The decision order is allow, then deny, then PERMIT. The allow list is the operator's
+// escape hatch and is checked FIRST, because an operator who has deliberately permitted
+// an address has more context than this package does.
+//
+// 🔴 THE TERMINAL IS A PERMIT, NOT A REFUSAL, and that is the single most important
+// thing to know about this type. An address matching no allow prefix, no categorical
+// check and no row of `denied` is DIALABLE — check returns nil at the bottom. It has to:
+// a tenant's webhook destination is an arbitrary public host, and a guard that refused
+// what it did not recognize would refuse the entire legitimate use.
+//
+// What follows from it is the part that bites. Under a default-deny reading the deny
+// table looks like a second opinion — belt and braces over the categorical checks, where
+// a missing row costs nothing. It is the opposite: outside the five categorical checks
+// the table IS the boundary, and a hazardous range absent from it is reachable by every
+// tenant. `denied` is not a list of extra refusals; it is the list of refusals. Treat an
+// addition to it as a fix, not as tidying.
 type Guard struct {
 	allow []netip.Prefix
 }
