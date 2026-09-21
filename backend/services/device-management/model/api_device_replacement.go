@@ -158,10 +158,13 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 			return err
 		}
 
-		// Every live, enabled credential this device holds — unbounded on purpose (the
-		// explicit internal unbounded path, ADR-029). A page bound here would leave
-		// whatever fell past the page still able to authenticate, which is precisely
-		// the outcome this operation exists to prevent, and it would do it silently.
+		// Every live, enabled credential this device holds, with no page. This is a raw
+		// read on the replacement's own transaction rather than anything from rdb's list
+		// API — it predates rdb.ListAllOf and cannot use it, since ListAllOf binds the
+		// manager's own connection and would fall outside this tx. It is bounded by how
+		// many credentials one device holds. A page bound here would leave whatever fell
+		// past the page still able to authenticate, which is precisely the outcome this
+		// operation exists to prevent, and it would do it silently.
 		retired = retired[:0]
 		if err := tx.Where("device_id = ? AND enabled = ?", device.ID, true).
 			Order("id ASC").Find(&retired).Error; err != nil {

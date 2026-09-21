@@ -112,13 +112,16 @@ func (api *Api) lowerSelectorSource(ctx context.Context, memberType, source stri
 
 // ResolveGroupMembers returns a paginated page of a group's members, transparently over
 // either mode: a static group reads its "member" edges; a dynamic group runs its lowered,
-// indexed selector query. The page is always bounded (Unbounded is forced off so a caller
-// can never request an unbounded scan of a dynamic group); the standard rdb page-size clamp
+// indexed selector query. The page is always bounded and the standard rdb page-size clamp
 // (ADR-029) applies. A per-tenant resolution rate limiter + metric are a G4 follow-up.
+//
+// 🔑 THE FIRST LINE OF THIS FUNCTION USED TO BE A DEFENCE, and its deletion is the point
+// of the change that removed it. It read Unbounded back off the pagination it was handed,
+// because rdb.Pagination carried a flag that every criteria type inherited. The flag is
+// gone, so a bounded page is now a property of this parameter's TYPE rather than of this
+// function remembering to say so — and of the two other stores that were remembering too.
 func (api *Api) ResolveGroupMembers(ctx context.Context, group *EntityGroup,
 	pagination rdb.Pagination) (*EntityMemberSearchResults, error) {
-	pagination.Unbounded = false // never an unbounded scan, even if a caller asks
-
 	if MembershipMode(group.MembershipMode) != MembershipDynamic {
 		return api.staticGroupMembers(ctx, group, pagination)
 	}
@@ -132,11 +135,10 @@ func (api *Api) ResolveGroupMembers(ctx context.Context, group *EntityGroup,
 
 // queryDynamicMembers runs a lowered selector fragment as the paginated, indexed member
 // query — the eval-on-read path shared by a saved dynamic group's resolve and the unsaved
-// previewSelector. The page is always bounded (Unbounded forced off) so no caller can turn
-// it into an unbounded scan of the member family.
+// previewSelector. The page is always bounded: the pagination it takes has no way to
+// express a full scan, so no caller can turn this into one over the member family.
 func (api *Api) queryDynamicMembers(ctx context.Context, memberType, frag string, args []any,
 	pagination rdb.Pagination) (*EntityMemberSearchResults, error) {
-	pagination.Unbounded = false // never an unbounded scan, even if a caller asks
 	// Fail closed on an unrecognized family rather than handing ListOf a nil Sortable,
 	// which would panic on the DefaultOrder() call. Every caller reaching here has
 	// already validated the family, so this is unreachable — the point is that it is now

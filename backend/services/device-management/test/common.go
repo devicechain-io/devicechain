@@ -155,6 +155,12 @@ func (api *MockApi) DeviceCredentials(ctx context.Context, criteria model.Device
 	return args.Get(0).(*model.DeviceCredentialSearchResults), args.Error(1)
 }
 
+func (api *MockApi) EnabledDeviceCredentialsOfType(ctx context.Context,
+	deviceToken string, credentialType string) (*model.DeviceCredentialSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceCredentialSearchResults), args.Error(1)
+}
+
 func (api *MockApi) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*model.DeviceCredential, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceCredential), args.Error(1)
@@ -177,6 +183,12 @@ func (api *MockApi) EntityRelationshipsByToken(ctx context.Context, tokens []str
 
 func (api *MockApi) EntityRelationships(ctx context.Context,
 	criteria model.EntityRelationshipSearchCriteria) (*model.EntityRelationshipSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.EntityRelationshipSearchResults), args.Error(1)
+}
+
+func (api *MockApi) TrackedRelationshipsForDevice(ctx context.Context,
+	deviceId uint) (*model.EntityRelationshipSearchResults, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.EntityRelationshipSearchResults), args.Error(1)
 }

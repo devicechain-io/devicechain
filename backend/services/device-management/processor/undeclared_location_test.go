@@ -89,7 +89,7 @@ func locationFixEvent(deviceToken string) *esmodel.UnresolvedEvent {
 // location declaration is undeclared by default — the state the warning fires on.
 func locationTestApi(versionToken string) *dmtest.MockApi {
 	api := new(dmtest.MockApi)
-	api.Mock.On("EntityRelationships").Return(
+	api.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	api.ProfileScopeResult = &dmodel.ProfileScope{DeviceTypeToken: "tracker-type", ProfileVersionToken: versionToken}
 	return api

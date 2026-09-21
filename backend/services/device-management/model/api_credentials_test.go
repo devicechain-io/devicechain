@@ -60,6 +60,15 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")
 
+	// The credentials hang off a real device because the read under test filters by
+	// one: EnabledDeviceCredentialsOfType is the method mintOrReuseCredential actually
+	// calls, and testing the generic search instead would pin the ordering of a query
+	// production does not issue.
+	device := Device{}
+	device.Token = "dev1"
+	device.TenantId = "acme"
+	require.NoError(t, api.RDB.DB(ctx).Create(&device).Error, "seed device")
+
 	soon := time.Now().Add(1 * time.Hour)
 	far := time.Now().Add(1000 * time.Hour)
 	// Inserted soonest-first so ascending id order is the WRONG answer: if the clause
@@ -68,7 +77,7 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 		token     string
 		expiresAt *time.Time
 	}{{"soon", &soon}, {"never", nil}, {"far", &far}} {
-		row := DeviceCredential{CredentialType: "ACCESS_TOKEN", CredentialId: c.token, Enabled: true}
+		row := DeviceCredential{DeviceId: device.ID, CredentialType: "ACCESS_TOKEN", CredentialId: c.token, Enabled: true}
 		row.Token = c.token
 		row.TenantId = "acme"
 		if c.expiresAt != nil {
@@ -77,10 +86,8 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 		require.NoError(t, api.RDB.DB(ctx).Create(&row).Error, "seed credential %q", c.token)
 	}
 
-	res, err := api.DeviceCredentials(ctx, DeviceCredentialSearchCriteria{
-		Pagination: rdb.Pagination{Unbounded: true},
-	})
-	require.NoError(t, err, "unbounded credential read (NULLS FIRST must parse on sqlite)")
+	res, err := api.EnabledDeviceCredentialsOfType(ctx, "dev1", "ACCESS_TOKEN")
+	require.NoError(t, err, "full-set credential read (NULLS FIRST must parse on sqlite)")
 
 	order := make([]string, 0, len(res.Results))
 	for _, cred := range res.Results {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -178,12 +179,12 @@ func (api *Api) EntityRelationshipsByToken(ctx context.Context, tokens []string)
 	return found, nil
 }
 
-// EntityRelationships searches relationships. Source is matched by the resolved
-// (SourceType, SourceId); Tracked filters by the relationship type's flag.
-func (api *Api) EntityRelationships(ctx context.Context,
-	criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error) {
-	results := make([]EntityRelationship, 0)
-	db, pag := api.RDB.ListOf(ctx, &EntityRelationship{}, func(result *gorm.DB) *gorm.DB {
+// entityRelationshipFilters builds the WHERE clauses for a relationship search, shared
+// by the paged EntityRelationships and the full-set TrackedRelationshipsForDevice so the
+// two cannot drift into filtering differently.
+func (api *Api) entityRelationshipFilters(ctx context.Context,
+	criteria EntityRelationshipSearchCriteria) func(result *gorm.DB) *gorm.DB {
+	return func(result *gorm.DB) *gorm.DB {
 		if criteria.SourceType != nil {
 			result = result.Where("source_type = ?", *criteria.SourceType)
 		}
@@ -205,7 +206,53 @@ func (api *Api) EntityRelationships(ctx context.Context,
 				api.RDB.DB(ctx).Model(&EntityRelationshipType{}).Select("id").Where("tracked = ?", *criteria.Tracked))
 		}
 		return result
-	}, criteria.Pagination)
+	}
+}
+
+// EntityRelationships searches relationships, ONE PAGE at a time. Source is matched by
+// the resolved (SourceType, SourceId); Tracked filters by the relationship type's flag.
+//
+// This is the GraphQL-facing read and it is always bounded. The event resolver's
+// whole-set read is TrackedRelationshipsForDevice, which is a separate method precisely
+// so that this one cannot be talked into returning the table.
+func (api *Api) EntityRelationships(ctx context.Context,
+	criteria EntityRelationshipSearchCriteria) (*EntityRelationshipSearchResults, error) {
+	results := make([]EntityRelationship, 0)
+	db, pag := api.RDB.ListOf(ctx, &EntityRelationship{},
+		api.entityRelationshipFilters(ctx, criteria), criteria.Pagination)
+	db.Preload("RelationshipType").Find(&results)
+	if db.Error != nil {
+		return nil, db.Error
+	}
+	return &EntityRelationshipSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// TrackedRelationshipsForDevice returns EVERY tracked relationship whose source is the
+// given device, with no LIMIT.
+//
+// 🔴 IT IS A NAMED METHOD RATHER THAN A FLAG ON A SEARCH, and the difference is what
+// makes the unbounded read reviewable. The caller used to build an ordinary
+// EntityRelationshipSearchCriteria and set Pagination.Unbounded on it; the cache in
+// front of this API then had to SNIFF that criteria shape to recognize the one query it
+// serves. Both the flag and the sniffing existed because the API had no way to say what
+// this call actually is. Now it does, and both are gone.
+//
+// The full set is what event resolution needs: a device's tracked-relationship targets
+// are denormalized in full onto every event (ADR-013 addendum 2026-07-01), so a page of
+// them would silently drop anchors. It is bounded by how many relationships one device
+// has, not by a LIMIT — which is the standard ListAllOf asks callers to meet.
+func (api *Api) TrackedRelationshipsForDevice(ctx context.Context,
+	deviceId uint) (*EntityRelationshipSearchResults, error) {
+	tracked := true
+	sourceType := string(entity.TypeDevice)
+	criteria := EntityRelationshipSearchCriteria{
+		SourceType: &sourceType,
+		SourceId:   &deviceId,
+		Tracked:    &tracked,
+	}
+	results := make([]EntityRelationship, 0)
+	db, pag := api.RDB.ListAllOf(ctx, &EntityRelationship{},
+		api.entityRelationshipFilters(ctx, criteria))
 	db.Preload("RelationshipType").Find(&results)
 	if db.Error != nil {
 		return nil, db.Error

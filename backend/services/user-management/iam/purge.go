@@ -231,15 +231,16 @@ type PurgeSearchResults struct {
 // could not do was find out whether there were 51, so the console's history page showed its
 // first page forever with no way to know it was truncating. TotalRecords is that missing half.
 //
-// 🔴 Unbounded IS FORCED OFF, and the reason is that the criteria EMBED rdb.Pagination, which
-// carries it. Without this line the sentence above would be true only of the GraphQL boundary
-// — which builds its Pagination from two int32s and cannot set the flag — while the store this
-// comment is attached to would still honour it for any internal caller that came along later
-// and read the promise rather than the field list. A claim about what a layer guarantees has
-// to be enforced by that layer. This is the same forcing api_group_members.go applies for the
-// same reason.
+// 🔑 THIS FUNCTION USED TO OPEN BY FORCING AN Unbounded FLAG OFF, and the argument for that
+// line is why the flag no longer exists. rdb.Pagination carried one, the criteria above embed
+// rdb.Pagination, and so the promise in the paragraph above held only at the GraphQL boundary
+// — which builds its Pagination from two int32s — while this store would still have honoured
+// the flag for any internal caller that came along later and read the promise rather than the
+// field list. A claim about what a layer guarantees has to be enforced by that layer, and two
+// other stores were enforcing the same one the same way. The enforcement now lives in the
+// type: Pagination can no longer express a full scan at all, and a read that genuinely needs
+// every row calls rdb.ListAllOf by name.
 func (s *Store) PurgeRecords(ctx context.Context, criteria PurgeSearchCriteria) (*PurgeSearchResults, error) {
-	criteria.Pagination.Unbounded = false // never an unbounded scan, even if a caller asks
 	results := make([]TenantPurge, 0)
 	db, pag := s.db.ListOf(core.WithSystemContext(ctx), &TenantPurge{}, func(q *gorm.DB) *gorm.DB {
 		if criteria.Completed != nil {

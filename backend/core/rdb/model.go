@@ -234,21 +234,32 @@ const (
 	MaxPageSize     = 1000
 )
 
-// Information for paged result sets
+// Pagination is one page of a result set, and a page is all it can describe.
+//
+// 🔴 IT CARRIES NO ALL-ROWS FLAG, AND THAT ABSENCE IS THE POINT. It used to: an
+// exported Unbounded bool that switched Paginate onto a no-LIMIT path. Thirty-five
+// criteria types embed this struct — thirty-four elsewhere plus AuditEventSearchCriteria
+// in this very package — so all thirty-five inherited the ability to ask for a full
+// table scan, while exactly two reads in the whole tree wanted one.
+//
+// Nothing outside rdb ever READ the flag. Three stores WROTE it, each forcing it back
+// off by hand, and one of them carried a comment explaining that a claim about what a
+// layer guarantees has to be enforced by that layer. Three hand-written defences against
+// a capability that two callers wanted is that capability living in the wrong place.
+//
+// A read that genuinely needs every row asks at the CALL, through ListAllOf, which
+// takes no Pagination at all. Whether a read is bounded is a property of that one
+// read and not of the criteria type: the same EntityRelationshipSearchCriteria is
+// paged for GraphQL and read in full for event resolution, so the criteria struct is
+// the one place the answer cannot correctly live.
 type Pagination struct {
 	PageNumber int32
 	PageSize   int32
-	// Unbounded requests every matching row with no LIMIT. It is for internal
-	// callers that genuinely need the full set (e.g. resolving a device's tracked
-	// relationships); the external GraphQL inputs map only PageNumber/PageSize, so
-	// an untrusted client can never set this and can never request a full scan.
-	Unbounded bool
 }
 
 // EffectivePageSize resolves the page size actually applied (ADR-029): below 1
-// falls back to DefaultPageSize, above MaxPageSize is clamped. Unbounded is a
-// separate no-LIMIT path and is not reflected here. ListOf uses this so its
-// reported PageStart/PageEnd match the LIMIT Paginate applied.
+// falls back to DefaultPageSize, above MaxPageSize is clamped. ListOf uses this so
+// its reported PageStart/PageEnd match the LIMIT Paginate applied.
 func (pag Pagination) EffectivePageSize() int32 {
 	if pag.PageSize < 1 {
 		return DefaultPageSize
@@ -262,10 +273,6 @@ func (pag Pagination) EffectivePageSize() int32 {
 // Scope function used to implement pagination.
 func Paginate(pag Pagination) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
-		// Explicit internal all-rows path (never reachable from external input).
-		if pag.Unbounded {
-			return db
-		}
 		size := pag.EffectivePageSize()
 		// int64 so a large PageNumber (up to the GraphQL Int max) can't overflow the
 		// offset and wrap back to an early page; a past-the-end offset just yields an

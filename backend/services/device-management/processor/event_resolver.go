@@ -24,7 +24,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -759,18 +758,11 @@ func (rez *EventResolver) warnIfLocationUndeclared(ctx context.Context,
 // relationship. Every anchor is denormalized onto the event (ADR-013 addendum
 // 2026-07-01), so a device assigned to several targets is queryable by each.
 func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Device) ([]model.ResolvedAnchor, []model.GroupRef, uint, error) {
-	tracked := true
-	sourceType := string(entity.TypeDevice)
-	criteria := model.EntityRelationshipSearchCriteria{
-		// A device's tracked-relationship set is denormalized in full onto every
-		// event, so this genuinely needs all rows — the explicit internal unbounded
-		// path, not the (now bounded) default (ADR-029).
-		Pagination: rdb.Pagination{Unbounded: true},
-		SourceType: &sourceType,
-		SourceId:   &device.ID,
-		Tracked:    &tracked,
-	}
-	drels, err := rez.Api.EntityRelationships(ctx, criteria)
+	// A device's tracked-relationship set is denormalized in full onto every event, so
+	// this genuinely needs all rows. TrackedRelationshipsForDevice is the named full-set
+	// read (ADR-029); the search criteria this used to assemble — and the flag it set on
+	// their pagination to lift the LIMIT — are both gone.
+	drels, err := rez.Api.TrackedRelationshipsForDevice(ctx, device.ID)
 	if err != nil {
 		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}

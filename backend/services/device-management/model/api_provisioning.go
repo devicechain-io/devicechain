@@ -376,16 +376,11 @@ func (api *Api) ProvisionDeviceBootstrap(ctx context.Context, request *Provision
 // handed back (review #4): reusing one would return a dead token the device
 // cannot authenticate with.
 func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, credentialType string, now time.Time) (string, error) {
-	enabled := true
-	existing, err := api.DeviceCredentials(ctx, DeviceCredentialSearchCriteria{
-		// Reuse must consider every live credential of this type for the device, not
-		// a bounded page — the explicit internal unbounded path (ADR-029). A bounded
-		// default could miss a reusable credential past the page and mint a duplicate.
-		Pagination:     rdb.Pagination{Unbounded: true},
-		Device:         &deviceToken,
-		CredentialType: &credentialType,
-		Enabled:        &enabled,
-	})
+	// Reuse must consider every live credential of this type for the device, not a
+	// bounded page: a page could miss a reusable credential past its boundary and mint a
+	// duplicate instead of reusing. EnabledDeviceCredentialsOfType is the named full-set
+	// read (ADR-029) — the page size this used to have to defeat is no longer reachable.
+	existing, err := api.EnabledDeviceCredentialsOfType(ctx, deviceToken, credentialType)
 	if err != nil {
 		return "", err
 	}
