@@ -362,11 +362,33 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 	}
 }
 
+// opensTheRelationalStore recognizes a service that opens the relational store, in either
+// of the two shapes a service can wire one.
+//
+// 🔴 THERE ARE TWO BECAUSE THE WIRING IS MID-MIGRATION, and a witness that knew only the
+// older one went quiet rather than red: a converted service simply stopped appearing in
+// the scan, and the budget below would have been sized for fewer services than an instance
+// actually runs. The scan's own emptiness check does not catch that — it fires only when
+// EVERY service stops matching, and this would have removed them a few at a time.
+//
+//   - Persistence.Rdb — the service builds its own rdb manager and names the instance-level
+//     datastore configuration to do it.
+//   - service.RdbSpec — the service declares a relational store in the Spec it hands to
+//     core/service, which builds the manager and reads that same configuration on its
+//     behalf. The literal no longer appears in the service's own source.
+//
+// When the conversion is finished the first form will be gone from backend/services, and
+// this can lose it — but not before, because a form nothing matches is indistinguishable
+// here from a service that does not open the store at all.
+func opensTheRelationalStore(src string) bool {
+	return strings.Contains(src, "Persistence.Rdb") || strings.Contains(src, "service.RdbSpec")
+}
+
 // 🔴 THE BUDGET IS COUNTED FROM A LIST, AND THE LIST IS HELD AGAINST THE SERVICES. An area
 // that starts opening the relational store without joining relationalAreas is an
 // instance whose login refuses its connections at the limit; one that stops leaves every
-// instance reserving connections nothing uses. The services' source is the witness: a
-// service opens the store through its configuration's Persistence.Rdb.
+// instance reserving connections nothing uses. The services' source is the witness — see
+// opensTheRelationalStore for what counts as one.
 func TestTheRelationalAreasAreTheServicesThatOpenTheRelationalStore(t *testing.T) {
 	root := filepath.Join("..", "..", "services")
 	dirs, err := os.ReadDir(root)
@@ -387,7 +409,7 @@ func TestTheRelationalAreasAreTheServicesThatOpenTheRelationalStore(t *testing.T
 			if err != nil {
 				return err
 			}
-			found = strings.Contains(string(src), "Persistence.Rdb")
+			found = opensTheRelationalStore(string(src))
 			return nil
 		})
 		if err != nil {

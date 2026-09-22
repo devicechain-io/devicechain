@@ -15,12 +15,18 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 var (
 	Microservice  *core.Microservice
 	Configuration *config.DeviceStateConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -134,81 +140,68 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize rdb manager.
-	rdbcb := core.NewNoOpLifecycleCallbacks()
-	RdbManager = rdb.NewRdbManager(Microservice, rdbcb, model.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	err = RdbManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create RDB caches.
-	model.InitializeCaches(RdbManager)
-
-	// Wrap api around rdb manager.
-	Api = model.NewApi(RdbManager)
-
-	// Build every Prometheus instrument this service exports, before the NATS manager
-	// that consumes them.
-	buildMetrics()
-
-	// Create and initialize nats manager.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	err = NatsManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Map of providers that will be injected into graphql http context.
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
-	}
-
-	// Create and initialize graphql manager.
-	gqlcb := core.NewNoOpLifecycleCallbacks()
-
-	schema := graphql.SchemaContent
-	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
-
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, parsed, providers, Microservice.Readiness)
-	err = GraphQLManager.Initialize(ctx)
-	if err != nil {
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this
+	// service's: which migrations, which oncreate callback, which schema, and the wiring
+	// in AfterRdb that has to happen between two of the constructions.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			Migrations: model.Migrations,
+			Config:     Configuration.RdbConfiguration,
+		},
+		// Runs once the rdb manager is initialized and before the other two are built.
+		// The Api wraps that manager and the GraphQL providers below carry the Api, so
+		// this is the one point in the sequence where this service has to run.
+		AfterRdb: func(_ context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+			model.InitializeCaches(RdbManager)
+			Api = model.NewApi(RdbManager)
+			// Build every Prometheus instrument this service exports, before the NATS
+			// manager that consumes them.
+			buildMetrics()
+			return nil
+		},
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		GraphQL: &service.GraphQLSpec{
+			Schema:   graphql.SchemaContent,
+			Resolver: &graphql.SchemaResolver{},
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextRdbKey: RdbManager,
+					gqlcore.ContextApiKey: Api,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
 	return nil
 }
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	err := RdbManager.Start(ctx)
-	if err != nil {
+	// Rdb, then NATS, then the GraphQL server. That order, and the reason the broker has
+	// to be up before the HTTP server accepts traffic, now live in core/service.
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
 
-	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
-	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
-	// that the stop order every service already shares is exactly this one reversed, and
-	// so a later injection into Api cannot open the window it opened in command-delivery.
-	err = NatsManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = GraphQLManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Start device state processor.
-	err = StateProcessor.Start(ctx)
+	// Start device state processor. It is built by the NATS manager's oncreate callback,
+	// so it does not exist until the line above has run.
+	err := StateProcessor.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -224,30 +217,17 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop the GraphQL server before the NATS manager. This service has a mutation that
-	// publishes on the caller's own goroutine: DemoteAssertedPresence writes a synthetic
-	// presence event through InboundEventsWriter, which is a writer on this connection.
-	// Draining the HTTP server first is what keeps a demotion that is already in flight
-	// from failing on a connection that has begun to go away — and its failure is not a
-	// tidy one, since the caller is told no devices in that page were demoted.
-	err = GraphQLManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop rdb manager.
-	err = RdbManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// The GraphQL server stops before the NATS manager, and for this service that is not
+	// merely the uniform order — it has a mutation that publishes on the caller's own
+	// goroutine: DemoteAssertedPresence writes a synthetic presence event through
+	// InboundEventsWriter, which is a writer on this connection. Draining the HTTP server
+	// first is what keeps a demotion already in flight from failing on a connection that
+	// has begun to go away, and its failure is not a tidy one — the caller is told no
+	// devices in that page were demoted.
+	//
+	// core/service stops them in exactly that order, for every service. Pinned next door
+	// in graphql_shutdown_order_test.go, which drives this function.
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.
@@ -258,23 +238,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 
-	// Terminate nats manager.
-	err = NatsManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate graphql manager.
-	err = GraphQLManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate rdb manager.
-	err = RdbManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the
+	// pair that actually closes handles.
+	return Svc.Terminate(ctx)
 }
