@@ -24,6 +24,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 )
 
 // startEmbeddedNats runs an in-process NATS server and returns its host and port.
@@ -206,10 +207,10 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	host, port := startEmbeddedNats(t)
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
-	prevProc, prevWriteback, prevApi := CommandDeliveryProcessor, DeadLetterWriteback, Api
+	prevProc, prevWriteback, prevApi, prevSvc := CommandDeliveryProcessor, DeadLetterWriteback, Api, Svc
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
-		CommandDeliveryProcessor, DeadLetterWriteback, Api = prevProc, prevWriteback, prevApi
+		CommandDeliveryProcessor, DeadLetterWriteback, Api, Svc = prevProc, prevWriteback, prevApi, prevSvc
 	})
 
 	area := fmt.Sprintf("command-delivery-shutdown-%d", time.Now().UnixNano())
@@ -244,6 +245,17 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), nil,
 		Microservice.InstanceConfiguration.Persistence.Rdb, mscfg.MicroserviceDatastoreConfiguration{})
 	Api = model.NewApi(RdbManager)
+
+	// 🔴 THE THREE MANAGERS GO THROUGH core/service, WHICH IS WHAT beforeMicroserviceStopped
+	// NOW CALLS — so this test drives the real ordering rather than a copy of it.
+	//
+	// They cannot come from a service.Spec: Spec builds all three the same way with no-op
+	// callbacks, and this fixture needs each in a DIFFERENT lifecycle state (NATS started,
+	// GraphQL initialized only, Rdb not initialized at all) and two of them carrying the
+	// probes that record which stop ran first. FromManagers is for exactly that.
+	Svc = service.FromManagers(Microservice, service.Managers{
+		Rdb: RdbManager, Nats: NatsManager, GraphQL: GraphQLManager,
+	})
 
 	// Both of these are stopped unconditionally by the stopper, so they have to be there
 	// and they have to be stoppable. Initialized-not-started is enough: this test is

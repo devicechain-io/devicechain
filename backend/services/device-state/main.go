@@ -157,6 +157,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
 			Migrations: model.Migrations,
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
 		},
 		// Runs once the rdb manager is initialized and before the other two are built.
@@ -174,7 +175,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
 			Schema:   graphql.SchemaContent,
-			Resolver: &graphql.SchemaResolver{},
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
 					gqlcore.ContextRdbKey: RdbManager,

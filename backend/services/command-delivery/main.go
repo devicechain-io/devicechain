@@ -21,6 +21,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -29,6 +30,11 @@ import (
 var (
 	Microservice  *core.Microservice
 	Configuration *config.CommandDeliveryConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -300,146 +306,138 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize rdb manager (relational persistence).
-	rdbcb := core.NewNoOpLifecycleCallbacks()
-	RdbManager = rdb.NewRdbManager(Microservice, rdbcb, model.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	err = RdbManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create RDB caches.
-	model.InitializeCaches(RdbManager)
-
-	// Wrap api around rdb manager. The default command TTL (floored positive in
-	// ApplyDefaults) gives every enqueued command a terminal horizon when its creator
-	// supplies no explicit expiresAt (ADR-075 L4b).
-	Api = model.NewApi(RdbManager)
-	Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
-
-	// How many failed dispatches one command may accumulate before the release path stops
-	// returning it to the queue and records FAILED instead. Floored positive in
-	// ApplyDefaults and bounded at both ends in Validate, so this is always a real bound: a
-	// missing or zero configured value means the platform default and NEVER "retry
-	// forever", which is the behaviour it exists to end.
-	Api.MaxDispatchFailures = Configuration.MaxDispatchFailures
-
-	// Fleet-write counters. This is the only place they are built: they register on the
-	// registry this Microservice owns, and the lifecycle manager guarantees this
-	// initializer runs once. Every test builds its Api by literal, leaves this nil, and
-	// records nothing.
-	Api.BatchMetrics = model.NewBatchMetrics(Microservice)
-
-	// The delivery processor's and write-back's instruments, built here for the same
-	// reason and NOT where those two components are: they are constructed in
-	// createNatsComponents, which the NATS manager invokes on EVERY start, and a
-	// collector belongs to the PROCESS whereas everything that callback builds belongs
-	// to the CONNECTION — registering one twice on this microservice's registry panics.
-	// This initializer runs once.
-	buildMetrics()
-
-	// The held-command ceiling this instance falls back to. It is floored positive in
-	// ApplyDefaults, so this is always a real bound: a missing or zero configured value
-	// means the platform default and NEVER unlimited.
-	//
-	// It is the fallback, not the whole answer: wireHeldCeilingResolver below adds the
-	// per-tenant cascade on top of it.
-	Api.DefaultHeldCommandCeiling = Configuration.HeldCommandCeiling
-	wireHeldCeilingResolver()
-
-	// The share of whatever ceiling is in force that only a platform service token may
-	// draw on, so one fleet write cannot consume the whole ceiling and leave every
-	// automated send-command for that tenant refused until the backlog drains. Operator
-	// configuration only — deliberately no per-tenant or tier path, since a tenant able
-	// to lower this could defeat the protection that exists against its own batches.
-	// Floored positive in ApplyDefaults and capped in Validate, so this is always a real
-	// share: absent or zero means the platform reserve, never "no reserve".
-	Api.DeliveryMachineryReserve = Configuration.DeliveryMachineryReserve
-
-	// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
-	// device-management before a command is enqueued (ADR-044 amendment) covering
-	// device existence, the profile's published command vocabulary, and the payload's
-	// conformance to the command's parameter schema — for single commands and for
-	// fleet batches — plus resolution of entity groups named as batch targets.
-	// Enabled only when the shared service secret is configured; otherwise the enqueue
-	// path runs unvalidated and we say so loudly rather than fail closed (an
-	// unvalidated command is an integrity nuisance, not a security breach, and
-	// refusing to start would take the whole service down over an optional
-	// collaborator). Group targeting is the exception and fails closed: a group that
-	// cannot be resolved must not silently become an empty fleet write.
-	wireDeviceManagementGates()
-
-	// Create and initialize nats manager.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	err = NatsManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Map of providers that will be injected into graphql http context.
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
-	}
-
-	// Create and initialize graphql manager.
-	gqlcb := core.NewNoOpLifecycleCallbacks()
-
-	schema := graphql.SchemaContent
-	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
-
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, parsed, providers, Microservice.Readiness)
-	err = GraphQLManager.Initialize(ctx)
-	if err != nil {
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this service's:
+	// which store, which migrations, which oncreate callback, which schema, and the wiring
+	// in AfterRdb that has to happen between two of the constructions.
+	//
+	// 🔴 THE START ORDER IS NOT A STYLISTIC CHOICE FOR THIS SERVICE. createNatsComponents
+	// binds Api.Nudger, and the GraphQL server must not be accepting before that has run —
+	// see nats_start_wiring_test.go, which pins the dependency that makes it load-bearing.
+	// core/service is where the order now lives.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
+			Migrations: model.Migrations,
+			Config:     Configuration.RdbConfiguration,
+		},
+		// Runs once the rdb manager is initialized and before the other two are built. The
+		// Api wraps that manager, the oncreate callback binds into the Api, and the GraphQL
+		// providers carry it — so this is the one point in the sequence where this service
+		// has to run.
+		AfterRdb: func(_ context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+
+			// Create RDB caches.
+			model.InitializeCaches(RdbManager)
+
+			// Wrap api around rdb manager. The default command TTL (floored positive in
+			// ApplyDefaults) gives every enqueued command a terminal horizon when its creator
+			// supplies no explicit expiresAt (ADR-075 L4b).
+			Api = model.NewApi(RdbManager)
+			Api.DefaultCommandTTL = time.Duration(Configuration.DefaultCommandTTLSeconds) * time.Second
+
+			// How many failed dispatches one command may accumulate before the release path stops
+			// returning it to the queue and records FAILED instead. Floored positive in
+			// ApplyDefaults and bounded at both ends in Validate, so this is always a real bound: a
+			// missing or zero configured value means the platform default and NEVER "retry
+			// forever", which is the behaviour it exists to end.
+			Api.MaxDispatchFailures = Configuration.MaxDispatchFailures
+
+			// Fleet-write counters. This is the only place they are built: they register on the
+			// registry this Microservice owns, and the lifecycle manager guarantees this
+			// initializer runs once. Every test builds its Api by literal, leaves this nil, and
+			// records nothing.
+			Api.BatchMetrics = model.NewBatchMetrics(Microservice)
+
+			// The delivery processor's and write-back's instruments, built here for the same
+			// reason and NOT where those two components are: they are constructed in
+			// createNatsComponents, which the NATS manager invokes on EVERY start, and a
+			// collector belongs to the PROCESS whereas everything that callback builds belongs
+			// to the CONNECTION — registering one twice on this microservice's registry panics.
+			// This initializer runs once.
+			buildMetrics()
+
+			// The held-command ceiling this instance falls back to. It is floored positive in
+			// ApplyDefaults, so this is always a real bound: a missing or zero configured value
+			// means the platform default and NEVER unlimited.
+			//
+			// It is the fallback, not the whole answer: wireHeldCeilingResolver below adds the
+			// per-tenant cascade on top of it.
+			Api.DefaultHeldCommandCeiling = Configuration.HeldCommandCeiling
+			wireHeldCeilingResolver()
+
+			// The share of whatever ceiling is in force that only a platform service token may
+			// draw on, so one fleet write cannot consume the whole ceiling and leave every
+			// automated send-command for that tenant refused until the backlog drains. Operator
+			// configuration only — deliberately no per-tenant or tier path, since a tenant able
+			// to lower this could defeat the protection that exists against its own batches.
+			// Floored positive in ApplyDefaults and capped in Validate, so this is always a real
+			// share: absent or zero means the platform reserve, never "no reserve".
+			Api.DeliveryMachineryReserve = Configuration.DeliveryMachineryReserve
+
+			// Wire the enqueue gate (ADR-043 decision 3): a synchronous check against
+			// device-management before a command is enqueued (ADR-044 amendment) covering
+			// device existence, the profile's published command vocabulary, and the payload's
+			// conformance to the command's parameter schema — for single commands and for
+			// fleet batches — plus resolution of entity groups named as batch targets.
+			// Enabled only when the shared service secret is configured; otherwise the enqueue
+			// path runs unvalidated and we say so loudly rather than fail closed (an
+			// unvalidated command is an integrity nuisance, not a security breach, and
+			// refusing to start would take the whole service down over an optional
+			// collaborator). Group targeting is the exception and fails closed: a group that
+			// cannot be resolved must not silently become an empty fleet write.
+			wireDeviceManagementGates()
+			return nil
+		},
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		GraphQL: &service.GraphQLSpec{
+			Schema:   graphql.SchemaContent,
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextRdbKey: RdbManager,
+					gqlcore.ContextApiKey: Api,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
 	return nil
 }
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	err := RdbManager.Start(ctx)
+	// Rdb, then NATS, then the GraphQL server. That order, and the reason the broker has to
+	// be up before the HTTP server accepts traffic, now live in core/service. For this
+	// service the reason is not hypothetical: createNatsComponents binds Api.Nudger, and a
+	// createCommand mutation arriving before it has run takes the nil branch and waits for
+	// the sweep instead of dispatching promptly.
+	if err := Svc.Start(ctx); err != nil {
+		return err
+	}
+
+	// Both of these are built by the NATS manager's oncreate callback, so they do not
+	// exist until the line above has run.
+	err := CommandDeliveryProcessor.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Start nats manager BEFORE the GraphQL server, and the order is load-bearing rather
-	// than conventional. createNatsComponents — NatsManager.Start's create callback —
-	// assigns Api.Nudger, which resolver goroutines read on the command-creation path
-	// (model/nudge.go). Starting GraphQL first opens a window in which the HTTP server is
-	// accepting traffic while that field is still nil.
-	//
-	// 🔑 THE WINDOW IS REACHABLE, which is why this is an ordering fix and not a tidy-up.
-	// StartInstanceAuthGate runs from afterMicroserviceInitialized and opens the readiness
-	// gate from a BACKGROUND goroutine, so /readyz can answer 200 part-way through this
-	// function. A createCommand mutation landing in the gap takes the nil-nudger branch:
-	// the nudge is skipped and the command waits for the sweep instead of being dispatched
-	// promptly. Latency, not loss — but it is the latency #917/#919 went to lengths to fix.
-	err = NatsManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = GraphQLManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Start command delivery processor.
-	err = CommandDeliveryProcessor.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Start the dead-letter write-back. After the nats manager, whose create callback
-	// builds it — it does not exist until that has run.
 	err = DeadLetterWriteback.Start(ctx)
 	if err != nil {
 		return err
@@ -463,31 +461,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop the GraphQL server before the NATS manager, so that the last mutation of a
-	// rolling restart finishes against a broker connection that is still whole rather
-	// than one that is already draining. Nothing in this service's GraphQL plane
-	// publishes on the caller's own goroutine today — CreateCommand's dispatch nudge
-	// hands the device to the processor's queue, and that processor is stopped above —
-	// but the enqueue path is the one that grows a publish, and the order that survives
-	// it costs nothing to hold now.
-	err = GraphQLManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop rdb manager.
-	err = RdbManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// GraphQL, then NATS, then Rdb, so that the last mutation of a rolling restart finishes
+	// against a broker connection that is still whole rather than one that is already
+	// draining. Nothing in this service's GraphQL plane publishes on the caller's own
+	// goroutine today — CreateCommand's dispatch nudge hands the device to the processor's
+	// queue, and that processor is stopped above — but the enqueue path is the one that
+	// grows a publish, and the order that survives it costs nothing to hold now.
+	//
+	// core/service stops them in exactly that order, for every service. Pinned next door in
+	// graphql_shutdown_order_test.go, which drives this function.
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.
@@ -498,23 +481,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 
-	// Terminate nats manager.
-	err = NatsManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate graphql manager.
-	err = GraphQLManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate rdb manager.
-	err = RdbManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
+	// that actually closes handles, and which the write-back above still precedes.
+	return Svc.Terminate(ctx)
 }

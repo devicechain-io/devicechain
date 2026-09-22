@@ -20,6 +20,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,6 +30,11 @@ import (
 var (
 	Microservice  *core.Microservice
 	Configuration *config.DeviceManagementConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -330,127 +336,132 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize rdb manager.
-	rdbcb := core.NewNoOpLifecycleCallbacks()
-	RdbManager = rdb.NewRdbManager(Microservice, rdbcb, schema.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	err = RdbManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Build every Prometheus instrument this service exports, before the NATS manager
-	// that consumes them.
-	buildMetrics()
-
-	// Create and initialize nats manager before the caches, which are backed by
-	// NATS JetStream KV buckets built from it (ADR-007: NATS KV cache backend).
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	err = NatsManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2).
-	caches, err := model.InitializeCaches(NatsManager, Configuration)
-	if err != nil {
-		return err
-	}
-
-	// Wrap api around rdb manager, then wrap a caching decorator over it for the
-	// hot inbound-event resolution path.
-	Api = model.NewApi(RdbManager)
-	CachedApi = model.NewCachedApi(Api, caches)
-	// The delete path evicts the hot-path caches through this seam so a delete does
-	// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
-	// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
-	Api.CacheEvictor = CachedApi
-
-	// Report the size of this schema's append-only history tables (ADR-023). Every one of
-	// them only grows — nothing prunes a version history short of purging the whole tenant —
-	// so the instance's storage floor rises with authoring activity and nothing today says
-	// how fast. This is the measurement that has to exist before any ceiling on it can be
-	// chosen honestly; it enforces nothing. The audit journal is added by the collector
-	// itself, since core owns that table in every schema.
-	//
-	// Registered directly rather than through Microservice.NewGauge because a failed read
-	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-		&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
-		&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{}))
-
-	// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
-	// its draft rules against event-processing and fails closed on an uncompilable one.
-	wireDetectionRuleValidator()
-
-	// Wire the per-tenant geofence caps and the counter that reports their refusals. The
-	// counter is set unconditionally, unlike the resolver: with no resolver the platform
-	// defaults are still enforced, so refusals still happen and still need reporting.
-	wireGeoFenceCapsResolver()
-	Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
-		Microservice.NewCounterVec(
-			"geofence_cap_refusals_total",
-			"Geofence authoring calls refused by a tenant's governance cap, labelled by which cap refused (ADR-023). A sustained non-zero rate on `cap=\"geoFencePositionCeiling\"` or `cap=\"geoFenceCeiling\"` means a tenant is authoring against a packaging limit; on `cap=\"geoFencePositionBudget\"` it means a tenant's whole fence set is at its share of the shared detection geometry cache. Raise the tenant's tier, or its per-tenant override, to clear it. Deliberately NOT labelled by tenant — that would be unbounded cardinality on a multi-tenant instance; the API error names the tenant's own numbers.",
-			[]string{"cap"}))
-
-	// Map of providers that will be injected into graphql http context. The NATS
-	// manager backs the live alarm subscription resolver (SubscribeLive, ADR-037); it
-	// is already connected here (NatsManager.Initialize above), before the
-	// subscription server accepts a client.
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
-		// The cached decorator is offered alongside the plain api so the profile
-		// publish/rollback mutations can invalidate the shared ingest cache they
-		// share with the processor (ADR-045 slice c); all other resolvers use Api.
-		graphql.ContextCachedApiKey: CachedApi,
-		gqlcore.ContextNatsKey:      NatsManager,
-	}
-
-	// Create and initialize graphql manager.
-	gqlcb := core.NewNoOpLifecycleCallbacks()
-
-	schema := graphql.SchemaContent
-	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
-
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, parsed, providers, Microservice.Readiness)
-	err = GraphQLManager.Initialize(ctx)
-	if err != nil {
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this service's:
+	// which store, which migrations, which oncreate callback, which schema, and the wiring
+	// in the two gaps between the three constructions.
+	//
+	// 🔑 THIS SERVICE USES THE SECOND GAP, WHICH IS UNUSUAL AND STRUCTURAL. Its caches are
+	// NATS JetStream KV buckets (ADR-007), so the Api that wraps them cannot be built until
+	// the broker manager exists — which is why almost everything below is in AfterNats
+	// rather than AfterRdb.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
+			Migrations: schema.Migrations,
+			Config:     Configuration.RdbConfiguration,
+		},
+		AfterRdb: func(_ context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+
+			// Build every Prometheus instrument this service exports, before the NATS manager
+			// that consumes them.
+			buildMetrics()
+			return nil
+		},
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		// Runs once the broker manager is initialized and before the GraphQL manager is
+		// built — the one point in the sequence where this service can have both a
+		// relational handle and a broker to build KV buckets from.
+		AfterNats: func(_ context.Context, m *service.Managers) error {
+			// Create NATS KV caches TTL'd from configuration (ADR-022 review B2).
+			caches, err := model.InitializeCaches(m.Nats, Configuration)
+			if err != nil {
+				return err
+			}
+
+			// Wrap api around rdb manager, then wrap a caching decorator over it for the
+			// hot inbound-event resolution path.
+			Api = model.NewApi(RdbManager)
+			CachedApi = model.NewCachedApi(Api, caches)
+			// The delete path evicts the hot-path caches through this seam so a delete does
+			// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
+			// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
+			Api.CacheEvictor = CachedApi
+
+			// Report the size of this schema's append-only history tables (ADR-023). Every one of
+			// them only grows — nothing prunes a version history short of purging the whole tenant —
+			// so the instance's storage floor rises with authoring activity and nothing today says
+			// how fast. This is the measurement that has to exist before any ceiling on it can be
+			// chosen honestly; it enforces nothing. The audit journal is added by the collector
+			// itself, since core owns that table in every schema.
+			//
+			// Registered directly rather than through Microservice.NewGauge because a failed read
+			// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
+			prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
+				&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
+				&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{}))
+
+			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
+			// its draft rules against event-processing and fails closed on an uncompilable one.
+			wireDetectionRuleValidator()
+
+			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
+			// counter is set unconditionally, unlike the resolver: with no resolver the platform
+			// defaults are still enforced, so refusals still happen and still need reporting.
+			wireGeoFenceCapsResolver()
+			Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
+				Microservice.NewCounterVec(
+					"geofence_cap_refusals_total",
+					"Geofence authoring calls refused by a tenant's governance cap, labelled by which cap refused (ADR-023). A sustained non-zero rate on `cap=\"geoFencePositionCeiling\"` or `cap=\"geoFenceCeiling\"` means a tenant is authoring against a packaging limit; on `cap=\"geoFencePositionBudget\"` it means a tenant's whole fence set is at its share of the shared detection geometry cache. Raise the tenant's tier, or its per-tenant override, to clear it. Deliberately NOT labelled by tenant — that would be unbounded cardinality on a multi-tenant instance; the API error names the tenant's own numbers.",
+					[]string{"cap"}))
+			return nil
+		},
+		GraphQL: &service.GraphQLSpec{
+			Schema:   graphql.SchemaContent,
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
+			// Evaluated after the broker manager is built, so the live alarm subscription
+			// resolver (SubscribeLive, ADR-037) gets one that is already connected, before
+			// the subscription server accepts a client.
+			//
+			// 🔴 IT READS Svc.Nats RATHER THAN THE PACKAGE VARIABLE, which is still nil at
+			// this moment: NatsManager is published below, after Initialize returns, and this
+			// runs inside it.
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextRdbKey: RdbManager,
+					gqlcore.ContextApiKey: Api,
+					// The cached decorator is offered alongside the plain api so the profile
+					// publish/rollback mutations can invalidate the shared ingest cache they
+					// share with the processor (ADR-045 slice c); all other resolvers use Api.
+					graphql.ContextCachedApiKey: CachedApi,
+					gqlcore.ContextNatsKey:      Svc.Nats,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
 	return nil
 }
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	err := RdbManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Start nats manager before the GraphQL server. createNatsComponents (run by
-	// NatsManager.Start) injects the alarm-event publisher into the shared Api; doing
-	// it before the HTTP server accepts traffic establishes happens-before for the
-	// resolver goroutines that read Api.AlarmPublisher, so an early acknowledgeAlarm/
-	// clearAlarm mutation neither races the write nor silently emits no event.
-	err = NatsManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = GraphQLManager.Start(ctx)
-	if err != nil {
+	// Rdb, then NATS, then the GraphQL server. That order now lives in core/service, and
+	// for this service it is load-bearing: createNatsComponents (run by NatsManager.Start)
+	// injects the alarm-event publisher into the shared Api, and doing it before the HTTP
+	// server accepts traffic establishes happens-before for the resolver goroutines that
+	// read Api.AlarmPublisher — so an early acknowledgeAlarm/clearAlarm mutation neither
+	// races the write nor silently emits no event.
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
 
 	// Start inbound events processor.
-	err = InboundEventsProcessor.Start(ctx)
+	err := InboundEventsProcessor.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -504,10 +515,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
-	// Stop graphql manager before nats: draining the HTTP server first ensures no
-	// in-flight ack/clear mutation tries to publish an alarm event to a NATS
-	// connection that is already shutting down (mirrors the start order).
-	err = GraphQLManager.Stop(ctx)
+	// GraphQL, then NATS, then Rdb: draining the HTTP server first ensures no in-flight
+	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
+	// already shutting down (mirrors the start order). core/service walks them in exactly
+	// that order, for every service.
+	err = Svc.Stop(ctx)
 	if err != nil {
 		return err
 	}
@@ -541,23 +553,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 
-	// Terminate nats manager.
-	err = NatsManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate graphql manager.
-	err = GraphQLManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate rdb manager.
-	err = RdbManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
+	// that actually closes handles, and which both consumers above still precede.
+	return Svc.Terminate(ctx)
 }
