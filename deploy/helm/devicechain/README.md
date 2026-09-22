@@ -25,9 +25,12 @@ an envelope-encrypted secret store, so the chart fails the render without one ra
 than shipping a pod that cannot form its key. The **same** value has to be passed on
 every later install and upgrade of this instance: a new key orphans every secret
 already stored. Generating it on the command line as above is fine for a first look;
-for anything you intend to keep, put the instance config in a Secret you manage and
-point the chart at it with `instance.existingSecret` (see below), or let
-`dcctl bootstrap` mint and store one for you.
+for anything you intend to keep, let `dcctl bootstrap` mint and store it for you. It
+owns the instance config Secret from then on, which is what keeps the key, the database
+and broker credentials and every later run consistent with each other.
+
+If you are driving Helm yourself rather than using `dcctl`, supply the document from a
+Secret you manage with `instance.existingSecret` (see below) and keep the key in it.
 
 Take `<X.Y.Z>` from the [Releases
 page](https://github.com/devicechain-io/devicechain/releases) — the chart's OCI tag is
@@ -113,8 +116,18 @@ mirrors `backend/k8s/functionalarea`, the Go source of truth.)
 ### Supplying the instance config from a Secret the chart does not write
 
 `instance.existingSecret` mounts a Secret you manage (External Secrets, a sealed
-secret, `dcctl`) instead of the one the chart renders. Four constraints come with it,
-and each exists because the chart stops being the document's author:
+secret) instead of the one the chart renders. It is for driving the chart **without**
+`dcctl`: on a `dcctl`-managed instance this is already how the chart runs, because
+`dcctl` writes that Secret itself and sets these values for you — so on such an
+instance, change the config through `dcctl` and not through the Secret.
+
+That is not a style preference. The annotation that rolls the workloads hashes the
+document Helm was given, not the one in the cluster, so a Secret edited by any other
+route updates the file the pods have mounted and restarts nothing: every process goes
+on serving the config it started with while `kubectl get secret` shows the new one.
+
+Four constraints come with this path, and each exists because the chart stops being the
+document's author:
 
 | Value | Why |
 | --- | --- |
