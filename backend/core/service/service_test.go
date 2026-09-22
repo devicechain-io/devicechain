@@ -5,14 +5,40 @@ package service
 
 import (
 	"context"
+	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/require"
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
+
+// startEmbeddedNats runs an in-process NATS server and returns its host and port.
+func startEmbeddedNats(t *testing.T) (string, uint32) {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host:      "127.0.0.1",
+		Port:      -1, // ephemeral
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second), "embedded nats server not ready")
+	t.Cleanup(srv.Shutdown)
+
+	u, err := url.Parse(srv.ClientURL())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+	return u.Hostname(), uint32(port)
+}
 
 // 🔑 WHAT IS TESTED WHERE, because this file deliberately does not test the main thing.
 //
@@ -138,4 +164,56 @@ func TestTheRdbSpecChoosesWhichInstanceStoreIsOpened(t *testing.T) {
 
 	require.NotNil(t, svc.Rdb, "the manager is published even when its initialize fails")
 	require.Equal(t, "the-store-the-service-asked-for", svc.Rdb.InstanceConfig.Type)
+}
+
+// TestTheHooksRunInTheGapsBetweenConstructions is the contract the two hooks exist for,
+// and the reason it is pinned HERE is that nothing else would catch it breaking.
+//
+// 🔴 A SERVICE'S main.go IS NOT EXERCISED BY ANY TEST. If Initialize ran AfterNats before
+// it built the broker manager, device-management would hand a nil manager to
+// model.InitializeCaches and user-management would ask a nil manager for a KV bucket —
+// both panics, both at startup, and both invisible until something actually starts the
+// process. The assertions below are what stands in for that.
+//
+// Each hook is asked what it can SEE rather than merely recorded, because the ordering is
+// only worth anything if the manager is there by the time the hook that needs it runs.
+// A sequence counter alone would pass for a pair of hooks called back to back at the end.
+func TestTheHooksRunInTheGapsBetweenConstructions(t *testing.T) {
+	host, port := startEmbeddedNats(t)
+
+	ms := testMicroservice(t)
+	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+
+	var seq []string
+	var rdbSawNats, natsSawNats bool
+
+	svc := New(ms, Spec{
+		AfterRdb: func(_ context.Context, m *Managers) error {
+			seq = append(seq, "afterRdb")
+			rdbSawNats = m.Nats != nil
+			return nil
+		},
+		Nats: &NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }},
+		AfterNats: func(_ context.Context, m *Managers) error {
+			seq = append(seq, "afterNats")
+			natsSawNats = m.Nats != nil
+			return nil
+		},
+	})
+
+	require.NoError(t, svc.Initialize(context.Background()))
+	t.Cleanup(func() {
+		if c := svc.Nats.Conn(); c != nil && !c.IsClosed() {
+			c.Close()
+		}
+	})
+
+	require.Equal(t, []string{"afterRdb", "afterNats"}, seq,
+		"the hooks did not both run, or ran in the wrong order")
+	require.False(t, rdbSawNats,
+		"AfterRdb was handed a broker manager, so it no longer runs in the gap BEFORE the "+
+			"broker is built and a service cannot rely on ordering its own work against it")
+	require.True(t, natsSawNats,
+		"AfterNats was handed no broker manager: device-management's JetStream KV caches and "+
+			"user-management's identity manager are built here and would take a nil")
 }

@@ -45,11 +45,28 @@
 // user-management has its own validator and calls MarkReady, and the ingest services open
 // it with no auth surface at all. Three different answers is not a default.
 //
-// Nor is this for every service. The ingest services assemble no GraphQL manager and hold
-// their broker differently — lwm2m-ingest RELEASES a leadership lease over its connection
-// during shutdown, so its NATS stop must come LAST, which is the opposite of the order
-// here. They keep their own wiring, and that is a decision rather than an omission: a
-// sequence that had to carry an exception for them would stop being one sequence.
+// Nor is this for every service, and the two kinds of exception are worth telling apart.
+//
+// The ingest services assemble no GraphQL manager and hold their broker differently —
+// lwm2m-ingest RELEASES a leadership lease over its connection during shutdown, so its
+// NATS stop must come LAST, which is the opposite of the order here. They keep their own
+// wiring, and that is a decision rather than an omission: a sequence that had to carry an
+// exception for them would stop being one sequence.
+//
+// 🔴 user-management IS THE OTHER KIND, AND IT IS THE ONE TO READ BEFORE EXTENDING THIS
+// API. It assembles exactly these three managers in exactly this order, but it stops its
+// own components BETWEEN two of them: GraphQL, then the purge coordinator and the
+// dead-letter pair, then NATS, then Rdb. The coordinator's pass holds an advisory lock on
+// a pooled connection, so it has to be down before the database and the broker — and the
+// GraphQL server has to be down before it, because that is where a tenant deletion is
+// accepted. Every other adopter's components stop wholly before or wholly after the three,
+// which is why a single Stop call fits them and not this one.
+//
+// It was left on its own wiring rather than converted, and the alternative is written down
+// here because it will be proposed again: hooks in the downward gaps, symmetric with
+// AfterRdb and AfterNats. That is a real design, but today it would have one caller for one
+// of the two hooks and none for the other — and the way to earn it is a second service that
+// wants the same gap, not a first one that can be made to fit.
 package service
 
 import (
@@ -130,19 +147,32 @@ type Spec struct {
 	Nats    *NatsSpec
 	GraphQL *GraphQLSpec
 
-	// AfterRdb runs once the relational manager is initialized and before the broker and
-	// GraphQL managers are built.
+	// AfterRdb runs once the relational manager is initialized, before the broker manager
+	// is built. AfterNats runs once the broker manager is initialized, before the GraphQL
+	// manager is built. Either may be nil.
 	//
-	// 🔑 THIS HOOK EXISTS BECAUSE THE CONSTRAINT IS REAL, not because the API wanted an
-	// escape hatch. A service's Api wraps its Rdb manager, its caches are built from the
-	// same handle, and its GraphQL context providers carry that Api — so there is exactly
-	// one point, between two of the three constructions, where the service has to run.
-	// Naming it is more honest than pretending the three are independent and letting
-	// callers discover that they are not.
+	// 🔑 THERE ARE TWO HOOKS BECAUSE THREE CONSTRUCTIONS HAVE TWO GAPS, and both gaps are
+	// occupied by real services. This is the whole surface, not an escape hatch that will
+	// grow: a service has nothing to do before the first construction (it would just do it
+	// before calling New) or after the last (it does it after Initialize returns).
 	//
-	// It is handed what has been built so far rather than reading package variables,
+	// Most services need the first gap: the Api wraps the relational manager, and the
+	// GraphQL providers carry that Api. Two services need the second, because what they
+	// build is backed by the BROKER rather than the database — device-management's entity
+	// caches are NATS JetStream KV buckets (ADR-007), and user-management's identity
+	// manager needs a KV store for refresh tokens plus a distributed lock to serialize
+	// signing-key work across replicas. Neither can exist before the broker manager does.
+	//
+	// 🔴 NEITHER IS THE PLACE FOR ANYTHING BOUND TO THE CONNECTION. Both run during
+	// INITIALIZE, and the broker connection is made in NatsManager's START — so a reader or
+	// writer built in AfterNats captures a nil by value and panics on first use. That
+	// belongs in NatsSpec.OnCreate. What AfterNats is for is the things a manager can hand
+	// out at initialize: KV buckets, locks, and whatever is built from them.
+	//
+	// Both are handed what has been built so far rather than reading package variables,
 	// because at this moment the caller has not been given the managers yet.
-	AfterRdb func(context.Context, *Managers) error
+	AfterRdb  func(context.Context, *Managers) error
+	AfterNats func(context.Context, *Managers) error
 }
 
 // Managers holds what a Spec produced. A field is nil when its Spec was.
@@ -209,6 +239,12 @@ func (s *Service) Initialize(ctx context.Context) error {
 			s.spec.Nats.OnCreate)
 		if err := s.Nats.Initialize(ctx); err != nil {
 			return fmt.Errorf("initializing the broker manager: %w", err)
+		}
+	}
+
+	if s.spec.AfterNats != nil {
+		if err := s.spec.AfterNats(ctx, &s.Managers); err != nil {
+			return err
 		}
 	}
 
