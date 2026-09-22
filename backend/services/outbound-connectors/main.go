@@ -292,7 +292,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// injected as a provider so the resolvers resolve it (and its secret store, for
 			// hasSecret) from the request context.
 			Schema:   graphql.SchemaContent,
-			Resolver: &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)},
+			Resolver: func() interface{} { return &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)} },
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
 					gqlcore.ContextRdbKey: RdbManager,

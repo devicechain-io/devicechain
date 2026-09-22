@@ -260,7 +260,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// The schema serves the notification configuration CRUD (channels/policies)
 			// backed by the rdb Api, plus the static channel-type capability list.
 			Schema:   graphql.SchemaContent,
-			Resolver: &graphql.SchemaResolver{},
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
 					gqlcore.ContextRdbKey: RdbManager,

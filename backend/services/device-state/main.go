@@ -175,7 +175,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
 			Schema:   graphql.SchemaContent,
-			Resolver: &graphql.SchemaResolver{},
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			Providers: func() map[gqlcore.ContextKey]interface{} {
 				return map[gqlcore.ContextKey]interface{}{
 					gqlcore.ContextRdbKey: RdbManager,

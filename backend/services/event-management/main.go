@@ -273,7 +273,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
 			Schema:   graphql.SchemaContent,
-			Resolver: &graphql.SchemaResolver{},
+			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
 			// Evaluated when the GraphQL manager is built, which is after the broker
 			// manager — so the live subscription resolvers (SubscribeLive) get a NATS
 			// manager that is already connected, before the subscription server accepts a

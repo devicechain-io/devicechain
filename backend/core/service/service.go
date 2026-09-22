@@ -101,12 +101,23 @@ type NatsSpec struct {
 
 // GraphQLSpec is what a service supplies to get a GraphQL server.
 type GraphQLSpec struct {
-	// Schema is the SDL, and Resolver its root resolver.
-	Schema   string
-	Resolver interface{}
-	// Providers is evaluated when the GraphQL manager is BUILT, which is after AfterRdb
-	// has run. It is a function rather than a map because what it returns generally
-	// includes the Api that AfterRdb constructs, which does not exist any earlier.
+	// Schema is the SDL. It is a constant, so it is a value.
+	Schema string
+
+	// Resolver returns the root resolver, and Providers the request-context providers.
+	//
+	// 🔑 BOTH ARE FUNCTIONS FOR THE SAME REASON: they are evaluated when the GraphQL
+	// manager is BUILT, which is after AfterRdb has run, and what they return generally
+	// depends on what AfterRdb made. Providers carries the Api; event-processing's
+	// resolver carries six read-model stores, all of them wrapped around the relational
+	// manager.
+	//
+	// 🔴 A PLAIN VALUE HERE WOULD BE CAPTURED WHEN THE SPEC LITERAL IS WRITTEN, which is
+	// before any of that exists. That is the trap this signature exists to close: the
+	// field is read late, so a value written into it reads as though it were computed
+	// late, and a resolver built that way carries nil stores into a server that compiles,
+	// starts and serves — failing at the first query rather than at startup.
+	Resolver  func() interface{}
 	Providers func() map[gqlcore.ContextKey]interface{}
 }
 
@@ -202,7 +213,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 	}
 
 	if s.spec.GraphQL != nil {
-		parsed := gqlcore.MustParseSchema(s.spec.GraphQL.Schema, s.spec.GraphQL.Resolver)
+		parsed := gqlcore.MustParseSchema(s.spec.GraphQL.Schema, s.spec.GraphQL.Resolver())
 		providers := map[gqlcore.ContextKey]interface{}{}
 		if s.spec.GraphQL.Providers != nil {
 			providers = s.spec.GraphQL.Providers()

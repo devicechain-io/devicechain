@@ -23,6 +23,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -40,6 +41,11 @@ var DetectTermGate *processor.TermGate
 var (
 	Microservice  *core.Microservice
 	Configuration *config.EventProcessingConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -477,99 +483,125 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// platform default, so this is never a zero that would silently mean "unlimited".
 	rules.SetPlatformMaxRuleDuration(time.Duration(Configuration.MaxRuleDurationSeconds) * time.Second)
 
-	// Create and initialize the rdb manager (runs the snapshot-store migrations under
-	// the startup advisory lock). It must be initialized before the NATS manager so
-	// the snapshot store exists when the processor is constructed below.
-	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), model.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	if err := RdbManager.Initialize(ctx); err != nil {
-		return err
-	}
-	SnapshotStore = model.NewSnapshotStore(RdbManager)
-	// The durable rule projection (ADR-051 slice 4b-3): the fact consumer persists published
-	// rules here and the engine's rule set is rebuilt from it at startup, so rules survive a
-	// restart independent of the finite-retention fact stream.
-	DetectRuleStore = model.NewDetectRuleStore(RdbManager)
-	RuleStatStore = model.NewRuleStatStore(RdbManager)
-	// The dead-man read-models (ADR-051 slice 4c-2b): the devices expected to report and which
-	// version is active per profile token (with its publish time, the grace base). The roster/
-	// entity-deleted/rule consumers maintain them before acking; slice 4c-2b-2's engine arming is
-	// rebuilt from them at startup, so a never-reported device's absence arming survives a restart.
-	DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
-	ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
-	// The dynamic-threshold read-model (ADR-051 slice 4c-3): the current numeric value of each
-	// platform-set device attribute, so a rule can resolve a per-device threshold from it. The
-	// attribute/entity-deleted consumers maintain it before acking; slice 4c-3b-2's eval reads it.
-	DeviceAttributeStore = model.NewDeviceAttributeStore(RdbManager)
-
-	// Build the ADR-078 fence-set fetch seam BEFORE the NATS manager: createNatsComponents wires
-	// the current-set half into the processor, whose startup reconcile seeds the containment
-	// projection from it, so it must exist by then.
-	FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
-
-	// Build every Prometheus instrument this service exports, before the NATS manager
-	// that consumes them.
-	buildMetrics()
-
-	// Create and initialize nats manager (builds the readers + checkpoint processor). The
-	// DETECT rule set is rebuilt from the durable rule projection inside createNatsComponents
-	// (ADR-051 slice 4b-3); the published-rule fact reader created there feeds live updates.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	if err := NatsManager.Initialize(ctx); err != nil {
-		return err
-	}
-
-	// The GraphQL surface carries the scaffold health/metrics server (/healthz, /readyz,
-	// /metrics), the ADR-044 detection-rule validation gate (validateDetectionRules — pure,
-	// compiles through the stateless DETECT compiler), and the slice-7b rule-health read
-	// (ruleHealth), which reads the durable rule + firing projections — so the resolver carries
-	// their stores. Auth/tenant ride the request context. The NATS manager is injected as a
-	// provider so the slice-7c detectionStream subscription can tap the tenant's derived-event
-	// feed (SubscribeLive); it is connected here (NatsManager.Initialize above), before the
-	// subscription server accepts a client.
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextNatsKey: NatsManager,
-	}
-	// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
-	// unavailable, fail-closed). It is built here so the resolver carries it alongside the
-	// stores.
-	Drafter = buildDrafter()
-	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
-		DetectRules: DetectRuleStore,
-		RuleStats:   RuleStatStore,
-		Profiles:    ProfileActiveStore,
-		Drafter:     Drafter,
-		// The replay preview resolves each replayed event's STAMPED fence-set version through
-		// this seam (ADR-078), so previewing a geofence rule over last week evaluates against the
-		// fences that were live then. It is off the DETECT loop and may block, which is why the
-		// preview holds it and the fan-out does not.
-		FenceSets: FenceSets,
-	})
-
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness.
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		parsed, providers, Microservice.Readiness)
-	return GraphQLManager.Initialize(ctx)
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this service's:
+	// which store, which migrations, which oncreate callback, which schema, and the wiring
+	// in AfterRdb that has to happen between two of the constructions.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			// This chain includes the snapshot-store migrations, which the manager runs
+			// under the startup advisory lock.
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
+			Migrations: model.Migrations,
+			Config:     Configuration.RdbConfiguration,
+		},
+		// Runs once the rdb manager is initialized and before the other two are built.
+		// Every store below wraps that manager, and both the NATS oncreate callback and
+		// the GraphQL resolver read them — which is what makes this the one point in the
+		// sequence where this service has to run.
+		AfterRdb: func(_ context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+
+			SnapshotStore = model.NewSnapshotStore(RdbManager)
+			// The durable rule projection (ADR-051 slice 4b-3): the fact consumer persists published
+			// rules here and the engine's rule set is rebuilt from it at startup, so rules survive a
+			// restart independent of the finite-retention fact stream.
+			DetectRuleStore = model.NewDetectRuleStore(RdbManager)
+			RuleStatStore = model.NewRuleStatStore(RdbManager)
+			// The dead-man read-models (ADR-051 slice 4c-2b): the devices expected to report and which
+			// version is active per profile token (with its publish time, the grace base). The roster/
+			// entity-deleted/rule consumers maintain them before acking; slice 4c-2b-2's engine arming is
+			// rebuilt from them at startup, so a never-reported device's absence arming survives a restart.
+			DeviceRosterStore = model.NewDeviceRosterStore(RdbManager)
+			ProfileActiveStore = model.NewProfileActiveStore(RdbManager)
+			// The dynamic-threshold read-model (ADR-051 slice 4c-3): the current numeric value of each
+			// platform-set device attribute, so a rule can resolve a per-device threshold from it. The
+			// attribute/entity-deleted consumers maintain it before acking; slice 4c-3b-2's eval reads it.
+			DeviceAttributeStore = model.NewDeviceAttributeStore(RdbManager)
+
+			// Build the ADR-078 fence-set fetch seam BEFORE the NATS manager: createNatsComponents wires
+			// the current-set half into the processor, whose startup reconcile seeds the containment
+			// projection from it, so it must exist by then.
+			FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
+
+			// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
+			// unavailable, fail-closed). It is built here so the resolver below can carry it
+			// alongside the stores.
+			Drafter = buildDrafter()
+
+			// Build every Prometheus instrument this service exports, before the NATS manager
+			// that consumes them.
+			buildMetrics()
+			return nil
+		},
+		// createNatsComponents builds the readers + checkpoint processor. The DETECT rule set
+		// is rebuilt from the durable rule projection inside it (ADR-051 slice 4b-3); the
+		// published-rule fact reader created there feeds live updates.
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		GraphQL: &service.GraphQLSpec{
+			// The GraphQL surface carries the scaffold health/metrics server (/healthz, /readyz,
+			// /metrics), the ADR-044 detection-rule validation gate (validateDetectionRules — pure,
+			// compiles through the stateless DETECT compiler), and the slice-7b rule-health read
+			// (ruleHealth), which reads the durable rule + firing projections — so the resolver carries
+			// their stores. Auth/tenant ride the request context.
+			//
+			// 🔴 THE RESOLVER IS BUILT IN A FUNCTION BECAUSE ITS STORES DO NOT EXIST YET. Every
+			// field below is made in AfterRdb, which has not run when this Spec literal is
+			// written; a resolver built here as a value would carry six nil stores into a
+			// server that compiles, starts and serves, and fails at the first ruleHealth query.
+			Schema: graphql.SchemaContent,
+			Resolver: func() interface{} {
+				return &graphql.SchemaResolver{
+					DetectRules: DetectRuleStore,
+					RuleStats:   RuleStatStore,
+					Profiles:    ProfileActiveStore,
+					Drafter:     Drafter,
+					// The replay preview resolves each replayed event's STAMPED fence-set version through
+					// this seam (ADR-078), so previewing a geofence rule over last week evaluates against the
+					// fences that were live then. It is off the DETECT loop and may block, which is why the
+					// preview holds it and the fan-out does not.
+					FenceSets: FenceSets,
+				}
+			},
+			// The NATS manager is injected as a provider so the slice-7c detectionStream
+			// subscription can tap the tenant's derived-event feed (SubscribeLive).
+			//
+			// 🔴 IT READS Svc.Nats RATHER THAN THE PACKAGE VARIABLE, which is still nil at
+			// this moment: NatsManager is published below, after Initialize returns, and this
+			// runs inside it. The manager is already connected by then — the broker is built
+			// and initialized before the GraphQL server — so the subscription server never
+			// accepts a client ahead of it.
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextNatsKey: Svc.Nats,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
+		return err
+	}
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
+	return nil
 }
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	// Start the rdb manager first: the processor restores engine state from the
+	// Rdb, then NATS, then the GraphQL server. That order, and the reason the broker has to
+	// be up before the HTTP server accepts traffic, now live in core/service. The relational
+	// manager going first also matters locally: the processor restores engine state from the
 	// snapshot store at Start, so the store must be live before the processor starts.
-	if err := RdbManager.Start(ctx); err != nil {
-		return err
-	}
-	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
-	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
-	// that the stop order every service already shares is exactly this one reversed, and
-	// so a later injection into Api cannot open the window it opened in command-delivery.
-	if err := NatsManager.Start(ctx); err != nil {
-		return err
-	}
-	if err := GraphQLManager.Start(ctx); err != nil {
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
 	if err := ResolvedEventsProcessor.Start(ctx); err != nil {
@@ -626,7 +658,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Stop(ctx); err != nil {
 		return err
 	}
-	// Stop the GraphQL server before the NATS manager. The detections subscription reads
+	// GraphQL, then NATS, then Rdb. The detections subscription reads
 	// the tenant's derived-event stream over this connection for as long as a socket is
 	// open, and GraphQLManager's stop is what closes those sockets — so closing them first
 	// cancels each subscription's context while its broker subscription is still live, and
@@ -645,13 +677,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// The DETECT partition lease is unaffected either way: the processor's stop above waits
 	// for the term to end, which flushes the final checkpoint and releases the lease, and
 	// both of those happen before either of these two lines runs.
-	if err := GraphQLManager.Stop(ctx); err != nil {
-		return err
-	}
-	if err := NatsManager.Stop(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Stop(ctx)
+	// core/service walks them in exactly that order, for every service. Pinned next door in
+	// graphql_shutdown_order_test.go, which drives this function.
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.
@@ -659,11 +687,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	if err := ResolvedEventsProcessor.Terminate(ctx); err != nil {
 		return err
 	}
-	if err := NatsManager.Terminate(ctx); err != nil {
-		return err
-	}
-	if err := GraphQLManager.Terminate(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Terminate(ctx)
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
+	// that actually closes handles, and which the processor above still precedes.
+	return Svc.Terminate(ctx)
 }
