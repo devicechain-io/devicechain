@@ -69,8 +69,23 @@ import (
 type RdbSpec struct {
 	// Migrations is the service's own migration chain.
 	Migrations []*gormigrate.Migration
-	// Config is the service's datastore configuration. The INSTANCE-level half is read
-	// from the microservice, since every service reads the same field.
+
+	// Instance is the instance-level datastore this manager opens.
+	//
+	// 🔴 IT IS NAMED BY THE SERVICE BECAUSE SERVICES DO NOT AGREE, and an earlier version
+	// of this struct read InstanceConfiguration.Persistence.Rdb here on the grounds that
+	// they did. They do not: event-management's manager opens Persistence.TSDB — the
+	// instance's event store, a different cluster — and everything it holds is a
+	// hypertable there. Defaulting would have pointed it at the relational store and
+	// created its schema in the wrong database.
+	//
+	// The distinction is load-bearing outside this package too. dcctl sizes an instance's
+	// Postgres connection limit from the areas that open a pool on the RELATIONAL store,
+	// and recognizes one by the literal it names here — so a service that says which store
+	// it opens is counted correctly, and event-management is correctly not counted.
+	Instance mscfg.DatastoreConfiguration
+
+	// Config is the service's own half of that datastore's configuration.
 	Config mscfg.MicroserviceDatastoreConfiguration
 }
 
@@ -166,8 +181,7 @@ func FromManagers(ms *core.Microservice, m Managers) *Service {
 func (s *Service) Initialize(ctx context.Context) error {
 	if s.spec.Rdb != nil {
 		s.Rdb = rdb.NewRdbManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
-			s.spec.Rdb.Migrations, s.Microservice.InstanceConfiguration.Persistence.Rdb,
-			s.spec.Rdb.Config)
+			s.spec.Rdb.Migrations, s.spec.Rdb.Instance, s.spec.Rdb.Config)
 		if err := s.Rdb.Initialize(ctx); err != nil {
 			return fmt.Errorf("initializing the relational database manager: %w", err)
 		}

@@ -157,6 +157,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
 			Migrations: model.Migrations,
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
 			Config:     Configuration.RdbConfiguration,
 		},
 		// Runs once the rdb manager is initialized and before the other two are built.

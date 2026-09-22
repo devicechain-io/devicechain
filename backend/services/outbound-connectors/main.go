@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
@@ -31,6 +32,11 @@ import (
 var (
 	Microservice  *core.Microservice
 	Configuration *config.OutboundConnectorsConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -216,84 +222,106 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize the rdb manager (runs the secret-store migration under the startup
-	// advisory lock). It must be initialized before the secret store and the NATS manager.
-	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), schema.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	if err := RdbManager.Initialize(ctx); err != nil {
-		return err
-	}
-
-	// Build the envelope-encrypted secret store (ADR-059) over the service DB: each outbound
-	// credential lives here, resolved server-internal at dispatch. Fails startup closed on an
-	// unbuilt backend/provider or a missing instance root key.
-	store, err := buildSecretStore(ctx)
-	if err != nil {
-		return err
-	}
-	SecretStore = store
-
-	// Build the per-tenant outbound egress limiter (ADR-060 SD-3) before the NATS manager, since
-	// createNatsComponents binds it into the consumer. Fail-open to the platform default when
-	// per-tenant overrides are not wired (never unlimited).
-	RateLimiter = buildEgressLimiter()
-
-	// Build the connector store (ADR-060 C4a) before the NATS manager: createNatsComponents binds it
-	// into the executor (publish resolves a ConnectorRef to its latest published version), and the
-	// GraphQL providers below reuse the same instance.
-	Api = model.NewApi(RdbManager, SecretStore)
-
-	// Report the size of this schema's append-only history tables (ADR-023): a connector version history only
-	// grows, and so does the audit journal the collector adds for every schema. Nothing
-	// prunes either, so the storage floor rises with use and nothing else says how fast.
-	// Registered directly rather than through Microservice.NewGauge because a failed read
-	// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
-	prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
-		&model.ConnectorVersion{}))
-
-	// Build every Prometheus instrument this service exports, before the NATS manager
-	// that consumes them.
-	buildMetrics()
-
-	// Create and initialize the nats manager (which invokes createNatsComponents to build the
-	// consumer). The secret store must already exist so the executor's resolver can bind it.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	if err := NatsManager.Initialize(ctx); err != nil {
-		return err
-	}
-
-	// The GraphQL surface carries the service identity plus the per-tenant, versioned
-	// Connector CRUD (ADR-060 slice C4). The api (built above, before the NATS manager) is
-	// injected as a provider so the resolvers resolve it (and its secret store, for
-	// hasSecret) from the request context. Auth degrades instead of failing startup (ADR-022
-	// decision 3).
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
-	}
-	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)})
+	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the validator in
+	// the background and gate the data plane on readiness rather than exiting when
+	// user-management is briefly unreachable (amends ADR-008).
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		parsed, providers, Microservice.Readiness)
-	return GraphQLManager.Initialize(ctx)
+
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this service's:
+	// which migrations, which oncreate callback, which schema, and the wiring in AfterRdb
+	// that has to happen between two of the constructions.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			// This chain includes the secret-store migration, which the rdb manager runs
+			// under the startup advisory lock.
+			Migrations: schema.Migrations,
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
+			Config:     Configuration.RdbConfiguration,
+		},
+		// Runs once the rdb manager is initialized and before the other two are built. Every
+		// line below needs the relational handle and is needed by the NATS manager's
+		// oncreate callback, which makes this the one point in the sequence where this
+		// service has to run.
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+
+			// The envelope-encrypted secret store (ADR-059) over the service DB: each
+			// outbound credential lives here, resolved server-internal at dispatch. Fails
+			// startup closed on an unbuilt backend/provider or a missing instance root key,
+			// since a resolved credential is required to authenticate an outbound call.
+			store, err := buildSecretStore(ctx)
+			if err != nil {
+				return err
+			}
+			SecretStore = store
+
+			// The per-tenant outbound egress limiter (ADR-060 SD-3). Fail-open to the
+			// platform default when per-tenant overrides are not wired (never unlimited).
+			RateLimiter = buildEgressLimiter()
+
+			// The connector store (ADR-060 C4a). createNatsComponents binds it into the
+			// executor (publish resolves a ConnectorRef to its latest published version),
+			// and the GraphQL providers below reuse the same instance.
+			Api = model.NewApi(RdbManager, SecretStore)
+
+			// Report the size of this schema's append-only history tables (ADR-023): a connector version history only
+			// grows, and so does the audit journal the collector adds for every schema. Nothing
+			// prunes either, so the storage floor rises with use and nothing else says how fast.
+			// Registered directly rather than through Microservice.NewGauge because a failed read
+			// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
+			prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
+				&model.ConnectorVersion{}))
+
+			// Build every Prometheus instrument this service exports, before the NATS
+			// manager that consumes them.
+			buildMetrics()
+			return nil
+		},
+		// The secret store, the rate limiter and the Api must already exist when this runs,
+		// which the order above guarantees.
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		GraphQL: &service.GraphQLSpec{
+			// The GraphQL surface carries the service identity plus the per-tenant,
+			// versioned Connector CRUD (ADR-060 slice C4). The Api built in AfterRdb is
+			// injected as a provider so the resolvers resolve it (and its secret store, for
+			// hasSecret) from the request context.
+			Schema:   graphql.SchemaContent,
+			Resolver: &graphql.SchemaResolver{Area: string(Microservice.FunctionalArea)},
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextRdbKey: RdbManager,
+					gqlcore.ContextApiKey: Api,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
+		return err
+	}
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
+	return nil
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	if err := RdbManager.Start(ctx); err != nil {
+	// Rdb, then NATS, then the GraphQL server. That order, and the reason the broker has to
+	// be up before the HTTP server accepts traffic, now live in core/service.
+	//
+	// This service's createNatsComponents injects nothing the resolvers read, so the order
+	// is not load-bearing here today. It is uniform so that a later injection into Api
+	// cannot open the window it opened in command-delivery.
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
-	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
-	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
-	// that the stop order every service already shares is exactly this one reversed, and
-	// so a later injection into Api cannot open the window it opened in command-delivery.
-	if err := NatsManager.Start(ctx); err != nil {
-		return err
-	}
-	if err := GraphQLManager.Start(ctx); err != nil {
-		return err
-	}
-	// Start the consumer last (after its reader is live).
+	// Start the consumer last (after its reader is live). It is built by the NATS manager's
+	// oncreate callback, so it does not exist until the line above has run.
 	return Consumer.Start(ctx)
 }
 
@@ -306,28 +334,22 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
-	// Stop the GraphQL server before the NATS manager. Nothing in this service's GraphQL
-	// plane touches the broker today — connector authoring and publishing are database
-	// writes, and the dispatch consumer that does read the broker is stopped above — so
-	// this is the platform's one shutdown order rather than a local requirement. It is
-	// worth holding anyway: the day a connector mutation publishes anything, the safe
-	// order is already the one in the file.
-	if err := GraphQLManager.Stop(ctx); err != nil {
-		return err
-	}
-	if err := NatsManager.Stop(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Stop(ctx)
+	// GraphQL, then NATS, then Rdb. Nothing in this service's GraphQL plane touches the
+	// broker today — connector authoring and publishing are database writes, and the
+	// dispatch consumer that does read the broker is stopped above — so this is the
+	// platform's one shutdown order rather than a local requirement. It is worth holding
+	// anyway: the day a connector mutation publishes anything, the safe order is already
+	// the one core/service walks.
+	return Svc.Stop(ctx)
 }
 
 // beforeMicroserviceTerminated terminates components in reverse dependency order.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	if err := NatsManager.Terminate(ctx); err != nil {
-		return err
-	}
-	if err := GraphQLManager.Terminate(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Terminate(ctx)
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
+	// that actually closes handles.
+	return Svc.Terminate(ctx)
 }

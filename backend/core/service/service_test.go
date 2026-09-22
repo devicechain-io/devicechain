@@ -104,3 +104,38 @@ func TestFromManagersNeedsNoSpec(t *testing.T) {
 		"Initialize on a FromManagers service must be a no-op, not an attempt to build")
 	require.Same(t, built, svc.Rdb, "Initialize replaced a manager it was not given a Spec for")
 }
+
+// TestTheRdbSpecChoosesWhichInstanceStoreIsOpened is here because the obvious
+// simplification is wrong, and wrong in a way that would not show up until a deployment.
+//
+// 🔴 THE SPEC NAMES THE INSTANCE DATASTORE; THIS PACKAGE MUST NOT PICK ONE. An earlier
+// version read InstanceConfiguration.Persistence.Rdb itself, on the reading that every
+// service opens the relational store. event-management does not: its manager opens
+// Persistence.TSDB, the instance's event store, which is a different cluster. Defaulting
+// would have created its schema in the relational database and left the hypertables it
+// depends on being absent from the store it actually queries.
+//
+// The microservice below carries a DIFFERENT relational store from the one the Spec asks
+// for, so this fails if the field is ignored rather than passing for free on a zero value.
+// The refusal is induced honestly — an unsupported type is rejected before any connection
+// is attempted — and it is read twice: through the manager the walk kept, and through the
+// error, which names the type it was given.
+func TestTheRdbSpecChoosesWhichInstanceStoreIsOpened(t *testing.T) {
+	ms := testMicroservice(t)
+	ms.InstanceConfiguration.Persistence.Rdb = mscfg.DatastoreConfiguration{Type: "the-relational-store"}
+
+	svc := New(ms, Spec{Rdb: &RdbSpec{
+		Instance: mscfg.DatastoreConfiguration{Type: "the-store-the-service-asked-for"},
+	}})
+
+	err := svc.Initialize(context.Background())
+	require.Error(t, err, "an unsupported datastore type must be refused, not connected to")
+	require.ErrorContains(t, err, "the-store-the-service-asked-for",
+		"the manager was opened against a store the Spec did not name")
+	require.NotContains(t, err.Error(), "the-relational-store",
+		"the Spec's datastore was ignored in favour of the instance's relational store, which "+
+			"is the wrong cluster for any service whose tables are hypertables")
+
+	require.NotNil(t, svc.Rdb, "the manager is published even when its initialize fails")
+	require.Equal(t, "the-store-the-service-asked-for", svc.Rdb.InstanceConfig.Type)
+}

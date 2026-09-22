@@ -362,26 +362,25 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 	}
 }
 
-// opensTheRelationalStore recognizes a service that opens the relational store, in either
-// of the two shapes a service can wire one.
+// opensTheRelationalStore recognizes a service that opens a pool on the instance's
+// RELATIONAL store, by the instance-level datastore configuration it names to do it.
 //
-// 🔴 THERE ARE TWO BECAUSE THE WIRING IS MID-MIGRATION, and a witness that knew only the
-// older one went quiet rather than red: a converted service simply stopped appearing in
-// the scan, and the budget below would have been sized for fewer services than an instance
-// actually runs. The scan's own emptiness check does not catch that — it fires only when
-// EVERY service stops matching, and this would have removed them a few at a time.
+// 🔴 THE QUESTION IS WHICH STORE, NOT WHETHER THERE IS A DATABASE, and those come apart
+// for a real service. event-management builds an rdb manager like everyone else, but
+// against Persistence.TSDB — the instance's event store, a different cluster — so it opens
+// no pool on the relational login and must not be counted here. A witness that recognized
+// "declares a relational manager" rather than "names the relational store" would count it,
+// and inflate every instance's connection limit by a service that never connects.
 //
-//   - Persistence.Rdb — the service builds its own rdb manager and names the instance-level
-//     datastore configuration to do it.
-//   - service.RdbSpec — the service declares a relational store in the Spec it hands to
-//     core/service, which builds the manager and reads that same configuration on its
-//     behalf. The literal no longer appears in the service's own source.
-//
-// When the conversion is finished the first form will be gone from backend/services, and
-// this can lose it — but not before, because a form nothing matches is indistinguishable
-// here from a service that does not open the store at all.
+// That is not hypothetical: a previous version of this function also matched the literal
+// service.RdbSpec, to keep recognizing services after their manager construction moved into
+// core/service. It would have started counting event-management the moment that service
+// converted. The shape it was reaching for is real — a conversion removes services from a
+// scan a few at a time, and the emptiness check below only fires when EVERY service stops
+// matching — but the fix was to keep the service naming its own store, not to widen this
+// into a question with a different answer. core/service.RdbSpec.Instance is that naming.
 func opensTheRelationalStore(src string) bool {
-	return strings.Contains(src, "Persistence.Rdb") || strings.Contains(src, "service.RdbSpec")
+	return strings.Contains(src, "Persistence.Rdb")
 }
 
 // 🔴 THE BUDGET IS COUNTED FROM A LIST, AND THE LIST IS HELD AGAINST THE SERVICES. An area

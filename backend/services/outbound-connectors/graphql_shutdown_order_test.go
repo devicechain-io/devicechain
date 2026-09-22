@@ -20,6 +20,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
 )
 
@@ -188,10 +189,10 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	host, port := startEmbeddedNats(t)
 
 	prevMs, prevGql, prevNats := Microservice, GraphQLManager, NatsManager
-	prevRdb, prevConsumer := RdbManager, Consumer
+	prevRdb, prevConsumer, prevSvc := RdbManager, Consumer, Svc
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager = prevMs, prevGql, prevNats
-		RdbManager, Consumer = prevRdb, prevConsumer
+		RdbManager, Consumer, Svc = prevRdb, prevConsumer, prevSvc
 	})
 
 	area := fmt.Sprintf("outbound-connectors-shutdown-%d", time.Now().UnixNano())
@@ -226,6 +227,17 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), nil,
 		Microservice.InstanceConfiguration.Persistence.Rdb, mscfg.MicroserviceDatastoreConfiguration{})
 
+	// 🔴 THE THREE MANAGERS GO THROUGH core/service, WHICH IS WHAT beforeMicroserviceStopped
+	// NOW CALLS — so this test drives the real ordering rather than a copy of it.
+	//
+	// They cannot come from a service.Spec: Spec builds all three the same way with no-op
+	// callbacks, and this fixture needs each in a DIFFERENT lifecycle state (NATS started,
+	// GraphQL initialized only, Rdb not initialized at all) and two of them carrying the
+	// probes that record which stop ran first. FromManagers is for exactly that.
+	Svc = service.FromManagers(Microservice, service.Managers{
+		Rdb: RdbManager, Nats: NatsManager, GraphQL: GraphQLManager,
+	})
+
 	// The dispatch consumer is nil-guarded in the stopper; there is nothing to stop.
 	Consumer = nil
 
@@ -250,11 +262,17 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 // a failure the caller sees, on a request the platform accepted, at the one moment
 // nobody is watching a single replica.
 //
-// core/core/http.go records that this order is a per-service decision and that
-// lwm2m-ingest reached the opposite answer for a real reason (its shutdown RELEASES a
-// leadership lease over the connection, so its NATS stop must come last). This service
-// has no such reason: everything of its own that touches the broker is stopped above,
-// and the two lines under test are adjacent.
+// The order itself now lives in core/service, which stops the three managers GraphQL →
+// NATS → Rdb for every service that assembles them there — so what this test drives is
+// that one implementation and not a copy of it. That is why the fixture wraps its three
+// managers with service.FromManagers rather than stopping them itself: a test that kept
+// its own sequence would keep passing after core/service was reordered.
+//
+// core/core/http.go records that lwm2m-ingest reached the opposite answer for a real
+// reason (its shutdown RELEASES a leadership lease over the connection, so its NATS stop
+// must come last). It assembles no GraphQL manager and does not use core/service, so the
+// two do not collide. This service has no such reason: everything of its own that touches
+// the broker is stopped above.
 func TestGraphQLServerStopsBeforeTheNatsConnection(t *testing.T) {
 	probe, rdbName := startShutdownFixture(t)
 
