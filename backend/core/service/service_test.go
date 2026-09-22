@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"strconv"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -216,4 +218,123 @@ func TestTheHooksRunInTheGapsBetweenConstructions(t *testing.T) {
 	require.True(t, natsSawNats,
 		"AfterNats was handed no broker manager: device-management's JetStream KV caches and "+
 			"user-management's identity manager are built here and would take a nil")
+}
+
+// freePort asks the operating system for a port nothing is listening on.
+//
+// The GraphQL manager's own ephemeral-port sentinel is unexported on purpose, so a test
+// outside that package cannot name it. Binding a real free port is the honest way to drive
+// ExecuteStart here: if the port is taken between the close and the bind, the start fails
+// loudly rather than the test passing over a server that never came up.
+func freePort(t *testing.T) int32 {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return int32(port)
+}
+
+// recordingPhases returns callbacks that append to a shared log, so the ORDER of a walk is
+// recorded data rather than something inferred afterwards from the managers' states.
+func recordingPhases(log *[]string, name string) core.LifecycleCallbacks {
+	cb := core.NewNoOpLifecycleCallbacks()
+	cb.Starter.Postprocess = func(context.Context) error { *log = append(*log, "start "+name); return nil }
+	cb.Stopper.Postprocess = func(context.Context) error { *log = append(*log, "stop "+name); return nil }
+	cb.Terminator.Postprocess = func(context.Context) error { *log = append(*log, "terminate "+name); return nil }
+	return cb
+}
+
+// TestTheWalkGoesForwardToComeUpAndBackwardToGoDown is the package's main purpose, and
+// until it existed only ONE of the three walks was covered anywhere in the tree.
+//
+// 🔴 WHAT THE ADOPTERS' FIXTURES DO AND DO NOT REACH. Six services have a
+// graphql_shutdown_order_test.go driving beforeMicroserviceStopped, which is why the file
+// header above says the order is pinned there. That is true of STOP only. None of them
+// calls Svc.Start or Svc.Terminate, so `forward` had no test at all, and a Terminate wired
+// to the forward helper instead of the reverse one would have been caught by nothing.
+//
+// Two real managers is enough to observe direction, which is what makes this testable here
+// despite Managers holding concrete types with no seam for fakes: the broker manager runs
+// against an embedded server, and the GraphQL manager binds a port the OS just handed us
+// rather than the service's fixed one.
+func TestTheWalkGoesForwardToComeUpAndBackwardToGoDown(t *testing.T) {
+	host, port := startEmbeddedNats(t)
+
+	ms := testMicroservice(t)
+	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+
+	var log []string
+
+	nats := messaging.NewNatsManager(ms, recordingPhases(&log, "nats"),
+		func(*messaging.NatsManager) error { return nil })
+	require.NoError(t, nats.Initialize(context.Background()))
+
+	gql := gqlcore.NewGraphQLManager(ms, recordingPhases(&log, "graphql"),
+		gqlcore.MustParseSchema(probeSchema, &probeResolver{}),
+		map[gqlcore.ContextKey]interface{}{}, ms.Readiness)
+	gql.Port = freePort(t)
+	require.NoError(t, gql.Initialize(context.Background()))
+
+	svc := FromManagers(ms, Managers{Nats: nats, GraphQL: gql})
+	t.Cleanup(func() {
+		if c := nats.Conn(); c != nil && !c.IsClosed() {
+			c.Close()
+		}
+	})
+
+	require.NoError(t, svc.Start(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()))
+	require.NoError(t, svc.Terminate(context.Background()))
+
+	require.Equal(t, []string{
+		"start nats", "start graphql",
+		"stop graphql", "stop nats",
+		"terminate graphql", "terminate nats",
+	}, log,
+		"the broker must come up before the GraphQL server and go down after it. Starting the "+
+			"HTTP server first serves traffic through resolvers whose broker wiring the oncreate "+
+			"callback has not built yet; stopping it last leaves an in-flight request publishing "+
+			"on a connection that is already draining")
+}
+
+// probeSchema is the smallest schema graphql-go will accept, so that this package can build
+// a real GraphQL manager without depending on any service's SDL.
+const probeSchema = `schema { query: Query }
+type Query { ping: String! }`
+
+type probeResolver struct{}
+
+func (*probeResolver) Ping() string { return "pong" }
+
+// TestAFailedRelationalInitializeDoesNotRunTheHook pins the half of the hook contract that
+// TestTheHooksRunInTheGapsBetweenConstructions structurally cannot reach.
+//
+// 🔴 THAT TEST DECLARES NO Rdb, SO IT ONLY OBSERVES THE SECOND GAP. Moving the AfterRdb
+// call ABOVE the relational construction passes it — and every adopter does
+// `RdbManager = m.Rdb` as the first line of that hook, so all seven would silently take a
+// nil, build an Api around it, initialize cleanly and nil-deref on the first query.
+//
+// The gap cannot be observed directly here, because AfterRdb runs only when the manager's
+// initialize SUCCEEDED and that needs a live Postgres. What can be observed is the
+// consequence that follows from the same ordering: a hook placed before the construction
+// also runs when the construction is about to fail. So this asks for a store that cannot be
+// opened and asserts the hook stayed out of it.
+func TestAFailedRelationalInitializeDoesNotRunTheHook(t *testing.T) {
+	ran := false
+	svc := New(testMicroservice(t), Spec{
+		Rdb: &RdbSpec{Instance: mscfg.DatastoreConfiguration{Type: "a-store-that-cannot-be-opened"}},
+		AfterRdb: func(_ context.Context, m *Managers) error {
+			ran = true
+			return nil
+		},
+	})
+
+	err := svc.Initialize(context.Background())
+
+	require.Error(t, err, "an unsupported datastore type must be refused")
+	require.False(t, ran,
+		"AfterRdb ran although the relational manager never initialized, which means it no "+
+			"longer runs AFTER that construction — every adopter reads m.Rdb as its first line "+
+			"and would take a nil")
 }

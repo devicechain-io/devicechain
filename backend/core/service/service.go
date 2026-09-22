@@ -163,11 +163,17 @@ type Spec struct {
 	// manager needs a KV store for refresh tokens plus a distributed lock to serialize
 	// signing-key work across replicas. Neither can exist before the broker manager does.
 	//
-	// 🔴 NEITHER IS THE PLACE FOR ANYTHING BOUND TO THE CONNECTION. Both run during
-	// INITIALIZE, and the broker connection is made in NatsManager's START — so a reader or
-	// writer built in AfterNats captures a nil by value and panics on first use. That
-	// belongs in NatsSpec.OnCreate. What AfterNats is for is the things a manager can hand
-	// out at initialize: KV buckets, locks, and whatever is built from them.
+	// 🔴 NEITHER IS THE PLACE FOR A READER OR A WRITER. Those are built by the oncreate
+	// callback, which NatsManager runs in its START — so one built in AfterNats is not the
+	// one the service will use, and a component constructed out here holding it captures a
+	// nil by value and panics on its first read. That belongs in NatsSpec.OnCreate, which is
+	// that callback.
+	//
+	// 🔑 THE REASON IS THE CALLBACK'S TIMING, NOT THE CONNECTION'S. An earlier version of
+	// this comment said the connection is made at START; it is made in
+	// NatsManager.ExecuteInitialize, by nats.Connect. That is exactly why AfterNats can do
+	// what it does — ask an already-connected manager for a KV bucket or a lock. It is also
+	// why oncreate is re-run on every start while these hooks run once.
 	//
 	// Both are handed what has been built so far rather than reading package variables,
 	// because at this moment the caller has not been given the managers yet.
@@ -249,6 +255,10 @@ func (s *Service) Initialize(ctx context.Context) error {
 	}
 
 	if s.spec.GraphQL != nil {
+		if s.spec.GraphQL.Resolver == nil {
+			return fmt.Errorf("the GraphQL spec has no resolver, so there is nothing to serve " +
+				"the schema with")
+		}
 		parsed := gqlcore.MustParseSchema(s.spec.GraphQL.Schema, s.spec.GraphQL.Resolver())
 		providers := map[gqlcore.ContextKey]interface{}{}
 		if s.spec.GraphQL.Providers != nil {

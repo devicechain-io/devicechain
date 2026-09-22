@@ -70,7 +70,7 @@ var Symmetries = []Symmetry{
 		FromVerb: "Start",
 		ToVerb:   "Stop",
 		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Fifteen packages are
-		// compared as this lands and they wire 48 stopped components between them.
+		// compared as this lands and they wire dozens of stopped components between them.
 		//
 		// Fifteen, not fourteen: the fourteen service mains plus backend/core/main.go,
 		// a demo microservice whose four callbacks only log. It wires no components, so
@@ -320,7 +320,7 @@ func typeLabel(t types.Type) string {
 // DispatchConsumer and event-processing's ReactDispatcher — hold a worker pool, a reader
 // goroutine and a WaitGroup, expose Start and Stop with the lifecycle signature, and own
 // no LifecycleManager at all. Deleting either one's Stop from its service left the guard
-// reporting 48 matched components and exit 0. They are precisely the goroutine-holding
+// reporting every matched component and exit 0. They are precisely the goroutine-holding
 // components this constraint's own rationale is written about, and the model could not
 // see them.
 //

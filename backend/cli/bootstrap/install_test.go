@@ -389,6 +389,15 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 // does — it explains why it opens the event store INSTEAD — so the prose that documents a
 // service as non-relational was enough to count it as relational. A guard that a comment
 // can flip is a guard that argues with documentation.
+//
+// 🔑 IT RECOGNIZES A CONVENTION, NOT A CAPABILITY, and the honest limit is worth stating.
+// It matches the selector `…Persistence.Rdb`, so a service that reached the same
+// configuration another way — through a local variable, a helper returning it, or a field
+// copied first — opens the store and is not seen here. The direction that matters is which
+// way the miss falls: this test asserts set EQUALITY against relationalAreas, so a miss on
+// an area ALREADY in that list fails loudly, and so does a spurious match. The silent case
+// is a NEW service that opens the store through a shape this does not match and is not yet
+// listed, which leaves the budget short. Anyone adding one: name the field.
 func opensTheRelationalStore(path string) (bool, error) {
 	// Mode 0 leaves comments out of the tree entirely, which is the point.
 	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
