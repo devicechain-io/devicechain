@@ -205,8 +205,9 @@ DeviceChain deliberately splits each layer:
 | Layer | Tool | Responsibility |
 |---|---|---|
 | Infrastructure | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
-| Workloads | **Helm chart** | Deployments, Services, per-area config ConfigMaps, and the instance config Secret |
-| Lifecycle | **Operator** | `Instance` status aggregation and config hot-reload |
+| Workloads | **Helm chart** | Deployments, Services, and the per-area config ConfigMaps |
+| Lifecycle | **Operator** | watches the `Instance` resource; acts on nothing today (status aggregation is planned) |
+| Instance identity + config | **`dcctl`** | writes the `Instance` declaration and the instance config Secret the workloads mount |
 | Business configuration | kubectl / UI | tenants and their settings |
 
 OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); `dcctl install` also applies the operator and its definitions, from manifests embedded in the CLI rather than through either of the other two layers; the chart renders the workloads; the operator watches the `Instance` resource (see the status note at the top of this page for what it does with it today). Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).

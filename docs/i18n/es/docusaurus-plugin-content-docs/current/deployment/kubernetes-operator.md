@@ -210,8 +210,9 @@ DeviceChain divide deliberadamente cada capa:
 | Capa | Herramienta | Responsabilidad |
 |---|---|---|
 | Infraestructura | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
-| Cargas de trabajo | **Chart de Helm** | Deployments, Services, ConfigMaps de configuración por área, y el Secret de configuración de instancia |
-| Ciclo de vida | **Operador** | Agregación de estado de `Instance` y recarga en caliente de configuración |
+| Cargas de trabajo | **Chart de Helm** | Deployments, Services y los ConfigMaps de configuración por área |
+| Ciclo de vida | **Operador** | observa el recurso `Instance`; hoy no actúa sobre nada (la agregación de estado está planificada) |
+| Identidad y configuración de instancia | **`dcctl`** | escribe la declaración `Instance` y el Secret de configuración de instancia que montan las cargas de trabajo |
 | Configuración de negocio | kubectl / UI | inquilinos y sus ajustes |
 
 OpenTofu se ejecuta al instalar un clúster (`dcctl install`, para los requisitos previos que comparten todas las instancias) y al arrancar una instancia (para el bróker y el almacén de eventos propios de esa instancia); `dcctl install` aplica además el operador y sus definiciones, a partir de manifiestos incrustados en la CLI y no a través de ninguna de las otras dos capas; el chart renderiza las cargas de trabajo; el operador observa el recurso `Instance` (vea la nota de estado al principio de esta página para saber qué hace hoy con él). El arranque del clúster nunca vive en el código de la aplicación o del operador — es responsabilidad de la capa de infraestructura. Los módulos de OpenTofu viven en [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); aprovisionan el nivel de base de datos con guardas de retención para que sobreviva al desmontaje de la aplicación (vea [Versiones y actualizaciones](./releases-and-upgrades.md#data-durability)).
