@@ -19,10 +19,32 @@ import (
 //
 // Static workload rendering (namespace, ConfigMaps, Deployments, Services per
 // functional area) has moved to the Helm chart at deploy/helm/devicechain
-// (ADR-022 decision 4); the operator no longer imperatively stamps it. The
-// genuine control-loop responsibilities that remain on the Instance — readiness
-// status aggregation across the chart-rendered Deployments and config hot-reload
-// — are tracked as follow-ups; this reconciler is the scaffold they land on.
+// (ADR-022 decision 4); the operator no longer imperatively stamps it. The one
+// genuine control-loop responsibility that remains on the Instance — readiness
+// status aggregation across the chart-rendered Deployments — is tracked as a
+// follow-up; this reconciler is the scaffold it lands on.
+//
+// 🔴 CONFIG HOT-RELOAD IS NOT ON THAT LIST, AND IT USED TO BE. It was removed
+// because it describes something this platform deliberately does not do, and
+// naming it as a follow-up told readers to wait for it — the claim reached the
+// published docs that way. Configuration lives in two planes and neither one
+// reloads in place:
+//
+//   - The NON-DATABASE config — infrastructure coordinates and credentials — is
+//     a mounted file, read ONCE at startup (core.LoadInstanceConfiguration, which
+//     says so itself: "hence Load rather than Reload"). A change is adopted by
+//     CYCLING THE POD, via the checksum annotations the chart stamps on each
+//     per-area Deployment's pod template. Nothing in any service watches, polls
+//     or re-reads that file. That is the whole mechanism.
+//   - Everything dynamic — per-tenant ceilings, shed priority, DETECT rules,
+//     connectors, dashboards, notification policy — is DATABASE-backed and
+//     already changes live, with no restart and no operator involvement.
+//
+// So there is no third thing left for this loop to reload. It could not do it
+// anyway: InstanceSpec is cluster-scoped, therefore public, and by its own rule
+// holds nothing derived from a secret, so it carries no configuration to
+// reconcile from — and the RBAC below covers instances only, not the config
+// Secret or ConfigMap.
 type InstanceReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -34,7 +56,8 @@ type InstanceReconciler struct {
 
 // Reconcile observes an Instance. Workloads are rendered by Helm, so there is no
 // child stamping here; deleting the Instance is handled by ordinary resource
-// lifecycle. Status aggregation and hot-reload land on this loop later.
+// lifecycle. Status aggregation lands on this loop later; config does not, for
+// the reasons on InstanceReconciler.
 func (r *InstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
