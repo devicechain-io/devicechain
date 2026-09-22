@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -379,8 +382,34 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 // scan a few at a time, and the emptiness check below only fires when EVERY service stops
 // matching — but the fix was to keep the service naming its own store, not to widen this
 // into a question with a different answer. core/service.RdbSpec.Instance is that naming.
-func opensTheRelationalStore(src string) bool {
-	return strings.Contains(src, "Persistence.Rdb")
+//
+// 🔴 IT READS THE CODE, NOT THE TEXT, and that distinction is not decorative: this
+// function used to be a substring match, and the first comment anywhere in a service that
+// mentioned the field by name made that service read as relational. event-management's
+// does — it explains why it opens the event store INSTEAD — so the prose that documents a
+// service as non-relational was enough to count it as relational. A guard that a comment
+// can flip is a guard that argues with documentation.
+func opensTheRelationalStore(path string) (bool, error) {
+	// Mode 0 leaves comments out of the tree entirely, which is the point.
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		return false, err
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		// ...Persistence.Rdb, whatever it is a selector on.
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Rdb" {
+			return true
+		}
+		inner, ok := sel.X.(*ast.SelectorExpr)
+		if !ok || inner.Sel.Name != "Persistence" {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found, nil
 }
 
 // 🔴 THE BUDGET IS COUNTED FROM A LIST, AND THE LIST IS HELD AGAINST THE SERVICES. An area
@@ -404,12 +433,8 @@ func TestTheRelationalAreasAreTheServicesThatOpenTheRelationalStore(t *testing.T
 			if err != nil || found || e.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return err
 			}
-			src, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			found = opensTheRelationalStore(string(src))
-			return nil
+			found, err = opensTheRelationalStore(path)
+			return err
 		})
 		if err != nil {
 			t.Fatalf("scanning %s: %v", d.Name(), err)

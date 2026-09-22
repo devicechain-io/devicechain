@@ -17,6 +17,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -25,6 +26,11 @@ import (
 var (
 	Microservice  *core.Microservice
 	Configuration *config.EventManagementConfiguration
+
+	// Svc owns the three managers below and the order of all four of their lifecycle
+	// phases. They stay named here because the rest of this service refers to them
+	// directly; Svc is what decides when each one runs.
+	Svc *service.Service
 
 	RdbManager     *rdb.RdbManager
 	GraphQLManager *gqlcore.GraphQLManager
@@ -172,127 +178,138 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Create and initialize rdb manager.
-	rdbcb := core.NewNoOpLifecycleCallbacks()
-	RdbManager = rdb.NewRdbManager(Microservice, rdbcb, model.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Tsdb, Configuration.TsdbConfiguration)
-	err = RdbManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create RDB caches.
-	model.InitializeCaches(RdbManager)
-
-	// Wrap api around rdb manager. The rollup read-path kill-switch (ADR-026) is set
-	// from config: bucketed reads use the measurement_rollups continuous aggregate
-	// unless an operator disables it.
-	Api = model.NewApi(RdbManager)
-	Api.RollupReadsDisabled = Configuration.Lifecycle.DisableRollupReads
-
-	// Build every Prometheus instrument this service exports, before the NATS manager
-	// that consumes them.
-	buildMetrics()
-
-	// Create and initialize nats manager.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	err = NatsManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
-	// entity-deletion events missed by the primary consumer.
-	if err := wireAnchorSweep(ctx); err != nil {
-		return err
-	}
-
-	// Map of providers that will be injected into graphql http context. The NATS
-	// manager backs the live subscription resolvers (SubscribeLive); it is already
-	// connected here (Initialize above), before the subscription server accepts a
-	// client.
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey:  RdbManager,
-		gqlcore.ContextApiKey:  Api,
-		gqlcore.ContextNatsKey: NatsManager,
-	}
-
-	// Create and initialize graphql manager.
-	gqlcb := core.NewNoOpLifecycleCallbacks()
-
-	schema := graphql.SchemaContent
-	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
-
 	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
 	// validator in the background and gate the data plane on readiness rather
 	// than exiting when user-management is briefly unreachable (amends ADR-008).
+	//
+	// Left here rather than handed to core/service: services do not agree on how the gate
+	// opens — most fetch it in the background like this, user-management has its own
+	// validator and marks ready outright, and the ingest services open it with no auth
+	// surface at all. Three answers is not a default.
 	Microservice.StartInstanceAuthGate(ctx)
 
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, gqlcb, parsed, providers, Microservice.Readiness)
-	err = GraphQLManager.Initialize(ctx)
-	if err != nil {
+	// The three managers, their construction and the order of all four of their lifecycle
+	// phases now live in core/service. What stays here is what is genuinely this service's:
+	// which store, which migrations, which oncreate callback, which schema, and the wiring
+	// in AfterRdb that has to happen between two of the constructions.
+	Svc = service.New(Microservice, service.Spec{
+		Rdb: &service.RdbSpec{
+			// 🔴 THE EVENT STORE, NOT THE RELATIONAL ONE. This service's tables are
+			// hypertables and live in the instance's TimescaleDB cluster, which is a
+			// different database from the one every other area opens. It is named here
+			// rather than defaulted because core/service must not guess: pointing this at
+			// Persistence.Rdb would create this schema in the wrong cluster, and would
+			// also make dcctl count this area against the relational connection budget it
+			// never draws on.
+			Instance:   Microservice.InstanceConfiguration.Persistence.Tsdb,
+			Migrations: model.Migrations,
+			Config:     Configuration.TsdbConfiguration,
+		},
+		// Runs once the rdb manager is initialized and before the other two are built.
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
+
+			// Create RDB caches.
+			model.InitializeCaches(RdbManager)
+
+			// Wrap api around rdb manager. The rollup read-path kill-switch (ADR-026) is set
+			// from config: bucketed reads use the measurement_rollups continuous aggregate
+			// unless an operator disables it.
+			Api = model.NewApi(RdbManager)
+			Api.RollupReadsDisabled = Configuration.Lifecycle.DisableRollupReads
+
+			// Reconcile the TimescaleDB data-lifecycle policies (ADR-026) now that the
+			// hypertables exist — the migrations ran in the manager's initialize, which has
+			// just returned. Best-effort with loud logging inside; a returned error means
+			// the reconcile could not be attempted.
+			//
+			// 🔑 THIS RUNS IN THE INITIALIZE PHASE, WHERE IT USED TO RUN IN THE START PHASE
+			// BETWEEN TWO MANAGER STARTS. Nothing was lost by moving it: RdbManager's start
+			// is literally `return nil`, so there is no "started" state a database
+			// operation could be waiting for — the connection and the hypertables both
+			// exist the moment initialize returns. What it still must not do is happen
+			// after the GraphQL server begins accepting, and running a phase earlier keeps
+			// that with room to spare.
+			lc := Configuration.Lifecycle
+			compressAfterDays := config.DefaultCompressAfterDays
+			if lc.CompressAfterDays != nil { // normally set by ApplyDefaults; guard against a nil deref
+				compressAfterDays = *lc.CompressAfterDays
+			}
+			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
+				ChunkIntervalHours: lc.ChunkIntervalHours,
+				CompressAfterDays:  compressAfterDays,
+				RetentionDays:      lc.RetentionDays,
+				// Passed through as a pointer: nil means "no override", so location inherits
+				// the uniform window. Collapsing it to an int here would lose the distinction
+				// between "unset" and an explicit 0 (retention off for location only).
+				LocationRetentionDays: lc.LocationRetentionDays,
+			}); err != nil {
+				return err
+			}
+
+			// Converge the read-only SQL/BI surface — its tenant-filtered views and the
+			// privileges over them. It runs here rather than only in a migration for two
+			// reasons: the reader group role is created by the database cluster
+			// asynchronously, so a pod can reach the database before the role exists (a
+			// migration would record that one failure as done and leave a surface nobody can
+			// read); and the views themselves carry the tenant boundary, which should not be
+			// something a database can lose permanently between schema changes. See
+			// model/analytics.go. A returned error means the boundary could not be put back,
+			// which is not a state to serve from — and returning it here means the GraphQL
+			// server is never built, let alone started.
+			if err := model.ReconcileAnalyticsSurface(ctx, RdbManager); err != nil {
+				return err
+			}
+
+			// Build every Prometheus instrument this service exports, before the NATS manager
+			// that consumes them.
+			buildMetrics()
+
+			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
+			// entity-deletion events missed by the primary consumer. It needs the Api and
+			// nothing else, which is what makes this the right side of the sequence for it.
+			return wireAnchorSweep(ctx)
+		},
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		GraphQL: &service.GraphQLSpec{
+			Schema:   graphql.SchemaContent,
+			Resolver: &graphql.SchemaResolver{},
+			// Evaluated when the GraphQL manager is built, which is after the broker
+			// manager — so the live subscription resolvers (SubscribeLive) get a NATS
+			// manager that is already connected, before the subscription server accepts a
+			// client.
+			//
+			// 🔴 IT READS Svc.Nats RATHER THAN THE PACKAGE VARIABLE, which is still nil at
+			// this moment: NatsManager is published below, after Initialize returns, and
+			// this runs inside it. Capturing the variable would hand every subscription
+			// resolver a nil manager.
+			Providers: func() map[gqlcore.ContextKey]interface{} {
+				return map[gqlcore.ContextKey]interface{}{
+					gqlcore.ContextRdbKey:  RdbManager,
+					gqlcore.ContextApiKey:  Api,
+					gqlcore.ContextNatsKey: Svc.Nats,
+				}
+			},
+		},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
-
+	// Published for the rest of the service, which names these managers directly.
+	NatsManager, GraphQLManager = Svc.Nats, Svc.GraphQL
 	return nil
 }
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	err := RdbManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Reconcile the TimescaleDB data-lifecycle policies (ADR-026) now that the
-	// hypertables exist (migrations ran in Initialize). Best-effort with loud
-	// logging inside; a returned error means the reconcile could not be attempted.
-	lc := Configuration.Lifecycle
-	compressAfterDays := config.DefaultCompressAfterDays
-	if lc.CompressAfterDays != nil { // normally set by ApplyDefaults; guard against a nil deref
-		compressAfterDays = *lc.CompressAfterDays
-	}
-	if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
-		ChunkIntervalHours: lc.ChunkIntervalHours,
-		CompressAfterDays:  compressAfterDays,
-		RetentionDays:      lc.RetentionDays,
-		// Passed through as a pointer: nil means "no override", so location inherits
-		// the uniform window. Collapsing it to an int here would lose the distinction
-		// between "unset" and an explicit 0 (retention off for location only).
-		LocationRetentionDays: lc.LocationRetentionDays,
-	}); err != nil {
-		return err
-	}
-
-	// Converge the read-only SQL/BI surface — its tenant-filtered views and the
-	// privileges over them. It runs here rather than only in a migration for two
-	// reasons: the reader group role is created by the database cluster
-	// asynchronously, so a pod can reach the database before the role exists (a
-	// migration would record that one failure as done and leave a surface nobody can
-	// read); and the views themselves carry the tenant boundary, which should not be
-	// something a database can lose permanently between schema changes. See
-	// model/analytics.go. A returned error means the boundary could not be put back,
-	// which is not a state to serve from.
-	if err := model.ReconcileAnalyticsSurface(ctx, RdbManager); err != nil {
-		return err
-	}
-
-	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
-	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
-	// that the stop order every service already shares is exactly this one reversed, and
-	// so a later injection into Api cannot open the window it opened in command-delivery.
-	err = NatsManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = GraphQLManager.Start(ctx)
-	if err != nil {
+	// Rdb, then NATS, then the GraphQL server. That order, and the reason the broker has to
+	// be up before the HTTP server accepts traffic, now live in core/service.
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
 
 	// Start event persistence processor.
-	err = EventPersistenceProcessor.Start(ctx)
+	err := EventPersistenceProcessor.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -328,17 +345,16 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 
 	// Stop event persistence processor.
-	err := EventPersistenceProcessor.Stop(ctx)
-	if err != nil {
+	if err := EventPersistenceProcessor.Stop(ctx); err != nil {
 		return err
 	}
 
-	// Stop the GraphQL server before the NATS manager. The GraphQL plane here holds live
-	// broker state, not just database reads: the events subscription reads the tenant's
-	// resolved-event stream over this connection for as long as a socket is open, and
-	// GraphQLManager's stop is what closes those sockets. Doing that first cancels each
-	// subscription's context while its broker subscription is still live, so the feed
-	// unwinds from the top and every subscriber is closed by the server it asked.
+	// GraphQL, then NATS, then Rdb. The GraphQL plane here holds live broker state, not
+	// just database reads: the events subscription reads the tenant's resolved-event stream
+	// over this connection for as long as a socket is open, and GraphQLManager's stop is
+	// what closes those sockets. Doing that first cancels each subscription's context while
+	// its broker subscription is still live, so the feed unwinds from the top and every
+	// subscriber is closed by the server it asked.
 	//
 	// 🔴 THE REVERSE ORDER REPORTS NOTHING AT ALL — IT DOES NOT SURFACE AS A BROKER FAULT,
 	// AND THAT IS WHY IT IS WORTH ORDERING RATHER THAN LEAVING TO CHANCE. Draining the
@@ -351,45 +367,19 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// expected shutdown rather than the permanent-failure error. The subscriber is left with
 	// neither data nor a close until the GraphQL stop finally drops its socket — a silent
 	// stall for the length of the teardown, indistinguishable at the client from an idle feed.
-	err = GraphQLManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop rdb manager.
-	err = RdbManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	//
+	// core/service stops them in exactly that order, for every service. Pinned next door in
+	// graphql_shutdown_order_test.go, which drives this function.
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	// Terminate nats manager.
-	err := NatsManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate graphql manager.
-	err = GraphQLManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate rdb manager.
-	err = RdbManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// GraphQL, then NATS, then Rdb — the same order as the stop above.
+	//
+	// This service used to terminate NATS first. The change is not observable:
+	// GraphQLManager.ExecuteTerminate returns nil and carries no callback, so the only
+	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
+	// that actually closes handles.
+	return Svc.Terminate(ctx)
 }
