@@ -5,10 +5,10 @@ title: Deployment & Operator
 
 # Deployment & Operator
 
-DeviceChain deploys in two declarative layers: a **Helm chart** renders the platform's workloads, and a Kubernetes **operator** (built with controller-runtime) handles the `Instance` lifecycle. Both are declarative and GitOps-friendly. (Tenants are not part of the operator's work — they are control-plane database records, see below.)
+DeviceChain deploys in two layers, and two `dcctl` commands put them there. `dcctl install` prepares the **cluster**: the prerequisites every instance shares, plus the Kubernetes **operator** (built with controller-runtime) and its resource definitions. It knows nothing about any particular instance. `dcctl bootstrap` then creates an **instance**: it writes a cluster-scoped **`Instance`** resource declaring what it is about to build, and the **Helm chart** renders that instance's workloads. The operator watches the `Instance` resource. (Tenants are not part of its work — they are control-plane database records, see below.)
 
 :::note Status
-The Helm chart renders the per-service workloads and config today. The operator's instance **status aggregation** and **config hot-reload** are in progress. Per-environment Kustomize overlays are planned.
+The Helm chart renders the per-service workloads and config today, and `dcctl bootstrap` and `dcctl upgrade` drive an instance's lifecycle. The operator currently **observes** the `Instance` resource and acts on nothing: it is the loop that instance **status aggregation** will land on, and until it does, the `Instance` reports no status — read the workloads themselves, or `dcctl`, to learn whether an instance is healthy. Status aggregation and per-environment Kustomize overlays are planned; neither has started.
 :::
 
 ## Deploying with Helm
@@ -209,4 +209,4 @@ DeviceChain deliberately splits each layer:
 | Lifecycle | **Operator** | `Instance` status aggregation and config hot-reload |
 | Business configuration | kubectl / UI | tenants and their settings |
 
-OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); `dcctl install` also applies the operator and its definitions, from manifests embedded in the CLI rather than through either of the other two layers; the chart renders the workloads; the operator runs continuously, reconciling lifecycle. Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).
+OpenTofu runs when a cluster is installed (`dcctl install`, for the prerequisites every instance shares) and when an instance is bootstrapped (for that instance's own broker and event store); `dcctl install` also applies the operator and its definitions, from manifests embedded in the CLI rather than through either of the other two layers; the chart renders the workloads; the operator watches the `Instance` resource (see the status note at the top of this page for what it does with it today). Cluster bootstrapping never lives in application or operator code — it is the infrastructure layer's job. The OpenTofu modules live in [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu); they provision the database tier with retention guards so it survives application teardown (see [Releases & Upgrades](./releases-and-upgrades.md#data-durability)).

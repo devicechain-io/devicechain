@@ -16,8 +16,18 @@ functional area**, plus the instance and per-service config ConfigMaps.
 helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --version <X.Y.Z> \
   --set instance.id=devicechain \
-  --set image.tag=v<X.Y.Z>
+  --set image.tag=v<X.Y.Z> \
+  --set instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)
 ```
+
+**Keep that root key.** It is required — the `default` profile ships an area that owns
+an envelope-encrypted secret store, so the chart fails the render without one rather
+than shipping a pod that cannot form its key. The **same** value has to be passed on
+every later install and upgrade of this instance: a new key orphans every secret
+already stored. Generating it on the command line as above is fine for a first look;
+for anything you intend to keep, put the instance config in a Secret you manage and
+point the chart at it with `instance.existingSecret` (see below), or let
+`dcctl bootstrap` mint and store one for you.
 
 Take `<X.Y.Z>` from the [Releases
 page](https://github.com/devicechain-io/devicechain/releases) — the chart's OCI tag is

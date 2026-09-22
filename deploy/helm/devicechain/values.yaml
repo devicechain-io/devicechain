@@ -8,11 +8,14 @@
 # A named profile: one of "default", "full", "telemetry", "ingest-only".
 #
 #   default  the standard system: the whole device/telemetry/automation platform.
-#   full     everything this build ships — `default` PLUS the three areas that reach
-#            OUTSIDE the instance (ai-inference, outbound-connectors, mcp). Each of
-#            those carries a decision to make deliberately (a paid provider key, an
-#            egress surface, an agent-facing API), which is why they are not in
-#            `default` — and each needs infrastructure.secrets.rootKey below.
+#   full     everything this build ships — `default` PLUS the five areas held back
+#            from it: ai-inference, outbound-connectors, mcp, sparkplug-ingest and
+#            lwm2m-ingest. Each carries a decision to make deliberately (a paid
+#            provider key, an egress surface, an agent-facing API, or a device
+#            transport that binds its own inbound port), which is why they are not in
+#            `default`. Of these, outbound-connectors and ai-inference own a secret
+#            store and so need infrastructure.secrets.rootKey below — but so does
+#            notification-management, which is in `default`, so every install owes one.
 #
 # Left empty by default so an override file that sets `enabledFunctionalAreas` is not
 # rejected for "setting both" against a baked-in profile (E19); an empty selection
