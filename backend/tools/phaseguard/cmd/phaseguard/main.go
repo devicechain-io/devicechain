@@ -32,7 +32,8 @@ func main() {
 	minFiles := flag.Int("min-files", 1, "minimum Go files that must load")
 	minInit := flag.Int("min-initialize-entries", 1, "minimum initialize-phase entry points")
 	minStart := flag.Int("min-start-entries", 1, "minimum start-phase entry points")
-	only := flag.String("rules", "", "comma-separated rule names to run (default: all)")
+	minStop := flag.Int("min-stop-entries", 1, "minimum stop-phase entry points")
+	only := flag.String("rules", "", "comma-separated rule and symmetry names to run (default: all)")
 	corePkg := flag.String("core-pkg", phaseguard.CorePkg,
 		"import path of the lifecycle framework (self-test fixtures only)")
 	// 🔴 OFF ONLY FOR THE SELF-TEST'S FIXTURES, which are single files with no core
@@ -50,29 +51,36 @@ func main() {
 	}
 
 	rules := phaseguard.RulesFor(*corePkg)
-	all := rules
+	syms := phaseguard.Symmetries
 	if *only != "" {
 		wanted := map[string]bool{}
 		for _, n := range strings.Split(*only, ",") {
 			wanted[strings.TrimSpace(n)] = true
 		}
-		var sel []phaseguard.Rule
-		for _, r := range all {
+		var selR []phaseguard.Rule
+		for _, r := range rules {
 			if wanted[r.Name] {
-				sel = append(sel, r)
+				selR = append(selR, r)
 				delete(wanted, r.Name)
+			}
+		}
+		var selS []phaseguard.Symmetry
+		for _, y := range syms {
+			if wanted[y.Name] {
+				selS = append(selS, y)
+				delete(wanted, y.Name)
 			}
 		}
 		if len(wanted) > 0 {
 			for n := range wanted {
-				fmt.Fprintf(os.Stderr, "phaseguard: no rule named %q\n", n)
+				fmt.Fprintf(os.Stderr, "phaseguard: no rule or symmetry named %q\n", n)
 			}
 			os.Exit(2)
 		}
-		rules = sel
+		rules, syms = selR, selS
 	}
 
-	res, err := phaseguard.Scan(phaseguard.Options{Dir: *dir, Core: *corePkg}, rules, patterns...)
+	res, err := phaseguard.Scan(phaseguard.Options{Dir: *dir, Core: *corePkg}, rules, syms, patterns...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "phaseguard: %v\n", err)
 		os.Exit(2)
@@ -117,6 +125,11 @@ func main() {
 				"found %d start-phase entry points, expected at least %d — the phase "+
 					"discovery is not reading this tree", got, *minStart))
 		}
+		if got := res.EntryPoints[phaseguard.Stop]; got < *minStop {
+			broken = append(broken, fmt.Sprintf(
+				"found %d stop-phase entry points, expected at least %d — the phase "+
+					"discovery is not reading this tree", got, *minStop))
+		}
 		// Then each rule's positive control: the direction that MUST be non-empty.
 		// A call graph that stopped resolving drives this to zero at the same moment
 		// it drives the findings to zero.
@@ -135,6 +148,56 @@ func main() {
 		}
 	}
 
+	if *liveness {
+		for _, y := range syms {
+			sr := res.Symmetry[y.Name]
+			// 🔴 THE SERVICE COUNT IS THE FLOOR THAT MATTERS, because this constraint
+			// is a SET DIFFERENCE and a service that dropped out of the set contributes
+			// an empty difference — which is indistinguishable from a service that
+			// stops everything it starts.
+			if sr.Services < y.MinServices {
+				broken = append(broken, fmt.Sprintf(
+					"symmetry %q compared %d services, expected at least %d — services are "+
+						"dropping out of the comparison, and a service that is not compared "+
+						"reports no findings exactly like one that is clean",
+					y.Name, sr.Services, y.MinServices))
+			}
+			if sr.Pairs < y.MinPairs {
+				broken = append(broken, fmt.Sprintf(
+					"symmetry %q matched %d components on the %s side, expected at least %d — "+
+						"an empty difference against a side the walk could not read is not a pass",
+					y.Name, sr.Pairs, y.To, y.MinPairs))
+			}
+		}
+	}
+
+	// 🔴 OUTSIDE THE LIVENESS SWITCH, LIKE A RENAMED SYMBOL AND FOR THE SAME REASON.
+	// Both of these are the analysis failing on a SPECIFIC SITE rather than a floor
+	// about how much of the tree was loaded, and -liveness=false exists to let the
+	// self-test's miniature fixtures fall short of the FLOORS, not to let the instrument
+	// answer questions it cannot answer.
+	for _, y := range syms {
+		sr := res.Symmetry[y.Name]
+		// 🔴 A ONE-SIDED SERVICE FAILS ON ITS OWN AND IS NOT LEFT TO THE FLOOR. The set
+		// difference cannot be taken when only one callback was found, so the service
+		// is not compared — and a service that is not compared contributes an empty
+		// difference, which is what a service that stops everything it starts also
+		// contributes. Leaving that to MinServices meant a third of the services could
+		// quietly drop out before anything failed, and the way they drop out is
+		// mundane: assigning the callback from a function call instead of writing the
+		// literal inline is enough.
+		for _, pa := range sr.Partial {
+			broken = append(broken, fmt.Sprintf(
+				"symmetry %q could not compare %s — only one side of the pair was found, "+
+					"so every component it wires is unchecked", y.Name, pa))
+		}
+		for _, a := range sr.Anonymous {
+			broken = append(broken, fmt.Sprintf(
+				"symmetry %q cannot identify a component: %s — it is not counted on "+
+					"either side, so it can neither be reported nor vouched for", y.Name, a))
+		}
+	}
+
 	if len(broken) > 0 {
 		fmt.Fprintln(os.Stderr, "phaseguard: the check could not be performed:")
 		for _, b := range broken {
@@ -149,6 +212,40 @@ func main() {
 			for _, f := range res.Expected[r.Name] {
 				fmt.Println(f)
 			}
+		}
+		for _, y := range syms {
+			sr := res.Symmetry[y.Name]
+			fmt.Printf("# %s: %d service(s), %d component(s) matched on the %s side\n",
+				y.Name, sr.Services, sr.Pairs, y.To)
+			for _, m := range sr.Matched {
+				fmt.Println("   " + m)
+			}
+			for _, pa := range sr.Partial {
+				fmt.Println("   (not compared) " + pa)
+			}
+		}
+	}
+
+	var symFindings []phaseguard.SymFinding
+	for _, y := range syms {
+		symFindings = append(symFindings, res.Symmetry[y.Name].Findings...)
+	}
+	if len(symFindings) > 0 {
+		for _, f := range symFindings {
+			fmt.Println(f)
+		}
+		fmt.Fprintf(os.Stderr, "\nphaseguard: %d component(s) handled in one phase and not its pair.\n",
+			len(symFindings))
+		seen := map[string]bool{}
+		for _, y := range syms {
+			if len(res.Symmetry[y.Name].Findings) == 0 || seen[y.Name] {
+				continue
+			}
+			seen[y.Name] = true
+			fmt.Fprintf(os.Stderr, "\n%s: %s.\n  Fix: %s.\n", y.Name, y.Why, y.Remedy)
+		}
+		if len(res.Findings) == 0 {
+			os.Exit(1)
 		}
 	}
 
@@ -174,10 +271,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("phaseguard: %d packages / %d files, %d initialize and %d start entry points",
-		res.Packages, res.Files, res.EntryPoints[phaseguard.Initialize], res.EntryPoints[phaseguard.Start])
+	fmt.Printf("phaseguard: %d packages / %d files, %d initialize, %d start and %d stop entry points",
+		res.Packages, res.Files, res.EntryPoints[phaseguard.Initialize],
+		res.EntryPoints[phaseguard.Start], res.EntryPoints[phaseguard.Stop])
 	for _, r := range rules {
 		fmt.Printf("; %s ok (%d on the %s path)", r.Name, res.Reached[r.Name][r.Expect], r.Expect)
+	}
+	for _, y := range syms {
+		sr := res.Symmetry[y.Name]
+		fmt.Printf("; %s ok (%d services, %d matched", y.Name, sr.Services, sr.Pairs)
+		// Printed on the clean path, not only under -show-expected: it is the size of a
+		// declared blind spot, and a blind spot only visible behind a flag is one nobody
+		// reads.
+		if sr.ViaInterface > 0 {
+			fmt.Printf(", %d of them identified only by interface", sr.ViaInterface)
+		}
+		fmt.Print(")")
 	}
 	fmt.Println(".")
 }
