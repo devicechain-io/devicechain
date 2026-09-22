@@ -410,13 +410,24 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	err = GraphQLManager.Start(ctx)
+	// Start nats manager BEFORE the GraphQL server, and the order is load-bearing rather
+	// than conventional. createNatsComponents — NatsManager.Start's create callback —
+	// assigns Api.Nudger, which resolver goroutines read on the command-creation path
+	// (model/nudge.go). Starting GraphQL first opens a window in which the HTTP server is
+	// accepting traffic while that field is still nil.
+	//
+	// 🔑 THE WINDOW IS REACHABLE, which is why this is an ordering fix and not a tidy-up.
+	// StartInstanceAuthGate runs from afterMicroserviceInitialized and opens the readiness
+	// gate from a BACKGROUND goroutine, so /readyz can answer 200 part-way through this
+	// function. A createCommand mutation landing in the gap takes the nil-nudger branch:
+	// the nudge is skipped and the command waits for the sweep instead of being dispatched
+	// promptly. Latency, not loss — but it is the latency #917/#919 went to lengths to fix.
+	err = NatsManager.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Start nats manager.
-	err = NatsManager.Start(ctx)
+	err = GraphQLManager.Start(ctx)
 	if err != nil {
 		return err
 	}
