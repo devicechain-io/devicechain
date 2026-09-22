@@ -75,7 +75,7 @@ func (suite *InboundEventsProcessorTestSuite) TestLifecycle() {
 func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopEof() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
-	eof := suite.IP.ProcessMessage(context.Background())
+	eof := readAndHandleOne(suite.IP, context.Background())
 
 	assert.Equal(suite.T(), eof, true)
 }
@@ -84,7 +84,7 @@ func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopEof() {
 func (suite *InboundEventsProcessorTestSuite) TestProcessingLoopNonEof() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil)
 
-	eof := suite.IP.ProcessMessage(context.Background())
+	eof := readAndHandleOne(suite.IP, context.Background())
 
 	assert.Equal(suite.T(), eof, false)
 }
@@ -102,7 +102,7 @@ func (suite *InboundEventsProcessorTestSuite) TestInvalidEvent() {
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()
-	suite.IP.ProcessMessage(ctx)
+	readAndHandleOne(suite.IP, ctx)
 	suite.IP.ProcessFailedEvent(ctx)
 
 	// Verify a message was written to failed messages writer.
@@ -244,7 +244,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUnresolvableLocationsEvent() {
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()
-	suite.IP.ProcessMessage(ctx)
+	readAndHandleOne(suite.IP, ctx)
 	suite.IP.ProcessFailedEvent(ctx)
 
 	// Verify a message was written to failed messages writer.
@@ -277,7 +277,7 @@ func (suite *InboundEventsProcessorTestSuite) SuccessEventFlowFor(msg messaging.
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()
-	suite.IP.ProcessMessage(ctx)
+	readAndHandleOne(suite.IP, ctx)
 	suite.IP.ProcessResolvedEvent(ctx)
 
 	// Verify a message was written to resolved messages writer.
@@ -304,7 +304,7 @@ func (suite *InboundEventsProcessorTestSuite) TestValidNewAssignmentEvent() {
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()
-	suite.IP.ProcessMessage(ctx)
+	readAndHandleOne(suite.IP, ctx)
 	suite.IP.ProcessResolvedEvent(ctx)
 
 	// Verify a message was written to resolved messages writer.

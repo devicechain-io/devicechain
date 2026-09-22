@@ -5,9 +5,7 @@ package deadletters
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -158,38 +156,21 @@ func (c *Consumer) ExecuteStop(context.Context) error {
 func (c *Consumer) Terminate(ctx context.Context) error    { return c.lifecycle.Terminate(ctx) }
 func (c *Consumer) ExecuteTerminate(context.Context) error { return nil }
 
-// loop reads until shutdown.
+// loop reads dead letters until shutdown, the stream ends, or the read errors stop
+// clearing.
+//
+// 🔴 ENDING IS THE POINT, NOT A CONCESSION, and this consumer is the reason it is worth
+// saying twice. It is the one that records everything ELSE's give-ups, so a copy of it
+// spinning silently on an error it will never clear is the single failure with nothing
+// behind it: letters age off the stream unstored while the pod reports ready and nothing
+// counts the loss. messaging.RunConsumer ends the loop once the pacer's budget is spent,
+// by which time the process has already been reported unfit.
 func (c *Consumer) loop() {
 	defer c.wg.Done()
-	for {
-		select {
-		case <-c.procCtx.Done():
-			return
-		default:
-		}
-		msg, err := c.reader.ReadMessage(c.procCtx)
-		if err != nil {
-			if errors.Is(err, io.EOF) || c.procCtx.Err() != nil {
-				return
-			}
-			c.reader.HandleResponse(err)
-			// A run of failures that outlasts the pacer's budget ends the loop, and the
-			// pacer has already reported the process unfit by the time this returns true.
-			// 🔴 ENDING IS THE POINT, NOT A CONCESSION. This is the consumer that records
-			// everything else's give-ups, so a copy of it spinning silently on an error it
-			// will never clear is the one failure with nothing behind it: letters age off
-			// the stream unstored while the pod reports ready and nothing counts the loss.
-			if c.pacer().PauseAfterError(c.procCtx, err) {
-				return
-			}
-			continue
-		}
-		// Clear the run of failures. Without this every error the consumer recovers from
-		// stays on the tally, and a service that hits one blip an hour tears itself down
-		// for faults that cured themselves.
-		c.pacer().Succeeded()
+	messaging.RunConsumer(c.procCtx, c.reader, c.pacer(), func(msg messaging.Message) bool {
 		c.handle(msg)
-	}
+		return true
+	})
 }
 
 // pacer returns the read loop's error pacer, building it on first use. It is touched only

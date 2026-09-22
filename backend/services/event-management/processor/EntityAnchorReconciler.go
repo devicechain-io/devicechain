@@ -5,9 +5,7 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/proto"
@@ -82,11 +80,7 @@ func (r *EntityAnchorReconciler) ExecuteStart(context.Context) error {
 	r.readerWG.Add(1)
 	go func() {
 		defer r.readerWG.Done()
-		for {
-			if r.processOne(r.procCtx) {
-				break
-			}
-		}
+		r.readLoop(r.procCtx)
 	}()
 	return nil
 }
@@ -111,30 +105,21 @@ func (r *EntityAnchorReconciler) ExecuteTerminate(context.Context) error {
 	return nil
 }
 
-// processOne reads and handles one entity-deletion message. Returns true on EOF (shutdown)
-// so the loop exits, and also when a run of non-EOF read errors has outlasted the pacer's
-// budget — in which case the pacer has already ended the process.
+// readLoop drains the entity-deleted stream until the context is cancelled, the reader
+// reports EOF, or a run of non-EOF read errors outlasts the pacer's budget.
 //
-// 🔑 THAT ENDS THE WHOLE SERVICE, NOT JUST THIS RECONCILER, AND THAT IS THE POINT. This loop
-// is the only thing that removes anchors for deleted entities; if it stops, nothing here
-// reports it and the anchors accumulate silently against a service that still looks
-// healthy. The errors that get this far are broker-level, so they are the same ones the
-// persistence loop in this process is facing — and a restart, which re-dials the broker and
-// re-creates the durable, is the remedy for most of them. Both loops leave their messages
-// unacked, so a restart costs redelivery, not data.
-func (r *EntityAnchorReconciler) processOne(ctx context.Context) bool {
-	msg, err := r.Reader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on entity-deleted stream")
-			return true
-		}
-		r.Reader.HandleResponse(err)
-		return r.pacer().PauseAfterError(ctx, err)
-	}
-	r.pacer().Succeeded()
-	r.handle(ctx, msg)
-	return false
+// 🔑 THAT LAST ONE ENDS THE WHOLE SERVICE, NOT JUST THIS RECONCILER, AND THAT IS THE POINT.
+// This loop is the only thing that removes anchors for deleted entities; if it stops,
+// nothing here reports it and the anchors accumulate silently against a service that still
+// looks healthy. The errors that get that far are broker-level, so they are the same ones
+// the persistence loop in this process is facing — and a restart, which re-dials the broker
+// and re-creates the durable, is the remedy for most of them. Both loops leave their
+// messages unacked, so a restart costs redelivery, not data.
+func (r *EntityAnchorReconciler) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, r.Reader, r.pacer(), func(msg messaging.Message) bool {
+		r.handle(ctx, msg)
+		return true
+	})
 }
 
 // handle reconciles a single entity-deletion event: it stamps the tenant carried on

@@ -4,8 +4,6 @@
 package processor
 
 import (
-	"errors"
-	"io"
 	"math"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -89,64 +87,59 @@ func (rp *ResolvedEventsProcessor) signalAttrRecheck(tenant, deviceToken string)
 // so a rule's dynamic bound tracks the current value.
 func (rp *ResolvedEventsProcessor) runAttributeConsumer() {
 	defer rp.readerWG.Done()
-	pacer := rp.pacerFor("device attributes")
-	for {
-		msg, err := rp.AttributeReader.ReadMessage(rp.pctx())
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			rp.AttributeReader.HandleResponse(err)
-			if pacer.PauseAfterError(rp.pctx(), err) {
-				return
-			}
-			continue
-		}
-		pacer.Succeeded()
-		tenant, ev, ok := decodeAttributeFact(rp, msg)
-		if !ok {
-			// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
-			rp.ackFact(msg, "device-attribute")
-			continue
-		}
-		if reason, bad := attributeFactPoison(ev); bad {
-			// A malformed/forged fact: dropping-and-acking rather than persisting it or wedging the
-			// persist-before-ack retry on a permanent error. Redelivery cannot fix any of these.
-			log.Warn().Str("device", ev.DeviceToken).Str("scope", ev.Scope).Str("key", ev.AttrKey).
-				Str("reason", reason).Str("subject", msg.Subject).Msg("Dropping malformed device-attribute fact.")
-			rp.ackFact(msg, "device-attribute")
-			continue
-		}
-		if rp.AttributeStore != nil {
-			desc := "device-attribute " + tenant + "/" + ev.DeviceToken + "/" + ev.Scope + "/" + ev.AttrKey
-			var op func() error
-			if ev.Removed {
-				op = func() error {
-					return rp.AttributeStore.Remove(rp.pctx(), tenant, ev.DeviceToken, ev.Scope, ev.AttrKey, ev.UpdatedAt)
-				}
-			} else {
-				attr := &model.DeviceAttribute{
-					Tenant:      tenant,
-					DeviceToken: ev.DeviceToken,
-					Scope:       ev.Scope,
-					AttrKey:     ev.AttrKey,
-					Value:       ev.Value,
-					LastEventAt: ev.UpdatedAt,
-				}
-				op = func() error { return rp.AttributeStore.Upsert(rp.pctx(), attr) }
-			}
-			if !rp.persistBeforeAck(desc, op) {
-				return // shutdown mid-retry: leave unacked; the fact redelivers next start
-			}
-			// Refresh the live view for this device (a no-op when the view is disabled). Signal AFTER
-			// the persist so the loop's re-read sees this fact's row; on shutdown mid-send leave the
-			// fact unacked so it redelivers and the restart reconcile rebuilds the view.
-			if !rp.signalAttrRecheck(tenant, ev.DeviceToken) {
-				return
-			}
-		}
+	// The term's context is taken ONCE, for the life of this loop. See runRosterConsumer.
+	ctx := rp.pctx()
+	messaging.RunConsumer(ctx, rp.AttributeReader, rp.pacerFor("device attributes"), rp.handleAttributeFact)
+}
+
+// handleAttributeFact applies one device-attribute fact, and reports whether the read loop
+// should carry on. It returns false only for shutdown part-way through, which leaves the
+// fact unacked so it redelivers on the next start.
+func (rp *ResolvedEventsProcessor) handleAttributeFact(msg messaging.Message) bool {
+	tenant, ev, ok := decodeAttributeFact(rp, msg)
+	if !ok {
+		// Unparseable/poison: redelivery cannot fix it. Ack so it stops redelivering forever.
 		rp.ackFact(msg, "device-attribute")
+		return true
 	}
+	if reason, bad := attributeFactPoison(ev); bad {
+		// A malformed/forged fact: dropping-and-acking rather than persisting it or wedging the
+		// persist-before-ack retry on a permanent error. Redelivery cannot fix any of these.
+		log.Warn().Str("device", ev.DeviceToken).Str("scope", ev.Scope).Str("key", ev.AttrKey).
+			Str("reason", reason).Str("subject", msg.Subject).Msg("Dropping malformed device-attribute fact.")
+		rp.ackFact(msg, "device-attribute")
+		return true
+	}
+	if rp.AttributeStore != nil {
+		desc := "device-attribute " + tenant + "/" + ev.DeviceToken + "/" + ev.Scope + "/" + ev.AttrKey
+		var op func() error
+		if ev.Removed {
+			op = func() error {
+				return rp.AttributeStore.Remove(rp.pctx(), tenant, ev.DeviceToken, ev.Scope, ev.AttrKey, ev.UpdatedAt)
+			}
+		} else {
+			attr := &model.DeviceAttribute{
+				Tenant:      tenant,
+				DeviceToken: ev.DeviceToken,
+				Scope:       ev.Scope,
+				AttrKey:     ev.AttrKey,
+				Value:       ev.Value,
+				LastEventAt: ev.UpdatedAt,
+			}
+			op = func() error { return rp.AttributeStore.Upsert(rp.pctx(), attr) }
+		}
+		if !rp.persistBeforeAck(desc, op) {
+			return false // shutdown mid-retry: leave unacked; the fact redelivers next start
+		}
+		// Refresh the live view for this device (a no-op when the view is disabled). Signal AFTER
+		// the persist so the loop's re-read sees this fact's row; on shutdown mid-send leave the
+		// fact unacked so it redelivers and the restart reconcile rebuilds the view.
+		if !rp.signalAttrRecheck(tenant, ev.DeviceToken) {
+			return false
+		}
+	}
+	rp.ackFact(msg, "device-attribute")
+	return true
 }
 
 // decodeAttributeFact unmarshals one device-attribute fact into its owning tenant (from the

@@ -5,9 +5,7 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"sync"
 	"time"
@@ -469,32 +467,30 @@ func (iproc *InboundEventsProcessor) Start(ctx context.Context) error {
 	return iproc.lifecycle.Start(ctx)
 }
 
-// Execute primary processing loop. This is done in a goroutine since it runs indefinitely.
+// readLoop drains the inbound-events stream into the resolvers until the context is
+// cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the pacer's
+// budget — at which point the pacer has already ended the process, because a service that
+// cannot read its own inbound stream is doing nothing while reporting healthy, and a
+// restart is the remedy for most of what causes it.
 //
-// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
-// read errors has outlasted the pacer's budget — in which case the pacer has already ended
-// the process, because a service that cannot read its own inbound stream is doing nothing
-// while reporting healthy, and a restart is the remedy for most of what causes it.
-func (iproc *InboundEventsProcessor) ProcessMessage(ctx context.Context) bool {
-	msg, err := iproc.InboundEventsReader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on inbound events stream")
-			return true
-		}
-		iproc.InboundEventsReader.HandleResponse(err)
-		return iproc.pacer().PauseAfterError(ctx, err)
-	}
-	iproc.pacer().Succeeded()
-	// Hand off to the resolvers, but abandon the handoff on shutdown so the
-	// loop can exit instead of blocking on a full channel (A5). The message
-	// is unacked, so it is redelivered after restart.
+// It is a named method rather than the body of the goroutine in ExecuteStart so the pacing
+// tests can drive the SAME line production runs.
+func (iproc *InboundEventsProcessor) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, iproc.InboundEventsReader, iproc.pacer(), func(msg messaging.Message) bool {
+		return iproc.handOff(ctx, msg)
+	})
+}
+
+// handOff gives one inbound event to the resolvers, and reports whether the read loop should
+// carry on. It abandons the handoff on shutdown so the loop can exit instead of blocking on
+// a full channel (A5). The message is unacked at that point, so it redelivers after restart.
+func (iproc *InboundEventsProcessor) handOff(ctx context.Context, msg messaging.Message) bool {
 	select {
 	case iproc.messages <- msg:
-	case <-ctx.Done():
 		return true
+	case <-ctx.Done():
+		return false
 	}
-	return false
 }
 
 // Lifecycle callback that runs startup logic.
@@ -526,12 +522,7 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 	iproc.readerWG.Add(1)
 	go func() {
 		defer iproc.readerWG.Done()
-		for {
-			eof := iproc.ProcessMessage(iproc.procCtx)
-			if eof {
-				break
-			}
-		}
+		iproc.readLoop(iproc.procCtx)
 	}()
 	return nil
 }

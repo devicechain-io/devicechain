@@ -26,21 +26,27 @@ import (
 
 const readCap = 5000
 
+// Each loop is driven as a whole (it is a goroutine body, not a per-message call), so the
+// reader is given an EOF far past any paced loop's reach. A paced loop never sees it; an
+// unpaced one ends there, and the assertion reports the number instead of hanging the run.
+//
+// 🔑 WHAT THESE STILL TEST NOW THE LOOP ITSELF LIVES IN messaging.RunConsumer: the WIRING —
+// that each consumer drives the shared loop with a pacer of its own. That is the
+// "constructed correctly, connected to nothing" class a test of the library alone cannot see.
 func TestThePersistenceLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
-	reader := &msgtest.FailingReader{}
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	eproc := &EventPersistenceProcessor{
 		ResolvedEventsReader: reader,
+		messages:             make(chan messaging.Message, readCap),
 		readPacer:            core.NewReadPacer(nil, "resolved events").UseClock(core.VirtualClock()),
 	}
 
-	stopped := false
-	for i := 0; i < readCap && !stopped; i++ {
-		stopped = eproc.ProcessMessage(context.Background())
-	}
-	if !stopped {
-		t.Fatalf("the persistence loop read %d times against an error that never clears and was "+
-			"still going: it burns a core and logs at full rate forever while every tenant's "+
-			"history stops behind a ready pod", reader.Reads)
+	eproc.readLoop(context.Background())
+
+	if reader.Reads >= readCap {
+		t.Fatalf("the persistence loop read %d times against an error that never clears and only "+
+			"stopped because the test's reader ran out: it burns a core and logs at full rate "+
+			"forever while every tenant's history stops behind a ready pod", reader.Reads)
 	}
 	if reader.Reads > 40 {
 		t.Fatalf("the persistence loop took %d reads to stop; that is too many to be a paced "+
@@ -50,20 +56,18 @@ func TestThePersistenceLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing
 }
 
 func TestTheAnchorReconcilerStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
-	reader := &msgtest.FailingReader{}
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	r := &EntityAnchorReconciler{
 		Reader:    reader,
 		readPacer: core.NewReadPacer(nil, "entity-deleted").UseClock(core.VirtualClock()),
 	}
 
-	stopped := false
-	for i := 0; i < readCap && !stopped; i++ {
-		stopped = r.processOne(context.Background())
-	}
-	if !stopped {
-		t.Fatalf("the anchor reconciler read %d times against an error that never clears and was "+
-			"still going: it burns a core and logs at full rate forever while deleted entities "+
-			"keep their anchors behind a ready pod", reader.Reads)
+	r.readLoop(context.Background())
+
+	if reader.Reads >= readCap {
+		t.Fatalf("the anchor reconciler read %d times against an error that never clears and only "+
+			"stopped because the test's reader ran out: it burns a core and logs at full rate "+
+			"forever while deleted entities keep their anchors behind a ready pod", reader.Reads)
 	}
 	if reader.Reads > 40 {
 		t.Fatalf("the anchor reconciler took %d reads to stop; that is too many to be a paced "+
@@ -76,29 +80,40 @@ func TestTheAnchorReconcilerStopsInsteadOfSpinningOnAnUnclearableError(t *testin
 // error, which would turn every transient broker hiccup into a dead consumer. This pins that
 // a successful read keeps each loop running AND clears the run of failures — the reset
 // without which one error an hour accumulates, across a day, into a service that tears
-// itself down for faults it recovered from.
+// itself down for faults it recovered from. Each loop here reaches its reader's EOF, which
+// is the only way it is allowed to end.
 func TestASuccessfulReadKeepsBothLoopsRunning(t *testing.T) {
+	const eofAt = 800
+
+	persistReader := &intermittentReader{}
+	persistReader.EOFAfter = eofAt
 	eproc := &EventPersistenceProcessor{
-		ResolvedEventsReader: &intermittentReader{},
-		messages:             make(chan messaging.Message, 1000),
+		ResolvedEventsReader: persistReader,
+		messages:             make(chan messaging.Message, eofAt),
 		readPacer:            core.NewReadPacer(nil, "resolved events").UseClock(core.VirtualClock()),
 	}
-	for i := 0; i < 400; i++ {
-		if eproc.ProcessMessage(context.Background()) {
-			t.Fatalf("the persistence loop stopped at read %d even though every failure was "+
-				"followed by a successful read", i+1)
-		}
+
+	eproc.readLoop(context.Background())
+
+	if persistReader.Reads != eofAt {
+		t.Fatalf("the persistence loop stopped after %d reads even though every failure was "+
+			"followed by a successful read; it should have run to its reader's EOF at %d",
+			persistReader.Reads, eofAt)
 	}
 
+	anchorReader := &intermittentReader{}
+	anchorReader.EOFAfter = eofAt
 	r := &EntityAnchorReconciler{
-		Reader:    &intermittentReader{},
+		Reader:    anchorReader,
 		readPacer: core.NewReadPacer(nil, "entity-deleted").UseClock(core.VirtualClock()),
 	}
-	for i := 0; i < 400; i++ {
-		if r.processOne(context.Background()) {
-			t.Fatalf("the anchor reconciler stopped at read %d even though every failure was "+
-				"followed by a successful read", i+1)
-		}
+
+	r.readLoop(context.Background())
+
+	if anchorReader.Reads != eofAt {
+		t.Fatalf("the anchor reconciler stopped after %d reads even though every failure was "+
+			"followed by a successful read; it should have run to its reader's EOF at %d",
+			anchorReader.Reads, eofAt)
 	}
 }
 
@@ -111,8 +126,13 @@ type intermittentReader struct {
 
 func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 {
+	// 🔑 THE EOFAfter GUARD IS LOAD-BEARING. Without "> 0" the comparison Reads+1 >= EOFAfter
+	// is TRUE for an unset EOFAfter, so every read would fail and the alternation this fake
+	// exists for would silently stop happening.
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
+	// Counted, so Reads means "calls" at every caller.
+	r.Reads++
 	return messaging.Message{}, nil
 }

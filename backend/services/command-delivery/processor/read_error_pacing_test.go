@@ -27,21 +27,28 @@ import (
 
 const readCap = 5000
 
+// The loop is driven as a whole (it is a goroutine body, not a per-message call), so the
+// reader is given an EOF far past any paced loop's reach. A paced loop never sees it; an
+// unpaced one ends there, and the assertion reports the number instead of hanging the run.
+//
+// 🔑 WHAT THESE STILL TEST NOW THE LOOP ITSELF LIVES IN messaging.RunConsumer: the WIRING.
+// That this processor drives the shared loop with a pacer of its own, and that nothing an
+// ordinary response contains ends the loop. Both are the "constructed correctly, connected
+// to nothing" class a test of the library alone cannot see.
 func TestTheResponseLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
-	reader := &msgtest.FailingReader{}
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	cproc := &CommandDeliveryProcessor{
 		CommandResponsesReader: reader,
 		readPacer:              core.NewReadPacer(nil, "command responses").UseClock(core.VirtualClock()),
 	}
 
-	stopped := false
-	for i := 0; i < readCap && !stopped; i++ {
-		stopped = cproc.ProcessMessage(context.Background())
-	}
-	if !stopped {
-		t.Fatalf("the response loop read %d times against an error that never clears and was "+
-			"still going: it burns a core and logs at full rate forever while every command in "+
-			"flight rides SENT to a TIMEOUT that blames the device", reader.Reads)
+	cproc.readLoop(context.Background())
+
+	if reader.Reads >= readCap {
+		t.Fatalf("the response loop read %d times against an error that never clears and only "+
+			"stopped because the test's reader ran out: it burns a core and logs at full rate "+
+			"forever while every command in flight rides SENT to a TIMEOUT that blames the "+
+			"device", reader.Reads)
 	}
 	if reader.Reads > 40 {
 		t.Fatalf("the response loop took %d reads to stop; that is too many to be a paced retry",
@@ -54,15 +61,19 @@ func TestTheResponseLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T)
 // which would turn every transient broker hiccup into a service that settles nothing again.
 // This pins that a successful read keeps the loop running AND clears the run of failures.
 func TestASuccessfulReadKeepsTheResponseLoopRunning(t *testing.T) {
+	const eofAt = 800
+	reader := &intermittentReader{}
+	reader.EOFAfter = eofAt
 	cproc := &CommandDeliveryProcessor{
-		CommandResponsesReader: &intermittentReader{},
+		CommandResponsesReader: reader,
 		readPacer:              core.NewReadPacer(nil, "command responses").UseClock(core.VirtualClock()),
 	}
-	for i := 0; i < 400; i++ {
-		if cproc.ProcessMessage(context.Background()) {
-			t.Fatalf("the response loop stopped at read %d even though every failure was followed "+
-				"by a successful read", i+1)
-		}
+
+	cproc.readLoop(context.Background())
+
+	if reader.Reads != eofAt {
+		t.Fatalf("the response loop stopped after %d reads even though every failure was followed "+
+			"by a successful read; it should have run to its reader's EOF at %d", reader.Reads, eofAt)
 	}
 }
 

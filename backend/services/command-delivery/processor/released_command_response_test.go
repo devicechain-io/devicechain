@@ -179,7 +179,7 @@ func TestAnAnswerToAReleasedCommandSettlesItByTheNonceItNames(t *testing.T) {
 	// Step 4: the device answers the dispatch it did receive.
 	dead := &deadRecorder{}
 	consumer := responseConsumer(api, dead, answer("cmd-1", nonce))
-	if stop := consumer.ProcessMessage(context.Background()); stop {
+	if stop := readAndHandleOne(consumer, context.Background()); stop {
 		t.Fatal("this response must not stop the consumer loop")
 	}
 
@@ -263,7 +263,7 @@ func TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt(t *testi
 	// The device answers the FIRST dispatch.
 	dead := &deadRecorder{}
 	consumer := responseConsumer(api, dead, answer("cmd-1", released))
-	consumer.ProcessMessage(context.Background())
+	readAndHandleOne(consumer, context.Background())
 
 	after := loadByToken(t, api, ctx, "cmd-1")
 	if after.Status != model.CommandSent.String() {
@@ -307,7 +307,7 @@ func TestAnAnswerToASupersededDispatchDoesNotSettleTheOneThatReplacedIt(t *testi
 	// Without this the refusal above is satisfied by a consumer that refuses everything, and
 	// the command would be left to expire as TIMEOUT against a device that answered twice.
 	second := responseConsumer(api, &deadRecorder{}, answer("cmd-1", current))
-	second.ProcessMessage(context.Background())
+	readAndHandleOne(second, context.Background())
 	if got := loadByToken(t, api, ctx, "cmd-1").Status; got != model.CommandSuccessful.String() {
 		t.Fatalf("status = %s, want SUCCESSFUL; the answer to the LIVE dispatch must land", got)
 	}
@@ -341,7 +341,7 @@ func TestAnAnswerNamingNoDispatchIsRefusedAndRecorded(t *testing.T) {
 
 	dead := &deadRecorder{}
 	consumer := responseConsumer(api, dead, answer("cmd-1", ""))
-	if stop := consumer.ProcessMessage(context.Background()); stop {
+	if stop := readAndHandleOne(consumer, context.Background()); stop {
 		t.Fatal("this response must not stop the consumer loop")
 	}
 
@@ -406,7 +406,7 @@ func TestAnAnswerToADispatchedCommandStillSettlesIt(t *testing.T) {
 
 	dead := &deadRecorder{}
 	consumer := responseConsumer(api, dead, answer("cmd-1", dispatchNonceOf(t, writer.messages)))
-	consumer.ProcessMessage(context.Background())
+	readAndHandleOne(consumer, context.Background())
 
 	if got := loadByToken(t, api, ctx, "cmd-1").Status; got != model.CommandSuccessful.String() {
 		t.Fatalf("status = %s, want SUCCESSFUL; a real answer to a dispatched command must land", got)
@@ -499,7 +499,7 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
 		},
 	}
-	consumer.ProcessMessage(context.Background())
+	readAndHandleOne(consumer, context.Background())
 	if len(dead.msgs) != 1 {
 		t.Fatalf("premise lost: wrote %d letters, want 1", len(dead.msgs))
 	}

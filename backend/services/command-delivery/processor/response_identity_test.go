@@ -27,8 +27,8 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	return m.GetCounter().GetValue()
 }
 
-// oneMessageReader hands ProcessMessage a single message and then EOF, so one call to
-// ProcessMessage consumes exactly one message and the test controls the subject verbatim.
+// oneMessageReader hands out a single message and then EOF, so one readAndHandleOne
+// consumes exactly one message and the test controls the subject verbatim.
 type oneMessageReader struct {
 	msg  messaging.Message
 	done bool
@@ -53,7 +53,7 @@ func responseProcessor(t *testing.T, api *fakeApi, subject string, body string) 
 	}
 }
 
-// TestProcessMessageTakesTheResponderFromTheSubject is the heart of the fix on the
+// TestAResponseTakesItsResponderFromTheSubject is the heart of the fix on the
 // consumer side.
 //
 // 🔴 THE PAYLOAD DELIBERATELY CARRIES A DIFFERENT DEVICE, and that is the whole test.
@@ -63,12 +63,12 @@ func responseProcessor(t *testing.T, api *fakeApi, subject string, body string) 
 // control. A processor that read the body would hand command-delivery an identity the
 // attacker picked, and every downstream check would then be verifying the attacker's own
 // claim against itself.
-func TestProcessMessageTakesTheResponderFromTheSubject(t *testing.T) {
+func TestAResponseTakesItsResponderFromTheSubject(t *testing.T) {
 	api := &fakeApi{}
 	body := `{"commandToken":"cmd-1","success":true,"deviceToken":"pump-9"}`
 	p := responseProcessor(t, api, "inst-1.acme.command-responses.pump-1", body)
 
-	p.ProcessMessage(context.Background())
+	readAndHandleOne(p, context.Background())
 
 	if len(api.responseCalls) != 1 {
 		t.Fatalf("MarkResponse called %d times, want 1", len(api.responseCalls))
@@ -86,7 +86,7 @@ func TestProcessMessageTakesTheResponderFromTheSubject(t *testing.T) {
 // A subject carrying no device identity must be refused outright rather than processed
 // anonymously — including the OLD tenant-wide shape, which is what a device built against
 // the previous topic still publishes to.
-func TestProcessMessageRefusesASubjectWithNoDevice(t *testing.T) {
+func TestAResponseWithNoDeviceInItsSubjectIsRefused(t *testing.T) {
 	for name, subject := range map[string]string{
 		"the old tenant-wide subject": "inst-1.acme.command-responses",
 		"no tenant at all":            "command-responses",
@@ -96,7 +96,7 @@ func TestProcessMessageRefusesASubjectWithNoDevice(t *testing.T) {
 			api := &fakeApi{}
 			p := responseProcessor(t, api, subject, `{"commandToken":"cmd-1","success":true}`)
 
-			p.ProcessMessage(context.Background())
+			readAndHandleOne(p, context.Background())
 
 			if len(api.responseCalls) != 0 {
 				t.Fatalf("a response on %q reached MarkResponse as %+v; a subject with no "+
@@ -114,14 +114,14 @@ func TestProcessMessageRefusesASubjectWithNoDevice(t *testing.T) {
 // leave the message unacked and redeliver it until MaxDeliver — turning one forged
 // response into a retry storm against the database, and burning the delivery budget the
 // real responses share.
-func TestProcessMessageDoesNotRetryARefusedResponse(t *testing.T) {
+func TestARefusedResponseIsNotRetried(t *testing.T) {
 	api := &fakeApi{responseErr: model.ErrResponderNotCommandOwner}
 	p := responseProcessor(t, api, "inst-1.acme.command-responses.pump-9",
 		`{"commandToken":"cmd-1","success":true}`)
 	refused := prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_total"})
 	p.ResponsesRefused = refused
 
-	if stop := p.ProcessMessage(context.Background()); stop {
+	if stop := readAndHandleOne(p, context.Background()); stop {
 		t.Fatal("a refused response must not stop the consumer loop")
 	}
 
@@ -180,7 +180,7 @@ func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
 	dead := &deadRecorder{}
 	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver+3)
 
-	p.ProcessMessage(context.Background())
+	readAndHandleOne(p, context.Background())
 
 	if len(dead.msgs) != 1 {
 		t.Fatalf("wrote %d dead letters at the cap, want 1", len(dead.msgs))
@@ -211,7 +211,7 @@ func TestACommandResponseBelowTheCapIsNotDeadLettered(t *testing.T) {
 	dead := &deadRecorder{}
 	p := responseProcessorAtCap(t, api, dead, 1)
 
-	p.ProcessMessage(context.Background())
+	readAndHandleOne(p, context.Background())
 
 	if len(dead.msgs) != 0 {
 		t.Fatalf("wrote %d dead letters below the cap, want 0", len(dead.msgs))
@@ -228,7 +228,7 @@ func TestARefusedResponseIsNotDeadLettered(t *testing.T) {
 	p := responseProcessorAtCap(t, api, dead, messaging.MaxDeliver)
 	p.ResponsesRefused = prometheus.NewCounter(prometheus.CounterOpts{Name: "refused2_total"})
 
-	p.ProcessMessage(context.Background())
+	readAndHandleOne(p, context.Background())
 
 	if len(dead.msgs) != 0 {
 		t.Fatal("a response the platform declined was filed as one it failed to finish")

@@ -2058,24 +2058,12 @@ func (rp *ResolvedEventsProcessor) retryAttrRechecks(deadline time.Time) {
 // still persists them, so the startup rebuild and the live path stay symmetric.
 func (rp *ResolvedEventsProcessor) runRuleConsumer() {
 	defer rp.readerWG.Done()
-	pacer := rp.pacerFor("rule updates")
-	for {
-		msg, err := rp.RuleUpdatesReader.ReadMessage(rp.pctx())
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			rp.RuleUpdatesReader.HandleResponse(err)
-			if pacer.PauseAfterError(rp.pctx(), err) {
-				return
-			}
-			continue
-		}
-		pacer.Succeeded()
-		if !rp.handleRuleFact(msg, true) {
-			return // shutdown mid-persist/-send: leave unacked; the rows rebuild it next start
-		}
-	}
+	// The term's context is taken ONCE, for the life of this loop. See runRosterConsumer.
+	ctx := rp.pctx()
+	messaging.RunConsumer(ctx, rp.RuleUpdatesReader, rp.pacerFor("rule updates"), func(msg messaging.Message) bool {
+		// false means shutdown mid-persist/-send: leave unacked; the rows rebuild it next start.
+		return rp.handleRuleFact(msg, true)
+	})
 }
 
 // handleRuleFact persists one published-rule fact's rules (DetectRule projection) and its active-version
