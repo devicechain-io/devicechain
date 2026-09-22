@@ -258,10 +258,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := RdbManager.Start(ctx); err != nil {
 		return err
 	}
-	if err := GraphQLManager.Start(ctx); err != nil {
+	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
+	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
+	// that the stop order every service already shares is exactly this one reversed, and
+	// so a later injection into Api cannot open the window it opened in command-delivery.
+	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
-	if err := NatsManager.Start(ctx); err != nil {
+	if err := GraphQLManager.Start(ctx); err != nil {
 		return err
 	}
 	if err := NotificationProcessor.Start(ctx); err != nil {

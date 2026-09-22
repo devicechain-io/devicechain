@@ -277,13 +277,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	err = GraphQLManager.Start(ctx)
+	// NATS before the GraphQL server. This service's createNatsComponents injects nothing
+	// the resolvers read, so the order is not load-bearing here today — it is uniform, so
+	// that the stop order every service already shares is exactly this one reversed, and
+	// so a later injection into Api cannot open the window it opened in command-delivery.
+	err = NatsManager.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Start nats manager.
-	err = NatsManager.Start(ctx)
+	err = GraphQLManager.Start(ctx)
 	if err != nil {
 		return err
 	}

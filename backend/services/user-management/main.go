@@ -486,6 +486,23 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := NatsManager.Start(ctx); err != nil {
 		return err
 	}
+	// The GraphQL server starts here, with the other two managers, rather than after the
+	// components below — which is where it used to sit, with nothing saying why.
+	//
+	// Everything the resolvers reach is wired in afterMicroserviceInitialized:
+	// IdentityManager, SettingsService, BlobStore and TsdbGuest are all assigned there,
+	// and the branding handler is registered on the Mux there too. None of the three
+	// components below writes anything a resolver reads, so serving before they run
+	// exposes nothing that was not already exposed — and the readiness gate, which this
+	// service opens synchronously via MarkReady once its own validator exists, is what
+	// actually admits traffic either way.
+	//
+	// What the move buys is that the three managers now start Rdb → NATS → GraphQL in
+	// every service, which makes the stop order every service already shares — GraphQL →
+	// NATS → Rdb — exactly its reverse.
+	if err := GraphQLManager.Start(ctx); err != nil {
+		return err
+	}
 	if PurgeCoordinator != nil {
 		if err := PurgeCoordinator.Start(ctx); err != nil {
 			return err
@@ -501,7 +518,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
-	return GraphQLManager.Start(ctx)
+	return nil
 }
 
 // Called before microservice has been stopped.
