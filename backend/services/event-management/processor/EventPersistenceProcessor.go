@@ -5,9 +5,7 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"sync"
 
@@ -236,32 +234,28 @@ func (eproc *EventPersistenceProcessor) Start(ctx context.Context) error {
 	return eproc.lifecycle.Start(ctx)
 }
 
-// Execute primary processing loop. This is done in a goroutine since it runs indefinitely.
-//
-// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
-// read errors has outlasted the pacer's budget — in which case the pacer has already ended
-// the process, because a persistence loop that cannot read is silently losing the tail of
-// every tenant's history, and a restart is the remedy for most of what causes it.
-func (eproc *EventPersistenceProcessor) ProcessMessage(ctx context.Context) bool {
-	msg, err := eproc.ResolvedEventsReader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on resolved events stream")
-			return true
-		}
-		eproc.ResolvedEventsReader.HandleResponse(err)
-		return eproc.pacer().PauseAfterError(ctx, err)
-	}
-	eproc.pacer().Succeeded()
-	// Hand off to the workers, but abandon the handoff on shutdown so the
-	// loop can exit instead of blocking on a full channel (A5). The message
-	// is unacked, so it is redelivered after restart.
+// readLoop drains the resolved-events stream into the persistence workers until the context
+// is cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the pacer's
+// budget — at which point the pacer has already ended the process, because a persistence
+// loop that cannot read is silently losing the tail of every tenant's history, and a restart
+// is the remedy for most of what causes it.
+func (eproc *EventPersistenceProcessor) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, eproc.ResolvedEventsReader, eproc.pacer(), func(msg messaging.Message) bool {
+		return eproc.handOff(ctx, msg)
+	})
+}
+
+// handOff gives one resolved event to the persistence workers, and reports whether the read
+// loop should carry on. It abandons the handoff on shutdown so the loop can exit instead of
+// blocking on a full channel (A5). The message is unacked at that point, so it is redelivered
+// after restart.
+func (eproc *EventPersistenceProcessor) handOff(ctx context.Context, msg messaging.Message) bool {
 	select {
 	case eproc.messages <- msg:
-	case <-ctx.Done():
 		return true
+	case <-ctx.Done():
+		return false
 	}
-	return false
 }
 
 // Lifecycle callback that runs startup logic.
@@ -282,12 +276,7 @@ func (eproc *EventPersistenceProcessor) ExecuteStart(ctx context.Context) error 
 	eproc.readerWG.Add(1)
 	go func() {
 		defer eproc.readerWG.Done()
-		for {
-			eof := eproc.ProcessMessage(eproc.procCtx)
-			if eof {
-				break
-			}
-		}
+		eproc.readLoop(eproc.procCtx)
 	}()
 	return nil
 }

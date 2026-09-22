@@ -5,7 +5,6 @@ package processor
 
 import (
 	"errors"
-	"io"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -107,24 +106,15 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 // observation off the reorderable stream directly.
 func (rp *ResolvedEventsProcessor) runRosterConsumer() {
 	defer rp.readerWG.Done()
-	pacer := rp.pacerFor("device roster")
-	for {
-		msg, err := rp.RosterReader.ReadMessage(rp.pctx())
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			rp.RosterReader.HandleResponse(err)
-			if pacer.PauseAfterError(rp.pctx(), err) {
-				return
-			}
-			continue
-		}
-		pacer.Succeeded()
-		if !rp.handleRosterFact(msg, true) {
-			return // shutdown mid-persist/-send: leave unacked; the row redelivers next start
-		}
-	}
+	// The term's context is taken ONCE, for the life of this loop. These loops belong to a
+	// single leadership term and the next term relaunches them (ADR-070), so re-reading it
+	// per iteration could only ever hand a loop from an ENDED term the successor's context
+	// and let it go on reading.
+	ctx := rp.pctx()
+	messaging.RunConsumer(ctx, rp.RosterReader, rp.pacerFor("device roster"), func(msg messaging.Message) bool {
+		// false means shutdown mid-persist/-send: leave unacked; the row redelivers next start.
+		return rp.handleRosterFact(msg, true)
+	})
 }
 
 // handleRosterFact persists one device-roster fact to the durable projection and acks it. When signal
@@ -178,24 +168,15 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 // are idempotent (removing/purging absent rows is a no-op), persisted before ack.
 func (rp *ResolvedEventsProcessor) runEntityDeletedConsumer() {
 	defer rp.readerWG.Done()
-	pacer := rp.pacerFor("entity deletions")
-	for {
-		msg, err := rp.EntityDeletedReader.ReadMessage(rp.pctx())
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			rp.EntityDeletedReader.HandleResponse(err)
-			if pacer.PauseAfterError(rp.pctx(), err) {
-				return
-			}
-			continue
-		}
-		pacer.Succeeded()
-		if !rp.handleEntityDeletedFact(msg, true) {
-			return // shutdown mid-persist/-send: leave unacked; the deletion redelivers next start
-		}
-	}
+	// The term's context is taken ONCE, for the life of this loop. These loops belong to a
+	// single leadership term and the next term relaunches them (ADR-070), so re-reading it
+	// per iteration could only ever hand a loop from an ENDED term the successor's context
+	// and let it go on reading.
+	ctx := rp.pctx()
+	messaging.RunConsumer(ctx, rp.EntityDeletedReader, rp.pacerFor("entity deletions"), func(msg messaging.Message) bool {
+		// false means shutdown mid-persist/-send: leave unacked; the deletion redelivers next start.
+		return rp.handleEntityDeletedFact(msg, true)
+	})
 }
 
 // handleEntityDeletedFact tombstones a deleted device's roster row and purges its dynamic-threshold

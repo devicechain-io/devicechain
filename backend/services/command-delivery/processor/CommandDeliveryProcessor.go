@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -735,31 +734,25 @@ func (cproc *CommandDeliveryProcessor) releaseFailedClaim(tenantCtx context.Cont
 	}
 }
 
-// ProcessMessage reads a single device response and matches it to its command.
-// Undecodable messages (or messages with no parseable tenant) are logged and
-// skipped.
-//
-// It returns true when the loop should stop: on EOF, on shutdown, and when a run of non-EOF
-// read errors has outlasted the pacer's budget — in which case the pacer has already ended
-// the process.
+// readLoop drains the command-responses stream, matching each device response to its
+// command, until the context is cancelled, the reader reports EOF, or a run of non-EOF read
+// errors outlasts the pacer's budget.
 //
 // 🔑 THIS LOOP'S SILENT FAILURE PRODUCES WRONG DATA, NOT JUST MISSING DATA, which is why it
 // ends the process rather than retrying forever. Commands go on being dispatched while
 // nothing settles them, so every one of them rides SENT to its TTL and terminalizes as
 // TIMEOUT — which blames the device for a fault on this side of the wire. A restarted pod
 // re-reads the unacked responses; a pod spinning quietly on a read error never does.
-func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool {
-	msg, err := cproc.CommandResponsesReader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on command responses stream")
-			return true
-		}
-		cproc.CommandResponsesReader.HandleResponse(err)
-		return cproc.pacer().PauseAfterError(ctx, err)
-	}
-	cproc.pacer().Succeeded()
+func (cproc *CommandDeliveryProcessor) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, cproc.CommandResponsesReader, cproc.pacer(), func(msg messaging.Message) bool {
+		return cproc.handleResponse(ctx, msg)
+	})
+}
 
+// handleResponse matches a single device response to its command, and reports whether the
+// read loop should carry on. Undecodable messages (or messages with no parseable tenant) are
+// logged and skipped; nothing a response can contain ends the loop.
+func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg messaging.Message) bool {
 	// RED metrics for this response (E13): start timing now that we hold a
 	// message, and record its disposition exactly once on whichever return
 	// path it leaves by.
@@ -772,7 +765,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping command response with no parseable tenant in subject %q", msg.Subject))
 		_ = msg.Ack()
 		done(core.ResultInvalid)
-		return false
+		return true
 	}
 
 	// ...and the responding DEVICE from the same subject, for the same reason and with
@@ -792,7 +785,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping command response with no parseable device in subject %q", msg.Subject))
 		_ = msg.Ack()
 		done(core.ResultInvalid)
-		return false
+		return true
 	}
 
 	// An undecodable payload is poison: ack it so it does not redeliver.
@@ -801,7 +794,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg("Skipping undecodable command response")
 		_ = msg.Ack()
 		done(core.ResultInvalid)
-		return false
+		return true
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
@@ -819,7 +812,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 				Msg("Refusing a command response from a device that does not own the command")
 			_ = msg.Ack()
 			done(core.ResultInvalid)
-			return false
+			return true
 		}
 		// The device owns the command, but the command is not in a state its answer can
 		// settle — the platform holds it QUEUED or HELD. TERMINAL, and RECORDED rather than
@@ -883,7 +876,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 					"and was not recorded against the command")
 			_ = msg.Ack()
 			done(core.ResultFailed)
-			return false
+			return true
 		}
 		if errors.Is(err, model.ErrResponseNonceMismatch) {
 			incr(cproc.ResponsesStaleNonce, 1)
@@ -898,7 +891,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 					"newer dispatch with the older dispatch's outcome")
 			_ = msg.Ack()
 			done(core.ResultFailed)
-			return false
+			return true
 		}
 		// The residual. The answer names the dispatch the command is still on, and the
 		// command is in a state that dispatch cannot settle — which no state in today's
@@ -917,7 +910,7 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 					"against it")
 			_ = msg.Ack()
 			done(core.ResultFailed)
-			return false
+			return true
 		}
 		// Treat a failed persist as transient. Leave it unacked to retry until
 		// the redelivery cap, then ack to give up (the device can resend and the
@@ -938,13 +931,13 @@ func (cproc *CommandDeliveryProcessor) ProcessMessage(ctx context.Context) bool 
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Msg("unable to record command response")
 			done(core.ResultRetry)
 		}
-		return false
+		return true
 	}
 
 	// Response persisted successfully; ack so it is not redelivered.
 	_ = msg.Ack()
 	done(core.ResultOK)
-	return false
+	return true
 }
 
 // sweepLocked runs one expiry + redelivery sweep under a try-lock, so exactly one
@@ -1147,14 +1140,7 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// does. The one place inside ReadMessage that does not watch the context is the
 	// pull-consumer Fetch, which is capped at its own MaxWait — currently a second — so
 	// that is the worst this adds to a shutdown, and only when the cancel lands mid-fetch.
-	cproc.startPeriodic(func() {
-		for {
-			eof := cproc.ProcessMessage(ctx)
-			if eof {
-				break
-			}
-		}
-	})
+	cproc.startPeriodic(func() { cproc.readLoop(ctx) })
 
 	// Background expiry + delivery ticker.
 	cproc.startPeriodic(func() { cproc.runSweepTicker(ctx) })

@@ -68,7 +68,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestLifecycle() {
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopEof() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
-	eof := suite.EP.ProcessMessage(context.Background())
+	eof := readAndHandleOne(suite.EP, context.Background())
 
 	assert.Equal(suite.T(), eof, true)
 }
@@ -77,7 +77,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopEof() {
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil)
 
-	eof := suite.EP.ProcessMessage(context.Background())
+	eof := readAndHandleOne(suite.EP, context.Background())
 
 	assert.Equal(suite.T(), eof, false)
 }
@@ -180,7 +180,7 @@ func (suite *EventPersistenceProcessorTestSuite) FailedEventFlowFor(msg messagin
 
 	// Send message and wait for event to be processed by resolver.
 	ctx := context.Background()
-	suite.EP.ProcessMessage(ctx)
+	readAndHandleOne(suite.EP, ctx)
 	suite.EP.ProcessFailedEvent(ctx)
 
 	// Verify a message was written to failed messages writer.
@@ -210,7 +210,7 @@ func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messagi
 	// call (the persistence side effect) rather than synchronizing on a now
 	// removed persisted channel.
 	ctx := context.Background()
-	suite.EP.ProcessMessage(ctx)
+	readAndHandleOne(suite.EP, ctx)
 
 	// Verify the event was persisted via the API.
 	assert.Eventually(suite.T(), func() bool {

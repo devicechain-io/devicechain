@@ -436,75 +436,74 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	close(d.ready)
 	defer d.queuesPtr.Store(nil)
 
-	for ctx.Err() == nil {
-		msg, err := d.reader.ReadMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				break // evicted / shutting down
-			}
-			// A read error — a JetStream API error, a 409 from a stream at its MaxAckPending or
-			// MaxWaiting ceiling, a consumer whose leadership keeps moving, or an io.EOF from a
-			// rebind that gave up. Record it, then let the pacer space the retries out AND decide
-			// when the run of them has stopped looking transient.
-			//
-			// 🔴 THE PACER IS NOT REDUNDANT WITH LEASE EVICTION, WHICH IS WHAT THIS COMMENT USED
-			// TO CLAIM. It said a durable NATS outage stalls this term's lease renewal, which
-			// evicts the term and ends the loop, "so this never spins forever on a dead broker."
-			// That is true and it is beside the point. The lease renews over the SAME connection
-			// the reader uses, so it covers exactly the case where the whole broker is gone — and
-			// every error listed above happens on a connection that is perfectly HEALTHY.
-			// Lease.KeepAlive gives up only when Renew FAILS and the TTL window has passed
-			// (core/messaging/lease.go), so with the broker up the term is renewed indefinitely
-			// while this loop retries a broken consumer once a second, forever, behind a pod
-			// reporting leader and serving. Metrics carries no read-error counter, so nothing
-			// shows it either.
-			d.reader.HandleResponse(err)
-			if d.readPacer.PauseAfterError(ctx, err) {
-				break
-			}
-			continue
-		}
-		d.readPacer.Succeeded()
-		w, ok := d.parse(msg)
-		if !ok {
-			continue // poison — already acked + counted in parse
-		}
-		// Pre-filter reachability at ROUTE time (S4 hardening): a command for a device this adapter
-		// does not serve — the DOMINANT case, since this cross-tenant consumer sees every other
-		// protocol adapter's device-commands too — is ack-dropped HERE, so it never occupies a
-		// per-device worker slot. It is another protocol's traffic and there is nothing for this
-		// adapter to record about it.
-		//
-		// 🔴 AN OFFLINE SERVED DEVICE IS NO LONGER DROPPED HERE, AND THAT IS DELIBERATE. Its
-		// command has to be PARKED in command-delivery, which is a network round trip, and this
-		// is the JetStream read loop — the one goroutine that must not make one. So it is routed
-		// to the device's shard worker, which parks it there. The alternative considered and
-		// rejected was a third task kind with a non-blocking send like Drain's: a dropped park
-		// task has no next wake to re-trigger it, so a full shard would silently leave the row in
-		// SENT with no signal — losing exactly the fix this exists to deliver.
-		//
-		// The cost is stated rather than hidden: offline-device commands now occupy shard slots,
-		// so while command-delivery is unreachable a shard can be blocked by parks timing out.
-		// That is bounded, self-healing, and preferable to a silent loss.
-		if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach == ReachNotServed {
-			d.dropNonLive(reach, w.msg)
-			continue
-		}
-		// The live-command send BLOCKS on a full shard (the named head-of-line convoy, L4a S4) — a
-		// live command must not be dropped. The drain send (Drain) is non-blocking by contrast, so a
-		// wake never stalls the handler.
-		select {
-		case queues[d.shard(w.env.DeviceToken)] <- task{deviceToken: w.env.DeviceToken, live: &w}:
-		case <-ctx.Done():
-			// Evicted before we could route: do NOT ack, so the message redelivers to the next
-			// leader rather than being dropped by a replica that is no longer serving.
-		}
-	}
+	// The read loop's own shutdown check, its terminal error set and its pacing all live in
+	// messaging.RunConsumer now. What stays here is the routing, which is this dispatcher's
+	// alone.
+	//
+	// 🔴 THE PACER IS NOT REDUNDANT WITH LEASE EVICTION, WHICH IS WHAT THIS COMMENT USED TO
+	// CLAIM. It said a durable NATS outage stalls this term's lease renewal, which evicts the
+	// term and ends the loop, "so this never spins forever on a dead broker." That is true and
+	// it is beside the point. The lease renews over the SAME connection the reader uses, so it
+	// covers exactly the case where the whole broker is gone — and the errors that actually
+	// reach here (a JetStream API error, a 409 at a MaxAckPending or MaxWaiting ceiling, a
+	// consumer whose leadership keeps moving) happen on a connection that is perfectly HEALTHY.
+	// Lease.KeepAlive gives up only when Renew FAILS and the TTL window has passed
+	// (core/messaging/lease.go), so with the broker up the term is renewed indefinitely while
+	// this loop would retry a broken consumer once a second, forever, behind a pod reporting
+	// leader and serving. Metrics carries no read-error counter, so nothing would show it.
+	messaging.RunConsumer(ctx, d.reader, d.readPacer, func(msg messaging.Message) bool {
+		return d.route(ctx, queues, msg)
+	})
 
 	// Ends the workers on both exits: an evicted term, where the caller's ctx is already
 	// cancelled and this is a no-op, and an exhausted read budget, where it is not.
 	stopWorkers()
 	wg.Wait()
+}
+
+// route places one command message on its device's shard worker, and reports whether the
+// read loop should carry on.
+//
+// 🔴 IT IS THE ONE GOROUTINE THAT MUST NOT MAKE A NETWORK ROUND TRIP, which is what decides
+// each disposition below.
+func (d *Dispatcher) route(ctx context.Context, queues []chan task, msg messaging.Message) bool {
+	w, ok := d.parse(msg)
+	if !ok {
+		return true // poison — already acked + counted in parse
+	}
+	// Pre-filter reachability at ROUTE time (S4 hardening): a command for a device this adapter
+	// does not serve — the DOMINANT case, since this cross-tenant consumer sees every other
+	// protocol adapter's device-commands too — is ack-dropped HERE, so it never occupies a
+	// per-device worker slot. It is another protocol's traffic and there is nothing for this
+	// adapter to record about it.
+	//
+	// 🔴 AN OFFLINE SERVED DEVICE IS NO LONGER DROPPED HERE, AND THAT IS DELIBERATE. Its
+	// command has to be PARKED in command-delivery, which is a network round trip, and this
+	// is the JetStream read loop — the one goroutine that must not make one. So it is routed
+	// to the device's shard worker, which parks it there. The alternative considered and
+	// rejected was a third task kind with a non-blocking send like Drain's: a dropped park
+	// task has no next wake to re-trigger it, so a full shard would silently leave the row in
+	// SENT with no signal — losing exactly the fix this exists to deliver.
+	//
+	// The cost is stated rather than hidden: offline-device commands now occupy shard slots,
+	// so while command-delivery is unreachable a shard can be blocked by parks timing out.
+	// That is bounded, self-healing, and preferable to a silent loss.
+	if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach == ReachNotServed {
+		d.dropNonLive(reach, w.msg)
+		return true
+	}
+	// The live-command send BLOCKS on a full shard (the named head-of-line convoy, L4a S4) — a
+	// live command must not be dropped. The drain send (Drain) is non-blocking by contrast, so a
+	// wake never stalls the handler.
+	select {
+	case queues[d.shard(w.env.DeviceToken)] <- task{deviceToken: w.env.DeviceToken, live: &w}:
+	case <-ctx.Done():
+		// Evicted before we could route: do NOT ack, so the message redelivers to the next
+		// leader rather than being dropped by a replica that is no longer serving. Ending the
+		// loop here is what the old `for ctx.Err() == nil` condition did one statement later.
+		return false
+	}
+	return true
 }
 
 // Drain enqueues a wake-drain for a device onto its shard worker, so the leader pulls that device's

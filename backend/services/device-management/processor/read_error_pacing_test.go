@@ -31,21 +31,26 @@ import (
 // loop fails the assertion rather than hanging the run.
 const readCap = 5000
 
+// The loops are driven as a whole (each is a goroutine body, not a per-message call), so the
+// reader is given an EOF far past any paced loop's reach. A paced loop never sees it; an
+// unpaced one ends there, and the assertion reports the number instead of hanging the run.
+//
+// 🔑 WHAT THESE STILL TEST NOW THE LOOP ITSELF LIVES IN messaging.RunConsumer: the WIRING —
+// that each of these consumers drives the shared loop with a pacer of its own. That is the
+// "constructed correctly, connected to nothing" class a test of the library alone cannot see.
 func TestTheRaiseAlarmLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
-	reader := &msgtest.FailingReader{}
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	rc := &RaiseAlarmConsumer{
 		Reader:    reader,
 		readPacer: core.NewReadPacer(nil, "raise-alarm").UseClock(core.VirtualClock()),
 	}
 
-	stopped := false
-	for i := 0; i < readCap && !stopped; i++ {
-		stopped = rc.readMessage(context.Background())
-	}
-	if !stopped {
-		t.Fatalf("the raise-alarm loop read %d times against an error that never clears and was "+
-			"still going: it burns a core and logs at full rate forever while the pod reports ready",
-			reader.Reads)
+	rc.readLoop(context.Background())
+
+	if reader.Reads >= readCap {
+		t.Fatalf("the raise-alarm loop read %d times against an error that never clears and only "+
+			"stopped because the test's reader ran out: it burns a core and logs at full rate "+
+			"forever while the pod reports ready", reader.Reads)
 	}
 	if reader.Reads > 40 {
 		t.Fatalf("the raise-alarm loop took %d reads to stop; that is too many to be a paced "+
@@ -55,20 +60,19 @@ func TestTheRaiseAlarmLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.
 }
 
 func TestTheInboundEventsLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
-	reader := &msgtest.FailingReader{}
+	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	iproc := &InboundEventsProcessor{
 		InboundEventsReader: reader,
+		messages:            make(chan messaging.Message, readCap),
 		readPacer:           core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock()),
 	}
 
-	stopped := false
-	for i := 0; i < readCap && !stopped; i++ {
-		stopped = iproc.ProcessMessage(context.Background())
-	}
-	if !stopped {
+	iproc.readLoop(context.Background())
+
+	if reader.Reads >= readCap {
 		t.Fatalf("the inbound events loop read %d times against an error that never clears and "+
-			"was still going: it burns a core and logs at full rate forever while the pod reports "+
-			"ready", reader.Reads)
+			"only stopped because the test's reader ran out: it burns a core and logs at full "+
+			"rate forever while the pod reports ready", reader.Reads)
 	}
 	if reader.Reads > 40 {
 		t.Fatalf("the inbound events loop took %d reads to stop; that is too many to be a paced "+
@@ -83,16 +87,21 @@ func TestTheInboundEventsLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testi
 // failures is cleared by it — the reset that stops one error an hour from accumulating,
 // across a day, into a service that tears itself down for faults it recovered from.
 func TestASuccessfulReadKeepsBothLoopsRunning(t *testing.T) {
-	pacer := core.NewReadPacer(nil, "raise-alarm").UseClock(core.VirtualClock())
+	const eofAt = 800
 	reader := &intermittentReader{}
-	rc := &RaiseAlarmConsumer{Reader: reader, Api: nil, readPacer: pacer}
+	reader.EOFAfter = eofAt
+	rc := &RaiseAlarmConsumer{
+		Reader:    reader,
+		Api:       nil,
+		readPacer: core.NewReadPacer(nil, "raise-alarm").UseClock(core.VirtualClock()),
+	}
 
-	// Alternating failure and success, far more failures than any single run could absorb.
-	for i := 0; i < 400; i++ {
-		if rc.readMessage(context.Background()) {
-			t.Fatalf("the raise-alarm loop stopped at read %d even though every failure was "+
-				"followed by a successful read", i+1)
-		}
+	rc.readLoop(context.Background())
+
+	if reader.Reads != eofAt {
+		t.Fatalf("the raise-alarm loop stopped after %d reads even though every failure was "+
+			"followed by a successful read; it should have run to its reader's EOF at %d",
+			reader.Reads, eofAt)
 	}
 }
 
@@ -106,8 +115,13 @@ type intermittentReader struct {
 
 func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
 	r.n++
-	if r.n%2 == 1 {
+	// 🔑 THE EOFAfter GUARD IS LOAD-BEARING. Without "> 0" the comparison Reads+1 >= EOFAfter
+	// is TRUE for an unset EOFAfter, so every read would fail and the alternation this fake
+	// exists for would silently stop happening.
+	if r.n%2 == 1 || (r.EOFAfter > 0 && r.Reads+1 >= r.EOFAfter) {
 		return r.FailingReader.ReadMessage(ctx)
 	}
+	// Counted, so Reads means "calls" at every caller.
+	r.Reads++
 	return messaging.Message{}, nil
 }

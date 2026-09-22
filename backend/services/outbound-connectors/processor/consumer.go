@@ -5,8 +5,6 @@ package processor
 
 import (
 	"context"
-	"errors"
-	"io"
 	"sync"
 	"time"
 
@@ -181,39 +179,29 @@ func (c *DispatchConsumer) Stop(ctx context.Context) error {
 	return nil
 }
 
-// run drains the dispatch stream, handing each message to the worker pool. An EOF (reader closed) or
-// a cancelled context exits; a transient read error is paced and retried, and a run of them that
-// outlasts the pacer's budget ends the loop and the process.
+// run drains the dispatch stream, handing each message to the worker pool.
+//
+// 🔴 STOPPING IS THE POINT when the read errors never clear. This service EMITS, so a loop that
+// spins silently on an error the reader keeps handing back leaves a ready pod dispatching
+// nothing — every connector the tenant configured quietly does not fire, and the stream's
+// per-tenant bound then discards the requests. A restart is visible; a ready pod delivering
+// nothing is not. messaging.RunConsumer ends the loop once the pacer's budget is spent.
 func (c *DispatchConsumer) run() {
 	defer c.readerWG.Done()
-	for {
-		msg, err := c.reader.ReadMessage(c.procCtx)
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			c.reader.HandleResponse(err)
-			// 🔴 STOPPING IS THE POINT. This service EMITS, and a read loop that spins silently on
-			// an error the reader hands back and that never clears leaves a ready pod
-			// dispatching nothing — every
-			// connector the tenant configured quietly does not fire, and the stream's per-tenant
-			// bound then discards the requests. A restart is visible; a ready pod delivering
-			// nothing is not.
-			if c.readPacer.PauseAfterError(c.procCtx, err) {
-				return
-			}
-			continue
-		}
-		// Clear the run of failures, so an ordinary broker blip does not accumulate across a long
-		// uptime into a give-up the consumer never earned.
-		c.readPacer.Succeeded()
-		// Hand off to a worker, abandoning on shutdown so the loop can exit rather than block on a
-		// full channel; the message is unacked, so it redelivers after restart.
-		select {
-		case c.messages <- msg:
-		case <-c.procCtx.Done():
-			return
-		}
+	messaging.RunConsumer(c.procCtx, c.reader, c.readPacer, func(msg messaging.Message) bool {
+		return c.handOff(c.procCtx, msg)
+	})
+}
+
+// handOff gives one dispatch message to the worker pool, and reports whether the read loop
+// should carry on. It abandons the handoff on shutdown so the loop can exit rather than block
+// on a full channel; the message is unacked at that point, so it redelivers after restart.
+func (c *DispatchConsumer) handOff(ctx context.Context, msg messaging.Message) bool {
+	select {
+	case c.messages <- msg:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

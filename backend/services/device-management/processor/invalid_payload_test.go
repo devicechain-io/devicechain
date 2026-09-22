@@ -64,7 +64,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageIsDeadLetter
 	logs := captureWarnings(suite.T())
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	assert.Empty(suite.T(), item.event.Payload,
@@ -90,7 +90,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageDeadLetterLo
 	msg := undecodableMessage()
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	// It still reads as a failure. An undecodable message that stopped saying so would
@@ -137,7 +137,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageDeadLetterBo
 		Subject: testTenantSubject, Value: encoded, StreamSeq: undecodableStreamSeq,
 	}, nil)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	assert.LessOrEqual(suite.T(), len(item.event.Error), invalidEventErrorCap+len("... (truncated)"),
@@ -182,7 +182,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDecodableEventStillTakesTheNor
 	suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{*buildDeviceRelationship()}}, nil)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitResolved(suite)
 
 	assert.Equal(suite.T(), "tenant1", item.tenant)
@@ -216,7 +216,7 @@ func (suite *InboundEventsProcessorTestSuite) TestResolutionFailureStillDeadLett
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).
 		Return([]*dmodel.Device{}, errors.New("device lookup failed"))
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	assert.NotEmpty(suite.T(), item.event.Payload,

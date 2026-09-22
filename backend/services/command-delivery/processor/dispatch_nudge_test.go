@@ -496,7 +496,7 @@ func TestANudgerlessProcessorAcceptsNudgesSilently(t *testing.T) {
 }
 
 // eofReader ends the response-consumer loop immediately, so a test can drive the real
-// lifecycle without a broker. ProcessMessage returns on EOF before it touches the RED
+// lifecycle without a broker. The loop returns on EOF before anything touches the RED
 // metrics, which a literal-built processor does not have.
 type eofReader struct{}
 

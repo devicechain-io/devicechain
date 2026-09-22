@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -241,38 +240,21 @@ func (w *DeadLetterWriteback) Terminate(ctx context.Context) error {
 
 func (w *DeadLetterWriteback) ExecuteTerminate(context.Context) error { return nil }
 
-// loop reads until shutdown.
+// loop reads dead-lettered responses until shutdown, the stream ends, or the read errors
+// stop clearing.
+//
+// 🔴 A SILENT LOOP HERE PRODUCES WRONG DATA, NOT MISSING DATA — the same mis-attribution
+// this consumer exists to remove. Every command whose answer was dead-lettered goes on
+// reading SENT and terminalizes as TIMEOUT, which blames a device that replied. Stopping
+// makes the fault visible as a restart instead of as a fleet of rows that each look
+// individually plausible. messaging.RunConsumer ends the loop once the pacer's budget is
+// spent, by which time the process has already been reported unfit.
 func (w *DeadLetterWriteback) loop() {
 	defer w.wg.Done()
-	for {
-		select {
-		case <-w.procCtx.Done():
-			return
-		default:
-		}
-		msg, err := w.reader.ReadMessage(w.procCtx)
-		if err != nil {
-			if errors.Is(err, io.EOF) || w.procCtx.Err() != nil {
-				return
-			}
-			w.reader.HandleResponse(err)
-			// A run of failures that outlasts the pacer's budget ends the loop, and the
-			// pacer has already reported the process unfit by the time this returns true.
-			// 🔴 A SILENT LOOP HERE PRODUCES WRONG DATA, NOT MISSING DATA — the same
-			// mis-attribution this consumer exists to remove. Every command whose answer
-			// was dead-lettered goes on reading SENT and terminalizes as TIMEOUT, which
-			// blames a device that replied. Stopping makes the fault visible as a restart
-			// instead of as a fleet of rows that each look individually plausible.
-			if w.writebackPacer().PauseAfterError(w.procCtx, err) {
-				return
-			}
-			continue
-		}
-		// Clear the run of failures, so a write-back that rides out an ordinary broker
-		// blip does not carry it on the tally towards a give-up it never earned.
-		w.writebackPacer().Succeeded()
+	messaging.RunConsumer(w.procCtx, w.reader, w.writebackPacer(), func(msg messaging.Message) bool {
 		w.Handle(msg)
-	}
+		return true
+	})
 }
 
 // writebackPacer returns the read loop's error pacer, building it on first use. It is

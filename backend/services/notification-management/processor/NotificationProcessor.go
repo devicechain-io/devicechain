@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -195,41 +194,32 @@ func (np *NotificationProcessor) ExecuteStart(ctx context.Context) error {
 	np.readerWG.Add(1)
 	go func() {
 		defer np.readerWG.Done()
-		for {
-			if eof := np.ProcessMessage(np.procCtx); eof {
-				break
-			}
-		}
+		np.readLoop(np.procCtx)
 	}()
 	return nil
 }
 
-// ProcessMessage reads one alarm event and hands it to the worker pool. Returns true
-// once the stream EOFs, the loop is shutting down, or a run of non-EOF read errors has
-// outlasted the pacer's budget — in which case the pacer has already ended the process,
-// because a consumer that cannot read alarms pages nobody while reporting healthy, and a
-// restart is the remedy for most of what causes it.
-func (np *NotificationProcessor) ProcessMessage(ctx context.Context) bool {
-	msg, err := np.Reader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on alarm events stream")
-			return true
-		}
-		np.Reader.HandleResponse(err)
-		return np.pacer().PauseAfterError(ctx, err)
-	}
-	np.pacer().Succeeded()
+// readLoop drains the alarm-events stream into the worker pool until the context is
+// cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the pacer's
+// budget — at which point the pacer has already ended the process, because a consumer that
+// cannot read alarms pages nobody while reporting healthy, and a restart is the remedy for
+// most of what causes it.
+func (np *NotificationProcessor) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, np.Reader, np.pacer(), func(msg messaging.Message) bool {
+		return np.handOff(ctx, msg)
+	})
+}
 
-	// Hand off to the workers, but abandon the handoff on shutdown so the loop can
-	// exit instead of blocking on a full channel (A5). The message is unacked, so it
-	// is redelivered after restart.
+// handOff gives one alarm event to the worker pool, and reports whether the read loop should
+// carry on. It abandons the handoff on shutdown so the loop can exit instead of blocking on
+// a full channel (A5). The message is unacked at that point, so it redelivers after restart.
+func (np *NotificationProcessor) handOff(ctx context.Context, msg messaging.Message) bool {
 	select {
 	case np.messages <- msg:
-	case <-ctx.Done():
 		return true
+	case <-ctx.Done():
+		return false
 	}
-	return false
 }
 
 // processMessages is the worker loop: it drains the messages channel and dispatches

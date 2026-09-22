@@ -6,8 +6,6 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"sync"
 	"time"
 
@@ -110,30 +108,16 @@ func (rd *ReactDispatcher) Stop(ctx context.Context) error {
 	return nil
 }
 
-// run drains the derived-event stream, dispatching each event's actions. It mirrors the fact
-// consumers' read loop: an EOF (reader closed) or a cancelled context exits; a transient read error
-// backs off and retries.
+// run drains the derived-event stream, dispatching each event's actions.
+//
+// The loop's own post-handle shutdown check is gone because messaging.RunConsumer re-checks
+// the context BEFORE each read, which is the same stop one iteration earlier.
 func (rd *ReactDispatcher) run() {
 	defer rd.wg.Done()
-	pacer := rd.pacer()
-	for {
-		msg, err := rd.reader.ReadMessage(rd.procCtx)
-		if errors.Is(err, io.EOF) {
-			return
-		}
-		if err != nil {
-			rd.reader.HandleResponse(err)
-			if pacer.PauseAfterError(rd.procCtx, err) {
-				return
-			}
-			continue
-		}
-		pacer.Succeeded()
+	messaging.RunConsumer(rd.procCtx, rd.reader, rd.pacer(), func(msg messaging.Message) bool {
 		rd.handle(msg)
-		if rd.procCtx.Err() != nil {
-			return
-		}
-	}
+		return true
+	})
 }
 
 // pacer builds a read pacer for one run of the loop, falling back to a reportless one when

@@ -5,9 +5,7 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -165,33 +163,22 @@ func (rc *RaiseAlarmConsumer) ExecuteStart(ctx context.Context) error {
 	rc.readerWG.Add(1)
 	go func() {
 		defer rc.readerWG.Done()
-		for {
-			if eof := rc.readMessage(rc.procCtx); eof {
-				return
-			}
-		}
+		rc.readLoop(rc.procCtx)
 	}()
 	return nil
 }
 
-// readMessage reads and handles one raise-alarm request. It returns true when the stream is
-// exhausted, when the loop is shutting down, or when a run of non-EOF read errors has
-// outlasted the pacer's budget — in which case the pacer has already ended the process,
-// because a restart is the remedy for most of what gets a read loop into that state, and a
-// pod that reports ready while raising no alarms is not.
-func (rc *RaiseAlarmConsumer) readMessage(ctx context.Context) bool {
-	msg, err := rc.Reader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on raise-alarm stream")
-			return true
-		}
-		rc.Reader.HandleResponse(err)
-		return rc.pacer().PauseAfterError(ctx, err)
-	}
-	rc.pacer().Succeeded()
-	rc.handle(ctx, msg)
-	return ctx.Err() != nil
+// readLoop drains the raise-alarm stream until the context is cancelled, the stream is
+// exhausted, or a run of non-EOF read errors outlasts the pacer's budget — in which case the
+// pacer has already ended the process, because a restart is the remedy for most of what gets
+// a read loop into that state, and a pod that reports ready while raising no alarms is not.
+func (rc *RaiseAlarmConsumer) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, rc.Reader, rc.pacer(), func(msg messaging.Message) bool {
+		rc.handle(ctx, msg)
+		// handle never ends the loop of its own accord; the shutdown it used to report here
+		// is caught by RunConsumer's check before the next read.
+		return true
+	})
 }
 
 // handle applies one raise-alarm request and acks or leaves it unacked. A no-tenant subject, an

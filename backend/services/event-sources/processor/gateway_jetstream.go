@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -198,44 +197,11 @@ func (es *GatewayJetStreamSource) ExecuteTerminate(ctx context.Context) error { 
 // release ExecuteStop.
 func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan struct{}) {
 	defer close(drained)
-	for {
-		msg, err := es.reader.ReadMessage(ctx)
-		if err != nil {
-			// io.EOF is the reader's TERMINAL signal — a closed connection, a drained
-			// subscription, or a failed rebind — and every peer consumer
-			// (command-delivery, outbound-connectors, event-processing) exits on it.
-			// Continuing instead would be a hot spin: on a closed connection the fetch
-			// returns instantly, so the loop would burn a core emitting one error log
-			// per iteration. Today that is masked only by shutdown ordering, which is
-			// not a property this loop should depend on.
-			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
-				log.Info().Str("source", es.Id).Msg("Gateway capture read loop stopped.")
-				return
-			}
-			// A read error is transport-level, not message-level: there is nothing to
-			// ack or drop, so it is logged and the loop reads again rather than tearing
-			// the source down for one bad fetch.
-			//
-			// 🔴 THE PACER IS WHAT MAKES THAT SAFE, and it is here rather than in the
-			// comment above because the comment above used to be the whole answer. The
-			// reader's own self-heal covers empty fetches and a deleted consumer;
-			// anything else — a broker refusing fetches, a
-			// subscription it cannot rebuild — arrives here unchanged on every
-			// iteration, and returns instantly while it does. Without the pause that is
-			// the hot spin the EOF branch above already refuses to allow. Past the
-			// pacer's budget the errors are no longer transient in any useful sense, so
-			// it ends the process rather than leaving a source that reports healthy and
-			// ingests nothing.
-			es.reader.HandleResponse(err)
-			if es.readPacer.PauseAfterError(ctx, err) {
-				log.Info().Str("source", es.Id).Msg("Gateway capture read loop stopped.")
-				return
-			}
-			continue
-		}
-		es.readPacer.Succeeded()
+	messaging.RunConsumer(ctx, es.reader, es.readPacer, func(msg messaging.Message) bool {
 		es.handle(msg)
-	}
+		return true
+	})
+	log.Info().Str("source", es.Id).Msg("Gateway capture read loop stopped.")
 }
 
 // handle admits one captured message into the decode pipeline, or terminally

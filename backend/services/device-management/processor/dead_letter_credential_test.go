@@ -78,7 +78,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventCarriesNoPres
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(credentialLocationMessage(suite, messaging.MaxDeliver), nil)
 	suite.API.Mock.On("AuthenticateDevice").Return((*dmodel.Device)(nil), dmodel.ErrCredentialSecretMismatch)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	archived, err := esproto.UnmarshalUnresolvedEvent(item.event.Payload)
@@ -103,7 +103,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventStillReportsT
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(credentialLocationMessage(suite, messaging.MaxDeliver), nil)
 	suite.API.Mock.On("AuthenticateDevice").Return((*dmodel.Device)(nil), dmodel.ErrCredentialSecretMismatch)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), item.event.Reason,
@@ -132,7 +132,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDebugEventDumpCarriesNoPresent
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(credentialLocationMessage(suite, messaging.MaxDeliver), nil)
 	suite.API.Mock.On("AuthenticateDevice").Return((*dmodel.Device)(nil), dmodel.ErrCredentialSecretMismatch)
 
-	suite.IP.ProcessMessage(context.Background())
+	readAndHandleOne(suite.IP, context.Background())
 	awaitFailed(suite)
 
 	got := logs.String()
@@ -177,7 +177,7 @@ func (suite *InboundEventsProcessorTestSuite) TestCredentialStillAuthenticatesAn
 	suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
 
 	ctx := context.Background()
-	suite.IP.ProcessMessage(ctx)
+	readAndHandleOne(suite.IP, ctx)
 	suite.IP.ProcessResolvedEvent(ctx)
 
 	suite.Resolved.AssertCalled(suite.T(), "WriteMessages", mock.Anything, mock.Anything)

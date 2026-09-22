@@ -6,9 +6,7 @@ package processor
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"sync"
 	"time"
@@ -182,33 +180,32 @@ func (sp *StateProcessor) Start(ctx context.Context) error {
 	return sp.lifecycle.Start(ctx)
 }
 
-// Execute the read side of the processing loop. Reads one resolved event from the
-// stream and hands it to the worker pool. Runs in a goroutine since it loops
-// indefinitely. Returns true once the stream EOFs, the loop is being shut down, or a run of
-// non-EOF read errors has outlasted the pacer's budget — in which case the pacer has already
-// ended the process, because a projection that cannot read its source stream goes stale
-// silently and a restart is the remedy for most of what causes it.
-func (sp *StateProcessor) ProcessMessage(ctx context.Context) bool {
-	msg, err := sp.ResolvedEventsReader.ReadMessage(ctx)
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Info().Msg("Detected EOF on resolved events stream")
-			return true
-		}
-		sp.ResolvedEventsReader.HandleResponse(err)
-		return sp.pacer().PauseAfterError(ctx, err)
-	}
-	sp.pacer().Succeeded()
+// readLoop drains the resolved-events stream into the worker pool until the context is
+// cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the pacer's
+// budget.
+//
+// It is a named method rather than the body of the goroutine in ExecuteStart so that the
+// pacing tests can run the SAME line production runs. A test that reassembles the call
+// itself proves the library works and says nothing about how this service calls it, which
+// is where the wiring defects in this tree have actually been.
+func (sp *StateProcessor) readLoop(ctx context.Context) {
+	messaging.RunConsumer(ctx, sp.ResolvedEventsReader, sp.pacer(), func(msg messaging.Message) bool {
+		return sp.handOff(ctx, msg)
+	})
+}
 
-	// Hand off to the workers, but abandon the handoff on shutdown so the loop
-	// can exit instead of blocking on a full channel (A5). The message is unacked,
-	// so it is redelivered after restart.
+// handOff gives one resolved event to the worker pool, and reports whether the read loop
+// should carry on.
+//
+// It abandons the handoff on shutdown so the loop can exit instead of blocking on a full
+// channel (A5). The message is unacked at that point, so it is redelivered after restart.
+func (sp *StateProcessor) handOff(ctx context.Context, msg messaging.Message) bool {
 	select {
 	case sp.messages <- msg:
-	case <-ctx.Done():
 		return true
+	case <-ctx.Done():
+		return false
 	}
-	return false
 }
 
 // processMessages is the worker loop: it drains the messages channel and merges
@@ -417,12 +414,7 @@ func (sp *StateProcessor) ExecuteStart(ctx context.Context) error {
 	sp.readerWG.Add(1)
 	go func() {
 		defer sp.readerWG.Done()
-		for {
-			eof := sp.ProcessMessage(sp.procCtx)
-			if eof {
-				break
-			}
-		}
+		sp.readLoop(sp.procCtx)
 	}()
 
 	// Background inactivity monitor, tracked so ExecuteStop can join it.
