@@ -519,24 +519,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
 	// already shutting down (mirrors the start order). core/service walks them in exactly
 	// that order, for every service.
-	err = Svc.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop rdb manager.
-	err = RdbManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.

@@ -45,7 +45,7 @@
 # database handles across a stop, and the state machine then refuses its next start
 # because the component never left Started.
 #
-# Fourteen services wire 48 components between them, and 0 of 14 had any test asserting
+# The services wire dozens of components between them, and none had any test asserting
 # that set is complete. Six of them DO have a main-package test — the shutdown-order tests
 # added when the stop orders were fixed — and every one of those still passes if a seventh
 # component is added to the start callback and forgotten in the stop callback. A test that
@@ -845,7 +845,7 @@ func Build() core.LifecycleCallbacks {
   #     SEE AT ALL. outbound-connectors' DispatchConsumer and event-processing's
   #     ReactDispatcher are exactly this: a worker pool, a reader goroutine and a
   #     WaitGroup behind Start and Stop, with no core.LifecycleManager anywhere. A model
-  #     that watched the manager reported 48 matched components and exit 0 with either
+  #     that watched the manager reported every matched component and exit 0 with either
   #     one's Stop deleted. They are the goroutine-holding components this constraint is
   #     written about, so they get the fixture.
   plantmain symmetrynomanager 'package main
@@ -1469,7 +1469,7 @@ fi
 # The floors below are floors with room under them, not tracking counts. The workspace
 # parsed 191 packages and 912 Go files when this landed, with 52 entry points in each
 # phase; a floor set at today's number is a floor somebody edits to make green. The stop
-# phase was added later and reads 48 alongside the other two, so it gets the same floor.
+# phase was added later and reads alongside the other two, so it gets the same floor.
 #
 # The symmetry constraint carries its own two floors in the rule table rather than here,
 # because they are about the comparison rather than about the load: how many services were
