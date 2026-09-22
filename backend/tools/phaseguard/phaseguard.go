@@ -49,6 +49,29 @@
 // follows the call graph out of them, resolving every callee through go/types and
 // expanding interface calls by class-hierarchy analysis over the loaded program.
 //
+// # The second question, which the first one's shape cannot ask
+//
+// 🔴 A RULE CANNOT SEE AN ABSENCE. Everything above is "is this named thing reachable
+// from a phase it must not run in", answered across the whole program at once. That
+// shape is satisfied by a service which starts seven components and stops six: every
+// Stop it does make is in the right phase, no watched symbol appears where it must not,
+// and the count of stops clears any floor. What is wrong is the component that is not
+// there, and nothing keyed on the PRESENCE of a symbol can report an absence.
+//
+// So there is a second constraint shape in symmetry.go — a Symmetry — which compares the
+// set of components one service starts against the set it stops. Three things about it
+// are different from a Rule and all three are forced:
+//
+//   - It is scoped PER SERVICE. A missing stop in one service is otherwise covered by a
+//     different service stopping a component of the same type.
+//   - It identifies a component by the VARIABLE the service wired it into, not by type.
+//     Several distinct components embed *core.PeriodicTask and declare no Stop of their
+//     own, so by type they are one thing and dropping one of them reports clean.
+//   - It does NOT expand interface calls. Class-hierarchy expansion is the right
+//     approximation for a Rule — over-approximating can only invent findings — but a set
+//     difference inverts that, and an over-approximated stop set is a guard going green
+//     over the defect it exists for.
+//
 // Grepping is worse than merely weak here for the same reason it was for the default-mux
 // guard: the watched names appear in this tree in prose. NewHttpServer is named in doc
 // comments in core/core/http.go and core/graphql/graphql.go, and RegisterProbes explains
@@ -116,29 +139,78 @@ const (
 	// Start is the once-per-start step, which runs again after every stop. Reached
 	// through ExecuteStart and the Starter callback pair.
 	Start
+	// Stop is the once-per-stop step. Reached through ExecuteStop and the Stopper
+	// callback pair.
+	Stop
+	// Terminate is the final step. Reached through ExecuteTerminate and the Terminator
+	// callback pair.
+	Terminate
 )
 
+// allPhases is every phase whose entry points are discovered. It is separate from the
+// phases a Rule may name on purpose: discovery is cheap, and being able to see a phase is
+// not the same as enforcing something about it. Only Stop is enforced over, by the
+// Symmetry constraints in symmetry.go; Terminate is discovered so that all four callback
+// closures are classified and all four are barriers.
+//
+// 🔴 DISCOVERING THE TWO NEW PHASES IS NOT INERT FOR THE EXISTING RULES, AND AN EARLIER
+// DRAFT OF THIS COMMENT CLAIMED IT WAS. The claim was that no Rule names Stop and the
+// rule traversal's barrier list still reads {Initialize, Start}, so nothing could move.
+// That is wrong about the mechanism: seedCallback also marks a callback's closures in
+// `classified`, and the rule traversal refuses to descend into a classified closure from
+// its LEXICAL parent. A Stopper closure written inside an Initializer closure was walked
+// as initialize-phase work before and is not now. Demonstrated on a fixture, both
+// directions: a nested Stopper closure calling NewHttpServer reported a finding before
+// and reports none after; one calling NewCounterVec counted toward the expected-sites
+// floor before and does not now.
+//
+// The new behaviour is the correct one — a Stopper closure runs at stop, whatever
+// function it was typed inside — and the real tree is unaffected because no callback
+// closure there names a watched symbol (5 / 4 / 197 expected sites before and after).
+// But "measured identical on one tree" is not "cannot change", and the reason all four
+// phases are discovered rather than three is so the carve-out is uniform instead of
+// applying to three of four for no stated reason.
+var allPhases = []Phase{Initialize, Start, Stop, Terminate}
+
 func (p Phase) String() string {
-	if p == Initialize {
+	switch p {
+	case Initialize:
 		return "initialize"
+	case Stop:
+		return "stop"
+	case Terminate:
+		return "terminate"
+	default:
+		return "start"
 	}
-	return "start"
 }
 
 // execMethod is the LifecycleComponent method the framework invokes for this phase.
 func (p Phase) execMethod() string {
-	if p == Initialize {
+	switch p {
+	case Initialize:
 		return "ExecuteInitialize"
+	case Stop:
+		return "ExecuteStop"
+	case Terminate:
+		return "ExecuteTerminate"
+	default:
+		return "ExecuteStart"
 	}
-	return "ExecuteStart"
 }
 
 // callbackField is the LifecycleCallbacks field holding this phase's callback pair.
 func (p Phase) callbackField() string {
-	if p == Initialize {
+	switch p {
+	case Initialize:
 		return "Initializer"
+	case Stop:
+		return "Stopper"
+	case Terminate:
+		return "Terminator"
+	default:
+		return "Starter"
 	}
-	return "Starter"
 }
 
 // Symbol names one watched function: a package-level function, or a method on a named
@@ -235,6 +307,8 @@ type Result struct {
 	// all. A renamed constructor lands here, and it is an instrument failure rather
 	// than a clean tree.
 	Unresolved []Symbol
+	// Symmetry holds each completeness constraint's answer, keyed by its name.
+	Symmetry map[string]SymResult
 }
 
 // node is one function body in the call graph: either a declared function or method, or
@@ -278,6 +352,12 @@ type scanner struct {
 	// entries are the phase entry points, discovered from the framework's contract
 	// rather than from names a service chose.
 	entries map[Phase][]*node
+	// cb is the CALLBACK entry points alone, kept per package. The Symmetry
+	// constraints need both halves of that: callbacks only, because a component's own
+	// ExecuteStop is not evidence that the SERVICE stops it; and per package, because
+	// the question is about one service's wiring and a whole-program answer would let
+	// one service's stop cover another's omission.
+	cb map[*packages.Package]map[Phase][]*node
 	// corePkg is the import path whose lifecycle types define the phases.
 	corePkg string
 	// classified is every function literal that a LifecycleCallback literal assigns to
@@ -293,7 +373,7 @@ type scanner struct {
 //
 // dir is the directory the patterns are resolved from — the workspace root, so a single
 // load covers every module in go.work.
-func Scan(opts Options, rules []Rule, patterns ...string) (Result, error) {
+func Scan(opts Options, rules []Rule, symmetries []Symmetry, patterns ...string) (Result, error) {
 	corePkg := opts.Core
 	if corePkg == "" {
 		corePkg = CorePkg
@@ -302,6 +382,7 @@ func Scan(opts Options, rules []Rule, patterns ...string) (Result, error) {
 		EntryPoints: map[Phase]int{},
 		Reached:     map[string]map[Phase]int{},
 		Expected:    map[string][]Finding{},
+		Symmetry:    map[string]SymResult{},
 	}
 
 	// 🔴 THE FileSet IS SUPPLIED RATHER THAN LEFT NIL. packages.Load makes its own when
@@ -348,6 +429,7 @@ func Scan(opts Options, rules []Rule, patterns ...string) (Result, error) {
 		litPkg:     map[*ast.FuncLit]*packages.Package{},
 		chaCache:   map[*types.Func][]*types.Func{},
 		entries:    map[Phase][]*node{},
+		cb:         map[*packages.Package]map[Phase][]*node{},
 		classified: map[*ast.FuncLit]bool{},
 		corePkg:    corePkg,
 	}
@@ -358,7 +440,7 @@ func Scan(opts Options, rules []Rule, patterns ...string) (Result, error) {
 	for _, p := range pkgs {
 		res.Files += len(p.Syntax)
 	}
-	for _, ph := range []Phase{Initialize, Start} {
+	for _, ph := range allPhases {
 		res.EntryPoints[ph] = len(s.entries[ph])
 	}
 
@@ -382,6 +464,18 @@ func Scan(opts Options, rules []Rule, patterns ...string) (Result, error) {
 				res.Findings = append(res.Findings, h)
 			}
 		}
+	}
+
+	for _, sym := range symmetries {
+		// The verbs are watched symbols too, and a renamed one is the same instrument
+		// failure as a renamed constructor: every component silently stops matching.
+		for _, v := range []string{sym.FromVerb, sym.ToVerb} {
+			cand := Symbol{Pkg: corePkg, Recv: lifecycleManagerType, Name: v}
+			if !s.symbolExists(cand) {
+				res.Unresolved = append(res.Unresolved, cand)
+			}
+		}
+		res.Symmetry[sym.Name] = s.symmetryFindings(sym)
 	}
 
 	sort.Slice(res.Findings, func(i, j int) bool {
@@ -480,7 +574,7 @@ func (s *scanner) findEntryPoints() {
 		if sig == nil || sig.Recv() == nil {
 			continue
 		}
-		for _, ph := range []Phase{Initialize, Start} {
+		for _, ph := range allPhases {
 			if fn.Name() == ph.execMethod() && isPhaseSignature(sig) {
 				s.entries[ph] = append(s.entries[ph], n)
 			}
@@ -501,7 +595,7 @@ func (s *scanner) findEntryPoints() {
 				if !isNamed(p.TypesInfo.TypeOf(lit), s.corePkg, "LifecycleCallbacks") {
 					return true
 				}
-				for _, ph := range []Phase{Initialize, Start} {
+				for _, ph := range allPhases {
 					v := structField(p, lit, ph.callbackField())
 					if v == nil {
 						continue
@@ -554,7 +648,7 @@ func (s *scanner) seedCallback(p *packages.Package, ph Phase, field string, v as
 		// 🔴 THE ANONYMOUS CASE, which is the whole reason this door exists. There is
 		// no name to key on; the literal IS the callback.
 		s.classified[e] = true
-		s.entries[ph] = append(s.entries[ph], s.litNode(e, ph.callbackField()+"."+field+" (closure)"))
+		s.addEntry(p, ph, s.litNode(e, ph.callbackField()+"."+field+" (closure)"))
 	case *ast.Ident, *ast.SelectorExpr:
 		fn, _ := objOf(p, e).(*types.Func)
 		if fn == nil {
@@ -562,10 +656,20 @@ func (s *scanner) seedCallback(p *packages.Package, ph Phase, field string, v as
 		}
 		for _, target := range s.resolve(fn) {
 			if n, ok := s.decls[target]; ok {
-				s.entries[ph] = append(s.entries[ph], n)
+				s.addEntry(p, ph, n)
 			}
 		}
 	}
+}
+
+// addEntry records a CALLBACK entry point in both the global list the rules walk and the
+// per-package list the symmetry constraints walk.
+func (s *scanner) addEntry(p *packages.Package, ph Phase, n *node) {
+	s.entries[ph] = append(s.entries[ph], n)
+	if s.cb[p] == nil {
+		s.cb[p] = map[Phase][]*node{}
+	}
+	s.cb[p][ph] = append(s.cb[p][ph], n)
 }
 
 // structField returns the value assigned to the named field of a struct literal,
@@ -619,6 +723,11 @@ func (s *scanner) referencesFrom(ph Phase, rule Rule) []Finding {
 	// five legitimate per-start constructions would all report as findings. Stopping
 	// is not a hole: work under an ExecuteStart runs again on every start whatever
 	// else also reached it, so it is governed by the start-phase rule.
+	// 🔴 {Initialize, Start} AND NOT allPhases, DELIBERATELY. Every Rule's Forbidden
+	// and Expect name one of these two, and widening this list would change what the
+	// three existing rules see — a stop-phase entry point becoming a barrier can only
+	// remove reachable code from a walk, which can only turn findings into silence.
+	// The symmetry traversal builds its own, stricter barrier for its own question.
 	barrier := map[any]bool{}
 	for _, ph2 := range []Phase{Initialize, Start} {
 		if ph2 == ph {
