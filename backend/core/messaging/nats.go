@@ -952,7 +952,11 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
-		err := pctx.Err() // an already-expired caller deadline publishes nothing
+		// Belt-and-braces: nats.go's request path also checks ctx.Err() before it
+		// sends, so this is not the only guard that an already-expired caller
+		// deadline publishes nothing; it states the rule here instead of relying
+		// on the client's internals alone.
+		err := pctx.Err()
 		if err == nil {
 			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
 		}

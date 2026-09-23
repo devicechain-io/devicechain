@@ -834,7 +834,8 @@ func (d *Dispatcher) publishResponse(tenant, deviceToken string, env responseEnv
 	}
 	// The tenant context is built fresh from the tenant string (NOT the run ctx), so recording the
 	// outcome of an op we already ran is not aborted by a leadership eviction landing during the
-	// publish. Each publish is bounded by the JetStream client's own default publish timeout.
+	// publish. With no deadline here, each publish is bounded by the core messaging writer's 5 s
+	// per-publish ceiling.
 	tctx := core.WithTenant(context.Background(), tenant)
 	for attempt := 0; attempt < responsePublishAttempts; attempt++ {
 		if err = d.responses.WriteToDevice(tctx, deviceToken, messaging.Message{Value: data}); err == nil {

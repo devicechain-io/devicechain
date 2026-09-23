@@ -71,10 +71,15 @@ func storedCount(t *testing.T, nmgr *NatsManager) uint64 {
 	return info.State.Msgs
 }
 
+// ruledPublishCeiling is the ceiling's value as the contract states it — MessageWriter's
+// doc says 5 s. The timing tests measure against THIS literal, not the publishWait
+// symbol, so a drift in the constant fails them instead of moving with them.
+const ruledPublishCeiling = 5 * time.Second
+
 // timedWrite runs one WriteMessages under a hard test-side deadline, so a publish that
 // never returns fails the test as a HANG rather than stalling the package until the
-// go test timeout.
-func timedWrite(t *testing.T, w MessageWriter, ctx context.Context, limit time.Duration) (time.Duration, error) {
+// go test timeout. With no msgs it writes a single message.
+func timedWrite(t *testing.T, w MessageWriter, ctx context.Context, limit time.Duration, msgs ...Message) (time.Duration, error) {
 	t.Helper()
 	if dl, ok := t.Deadline(); ok && time.Until(dl) < limit+5*time.Second {
 		t.Fatalf("not enough test time left (%v) to bound a %v publish", time.Until(dl), limit)
@@ -86,7 +91,10 @@ func timedWrite(t *testing.T, w MessageWriter, ctx context.Context, limit time.D
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		err := w.WriteMessages(ctx, Message{Value: []byte("payload")})
+		if len(msgs) == 0 {
+			msgs = []Message{{Value: []byte("payload")}}
+		}
+		err := w.WriteMessages(ctx, msgs...)
 		done <- result{time.Since(start), err}
 	}()
 	select {
@@ -186,8 +194,11 @@ func TestPublishWithoutDeadlineKeepsTheCeiling(t *testing.T) {
 	if !errors.Is(err, nats.ErrTimeout) {
 		t.Errorf("err = %v, want nats.ErrTimeout (the publish ceiling, not a caller deadline)", err)
 	}
-	if elapsed < publishWait || elapsed >= publishWait+1500*time.Millisecond {
-		t.Errorf("publish took %v, want within [%v, %v)", elapsed, publishWait, publishWait+1500*time.Millisecond)
+	if publishWait != ruledPublishCeiling {
+		t.Errorf("publishWait = %v, want %v: the ceiling is part of MessageWriter's documented contract", publishWait, ruledPublishCeiling)
+	}
+	if elapsed < ruledPublishCeiling || elapsed >= ruledPublishCeiling+1500*time.Millisecond {
+		t.Errorf("publish took %v, want within [%v, %v)", elapsed, ruledPublishCeiling, ruledPublishCeiling+1500*time.Millisecond)
 	}
 }
 
@@ -208,9 +219,50 @@ func TestLongerCallerDeadlineIsCappedAtTheCeiling(t *testing.T) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v reports the caller's deadline as exceeded; it has %v left", err, time.Until(mustDeadline(t, ctx)))
 	}
-	if elapsed < publishWait || elapsed >= publishWait+1500*time.Millisecond {
+	if elapsed < ruledPublishCeiling || elapsed >= ruledPublishCeiling+1500*time.Millisecond {
 		t.Errorf("publish took %v, want within [%v, %v): the caller's longer deadline replaced the ceiling",
-			elapsed, publishWait, publishWait+1500*time.Millisecond)
+			elapsed, ruledPublishCeiling, ruledPublishCeiling+1500*time.Millisecond)
+	}
+}
+
+// Each message in a batch gets its own ceiling: a batch is not one publish. The first
+// publish is answered, slowly (firstAckDelay), and the second is never answered. With
+// a ceiling per message the second waits its full ceiling AFTER the first returns, so
+// the batch takes firstAckDelay + the ceiling; with one ceiling shared by the batch the
+// second would be cut short at the ceiling measured from the start.
+func TestEachMessageInABatchGetsItsOwnCeiling(t *testing.T) {
+	const firstAckDelay = 3 * time.Second
+	srv := startEmbeddedServer(t)
+	nmgr, w, subject := publishDeadlineWriter(t, srv)
+	if err := nmgr.js.DeleteStream(StreamName(nmgr.Microservice.InstanceId, streams.FailedEvents)); err != nil {
+		t.Fatalf("delete stream: %v", err)
+	}
+	nc, err := nats.Connect(srv.ClientURL())
+	if err != nil {
+		t.Fatalf("connect responder: %v", err)
+	}
+	t.Cleanup(nc.Close)
+	var seen int
+	if _, err := SubscribeSynced(nc, subject, func(m *nats.Msg) {
+		seen++ // the handler runs on one goroutine, so no lock is needed
+		if seen != 1 {
+			return // every publish after the first is swallowed
+		}
+		time.Sleep(firstAckDelay)
+		_ = m.Respond([]byte(`{"stream":"publish-deadline","seq":1}`))
+	}); err != nil {
+		t.Fatalf("subscribe responder: %v", err)
+	}
+
+	elapsed, err := timedWrite(t, w, core.WithTenant(context.Background(), "acme"), 20*time.Second,
+		Message{Value: []byte("first")}, Message{Value: []byte("second")})
+	if !errors.Is(err, nats.ErrTimeout) {
+		t.Errorf("err = %v, want nats.ErrTimeout from the second message's ceiling", err)
+	}
+	want := firstAckDelay + ruledPublishCeiling
+	if elapsed < want || elapsed >= want+1500*time.Millisecond {
+		t.Errorf("batch took %v, want within [%v, %v): the second message did not get a ceiling of its own",
+			elapsed, want, want+1500*time.Millisecond)
 	}
 }
 
