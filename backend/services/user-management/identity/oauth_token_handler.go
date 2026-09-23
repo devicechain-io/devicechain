@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 )
 
 // maxTokenBodyBytes caps the token-request body (a small set of form fields).
@@ -120,7 +121,7 @@ func TokenHandler(
 			writeTokenError(w, errInvalidRequest("grant_type is required"))
 			return
 		default:
-			writeTokenError(w, &oauthError{"unsupported_grant_type", "unsupported grant_type " + grant, http.StatusBadRequest})
+			writeTokenError(w, &oauthError{Code: "unsupported_grant_type", Desc: "unsupported grant_type " + grant, Status: http.StatusBadRequest})
 			return
 		}
 
@@ -165,13 +166,17 @@ func writeTokenSuccess(w http.ResponseWriter, t *OAuthTokens) {
 // writeTokenError renders the §5.2 error body with the mapped status. Like the
 // success response it is marked no-store (§5.1). An invalid_client (401) carries a
 // WWW-Authenticate: Basic challenge, as RFC 6749 §5.2 requires when a client that
-// tried to authenticate is rejected.
+// tried to authenticate is rejected. A throttled client authentication (HTTP 429)
+// carries Retry-After, in whole seconds.
 func writeTokenError(w http.ResponseWriter, e *oauthError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	if e.Code == "invalid_client" {
 		w.Header().Set("WWW-Authenticate", `Basic realm="oauth", charset="UTF-8"`)
+	}
+	if e.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
 	}
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(tokenErrorResponse{Error: e.Code, ErrorDescription: e.Desc})

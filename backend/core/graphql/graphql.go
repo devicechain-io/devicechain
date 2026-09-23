@@ -11,7 +11,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
-	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,7 +44,7 @@ const (
 // Manages lifecycle of microservice GraphQL server.
 type GraphQLManager struct {
 	Microservice     *core.Microservice
-	Schema           *graphql.Schema
+	Schema           *Schema
 	Server           *core.HttpServer
 	ContextProviders map[ContextKey]interface{}
 	// Gate supplies the late-bound JWT validator and the readiness state the
@@ -82,7 +81,7 @@ type GraphQLManager struct {
 
 // Create a new graphql manager.
 func NewGraphQLManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
-	schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {
+	schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *GraphQLManager {
 	gql := &GraphQLManager{
 		Microservice:     ms,
 		Schema:           schema,
@@ -129,7 +128,7 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 
 	// Add handler for queries. A WebSocket upgrade on the same /graphql path is
 	// routed to the graphql-transport-ws subscription handler (ADR-037); a plain
-	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
+	// POST goes to the HTTP handler. Sharing one path lets a client derive
 	// the ws:// URL from the http:// one, matching GraphQL client conventions.
 	//
 	// 🔴 ONLY A SCHEMA WITH A SUBSCRIPTION ROOT GETS A WEBSOCKET AT ALL. The socket

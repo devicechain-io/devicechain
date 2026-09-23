@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -191,8 +192,25 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The credential checker: every password and client-secret compare goes through
+	// it, under a per-principal backoff whose state is shared by every replica through
+	// this bucket. It fails closed when the bucket cannot be reached.
+	attemptsKV, err := NatsManager.CredentialAttemptStore()
+	if err != nil {
+		return err
+	}
+	credentials, err := credential.NewChecker(attemptsKV, identity.CredentialPolicies,
+		credential.WithCounter(Microservice.NewCounterVec("credential_checks_total",
+			"Password and OAuth client-secret checks by outcome. A throttled attempt writes no "+
+				"audit row, so outcome=\"throttled\" is the view of an account held at the backoff "+
+				"cap; outcome=\"unavailable\" means the attempt store could not be reached and "+
+				"sign-in failed closed.",
+			[]string{"kind", "outcome"})))
+	if err != nil {
+		return err
+	}
 	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL,
-		Configuration.Auth.IssuerUrl, bootstrapConfig(Configuration))
+		Configuration.Auth.IssuerUrl, bootstrapConfig(Configuration), credentials)
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return explainSeedRefusal(err)
 	}

@@ -20,7 +20,7 @@ func testExpectation(replicas int) Expectation {
 		Streams:             []string{"i_inbound-events", "i_resolved-events"},
 		LeaseBucket:         "KV_i_dc_leases",
 		LeaseBucketRequired: true,
-		StateBuckets:        []string{"KV_i_dc_locks", "KV_dc_refresh_tokens"},
+		StateBuckets:        []string{"KV_i_dc_locks", "KV_dc_refresh_tokens", "KV_i_dc_credential_attempts"},
 		CacheBucketSuffixes: []string{"_device-by-token"},
 		MqttStreams:         []string{"$MQTT_sess", "$MQTT_msgs"},
 		Prefixes:            []string{"i_", "KV_i_", "KV_dc_"},

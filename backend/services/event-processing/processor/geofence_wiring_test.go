@@ -29,7 +29,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/glebarez/sqlite"
-	graphqlgo "github.com/graph-gophers/graphql-go"
 	"gorm.io/gorm"
 )
 
@@ -124,9 +123,9 @@ func lastFact(t *testing.T, facts *fenceFactWriter) ([]byte, *dmmodel.GeoFenceSe
 // It is memoized rather than parsed per request because manifest delivery makes many more
 // requests than the paged read it replaces — one manifest read plus a geometry request per
 // chunk — and re-parsing a schema of this size on each one turns a fixture into the slowest
-// thing in the package. A parsed *graphql.Schema is immutable and safe for concurrent Exec,
+// thing in the package. A parsed schema is immutable and safe for concurrent Exec,
 // which matters here: the reconcile sweep drives this from its own goroutine.
-var dmSchema = sync.OnceValue(func() *graphqlgo.Schema {
+var dmSchema = sync.OnceValue(func() *gqlcore.Schema {
 	return gqlcore.MustParseSchema(dmgraphql.SchemaContent, &dmgraphql.SchemaResolver{})
 })
 

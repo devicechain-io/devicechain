@@ -9,47 +9,39 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/iam"
-	"golang.org/x/crypto/bcrypt"
 )
 
-// verifyClientAuth is the pure token-endpoint client-authentication decision: a
-// disabled client is always rejected; a confidential client must present a
-// bcrypt-matching secret; a public client must NOT present a secret.
+// verifyClientAuth is the pure token-endpoint client-authentication decision —
+// everything but the secret compare, which it hands back as checkSecret: a disabled
+// client is always rejected; a confidential client must present a secret, and then
+// needs the compare; a public client must NOT present a secret, and needs none.
 func TestVerifyClientAuth(t *testing.T) {
-	const secret = "s3cr3t-value"
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("hash: %v", err)
-	}
-	confidential := &iam.OAuthClient{Enabled: true, SecretHash: string(hash)}
+	confidential := &iam.OAuthClient{Enabled: true, SecretHash: "$2a$10$hash"}
 	public := &iam.OAuthClient{Enabled: true}
 
-	// Confidential: correct secret passes; wrong/absent secret is invalid_client.
-	if e := verifyClientAuth(confidential, secret, true); e != nil {
-		t.Errorf("confidential + correct secret: got %v, want nil", e)
-	}
-	if e := verifyClientAuth(confidential, "wrong", true); e == nil || e.Code != "invalid_client" {
-		t.Errorf("confidential + wrong secret: got %v, want invalid_client", e)
-	}
-	if e := verifyClientAuth(confidential, "", false); e == nil || e.Code != "invalid_client" {
-		t.Errorf("confidential + no secret: got %v, want invalid_client", e)
-	}
-
-	// Public: no secret passes; a presented secret is a misconfiguration → invalid_client.
-	if e := verifyClientAuth(public, "", false); e != nil {
-		t.Errorf("public + no secret: got %v, want nil", e)
-	}
-	if e := verifyClientAuth(public, "anything", true); e == nil || e.Code != "invalid_client" {
-		t.Errorf("public + presented secret: got %v, want invalid_client", e)
-	}
-
-	// A disabled client is rejected regardless of type/secret.
-	for _, c := range []*iam.OAuthClient{
-		{Enabled: false, SecretHash: string(hash)},
-		{Enabled: false},
+	for _, c := range []struct {
+		name      string
+		client    *iam.OAuthClient
+		presented bool
+		wantCheck bool
+		wantErr   bool
+	}{
+		{"confidential + a secret needs the compare", confidential, true, true, false},
+		{"confidential + no secret is refused", confidential, false, false, true},
+		{"public + no secret passes with no compare", public, false, false, false},
+		{"public + a secret is a misconfiguration", public, true, false, true},
+		{"disabled confidential is refused", &iam.OAuthClient{Enabled: false, SecretHash: "$2a$10$hash"}, true, false, true},
+		{"disabled public is refused", &iam.OAuthClient{Enabled: false}, false, false, true},
 	} {
-		if e := verifyClientAuth(c, secret, true); e == nil || e.Code != "invalid_client" {
-			t.Errorf("disabled client: got %v, want invalid_client", e)
+		check, e := verifyClientAuth(c.client, c.presented)
+		if check != c.wantCheck {
+			t.Errorf("%s: checkSecret = %v, want %v", c.name, check, c.wantCheck)
+		}
+		if c.wantErr && (e == nil || e.Code != "invalid_client") {
+			t.Errorf("%s: got %v, want invalid_client", c.name, e)
+		}
+		if !c.wantErr && e != nil {
+			t.Errorf("%s: got %v, want nil", c.name, e)
 		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -152,13 +153,15 @@ type Manager struct {
 	// is disabled (no issuer configured), in which case the token endpoint is not
 	// registered and the code methods are never reached.
 	codesKV nats.KeyValue
-	// dummyHash equalizes login timing on the user-not-found path so response
-	// time does not reveal whether a username exists.
-	dummyHash  []byte
-	refreshTTL time.Duration
-	bootstrap  BootstrapConfig
-	issuerUrl  string
-	issuerName string
+	// credentials is the ONLY way this manager compares a presented secret with a
+	// stored hash — a password at login, a client secret at the OAuth token endpoint.
+	// It owns the per-principal backoff and the timing equalizer for unknown
+	// principals, so neither path can run an unthrottled bcrypt compare.
+	credentials *credential.Checker
+	refreshTTL  time.Duration
+	bootstrap   BootstrapConfig
+	issuerUrl   string
+	issuerName  string
 
 	// mu guards the signing-key material, which a rotation replaces while the
 	// service is live. The validator pointer is created once (request handlers
@@ -184,9 +187,32 @@ type TokenPair struct {
 // keeps the legacy per-instance internal identifier. store is the instance secret
 // store the signing keys' private halves are sealed in; it must be the Postgres store
 // over db, because a key's sealed half and its row are written in one transaction.
-func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, store secrets.SecretStore, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
+// credentials is the credential checker every secret comparison goes through; a nil
+// one makes Login and client authentication fail rather than compare unthrottled.
+func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, store secrets.SecretStore, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig, credentials *credential.Checker) *Manager {
+	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap, credentials: credentials}
 }
+
+// CredentialPolicies is the backoff schedule for each kind of secret this service
+// checks.
+//
+//   - A PASSWORD belongs to a human and may be weak, so it gets five attempts back to
+//     back and then 1s, 2s, 4s … up to 5 minutes between evaluated attempts — about a
+//     dozen guesses an hour at the cap, while the owner can still sign in.
+//   - A CLIENT SECRET is 256 random bits, so throttling it buys no protection against
+//     guessing; what it bounds is bcrypt work per client_id. The schedule is gentle and
+//     its cap short on purpose, because the throttle state is keyed by the client_id,
+//     which is not a secret: anyone who knows a confidential client's id can hold its
+//     delay at the cap, and a short cap is what keeps that from becoming an outage of
+//     the client (for Grafana SSO, of every user's sign-in through it).
+var CredentialPolicies = map[credential.Kind]credential.Policy{
+	credential.KindIdentity:    {Free: 5, Base: time.Second, Cap: 5 * time.Minute},
+	credential.KindOAuthClient: {Free: 10, Base: time.Second, Cap: 30 * time.Second},
+}
+
+// errNoCredentialChecker fails a secret comparison on a manager built without a
+// checker. Loudly, because the alternative is an unthrottled compare.
+var errNoCredentialChecker = errors.New("identity: no credential checker is configured")
 
 // resolveIssuerName picks the JWT "iss" value. A configured OAuth issuer URL
 // (ADR-047) wins and becomes the "iss" of every token — a decisive platform-wide
@@ -215,12 +241,9 @@ func (m *Manager) Initialize(ctx context.Context, refreshKV, codesKV nats.KeyVal
 	m.applyKeys(set)
 	m.refreshKV = refreshKV
 	m.codesKV = codesKV
-
-	dummy, err := bcrypt.GenerateFromPassword([]byte("dc-login-timing-equalizer"), bcrypt.DefaultCost)
-	if err != nil {
-		return err
+	if m.credentials == nil {
+		return errNoCredentialChecker
 	}
-	m.dummyHash = dummy
 
 	return m.seed(ctx)
 }
@@ -317,20 +340,43 @@ type MembershipInfo struct {
 // identity's memberships (ADR-033). Failures are uniform (unknown email, bad
 // password, or disabled) and timing-equalized so the API does not reveal whether
 // an email exists.
+//
+// The compare runs through the credential checker, so repeated failures on one
+// email are slowed down (see CredentialPolicies). Two failures are reported
+// distinctly from ErrInvalidCredentials, and neither says anything about the account:
+//
+//   - *credential.ThrottledError: the attempt was not evaluated, because the email's
+//     delay is still running. No lookup ran and NO AUDIT ROW is written — otherwise an
+//     attacker held at the cap could still drive a database write per request. The
+//     checker's outcome counter is where these show.
+//   - *credential.UnavailableError: the attempt store could not be reached, and the
+//     check failed closed.
 func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityAuth, error) {
+	if m.credentials == nil {
+		return nil, errNoCredentialChecker
+	}
 	email = normalizeEmail(email)
-	id, err := m.iam.IdentityByEmail(ctx, email)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	var id *iam.Identity
+	err := m.credentials.Check(ctx, credential.Principal{Kind: credential.KindIdentity, ID: email}, password,
+		func(ctx context.Context) (string, error) {
+			found, err := m.iam.IdentityByEmail(ctx, email)
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return "", err
+			}
+			if found == nil || !found.Enabled {
+				// Unknown or disabled: the checker compares a dummy hash, at the same cost.
+				return "", nil
+			}
+			id = found
+			return found.PasswordHash, nil
+		})
+	switch {
+	case err == nil:
+	case errors.Is(err, credential.ErrMismatch):
+		m.recordAuth(ctx, rdb.AuditOpLoginFailed, email, "")
+		return nil, ErrInvalidCredentials
+	default:
 		return nil, err
-	}
-	if id == nil || !id.Enabled {
-		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(password))
-		m.recordAuth(ctx, rdb.AuditOpLoginFailed, email, "")
-		return nil, ErrInvalidCredentials
-	}
-	if bcrypt.CompareHashAndPassword([]byte(id.PasswordHash), []byte(password)) != nil {
-		m.recordAuth(ctx, rdb.AuditOpLoginFailed, email, "")
-		return nil, ErrInvalidCredentials
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, "")
 

@@ -134,8 +134,13 @@ var compact = compactSizing{
 	StreamMaxBytesCold:    16 << 20,
 	MqttStoreMaxBytes:     32 << 20,
 	MqttQoS2StoreMaxBytes: 8 << 20,
-	KvCacheMaxBytes:       8 << 20,
-	KvStateMaxBytes:       16 << 20,
+	// 4 MiB, down from 8, when the credential-attempt State bucket arrived: that
+	// bucket's 16 MiB took the store's headroom 16 MiB under the budget test's floor.
+	// The cache tier is where the room comes from because a full cache bucket
+	// costs a database read, where a full State bucket fails sign-in; six of
+	// them at 4 MiB give back 24.
+	KvCacheMaxBytes: 4 << 20,
+	KvStateMaxBytes: 16 << 20,
 
 	JetStreamStorage:   "2Gi",
 	PostgresStorage:    "2Gi",

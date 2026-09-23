@@ -74,7 +74,7 @@ func keysTestManager(t *testing.T, db *gorm.DB, cfg config.SecretsConfiguration)
 	t.Helper()
 	store, err := secrets.NewFromConfig(context.Background(), cfg, db)
 	require.NoError(t, err)
-	return NewManager(nil, &rdb.RdbManager{Database: db}, nil, store, 0, 0, "", BootstrapConfig{}), store
+	return NewManager(nil, &rdb.RdbManager{Database: db}, nil, store, 0, 0, "", BootstrapConfig{}, nil), store
 }
 
 // storedSigningKeys reads every signing_keys row, soft-deleted or not.
@@ -413,7 +413,7 @@ func TestASealedHalfOfAnotherKeyIsRefused(t *testing.T) {
 // falling back to anything.
 func TestNoSecretStoreIsRefused(t *testing.T) {
 	db := keysTestDB(t)
-	m := NewManager(nil, &rdb.RdbManager{Database: db}, nil, nil, 0, 0, "", BootstrapConfig{})
+	m := NewManager(nil, &rdb.RdbManager{Database: db}, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
 	_, err := m.loadSigningKeysLocked(context.Background())
 	require.ErrorContains(t, err, "no secret store")
 	require.Empty(t, storedSigningKeys(t, db))

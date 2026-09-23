@@ -5,15 +5,13 @@ package graphql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
-	graphql "github.com/graph-gophers/graphql-go"
-
-	"github.com/graph-gophers/graphql-go/relay"
 )
 
 // bearerPrefix is the Authorization scheme carrying the access token.
@@ -117,8 +115,9 @@ func authenticateIdentity(v *auth.Validator, token string, _ func(string) string
 
 // Adds extra context to http request.
 type HttpHandler struct {
-	Schema           *graphql.Schema
-	Relay            *relay.Handler
+	// Schema is the work-limited schema (see Schema). It is the only kind a handler
+	// can be built over, which is what makes the limit apply to every service.
+	Schema           *Schema
 	ContextProviders map[ContextKey]interface{}
 	// Gate supplies the live JWT validator, which is bound late: a service starts
 	// not-ready and the validator becomes available only once the auth bootstrap
@@ -133,21 +132,20 @@ type HttpHandler struct {
 // Create new http handler for the data plane. gate may be nil only for a
 // deliberately unauthenticated server (tests); production services pass the
 // microservice readiness gate.
-func NewHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
+func NewHttpHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
 	return newHandler(schema, providers, gate, tenantPolicy)
 }
 
 // NewAdminHttpHandler creates the instance-scoped admin handler (ADR-033): it
 // requires an identity-tier token and runs in the system context (no tenant).
 // Resolvers still gate each operation on a specific system authority.
-func NewAdminHttpHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
+func NewAdminHttpHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
 	return newHandler(schema, providers, gate, identityPolicy)
 }
 
-func newHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, policy authPolicy) *HttpHandler {
+func newHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, policy authPolicy) *HttpHandler {
 	return &HttpHandler{
 		Schema:           schema,
-		Relay:            &relay.Handler{Schema: schema},
 		ContextProviders: providers,
 		Gate:             gate,
 		policy:           policy,
@@ -165,7 +163,7 @@ func (h *HttpHandler) validator() *auth.Validator {
 
 // Handles http request processing.
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Cap the request body before anything reads it (ADR-029): the relay's JSON
+	// Cap the request body before anything reads it (ADR-029): serveExec's JSON
 	// decode buffers the whole envelope — query + variables — into memory before
 	// the query-length ceiling can reject an oversized query, so without this a
 	// multi-hundred-MB body is a cheap memory-exhaustion vector. MaxBytesReader
@@ -192,7 +190,7 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Data plane: run unauthenticated so open entry points (the login
 		// mutation) stay reachable; tenant-scoped operations fail closed at the DB.
-		h.Relay.ServeHTTP(w, r)
+		h.serveExec(w, r)
 		return
 	}
 
@@ -211,7 +209,39 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
-	h.Relay.ServeHTTP(w, r.WithContext(ctx))
+	h.serveExec(w, r.WithContext(ctx))
+}
+
+// execRequest is the GraphQL-over-HTTP request envelope.
+type execRequest struct {
+	Query         string         `json:"query"`
+	OperationName string         `json:"operationName"`
+	Variables     map[string]any `json:"variables"`
+}
+
+// serveExec decodes one GraphQL request and executes it through the work-limited
+// Schema.
+//
+// It replaces graphql-go's relay.Handler, which took the RAW *graphql.Schema and so
+// could only ever call the unlimited Exec. The wire contract is relay's, kept exactly
+// because every client depends on it: a body that does not decode is a 400 with the
+// decoder's message (which is also how the MaxBytesReader ceiling surfaces); anything
+// that decodes gets HTTP 200 with a JSON GraphQL response, errors included — a GraphQL
+// request error is a 200 with an `errors` array, never an HTTP status.
+func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
+	var params execRequest
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	response := h.Schema.Exec(r.Context(), params.Query, params.OperationName, params.Variables)
+	body, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }
 
 // bearerToken extracts the access token from the Authorization header. It

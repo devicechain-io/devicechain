@@ -17,6 +17,7 @@ export {
   setAuthTokenGetter,
   setIdentityTokenGetter,
   GraphQLRequestError,
+  type GraphQLErrorEntry,
   type Area,
   type RequestOptions,
   type TypedDocument,

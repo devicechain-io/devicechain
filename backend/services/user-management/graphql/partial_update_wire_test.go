@@ -159,12 +159,13 @@ func (m partialUpdateMutation) ctxFor(t *testing.T) context.Context {
 	}
 	// updateProfile needs only to be authenticated: it is self-scoped, so the token
 	// subject IS the authorization. The Manager is built through NewManager with no
-	// microservice, lock or issuer — UpdateProfile reads none of them, and building the
-	// rest would make this file need a live NATS KV to check a document's shape.
+	// microservice, lock, issuer or credential checker — UpdateProfile reads none of
+	// them, and building the rest would make this file need a live NATS KV to check a
+	// document's shape.
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{
 		TokenType: auth.TokenTypeAccess, Username: "nobody@example.invalid",
 	})
-	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{})
+	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, nil)
 	return context.WithValue(ctx, ContextIdentityKey, mgr)
 }
 

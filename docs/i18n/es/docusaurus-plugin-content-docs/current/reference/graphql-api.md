@@ -521,4 +521,84 @@ identificador propio del dispositivo.
 La consola acuña los tokens por ti a partir de una plantilla por tipo de entidad, así que allí esto
 rara vez aparece; es en la API y en el aprovisionamiento por script donde muerde primero.
 
+## Límites de las solicitudes {#request-limits}
+
+Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,
+antes de ejecutar nada de ella. Los límites son los mismos en todos los servicios, y cada uno puede
+cambiarse por servicio con la variable de entorno indicada. Un valor ausente, que no es un número o
+menor que 1 vuelve al valor por defecto: ninguno puede desactivarse.
+
+| Límite | Por defecto | Variable | Qué se rechaza |
+| --- | --- | --- | --- |
+| Cuerpo de la solicitud | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | Todo el cuerpo HTTP, variables incluidas. Se responde con HTTP 400. |
+| Longitud de la consulta | 100.000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | La cadena de la consulta en sí. |
+| Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
+| Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
+| Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
+
+Salvo con el límite del cuerpo, una solicitud rechazada recibe HTTP 200 con una sola entrada en
+`errors`, sin `data` y sin haber ejecutado nada. El rechazo por campos raíz lleva
+`extensions.code` con el valor `TOO_MANY_ROOT_FIELDS`:
+
+```json
+{
+  "errors": [{
+    "message": "mutation (anonymous) selects 6 root fields; the maximum is 5",
+    "extensions": { "code": "TOO_MANY_ROOT_FIELDS" }
+  }]
+}
+```
+
+**Los campos raíz se cuentan por clave de respuesta**, así que cada alias cuenta como un campo
+propio, y los campos a los que se llega a través de un fragmento cuentan como si estuvieran escritos
+directamente. Repetir la misma clave cuenta como un solo campo. `@skip` e `@include` no se evalúan,
+así que un campo condicional cuenta tanto si se ejecuta como si no. Se cuentan todas las operaciones
+del documento, no solo la que selecciona `operationName`, y la regla se aplica tanto por WebSocket
+como por HTTP.
+
+El límite de mutaciones es el estricto porque los campos de una mutación se ejecutan uno tras otro:
+sin él, una sola solicitud podría llevar cientos de copias con alias de una mutación costosa. La
+consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de
+mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de primer nivel; los alias
+de un campo anidado no se cuentan.
+
+### Espera entre intentos de inicio de sesión {#sign-in-backoff}
+
+Los inicios de sesión fallidos hacen más lentos los siguientes intentos sobre la misma cuenta. No
+hay bloqueo.
+
+- **Contraseñas** (`login` y el formulario de inicio de sesión de OAuth). Los cinco primeros
+  intentos fallidos sobre una dirección de correo se evalúan de inmediato. A partir de ahí, la cuenta
+  espera 1 segundo antes de que se evalúe su siguiente intento, luego 2, luego 4, duplicándose hasta
+  5 minutos. Un inicio de sesión correcto reinicia la cuenta, y también 10 minutos sin actividad
+  después del último intento evaluado.
+- **Secretos de cliente OAuth** (el endpoint de tokens). Los diez primeros fallos se evalúan de
+  inmediato; después la espera se duplica desde 1 segundo hasta 30 segundos. Los clientes públicos
+  no tienen secreto y nunca se ralentizan.
+
+La cuenta pertenece a la dirección escrita, exista o no una cuenta con ella, así que la espera no
+revela qué direcciones están registradas. La comparten todas las réplicas del servicio.
+
+Un intento hecho durante la espera no se evalúa en absoluto: no se comprueba la contraseña y no se
+registra nada en el registro de auditoría. Se informa como un error propio y no como una contraseña
+incorrecta, porque la contraseña bien podría ser correcta:
+
+```json
+{
+  "errors": [{
+    "message": "too many failed sign-in attempts; try again in 8 seconds",
+    "path": ["login"],
+    "extensions": { "code": "THROTTLED", "retryAfterSeconds": 8 }
+  }]
+}
+```
+
+El endpoint de tokens de OAuth responde a un cliente ralentizado con HTTP 429, una cabecera
+`Retry-After` y `{"error": "invalid_client", "error_description": "too many failed attempts"}`.
+
+Si el servicio no puede llegar al almacén que guarda estas cuentas, se niega a comprobar contraseñas
+en lugar de comprobarlas sin contar. El error de `login` lleva entonces `extensions.code` con el
+valor `UNAVAILABLE`, y el endpoint de tokens responde HTTP 503. Trata ambos casos como una caída del
+servicio, no como una credencial rechazada.
+
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se estabilicen.

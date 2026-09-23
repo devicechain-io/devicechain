@@ -8,5 +8,6 @@
   "serverUnreachable": "No se pudo conectar con el servidor. Comprueba que la API esté en ejecución.",
   "sessionExpired": "Tu sesión expiró. Inicia sesión de nuevo.",
   "signIn": "Iniciar sesión",
-  "signInSubtitle": "Inicia sesión en la consola de gestión"
+  "signInSubtitle": "Inicia sesión en la consola de gestión",
+  "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo."
 }

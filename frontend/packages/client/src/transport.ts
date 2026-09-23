@@ -111,16 +111,27 @@ export class GraphQLRequestError extends Error {
     /** HTTP status, or 0 for a transport-level failure. */
     public status: number,
     /** The raw `errors` array from a GraphQL response, when present. */
-    public errors?: { message: string }[],
+    public errors?: GraphQLErrorEntry[],
   ) {
     super(message);
     this.name = 'GraphQLRequestError';
   }
 }
 
+/**
+ * One entry of a GraphQL response's `errors` array. `extensions` carries the server's
+ * machine-readable detail when it sends any — for example `code: "THROTTLED"` with
+ * `retryAfterSeconds` on a sign-in refused by the per-account backoff — so a caller can
+ * branch on a code instead of matching the message text.
+ */
+export interface GraphQLErrorEntry {
+  message: string;
+  extensions?: Record<string, unknown>;
+}
+
 interface GraphQLResponse<T> {
   data?: T;
-  errors?: { message: string }[];
+  errors?: GraphQLErrorEntry[];
 }
 
 export interface RequestOptions {

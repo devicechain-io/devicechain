@@ -500,4 +500,81 @@ entity a token you choose and keep the device's own identifier alongside it.
 The console mints tokens for you from a per-entity-type template, so this rarely comes up there;
 it is the API and scripted-provisioning path where it bites first.
 
+## Request limits {#request-limits}
+
+Every GraphQL endpoint refuses a request that is too large or does too much, before any of it
+runs. The limits are the same for every service, and each can be changed per service with the
+environment variable shown. A value that is missing, not a number, or below 1 falls back to the
+default: none of them can be switched off.
+
+| Limit | Default | Variable | What is refused |
+| --- | --- | --- | --- |
+| Request body | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | The whole HTTP body, including variables. Answered with HTTP 400. |
+| Query length | 100,000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | The query string itself. |
+| Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
+| Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
+| Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
+
+Apart from the body limit, a refused request gets HTTP 200 with a single entry in `errors`, no
+`data`, and nothing executed. A root-field refusal carries `extensions.code` set to
+`TOO_MANY_ROOT_FIELDS`:
+
+```json
+{
+  "errors": [{
+    "message": "mutation (anonymous) selects 6 root fields; the maximum is 5",
+    "extensions": { "code": "TOO_MANY_ROOT_FIELDS" }
+  }]
+}
+```
+
+**Root fields are counted by response key**, so every alias counts as a field of its own, and
+fields reached through a fragment count as if they were written out. Repeating the same key is
+one field. `@skip` and `@include` are not evaluated, so a conditional field counts whether or not
+it runs. Every operation in the document is counted, not only the one `operationName` selects, and
+the rule applies over WebSocket as well as HTTP.
+
+The mutation limit is the tight one because mutation fields run one after another: without it, a
+single request could carry hundreds of aliased copies of an expensive mutation. The console, the
+dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per request and at
+most two query fields. The limit applies to top-level fields only; aliases of a nested field are not counted.
+
+### Sign-in backoff {#sign-in-backoff}
+
+Failed sign-ins slow down further attempts on the same account. There is no lockout.
+
+- **Passwords** (`login`, and the OAuth sign-in form). The first five failed attempts on an email
+  address are evaluated straight away. After that the account waits 1 second before its next
+  attempt is evaluated, then 2, then 4, doubling up to 5 minutes. A successful sign-in resets the
+  count, and so does a quiet spell of 10 minutes after the last attempt that was evaluated.
+- **OAuth client secrets** (the token endpoint). The first ten failures are evaluated straight
+  away, then the wait doubles from 1 second up to 30 seconds. Public clients have no secret and are
+  never slowed down.
+
+The count belongs to the address that was typed, whether or not an account exists for it, so the
+delay does not reveal which addresses are registered. It is shared by every replica of the
+service.
+
+An attempt made during the wait is not evaluated at all: the password is not checked and nothing
+is recorded in the audit log. It is reported as its own error rather than as a wrong password,
+because the password may well have been right:
+
+```json
+{
+  "errors": [{
+    "message": "too many failed sign-in attempts; try again in 8 seconds",
+    "path": ["login"],
+    "extensions": { "code": "THROTTLED", "retryAfterSeconds": 8 }
+  }]
+}
+```
+
+The OAuth token endpoint answers a throttled client with HTTP 429, a `Retry-After` header and
+`{"error": "invalid_client", "error_description": "too many failed attempts"}`.
+
+If the service cannot reach the store that keeps these counts, it refuses to check passwords at all
+rather than check them without counting. The `login` error then carries
+`extensions.code` set to `UNAVAILABLE`, and the token endpoint answers HTTP 503. Treat both as an
+outage, not as a rejected credential.
+
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.

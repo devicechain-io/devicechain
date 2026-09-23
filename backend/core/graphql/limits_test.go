@@ -56,6 +56,12 @@ func TestDefaultConstants(t *testing.T) {
 	if DefaultGraphQLMaxBodyBytes != 4<<20 {
 		t.Errorf("DefaultGraphQLMaxBodyBytes = %d, want %d", DefaultGraphQLMaxBodyBytes, 4<<20)
 	}
+	if DefaultGraphQLMaxQueryRootFields != 20 {
+		t.Errorf("DefaultGraphQLMaxQueryRootFields = %d, want 20", DefaultGraphQLMaxQueryRootFields)
+	}
+	if DefaultGraphQLMaxMutationRootFields != 5 {
+		t.Errorf("DefaultGraphQLMaxMutationRootFields = %d, want 5", DefaultGraphQLMaxMutationRootFields)
+	}
 }
 
 // nestRoot is a self-referential type so a test query can nest arbitrarily deep.

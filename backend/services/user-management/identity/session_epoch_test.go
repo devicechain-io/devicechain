@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/golang-jwt/jwt/v5"
@@ -19,7 +21,6 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -90,9 +91,15 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	refresh, codes := jetStreamKV(t)
 	base.m.refreshKV = refresh
 	base.m.codesKV = codes
-	dummy, err := bcrypt.GenerateFromPassword([]byte("equalizer"), bcrypt.MinCost)
+	// Login compares through the credential checker, which owns the timing-equalizing
+	// dummy compare. This test is about sessions, not the backoff, so its policy is
+	// generous enough that no sequence of sign-ins here is ever throttled.
+	generous := credential.Policy{Free: 1000, Base: time.Second, Cap: time.Minute}
+	checker, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{
+		credential.KindIdentity: generous, credential.KindOAuthClient: generous,
+	})
 	require.NoError(t, err)
-	base.m.dummyHash = dummy
+	base.m.credentials = checker
 
 	base.seedTenant(t, "acme")
 	require.NoError(t, base.store.CreateOAuthClient(context.Background(), &iam.OAuthClient{

@@ -41,6 +41,8 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.19 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.57.0 // indirect

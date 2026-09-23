@@ -38,14 +38,20 @@ import { GraphQLRequestError } from '@devicechain/client';
  * the server returned a GraphQL body containing errors. That is the same as saying "the
  * resolver ran and returned an error" — which is the question this screen can actually ask.
  *
- * 🔴 IT IS NOT THE SAME AS "the server decided about these credentials", and the gap is
- * real rather than theoretical. `login` returns whatever `IdentityByEmail` gives it for any
- * non-not-found database error, so Postgres failing over mid-login also arrives as HTTP 200
- * with an `errors` array and is reported here as a bad password. Nothing in the response
- * distinguishes the two today — there is no error-extensions convention on any of these
- * schemas — so the fix is server-side and this predicate is as good as the wire allows. It
- * is still strictly better than what it replaced, which reported every unreachable server
- * the same way.
+ * 🔴 IT IS NOT THE SAME AS "the server decided about these credentials". Two failures
+ * that are not about the password also arrive as HTTP 200 with an `errors` array, and the
+ * server labels both with an `extensions.code` so they are not read as one:
+ *
+ *   - `THROTTLED` — the account has failed too many times recently and this attempt was
+ *     not evaluated at all. Saying "invalid password" here would tell someone who typed
+ *     the RIGHT password that it is wrong.
+ *   - `UNAVAILABLE` — the server could not count the attempt (its attempt store was
+ *     unreachable), so it refused to check the password. That is an outage, not a verdict.
+ *
+ * signInErrorKey reads those codes before this predicate. What still has no code is a
+ * database failure during the account lookup, which is therefore still reported as a
+ * rejection — the one remaining case where this screen can blame the password for an
+ * outage.
  *
  * 🔴 VERIFIED AGAINST THE SERVER, NOT REASONED FROM THE CLIENT. Both of this screen's
  * calls — `login` and `selectTenant` — pass `{ anonymous: true }`, so they carry no
@@ -69,10 +75,25 @@ export function serverRejectedRequest(err: unknown): boolean {
  * Keys are namespace-qualified so a caller whose default namespace is not `login` cannot
  * silently resolve a different string.
  *
- * Deliberately coarse: distinguishing a rate-limit from a bad password would mean
- * pattern-matching the server's prose, which is a contract nobody has agreed to and which
- * breaks the moment that text is reworded.
+ * The server's codes are read FIRST, because they are the cases where "the server
+ * answered" and "the server rejected these credentials" come apart: a throttled attempt
+ * gets its own message, and an unavailable check reads as the outage it is. They are
+ * matched on `extensions.code`, never on the message text, which is prose and may be
+ * reworded.
  */
 export function signInErrorKey(err: unknown, rejectedKey: string): string {
+  switch (serverErrorCode(err)) {
+    case 'THROTTLED':
+      return 'login:tooManyAttempts';
+    case 'UNAVAILABLE':
+      return 'login:serverUnreachable';
+  }
   return serverRejectedRequest(err) ? rejectedKey : 'login:serverUnreachable';
+}
+
+/** The machine-readable code on the server's first error, when it sent one. */
+export function serverErrorCode(err: unknown): string | undefined {
+  if (!(err instanceof GraphQLRequestError)) return undefined;
+  const code = err.errors?.[0]?.extensions?.code;
+  return typeof code === 'string' ? code : undefined;
 }

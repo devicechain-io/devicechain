@@ -93,6 +93,20 @@ var All = []Bucket{
 			"volume of any bucket here; a full one breaks MCP authorization.",
 	},
 	{
+		Name: BucketCredentialAttempts,
+		Tier: State,
+		Why: "One entry per principal (email or OAuth client_id, hashed) that failed a " +
+			"credential check recently, expiring 10 minutes after its last write, so it " +
+			"scales with recent failed sign-ins — including ones for accounts that do not " +
+			"exist, since an attempt is charged before the account is looked up. A full " +
+			"bucket refuses the charge, and credential.Checker fails closed: EVERY sign-in " +
+			"on the instance fails until entries expire. Filling it takes roughly 650k " +
+			"distinct principals inside one TTL window (~1,100 new principals a second, " +
+			"each paying a bcrypt compare); the outcome=\"unavailable\" series of " +
+			"devicechain_usermanagement_credential_checks_total " +
+			"is where that shows.",
+	},
+	{
 		Name: BucketLocks,
 		Tier: State,
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
@@ -153,6 +167,7 @@ var All = []Bucket{
 const (
 	BucketRefreshTokens         = "dc_refresh_tokens"
 	BucketOAuthCodes            = "dc_oauth_codes"
+	BucketCredentialAttempts    = "dc_credential_attempts"
 	BucketLocks                 = "dc_locks"
 	BucketLeases                = "dc_leases"
 	BucketDeviceByToken         = "device-by-token"

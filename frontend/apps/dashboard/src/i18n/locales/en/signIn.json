@@ -8,5 +8,6 @@
   "serverUnreachable": "Could not reach the server. Check that the API is running.",
   "submit": "Sign in",
   "submitting": "Signing in…",
-  "title": "Sign in"
+  "title": "Sign in",
+  "tooManyAttempts": "Too many failed sign-in attempts for this account. Wait a moment, then try again."
 }

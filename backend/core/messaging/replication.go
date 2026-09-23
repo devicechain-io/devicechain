@@ -102,6 +102,17 @@ var mqttStreamNames = []string{
 	"$MQTT_out",    // outbound QoS 2 PUBREL
 }
 
+// CredentialAttemptsBucketName is the concrete KV bucket holding an instance's
+// credential-check backoff state (core/credential).
+//
+// It is instance-PREFIXED, unlike the refresh-token and authorization-code buckets,
+// on purpose: the entries are keyed by a hash of the presented email, so two instances
+// sharing one broker would otherwise share one throttle — failed sign-ins for an
+// address on one instance delaying the same address on the other.
+func CredentialAttemptsBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketCredentialAttempts))
+}
+
 // ReplicationExpectation states, in concrete broker names, what an instance's
 // JetStream objects must look like at the given replica factor (ADR-020 A0).
 //
@@ -165,6 +176,9 @@ func ReplicationExpectation(instanceId string, replicas int, deployedAreas []str
 		// prefix sweep, which checks it when it is there and does not report it
 		// missing when it is not.
 		KvStreamName(kv.BucketRefreshTokens),
+		// The credential-attempt store is created unconditionally by user-management
+		// too, and a full or unreplicated one fails every sign-in the same way.
+		KvStreamName(CredentialAttemptsBucketName(instanceId)),
 	}
 	for _, b := range kv.All {
 		if b.Tier != kv.Cache {
