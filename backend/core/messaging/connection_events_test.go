@@ -166,6 +166,13 @@ func TestPermanentCloseIsLoggedAtError(t *testing.T) {
 	waitFor(t, "a closed log", func() bool {
 		return findLog(logs, "CLOSED permanently") != nil
 	})
+	// The handler goes on to call MarkNotLive, which logs a SECOND error line. Wait for
+	// it too: returning after the first line let the second land in the NEXT test's
+	// capture, where TestShutdownCloseIsNotLoggedAtError read it as its own graceful
+	// shutdown logging at error level.
+	waitFor(t, "the liveness log", func() bool {
+		return findLog(logs, "only a restart can clear it") != nil
+	})
 	// The level is read off THAT record rather than searched for in the buffer: any
 	// unrelated error logged during the test would otherwise satisfy it. A terminal
 	// condition logged at warn sits in the same bucket as the recoverable
