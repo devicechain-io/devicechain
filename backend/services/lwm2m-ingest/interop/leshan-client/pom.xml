@@ -28,7 +28,22 @@
     <maven.compiler.target>11</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <leshan.version>2.0.0-M15</leshan.version>
+    <!-- Leshan 2.0.0-M15 pulls jackson 2.15.3 transitively, which carries known advisories.
+         The 2.18 line is the newest that still targets Java 8, so it is a drop-in here. -->
+    <jackson.version>2.18.11</jackson.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
