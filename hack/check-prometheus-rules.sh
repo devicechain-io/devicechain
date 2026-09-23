@@ -16,10 +16,10 @@
 # That is the same failure mode as an alert with no series, reached by a
 # different route, and this repo now ships nine rule files: the DETECT/REACT
 # rules, the JetStream replication rules (ADR-020 A0), the JetStream delivery
-# rules (unread loss and stream fill), the database backup rules (ADR-028,
-# ADR-020 A2.5), the database storage rules (ADR-020 A2), the database
-# control-plane rules (ADR-020 A1.5), the command-delivery rules, the tenant-purge
-# rules and the sign-in rules. A break in any one takes its neighbours with it.
+# rules (unread loss, stream fill and messages held past AckWait), the database
+# backup rules (ADR-028, ADR-020 A2.5), the database storage rules (ADR-020 A2),
+# the database control-plane rules (ADR-020 A1.5), the command-delivery rules,
+# the tenant-purge rules and the sign-in rules. A break in any one takes its neighbours with it.
 #
 # 🔴 THIS SCRIPT CANNOT SEE A MISSPELLED SERIES NAME. promtool parses PromQL; it
 # has no idea whether `devicechain_commanddelivery_batch_refusals_total` is a
@@ -946,10 +946,10 @@ note "every rendered rule group parses"
 # rendering its rules reports.
 #
 # 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and the exact value is derived
-# rather than chosen. The chart renders 39 alerts across nine rule files, and the
+# rather than chosen. The chart renders 40 alerts across nine rule files, and the
 # largest single file holds 15. The floor is 20: strictly ABOVE the biggest one
 # file, so a run that read only a SUBSET of the files can never clear it, and
-# comfortably below 39, so ordinary rule churn -- adding alerts, retiring one --
+# comfortably below 40, so ordinary rule churn -- adding alerts, retiring one --
 # never touches it.
 #
 # A floor set AT the current count would be a tripwire on legitimate editing

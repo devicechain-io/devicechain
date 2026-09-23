@@ -127,7 +127,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// a running fleet does NOT replay the backlog of dispatch requests event-processing has published
 	// since the C2b sink went live — replaying that history would flood stale outbound calls. Once
 	// the durable exists its ack cursor persists, so a restart resumes from the last ack.
-	reader, err := nmgr.NewReader(streams.ConnectorDispatch, messaging.ReaderWithDeliverNew())
+	reader, err := newDispatchReader(nmgr, Configuration)
 	if err != nil {
 		return err
 	}
@@ -174,9 +174,24 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// exhausted budget is the one thing a pacer needs one for.
 	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, DeadLetters, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
-		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,
+		tenantDeleted, Configuration.MaxConcurrentSends,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
 	return nil
+}
+
+// newDispatchReader builds the durable connector-dispatch reader the consumer drains. It is a
+// function of its own so the test that reproduces a burst queued behind slow sends builds the
+// reader exactly as this service does, rather than a copy of it.
+//
+// 🔴 IT FETCHES ONLY WHAT A SEND WORKER CAN START. The broker's redelivery clock starts at fetch,
+// and a send can take up to the per-send ceiling. A reader that fetched a full batch in front of
+// the pool held the tail of a burst past that clock, the broker redelivered it while the first
+// copy was still queued, and both copies were sent. With one slot per worker nothing waits in a
+// queue, and each dispatch carries the time its clock started so the rate wait and the send are
+// bounded from there (DispatchConsumer.handle, sendContext).
+func newDispatchReader(nmgr *messaging.NatsManager, cfg *config.OutboundConnectorsConfiguration) (messaging.MessageReader, error) {
+	return nmgr.NewReader(streams.ConnectorDispatch, messaging.ReaderWithDeliverNew(),
+		messaging.ReaderWithCapacity(cfg.MaxConcurrentSends))
 }
 
 // buildEgressLimiter constructs the per-tenant OUTBOUND egress limiter (ADR-060 SD-3). When the

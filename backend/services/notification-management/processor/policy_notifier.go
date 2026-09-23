@@ -286,7 +286,21 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// message, so they belong inside the same budget the broker is timing. See
 	// dispatchBudget — this is the mechanism that makes "the dispatch finishes inside
 	// AckWait" true, instead of a claim about the per-attempt timeout that never was.
-	dctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
+	//
+	// 🔑 AND IT IS MEASURED FROM THE BROKER'S CLOCK WHEN THE MESSAGE CARRIES IT. The broker
+	// started timing this alarm when it was FETCHED, so a budget counted from now is only
+	// right if the alarm went straight to a worker. The message's AckDeadline says when the
+	// broker will actually redeliver it; the dispatch ends dispatchMargin before that if that
+	// is earlier, leaving the margin for the bookkeeping below exactly as the fixed budget
+	// does. Only the delivery context gets the deadline — ctx itself gets none, so the
+	// post-delivery RecordNotification keeps its own bound.
+	deadline := time.Now().Add(n.wholeDispatchBudget())
+	if ackDeadline, ok := messaging.AckDeadlineFrom(ctx); ok {
+		if capped := ackDeadline.Add(-dispatchMargin); capped.Before(deadline) {
+			deadline = capped
+		}
+	}
+	dctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
 	policies, err := n.api.EnabledNotificationPolicies(dctx)

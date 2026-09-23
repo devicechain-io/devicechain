@@ -1500,7 +1500,9 @@ below). The sign-in section matters if you call the GraphQL API from your own co
 the JetStream volume yourself: sign-in is now rate-limited, and a GraphQL request is limited in how
 many root fields and password checks it can carry. If you route or silence alerts by name, read
 "A consumer that falls behind a full stream now raises an alert": `EventProcessingStreamNearFull` is
-renamed.
+renamed. If your outbound-connectors values set `dispatchBacklog`, delete it before upgrading: the
+service now refuses to start with it (see "The connectors service no longer accepts dispatchBacklog"
+below).
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1722,6 +1724,27 @@ The near-full warning is **renamed** from `EventProcessingStreamNearFull` to
 **`JetStreamStreamNearFull`**, and it now covers the streams of every service, not only
 event-processing's. The threshold (80% of the byte ceiling for 10 minutes) is unchanged. If an
 Alertmanager route or silence names the old alert, change it to the new name.
+
+#### The connectors service no longer accepts dispatchBacklog
+
+If your values set `dispatchBacklog` under `functionalAreas.outbound-connectors.config`, delete it
+**before** upgrading. The service refuses to start with it, and the error names the key.
+
+The setting sized a buffer between the service's reader and its send workers, and that buffer is
+gone. The reader now fetches only as many dispatches as there are workers free to start them
+(`maxConcurrentSends`), so a dispatch no longer waits in the process while the broker's
+acknowledgement window runs. The notification service reads alarms the same way, one per
+dispatcher.
+
+This fixes a duplicate. Before, a burst of alarms or connector dispatches queued behind a slow
+channel could sit in the service longer than that window. The broker then handed the same messages
+out again while the first copies were still waiting, and both copies were sent: a second page for
+one alarm, or a second call to the same webhook. Each send is now also cut off with time to spare
+before the window closes.
+
+A new alert, `ReaderHeldMessagePastAckWait`, fires if either service still holds a message past the
+window. [Messages held past their acknowledgement
+window](./observability.md#held-past-ack-wait) explains what each case means.
 
 ### The one-time durable-ingest cutover
 

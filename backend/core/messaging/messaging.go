@@ -194,6 +194,35 @@ type Message struct {
 	Headers map[string]string
 
 	ack Acknowledger
+	// slot is this message's claim on a capacity reader's pool (ReaderWithCapacity), and
+	// carries the time it was fetched. Nil for every message a capacity reader did not
+	// produce, which is what makes AckDeadline zero and Release a no-op on them.
+	slot *slot
+}
+
+// AckDeadline is when the broker will redeliver this message if it has not been acked: its
+// fetch time plus the AckWait its durable was created with. It is the budget a worker making
+// a slow send should measure from — the broker's clock started at fetch, not at dequeue.
+//
+// 🔴 IT IS THE ZERO TIME UNLESS THE MESSAGE CAME FROM A CAPACITY READER. A reader that fetches
+// full batches hands a message out an unknown time after its clock started, and stamping one
+// would invite a consumer to re-base a budget onto a number that does not describe its queue.
+// Zero is the honest answer there, and WithAckDeadline and AckDeadlineFrom treat it as "none".
+func (m Message) AckDeadline() time.Time {
+	if m.slot == nil {
+		return time.Time{}
+	}
+	return m.slot.deadline
+}
+
+// Release returns this message's capacity slot, so its reader can fetch another. It is
+// idempotent, a no-op on a message without a slot, and a no-op once the slot's AckWait has run
+// out (the reader already took it back). Ack releases on its own and Process releases when the
+// worker returns, so a consumer rarely calls this directly.
+func (m Message) Release() {
+	if m.slot != nil {
+		m.slot.release()
+	}
 }
 
 // HeaderCorrelationID is the message-header key for the correlation id that ties
@@ -239,7 +268,13 @@ func NewConsumedMessage(subject string, value []byte, numDelivered int, headers 
 // Ack acknowledges that the message has been durably handled so it is not
 // redelivered. It is a no-op when the message carries no acknowledger (a
 // produced or synthetic message), so producers and unit tests are unaffected.
+//
+// On a message from a capacity reader it sends the ack and THEN returns the message's slot —
+// whether or not the ack send errored. A failed ack leaves the message to be redelivered,
+// and holding the slot until then would protect nothing: the redelivery is a new delivery
+// with a slot of its own.
 func (m Message) Ack() error {
+	defer m.Release()
 	if m.ack == nil {
 		return nil
 	}

@@ -247,6 +247,21 @@ del servicio lector se reinician a la vez puede quedar sin contar. Un servicio s
 informa ninguna de las dos series, así que ninguna alerta puede dispararse por él; la advertencia de
 flujo casi lleno y sus alertas de salud de los pods cubren ese caso.
 
+## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
+
+El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un
+mensaje que sigue sin confirmar cuando la ventana se cierra se entrega de nuevo, y el servicio
+lo trata como si fuera nuevo. Para los dos servicios cuyo trabajo es un envío lento hacia fuera
+de la plataforma —las notificaciones de alarmas y los conectores de salida— eso puede
+significar una segunda notificación o una segunda llamada a un webhook. Ambos leen solo tantos
+mensajes como trabajadores tienen libres para empezarlos, así que nada espera en una cola
+mientras corre la ventana, y cada envío se corta con margen antes de que la ventana se cierre.
+La alerta siguiente informa de los casos que aun así se producen.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `ReaderHeldMessagePastAckWait` | warning | Un manejador retuvo un mensaje más allá de su ventana de confirmación, así que se volvió a entregar. `stage=worker`: un envío tardó demasiado, así que el mensaje pudo enviarse dos veces. `stage=buffer`: un mensaje se descartó antes de entregarse, y se procesó su nueva entrega en su lugar. | Para `stage=worker`, busque un destino lento o que no responde detrás del servicio que indica la etiqueta `durable`. Para `stage=buffer`, el servicio no está al día con su stream. |
+
 ## Relacionado
 
 - **[Arrancar una instancia](./bootstrap.md#install)** — `dcctl install`, el comando que

@@ -78,6 +78,13 @@ type streamMetrics struct {
 	// desired == 1 is the false-HA state, stated as an alertable fact.
 	brokerClustered prometheus.Gauge
 
+	// heldPastAckWait counts messages a CAPACITY READER held past their AckWait, by durable
+	// and by where the message was when the clock ran out (capacity.go): stage=worker means a
+	// handler was still working on a message the broker had already redelivered, so it may be
+	// handled twice; stage=buffer means the reader dropped a message it had fetched but not
+	// yet handed out. Each pod counts its own messages, so the alert sums across pods.
+	heldPastAckWait *prometheus.CounterVec
+
 	// warned tracks whether a stream is currently above the near-full threshold, so
 	// the warning fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
@@ -157,22 +164,43 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			"Messages removed ahead of this durable's cursor, reported while the durable has been handed "+
 				"nothing since the previous sample (0 while it is reading).",
 			[]string{"stream", "durable"}),
+		heldPastAckWait: ms.NewCounterVec("reader_held_past_ack_wait_total",
+			"Messages a capacity-bounded reader held past their acknowledgement window, so the broker "+
+				"redelivered them. stage=worker: a handler was still working on one; stage=buffer: the "+
+				"reader dropped one it had fetched but not yet handed out.",
+			[]string{"durable", "stage"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
 }
 
-// initDurable creates a durable's two unread series at 0.
+// initDurable creates a durable's per-reader series at 0: the two unread series for every
+// reader, and — for a capacity reader — both stages of the held-past-AckWait counter.
 //
-// It is called when the reader is created, not at its first sample, and that ordering is
-// what makes the first loss visible. The alert is increase() over the counter, and a
-// counter that first APPEARS at a nonzero value has no earlier sample to increase from —
+// It is called when the reader is created, not at its first sample or first count, and that
+// ordering is what makes the first loss visible. The alerts are increase() over counters, and
+// a counter that first APPEARS at a nonzero value has no earlier sample to increase from —
 // so a loss in a durable's first interval would be exported and never alerted on. A
 // series that exists at 0 from creation also keeps "no loss" and "not measured" from
-// reading the same on a dashboard.
-func (m *streamMetrics) initDurable(stream, durable string) {
+// reading the same on a dashboard. The held-past series exist only for a capacity reader,
+// because no other reader can count one: a 0 there would claim a measurement nothing makes.
+func (m *streamMetrics) initDurable(stream, durable string, capacity bool) {
 	m.unreadSkipped.WithLabelValues(stream, durable).Add(0)
 	m.unreadGap.WithLabelValues(stream, durable).Set(0)
+	if capacity {
+		m.heldPastAckWait.WithLabelValues(durable, stageBuffer).Add(0)
+		m.heldPastAckWait.WithLabelValues(durable, stageWorker).Add(0)
+	}
+}
+
+// heldPastAckWaitFor returns the held-past-AckWait recorder for one capacity reader's
+// durable. Its series are created at 0 by initDurable, once the reader exists. It returns
+// nil on a manager with no metrics (one assembled by hand in a unit test).
+func (m *streamMetrics) heldPastAckWaitFor(durable string) func(stage string) {
+	if m == nil || m.heldPastAckWait == nil {
+		return nil
+	}
+	return func(stage string) { m.heldPastAckWait.WithLabelValues(durable, stage).Inc() }
 }
 
 // sampleReplication records the replication triple for one stream or KV bucket.

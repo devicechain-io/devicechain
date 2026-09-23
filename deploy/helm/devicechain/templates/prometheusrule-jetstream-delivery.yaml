@@ -1,6 +1,7 @@
 {{/*
 Alerting rules for JetStream DELIVERY: messages a stream discarded before a reader got
-to them, and streams approaching the ceiling (ADR-023) at which that starts.
+to them, streams approaching the ceiling (ADR-023) at which that starts, and messages a
+capacity-bounded reader held past their acknowledgement window.
 
 WHY THIS GROUP EXISTS. Every stream is bounded and discards its OLDEST message once
 full (DiscardOld). That is the right policy for a platform that must keep ingesting,
@@ -17,9 +18,19 @@ own subsystem, so a regex over the name covers every reader with no list to keep
 `[a-z0-9]+`, NOT `.+`: the area segment never contains `_` (its dashes are stripped),
 so the stricter form matches the one name core builds and nothing else.
 
-🔑 `max by`, NEVER `sum`. Every replica of a service samples the same durable and
-counts the same removal, so summing across pods would multiply one loss by the
-replica count.
+🔑 `max by`, NEVER `sum`, for the broker-sampled series (the unread counter and gap,
+and the fill gauges). Every replica of a service samples the same durable and counts
+the same removal, so summing across pods would multiply one loss by the replica
+count. The held-past-AckWait counter is the opposite case and is summed: each pod
+counts only the messages IT held (see that rule).
+
+A LATE DELIVERY is the other way a reader goes wrong without failing. A consumer that
+falls behind its broker does not error: the broker redelivers what the consumer held
+too long, and the consumer handles the redelivery as though it were new. For a service
+whose handling is an EXTERNAL SEND -- a page to a human, a webhook to someone else's
+server -- that is a second send nobody can take back, and nothing in the service's own
+success metrics looks wrong while it happens. reader_held_past_ack_wait_total is the
+only record of it.
 
 Same operator assumption and gating as the event-processing rules.
 */}}
@@ -84,4 +95,19 @@ spec:
           annotations:
             summary: "A JetStream stream is near its ceiling"
             description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread)."
+        # A capacity-bounded reader held a message past its AckWait. Selected by name
+        # like the rules above: core builds the counter for every capacity reader, under
+        # the adopting service's own subsystem.
+        - alert: ReaderHeldMessagePastAckWait
+          # `sum`, not `max`: each pod counts only the messages IT held, so the pods' counts
+          # add up rather than repeat one another. The series are initialised at 0 when the
+          # reader is created, so increase() sees a pod's first occurrence rather than
+          # missing it.
+          expr: sum by (durable, stage) (increase({__name__=~"devicechain_[a-z0-9]+_reader_held_past_ack_wait_total", namespace="{{ $ns }}"}[15m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A service held a message past its acknowledgement window, so it was redelivered"
+            description: "The reader for durable {{`{{ $labels.durable }}`}} held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
 {{- end }}

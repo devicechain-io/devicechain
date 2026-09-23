@@ -1595,7 +1595,9 @@ propio código o scripts, o si dimensiona usted mismo el volumen de JetStream: e
 ahora tiene límite de frecuencia, y una solicitud de GraphQL tiene un límite de campos raíz y de
 comprobaciones de contraseña. Si enruta o silencia alertas por su nombre, lea «Un consumidor que se
 queda atrás de un flujo lleno ahora genera una alerta»: `EventProcessingStreamNearFull` cambia de
-nombre.
+nombre. Si sus valores de outbound-connectors fijan `dispatchBacklog`, elimínelo antes de
+actualizar: el servicio ahora se niega a arrancar con él (vea «El servicio de conectores ya no
+acepta dispatchBacklog» más abajo).
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1831,6 +1833,27 @@ La advertencia de flujo casi lleno **cambia de nombre**, de `EventProcessingStre
 **`JetStreamStreamNearFull`**, y ahora cubre los flujos de todos los servicios, no solo los de
 event-processing. El umbral (80% del límite de bytes durante 10 minutos) no cambia. Si una ruta o un
 silencio de Alertmanager nombra la alerta antigua, cámbielo al nombre nuevo.
+
+#### El servicio de conectores ya no acepta dispatchBacklog
+
+Si sus valores fijan `dispatchBacklog` en `functionalAreas.outbound-connectors.config`, elimínelo
+**antes** de actualizar. El servicio se niega a arrancar con él, y el error nombra la clave.
+
+El ajuste dimensionaba un búfer entre el lector del servicio y sus trabajadores de envío, y ese búfer
+ya no existe. El lector ahora solo obtiene tantos envíos como trabajadores libres hay para empezarlos
+(`maxConcurrentSends`), así que un envío ya no espera dentro del proceso mientras corre la ventana de
+confirmación del broker. El servicio de notificaciones lee las alarmas de la misma forma, una por
+despachador.
+
+Esto corrige un duplicado. Antes, una ráfaga de alarmas o de envíos de conectores en cola detrás de
+un canal lento podía quedarse en el servicio más tiempo que esa ventana. El broker entonces volvía a
+entregar los mismos mensajes mientras las primeras copias seguían esperando, y se enviaban ambas
+copias: una segunda notificación por una sola alarma, o una segunda llamada al mismo webhook. Además,
+ahora cada envío se corta con margen antes de que la ventana se cierre.
+
+Una alerta nueva, `ReaderHeldMessagePastAckWait`, se dispara si alguno de los dos servicios aún
+retiene un mensaje más allá de la ventana. [Mensajes retenidos más allá de su ventana de
+confirmación](./observability.md#held-past-ack-wait) explica qué significa cada caso.
 
 ### La transición única a la ingesta duradera
 

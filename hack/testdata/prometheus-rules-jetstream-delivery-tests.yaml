@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# promtool UNIT TESTS for the JetStream delivery alerting rules.
+# promtool UNIT TESTS for the JetStream delivery alerting rules (the jetstream-delivery group).
 #
 # WHAT THESE ARE FOR, over and above the parse check
 #
@@ -30,6 +30,20 @@
 #     rather than omitting them: an alert silent because its series is missing and one
 #     silent because nothing was lost look identical, and only one is a working alert.
 #   - devicechain_<area>_jetstream_stream_used_bytes / _limit_bytes{stream} — gauges.
+#
+# ReaderHeldMessagePastAckWait watches a counter that should read 0 for the whole
+# life of a healthy instance, so the quiet cases carry as much weight as the firing
+# one: a pod whose counter sits at zero, and a pod whose ONE old occurrence has aged
+# out of the window, must both stay silent. Unlike the unread counter it is summed
+# across pods (each pod counts only the messages it held); the two-pod scenario
+# fires ONE alert per durable and stage, not one per pod.
+#
+#   - devicechain_<area>_reader_held_past_ack_wait_total{durable,stage} -- a
+#     CounterVec built by core messaging, exported under each adopting service's own
+#     subsystem. Both stage series (worker, buffer) are initialised at 0 when a
+#     capacity-bounded reader is created, so they EXIST on a healthy instance rather
+#     than being absent; the quiet scenarios carry them at zero for the reason given
+#     for the unread series above.
 #
 # Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
 # rendered group in beside this file as rendered-rules.yaml.
@@ -193,3 +207,111 @@ tests:
             exp_annotations:
               summary: "A JetStream stream is near its ceiling"
               description: "Stream devicechain_resolved-events is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread)."
+
+  # ------------------------------------------------------------------
+  # A send ran past the acknowledgement window: one worker-stage count on
+  # the notification service's reader.
+  # ------------------------------------------------------------------
+  - name: a send that ran past the acknowledgement window warns
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-abcde", durable="devicechain_notification-management_alarm-events", stage="worker"}'
+        values: '0x10 1x30'
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-abcde", durable="devicechain_notification-management_alarm-events", stage="buffer"}'
+        values: '0x40'
+    alert_rule_test:
+      # Before the increase: quiet.
+      - eval_time: 9m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              durable: devicechain_notification-management_alarm-events
+              stage: worker
+            exp_annotations:
+              summary: "A service held a message past its acknowledgement window, so it was redelivered"
+              description: "The reader for durable devicechain_notification-management_alarm-events held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
+      # 🔴 THE OCCURRENCE AGES OUT. Once the window no longer spans the increase the
+      # alert clears, rather than paging forever over one old event.
+      - eval_time: 35m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Two pods of the connectors service each drop a buffered message: the
+  # counts are per pod and summed, and the stage label says which kind.
+  # ------------------------------------------------------------------
+  - name: buffered drops on two pods are summed per durable and stage
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-aaaaa", durable="devicechain_outbound-connectors_connector-dispatch", stage="buffer"}'
+        values: '0x5 1x20'
+      - series: 'devicechain_outboundconnectors_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-bbbbb", durable="devicechain_outbound-connectors_connector-dispatch", stage="buffer"}'
+        values: '0x5 1x20'
+      - series: 'devicechain_outboundconnectors_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-aaaaa", durable="devicechain_outbound-connectors_connector-dispatch", stage="worker"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              durable: devicechain_outbound-connectors_connector-dispatch
+              stage: buffer
+            exp_annotations:
+              summary: "A service held a message past its acknowledgement window, so it was redelivered"
+              description: "The reader for durable devicechain_outbound-connectors_connector-dispatch held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
+
+  # ------------------------------------------------------------------
+  # 🔴 A healthy instance: every series present and flat at zero. Must
+  # never page.
+  # ------------------------------------------------------------------
+  - name: a healthy instance with every held-past series at zero is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-abcde", durable="devicechain_notification-management_alarm-events", stage="worker"}'
+        values: '0x60'
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-abcde", durable="devicechain_notification-management_alarm-events", stage="buffer"}'
+        values: '0x60'
+      - series: 'devicechain_outboundconnectors_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-aaaaa", durable="devicechain_outbound-connectors_connector-dispatch", stage="worker"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A counter that is already non-zero when first scraped (a pod that
+  # counted before this Prometheus saw it) and stays flat is not a new
+  # occurrence, and must not page.
+  # ------------------------------------------------------------------
+  - name: a held-past counter that appears at n and stays flat is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-abcde", durable="devicechain_notification-management_alarm-events", stage="worker"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Another instance's namespace is not this instance's alert.
+  # ------------------------------------------------------------------
+  - name: another instance's held-past counter is not this instance's alert
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_reader_held_past_ack_wait_total{namespace="dci-other", pod="dc-notification-management-7c9f-abcde", durable="other_notification-management_alarm-events", stage="worker"}'
+        values: '0x5 4x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []

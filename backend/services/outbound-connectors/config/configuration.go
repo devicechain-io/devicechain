@@ -26,15 +26,11 @@ const (
 	// busy rather than buffering unboundedly — unpulled work stays durable on the stream (which is
 	// itself per-tenant bounded, ADR-023 G.2). Per-tenant egress RATE limiting + cost-gate-at-source
 	// is a follow-up (C3b); this concurrency bound is the C3a back-pressure primitive.
+	//
+	// It is also the dispatch reader's capacity: the reader fetches only as many dispatches as there
+	// are free workers (messaging.ReaderWithCapacity), so no dispatch waits in the process while the
+	// broker's redelivery clock runs. There is no separate hand-off buffer to size.
 	DefaultMaxConcurrentSends = 32
-	// DefaultDispatchBacklog bounds the hand-off buffer between the single reader and the worker
-	// pool. Kept SMALL on purpose — it is not a queue, just a smoothing buffer, and a large backlog
-	// would let the read loop pull a second fetch batch ahead while the first is still in flight,
-	// putting two batches' worth of messages under the AckWait clock at once (a slow-but-succeeding
-	// send could then be redelivered underneath the worker). A small backlog paces the read loop to
-	// worker availability, so roughly one fetch batch is exposed at a time; the durable stream is the
-	// real durable buffer (unacked messages redeliver).
-	DefaultDispatchBacklog = 8
 
 	// DefaultOutboundMessagesPerSecond / DefaultOutboundBurst are the platform-default per-tenant
 	// OUTBOUND egress rate ceiling (ADR-060 SD-3), applied to any tenant with no override in
@@ -54,15 +50,20 @@ const (
 	// for the AckWait-safety bound this default sits comfortably inside.
 	DefaultEgressWaitBudgetMs = 5_000
 
-	// MaxEgressWaitBudgetMs caps the configurable wait budget at startup so wait + send stays under
-	// the consumer AckWait. The AckWait clock starts for a whole FETCH BATCH at delivery (not per
-	// message), so a batch of fetchBatch(64) over the default MaxConcurrentSends(32) clears in ~2
-	// worker-waves; the safe bound is therefore 2 × (waitBudget + maxSend) < AckWait, i.e.
-	// 2 × (waitBudget + 20s) < 60s ⟹ waitBudget < 10s. Capped at 8s to keep a margin. Both terms are
-	// enforced: maxSend is the executor's hard clamp at connectorwire.MaxTimeoutMs, and Validate
-	// rejects a SendTimeoutMs above that ceiling. NOTE this 2-wave model assumes MaxConcurrentSends
-	// near its default; materially lowering concurrency shrinks the safe budget (and, independent of
-	// this budget, strains the batch-vs-AckWait relationship) — lower the budget in step.
+	// MaxEgressWaitBudgetMs caps the configurable wait budget at startup so ONE dispatch fits inside
+	// the consumer AckWait, measured on that message's own clock. The dispatch reader fetches a
+	// message only when a worker is free to start it, so the broker's clock and the worker's start
+	// together, and everything the worker does must finish before the clock runs out:
+	//
+	//   waitBudget + secretResolve + maxSend + sendMargin < AckWait
+	//   8s         + 5s            + 20s     + 5s         = 38s < 60s
+	//
+	// Every term is enforced in code: maxSend is the executor's hard clamp at
+	// connectorwire.MaxTimeoutMs (Validate rejects a SendTimeoutMs above it), secretResolve and
+	// sendMargin are the processor's constants, and the processor also caps the wait and the send at
+	// the message's own AckDeadline, so a message that reached its worker late still cannot send past
+	// it. It no longer depends on MaxConcurrentSends: the pool width sets how many dispatches are in
+	// flight, not how long any one of them waits.
 	MaxEgressWaitBudgetMs = 8_000
 )
 
@@ -78,13 +79,10 @@ type OutboundConnectorsConfiguration struct {
 	// defaults to DefaultSendTimeoutMs; a negative value is rejected.
 	SendTimeoutMs int
 
-	// MaxConcurrentSends is the outbound concurrency ceiling (worker-pool width). Unset (0) defaults
-	// to DefaultMaxConcurrentSends; a non-positive value is rejected.
+	// MaxConcurrentSends is the outbound concurrency ceiling (worker-pool width) and the dispatch
+	// reader's capacity. Unset (0) defaults to DefaultMaxConcurrentSends; a non-positive value is
+	// rejected.
 	MaxConcurrentSends int
-
-	// DispatchBacklog is the reader→worker hand-off buffer size. Unset (0) defaults to
-	// DefaultDispatchBacklog; a non-positive value is rejected.
-	DispatchBacklog int
 
 	// OutboundMessagesPerSecond / OutboundBurst are the platform-default per-tenant egress ceiling
 	// (ADR-060 SD-3). Unset (0) defaults to DefaultOutboundMessagesPerSecond / DefaultOutboundBurst;
@@ -115,9 +113,6 @@ func (c *OutboundConnectorsConfiguration) ApplyDefaults() {
 	if c.MaxConcurrentSends == 0 {
 		c.MaxConcurrentSends = DefaultMaxConcurrentSends
 	}
-	if c.DispatchBacklog == 0 {
-		c.DispatchBacklog = DefaultDispatchBacklog
-	}
 	if c.OutboundMessagesPerSecond == 0 {
 		c.OutboundMessagesPerSecond = DefaultOutboundMessagesPerSecond
 	}
@@ -144,9 +139,6 @@ func (c *OutboundConnectorsConfiguration) Validate() error {
 	}
 	if c.MaxConcurrentSends <= 0 {
 		return fmt.Errorf("maxConcurrentSends must be positive, got %d", c.MaxConcurrentSends)
-	}
-	if c.DispatchBacklog <= 0 {
-		return fmt.Errorf("dispatchBacklog must be positive, got %d", c.DispatchBacklog)
 	}
 	if c.OutboundMessagesPerSecond <= 0 {
 		return fmt.Errorf("outboundMessagesPerSecond must be positive, got %v", c.OutboundMessagesPerSecond)
