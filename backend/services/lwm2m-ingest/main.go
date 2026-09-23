@@ -55,14 +55,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
-
-// httpPort is this service's fixed HTTP surface port. A var (not a const) only so a test can ask
-// afterMicroserviceStarted for an ephemeral one rather than racing whatever holds 8080;
-// production never assigns it.
-var httpPort int32 = 8080
 
 const (
 	// leasePartition names this service's single ownership lease within the shared instance
@@ -140,8 +136,14 @@ var (
 	leaderGauge     prometheus.Gauge
 	servingGauge    prometheus.Gauge
 
-	Lease      *messaging.DistributedLease
-	httpServer *core.HttpServer
+	Lease *messaging.DistributedLease
+
+	// Svc drives the broker (when there are credentials) and the HTTP surface (probes +
+	// metrics, always) in core/service's one sequence. The leadership loop and the inert
+	// transport are this service's own and are not in it: they start after Svc and are
+	// unwound before it, because releasing the lease is a KV write over Svc's broker
+	// connection.
+	Svc *service.Service
 
 	// leadershipCancel stops the leadership loop on shutdown; leadershipDone closes when it has
 	// fully unwound (this term's Server stopped, registry timers stopped, lease released).
@@ -219,6 +221,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// presence. Stand up its long-lived collaborators only when there are credentials so an inert
 	// (no-identity) deployment does not demand the durable-emit + device-management coordinates it
 	// will never use.
+	spec := service.Spec{}
 	if len(Configuration.Security.Identities) > 0 {
 		infra := Microservice.InstanceConfiguration.Infrastructure
 		// Validate the device-facing endpoints ONCE at startup (fail closed): a term that cannot
@@ -229,11 +232,20 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		if deviceStateURL, err = deviceStateEndpoint(infra); err != nil {
 			return err
 		}
-		NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-			func(*messaging.NatsManager) error { return nil })
-		if err := NatsManager.Initialize(ctx); err != nil {
-			return err
-		}
+		spec.Nats = &service.NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }}
+	}
+
+	// The broker when there are credentials, and in every deployment — an inert one included —
+	// the HTTP surface the chart probes.
+	Svc = service.New(Microservice, spec)
+	if err := Svc.Initialize(ctx); err != nil {
+		return err
+	}
+	// ⚠️ No test drives this initializer — it needs config, credentials and a broker — so
+	// the tests install NatsManager themselves. The line below is what they stand in for.
+	NatsManager = Svc.Nats
+
+	if NatsManager != nil {
 		// Build the writer synchronously here (right after Initialize sets the JetStream context),
 		// not in the oncreate callback which does not run until Start — the same ordering the
 		// Sparkplug adapter relies on. It is reused by every leadership term.
@@ -271,30 +283,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Msg("Built an inert (no-credential) LwM2M CoAP/DTLS transport; it serves the health probe only and takes no leadership lease.")
 	}
 
-	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
-	// registerHttpRoutes for why it is here and not where the server starts.
-	registerHttpRoutes()
 	return nil
-}
-
-// registerHttpRoutes mounts this service's HTTP surface — /healthz, /readyz and
-// /metrics — on the microservice's OWN mux rather than on http.DefaultServeMux.
-//
-// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS.
-// RegisterProbes goes through ServeMux.Handle, which panics on a duplicate pattern,
-// and LifecycleComponent does not promise ExecuteStart runs once: a start that fails
-// restores the component to Initialized, so a retried start enters the start path
-// again. Registering from there turns that retry into a crash. Initialize is where the
-// routes belong, which is what makes this the safe half.
-//
-// 🔴 It is also a named function rather than a line inside the initializer so a test
-// can drive the REGISTRATION ITSELF. A test that called RegisterProbes on its own
-// would be asserting against its own copy of the wiring: it would keep passing if this
-// went back to http.Handle on the default mux, which is the exact regression the
-// switchover has to prevent. The uncovered remainder is one line — that the initializer
-// calls this — because the initializer needs config, credentials and a broker.
-func registerHttpRoutes() {
-	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
 // buildMetrics creates every Prometheus instrument exactly once. All are shared across
@@ -831,16 +820,16 @@ func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, b
 	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), true
 }
 
-// afterMicroserviceStarted starts NATS (so the presence emitter can publish) and, when the
-// adapter has credentials, launches the leadership loop that serves the transport only while this
+// afterMicroserviceStarted starts the HTTP surface and NATS (so the presence emitter can publish)
+// through core/service and, when the adapter has credentials, launches the leadership loop that serves the transport only while this
 // replica holds the ownership lease; an inert deployment serves its health-only transport
 // unconditionally. Readiness is opened regardless — a standby is "ready" to take over and a
 // device-less deployment is healthy — and is not gated on any device connecting.
 func afterMicroserviceStarted(ctx context.Context) error {
+	if err := Svc.Start(ctx); err != nil {
+		return err
+	}
 	if NatsManager != nil {
-		if err := NatsManager.Start(ctx); err != nil {
-			return err
-		}
 		lease, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
 		if err != nil {
 			return err
@@ -861,8 +850,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// is no token for a validator to check. Saying so is what keeps it distinguishable
 	// from a service that simply lost its validator — the gate refuses a bare nil.
 	Microservice.MarkReadyWithoutAuthSurface()
-
-	return startHttpServer(httpPort)
+	return nil
 }
 
 // superviseInertTransport supervises the always-on health-only transport of an identity-less
@@ -878,44 +866,18 @@ func afterMicroserviceStarted(ctx context.Context) error {
 // goroutine that would otherwise be parked inside FailNow.
 //
 // 🔴 It is a named function rather than a closure inline above so a test can drive the wiring
-// ITSELF, for the reason registerHttpRoutes gives: a test that hand-built the same closure would
-// be asserting against its own copy, and would keep passing if this call were dropped.
+// ITSELF: a test that hand-built the same closure would be asserting against its own copy, and
+// would keep passing if this call were dropped.
 //
 // That is not the whole gate, because a test driving THIS function directly passes just as well
 // with the call in afterMicroserviceStarted deleted — the supervision would simply never be
 // wired, on a path whose entire purpose is to end a pod nothing else will restart. The start
-// phase is therefore driven end to end by a test of its own, which is what httpPort being a var
-// rather than a const is for: the only thing that used to stand in the way was
-// afterMicroserviceStarted's final startHttpServer, and startHttpServer already takes the port
-// as a parameter.
+// phase is therefore driven end to end by a test of its own, on an ephemeral port through
+// service.ProbesPort — the HTTP server Svc.Start binds is the only thing in the way.
 func superviseInertTransport(srv serveServer) func() {
 	return superviseServe(srv, func(err error) {
 		failProcess(transportDeathError(err))
 	})
-}
-
-// startHttpServer builds this service's HTTP server over the microservice's own mux
-// and starts it, returning any bind failure.
-//
-// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
-// pull in opposite directions:
-//
-//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
-//     this is entered again by any start retried after a failed one. The routes are
-//     registered once, in the initialize phase.
-//   - It builds a new server because an http.Server cannot be restarted: Shutdown
-//     latches its shuttingDown flag permanently, so reusing one would bind and then
-//     serve nothing.
-//
-// The port is a parameter so a test can ask for an ephemeral one rather than racing
-// whatever holds 8080.
-func startHttpServer(port int32) error {
-	httpServer = Microservice.NewHttpServer(port)
-	if err := httpServer.Start(); err != nil {
-		return err
-	}
-	log.Info().Str("addr", httpServer.Addr()).Msg("Started LwM2M ingest HTTP server.")
-	return nil
 }
 
 // runLeadership is the acquire/serve/standby loop (ADR-070). It repeatedly tries to acquire the
@@ -1344,8 +1306,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // beforeMicroserviceStopped unwinds leadership (self-evict: stop the transport and registry
-// timers, release the lease) or the inert transport, stops the NATS manager, and shuts the HTTP
-// server down.
+// timers, release the lease) or the inert transport, and then stops the NATS manager and, last,
+// the HTTP server through core/service.
 //
 // It does NOT drain readiness. core/core/microservice.go flips the gate to 503 and waits out the
 // drain window before it cancels the root context and calls teardown, and teardown is the only
@@ -1363,36 +1325,22 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	} else if inertStop != nil {
 		inertStop()
 	}
-	// Stop the NATS manager here, not just Terminate it after: Terminate is only legal
-	// from Stopped (core/core/lifecycle.go), so skipping this step makes the terminate
-	// below a refusal — the metrics sampler keeps running, the connection is never
-	// drained, and, because shuttingDown is only set inside ExecuteStop/ExecuteTerminate,
-	// the ClosedHandler reports an orderly stop as a permanent unasked-for close.
-	//
 	// 🔴 AFTER the unwind above, never before it. The unwind ends in evict(), which
-	// releases the lease with a KV write over this same connection; Stop drains that
-	// connection, so hoisting this block makes the release fail and leaves a standby
-	// waiting out a full lease TTL to take over. Both halves are pinned by
-	// nats_shutdown_test.go — the second test fails on exactly that hoist.
-	if NatsManager != nil {
-		if err := NatsManager.Stop(ctx); err != nil {
-			log.Error().Err(err).Msg("Error stopping the NATS manager.")
-		}
-	}
-	if httpServer == nil {
-		return nil
-	}
-	return httpServer.Shutdown(ctx)
+	// releases the lease with a KV write over the broker connection; Svc.Stop drains that
+	// connection, so hoisting it above the unwind makes the release fail and leaves a
+	// standby waiting out a full lease TTL to take over. nats_shutdown_test.go fails on
+	// exactly that hoist.
+	//
+	// The NATS stop itself is core/service's to make. It used to be written out here, and
+	// once it was left out: Terminate is only legal from Stopped, so the terminate that
+	// followed was refused, the connection was never drained, and every orderly shutdown
+	// logged that it had closed unasked (#924, fixed by #933).
+	return Svc.Stop(ctx)
 }
 
-// afterMicroserviceTerminated releases the NATS manager's resources.
+// afterMicroserviceTerminated releases the broker's resources.
 func afterMicroserviceTerminated(ctx context.Context) error {
-	if NatsManager != nil {
-		if err := NatsManager.Terminate(ctx); err != nil {
-			log.Error().Err(err).Msg("Error terminating the NATS manager.")
-		}
-	}
-	return nil
+	return Svc.Terminate(ctx)
 }
 
 // durationSeconds converts a whole-second config value to a Duration (0 stays 0).

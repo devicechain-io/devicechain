@@ -29,16 +29,21 @@ var Rules = []Rule{
 		},
 		Forbidden: Initialize,
 		Expect:    Start,
-		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Five servers are built on
-		// the start path as this lands. Pinning five would turn deleting a service, or
-		// merging two listeners, into a guard failure that says nothing about the rule
-		// — and a floor people edit to make green is a floor that stops meaning
-		// anything. Three is low enough that ordinary editing never reaches it and
-		// high enough that a call graph which stopped resolving cannot clear it: the
-		// five sit in five different modules and are reached through BOTH entry-point
-		// shapes — two through a component's ExecuteStart, three through the Starter
-		// callback — so neither door going blind on its own can leave three standing.
-		MinExpected: 3,
+		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Three servers are built on
+		// the start path: the GraphQL manager's, core/service's probes-only server and
+		// event-sources' device-ingest listener — two in core and one in event-sources —
+		// all reached through a component's ExecuteStart. Two leaves room for merging a listener or retiring
+		// the ingest transport without a failure that says nothing about the rule — and
+		// a floor people edit to make green is a floor that stops meaning anything.
+		//
+		// There were five until the services with no GraphQL plane moved onto
+		// core/service, and the floor used to argue that its sites spanned BOTH entry
+		// shapes, so neither going blind could clear it. That is no longer true here:
+		// every site is behind ExecuteStart. The Starter-callback door is still watched,
+		// by the rules that have sites behind it — metrics-registered-once, where almost
+		// every site is an Initializer-callback site, and start-stop-symmetry, which reads
+		// nothing but callbacks. A door gone blind still fails the run, under those names.
+		MinExpected: 2,
 		Why: "core.HttpServer wraps one *http.Server for its lifetime, and an " +
 			"http.Server cannot be restarted — one built on the initialize path is " +
 			"retained across a stop and refuses the next start",
@@ -55,11 +60,13 @@ var Rules = []Rule{
 		},
 		Forbidden: Start,
 		Expect:    Initialize,
-		// Four callers today: core's GraphQL manager, which every GraphQL-serving
-		// service reaches through its ExecuteInitialize, and the three ingest services
-		// that register their own probes from the Initializer callback. Two is the
-		// floor for the same reason three is above — room under it, and enough that
-		// neither door going blind on its own clears it.
+		// 🔴 NO ROOM UNDER THIS FLOOR, ON PURPOSE. Two callers: the GraphQL manager
+		// and core/service's probes-only server — the two ways a Service gets its probe
+		// surface, both through ExecuteInitialize. No service registers probes itself any
+		// more, so losing either site is not ordinary editing; it is the regression this
+		// rule exists for, or a call graph that stopped resolving. The Initializer-callback
+		// door has no site here and is watched by metrics-registered-once instead; see
+		// http-server-per-start above.
 		MinExpected: 2,
 		Why: "http.ServeMux panics on a duplicate pattern and the microservice's mux " +
 			"outlives a stop, so a route registered on the start path takes the " +

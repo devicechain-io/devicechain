@@ -315,11 +315,12 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 // calling SubscribeLive. So the probe makes that exact call at the instant the HTTP
 // server finishes draining.
 //
-// core/core/http.go records that this order is a per-service decision and that
-// lwm2m-ingest reached the opposite answer for a real reason: its shutdown RELEASES a
-// leadership lease over the connection, so its NATS stop must come LAST. This service
-// holds a lease too — the DETECT partition lease — and the reason the same argument does
-// not apply here is pinned separately, by TestDetectStopsBeforeEitherManager.
+// This service holds a leadership lease too — the DETECT partition lease — and releasing
+// it is a write over this same connection, so whatever holds it must be unwound before the
+// NATS stop. That constraint is about the lease holder, not about the HTTP server, and it
+// is pinned separately, by TestDetectStopsBeforeEitherManager. lwm2m-ingest has the same
+// constraint and meets it the same way: its leadership unwinds before core/service stops
+// anything.
 func TestGraphQLServerStopsBeforeTheNatsConnection(t *testing.T) {
 	probe, rdbName := startShutdownFixture(t)
 

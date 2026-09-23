@@ -75,6 +75,7 @@ func testMicroservice(t *testing.T) *core.Microservice {
 // absent manager as an error — or that indexed into the sequence assuming three — would
 // take those services down at the first phase.
 func TestAServiceWithNoManagersIsDrivable(t *testing.T) {
+	ephemeralProbes(t)
 	svc := New(testMicroservice(t), Spec{})
 	ctx := context.Background()
 
@@ -131,6 +132,13 @@ func TestFromManagersNeedsNoSpec(t *testing.T) {
 	require.NoError(t, svc.Initialize(context.Background()),
 		"Initialize on a FromManagers service must be a no-op, not an attempt to build")
 	require.Same(t, built, svc.Rdb, "Initialize replaced a manager it was not given a Spec for")
+
+	// 🔴 NOR A PROBE SURFACE, which is the half a zero Spec would otherwise get. The
+	// managers handed over may already have registered /healthz on this mux, and a second
+	// registration panics — so FromManagers and Spec{} must not be the same thing.
+	require.Nil(t, svc.probes, "a FromManagers service built a probe server nobody asked for")
+	require.Empty(t, routeFor(ms, "/healthz"),
+		"a FromManagers service registered probes on a mux it was not given a Spec for")
 }
 
 // TestTheRdbSpecChoosesWhichInstanceStoreIsOpened is here because the obvious

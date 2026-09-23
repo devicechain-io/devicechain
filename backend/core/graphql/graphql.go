@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	GRAPHQL_PORT = 8080
+	// GRAPHQL_PORT is the port the GraphQL server binds: the one HTTP port every service
+	// serves on, named core.HttpPort.
+	GRAPHQL_PORT = core.HttpPort
 
 	// graphiqlEndpoint is the GraphQL URL the /graphiql explorer page posts to. It
 	// is templated into the page's fetch() call, which resolves it against the

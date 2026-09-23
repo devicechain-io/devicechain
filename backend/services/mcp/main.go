@@ -10,15 +10,17 @@ import (
 	"github.com/devicechain-io/dc-mcp/server"
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/rs/zerolog/log"
+	"github.com/devicechain-io/dc-microservice/service"
 )
-
-const httpPort = 8080
 
 var (
 	Microservice  *core.Microservice
 	Configuration *config.McpConfiguration
-	httpServer    *core.HttpServer
+
+	// Svc holds no managers — this service has no database, no broker and no GraphQL
+	// plane — so what it assembles is the HTTP surface alone: the probes, and the server
+	// that carries them and the MCP routes. Its start and stop are the whole lifecycle.
+	Svc *service.Service
 )
 
 func main() {
@@ -36,7 +38,7 @@ func main() {
 			Postprocess: func(context.Context) error { return nil },
 		},
 		Terminator: core.LifecycleCallback{
-			Preprocess:  func(context.Context) error { return nil },
+			Preprocess:  beforeMicroserviceTerminated,
 			Postprocess: func(context.Context) error { return nil },
 		},
 	}
@@ -75,17 +77,26 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// registerHttpRoutes for why it is here and not where the server starts.
 	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator,
 		server.NewGraphQLClient())
-	return nil
+	return initializeService(ctx)
 }
 
-// registerHttpRoutes mounts this service's HTTP surface on the microservice's OWN mux
-// rather than on http.DefaultServeMux. Six patterns, in two groups:
+// initializeService assembles the Service, which registers the probes on the same mux the
+// MCP routes are already on. It is its own function so a test can drive it.
+func initializeService(ctx context.Context) error {
+	Svc = service.New(Microservice, service.Spec{})
+	return Svc.Initialize(ctx)
+}
+
+// registerHttpRoutes mounts this service's MCP routes on the microservice's OWN mux
+// rather than on http.DefaultServeMux. The mux ends up carrying six patterns, in two
+// groups:
 //
-//   - server.Routes contributes the MCP endpoint at "/" and the two RFC 9728
+//   - server.Routes, called here, contributes the MCP endpoint at "/" and the two RFC 9728
 //     protected-resource metadata locations — the exact path and its subtree form.
 //     Which paths those are is a routing decision that belongs to the server package,
 //     which has tests for it.
-//   - RegisterProbes contributes /healthz, /readyz and /metrics.
+//   - core/service contributes /healthz, /readyz and /metrics, as it does for every
+//     service; initializeService is where that happens.
 //
 // 🔴 THAT ROUTE SET IS A PROTOCOL CONTRACT, NOT A CONVENIENCE. A client discovers this
 // server by spec: it POSTs the resource identifier, reads the WWW-Authenticate
@@ -100,57 +111,35 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 // unready forever and the area leaves its Service endpoints — with a symptom that points
 // at authentication rather than at routing.
 //
-// 🔴 CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS. Both
-// registrars go through ServeMux.Handle, which panics on a duplicate pattern, and
+// 🔴 CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS. server.Routes
+// goes through ServeMux.Handle, which panics on a duplicate pattern, and
 // LifecycleComponent does not promise ExecuteStart runs once: a start that fails
 // restores the component to Initialized, so a retried start enters the start path
 // again, and registering from there turns that retry into a crash.
 //
 // 🔴 It is a named function taking its inputs as parameters so a test can drive the
-// REGISTRATION ITSELF. A test that called server.Routes and RegisterProbes on its own
-// would be asserting against its own copy of the wiring: it would keep passing if this
+// REGISTRATION ITSELF. A test that called server.Routes on its own would be asserting
+// against its own copy of the wiring: it would keep passing if this
 // went back to http.DefaultServeMux, which is exactly the regression the switchover
 // exists to prevent. The uncovered remainder is one line — that the initializer calls
 // this — because the initializer needs configuration and a JWKS endpoint.
 func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator,
 	gql *server.GraphQLClient) {
 	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql)
-	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
-// afterMicroserviceStarted starts the HTTP server.
-func afterMicroserviceStarted(_ context.Context) error {
-	return startHttpServer(httpPort)
+// afterMicroserviceStarted starts the HTTP server, which core/service builds fresh on each
+// start and whose bind error it returns.
+func afterMicroserviceStarted(ctx context.Context) error {
+	return Svc.Start(ctx)
 }
 
-// startHttpServer builds this service's HTTP server over the microservice's own mux
-// and starts it, returning any bind failure.
-//
-// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
-// pull in opposite directions:
-//
-//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
-//     this is entered again by any start retried after a failed one. The routes are
-//     registered once, in the initialize phase.
-//   - It builds a new server because an http.Server cannot be restarted: Shutdown
-//     latches its shuttingDown flag permanently, so reusing one would bind and then
-//     serve nothing.
-//
-// The port is a parameter so a test can ask for an ephemeral one rather than racing
-// whatever holds 8080.
-func startHttpServer(port int32) error {
-	httpServer = Microservice.NewHttpServer(port)
-	if err := httpServer.Start(); err != nil {
-		return err
-	}
-	log.Info().Str("addr", httpServer.Addr()).Msg("Started MCP server.")
-	return nil
-}
-
-// beforeMicroserviceStopped gracefully shuts the HTTP server down.
+// beforeMicroserviceStopped shuts the HTTP server down, letting in-flight requests finish.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	if httpServer == nil {
-		return nil
-	}
-	return httpServer.Shutdown(ctx)
+	return Svc.Stop(ctx)
+}
+
+// beforeMicroserviceTerminated completes the lifecycle core/service drives.
+func beforeMicroserviceTerminated(ctx context.Context) error {
+	return Svc.Terminate(ctx)
 }

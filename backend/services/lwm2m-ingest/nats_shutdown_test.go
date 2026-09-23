@@ -20,6 +20,7 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/service"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
@@ -91,23 +92,25 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 }
 
 // startRunningManager brings a real NatsManager up to Started against an in-process
-// broker and installs the package-level state the stopper reads.
+// broker and installs the package-level state the stopper reads — including Svc, which
+// wraps it with service.FromManagers so beforeMicroserviceStopped drives core/service's
+// real sequence rather than a copy of it.
 //
-// The globals are a test simplification, not a claim about production: main() always
-// builds the HTTP server, so no real replica runs with httpServer nil. Each test
-// starts from a known-empty baseline and puts back whatever it found, so nothing here
-// leaks into another test.
+// The Svc it installs holds no probe server, which is a test simplification rather than
+// a claim about production: a real replica always has one, and it is stopped after NATS,
+// where it cannot affect what these tests assert. Each test starts from a known-empty
+// baseline and puts back whatever it found, so nothing here leaks into another test.
 func startRunningManager(t *testing.T) {
 	t.Helper()
 	host, port := startEmbeddedNats(t)
 
-	prevMs, prevMgr, prevSrv := Microservice, NatsManager, httpServer
+	prevMs, prevMgr, prevSvc := Microservice, NatsManager, Svc
 	prevCancel, prevDone, prevInert := leadershipCancel, leadershipDone, inertStop
 	t.Cleanup(func() {
-		Microservice, NatsManager, httpServer = prevMs, prevMgr, prevSrv
+		Microservice, NatsManager, Svc = prevMs, prevMgr, prevSvc
 		leadershipCancel, leadershipDone, inertStop = prevCancel, prevDone, prevInert
 	})
-	httpServer, leadershipCancel, leadershipDone, inertStop = nil, nil, nil, nil
+	leadershipCancel, leadershipDone, inertStop = nil, nil, nil
 
 	identity := uniqueIdentity("lwm2m-ingest")
 	Microservice = &core.Microservice{
@@ -126,6 +129,7 @@ func startRunningManager(t *testing.T) {
 	require.NoError(t, NatsManager.Start(context.Background()))
 	require.NotNil(t, NatsManager.Conn())
 	require.False(t, NatsManager.Conn().IsClosed(), "connection should be live before shutdown")
+	Svc = service.FromManagers(Microservice, service.Managers{Nats: NatsManager})
 
 	// A require between here and the end of the test unwinds through Cleanup without
 	// ever closing this connection, and the client reconnects forever — so a single
@@ -151,10 +155,12 @@ func captureLogs(t *testing.T) *dctest.LogSink {
 //
 // The two are not interchangeable and the difference is invisible from the call
 // site. Terminate is legal only from Stopped (core/core/lifecycle.go), so a
-// stopper that skips Stop gets its Terminate REFUSED by the state machine — and
-// because the refusal is logged rather than returned, teardown still reports
-// success. What actually happens is that the metrics sampler keeps running and
-// the connection is never drained or closed.
+// stopper that skips Stop gets its Terminate REFUSED by the state machine. This
+// service's hand-written stopper once did exactly that (#924): the refusal was
+// logged rather than returned, so teardown still reported success while the
+// metrics sampler kept running and the connection was never drained or closed.
+// core/service makes the stop now and returns a refusal, which is what the
+// NoError on the terminate below reads.
 //
 // The operator-visible symptom is a lie in the logs. shuttingDown is set inside
 // ExecuteStop/ExecuteTerminate, so with neither having run the connection's
@@ -173,9 +179,7 @@ func TestOrderlyShutdownStopsAndTerminatesTheNatsManager(t *testing.T) {
 	require.NoError(t, beforeMicroserviceStopped(ctx))
 	require.NoError(t, afterMicroserviceTerminated(ctx))
 
-	require.True(t, NatsManager.Conn().IsClosed(),
-		"orderly shutdown left the NATS connection open: Stop was skipped, so Terminate was "+
-			"refused from the Started state and never closed it")
+	requireClosedAndTerminated(t)
 
 	// The ClosedHandler runs on the client's callback goroutine, so wait for the line
 	// rather than racing it. Its arrival is also what proves the handler ran at all —
@@ -186,8 +190,6 @@ func TestOrderlyShutdownStopsAndTerminatesTheNatsManager(t *testing.T) {
 		"the ClosedHandler did not recognize the close as part of a shutdown; logs were:\n"+logged.String())
 	require.NotContains(t, logged.String(), "CLOSED permanently",
 		"a clean shutdown logged the permanent-close alarm")
-	require.NotContains(t, logged.String(), "Error terminating the NATS manager",
-		"Terminate was refused by the lifecycle state machine")
 }
 
 // WHERE the NATS manager is stopped matters as much as THAT it is stopped, and the
@@ -195,7 +197,7 @@ func TestOrderlyShutdownStopsAndTerminatesTheNatsManager(t *testing.T) {
 //
 // The leadership unwind is not merely bookkeeping that can be done in any order: it
 // ends in evict(), which RELEASES THE LEASE — a KV write over the very connection
-// Stop drains. Hoisting the Stop block above the unwind therefore makes the release
+// Svc.Stop drains. Hoisting Svc.Stop above the unwind therefore makes the release
 // fail on a draining connection, and a lease that is not released is a lease a
 // standby cannot take until it ages out a full TTL. That is a failover gap, not a
 // tidiness issue, and the test above cannot see it: it runs the NATS-only branch,
@@ -233,5 +235,31 @@ func TestOrderlyShutdownUnwindsLeadershipBeforeStoppingNats(t *testing.T) {
 			"release to execute on a draining connection")
 
 	require.NoError(t, afterMicroserviceTerminated(ctx))
-	require.True(t, NatsManager.Conn().IsClosed())
+	requireClosedAndTerminated(t)
+}
+
+// requireClosedAndTerminated asserts the orderly-shutdown end state: the broker connection
+// closed, and the Service actually TERMINATED rather than merely stopped.
+//
+// 🔴 IT WAITS FOR THE CLOSE, AND THAT IS NOT PADDING. Stop drains the connection, and
+// nats.go finishes a drain on a goroutine of its own. When Terminate's Close lands first,
+// that goroutine still moves the status to DRAINING_PUBS afterwards — changeConnStatus
+// does not check for CLOSED — and the status returns to CLOSED only when the drain calls
+// Close itself a moment later. So IsClosed can read false straight after a Terminate that
+// did close the connection — and when it does, the drain goes on to a five-second publish
+// flush against a socket that is already gone, and only closes once that times out. So the
+// status can read not-closed for about five seconds. Reading it once flaked roughly once in a
+// hundred runs; the wait below is set well past the flush timeout.
+//
+// 🔴 AND BECAUSE A DRAIN CLOSES THE CONNECTION ON ITS OWN, "eventually closed" cannot tell
+// a terminated Service from one whose terminator was dropped. The second half does: a
+// Service that really terminated refuses to terminate again.
+func requireClosedAndTerminated(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool { return NatsManager.Conn().IsClosed() },
+		15*time.Second, 5*time.Millisecond,
+		"orderly shutdown left the NATS connection open: Stop was skipped, so Terminate was "+
+			"refused from the Started state and never closed it")
+	require.ErrorContains(t, Svc.Terminate(context.Background()), "Terminated",
+		"the terminator did not terminate the Service: a second terminate should be refused")
 }

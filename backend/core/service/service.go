@@ -1,9 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package service assembles the three managers almost every DeviceChain service holds —
-// the relational database, the broker and the GraphQL server — and drives their lifecycle
-// in one order that lives here instead of in fourteen copies.
+// Package service assembles the managers a DeviceChain service holds — the relational
+// database, the broker and the GraphQL server — together with the HTTP surface every pod
+// must serve, and drives their lifecycle in one order that lives here instead of in a copy
+// per service.
 //
 // # Why this is not in core/core
 //
@@ -32,6 +33,21 @@
 // hypothetical: /readyz is served by the GraphQL manager's own HTTP server, so the moment
 // it starts is the moment traffic can first arrive.
 //
+// # The probe surface
+//
+// Every Service serves /healthz, /readyz and /metrics; the chart probes every pod by those
+// names. A Service with a GraphQL plane serves them from the GraphQL manager's server. One
+// without builds a probes-only server, which takes the OTHER end of the sequence:
+//
+//	Start       probes -> Rdb -> NATS
+//	Stop        NATS -> Rdb -> probes
+//
+// Both positions follow from one rule — a probe surface stays up as long as its
+// dependencies allow. The GraphQL server's resolvers read what the broker wires, so it
+// starts after NATS and stops before it. The probes-only server depends on nothing, so it
+// answers through the whole unwind and an operator keeps the metrics of the slow part of a
+// shutdown. See probeServer.
+//
 // Terminate was the one phase services disagreed about — seven ran NATS before GraphQL.
 // Unifying it moved nothing, because GraphQLManager.ExecuteTerminate returns nil and no
 // service wraps it in a callback: the only thing that changed position was a no-op, and
@@ -45,17 +61,22 @@
 // user-management has its own validator and calls MarkReady, and the ingest services open
 // it with no auth surface at all. Three different answers is not a default.
 //
-// Nor is this for every service, and the two kinds of exception are worth telling apart.
+// Nor is this for every service yet. ai-inference, dashboard-management and event-sources
+// still wire their managers by hand; nothing prevents them adopting it, it has simply not
+// been done. user-management is different in kind, and it is the one to read before
+// extending this API.
 //
-// The ingest services assemble no GraphQL manager and hold their broker differently —
-// lwm2m-ingest RELEASES a leadership lease over its connection during shutdown, so its
-// NATS stop must come LAST, which is the opposite of the order here. They keep their own
-// wiring, and that is a decision rather than an omission: a sequence that had to carry an
-// exception for them would stop being one sequence.
+// 🔑 THE INGEST SERVICES USED TO BE LISTED HERE AS AN EXCEPTION, AND THE REASON GIVEN WAS
+// WRONG. It said lwm2m-ingest's NATS stop had to come LAST. What its shutdown actually
+// requires is narrower: the leadership lease is released with a KV write over the broker
+// connection, so the leadership unwind must finish BEFORE the NATS stop
+// (nats_shutdown_test.go pins it). That is a service component stopping wholly before the
+// managers — the ordinary shape, the one device-state already has — and once the probe
+// surface stopped being tied to the GraphQL manager, nothing else kept them out. Their
+// hand-written teardown is where #924 hid: lwm2m-ingest never stopped its NATS manager.
 //
-// 🔴 user-management IS THE OTHER KIND, AND IT IS THE ONE TO READ BEFORE EXTENDING THIS
-// API. It assembles exactly these three managers in exactly this order, but it stops its
-// own components BETWEEN two of them: GraphQL, then the purge coordinator and the
+// 🔴 user-management assembles exactly these three managers in exactly this order, but it
+// stops its own components BETWEEN two of them: GraphQL, then the purge coordinator and the
 // dead-letter pair, then NATS, then Rdb. The coordinator's pass holds an advisory lock on
 // a pooled connection, so it has to be down before the database and the broker — and the
 // GraphQL server has to be down before it, because that is where a tenant deletion is
@@ -193,7 +214,14 @@ type Service struct {
 	*core.Microservice
 	Managers
 
-	spec Spec
+	// probes is the HTTP surface when the Spec asked for no GraphQL plane, and nil
+	// otherwise. It is not in Managers because nothing outside this package drives it.
+	probes *probeServer
+
+	// spec is nil for a Service built by FromManagers. It is a pointer so that case is
+	// distinguishable from a Spec that asked for nothing: the zero Spec still gets a probe
+	// surface, and a FromManagers Service gets nothing it did not hand over.
+	spec *Spec
 }
 
 // New records what to build. Nothing is constructed until Initialize.
@@ -202,7 +230,7 @@ type Service struct {
 // exist when a service can first name its Spec: the GraphQL providers carry an Api built
 // from the Rdb manager, and AfterRdb is what builds it.
 func New(ms *core.Microservice, spec Spec) *Service {
-	return &Service{Microservice: ms, spec: spec}
+	return &Service{Microservice: ms, spec: &spec}
 }
 
 // FromManagers wraps managers somebody else built, so they can be driven through the same
@@ -215,17 +243,31 @@ func New(ms *core.Microservice, spec Spec) *Service {
 // that drove a private copy of this ordering instead would no longer be testing it.
 //
 // A Service built this way has nothing to construct, so Initialize on it does nothing and
-// succeeds. Start, Stop and Terminate behave exactly as they do for a Spec-built one.
+// succeeds — and that includes the probe surface, which a Spec-built Service always gets:
+// the managers handed over may already have registered their routes, and a second
+// RegisterProbes on the same mux panics. Start, Stop and Terminate behave exactly as they
+// do for a Spec-built one.
 func FromManagers(ms *core.Microservice, m Managers) *Service {
 	return &Service{Microservice: ms, Managers: m}
 }
 
 // Initialize builds each requested manager and initializes it, in the forward order, with
-// AfterRdb run in between.
+// AfterRdb and AfterNats run in between. A Spec with no GraphQL plane gets the probes-only
+// server, initialized first because it is first in the sequence.
 //
-// On a Service built by FromManagers there is no Spec, so every branch below is skipped
-// and this returns nil: the managers were initialized by whoever built them.
+// On a Service built by FromManagers there is no Spec, so this returns nil at once: the
+// managers were initialized by whoever built them.
 func (s *Service) Initialize(ctx context.Context) error {
+	if s.spec == nil {
+		return nil
+	}
+	if s.spec.GraphQL == nil {
+		s.probes = newProbeServer(s.Microservice)
+		if err := s.probes.Initialize(ctx); err != nil {
+			return fmt.Errorf("initializing the probe server: %w", err)
+		}
+	}
+
 	if s.spec.Rdb != nil {
 		s.Rdb = rdb.NewRdbManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
 			s.spec.Rdb.Migrations, s.spec.Rdb.Instance, s.spec.Rdb.Config)
@@ -273,6 +315,19 @@ func (s *Service) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// HttpAddr is the address this Service's HTTP surface is bound to — the probe server's, or
+// the GraphQL manager's when it has one — and "" before Start. It is how a test that drives
+// a service's real start callbacks on an ephemeral port finds out which port it got.
+func (s *Service) HttpAddr() string {
+	switch {
+	case s.probes != nil && s.probes.server != nil:
+		return s.probes.server.Addr()
+	case s.GraphQL != nil && s.GraphQL.Server != nil:
+		return s.GraphQL.Server.Addr()
+	}
+	return ""
+}
+
 // Start starts the managers in the forward order.
 func (s *Service) Start(ctx context.Context) error {
 	return s.forward(ctx, "starting", func(c core.LifecycleComponent) func(context.Context) error {
@@ -299,9 +354,13 @@ func (s *Service) Terminate(ctx context.Context) error {
 //
 // A nil entry is a manager the Spec did not ask for and is skipped; it is not an error,
 // because a service with no broker is an ordinary shape (two of them serve GraphQL over a
-// database alone).
+// database alone). The probe server and the GraphQL manager are never both present, and
+// they sit at opposite ends for the reason the package comment gives.
 func (s *Service) ordered() []core.LifecycleComponent {
-	out := make([]core.LifecycleComponent, 0, 3)
+	out := make([]core.LifecycleComponent, 0, 4)
+	if s.probes != nil {
+		out = append(out, s.probes)
+	}
 	if s.Rdb != nil {
 		out = append(out, s.Rdb)
 	}
@@ -336,7 +395,7 @@ func (s *Service) reverse(ctx context.Context, verb string,
 }
 
 // name labels a manager for an error message. It is a type switch rather than an
-// interface method because these three are core-owned types this package already knows by
+// interface method because these are core-owned types this package already knows by
 // name, and adding a method to the LifecycleComponent contract for the sake of an error
 // string would oblige every implementation in the tree to carry it.
 func name(c core.LifecycleComponent) string {
@@ -347,6 +406,8 @@ func name(c core.LifecycleComponent) string {
 		return "the broker manager"
 	case *gqlcore.GraphQLManager:
 		return "the GraphQL manager"
+	case *probeServer:
+		return "the probe server"
 	}
 	return "an unknown manager"
 }

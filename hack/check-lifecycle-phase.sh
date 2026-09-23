@@ -6,8 +6,8 @@
 #
 # 🔴 WHY THIS IS A GATE. core.LifecycleManager's own state allow lists say how often each
 # step runs: initializeFrom is {Uninitialized}, so ExecuteInitialize runs AT MOST ONCE for
-# a component instance, while startFrom is {Initialized, Stopped}, so ExecuteStart runs
-# again after every stop. That splits everything a service builds in two, and putting
+# a component instance, while startFrom is {Initialized}, so ExecuteStart runs again
+# after every FAILED start, which restores the component to Initialized. That splits everything a service builds in two, and putting
 # either half in the wrong phase breaks the SECOND start of a service that looks entirely
 # healthy on its first:
 #
