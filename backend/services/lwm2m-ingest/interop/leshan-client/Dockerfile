@@ -9,13 +9,17 @@
 #
 # Leshan 2.0.0-M15 is Java-8 bytecode, so Temurin 11 builds and runs it. Multi-stage so
 # the image is reproducible from source with no host toolchain (what CI needs).
-FROM maven:3.8-eclipse-temurin-11 AS build
+#
+# Both bases are digest-pinned and deliberately NOT watched by Dependabot (see the
+# docker entry in .github/dependabot.yml): this image ships nowhere, so a base frozen
+# at a known digest is the point, not a staleness risk. Bump both digests by hand.
+FROM maven:3.8-eclipse-temurin-11@sha256:a9023829d06570e9e4f99928b360aca6a6ebec642901fa15b69726221dd2eda4 AS build
 WORKDIR /build
 COPY pom.xml .
 COPY src ./src
 RUN mvn -q -B -DskipTests package
 
-FROM eclipse-temurin:11-jre
+FROM eclipse-temurin:11-jre@sha256:4ccb3ef16bf278cca84540b204e315d19846b4808340b6c20aee201590401b13
 # Run unprivileged; the client needs no filesystem or root.
 RUN useradd --uid 10001 --create-home leshan
 USER 10001
