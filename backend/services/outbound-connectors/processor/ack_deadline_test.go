@@ -37,6 +37,14 @@ func capacityMessage(t *testing.T, ackWait time.Duration) messaging.Message {
 // capacityMessageWith is capacityMessage carrying the given body.
 func capacityMessageWith(t *testing.T, ackWait time.Duration, body []byte) messaging.Message {
 	t.Helper()
+	msg, _ := capacityMessageOn(t, ackWait, body)
+	return msg
+}
+
+// capacityMessageOn is capacityMessageWith that also returns the embedded server, so a test can
+// read the broker's own view of the durable (unackedOn) rather than trust the consumer's account.
+func capacityMessageOn(t *testing.T, ackWait time.Duration, body []byte) (messaging.Message, *natsserver.Server) {
+	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
 	})
@@ -78,7 +86,27 @@ func capacityMessageWith(t *testing.T, ackWait time.Duration, body []byte) messa
 	require.NoError(t, err)
 	t.Cleanup(msg.Release)
 	require.False(t, msg.AckDeadline().IsZero(), "a capacity reader's message must carry an AckDeadline")
-	return msg
+	return msg, srv
+}
+
+// unackedOn is the number of messages the broker holds delivered-but-unacked across every durable
+// on srv. It is the broker's answer to "was it acked?", which is the only one that decides whether
+// the dispatch is redelivered.
+func unackedOn(t *testing.T, srv *natsserver.Server) int {
+	t.Helper()
+	info, err := srv.Jsz(&natsserver.JSzOptions{Accounts: true, Streams: true, Consumer: true})
+	require.NoError(t, err)
+	durables, pending := 0, 0
+	for _, acct := range info.AccountDetails {
+		for _, st := range acct.Streams {
+			for _, ci := range st.Consumer {
+				durables++
+				pending += ci.NumAckPending
+			}
+		}
+	}
+	require.Positive(t, durables, "no durable found on the embedded server: the ack could not be observed")
+	return pending
 }
 
 // deadlineRecordingTransport records the deadline on the context of every request it carries,
@@ -211,4 +239,40 @@ func TestRateWaitCutByAckDeadlineIsNotAShed(t *testing.T) {
 
 	require.Empty(t, dead.written(), "a wait cut by the redelivery deadline was dead-lettered as a shed")
 	require.Less(t, elapsed, 4*time.Second, "the wait ran %v, past the AckDeadline cap", elapsed)
+}
+
+// On the FINAL delivery, a dispatch whose rate wait is cut short by the redelivery deadline is
+// dead-lettered and acked, as a transient failure at the cap is. No redelivery follows the final
+// delivery, so leaving it unacked there would strand it: never sent, never lettered, never counted.
+//
+// The setup is TestRateWaitCutByAckDeadlineIsNotAShed's, on the last delivery. The instruments are
+// the dead-letter subject (one letter, reason "dead" — not "rate_limited", since the tenant was not
+// shown to be over quota) and the broker's own count of unacked messages, which must fall to zero.
+func TestRateWaitCutByAckDeadlineOnFinalDeliveryIsDeadLettered(t *testing.T) {
+	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	drain, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_ = rl.Wait(drain, "acme")
+	cancel()
+
+	body, err := connectorwire.MarshalConnectorDispatchRequest(&connectorwire.ConnectorDispatchRequest{
+		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
+		HTTPCall: &connectorwire.HTTPCallDispatch{URL: "http://127.0.0.1:1/unused"},
+	})
+	require.NoError(t, err)
+	msg, srv := capacityMessageOn(t, 31*time.Second, body)
+	require.Equal(t, 1, unackedOn(t, srv), "the fetched dispatch must start out unacked")
+	// The broker's count cannot reach MaxDeliver inside a test without waiting out AckWait that many
+	// times; the consumer reads the count from the message, so the message is what is set.
+	msg.NumDelivered = messaging.MaxDeliver
+
+	dead := &fakeWriter{}
+	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 8*time.Second)
+	c.handle(context.Background(), msg)
+
+	letters := dead.written()
+	require.Len(t, letters, 1, "a final delivery too late to send must be dead-lettered, not stranded")
+	require.Equal(t, outcomeDead, letters[0].Headers[headerDeadReason],
+		"a wait cut by the redelivery deadline is not a rate shed, even on the final delivery")
+	require.Eventually(t, func() bool { return unackedOn(t, srv) == 0 }, 5*time.Second, 20*time.Millisecond,
+		"the dead-lettered dispatch must be acked on the broker")
 }

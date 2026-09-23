@@ -258,6 +258,41 @@ func TestLeftoverDeliveriesKeepTheirEarlierStamp(t *testing.T) {
 		"the leftover's deadline %v is not earlier than this fetch's would be", msg.AckDeadline())
 }
 
+// A reader that stops with messages still in its buffer gives their slots back at once. The
+// messages stay unacked, so the broker redelivers them; nobody will hand this copy out, so holding
+// its slot would only starve the next read — and, left to the AckWait timer, each one would be
+// counted as held past AckWait at stage=buffer, raising the alert for a reader that merely stopped.
+//
+// GUARD: kills "no dropPending on EOF". Both instruments are read: the slots are free NOW (not at
+// AckWait), and once AckWait has passed nothing was counted.
+func TestStoppedReaderReturnsItsBufferedSlots(t *testing.T) {
+	ackWait := time.Second
+	nmgr := capacityManager(t, ackWait)
+	r := capacityReaderFor(t, nmgr, 3)
+	publishN(t, nmgr, streams.InboundEvents, 3)
+
+	first, err := readWithin(t, r, 5*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, 3, ackPending(t, nmgr, r), "the fixture must fetch all three in one batch")
+	require.Len(t, r.pending, 2, "the fixture must leave two messages in the buffer")
+	require.Equal(t, 0, r.capacity.free(), "every slot must be held: one by the worker, two by the buffer")
+
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = r.ReadMessage(stopped)
+	require.ErrorIs(t, err, io.EOF)
+	require.Empty(t, r.pending, "a stopped reader kept its buffer")
+	require.Equal(t, 2, r.capacity.free(), "a stopped reader kept its buffered messages' slots")
+
+	first.Release()
+	require.Equal(t, 3, r.capacity.free())
+	time.Sleep(ackWait + 500*time.Millisecond)
+	require.Equal(t, 0.0, heldPastAckWait(nmgr, r, stageBuffer),
+		"a buffered message given back on stop was later counted as held past AckWait")
+	require.Equal(t, 0.0, heldPastAckWait(nmgr, r, stageWorker))
+	require.Equal(t, 3, r.capacity.free(), "a reclaim after the drop returned a second token")
+}
+
 // Process returns the slot however the handler leaves: by returning, by acking, or by panicking.
 func TestProcessReleasesOnEveryPath(t *testing.T) {
 	nmgr := capacityManager(t, 0)

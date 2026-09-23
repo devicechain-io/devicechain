@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -377,13 +378,11 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		// of its own budget and the latest moment those can still start and finish sendMargin
 		// before that deadline. A message with no AckDeadline (not from a capacity reader) waits
 		// its budget as before.
+		//
+		// A deadline already spent needs no check of its own: the limiter's Wait refuses a
+		// context that is already done, or one whose deadline its wait cannot cover, before it
+		// takes a token, so that case arrives below as a capped wait error like any other.
 		waitDeadline, capped := c.rateWaitDeadline(tctx, time.Now())
-		if !time.Now().Before(waitDeadline) {
-			// Spent before it began: the broker will redeliver this dispatch before a send could
-			// finish, so starting one would be a duplicate in the making.
-			c.tooLateToSend(tctx, msg, req.RuleID, tenant, action)
-			return
-		}
 		// Derive the wait from procCtx (cancelled on Stop) so a rolling-update drain aborts an
 		// in-progress rate wait rather than blocking Stop for the budget: a wait interrupted by
 		// shutdown ABANDONS the message unacked (it redelivers after restart for a fresh admission),
@@ -400,8 +399,10 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			}
 			if capped {
 				// The wait was cut short by the redelivery clock, not by the budget, so this is not
-				// evidence of a tenant sustained over quota.
-				c.tooLateToSend(tctx, msg, req.RuleID, tenant, action)
+				// evidence of a tenant sustained over quota: the broker will redeliver this dispatch
+				// before a send could finish, and starting one would be a duplicate in the making.
+				// It is disposed of exactly as a transient send failure is.
+				c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, errTooLateToSend)
 				return
 			}
 			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
@@ -422,17 +423,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	case res.retryable:
 		// Transient: redeliver until the cap, then dead-letter so a permanently-failing send cannot
 		// redeliver forever (SD-2).
-		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
-				Msg("Connector dispatch dead-lettered after the redelivery cap.")
-			c.deadLetter(tctx, msg, req.RuleID, action, outcomeDead)
-			return
-		}
-		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
-		// immediate nak would burn MaxDeliver in ~1.4ms inside an outage (ADR-030).
-		log.Warn().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempt", msg.NumDelivered).
-			Msg("Connector dispatch failed; leaving unacked for redelivery.")
-		c.metrics.recordOutcome(action, outcomeRetry)
+		c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, res.err)
 	default:
 		// Terminal (unsupported kind / malformed config that bypassed the publish gate): a redelivery
 		// cannot help, so dead-letter it visibly rather than churn the cap or silently drop it.
@@ -442,19 +433,26 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	}
 }
 
-// tooLateToSend disposes of a dispatch whose message will be redelivered before a send could
-// finish: it is left unacked for that redelivery, exactly as a transient send failure is — and on
-// the final delivery, where no redelivery follows, it is dead-lettered instead, as a transient
-// failure at the cap is, so it is recorded rather than stranded.
-func (c *DispatchConsumer) tooLateToSend(tctx context.Context, msg messaging.Message, rule, tenant, action string) {
+// errTooLateToSend is the cause recorded for a dispatch whose rate wait was cut short by its
+// message's redelivery deadline: a send started then could not finish before the broker
+// redelivered the message.
+var errTooLateToSend = errors.New("cannot send before the message's redelivery deadline")
+
+// retryOrDeadLetter disposes of a dispatch that did not go out but might on a later delivery — a
+// transient send failure, or a rate wait cut short by the redelivery deadline. It is the ONE place
+// this consumer decides "this is the final delivery, so letter it": below the cap the message is
+// left UNACKED (not nak'd) so AckWait paces its redelivery — an immediate nak would burn MaxDeliver
+// in ~1.4ms inside an outage (ADR-030); at the cap no redelivery follows, so it is dead-lettered
+// rather than stranded.
+func (c *DispatchConsumer) retryOrDeadLetter(tctx context.Context, msg messaging.Message, rule, tenant, action string, cause error) {
 	if msg.NumDelivered >= messaging.MaxDeliver {
-		log.Error().Str("rule", rule).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
-			Msg("Connector dispatch reached its final delivery too late to send; dead-lettering.")
+		log.Error().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
+			Msg("Connector dispatch dead-lettered on its final delivery.")
 		c.deadLetter(tctx, msg, rule, action, outcomeDead)
 		return
 	}
-	log.Warn().Str("rule", rule).Str("tenant", tenant).
-		Msg("Connector dispatch cannot send before its redelivery deadline; leaving it unacked.")
+	log.Warn().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempt", msg.NumDelivered).
+		Msg("Connector dispatch did not go out; leaving it unacked for redelivery.")
 	c.metrics.recordOutcome(action, outcomeRetry)
 }
 

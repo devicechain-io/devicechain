@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -251,7 +250,11 @@ type NatsManager struct {
 // server at creation, so changing the value afterwards would leave the broker timing
 // one number while the readers measure another — exactly the disagreement the single
 // accessor exists to rule out.
-func (nmgr *NatsManager) SetAckWaitForTesting(tb testing.TB, d time.Duration) {
+//
+// It takes a test's T for its Helper method alone, through an interface of that one method,
+// so production code in this package does not import the testing package — which would
+// link it into every service binary.
+func (nmgr *NatsManager) SetAckWaitForTesting(tb interface{ Helper() }, d time.Duration) {
 	tb.Helper()
 	if len(nmgr.readers) > 0 {
 		panic("messaging: SetAckWaitForTesting after a reader was created; a durable's AckWait is frozen at creation")

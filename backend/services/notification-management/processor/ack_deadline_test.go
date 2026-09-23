@@ -14,6 +14,7 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/require"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -26,6 +27,12 @@ import (
 // fetch time plus that AckWait. There is no other way to get one — the deadline is carried only
 // by a message a capacity reader produced, which is the property being relied on.
 func capacityMessage(t *testing.T, ackWait time.Duration) messaging.Message {
+	t.Helper()
+	return capacityMessageWith(t, ackWait, []byte("x"))
+}
+
+// capacityMessageWith is capacityMessage carrying the given body.
+func capacityMessageWith(t *testing.T, ackWait time.Duration, body []byte) messaging.Message {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
@@ -60,7 +67,7 @@ func capacityMessage(t *testing.T, ackWait time.Duration) messaging.Message {
 
 	writer, err := nmgr.NewWriter(streams.AlarmEvents)
 	require.NoError(t, err)
-	require.NoError(t, writer.WriteMessages(tenantScoped(), messaging.Message{Value: []byte("x")}))
+	require.NoError(t, writer.WriteMessages(tenantScoped(), messaging.Message{Value: body}))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	msg, err := reader.ReadMessage(ctx)
@@ -102,4 +109,33 @@ func TestDispatchDeadlineIsCappedByAckDeadline(t *testing.T) {
 			"AckDeadline (%v away), not a full dispatchBudget from now", da.remaining, want)
 	require.Greater(t, da.remaining, want-2*time.Second,
 		"the delivery's deadline was %v away, far tighter than the %v the AckDeadline allows", da.remaining, want)
+}
+
+// ackDeadlineRecordingNotifier records the AckDeadline on the context each Notify is handed.
+type ackDeadlineRecordingNotifier struct {
+	calls    int
+	deadline time.Time
+	had      bool
+}
+
+func (r *ackDeadlineRecordingNotifier) Notify(ctx context.Context, _ *dmmodel.AlarmStateChangeEvent) error {
+	r.calls++
+	r.deadline, r.had = messaging.AckDeadlineFrom(ctx)
+	return nil
+}
+
+// The worker hands the Notifier the message's AckDeadline. TestDispatchDeadlineIsCappedByAckDeadline
+// shows the Notifier bounds a dispatch by it when it is there; this is the caller's half — that it
+// IS there for a message from a capacity reader. Without it the Notifier falls back to a budget
+// counted from dequeue, which is the one a message that reached its worker late can overrun, paging
+// past its redelivery and sending twice. The instrument is the exact value, not "some deadline".
+func TestDispatchOneHandsTheNotifierTheAckDeadline(t *testing.T) {
+	msg := capacityMessageWith(t, 30*time.Second, validEventBytes(t))
+	rec := &ackDeadlineRecordingNotifier{}
+	newTestProcessor(rec).dispatchOne(context.Background(), msg)
+
+	require.Equal(t, 1, rec.calls, "the fixture must reach the Notifier or this test measures nothing")
+	require.True(t, rec.had, "the Notifier was handed no AckDeadline for a message from a capacity reader")
+	require.Equal(t, msg.AckDeadline(), rec.deadline,
+		"the Notifier must be handed the message's own AckDeadline")
 }
