@@ -134,7 +134,9 @@ func operationType(document, operationName string) (string, error) {
 }
 
 // opLexer tokenises a document the way graphql-go's lexer does
-// (internal/common/lexer.go in graphql-go), keeping only what the top-level walk needs.
+// (internal/common/lexer.go in graphql-go). It has two readers, and both depend on
+// that agreement for the same reason: operationType's top-level walk, and the work
+// limit's root-field reader (readRootFields), which mirrors graphql-go's parser over it.
 type opLexer struct {
 	sc   scanner.Scanner
 	tok  rune

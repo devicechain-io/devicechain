@@ -10,8 +10,6 @@ import (
 	graphql "github.com/graph-gophers/graphql-go"
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/graph-gophers/graphql-go/introspection"
-	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/vektah/gqlparser/v2/parser"
 )
 
 // Schema is a parsed GraphQL schema that REFUSES an operation selecting more root fields
@@ -54,12 +52,13 @@ func (s *Schema) Exec(ctx context.Context, query, operationName string, variable
 }
 
 // Subscribe checks the document against the work limit before handing it to
-// graphql-go's Subscribe. The WebSocket transport runs QUERIES AND MUTATIONS through
-// this path too — graphql-transport-ws has one `subscribe` message for all three — so
-// the limit is decided by the OPERATION TYPE in the document, never by which entry
-// point received it. A refused document arrives as one response carrying the error on
-// an already-closed channel, the same shape graphql-go uses for its own request errors,
-// so the transport sends `next` then `complete` and needs no special case.
+// graphql-go's Subscribe. graphql-go runs a query or mutation handed to Subscribe to
+// completion inside the call, so the limit is decided by the OPERATION TYPE in the
+// document, never by which entry point received it. The WebSocket transport refuses
+// anything but a subscription before it gets here; this is the second line behind that,
+// for any caller that does not. A refused document arrives as one response carrying the
+// error on an already-closed channel, the same shape graphql-go uses for its own request
+// errors.
 func (s *Schema) Subscribe(ctx context.Context, query, operationName string, variables map[string]any) (<-chan any, error) {
 	if err := s.checkWork(query); err != nil {
 		ch := make(chan any, 1)
@@ -104,102 +103,59 @@ const workLimitCode = "TOO_MANY_ROOT_FIELDS"
 
 // checkWork is the limit itself.
 //
-// 🔴 THE LENGTH CEILING IS CHECKED FIRST, BEFORE ANYTHING IS PARSED. graphql-go applies
-// its own MaxQueryLength inside Exec — which runs AFTER this — and gqlparser's
-// ParseQuery has no token limit. Parsing first would let an unauthenticated caller make
-// this function fully parse a body-sized (4 MiB) document that the old code refused by
-// length alone: a new amplifier added by the fix for an old one. The message matches
-// graphql-go's own so a client sees one wording either way.
+// 🔴 THE LENGTH CEILING IS CHECKED FIRST, BEFORE ANYTHING IS READ. graphql-go applies
+// its own MaxQueryLength inside Exec — which runs AFTER this. Reading first would let an
+// unauthenticated caller make this function walk a body-sized (4 MiB) document that the
+// old code refused by length alone: a new amplifier added by the fix for an old one. The
+// message matches graphql-go's own so a client sees one wording either way.
+//
+// 🔴 THE FIELDS ARE COUNTED BY A READER THAT TOKENISES EXACTLY AS graphql-go DOES
+// (readRootFields), not by a general GraphQL parser. The count is only a limit if it
+// counts what graphql-go then executes, and a conformant parser reads some documents
+// differently from graphql-go's text/scanner-based lexer — comments, raw strings and
+// block-string escapes are all read differently — which is enough to hide any number
+// of extra root fields from the count. readRootFields says how and why.
 //
 // Every operation in the document is counted, not only the one operationName selects.
 // That is the simpler rule and the fail-closed one: a document cannot carry an
 // oversized operation past the check by naming a different one, and a legitimate client
 // sends one operation per document anyway.
 //
-// A document gqlparser cannot parse is refused. graphql-go would refuse it too; if the
-// two parsers ever disagree, refusing is the direction that cannot run an uncounted
-// document.
+// A document the reader cannot read is refused. graphql-go would refuse nearly all of
+// them too, and where it would not, refusing is the direction that cannot run an
+// uncounted document.
 func checkWork(query string, maxLen, maxQueryRoots, maxMutationRoots int) *gqlerrors.QueryError {
 	if len(query) > maxLen {
 		return gqlerrors.Errorf("query length %d exceeds the maximum allowed query length of %d bytes", len(query), maxLen)
 	}
-	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	ops, fragments, err := readRootFields(query)
 	if err != nil {
 		return gqlerrors.Errorf("the document could not be parsed: %s", err.Error())
 	}
-	fragments := make(map[string]*ast.FragmentDefinition, len(doc.Fragments))
-	for _, f := range doc.Fragments {
-		fragments[f.Name] = f
-	}
-	for _, op := range doc.Operations {
+	for _, op := range ops {
 		var limit int
-		switch op.Operation {
-		case ast.Mutation:
+		switch op.kind {
+		case opMutation:
 			limit = maxMutationRoots
-		case ast.Query:
+		case opQuery:
 			limit = maxQueryRoots
 		default:
 			// A subscription is limited to ONE root field by graphql-go's own
 			// validation, which is stricter than anything set here.
 			continue
 		}
-		n := countRootKeys(op.SelectionSet, fragments)
+		n := countRootKeys(op.roots, fragments)
 		if n > limit {
-			name := op.Name
+			name := op.name
 			if name == "" {
 				name = "(anonymous)"
 			}
 			return &gqlerrors.QueryError{
 				Message: fmt.Sprintf("%s %s selects %d root fields; the maximum is %d",
-					op.Operation, name, n, limit),
+					op.kind, name, n, limit),
 				Extensions: map[string]any{"code": workLimitCode},
 			}
 		}
 	}
 	return nil
-}
-
-// countRootKeys counts the DISTINCT response keys an operation's root selection set
-// produces — which is exactly what graphql-go executes: its field collection merges
-// fields sharing a response key (the alias, or the field name when there is none) into
-// one resolver call, and expands inline fragments and fragment spreads into the set.
-//
-// So a key repeated ten times is ONE field, and aliases hidden behind a fragment are
-// counted as though written inline. @skip and @include are NOT evaluated: a
-// conditionally skipped field is counted as though it ran. That over-counts, which is
-// the safe direction, and costs a legitimate client nothing, because none sends more
-// root fields than the limit even unconditionally.
-//
-// A fragment is expanded at most once per operation. A fragment spread twice
-// contributes the same keys twice, which the distinct count absorbs, and the visited
-// set is also what stops a cyclic spread — invalid, but not yet validated here — from
-// recursing forever.
-func countRootKeys(set ast.SelectionSet, fragments map[string]*ast.FragmentDefinition) int {
-	keys := map[string]struct{}{}
-	visited := map[string]bool{}
-	var walk func(ast.SelectionSet)
-	walk = func(set ast.SelectionSet) {
-		for _, sel := range set {
-			switch s := sel.(type) {
-			case *ast.Field:
-				key := s.Alias
-				if key == "" {
-					key = s.Name
-				}
-				keys[key] = struct{}{}
-			case *ast.InlineFragment:
-				walk(s.SelectionSet)
-			case *ast.FragmentSpread:
-				if visited[s.Name] {
-					continue
-				}
-				visited[s.Name] = true
-				if f, ok := fragments[s.Name]; ok {
-					walk(f.SelectionSet)
-				}
-			}
-		}
-	}
-	walk(set)
-	return len(keys)
 }

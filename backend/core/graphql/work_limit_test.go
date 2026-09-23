@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -179,7 +180,7 @@ func TestEveryOperationIsCounted(t *testing.T) {
 // both over the length ceiling AND unparseable, so the message says which check ran
 // first: had it been parsed, the refusal would be the parse error. This is what keeps
 // the work limit from being a new amplifier — a body-sized document is refused by its
-// length, as it was before, rather than being fully parsed by a second parser.
+// length, as it was before, rather than being walked in full by the root-field reader.
 func TestLengthIsCheckedBeforeParsing(t *testing.T) {
 	t.Setenv(EnvGraphQLMaxQueryLength, "64")
 	root := &workRoot{}
@@ -304,10 +305,10 @@ func TestHttpHandlerWireContract(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-// The WebSocket transport runs queries and MUTATIONS through Subscribe, so the limit
-// must be decided by the operation type in the document and not by the entry point.
-// An over-cap mutation sent over the socket gets one error `next` and a `complete`,
-// and runs nothing.
+// The WebSocket transport accepts only subscriptions, and refuses a query or mutation
+// before Schema.Subscribe — so an over-cap mutation sent over the socket, and an at-cap
+// one, both run nothing. The work limit inside Schema.Subscribe stays as a second line
+// behind that refusal (TestSchemaSubscribeEnforcesRootFieldCap), not the only one.
 func TestWebSocketEnforcesRootFieldCap(t *testing.T) {
 	root := &workRoot{}
 	h := NewSubscriptionHandler(MustParseSchema(workSDL, root), map[ContextKey]interface{}{}, nil)
@@ -323,21 +324,37 @@ func TestWebSocketEnforcesRootFieldCap(t *testing.T) {
 	writeMsg(t, conn, wsMessage{Type: msgConnectionInit})
 	require.Equal(t, msgConnectionAck, readMsg(t, conn).Type)
 
-	// The control first: an at-cap mutation over the socket does run.
-	writeMsg(t, conn, subscribeMsg("ok", aliased("mutation", "bump", DefaultGraphQLMaxMutationRootFields), nil))
-	msg := readMsg(t, conn)
-	require.Equal(t, msgNext, msg.Type)
-	require.Equal(t, "", errorCode(t, msg.Payload), "%s", msg.Payload)
-	require.Equal(t, msgComplete, readMsg(t, conn).Type)
-	require.Equal(t, int32(DefaultGraphQLMaxMutationRootFields), root.mutations.Load())
+	for _, n := range []int{DefaultGraphQLMaxMutationRootFields, DefaultGraphQLMaxMutationRootFields + 1} {
+		id := fmt.Sprintf("m%d", n)
+		writeMsg(t, conn, subscribeMsg(id, aliased("mutation", "bump", n), nil))
+		msg := readMsg(t, conn)
+		require.Equal(t, msgError, msg.Type, "%s: got %s %s", id, msg.Type, msg.Payload)
+		assert.Equal(t, id, msg.ID)
+	}
+	assert.Equal(t, int32(0), root.mutations.Load())
 
-	root.mutations.Store(0)
-	writeMsg(t, conn, subscribeMsg("big", aliased("mutation", "bump", DefaultGraphQLMaxMutationRootFields+1), nil))
-	msg = readMsg(t, conn)
-	require.Equal(t, msgNext, msg.Type)
-	assert.Equal(t, "big", msg.ID)
-	assert.Equal(t, workLimitCode, errorCode(t, msg.Payload), "%s", msg.Payload)
-	done := readMsg(t, conn)
-	assert.Equal(t, msgComplete, done.Type)
+	// The control: the socket does run a subscription.
+	writeMsg(t, conn, subscribeMsg("sub", "subscription { tick }", nil))
+	msg := readMsg(t, conn)
+	require.Equal(t, msgNext, msg.Type, "%s", msg.Payload)
+}
+
+// Schema.Subscribe applies the limit itself, whatever reaches it: an over-cap mutation
+// handed to it directly yields one response carrying the refusal on a closed channel,
+// and runs nothing.
+func TestSchemaSubscribeEnforcesRootFieldCap(t *testing.T) {
+	root := &workRoot{}
+	schema := MustParseSchema(workSDL, root)
+	ch, err := schema.Subscribe(context.Background(), aliased("mutation", "bump", DefaultGraphQLMaxMutationRootFields+1), "", nil)
+	require.NoError(t, err)
+	var got []any
+	for r := range ch {
+		got = append(got, r)
+	}
+	require.Len(t, got, 1)
+	resp, ok := got[0].(*graphql.Response)
+	require.True(t, ok, "%T", got[0])
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, workLimitCode, resp.Errors[0].Extensions["code"])
 	assert.Equal(t, int32(0), root.mutations.Load())
 }
