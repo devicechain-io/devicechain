@@ -444,8 +444,9 @@ The root key encrypts every secret the instance stores, it lives only in the
 cluster's etcd, and **no DeviceChain backup contains etcd**. Without this file, a
 database backup restored to a new cluster rehydrates secrets that nothing can
 decrypt. The areas that store secrets refuse to start rather than serve credentials
-they cannot open, so you find out immediately — and there is nothing to be done about
-it by then. [Disaster
+they cannot open — user-management among them, which seals the token-signing key, so no
+one can sign in — so you find out immediately, and there is nothing to be done about it
+by then. [Disaster
 Recovery](./disaster-recovery.md) explains the whole procedure; read it before you
 need it.
 :::

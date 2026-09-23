@@ -353,26 +353,25 @@ issuer there is no AS, and a route to one would be a route to a 404.
 {{- end -}}
 
 {{/*
-devicechain.validateSecretsRootKey fails the render when an enabled area owns an
-ADR-059 envelope-encrypted secret store but no instance root key is configured. Such a
-service cannot form its KEK and MUST NOT start ("encryption-at-rest is not optional
-once wired"), so without this the only symptom is a CrashLooping pod.
+devicechain.validateSecretsRootKey fails the render when no instance root key is
+configured. Every instance needs one, whatever its profile: user-management — a core
+area, enabled in every profile — seals the JWT signing key's private half in its
+ADR-059 envelope-encrypted secret store, and a service that cannot form its KEK MUST
+NOT start ("encryption-at-rest is not optional once wired"). Without this check the
+only symptom is a CrashLooping user-management and an instance nobody can sign in to.
 
-notification-management is in the DEFAULT profile, so this is not only a "full"
-concern — any install owes a root key.
+It used to consult a list of the areas that own a secret store and fail only when one
+of them was enabled, which let the telemetry and ingest-only profiles render without a
+key. That list is gone rather than extended: an area that is always enabled makes the
+question "does this install carry a secret-store area?" always answer yes.
 */}}
 {{- define "devicechain.validateSecretsRootKey" -}}
-{{- $needsKey := list "notification-management" "outbound-connectors" "ai-inference" -}}
 {{- $rootKey := "" -}}
 {{- with .Values.instance -}}{{- with .config -}}{{- with .infrastructure -}}{{- with .secrets -}}
 {{- $rootKey = .rootKey | default "" -}}
 {{- end -}}{{- end -}}{{- end -}}{{- end -}}
 {{- if not $rootKey -}}
-  {{- range $a := splitList "," (include "devicechain.enabledAreas" .) -}}
-    {{- if has $a $needsKey -}}
-      {{- fail (printf "instance.config.infrastructure.secrets.rootKey is required: area %q owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically." $a) -}}
-    {{- end -}}
-  {{- end -}}
+  {{- fail "instance.config.infrastructure.secrets.rootKey is required: every instance seals its token-signing key under it, along with any integration credentials it stores, and user-management cannot start without it. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically." -}}
 {{- end -}}
 {{- end -}}
 

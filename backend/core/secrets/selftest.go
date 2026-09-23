@@ -117,8 +117,9 @@ func SelfTest(ctx context.Context, db *gorm.DB, kp KeyProvider) (SelfTestResult,
 	// Find into a slice rather than First into a struct: an empty store is then a
 	// zero-length result instead of ErrRecordNotFound, which keeps "nothing stored"
 	// from having to be recovered out of an error alongside real read failures.
-	// Soft-deleted rows are excluded by gorm's own default scope — a deleted secret
-	// is not a credential this service can be asked to open.
+	// The store's Delete removes rows outright, but a soft-deleted row written before
+	// it did can still be present; gorm's own default scope excludes it, because a
+	// deleted secret is not a credential this service can be asked to open.
 	var rows []Secret
 	if err := sysdb.Model(&Secret{}).Order("id ASC").Limit(1).Find(&rows).Error; err != nil {
 		return "", fmt.Errorf("secrets: could not read the secrets table to check the instance root key; this is "+

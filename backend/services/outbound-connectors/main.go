@@ -89,24 +89,6 @@ func parseConfiguration() error {
 	return nil
 }
 
-// buildSecretStore constructs the envelope-encrypted secret store (ADR-059) from the
-// instance secrets configuration. secrets.New is the single wiring point: it fails
-// closed on an unknown or declared-but-unbuilt backend/KEK provider and on a missing or
-// malformed instance root key, so a service that cannot form its KEK does not start (a
-// resolved credential is required to authenticate an outbound call).
-func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
-	cfg := Microservice.InstanceConfiguration.Infrastructure.Secrets
-	// DecodedRootKey is passed as a source rather than called here so New keeps this
-	// wiring's original check order: an external backend that owns its own keys is
-	// refused for not being built, not for lacking an instance root key.
-	return secrets.New(
-		ctx,
-		secrets.Config{Backend: cfg.Backend, KEKProvider: cfg.KEKProvider},
-		RdbManager.Database,
-		cfg.DecodedRootKey,
-	)
-}
-
 // buildMetrics creates this service's Prometheus instruments exactly once.
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE CONSUMER IS BUILT.
@@ -261,7 +243,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// outbound credential lives here, resolved server-internal at dispatch. Fails
 			// startup closed on an unbuilt backend/provider or a missing instance root key,
 			// since a resolved credential is required to authenticate an outbound call.
-			store, err := buildSecretStore(ctx)
+			store, err := secrets.NewFromConfig(ctx, Microservice.InstanceConfiguration.Infrastructure.Secrets, RdbManager.Database)
 			if err != nil {
 				return err
 			}

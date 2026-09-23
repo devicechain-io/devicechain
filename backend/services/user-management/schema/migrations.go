@@ -4,6 +4,7 @@
 package schema
 
 import (
+	"github.com/devicechain-io/dc-microservice/secrets"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 )
 
@@ -78,5 +79,14 @@ var (
 		// reset left every refresh token already issued able to keep rotating, and an
 		// identity deleted and re-created under the same email inherited the old one's.
 		NewIdentitySessionEpochMigration(),
+		// The secrets table (ADR-059): user-management becomes a secret-store area, and
+		// the first thing it seals is the private half of the JWT signing key. Built by
+		// core's own migration body under an ID of this chain's, because the shared ID
+		// predates everything above and the chain must stay in ID order.
+		secrets.NewSecretStoreSchemaAt("20260923130000"),
+		// The cleartext private keys leave signing_keys: every existing row, then the
+		// column. The migration's own comment says why the rows are deleted rather than
+		// demoted, and what it cannot reach (backups, WAL, dead tuples).
+		NewSigningKeyPrivateHalfMigration(),
 	}
 )

@@ -152,14 +152,15 @@ func TestAMatchingEscrowIsLeftAlone(t *testing.T) {
 	}
 }
 
-// An instance that uses no secret store has no root key, and reporting "no escrow"
-// about it would be naming a gap that does not exist.
-func TestAnInstanceWithNoRootKeyIsNotToldItHasNoEscrow(t *testing.T) {
+// Every instance needs a root key — user-management seals the token-signing key under
+// it — so a configuration with none is reported as exactly that, not as a missing escrow
+// and not as something that does not apply.
+func TestAnInstanceWithNoRootKeyIsToldItHasNone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rootkey.escrow")
 
 	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), "",
-		anUpgradeWithEscrowAt(path, passphraseFile(t, dir, "a-passphrase"))); got != escrowNotApplicable {
+		anUpgradeWithEscrowAt(path, passphraseFile(t, dir, "a-passphrase"))); got != escrowNoRootKey {
 		t.Errorf("an instance with no root key was reported as %q", got)
 	}
 

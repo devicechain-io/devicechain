@@ -83,14 +83,17 @@
 #   hack/dr-rig.sh restore    fresh cluster recovered from the escrow artifact +
 #                             BOTH off-cluster archives; the secret MUST decrypt
 #                             and the telemetry MUST come back intact
-#   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half: the identical
-#                             restore under a DIFFERENT root key, with the event
-#                             store NOT restored at all. The secret half now fails
-#                             TWICE, at two different depths — the area that stores
-#                             secrets REFUSES TO START, naming the root key, and the
-#                             ciphertext then fails AT THE DECRYPT — and the
-#                             telemetry must be reported MISSING, each with its own
-#                             exact exit code
+#   hack/dr-rig.sh control    THE NEGATIVE CONTROLS, one per half, on two rebuilds.
+#                             The EVENT half first: the relational restore under
+#                             the ESCROWED key with the event store NOT restored,
+#                             and the telemetry must be reported MISSING. Then the
+#                             SECRET half: the identical relational restore under
+#                             a DIFFERENT root key, which fails TWICE, at two
+#                             different depths — the areas that seal under the
+#                             key (user-management and notification-management)
+#                             REFUSE TO START, naming it, and the ciphertext then
+#                             fails AT THE DECRYPT — each with its own exact exit
+#                             code
 #   hack/dr-rig.sh all        up → disaster → restore → disaster → control
 #   hack/dr-rig.sh down       dcctl destroy the instance (when it still has local
 #                             state), then delete the cluster, the object store and
@@ -149,8 +152,8 @@
 #
 # Requires: kind, kubectl, docker, jq, curl, `tofu` OR `terraform` on PATH (dcctl
 # shells out to it), and a Go toolchain (the script builds dcctl and drdrill
-# itself). A full run brings up three clusters in sequence and builds images for
-# each — budget an hour, and run `down` afterwards.
+# itself). A full run brings up four clusters in sequence and builds images for
+# each — budget well over an hour, and run `down` afterwards.
 
 set -euo pipefail
 
@@ -1534,8 +1537,9 @@ choose. Free the port, or set DC_DR_PG_PORT to one that is free, and re-run."
 }
 
 # $@ are extra flags handed to `drdrill verify`. Only the negative control passes
-# any: --secret-area-refused, because the area that stores the secret is expected
-# not to be serving there. See checkRestoredWithoutSecretArea in the tool.
+# any: --secret-area-refused, because user-management and the area that stores the
+# secret are expected not to be serving there. See checkRestoredWithoutSecretArea in
+# the tool.
 run_verify() {
   local rc=0 waited=0
   local extra=("$@")
@@ -1853,32 +1857,47 @@ $state"
 
 # cmd_control is the check on the check.
 #
+# 🔴 IT REBUILDS TWICE, AND THE EVENT HALF RUNS FIRST, ON A REBUILD OF ITS OWN.
+#
+# Both controls used to share one rebuild — the decoy one — and they cannot any more.
+# The event half's verify-events authenticates through the API as the seeded
+# identity, and under a decoy root key there is no API: user-management seals the
+# instance's JWT signing key under the root key, so it refuses to start exactly as
+# notification-management does, and with it goes every login and every service that
+# validates a token. The event control would die on a login rather than reach its
+# question. So it gets a rebuild where the API can serve — the ESCROWED key, the
+# relational store restored, the event store deliberately NOT — and the cluster is
+# then destroyed again, as the `all` sequence's disaster does, before the decoy
+# rebuild starts from the same nothing.
+#
 # 🔴 THE SECRET HALF'S CONTROL FAILS TWICE, AT TWO DIFFERENT DEPTHS, and both are
 # asserted. That is not belt-and-braces: they are separate claims, and until #991
 # only the second one existed.
 #
-#   1. A service that stores secrets now checks its instance root key against its
-#      own stored ciphertext as it builds the secret store, and refuses to start if
-#      the key does not open it. So this rebuild does NOT produce a fully running
-#      instance — notification-management refuses, `dcctl bootstrap` never sees
-#      every area become ready, and the phase tolerates that (see the fourth
-#      argument to rebuild). What it does NOT tolerate is a bring-up that failed
-#      without that refusal in the log: a readiness timeout is the least specific
-#      failure this rig can produce, and a control that holds for "the cluster was
-#      slow" has stopped being evidence for the key. assert_startup_refusal is what
-#      keeps the two apart.
+#   1. A service that stores secrets checks its instance root key against its own
+#      stored ciphertext as it builds the secret store, and refuses to start if the
+#      key does not open it. So the decoy rebuild does NOT produce a running instance
+#      — user-management and notification-management both refuse, `dcctl bootstrap`
+#      never sees every area become ready, and the phase tolerates that (see the
+#      fourth argument to rebuild). What it does NOT tolerate is a bring-up that
+#      failed without those refusals in the logs: a readiness timeout is the least
+#      specific failure this rig can produce, and a control that holds for "the
+#      cluster was slow" has stopped being evidence for the key.
+#      assert_startup_refusal is what keeps the two apart, once per area.
 #   2. The ciphertext itself still does not decrypt, and run_verify still says so
 #      with its own exact exit code. It reads the database through its own
-#      port-forward rather than through the area's API, so it stands as a genuinely
-#      independent leg — it does not care that the area refused to serve, and it
+#      port-forward rather than through any API, so it stands as a genuinely
+#      independent leg — it does not care that the areas refused to serve, and it
 #      would report the same code if the refusal had never been implemented.
 #
-# 🔴 `wait_for_api notification-management` is deliberately ABSENT from this phase,
-# and only from this phase. That area cannot become ready here by design, so waiting
-# for it would be waiting for something this phase has just made impossible: the run
-# would die on a timeout instead of reading its own result. user-management stores no
-# secrets, comes up normally, and is what proves the ingress and the recovered
-# relational store are actually serving.
+# 🔴 NO `wait_for_api` RUNS AFTER THE DECOY REBUILD, and none can. user-management and
+# notification-management cannot become ready there by design, and the other areas
+# cannot validate a token without user-management's signing keys — so waiting for any
+# of them would be waiting for something this phase has just made impossible, and the
+# run would die on a timeout instead of reading its own result. What proves the
+# recovered relational store is serving is a DATABASE read instead: see
+# checkRestoredWithoutSecretArea in drdrill, which finds this run's identity and its
+# membership in the restored user-management tables.
 #
 # It recovers the SAME instance from the SAME archive under a root key that is not
 # the instance's. Everything else is identical. If the secret still decrypts, then
@@ -1907,9 +1926,9 @@ $state"
 # row, which is a question only the crypto can answer. See runDecoy.
 #
 # 🔴 THE CONTROL'S PREMISE IS THE RELATIONAL RESTORE. Without it the control instance
-# holds no sealed row at all — the secret-storing area's startup self-test has nothing
-# to refuse on, and run_verify reports NOT-FOUND rather than DECRYPT-FAILED, so
-# neither leg holds and the phase teaches nothing. rebuild restores it in both phases
+# holds no sealed row at all — the secret-storing areas' startup self-tests have
+# nothing to refuse on, and run_verify reports NOT-FOUND rather than DECRYPT-FAILED, so
+# neither leg holds and the phase teaches nothing. rebuild restores it in every phase
 # for exactly that reason; require_relational_restore is what stops this phase before
 # it can report on something else.
 cmd_control() {
@@ -1921,11 +1940,6 @@ cmd_control() {
     [[ -s "$f" ]] || fail "$f is missing or empty; run 'up' then 'disaster' first"
   done
 
-  say "minting a decoy escrow artifact — a well-formed artifact holding the WRONG key"
-  rm -f "$decoy_file"
-  "$drdrill" decoy --instance "$instance" --out "$decoy_file" ||
-    fail "could not mint the decoy artifact; there is no control to run"
-
   # 🔴 No --restore-tsdb-from, and that empty third argument IS the event half's
   # negative control.
   #
@@ -1936,20 +1950,81 @@ cmd_control() {
   # FAIL on one where nothing was restored, a verify-events that always passed
   # would be indistinguishable from a restore that always worked.
   #
-  # So the control cluster gets an event store that is fresh rather than restored
-  # — event-management migrates an empty schema onto it at startup, which is the
+  # So this cluster gets an event store that is fresh rather than restored —
+  # event-management migrates an empty schema onto it at startup, which is the
   # hardest version of the test: every hypertable, the continuous aggregate and
   # every policy are PRESENT and correct, and only the data is missing.
+  #
+  # Under the ESCROWED key, so the API it authenticates through can serve at all.
+  # Which key this rebuild runs does not touch the claim under test — event data is
+  # not sealed — and it is the only key under which the login can succeed.
   #
   # 🔑 Because it is not restored, this dc-tsdb is a fresh event store, and a fresh
   # one archives under a path of its own generation — so it archives into an empty
   # path beside the original's rather than colliding with it. Verdict-neutral either
   # way: the control asserts the telemetry is ABSENT, which needs no archive.
+  rebuild "$escrow_file" "the ESCROWED root key, with the event store NOT restored (the event control)" ""
+
+  say "waiting for the recovered instance API to route"
+  wait_for_api user-management
+  wait_for_api event-management
+
+  # This cluster's event store was never restored, so verify-events must say the
+  # telemetry is not there — and must say it with the NOT-FOUND code specifically.
+  #
+  # Any other outcome is a different problem wearing the same clothes: exit 6 would
+  # mean it tripped over TimescaleDB's machinery before it ever looked for a row
+  # (so the absence was never actually detected), and exit 1 means it could not run.
+  # Only exit $DRDRILL_EXIT_NOT_FOUND shows the check reaching the question and
+  # answering it correctly.
+  say "NEGATIVE CONTROL, EVENT HALF — an event store that was never restored"
+  local rc=0
+  run_event verify-events --server "$api_server" --scheme "$api_scheme" || rc=$?
+
+  case "$rc" in
+    "$DRDRILL_EXIT_OK")
+      fail "THE EVENT CONTROL DID NOT HOLD.
+
+verify-events PASSED against an event store that was never restored. Whatever it
+is reading, it is not this run's telemetry — so its pass in the restore phase is
+worth nothing, and no event-restore result may be recorded from this run."
+      ;;
+    "$DRDRILL_EXIT_NOT_FOUND")
+      say "EVENT CONTROL HELD — the telemetry was absent and was reported absent.
+The schema is all there (event-management migrated it onto an empty cluster:
+hypertables, the continuous aggregate, every policy) and the data is not. The
+check reached the question and answered it, which is what makes its pass in the
+restore phase mean something."
+      ;;
+    *)
+      fail "THE EVENT CONTROL DID NOT RUN (drdrill exit $rc).
+
+INCONCLUSIVE, not a result. The control is only evidence when it reports the data
+MISSING (exit $DRDRILL_EXIT_NOT_FOUND); exit $DRDRILL_EXIT_TIMESCALE_BROKEN means it stopped at TimescaleDB's machinery
+before it looked for a row, and exit $DRDRILL_EXIT_SETUP means it could not run at all."
+      ;;
+  esac
+
+  # The same loss `disaster` simulates, and for the same reason: the decoy rebuild's
+  # premise is a cluster that lost everything. A surviving instance keeps the key it
+  # is running — the ESCROWED one, here — and require_no_instance would refuse to
+  # rebuild over it. Not cmd_disaster itself: its pre-checks are about the archive
+  # `up` wrote, which this phase only reads.
+  say "destroying the event-control cluster before the decoy rebuild"
+  delete_cluster
+  remove_instance_state "$instance"
+
+  say "minting a decoy escrow artifact — a well-formed artifact holding the WRONG key"
+  rm -f "$decoy_file"
+  "$drdrill" decoy --instance "$instance" --out "$decoy_file" ||
+    fail "could not mint the decoy artifact; there is no control to run"
+
+  # The event store is not restored here either; nothing in this half reads it.
   rebuild "$decoy_file" "a DECOY root key (the negative control)" "" \
-    "notification-management stores secrets, so under a decoy root key it refuses to
-start and the instance never becomes fully ready. The bootstrap reporting that as a
-readiness timeout is the EXPECTED outcome of this phase, and the refusal itself is
-asserted immediately below."
+    "user-management and notification-management both seal what they store under the
+root key, so under a decoy both refuse to start and the instance never becomes
+ready. The bootstrap reporting that as a readiness timeout is the EXPECTED outcome
+of this phase, and each refusal is asserted immediately below."
 
   # The control's premise, asserted BOTH ways. Either half alone is insufficient:
   #
@@ -1991,31 +2066,30 @@ not means the instance survived the disaster, or the key came from somewhere thi
 rig does not know about. Nothing below would be evidence."
   fi
 
-  # LEG ONE. Asserted after the two escrow checks above rather than before them, so
-  # that "the decoy key is genuinely installed" is already established when this
-  # reads the refusal — otherwise a missing refusal would be reported as a stale
-  # grep string when the truth was that the wrong key never took effect.
+  # LEG ONE, once per area that seals under the root key. Asserted after the two
+  # escrow checks above rather than before them, so that "the decoy key is genuinely
+  # installed" is already established when this reads the refusal — otherwise a
+  # missing refusal would be reported as a stale grep string when the truth was that
+  # the wrong key never took effect.
   assert_startup_refusal notification-management
-
-  # user-management ONLY — see the 🔴 note on this function.
-  say "waiting for the recovered instance API to route"
-  wait_for_api user-management
+  assert_startup_refusal user-management
 
   say "NEGATIVE CONTROL, LEG TWO — the same archive, recovered under a different root key"
-  local rc=0
+  rc=0
   # 🔴 --secret-area-refused, and it is NOT "skip the API check".
   #
   # `verify`'s ordinary precheck asks notification-management whether the channel is
   # back. In this phase that area has refused to start — which is the very thing leg
-  # one just asserted — so the question cannot be answered, and a live run died here
-  # on a wrong-reason setup failure rather than on the key.
+  # one just asserted — and so has user-management, so no question can be asked of
+  # the API at all.
   #
-  # The flag swaps that premise for a harder pair: the seeded identity must log in to
-  # user-management and still hold this run's tenant membership (so the relational
-  # restore demonstrably landed, on rows THIS run wrote), and the secret-storing area
-  # must NOT answer. Passing it against a healthy instance fails; passing it against
-  # an instance that restored nothing fails. It cannot be used to delete the check,
-  # which is what happened to the --skip-api flag that used to exist.
+  # The flag swaps that premise for a harder pair: this run's identity must be in the
+  # restored user-management tables and still hold this run's tenant membership (so
+  # the relational restore demonstrably landed, on rows THIS run wrote — read from the
+  # database, since no login can succeed here), and neither refusing area may answer.
+  # Passing it against a healthy instance fails; passing it against an instance that
+  # restored nothing fails. It cannot be used to delete the check, which is what
+  # happened to the --skip-api flag that used to exist.
   run_verify --secret-area-refused || rc=$?
 
   case "$rc" in
@@ -2033,7 +2107,7 @@ No restore result may be recorded from this run."
       ;;
     "$DRDRILL_EXIT_DECRYPT_FAILED")
       say "NEGATIVE CONTROL HELD — the secret was present and did NOT decrypt.
-The row recovered from the archive, the instance served it, and the key this
+The row recovered from the archive, the database served it, and the key this
 cluster was given could not open it. That is the failure mode the escrow artifact
 exists to prevent, and it has now been observed rather than assumed."
       ;;
@@ -2044,43 +2118,6 @@ That is INCONCLUSIVE — neither a pass nor a failure. The control is only evide
 when it fails at the DECRYPT (exit $DRDRILL_EXIT_DECRYPT_FAILED); exit $DRDRILL_EXIT_NOT_FOUND means the row never
 recovered and exit $DRDRILL_EXIT_SETUP means the drill could not get far enough to have an opinion.
 Fix what the output above reports and re-run rather than reading this either way."
-      ;;
-  esac
-
-  # THE EVENT HALF'S CONTROL. This cluster's event store was never restored, so
-  # verify-events must say the telemetry is not there — and must say it with the
-  # NOT-FOUND code specifically.
-  #
-  # Any other outcome is a different problem wearing the same clothes: exit 6 would
-  # mean it tripped over TimescaleDB's machinery before it ever looked for a row
-  # (so the absence was never actually detected), and exit 1 means it could not run.
-  # Only exit $DRDRILL_EXIT_NOT_FOUND shows the check reaching the question and
-  # answering it correctly.
-  say "NEGATIVE CONTROL, EVENT HALF — an event store that was never restored"
-  rc=0
-  run_event verify-events --server "$api_server" --scheme "$api_scheme" || rc=$?
-
-  case "$rc" in
-    "$DRDRILL_EXIT_OK")
-      fail "THE EVENT CONTROL DID NOT HOLD.
-
-verify-events PASSED against an event store that was never restored. Whatever it
-is reading, it is not this run's telemetry — so its pass in the restore phase is
-worth nothing, and no event-restore result may be recorded from this run."
-      ;;
-    "$DRDRILL_EXIT_NOT_FOUND")
-      say "EVENT CONTROL HELD — the telemetry was absent and was reported absent.
-The schema is all there (event-management migrated it onto an empty cluster:
-hypertables, the continuous aggregate, every policy) and the data is not. The
-check reached the question and answered it, which is what makes its pass in the
-restore phase mean something."
-      ;;
-    *)
-      fail "THE EVENT CONTROL DID NOT RUN (drdrill exit $rc).
-
-INCONCLUSIVE, not a result. The control is only evidence when it reports the data
-MISSING (exit $DRDRILL_EXIT_NOT_FOUND); exit $DRDRILL_EXIT_TIMESCALE_BROKEN means it stopped at TimescaleDB's machinery
-before it looked for a row, and exit $DRDRILL_EXIT_SETUP means it could not run at all."
       ;;
   esac
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
@@ -133,6 +134,9 @@ type Manager struct {
 	iam       *iam.Store
 	locker    *messaging.DistributedLock
 	accessTTL time.Duration
+	// secrets holds the private half of the active JWT signing key, sealed under the
+	// instance root key. The signing_keys table holds public halves only.
+	secrets secrets.SecretStore
 
 	refreshKV nats.KeyValue
 	// codesKV backs the OAuth 2.1 authorization-code store (ADR-047); nil when OAuth
@@ -168,9 +172,11 @@ type TokenPair struct {
 // auth package defaults. locker serializes signing-key generation/rotation and
 // bootstrap seeding across replicas (ADR-007). issuerUrl, when non-empty, is the
 // OAuth 2.1 issuer identifier (ADR-047) stamped as every token's "iss"; empty
-// keeps the legacy per-instance internal identifier.
-func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig) *Manager {
-	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
+// keeps the legacy per-instance internal identifier. store is the instance secret
+// store the signing keys' private halves are sealed in; it must be the Postgres store
+// over db, because a key's sealed half and its row are written in one transaction.
+func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.DistributedLock, store secrets.SecretStore, accessTTL, refreshTTL time.Duration, issuerUrl string, bootstrap BootstrapConfig) *Manager {
+	return &Manager{ms: ms, db: db, iam: iam.NewStore(db), locker: locker, secrets: store, accessTTL: accessTTL, refreshTTL: refreshTTL, issuerUrl: issuerUrl, bootstrap: bootstrap}
 }
 
 // resolveIssuerName picks the JWT "iss" value. A configured OAuth issuer URL

@@ -110,7 +110,7 @@ Debido a que el registro es público, no se requieren credenciales para descarga
 Fije la etiqueta de imagen a la versión que desea:
 
 `DC_ROOT_KEY`, más abajo, es la clave raíz del almacén de secretos de la instancia:
-la requiere el perfil `default`, se genera una sola vez con `openssl rand -base64 32` y se
+la requieren todos los perfiles, se genera una sola vez con `openssl rand -base64 32` y se
 pasa sin cambios en cada instalación y actualización. Consulte
 [Desplegando con Helm](./kubernetes-operator.md#desplegando-con-helm) para saber por qué.
 
@@ -179,7 +179,7 @@ funcionamiento no se pueden leer.
 Cuando eso ocurre no se corrompe nada, porque el chart se niega a renderizar sin la clave raíz:
 
 ```
-Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
+Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:21:4): instance.config.infrastructure.secrets.rootKey is required: every instance seals its token-signing key under it, along with any integration credentials it stores, and user-management cannot start without it. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
 `--reuse-values` también funciona, pero conserva en silencio entradas obsoletas cuando los
@@ -1583,11 +1583,12 @@ corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en q
 
 ### Próxima versión {#next-upgrade}
 
-La actualización cierra la sesión de todos los usuarios una vez, y a partir de entonces restablecer
-la contraseña de un usuario, desactivarlo o eliminarlo termina sus sesiones. Eso es la primera
-sección de abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de mensajes no
-entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones WebSocket
-de GraphQL desde su propio código.
+La actualización cierra la sesión de todos los usuarios una vez, a partir de entonces restablecer
+la contraseña de un usuario, desactivarlo o eliminarlo termina sus sesiones, y la clave raíz de la
+instancia pasa a ser obligatoria en todos los perfiles. Eso son las tres primeras secciones de
+abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de mensajes no
+entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones
+WebSocket de GraphQL desde su propio código.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1628,6 +1629,60 @@ Lo que cambia a partir de entonces:
   hereda ninguna sesión que conservara el anterior.
 - Cambiar los roles o las membresías de un usuario no cierra su sesión. Surte efecto en su siguiente
   renovación, como antes.
+
+#### Todos vuelven a iniciar sesión una vez
+
+La clave que firma todos los tokens de acceso y de actualización se guardaba sin cifrar en la base
+de datos de user-management. Cualquiera que pudiera leer esa base de datos, una copia de seguridad
+de ella o su archivo del registro de escritura anticipada podía firmar tokens que todos los
+servicios aceptan. Ahora se sella bajo la clave raíz de la instancia, como cualquier otra
+credencial almacenada, y solo la clave en uso tiene mitad privada. Cuando una clave se retira por
+rotación, su mitad privada se borra y solo se conserva la pública, de modo que los tokens que firmó
+siguen verificándose hasta que caducan.
+
+La actualización **borra todas las claves de firma que tenía la instancia**, en lugar de sellarlas,
+porque cada una ya ha estado sin cifrar en todas las copias de seguridad tomadas hasta ahora.
+user-management genera una clave nueva al arrancar. Como consecuencia:
+
+- **Todos los usuarios vuelven a iniciar sesión.** Los tokens de acceso y de actualización emitidos
+  antes de la actualización dejan de validar.
+- **Los clientes OAuth, incluidos los clientes MCP, tienen que volver a autorizarse.** Sus tokens de
+  actualización también dejan de funcionar.
+- **Las sesiones en una aplicación de paneles embebida terminan**, y sus usuarios vuelven a iniciar
+  sesión.
+
+Esto surte efecto cuando termina el despliegue, no en el momento en que empieza la actualización.
+Hasta que se detiene el último pod antiguo de user-management, sigue firmando tokens con la clave
+antigua y publicándola para que los demás servicios verifiquen con ella. `helm upgrade` y
+`dcctl upgrade` sustituyen todos los pods, así que la clave antigua deja de ser de confianza cuando
+terminan.
+
+Las copias de seguridad y el registro de escritura anticipada archivado **antes** de la
+actualización siguen conteniendo las claves antiguas. Esas claves ya no son de confianza en ninguna
+parte una vez terminado el despliegue, pero conviene seguir protegiendo esos archivos como las
+credenciales que fueron.
+
+#### La clave raíz de la instancia es ahora obligatoria en todos los perfiles
+
+Antes, la clave raíz solo la necesitaban los perfiles que almacenan credenciales de integración, así
+que el chart permitía renderizar los perfiles `telemetry` e `ingest-only` sin ella. Ahora toda
+instancia sella su clave de firma con la clave raíz, así que el chart **falla el renderizado** en
+cualquier perfil cuando no hay clave. Una instancia construida con `dcctl bootstrap` ya tiene una y
+no necesita nada. Una instalación `telemetry` o `ingest-only` hecha solo con el chart necesita una
+clave antes de poder actualizarse. Genérela con `openssl rand -base64 32`, pásela como
+`instance.config.infrastructure.secrets.rootKey` y consérvela: hay que pasar el mismo valor en
+cada actualización posterior.
+
+La clave raíz decide ahora también si alguien puede iniciar sesión. Con una clave equivocada o
+perdida, user-management se niega a arrancar, igual que todo servicio que almacena credenciales de
+integración. Los demás servicios se quedan entonces sin estar listos, porque no pueden obtener las
+claves que necesitan para validar un token. Cae toda la API, no solo las integraciones. Consulte
+[Recuperación ante desastres](./disaster-recovery.md#root-key) para saber qué hacer.
+
+Borrar una credencial almacenada ahora también la elimina por completo de la base de datos. Antes,
+la fila sellada se quedaba en la tabla, marcada como borrada. Las credenciales borradas **antes** de
+esta versión se quedan así: no se pueden usar, pero sus filas selladas siguen en la tabla y en las
+copias de seguridad.
 
 #### Los contadores de pérdidas son una métrica por servicio
 

@@ -105,7 +105,7 @@ Because the registry is public, no credentials are required to pull released ima
 
 Pin the image tag to the release you want:
 
-`DC_ROOT_KEY` below is the instance's secret-store root key — required by the `default`
+`DC_ROOT_KEY` below is the instance's secret-store root key — required by every
 profile, generated once with `openssl rand -base64 32`, and passed unchanged on every
 install and upgrade. See
 [Deploying with Helm](./kubernetes-operator.md#deploying-with-helm) for why.
@@ -174,7 +174,7 @@ Nothing is corrupted when it happens, because the chart refuses to render withou
 key:
 
 ```
-Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:27:4): instance.config.infrastructure.secrets.rootKey is required: area "notification-management" owns an envelope-encrypted secret store and cannot form its KEK without it, so it would crash-loop. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
+Error: UPGRADE FAILED: execution error at (devicechain/templates/instance-config.yaml:21:4): instance.config.infrastructure.secrets.rootKey is required: every instance seals its token-signing key under it, along with any integration credentials it stores, and user-management cannot start without it. Set it to a base64 256-bit key (openssl rand -base64 32); dcctl bootstrap mints one automatically.
 ```
 
 `--reuse-values` also works, but it silently keeps stale entries when the chart's own
@@ -1490,10 +1490,11 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ### Next release {#next-upgrade}
 
-The upgrade signs every user out once, and from then on a password reset, disabling a user or
-deleting one ends that user's sessions. That is the first section below. The three after it matter
-only if you watch the dead-letter metrics yourself, rely on command responses that could not be
-recorded, or open GraphQL WebSocket connections from your own code.
+The upgrade signs every user out once, from then on a password reset, disabling a user or deleting
+one ends that user's sessions, and the instance root key becomes required in every profile. Those
+are the first three sections below. The three after them matter only if you watch the dead-letter
+metrics yourself, rely on command responses that could not be recorded, or open GraphQL WebSocket
+connections from your own code.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1532,6 +1533,55 @@ What changes from then on:
   pick up any session the old one still held.
 - Changing a user's roles or memberships does not sign them out. It takes effect at their next
   refresh, as before.
+
+#### Everyone signs in again once
+
+The key that signs every access and refresh token used to be stored unencrypted in
+user-management's database. Anyone who could read that database, a backup of it or its
+write-ahead-log archive could sign tokens every service accepts. It is now sealed under the
+instance root key, like every other stored credential, and only the key currently in use has a
+private half at all. When a key is rotated out, its private half is deleted and only its public
+half is kept, so tokens it signed keep verifying until they expire.
+
+The upgrade **deletes every signing key the instance had**, rather than sealing them, because
+each one has already sat unencrypted in every backup taken so far. user-management generates a
+new key when it starts. As a result:
+
+- **Every user signs in again.** Access and refresh tokens issued before the upgrade stop
+  validating.
+- **OAuth clients, including MCP clients, have to authorize again.** Their refresh tokens stop
+  working too.
+- **Sessions in an embedded dashboard app end**, and its users sign in again.
+
+This takes effect once the rollout completes, not the moment the upgrade starts. Until the last
+old user-management pod has stopped, it keeps signing tokens with the old key and publishing
+that key for other services to verify against. `helm upgrade` and `dcctl upgrade` replace every
+pod, so the old key stops being trusted when they finish.
+
+Backups and archived write-ahead log taken **before** the upgrade still contain the old keys.
+Those keys are no longer trusted anywhere once the rollout completes, but the files are still
+worth protecting as the credentials they were.
+
+#### The instance root key is now required in every profile
+
+The root key used to be needed only by profiles that store integration credentials. The chart
+therefore let the `telemetry` and `ingest-only` profiles render without one. Every instance now
+seals its signing key under the root key, so the chart **fails the render** for any profile when
+no key is set. An instance built with `dcctl bootstrap` already has one and needs nothing. A
+chart-only `telemetry` or `ingest-only` install needs a key before it can be upgraded. Generate
+one with `openssl rand -base64 32`, pass it as `instance.config.infrastructure.secrets.rootKey`,
+and keep it: the same value has to be passed on every later upgrade.
+
+The root key now also decides whether anyone can sign in. With a wrong or lost key,
+user-management refuses to start, and so does every service that stores integration
+credentials. Every other service then stays not-ready, because it cannot get the keys it needs
+to validate a token. The whole API is down, not just the integrations. See
+[Disaster recovery](./disaster-recovery.md#root-key) for what to do about it.
+
+Deleting a stored credential now also removes it from the database completely. Before, the
+sealed row stayed in the table, marked deleted. Credentials that were deleted **before** this
+release stay that way: they cannot be used, but their sealed rows are still in the table and in
+backups.
 
 #### The dead-letter loss counters are one metric per service
 

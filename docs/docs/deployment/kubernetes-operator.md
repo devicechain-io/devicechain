@@ -24,13 +24,14 @@ You choose which services to run with **either** a named profile **or** an expli
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
-Any profile that runs an area owning a secret store — which the `default` profile does,
-through `notification-management` — requires the instance's **secret-store root key**, and
-the chart fails the render without it rather than letting the area crash-loop. Generate one
-value (`openssl rand -base64 32`), keep it, and pass the **same** value on every install and
-upgrade: a new key makes secrets already stored under the old one unreadable. `dcctl
-bootstrap` mints and escrows this key for you; supply it yourself only when driving the
-chart directly.
+Every profile requires the instance's **secret-store root key**: `user-management`, which
+every profile runs, seals the key that signs sign-in tokens under it, and the areas that
+store integration credentials seal those under it too. The chart fails the render without
+it rather than letting `user-management` crash-loop. Generate one value
+(`openssl rand -base64 32`), keep it, and pass the **same** value on every install and
+upgrade: a new key makes secrets already stored under the old one unreadable, and stops
+anyone signing in. `dcctl bootstrap` mints and escrows this key for you; supply it yourself
+only when driving the chart directly.
 
 ```bash
 DC_ROOT_KEY="$(openssl rand -base64 32)"   # generate ONCE, then keep it
@@ -39,9 +40,10 @@ helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
   --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY"
 
-# Run a smaller set of services. `telemetry` runs no area with a secret store,
-# so it needs no root key.
-helm install dc deploy/helm/devicechain --set profile=telemetry
+# Run a smaller set of services. Every profile needs the root key, the smallest
+# ones included.
+helm install dc deploy/helm/devicechain --set profile=telemetry \
+  --set instance.config.infrastructure.secrets.rootKey="$DC_ROOT_KEY"
 ```
 
 To install a published release, pin the image tag to a version — released images are public

@@ -15,6 +15,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/config"
@@ -110,6 +111,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// The instance secret store (ADR-059), which holds the private half of the active
+	// JWT signing key. It is built HERE, after RdbManager.Initialize, because building
+	// it runs the root-key self-test, and that reads the secrets table the migrations
+	// above create. It fails startup closed on a missing or wrong root key: a key that
+	// cannot open the sealed signing key would leave this service unable to sign a
+	// token, and every other service unable to verify one.
+	secretStore, err := secrets.NewFromConfig(ctx, Microservice.InstanceConfiguration.Infrastructure.Secrets, RdbManager.Database)
+	if err != nil {
+		return err
+	}
+
 	// The ADR-024 store. It is built HERE, before the admin handler is registered below,
 	// because that handler captures it — an earlier arrangement created it afterwards and
 	// handed the admin service a nil, which its own tolerate-nil path then rendered as
@@ -147,8 +159,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Build the identity manager: load/create the signing key, wire the refresh
-	// store, and seed the bootstrap admin (ADR-008).
+	// Build the identity manager: load/create the signing key (its private half sealed
+	// in the secret store built above), wire the refresh store, and seed the bootstrap
+	// admin (ADR-008).
 	accessTTL := time.Duration(Configuration.Auth.AccessTokenTtlSeconds) * time.Second
 	refreshTTL := time.Duration(Configuration.Auth.RefreshTokenTtlSeconds) * time.Second
 	// These two buckets pass their name twice because KeyValueStore takes the
@@ -175,7 +188,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, accessTTL, refreshTTL, Configuration.Auth.IssuerUrl, identity.BootstrapConfig{
+	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL, Configuration.Auth.IssuerUrl, identity.BootstrapConfig{
 		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
 		SuperuserPassword: Configuration.Auth.SuperuserPassword,
 		SeedClients:       seedClientsFromConfig(Configuration.Auth.SeedClients),

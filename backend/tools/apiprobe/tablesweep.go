@@ -215,6 +215,13 @@ var tableSweepExemptions = map[string]string{
 		"be reporting a defect in something else, not coverage of this. It carries tenant_id and " +
 		"is swept by the ordinary tenant purge like any other tenant-bearing table.",
 
+	// ---- instance-only secrets ------------------------------------------------
+	"user-management.secrets": "user-management's secret store holds only INSTANCE-scoped rows — " +
+		"the sealed private half of the active JWT signing key, whose tenant_id is the empty " +
+		"instance sentinel. Nothing in user-management writes a tenant-scoped secret, so no " +
+		"tenant can own a row here. The table carries tenant_id only because it is core's shared " +
+		"secret-store table, which the other secret-store areas do fill per tenant.",
+
 	// ---- runtime state of a delivery mechanism -------------------------------
 	"notification-management.notification_states": "escalation state for a notification the policy has " +
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +

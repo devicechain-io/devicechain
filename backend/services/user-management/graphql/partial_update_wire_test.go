@@ -164,7 +164,7 @@ func (m partialUpdateMutation) ctxFor(t *testing.T) context.Context {
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{
 		TokenType: auth.TokenTypeAccess, Username: "nobody@example.invalid",
 	})
-	mgr := identity.NewManager(nil, rdbm, nil, 0, 0, "", identity.BootstrapConfig{})
+	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{})
 	return context.WithValue(ctx, ContextIdentityKey, mgr)
 }
 

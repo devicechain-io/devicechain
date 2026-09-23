@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -79,6 +80,40 @@ type gormStore struct {
 // tenant-scoped rows. A service builds this once at startup after forming its KEK.
 func NewStore(db *gorm.DB, kp KeyProvider) SecretStore {
 	return &gormStore{db: db, kp: kp}
+}
+
+// BindTx returns a view of store whose every read and write runs inside tx, the
+// caller's own open database transaction, so a secret and the rows that refer to it
+// commit or roll back together.
+//
+// It exists for a caller whose secret and whose row are ONE fact: a JWT signing key's
+// public half is a row, its private half is a secret, and a key with only one of the
+// two is broken in a way no later step can repair. Written as two separate commits
+// there is always a window between them — a crash after sealing leaves a private key
+// nobody refers to and nothing can find (the store has no listing), and a crash after
+// demoting a key leaves its private half behind. Sharing the transaction removes the
+// window rather than adding a clean-up pass to close it.
+//
+// It works only for the Postgres backend, where the envelope lives in the same
+// database as the caller's rows. A store whose values live elsewhere (an external
+// secret manager) cannot join a database transaction, and pretending it had — running
+// the calls outside tx — would bring the window back while the caller believed it was
+// gone. So anything other than this package's own Postgres store is refused.
+//
+// tx must be the transaction handle gorm hands the caller (db.Transaction's argument,
+// or db.Begin()'s result). The view is valid only until that transaction ends.
+func BindTx(store SecretStore, tx *gorm.DB) (SecretStore, error) {
+	gs, ok := store.(*gormStore)
+	if !ok {
+		return nil, fmt.Errorf("secrets: a %T keeps its values outside the database, so it cannot join a database transaction", store)
+	}
+	if tx == nil {
+		return nil, errors.New("secrets: BindTx requires a transaction handle")
+	}
+	// The same key provider over the transaction's handle. ctxDB derives every
+	// statement from s.db with WithContext, which keeps the handle's connection — so
+	// every statement this view issues runs on the transaction's connection.
+	return &gormStore{db: tx, kp: gs.kp}, nil
 }
 
 // ctxDB binds the base db to the context appropriate for ref's scope: a tenant
@@ -194,9 +229,18 @@ func (s *gormStore) Rotate(ctx context.Context, ref SecretRef, value []byte) err
 	return s.Put(ctx, ref, value)
 }
 
-// Delete removes the secret under ref (soft delete, so the handle frees for reuse
-// via the partial unique index). It is idempotent: deleting an absent secret is not
-// an error.
+// Delete removes the secret under ref. It is idempotent: deleting an absent secret is
+// not an error.
+//
+// It is a HARD delete, and that is the point of it. A soft delete only sets
+// deleted_at, which leaves the whole envelope — ciphertext, nonce, wrapped DEK — in
+// the row, in every backup of it, and openable by the root key for as long as the row
+// lives: a credential its owner deleted would still be recoverable by anyone holding
+// the database and the key. For JWT signing keys it would also keep a retired key's
+// private half, the thing retiring it exists to remove. Removing the row also frees
+// the handle for reuse, which the partial unique index did for a soft delete. The
+// audit journal still records the deletion: its delete callback fires for any delete
+// that removed a row, Unscoped or not.
 func (s *gormStore) Delete(ctx context.Context, ref SecretRef) error {
 	if err := ref.Valid(); err != nil {
 		return err
@@ -206,7 +250,7 @@ func (s *gormStore) Delete(ctx context.Context, ref SecretRef) error {
 	// a zero &Secret{} would log an empty handle for the most destructive mutation.
 	// These fields are not query conditions (Delete conditions come from scoped()'s
 	// Where); they only populate the audited row.
-	return s.scoped(ctx, ref).Delete(&Secret{Scope: string(ref.Scope), Name: ref.Name}).Error
+	return s.scoped(ctx, ref).Unscoped().Delete(&Secret{Scope: string(ref.Scope), Name: ref.Name}).Error
 }
 
 // Exists reports whether a secret is stored under ref, without decrypting it (it

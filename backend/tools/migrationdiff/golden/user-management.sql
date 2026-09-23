@@ -8,6 +8,7 @@ ALTER SEQUENCE "user-management".iam_tenant_purge_stores_id_seq OWNED BY "user-m
 ALTER SEQUENCE "user-management".iam_tenant_purges_id_seq OWNED BY "user-management".iam_tenant_purges.id;
 ALTER SEQUENCE "user-management".iam_tenant_tiers_id_seq OWNED BY "user-management".iam_tenant_tiers.id;
 ALTER SEQUENCE "user-management".iam_tenants_id_seq OWNED BY "user-management".iam_tenants.id;
+ALTER SEQUENCE "user-management".secrets_id_seq OWNED BY "user-management".secrets.id;
 ALTER SEQUENCE "user-management".signing_keys_id_seq OWNED BY "user-management".signing_keys.id;
 ALTER TABLE ONLY "user-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
@@ -59,6 +60,9 @@ ALTER TABLE ONLY "user-management".iam_tenants
 ALTER TABLE ONLY "user-management".iam_tenants ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenants_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "user-management".secrets
+ ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".secrets ALTER COLUMN id SET DEFAULT nextval('"user-management".secrets_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".signing_keys
  ADD CONSTRAINT signing_keys_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".signing_keys ALTER COLUMN id SET DEFAULT nextval('"user-management".signing_keys_id_seq'::regclass);
@@ -66,6 +70,10 @@ ALTER TABLE ONLY "user-management".system_settings
  ADD CONSTRAINT system_settings_pkey PRIMARY KEY (key);
 ALTER TABLE ONLY "user-management".user_management_migrations
  ADD CONSTRAINT user_management_migrations_pkey PRIMARY KEY (id);
+CREATE INDEX "idx_user-management_secrets_deleted_at" ON "user-management".secrets USING btree (deleted_at);
+CREATE INDEX "idx_user-management_secrets_name" ON "user-management".secrets USING btree (name);
+CREATE INDEX "idx_user-management_secrets_scope" ON "user-management".secrets USING btree (scope);
+CREATE INDEX "idx_user-management_secrets_tenant_id" ON "user-management".secrets USING btree (tenant_id);
 CREATE INDEX "idx_user-management_signing_keys_active" ON "user-management".signing_keys USING btree (active);
 CREATE INDEX "idx_user-management_signing_keys_deleted_at" ON "user-management".signing_keys USING btree (deleted_at);
 CREATE INDEX "idx_user-management_signing_keys_retired_at" ON "user-management".signing_keys USING btree (retired_at);
@@ -138,6 +146,12 @@ CREATE SEQUENCE "user-management".iam_tenant_tiers_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "user-management".iam_tenants_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".secrets_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -314,13 +328,26 @@ CREATE TABLE "user-management".purged_tenants (
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
 );
+CREATE TABLE "user-management".secrets (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ scope character varying(16) NOT NULL,
+ name character varying(256) NOT NULL,
+ ciphertext bytea NOT NULL,
+ nonce bytea NOT NULL,
+ wrapped_dek bytea NOT NULL,
+ kek_version bigint NOT NULL,
+ alg character varying(32) NOT NULL
+);
 CREATE TABLE "user-management".signing_keys (
  id bigint NOT NULL,
  created_at timestamp with time zone,
  updated_at timestamp with time zone,
  deleted_at timestamp with time zone,
  active boolean DEFAULT true NOT NULL,
- private_key_pem text NOT NULL,
  public_key_pem text NOT NULL,
  retired_at timestamp with time zone
 );
@@ -342,3 +369,4 @@ CREATE UNIQUE INDEX idx_iam_tenant_tiers_token ON "user-management".iam_tenant_t
 CREATE UNIQUE INDEX idx_iam_tenants_token ON "user-management".iam_tenants USING btree (token);
 CREATE UNIQUE INDEX idx_tenant_purge_stores_purge_store ON "user-management".iam_tenant_purge_stores USING btree (tenant_purge_id, store);
 CREATE UNIQUE INDEX idx_tenant_purges_token_epoch ON "user-management".iam_tenant_purges USING btree (token, epoch);
+CREATE UNIQUE INDEX uix_secrets_tenant_scope_name ON "user-management".secrets USING btree (tenant_id, scope, name) WHERE (deleted_at IS NULL);

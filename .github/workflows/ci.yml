@@ -1536,6 +1536,10 @@ jobs:
           EXT=("${NAME[@]}" --set metrics.natsBrokerHost=dc-nats.dc-system)
 
           refuses "no root key" "rootKey is required"
+          # The smallest profile too. It runs no area with integration credentials,
+          # and used to render without a key for exactly that reason; user-management
+          # now seals the token-signing key under it, and runs in every profile.
+          refuses "no root key, ingest-only" "rootKey is required" --set profile=ingest-only
           refuses "external, renamed Secret" "must be named" \
             --set instance.existingSecret=somewhere-else \
             --set instance.existingSecretChecksum="$SUM" \
@@ -1551,6 +1555,8 @@ jobs:
             --set instance.config.infrastructure.shutdown.drainSeconds=9
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
+          renders "inline config, ingest-only" --set profile=ingest-only \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "external config" "${EXT[@]}" --set instance.existingSecretChecksum="$SUM"
 
       - name: cnpg-cluster chart

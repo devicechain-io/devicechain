@@ -54,12 +54,14 @@ Two consequences worth planning around:
 TimescaleDB restore needs nothing from this page. Everything below is about core
 data.
 
-## Why the root key needs its own procedure
+## Why the root key needs its own procedure {#root-key}
 
-Every secret DeviceChain stores on your behalf — outbound-connector credentials, SMTP
-passwords, AI provider keys — is encrypted at rest under a per-secret data key, and
-each of those data keys is wrapped by one instance-wide **root key** (the KEK, see
-[Architecture](../concepts/architecture.md)).
+Every secret DeviceChain stores — the key that signs every sign-in token,
+outbound-connector credentials, SMTP passwords, AI provider keys — is encrypted at rest
+under a per-secret data key, and each of those data keys is wrapped by one
+instance-wide **root key** (the KEK, see [Architecture](../concepts/architecture.md)).
+The token-signing key is stored in every instance, whatever its profile, so every
+instance depends on its root key: without it, no one can sign in.
 
 That root key lives in the instance's Kubernetes Secret, which means it lives in
 **etcd**, and no database backup contains etcd. A PostgreSQL backup archives
@@ -89,12 +91,19 @@ moments and on different evidence, and it is worth knowing which is which:
   wrong key rather than a missing one — a recovery pointed at the wrong artifact — which
   no reading of the store can see.
 
+The startup check takes down the **whole API**, not just the integrations.
+user-management stores the token-signing key, so it is one of the services that refuses
+to start. Every other service waits for user-management's signing keys before it reports
+ready, so none of them serve either, and no one can sign in.
+
 Both make the mistake loud and immediate instead of slow and scattered. Neither recovers
 anything. If the key is gone, it is gone.
 
 :::danger There is no recovery from a lost root key
 The key is 256 bits of randomness and the wrapped data keys are not brute-forceable.
-If the key is gone, the secrets are gone — a support ticket cannot recover them. This
+If the key is gone, the secrets are gone — a support ticket cannot recover them. That
+includes the token-signing key, so an instance whose root key is lost or wrong **does
+not start**: user-management refuses, and nothing else becomes ready without it. This
 is the one piece of DeviceChain state with no second chance, which is why the escrow
 below is on by default.
 :::
@@ -231,10 +240,12 @@ retried, and a sharper guard makes that safe by permitting it only when the escr
 artifact carries the key the instance is already running on.
 
 **3. Confirm the root key is the escrowed one** with `dcctl secrets escrow verify` (see
-[Verifying your escrow](#verify)). Reading a secret-backed object back — an outbound
-connector, a notification channel — is the stronger check, and it is available once step
-1 has recovered the store that object lives in: a restore that returns rows is not proof;
-a value that decrypts is.
+[Verifying your escrow](#verify)). Being able to sign in at all is the first sign that
+the key is right: user-management does not start until the root key opens its sealed
+token-signing key. Reading a secret-backed object back — an outbound connector, a
+notification channel — is the stronger check, and it is available once step 1 has
+recovered the store that object lives in: a restore that returns rows is not proof; a
+value that decrypts is.
 
 **4. If you restored event data, check the machinery and not the row count.** A
 recovered event store can hold every row and still have quietly stopped being a

@@ -69,7 +69,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/user-management/iam/purge.go":                              {"Store.PurgeRecords"},
 	"backend/services/user-management/iam/store.go":                              {"Store.AuditEvents", "Store.sys"},
 	"backend/services/user-management/identity/keys.go": {
-		"Manager.activeKeyAge", "Manager.loadSigningKeys", "Manager.rotateSigningKey",
+		"Manager.activeKeyAge", "Manager.loadSigningKeysLocked", "Manager.rotateSigningKeyLocked",
 	},
 	"backend/services/user-management/purge/coordinator.go": {"Coordinator.PurgeTenant", "Coordinator.pass"},
 	"backend/services/user-management/purge/relational.go":  {"Relational.handle"},

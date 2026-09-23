@@ -60,13 +60,15 @@ Dos consecuencias que conviene planificar:
 contienen texto cifrado, así que una restauración de TimescaleDB no necesita nada de
 esta página. Todo lo que sigue trata de los datos de núcleo.
 
-## Por qué la clave raíz necesita su propio procedimiento
+## Por qué la clave raíz necesita su propio procedimiento {#root-key}
 
-Todos los secretos que DeviceChain almacena por usted —credenciales de conectores de
-salida, contraseñas SMTP, claves de proveedores de IA— se cifran en reposo con una
-clave de datos por secreto, y cada una de esas claves de datos va envuelta por una
-única **clave raíz** de la instancia (la KEK; véase
-[Arquitectura](../concepts/architecture.md)).
+Todos los secretos que DeviceChain almacena —la clave que firma todos los tokens de
+inicio de sesión, credenciales de conectores de salida, contraseñas SMTP, claves de
+proveedores de IA— se cifran en reposo con una clave de datos por secreto, y cada una
+de esas claves de datos va envuelta por una única **clave raíz** de la instancia (la
+KEK; véase [Arquitectura](../concepts/architecture.md)). La clave de firma de tokens se
+almacena en toda instancia, sea cual sea su perfil, así que toda instancia depende de
+su clave raíz: sin ella, nadie puede iniciar sesión.
 
 Esa clave raíz vive en el Secret de Kubernetes de la instancia, es decir, vive en
 **etcd**, y ninguna copia de seguridad de bases de datos contiene etcd. Una copia de
@@ -99,14 +101,23 @@ distintas, y conviene saber cuál es cuál:
   una clave *equivocada* en lugar de una ausente —una recuperación apuntada al artefacto
   incorrecto—, algo que ninguna lectura del almacén puede ver.
 
+La comprobación al arrancar derriba **toda la API**, no solo las integraciones.
+user-management almacena la clave de firma de tokens, así que es uno de los servicios
+que se niegan a arrancar. Todos los demás servicios esperan las claves de firma de
+user-management antes de declararse listos, así que ninguno sirve tampoco, y nadie puede
+iniciar sesión.
+
 Ambas convierten el error en algo ruidoso e inmediato en lugar de lento y disperso.
 Ninguna recupera nada. Si la clave se perdió, se perdió.
 
 :::danger No hay recuperación posible tras perder la clave raíz
 La clave son 256 bits de aleatoriedad y las claves de datos envueltas no son
 descifrables por fuerza bruta. Si la clave desaparece, los secretos desaparecen: un
-ticket de soporte no puede recuperarlos. Este es el único dato de DeviceChain sin
-segunda oportunidad, y por eso el depósito descrito abajo está activado por defecto.
+ticket de soporte no puede recuperarlos. Eso incluye la clave de firma de tokens, así
+que una instancia cuya clave raíz se ha perdido o es incorrecta **no arranca**:
+user-management se niega, y nada más llega a estar listo sin él. Este es el único dato
+de DeviceChain sin segunda oportunidad, y por eso el depósito descrito abajo está
+activado por defecto.
 :::
 
 ## El artefacto de depósito
@@ -248,7 +259,9 @@ solo cuando el artefacto de depósito lleva la clave sobre la que la instancia y
 funcionando.
 
 **3. Confirme que la clave raíz es la del depósito** con `dcctl secrets escrow verify` (vea
-[Verificar el depósito](#verify)). Leer un objeto respaldado por un secreto (un conector
+[Verificar el depósito](#verify)). Poder iniciar sesión es la primera señal de que la
+clave es la correcta: user-management no arranca hasta que la clave raíz abre su clave de
+firma de tokens sellada. Leer un objeto respaldado por un secreto (un conector
 de salida, un canal de notificación) es la comprobación más fuerte, y está disponible en
 cuanto el paso 1 ha recuperado el almacén donde vive ese objeto: una restauración que
 devuelve filas no es una prueba; un valor que se descifra sí lo es.

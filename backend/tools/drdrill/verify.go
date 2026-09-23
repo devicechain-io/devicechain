@@ -43,9 +43,10 @@ type verifyOptions struct {
 	server string
 	scheme string
 
-	// secretAreaRefused says the area that STORES the secret is expected not to be
-	// serving, because it refused to start on a root key that does not open its
-	// stored ciphertext. Only the restore drill's negative control passes it.
+	// secretAreaRefused says the areas that seal what they store under the root key —
+	// user-management and the area that STORES the drill's secret — are expected not
+	// to be serving, because they refused to start on a root key that does not open
+	// their stored ciphertext. Only the restore drill's negative control passes it.
 	secretAreaRefused bool
 }
 
@@ -67,7 +68,7 @@ func runVerify(ctx context.Context, argv []string) error {
 	fs.StringVar(&o.server, "server", "localhost", "instance ingress host the API is reachable on")
 	fs.StringVar(&o.scheme, "scheme", "http", "http or https for the API check")
 	fs.BoolVar(&o.secretAreaRefused, "secret-area-refused", false,
-		"the secret-storing area is EXPECTED not to serve (it refused a wrong root key); "+
+		"user-management and the secret-storing area are EXPECTED not to serve (they refused a wrong root key); "+
 			"swaps the API precheck for a stronger one — see checkRestoredWithoutSecretArea")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
@@ -108,8 +109,20 @@ func runVerify(ctx context.Context, argv []string) error {
 	// It does not remove the premise; it REPLACES it with one that is strictly
 	// harder to satisfy by accident, and that FAILS on a healthy instance. See
 	// checkRestoredWithoutSecretArea.
+	//
+	// 🔴 THE DATABASE IS OPENED ONCE, UP HERE, AND BOTH CHECKS READ IT. The refused
+	// mode's positive half reads the restored database too, and a second connection
+	// is the one thing this process must not make: a `kubectl port-forward` to this
+	// database carries exactly one connection and hangs the next (see run_verify in
+	// hack/dr-rig.sh). One pooled connection, opened once, serves both.
+	db, err := openInstanceDB(ctx, o, receipt.Schema)
+	if err != nil {
+		return failWith(exitSetup, "%w", err)
+	}
+	defer closeDB(db)
+
 	if o.secretAreaRefused {
-		if err := checkRestoredWithoutSecretArea(ctx, o, receipt); err != nil {
+		if err := checkRestoredWithoutSecretArea(ctx, o, receipt, db); err != nil {
 			return failWith(exitSetup, "%w", err)
 		}
 	} else {
@@ -120,11 +133,6 @@ func runVerify(ctx context.Context, argv []string) error {
 	}
 
 	// CHECK 2 — the row decrypts under the root key this cluster carries.
-	db, err := openInstanceDB(ctx, o, receipt.Schema)
-	if err != nil {
-		return failWith(exitSetup, "%w", err)
-	}
-	defer closeDB(db)
 
 	row, err := readSecretRow(ctx, db, receipt)
 	if err != nil {
@@ -477,8 +485,25 @@ func checkChannelVisible(ctx context.Context, o verifyOptions, r Receipt) error 
 	return fmt.Errorf("the restored instance does not have channel %q — the relational restore did not land", r.ChannelToken)
 }
 
-// checkRestoredWithoutSecretArea is the API precheck for the one case where the
-// ordinary one cannot run: the area that STORES the secret has refused to start.
+// areaUserManagement is the user-management functional area: the `/api/<area>`
+// ingress prefix and the Postgres schema its tables live in, the same pairing
+// areaNotification documents.
+const areaUserManagement = "user-management"
+
+// refusedAreas are the areas that must NOT be serving when the instance was
+// recovered under a root key that does not open its stored ciphertext. Both seal
+// something under that key and check the key against it at startup — user-management
+// the JWT signing key, notification-management this drill's channel secret — so both
+// refuse to start.
+var refusedAreas = []string{areaUserManagement, areaNotification}
+
+// membershipReader answers, from the restored relational store, whether an identity
+// exists and whether it is a member of a tenant. It is a seam so the decision below
+// can be tested without a database; readMembership is the real one.
+type membershipReader func(ctx context.Context, identity, tenant string) (found, member bool, err error)
+
+// checkRestoredWithoutSecretArea is the precheck for the one case where the ordinary
+// one cannot run: the areas that STORE secrets have refused to start.
 //
 // 🔴 WHY THIS EXISTS AT ALL, because "the check could not run, so skip it" is the
 // exact reasoning this drill refuses everywhere else.
@@ -491,63 +516,109 @@ func checkChannelVisible(ctx context.Context, o verifyOptions, r Receipt) error 
 // cannot, by design. A premise that is impossible to satisfy is not a premise, and
 // leaving it in place made the control die on a wrong-reason setup failure.
 //
+// 🔴 AND USER-MANAGEMENT IS ONE OF THOSE AREAS NOW. It seals the private half of the
+// instance's JWT signing key under the root key, so under a key that does not open it
+// it refuses as well — and with it goes every login, so the API cannot answer ANY
+// question in this phase. The positive half used to log in as the seeded identity;
+// that premise became impossible for the same reason the channel query did, and it is
+// replaced the same way: by reading the restored database directly, which needs no
+// service at all.
+//
 // So the premise is REPLACED, not dropped, and the replacement is asserted BOTH ways:
 //
-//  1. POSITIVE — the relational store really did restore, proved by logging in as the
-//     identity `seed` minted and finding this run's tenant among its memberships. That
-//     exercises identity, credential and membership rows written by THIS run, which is
-//     a stronger statement about the restore than "a channel is listed" was.
-//  2. NEGATIVE — the secret-storing area must NOT answer. If it does, the instance did
-//     not refuse, so whatever this invocation was called for, it is not a control, and
-//     saying so is a setup failure rather than a verdict.
+//  1. POSITIVE — the relational store really did restore, proved by finding the
+//     identity `seed` minted in user-management's own tables, still a member of this
+//     run's tenant. Those are rows written by THIS run, read from the recovered
+//     database through the same port-forward the decrypt leg uses.
+//  2. NEGATIVE — neither user-management nor the secret-storing area may answer. If
+//     either does, it built its secret store, so its root key OPENS the stored
+//     ciphertext: the instance did not refuse, and whatever this invocation was
+//     called for, it is not a control. Saying so is a setup failure, not a verdict.
 //
 // Together those make the flag impossible to use as a way to quietly delete the
 // precheck: passing it against a healthy instance fails at (2), and passing it against
 // an instance that restored nothing fails at (1).
 //
-// It deliberately does NOT try to establish WHY the area is not serving. A pod that is
-// down for any other reason would satisfy (2) just as well, which is why the caller
-// asserts the specific root-key refusal in that area's own log before running this —
+// It deliberately does NOT try to establish WHY the areas are not serving. A pod that
+// is down for any other reason would satisfy (2) just as well, which is why the caller
+// asserts the specific root-key refusal in each area's own log before running this —
 // see assert_startup_refusal in hack/dr-rig.sh. This function checks that the world is
 // in the shape that assertion described; it is not a second copy of it.
-func checkRestoredWithoutSecretArea(ctx context.Context, o verifyOptions, r Receipt) error {
-	if r.Identity == "" || r.Password == "" {
+//
+// db is the connection verify already holds to the restored database. Its search path
+// is pinned to the secret-storing area's schema, so the read names user-management's
+// tables by schema rather than opening a second connection (see runVerify for why it
+// must not).
+func checkRestoredWithoutSecretArea(ctx context.Context, o verifyOptions, r Receipt, db *gorm.DB) error {
+	return checkRestoredWithoutSecretAreaUsing(ctx, o, r, func(ctx context.Context, identity, tenant string) (bool, bool, error) {
+		return readMembership(ctx, db, areaUserManagement, identity, tenant)
+	})
+}
+
+// checkRestoredWithoutSecretAreaUsing is checkRestoredWithoutSecretArea with the
+// relational read supplied, so the decision can be tested on its own.
+func checkRestoredWithoutSecretAreaUsing(ctx context.Context, o verifyOptions, r Receipt, members membershipReader) error {
+	if r.Identity == "" {
 		return fmt.Errorf("the receipt carries no identity, so the restore cannot be confirmed at all; re-seed — this receipt was written by a seed that did not complete")
 	}
-	base := fmt.Sprintf("%s://%s", o.scheme, o.server)
 
-	auth, err := userclient.Login(ctx, drillHTTPClient(o.scheme), base+"/api/user-management/graphql", r.Identity, r.Password)
+	found, member, err := members(ctx, r.Identity, r.Tenant)
 	if err != nil {
-		return fmt.Errorf("logging in to the restored instance as %q: %w\nThe relational store did not come back, or did not come back with this run's identity in it. "+
-			"Nothing below would be evidence about the root key", r.Identity, err)
-	}
-	found := false
-	for _, m := range auth.Memberships {
-		if m.Tenant == r.Tenant {
-			found = true
-			break
-		}
+		return fmt.Errorf("reading identity %q out of the restored %s schema: %w\nThe relational store did not come back, "+
+			"or could not be reached. Nothing below would be evidence about the root key", r.Identity, areaUserManagement, err)
 	}
 	if !found {
+		return fmt.Errorf("identity %q is not in the restored %s schema. The relational store did not come back, or did "+
+			"not come back with this run's identity in it. Nothing below would be evidence about the root key",
+			r.Identity, areaUserManagement)
+	}
+	if !member {
 		return fmt.Errorf("identity %q is back but is not a member of tenant %q, which this run created; "+
 			"the relational restore is not the one this receipt describes", r.Identity, r.Tenant)
 	}
 	fmt.Printf("ok   the relational store restored: identity %q is back and still a member of tenant %q\n", r.Identity, r.Tenant)
 
-	serving, detail, err := areaIsServing(ctx, o, areaNotification)
-	if err != nil {
-		return fmt.Errorf("could not determine whether %s is serving: %w\n"+
-			"This mode's whole premise is that it is NOT, and an unanswered question is not a premise", areaNotification, err)
+	for _, area := range refusedAreas {
+		serving, detail, err := areaIsServing(ctx, o, area)
+		if err != nil {
+			return fmt.Errorf("could not determine whether %s is serving: %w\n"+
+				"This mode's whole premise is that it is NOT, and an unanswered question is not a premise", area, err)
+		}
+		if serving {
+			return fmt.Errorf("--secret-area-refused was given, but %s IS serving (%s).\n"+
+				"That area seals what it stores under the instance root key and checks the key at startup, so a "+
+				"service that is answering built its secret store — its root key OPENS the stored ciphertext. The "+
+				"instance did not refuse, and this run is not a negative control. Refusing rather than reporting a "+
+				"verdict, because a decrypt result from here would be read as evidence about a key that was never wrong",
+				area, detail)
+		}
+		fmt.Printf("ok   %s is NOT serving (%s), which is what this mode requires\n", area, detail)
 	}
-	if serving {
-		return fmt.Errorf("--secret-area-refused was given, but %s IS serving (%s).\n"+
-			"That area stores the secret, so a service that is answering built its secret store — its root "+
-			"key OPENS the stored ciphertext. The instance did not refuse, and this run is not a negative "+
-			"control. Refusing rather than reporting a verdict, because a decrypt result from here would be "+
-			"read as evidence about a key that was never wrong", areaNotification, detail)
-	}
-	fmt.Printf("ok   %s is NOT serving (%s), which is what this mode requires\n", areaNotification, detail)
 	return nil
+}
+
+// readMembership reads, from user-management's restored tables in schema, whether the
+// identity exists and whether it holds a live membership of tenant. Soft-deleted rows
+// do not count: the service would not honour them either. The tables are named by
+// schema so the read works over a connection pinned to another area's search path.
+func readMembership(ctx context.Context, db *gorm.DB, schema, identity, tenant string) (found, member bool, err error) {
+	q := rdb.QuoteIdentifier(schema)
+	var ids []uint
+	if err := db.WithContext(ctx).
+		Raw("SELECT id FROM "+q+".iam_identities WHERE email = ? AND deleted_at IS NULL", identity).
+		Scan(&ids).Error; err != nil {
+		return false, false, err
+	}
+	if len(ids) == 0 {
+		return false, false, nil
+	}
+	var n int64
+	if err := db.WithContext(ctx).
+		Raw("SELECT COUNT(*) FROM "+q+".iam_memberships WHERE identity_id = ? AND tenant_id = ? AND deleted_at IS NULL", ids[0], tenant).
+		Scan(&n).Error; err != nil {
+		return true, false, err
+	}
+	return true, n > 0, nil
 }
 
 // areaIsServing answers ONE narrow question: is there a live backend behind the
