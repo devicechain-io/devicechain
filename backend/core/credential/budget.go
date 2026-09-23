@@ -31,37 +31,59 @@ import (
 // execution cannot reach Check without one. Refusing an unbudgeted check instead would
 // turn every such handler into a place that has to remember to install a budget of 1,
 // which is the kind of rule this type exists to take away.
+//
+// 🔴 A BUDGET CAN BE TIGHTENED BUT NEVER WIDENED, AND THAT HOLDS FOR THE AGGREGATE, NOT
+// JUST ONE CHAIN. A budget installed inside another is NESTED in it: every check spends
+// one unit from the innermost budget AND from every budget enclosing it, and is refused
+// if any of them is spent. So however many children one request's context is wrapped
+// into, and whatever each is given, the checks made under all of them together never
+// exceed the outermost budget — a child can only ever narrow what its parent allows.
 type requestBudget struct {
 	remaining atomic.Int64
+	// parent is the budget this one was installed inside, or nil.
+	parent *requestBudget
 }
 
 type budgetKey struct{}
 
-// WithRequestBudget returns a context in which at most n credential checks may run. A
-// budget already present is REPLACED only if n is smaller — so wrapping twice can
-// tighten a budget but never widen one — and an n below 1 allows no checks at all.
+// WithRequestBudget returns a context in which at most n credential checks may run —
+// fewer if ctx already carries a budget, because the new one is nested inside it and
+// every check spends from both. An n below 1 allows no checks at all.
 func WithRequestBudget(ctx context.Context, n int) context.Context {
-	if existing, ok := ctx.Value(budgetKey{}).(*requestBudget); ok && existing.remaining.Load() <= int64(n) {
-		return ctx
-	}
 	b := &requestBudget{}
+	if parent, ok := ctx.Value(budgetKey{}).(*requestBudget); ok {
+		b.parent = parent
+	}
 	if n > 0 {
 		b.remaining.Store(int64(n))
 	}
 	return context.WithValue(ctx, budgetKey{}, b)
 }
 
-// spend takes one unit of the context's budget, reporting false when there is none
-// left. A context with no budget always has one to spend.
+// spend takes one unit from the context's budget and from every budget it is nested in,
+// reporting false — and taking nothing from any of them — when any is spent. A context
+// with no budget always has one to spend.
 //
-// It is atomic, so resolvers running concurrently in one request — graphql-go runs a
-// query's root fields in parallel — cannot both take the last unit.
+// Each level is decremented atomically, innermost first, and a refusal gives back the
+// units it took on the way up. So resolvers running concurrently in one request —
+// graphql-go runs a query's root fields in parallel — cannot both take the last unit of
+// any level, and a refused check leaks nothing. A check racing a refusal can see a
+// level transiently short by the unit being given back, and be refused when a moment
+// later it would not have been: that errs toward refusing, never toward allowing.
 func spend(ctx context.Context) bool {
 	b, ok := ctx.Value(budgetKey{}).(*requestBudget)
 	if !ok {
 		return true
 	}
-	return b.remaining.Add(-1) >= 0
+	for level := b; level != nil; level = level.parent {
+		if level.remaining.Add(-1) < 0 {
+			for undo := b; undo != level.parent; undo = undo.parent {
+				undo.remaining.Add(1)
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // ErrRequestBudgetExhausted is returned, as a *RequestBudgetError, when a request has

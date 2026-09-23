@@ -53,8 +53,8 @@ type Schema struct {
 // the handler constructors accept, so no resolver can reach credential.Checker from a
 // GraphQL request without this budget in its context. The root-field limit reads the
 // document; this does not, so it still holds for any document the root-field count
-// misreads. A zero value (a Schema not built by MustParseSchema) allows no checks at
-// all rather than unlimited ones.
+// misreads. If some construction path other than MustParseSchema leaves maxCredChecks
+// at zero, every check is refused rather than unlimited.
 func (s *Schema) execContext(ctx context.Context) context.Context {
 	return credential.WithRequestBudget(ctx, s.maxCredChecks)
 }

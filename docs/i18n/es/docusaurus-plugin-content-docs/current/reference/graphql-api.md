@@ -524,7 +524,8 @@ rara vez aparece; es en la API y en el aprovisionamiento por script donde muerde
 ## Límites de las solicitudes {#request-limits}
 
 Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,
-antes de ejecutar nada de ella. Los límites son los mismos en todos los servicios, y cada uno puede
+antes de ejecutar nada de ella. La única excepción es el límite de comprobaciones de credenciales,
+que se aplica mientras la solicitud se ejecuta (ver [más abajo](#credential-checks-per-request)). Los límites son los mismos en todos los servicios, y cada uno puede
 cambiarse por servicio con la variable de entorno indicada. Un valor ausente, que no es un número o
 menor que 1 vuelve al valor por defecto: ninguno puede desactivarse.
 
@@ -535,10 +536,12 @@ menor que 1 vuelve al valor por defecto: ninguno puede desactivarse.
 | Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
 | Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
 | Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
-| Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña posteriores a la primera en una misma petición (ver [más abajo](#credential-checks-per-request)). |
+| Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña de una misma petición que superan este número (ver [más abajo](#credential-checks-per-request)). |
 
-Salvo con el límite del cuerpo, una solicitud rechazada recibe HTTP 200 con una sola entrada en
-`errors`, sin `data` y sin haber ejecutado nada. El rechazo por campos raíz lleva
+Salvo con el límite del cuerpo y el de comprobaciones de credenciales, una solicitud rechazada
+recibe HTTP 200 con una sola entrada en `errors`, sin `data` y sin haber ejecutado nada. El límite de
+comprobaciones de credenciales rechaza solo las comprobaciones que lo superan, cada una con su propio
+error, y el resto de la solicitud se ejecuta. El rechazo por campos raíz lleva
 `extensions.code` con el valor `TOO_MANY_ROOT_FIELDS`:
 
 ```json
@@ -565,10 +568,11 @@ de un campo anidado no se cuentan.
 
 ### Comprobaciones de credenciales por petición {#credential-checks-per-request}
 
-En una petición se puede comprobar como mucho una contraseña, se escriba como se escriba. El primer
-`login` de una petición se evalúa con normalidad. Cualquier otro `login` en la misma petición, como
-otro alias, no se evalúa: no se comprueba la contraseña, no se busca nada y no se registra nada en
-el registro de auditoría. Recibe su propio error en lugar de un veredicto sobre la contraseña:
+En una petición solo se puede comprobar un número limitado de contraseñas, se escriba como se
+escriba: una por defecto. Los campos `login` hasta ese número se evalúan con normalidad. Cualquier
+otro `login` en la misma petición, como otro alias, no se evalúa: no se comprueba la contraseña, no
+se busca nada y no se registra nada en el registro de auditoría. Recibe su propio error en lugar de
+un veredicto sobre la contraseña, y los demás campos de la petición siguen devolviendo sus datos:
 
 ```json
 {

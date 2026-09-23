@@ -503,7 +503,8 @@ it is the API and scripted-provisioning path where it bites first.
 ## Request limits {#request-limits}
 
 Every GraphQL endpoint refuses a request that is too large or does too much, before any of it
-runs. The limits are the same for every service, and each can be changed per service with the
+runs. The one exception is the limit on credential checks, which applies while the request runs
+(see [below](#credential-checks-per-request)). The limits are the same for every service, and each can be changed per service with the
 environment variable shown. A value that is missing, not a number, or below 1 falls back to the
 default: none of them can be switched off.
 
@@ -514,10 +515,11 @@ default: none of them can be switched off.
 | Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
 | Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
 | Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
-| Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks after the first in one request (see [below](#credential-checks-per-request)). |
+| Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks in one request beyond this number (see [below](#credential-checks-per-request)). |
 
-Apart from the body limit, a refused request gets HTTP 200 with a single entry in `errors`, no
-`data`, and nothing executed. A root-field refusal carries `extensions.code` set to
+Apart from the body limit and the credential-check limit, a refused request gets HTTP 200 with a
+single entry in `errors`, no `data`, and nothing executed. The credential-check limit refuses only
+the checks over it, each with its own error, and the rest of the request still runs. A root-field refusal carries `extensions.code` set to
 `TOO_MANY_ROOT_FIELDS`:
 
 ```json
@@ -542,10 +544,11 @@ most two query fields. The limit applies to top-level fields only; aliases of a 
 
 ### Credential checks per request {#credential-checks-per-request}
 
-One request can have at most one password checked, however it is written. The first `login` in a
-request is evaluated as usual. Any further `login` in the same request, as another alias, is not
-evaluated: the password is not checked, nothing is looked up, and nothing is recorded in the audit
-log. It gets its own error instead of a verdict on the password:
+One request can have only a limited number of passwords checked, however it is written: one by
+default. The `login` fields up to that number are evaluated as usual. Any further `login` in the
+same request, such as another alias, is not evaluated: the password is not checked, nothing is
+looked up, and nothing is recorded in the audit log. It gets its own error instead of a verdict on
+the password, and the other fields in the request still return their data:
 
 ```json
 {

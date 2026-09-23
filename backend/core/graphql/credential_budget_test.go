@@ -161,3 +161,52 @@ func TestCredentialBudgetEnvOverride(t *testing.T) {
 	assert.Equal(t, int32(2), root.ran.Load())
 	assert.Equal(t, int32(1), root.refused.Load())
 }
+
+// A Schema whose budget was left at zero — any construction path other than
+// MustParseSchema — refuses every check rather than allowing unlimited ones.
+func TestZeroBudgetSchemaRefusesEveryCheck(t *testing.T) {
+	root := newBudgetRoot(t)
+	schema := &Schema{
+		inner:            graphql.MustParseSchema(budgetSDL, root),
+		maxQueryLength:   DefaultGraphQLMaxQueryLength,
+		maxQueryRoots:    DefaultGraphQLMaxQueryRootFields,
+		maxMutationRoots: DefaultGraphQLMaxMutationRootFields,
+	}
+	resp := schema.Exec(context.Background(), "mutation { check }", "", nil)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, credential.CodeTooManyCredentialChecks, resp.Errors[0].Extensions["code"])
+	assert.Equal(t, int32(0), root.ran.Load())
+	assert.Equal(t, int32(1), root.refused.Load())
+}
+
+// budgetMixedSDL has a subscription root, so graphql-go's Subscribe accepts a document,
+// and a mutation, which Subscribe runs to completion inside the call.
+const budgetMixedSDL = `
+	schema { query: Query mutation: Mutation subscription: Subscription }
+	type Query { ping: Boolean! }
+	type Mutation { check: Boolean! }
+	type Subscription { tick: Boolean! }
+`
+
+type budgetMixedRoot struct{ *budgetRoot }
+
+func (r *budgetMixedRoot) Ping() bool { return true }
+func (r *budgetMixedRoot) Tick(context.Context) <-chan bool {
+	ch := make(chan bool)
+	close(ch)
+	return ch
+}
+
+// Subscribe carries the budget for whatever it runs, not only for subscription
+// resolvers: a mutation with two aliased checks handed to Subscribe runs one and
+// refuses the other.
+func TestSubscribeBudgetsAMutationItRuns(t *testing.T) {
+	root := newBudgetRoot(t)
+	schema := MustParseSchema(budgetMixedSDL, &budgetMixedRoot{root})
+	ch, err := schema.Subscribe(context.Background(), "mutation { a: check b: check }", "", nil)
+	require.NoError(t, err)
+	for range ch {
+	}
+	assert.Equal(t, int32(1), root.ran.Load())
+	assert.Equal(t, int32(1), root.refused.Load())
+}

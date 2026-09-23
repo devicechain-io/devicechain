@@ -100,8 +100,9 @@ func TestNoBudgetIsUnlimited(t *testing.T) {
 	}
 }
 
-// Wrapping a context that already has a budget can tighten it, never widen it — so no
-// layer between the Schema and the Checker can hand a request more checks.
+// Wrapping a context that already has a budget can tighten it, never widen it, along one
+// chain — so no layer between the Schema and the Checker can hand a request more checks.
+// TestSiblingBudgetsNeverExceedTheirParent is the same claim for the aggregate.
 func TestRequestBudgetCanOnlyTighten(t *testing.T) {
 	c := newChecker(t, credentialtest.NewStore(), newClock())
 	acct := newAccount(t)
@@ -116,6 +117,95 @@ func TestRequestBudgetCanOnlyTighten(t *testing.T) {
 	tightened := credential.WithRequestBudget(credential.WithRequestBudget(context.Background(), 5), 1)
 	require.NoError(t, c.Check(tightened, id(2), secret, acct.lookup))
 	require.ErrorIs(t, c.Check(tightened, id(3), secret, acct.lookup), credential.ErrRequestBudgetExhausted)
+}
+
+// 🔴 THE AGGREGATE BOUND: children installed inside one budget — however many, and
+// whatever each is given — together never make more checks than the parent allows,
+// because every check spends from its own budget AND from each one enclosing it. Five
+// siblings of 1 under a parent of 2 get two checks between them, not five; and a
+// sibling that could widen (10 under a parent of 2) gets no more.
+func TestSiblingBudgetsNeverExceedTheirParent(t *testing.T) {
+	c := newChecker(t, credentialtest.NewStore(), newClock())
+	acct := newAccount(t)
+	client := credential.Principal{Kind: credential.KindIdentity, ID: "carol@example.com"}
+
+	parent := credential.WithRequestBudget(context.Background(), 2)
+	evaluated := 0
+	for i := 0; i < 5; i++ {
+		child := credential.WithRequestBudget(parent, 1)
+		if c.Check(child, client, secret, acct.lookup) == nil {
+			evaluated++
+		}
+	}
+	assert.Equal(t, 2, evaluated, "five children of 1 under a parent of 2 share the parent's 2")
+
+	parent = credential.WithRequestBudget(context.Background(), 2)
+	wide := credential.WithRequestBudget(parent, 10)
+	evaluated = 0
+	for i := 0; i < 10; i++ {
+		if c.Check(wide, client, secret, acct.lookup) == nil {
+			evaluated++
+		}
+	}
+	assert.Equal(t, 2, evaluated, "a child given more than its parent gets no more than the parent")
+	require.ErrorIs(t, c.Check(parent, client, secret, acct.lookup), credential.ErrRequestBudgetExhausted,
+		"and what the child spent, the parent no longer has")
+}
+
+// A refusal at an inner level takes nothing from the levels above it: a child that has
+// spent its own unit is refused, and the parent's remaining unit is still there for the
+// next check.
+func TestRefusedCheckLeaksNoParentUnits(t *testing.T) {
+	c := newChecker(t, credentialtest.NewStore(), newClock())
+	acct := newAccount(t)
+	client := credential.Principal{Kind: credential.KindIdentity, ID: "dave@example.com"}
+
+	parent := credential.WithRequestBudget(context.Background(), 2)
+	child := credential.WithRequestBudget(parent, 1)
+	require.NoError(t, c.Check(child, client, secret, acct.lookup))
+	for i := 0; i < 5; i++ {
+		require.ErrorIs(t, c.Check(child, client, secret, acct.lookup), credential.ErrRequestBudgetExhausted)
+	}
+	require.NoError(t, c.Check(parent, client, secret, acct.lookup), "the parent's second unit survived five refusals")
+	require.ErrorIs(t, c.Check(parent, client, secret, acct.lookup), credential.ErrRequestBudgetExhausted)
+}
+
+// The aggregate bound under concurrency: 40 goroutines across 8 sibling children (3
+// each, 24 between them) under a parent of 5 — exactly 5 checks run.
+func TestSiblingBudgetsHoldUnderConcurrency(t *testing.T) {
+	c, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{
+		credential.KindIdentity: testPolicy, credential.KindOAuthClient: {Unthrottled: true},
+	})
+	require.NoError(t, err)
+	acct := newAccount(t)
+	parent := credential.WithRequestBudget(context.Background(), 5)
+	children := make([]context.Context, 8)
+	for i := range children {
+		children[i] = credential.WithRequestBudget(parent, 3)
+	}
+
+	var wg sync.WaitGroup
+	var evaluated atomic.Int32
+	start := make(chan struct{})
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(ctx context.Context) {
+			defer wg.Done()
+			<-start
+			err := c.Check(ctx, credential.Principal{Kind: credential.KindOAuthClient, ID: "c"}, secret, acct.lookup)
+			switch {
+			case err == nil:
+				evaluated.Add(1)
+			case errors.Is(err, credential.ErrRequestBudgetExhausted):
+			default:
+				t.Errorf("unexpected error %v", err)
+			}
+		}(children[i%len(children)])
+	}
+	close(start)
+	wg.Wait()
+	assert.LessOrEqual(t, evaluated.Load(), int32(5), "never more than the parent allows")
+	assert.Equal(t, int32(5), evaluated.Load(), "and, with demand far above it, all of it is used")
 }
 
 // Concurrent checks in one request cannot overspend: graphql-go runs a query's root
