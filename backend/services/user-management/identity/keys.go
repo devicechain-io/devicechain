@@ -197,9 +197,11 @@ func (m *Manager) mintSigningKey(ctx context.Context, tx *gorm.DB, store secrets
 // deletes its sealed private half, mints a new active key, and hard-deletes keys
 // retired longer ago than retention (no live token can still reference them). All of
 // it runs in one DB transaction that the secret store joins, so a partial failure can
-// never leave zero or two active keys, a retired key that can still sign, or an
-// active key with no private half; and the whole thing runs under the distributed
-// lock so it happens once across replicas. retention <= 0 keeps retired keys'
+// never leave zero or two active keys, a retired key whose private half is still
+// stored, or an active key with no private half; and the whole thing runs under the
+// distributed lock so it happens once across replicas. That is a claim about the
+// DATABASE: another replica already running keeps the demoted key in memory and signs
+// with it until it restarts, because nothing tells it the key was rotated. retention <= 0 keeps retired keys'
 // PUBLIC halves indefinitely; their private halves are gone at demotion regardless.
 func (m *Manager) rotateSigningKey(ctx context.Context, retention time.Duration) (*signingKeySet, error) {
 	var set *signingKeySet
@@ -232,8 +234,9 @@ func (m *Manager) rotateSigningKeyLocked(ctx context.Context, retention time.Dur
 			Updates(map[string]any{"active": false, "retired_at": now}).Error; err != nil {
 			return err
 		}
-		// A retired key only verifies, so its private half has no further use — and
-		// kept, it is a key that can still mint tokens every service accepts for as
+		// A retired key is only meant to verify (a replica still running with it in
+		// memory signs until it restarts; nothing here reaches that copy), so its
+		// stored private half has no further use — and kept, it is a key that can still mint tokens every service accepts for as
 		// long as the public half is served.
 		for _, k := range demoted {
 			pub, err := auth.DecodePublicKeyPEM([]byte(k.PublicKeyPem))

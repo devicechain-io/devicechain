@@ -36,6 +36,12 @@ import (
 // key or instance-secret write that lost its system context is refused here exactly as
 // it would be in production — the core-owned tables migrated, and then this area's own
 // migration chain, so the tables are the ones a fresh install builds.
+//
+// 🔴 ":memory:" gives EACH pooled connection its own empty database. A write that
+// escapes the transaction lands on another connection and fails with "no such table",
+// so a broken secrets.BindTx fails the tests here for that incidental reason, not on
+// atomicity. Those failures are not coverage of BindTx: core/secrets/bindtx_test.go is
+// what pins the store joining the caller's transaction.
 func keysTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

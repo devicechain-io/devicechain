@@ -60,31 +60,45 @@ func (signingKeyCleartextSnapshot) TableName() string { return "signing_keys" }
 //     already taken, or from the WAL archive. Those copies still hold keys — but no
 //     longer trusted ones, because nothing serves their public halves after this.
 //
-// Individually re-runnable, as the chain requires (UseTransaction:false, replayed from
-// the top after a failure): it acts only while the column exists. A replay after the
-// drop is a no-op, and a failure between the DELETE and the drop replays both — which
-// is also why the DELETE can never reach a row written after the cutover: no such row
-// exists while the column does, because the service does not start until the chain
-// has run.
+// ONE TRANSACTION, AND THE DROP GOES FIRST. The chain runs with UseTransaction:false,
+// so without its own transaction the DELETE and the DROP would be two autocommit
+// statements — and a pod still on the previous release that (re)started between them
+// would find no active key and mint one with a cleartext private_key_pem, which the
+// DROP would then strip. The new service would find an active row with no sealed
+// private half and refuse to start until someone edited the table by hand. Postgres
+// DDL is transactional, so both statements commit together or not at all; and the
+// DROP COLUMN, run first, takes the table's ACCESS EXCLUSIVE lock before anything
+// else, so every other reader and writer waits for the commit and then sees both
+// changes at once. An old-release pod that then tries to mint fails loudly on the
+// missing column instead of leaving a row behind. (DELETE first would still commit
+// atomically, but its row locks would come before the table lock, and an old pod
+// rotating at the same moment could deadlock the migration.)
+//
+// Individually re-runnable, as the chain requires (replayed from the top after a
+// failure): it acts only while the column exists, and the column exists exactly when
+// the transaction has not committed. A replay after the commit is a no-op, and a
+// failure inside it rolls both statements back and replays both.
 //
 // On a fresh install the table is empty when this runs, so it only drops the column
 // the baseline created.
 func NewSigningKeyPrivateHalfMigration() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20260923130100",
-		Migrate: func(tx *gorm.DB) error {
-			snapshot := &signingKeyCleartextSnapshot{}
-			if !tx.Migrator().HasColumn(snapshot, "private_key_pem") {
-				return nil
-			}
-			// Raw SQL, not tx.Delete: a gorm Delete with no condition is refused
-			// (ErrMissingWhereClause), and one over a type carrying DeletedAt would be a
-			// SOFT delete that leaves every PEM in place until the column is dropped. The
-			// bare table name resolves through search_path, as the pinned TableName does.
-			if err := tx.Exec("DELETE FROM signing_keys").Error; err != nil {
-				return err
-			}
-			return tx.Migrator().DropColumn(snapshot, "private_key_pem")
+		Migrate: func(db *gorm.DB) error {
+			return db.Transaction(func(tx *gorm.DB) error {
+				snapshot := &signingKeyCleartextSnapshot{}
+				if !tx.Migrator().HasColumn(snapshot, "private_key_pem") {
+					return nil
+				}
+				if err := tx.Migrator().DropColumn(snapshot, "private_key_pem"); err != nil {
+					return err
+				}
+				// Raw SQL, not tx.Delete: a gorm Delete with no condition is refused
+				// (ErrMissingWhereClause), and one over a type carrying DeletedAt would be
+				// a SOFT delete that leaves every public half in the table. The bare
+				// table name resolves through search_path, as the pinned TableName does.
+				return tx.Exec("DELETE FROM signing_keys").Error
+			})
 		},
 		Rollback: func(tx *gorm.DB) error {
 			// Unimplemented must fail loudly. The keys this deleted are gone, and a

@@ -24,8 +24,10 @@ import (
 // Exactly one row is Active — the key currently signing new tokens, and the only
 // key with a private half at all. A rotation generates a new Active key and
 // demotes the previous one (Active=false, RetiredAt set) and deletes the demoted
-// key's private half in the same transaction: a retired key only ever verifies.
-// Its public half is still served in the JWKS so tokens it signed verify until
+// key's private half in the same transaction, so no retired key can sign from what
+// is STORED. A replica already running still holds the demoted key in memory and signs
+// with it until it restarts: rotation runs at a replica's startup, and nothing tells
+// the others to reload. Its public half is still served in the JWKS so tokens it signed verify until
 // they expire, and the row is pruned once past the retention window. The key id
 // (kid) is not stored — it is derived from the public key (RFC 7638 thumbprint)
 // wherever needed, and so is the secret-store handle of the private half.

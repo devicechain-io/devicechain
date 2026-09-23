@@ -4,6 +4,8 @@
 package schema
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -99,6 +101,46 @@ func TestThePrivateHalfMigrationDeletesEveryCleartextKeyAndTheColumn(t *testing.
 	require.NoError(t, NewSigningKeyPrivateHalfMigration().Migrate(db), "a replay after the cutover must succeed")
 	require.Equal(t, int64(1), countSigningKeyRows(t, db),
 		"a replay after the column is gone must not touch a key written since the cutover")
+}
+
+// The DROP and the DELETE commit together or not at all. The chain runs with
+// UseTransaction:false, so without the migration's own transaction a failure after the
+// drop would leave the column gone and every cleartext-era row in place — and a replay
+// would then find no column and never delete them, keeping their public halves in the
+// JWKS for good. Here the DELETE is made to fail, and the drop must be undone with it,
+// so the replay that follows still has work to do and does it.
+//
+// The failure is injected as a gorm raw-SQL callback, not a trigger: SQLite's
+// DropColumn rebuilds the table, which discards any trigger on it before the DELETE
+// runs.
+func TestThePrivateHalfMigrationIsOneTransaction(t *testing.T) {
+	db := dbBeforeCleartextRemoval(t)
+	// One connection: ":memory:" is a separate database per pooled connection, and the
+	// assertions below must read the one the migration wrote.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	require.NoError(t, db.Exec(`INSERT INTO signing_keys (created_at, updated_at, active, private_key_pem, public_key_pem)
+		VALUES (CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true, '-----BEGIN PRIVATE KEY-----active', '-----BEGIN PUBLIC KEY-----active')`).Error)
+	refuse := true
+	require.NoError(t, db.Callback().Raw().Before("gorm:raw").Register("test:refuse_signing_key_delete",
+		func(d *gorm.DB) {
+			if refuse && strings.HasPrefix(d.Statement.SQL.String(), "DELETE FROM signing_keys") {
+				_ = d.AddError(errors.New("delete refused by the test"))
+			}
+		}))
+
+	require.Error(t, NewSigningKeyPrivateHalfMigration().Migrate(db), "the premise: the DELETE fails")
+	require.Contains(t, signingKeyColumns(t, db), "private_key_pem",
+		"a failed DELETE must roll the column drop back with it — committed alone, the drop "+
+			"turns every replay into a no-op that never deletes the cleartext-era rows")
+	require.Equal(t, int64(1), countSigningKeyRows(t, db))
+
+	refuse = false
+	require.NoError(t, NewSigningKeyPrivateHalfMigration().Migrate(db), "the replay")
+	require.Equal(t, int64(0), countSigningKeyRows(t, db), "the replay must still delete the rows")
+	require.NotContains(t, signingKeyColumns(t, db), "private_key_pem")
 }
 
 // The whole chain, as a fresh install runs it: the secrets table the signing key is
