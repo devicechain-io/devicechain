@@ -208,7 +208,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				"audit row, so outcome=\"throttled\" is the view of an account held at the backoff "+
 				"cap; outcome=\"unavailable\" means the attempt store could not be reached and "+
 				"sign-in failed closed; outcome=\"store_full\" means the attempt store was full and "+
-				"the attempt was checked WITHOUT its backoff.",
+				"the attempt was checked WITHOUT its backoff; outcome=\"request_budget\" means one request "+
+				"carried more sign-ins than its per-request budget, and the extra ones were not evaluated.",
 			[]string{"kind", "outcome"})))
 	if err != nil {
 		return err

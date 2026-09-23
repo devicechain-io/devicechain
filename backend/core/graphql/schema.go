@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	graphql "github.com/graph-gophers/graphql-go"
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/graph-gophers/graphql-go/introspection"
@@ -39,6 +40,23 @@ type Schema struct {
 	maxQueryLength   int
 	maxQueryRoots    int
 	maxMutationRoots int
+	// maxCredChecks is the credential-check budget every execution carries (see
+	// execContext).
+	maxCredChecks int
+}
+
+// execContext is the context every execution runs under: the caller's, carrying a
+// credential-check budget of maxCredChecks.
+//
+// 🔴 THIS IS WHERE THE LOGIN BACKSTOP IS INSTALLED, AND WHY HERE. Exec and Subscribe are
+// the only ways to execute a document against a Schema, and a Schema is the only thing
+// the handler constructors accept, so no resolver can reach credential.Checker from a
+// GraphQL request without this budget in its context. The root-field limit reads the
+// document; this does not, so it still holds for any document the root-field count
+// misreads. A zero value (a Schema not built by MustParseSchema) allows no checks at
+// all rather than unlimited ones.
+func (s *Schema) execContext(ctx context.Context) context.Context {
+	return credential.WithRequestBudget(ctx, s.maxCredChecks)
 }
 
 // Exec checks the document against the work limit and, when it passes, executes it
@@ -48,7 +66,7 @@ func (s *Schema) Exec(ctx context.Context, query, operationName string, variable
 	if err := s.checkWork(query); err != nil {
 		return &graphql.Response{Errors: []*gqlerrors.QueryError{err}}
 	}
-	return s.inner.Exec(ctx, query, operationName, variables)
+	return s.inner.Exec(s.execContext(ctx), query, operationName, variables)
 }
 
 // Subscribe checks the document against the work limit before handing it to
@@ -66,7 +84,7 @@ func (s *Schema) Subscribe(ctx context.Context, query, operationName string, var
 		close(ch)
 		return ch, nil
 	}
-	return s.inner.Subscribe(ctx, query, operationName, variables)
+	return s.inner.Subscribe(s.execContext(ctx), query, operationName, variables)
 }
 
 // ValidateWithVariables validates a document against the schema without executing it.

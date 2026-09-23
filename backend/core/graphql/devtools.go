@@ -45,7 +45,9 @@ func DevToolsEnabled() bool {
 // more ROOT fields than DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS / _MUTATION_ROOT_FIELDS allow,
 // before any resolver runs. That bounds the serial work one request can buy through
 // aliased mutations and its root fan-out; it does not bound nested aliasing (see
-// Schema's doc comment for what it leaves open).
+// Schema's doc comment for what it leaves open). Every execution also carries a
+// credential-check budget of DC_GRAPHQL_MAX_CREDENTIAL_CHECKS, which bounds the
+// bcrypt compares one request can reach however its document is written.
 //
 // Everything is centralized here so every service inherits it from one place rather
 // than each remembering to pass it, and the handler constructors accept only the
@@ -62,5 +64,6 @@ func MustParseSchema(schema string, resolver interface{}, opts ...graphql.Schema
 		maxQueryLength:   maxLen,
 		maxQueryRoots:    maxQueryRootFields(),
 		maxMutationRoots: maxMutationRootFields(),
+		maxCredChecks:    maxCredentialChecks(),
 	}
 }

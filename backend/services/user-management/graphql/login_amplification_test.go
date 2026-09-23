@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +52,8 @@ type loginFixture struct {
 	mgr   *identity.Manager
 	rdbm  *rdb.RdbManager
 	store *credentialtest.Store
+	// compares counts the bcrypt compares the checker actually ran, the dummy included.
+	compares atomic.Int32
 }
 
 func newLoginFixture(t *testing.T, free int) *loginFixture {
@@ -65,15 +68,14 @@ func newLoginFixture(t *testing.T, free int) *loginFixture {
 	policy := credential.Policy{Free: free, Base: time.Minute, Cap: 4 * time.Minute}
 	store := credentialtest.NewStore()
 	frozen := time.Unix(1_700_000_000, 0)
+	f := &loginFixture{rdbm: rdbm, store: store}
 	checker, err := credential.NewChecker(store,
 		map[credential.Kind]credential.Policy{credential.KindIdentity: policy, credential.KindOAuthClient: policy},
-		credential.WithClock(func() time.Time { return frozen }))
+		credential.WithClock(func() time.Time { return frozen }),
+		credential.WithCompareObserver(func([]byte) { f.compares.Add(1) }))
 	require.NoError(t, err)
-	return &loginFixture{
-		mgr:   identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, checker),
-		rdbm:  rdbm,
-		store: store,
-	}
+	f.mgr = identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, checker)
+	return f
 }
 
 // aliasedLogins builds one document carrying n aliased login mutations, all with
@@ -99,12 +101,19 @@ type gqlResponse struct {
 	Errors []gqlError                 `json:"errors"`
 }
 
-// post drives one document through the real data-plane handler, unauthenticated.
+// post drives one document through the real data-plane handler, unauthenticated, with
+// $e set to the victim's email.
 func (f *loginFixture) post(t *testing.T, doc string) (int, gqlResponse) {
+	t.Helper()
+	return f.postAs(t, doc, victimEmail)
+}
+
+// postAs is post with $e set to email.
+func (f *loginFixture) postAs(t *testing.T, doc, email string) (int, gqlResponse) {
 	t.Helper()
 	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
 	h := gqlcore.NewHttpHandler(schema, map[gqlcore.ContextKey]interface{}{ContextIdentityKey: f.mgr}, nil)
-	body, err := json.Marshal(map[string]any{"query": doc, "variables": map[string]any{"e": victimEmail}})
+	body, err := json.Marshal(map[string]any{"query": doc, "variables": map[string]any{"e": email}})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -154,7 +163,12 @@ func TestAmplifiedLoginDocumentIsRefusedBeforeExecution(t *testing.T) {
 // A document UNDER the ceiling still cannot buy more than the free attempts. With the
 // free allowance at 3, five aliased wrong logins in one request evaluate three and
 // come back THROTTLED for the other two — which wrote no audit row.
+//
+// The per-request credential budget (default 1) would refuse the second alias on its
+// own, so it is raised here to 5: this test is about the per-ACCOUNT backoff, and it
+// has to be the only limit in play for the throttles below to be the backoff's.
 func TestAliasesUnderTheCeilingAreThrottledPerAccount(t *testing.T) {
+	t.Setenv(gqlcore.EnvGraphQLMaxCredentialChecks, "5")
 	f := newLoginFixture(t, 3)
 
 	_, resp := f.post(t, aliasedLogins(5))

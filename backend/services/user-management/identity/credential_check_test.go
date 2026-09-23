@@ -234,6 +234,30 @@ func TestLoginFailsClosedWhenTheAttemptStoreIsDown(t *testing.T) {
 	assert.Equal(t, int32(0), f.lookups.Load())
 }
 
+// Login under the per-request budget the GraphQL layer installs (1): the one sign-in
+// runs all the way to an issued token, and a second sign-in on the SAME request is
+// refused with the budget's error before anything is looked up — while a fresh request
+// is evaluated again.
+func TestLoginWithinARequestBudget(t *testing.T) {
+	f := newCredFixture(t)
+	req := credential.WithRequestBudget(context.Background(), 1)
+
+	res, err := f.mgr.Login(req, knownEmail, knownPassword)
+	require.NoError(t, err)
+	require.NotEmpty(t, res.IdentityToken)
+	lookups := f.lookups.Load()
+
+	_, err = f.mgr.Login(req, knownEmail, knownPassword)
+	var be *credential.RequestBudgetError
+	require.Truef(t, errors.As(err, &be), "got %v", err)
+	assert.Equal(t, lookups, f.lookups.Load(), "a refused sign-in looks nothing up")
+	assert.Equal(t, int64(1), f.audit(t, rdb.AuditOpLogin), "and writes no audit row")
+	assert.Equal(t, int64(0), f.audit(t, rdb.AuditOpLoginFailed))
+
+	_, err = f.mgr.Login(credential.WithRequestBudget(context.Background(), 1), knownEmail, knownPassword)
+	require.NoError(t, err, "a new request has its own budget")
+}
+
 // A Manager built without a checker refuses to compare at all rather than falling
 // back to an unthrottled compare.
 func TestLoginWithoutACheckerFailsLoudly(t *testing.T) {

@@ -39,6 +39,9 @@ const (
 	// EnvGraphQLMaxMutationRootFields overrides the maximum distinct root fields in a
 	// mutation.
 	EnvGraphQLMaxMutationRootFields = "DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS"
+	// EnvGraphQLMaxCredentialChecks overrides how many credential checks (password or
+	// client-secret compares) one request may make.
+	EnvGraphQLMaxCredentialChecks = "DC_GRAPHQL_MAX_CREDENTIAL_CHECKS"
 
 	// DefaultGraphQLMaxDepth caps selection nesting. The deepest legitimate operation
 	// the platform issues is depth ~4; the canonical schema-introspection query
@@ -68,6 +71,15 @@ const (
 	// run one after another, so this is the ceiling that bounds the serial work one
 	// request can buy — before it, one request carried ~1,500 aliased logins.
 	DefaultGraphQLMaxMutationRootFields = 5
+	// DefaultGraphQLMaxCredentialChecks caps the credential checks one request may make
+	// — in practice, how many `login` mutations it can have evaluated. Every first-party
+	// client (console, dashboard app, SDKs, dcctl, the simulators) sends exactly one
+	// sign-in per request, and the OAuth endpoints outside GraphQL make exactly one check
+	// per request by their shape, so 1 makes "one credential check per request" true on
+	// every path. Any allowance above it would be headroom only a guesser uses. Unlike
+	// the root-field ceilings it does not read the document, so it holds even for a
+	// document the root-field count misreads (see credential.WithRequestBudget).
+	DefaultGraphQLMaxCredentialChecks = 1
 )
 
 // maxDepth resolves the effective selection-depth ceiling (see EnvGraphQLMaxDepth).
@@ -91,6 +103,12 @@ func maxQueryRootFields() int {
 // EnvGraphQLMaxMutationRootFields).
 func maxMutationRootFields() int {
 	return envPositiveInt(EnvGraphQLMaxMutationRootFields, DefaultGraphQLMaxMutationRootFields)
+}
+
+// maxCredentialChecks resolves the effective per-request credential-check budget (see
+// EnvGraphQLMaxCredentialChecks).
+func maxCredentialChecks() int {
+	return envPositiveInt(EnvGraphQLMaxCredentialChecks, DefaultGraphQLMaxCredentialChecks)
 }
 
 // maxBodyBytes resolves the effective HTTP request-body ceiling in bytes (see

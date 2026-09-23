@@ -363,6 +363,10 @@ type MembershipInfo struct {
 //   - *credential.UnavailableError: the attempt store could not be reached, and the
 //     check failed closed. A FULL store is not this: the checker evaluates the
 //     attempt without its backoff and returns its normal result.
+//   - *credential.RequestBudgetError: the request had already made as many credential
+//     checks as its budget allows (one, by default, on GraphQL), so this sign-in was not
+//     evaluated. Refused before the email is looked at, like a throttle, and with no
+//     audit row.
 func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityAuth, error) {
 	if m.credentials == nil {
 		return nil, errNoCredentialChecker

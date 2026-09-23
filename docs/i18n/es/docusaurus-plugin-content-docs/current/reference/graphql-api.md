@@ -535,6 +535,7 @@ menor que 1 vuelve al valor por defecto: ninguno puede desactivarse.
 | Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
 | Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
 | Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
+| Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña posteriores a la primera en una misma petición (ver [más abajo](#credential-checks-per-request)). |
 
 Salvo con el límite del cuerpo, una solicitud rechazada recibe HTTP 200 con una sola entrada en
 `errors`, sin `data` y sin haber ejecutado nada. El rechazo por campos raíz lleva
@@ -561,6 +562,30 @@ sin él, una sola solicitud podría llevar cientos de copias con alias de una mu
 consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de
 mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de primer nivel; los alias
 de un campo anidado no se cuentan.
+
+### Comprobaciones de credenciales por petición {#credential-checks-per-request}
+
+En una petición se puede comprobar como mucho una contraseña, se escriba como se escriba. El primer
+`login` de una petición se evalúa con normalidad. Cualquier otro `login` en la misma petición, como
+otro alias, no se evalúa: no se comprueba la contraseña, no se busca nada y no se registra nada en
+el registro de auditoría. Recibe su propio error en lugar de un veredicto sobre la contraseña:
+
+```json
+{
+  "errors": [{
+    "message": "this request has already made its credential checks; send one sign-in per request",
+    "path": ["a2"],
+    "extensions": { "code": "TOO_MANY_CREDENTIAL_CHECKS" }
+  }]
+}
+```
+
+No depende de cómo esté escrito el documento, así que se mantiene incluso para un documento que
+supere el límite de campos raíz. El rechazo ocurre antes de mirar la dirección de correo, así que es
+el mismo exista o no una cuenta. Todos los clientes que incluye DeviceChain envían un solo inicio de
+sesión por petición, así que a ninguno le afecta. `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` aumenta el
+número por servicio; como los demás límites, no se puede desactivar. Los rechazos se cuentan en
+`devicechain_usermanagement_credential_checks_total` con `outcome="request_budget"`.
 
 ### Espera entre intentos de inicio de sesión {#sign-in-backoff}
 

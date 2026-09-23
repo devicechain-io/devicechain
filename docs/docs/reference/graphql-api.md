@@ -514,6 +514,7 @@ default: none of them can be switched off.
 | Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
 | Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
 | Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
+| Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks after the first in one request (see [below](#credential-checks-per-request)). |
 
 Apart from the body limit, a refused request gets HTTP 200 with a single entry in `errors`, no
 `data`, and nothing executed. A root-field refusal carries `extensions.code` set to
@@ -538,6 +539,30 @@ The mutation limit is the tight one because mutation fields run one after anothe
 single request could carry hundreds of aliased copies of an expensive mutation. The console, the
 dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per request and at
 most two query fields. The limit applies to top-level fields only; aliases of a nested field are not counted.
+
+### Credential checks per request {#credential-checks-per-request}
+
+One request can have at most one password checked, however it is written. The first `login` in a
+request is evaluated as usual. Any further `login` in the same request, as another alias, is not
+evaluated: the password is not checked, nothing is looked up, and nothing is recorded in the audit
+log. It gets its own error instead of a verdict on the password:
+
+```json
+{
+  "errors": [{
+    "message": "this request has already made its credential checks; send one sign-in per request",
+    "path": ["a2"],
+    "extensions": { "code": "TOO_MANY_CREDENTIAL_CHECKS" }
+  }]
+}
+```
+
+This does not depend on how the document is written, so it still holds for a document that gets
+past the root-field limit. The refusal happens before the email address is looked at, so it is the
+same whether or not an account exists. Every client DeviceChain ships sends one sign-in per request,
+so none of them is affected. `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` raises the number per service; like
+the other limits, it cannot be switched off. Refusals are counted on
+`devicechain_usermanagement_credential_checks_total` with `outcome="request_budget"`.
 
 ### Sign-in backoff {#sign-in-backoff}
 

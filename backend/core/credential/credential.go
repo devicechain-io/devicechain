@@ -38,6 +38,17 @@
 // price, so it should be Unthrottled rather than hand anyone a way to lock it out —
 // user-management's OAuth client secrets are (identity.CredentialPolicies).
 //
+// # A budget per request
+//
+// Separately from the per-principal backoff, every check spends one unit of the
+// request's credential-check budget (WithRequestBudget) before it does anything else,
+// and is refused with a *RequestBudgetError when none is left. That bounds the bcrypt
+// compares ONE REQUEST can buy — however many aliased sign-ins its document carries,
+// and whatever the GraphQL layer's reading of that document — and it is refused before
+// the principal is looked at, so it says nothing about any account. core/graphql
+// installs the budget on every execution; budget.go has the rule for a context
+// without one.
+//
 // # Existence does not leak
 //
 // The key is derived from the PRESENTED identifier, and an unknown principal runs the
@@ -327,6 +338,10 @@ const (
 	// not already inside a running delay (the package doc says why that is not only new
 	// ones), and the chart alerts on it.
 	OutcomeStoreFull = "store_full"
+	// OutcomeRequestBudget is a check refused because its request had already spent
+	// its credential-check budget (see WithRequestBudget). Nothing was evaluated. A
+	// non-zero rate means some request carried more sign-ins than any client sends.
+	OutcomeRequestBudget = "request_budget"
 	// OutcomeError is an admitted attempt whose lookup failed — a database error, not a
 	// decision about the secret.
 	OutcomeError = "error"
@@ -367,6 +382,20 @@ const storeFullLogInterval = time.Minute
 
 // Option configures a Checker.
 type Option func(*Checker)
+
+// WithCompareObserver calls seen with the stored hash of every compare the checker
+// runs — the dummy included — before running it. It only observes: it cannot change
+// what is compared or the result. It exists so a test in another package can count the
+// bcrypt compares a request actually paid for, which no outcome or error can show.
+func WithCompareObserver(seen func(hash []byte)) Option {
+	return func(c *Checker) {
+		inner := c.compare
+		c.compare = func(hash, secret []byte) error {
+			seen(hash)
+			return inner(hash, secret)
+		}
+	}
+}
 
 // WithClock replaces the wall clock, so a test can step time instead of sleeping.
 func WithClock(now func() time.Time) Option { return func(c *Checker) { c.now = now } }
@@ -462,6 +491,14 @@ func Key(p Principal) string {
 // An Unthrottled kind skips all of that — no read, no charge, no delete — and only
 // compares.
 func (c *Checker) Check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) error {
+	// 🔴 THE REQUEST BUDGET IS SPENT FIRST, before the principal is so much as keyed:
+	// a refusal here does no read, no charge, no lookup and no compare, and so it
+	// looks the same for every principal (see budget.go).
+	if !spend(ctx) {
+		err := &RequestBudgetError{}
+		c.observe(p.Kind, err, false)
+		return err
+	}
 	failedOpen, err := c.check(ctx, p, secret, lookup)
 	c.observe(p.Kind, err, failedOpen)
 	return err
@@ -611,6 +648,8 @@ func (c *Checker) observe(kind Kind, err error, failedOpen bool) {
 	switch {
 	case failedOpen:
 		outcome = OutcomeStoreFull
+	case errors.Is(err, ErrRequestBudgetExhausted):
+		outcome = OutcomeRequestBudget
 	case err == nil:
 	case errors.As(err, &throttled):
 		outcome = OutcomeThrottled
