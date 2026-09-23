@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
@@ -72,7 +73,8 @@ type GraphQLManager struct {
 
 	// subscriptions is the WebSocket half of the /graphql route, kept here so
 	// ExecuteStop can close the connections http.Server.Shutdown will not.
-	// ExecuteInitialize builds it; it is nil only before that has run.
+	// ExecuteInitialize builds it, and only for a schema with a Subscription root;
+	// it is nil before that has run, and always nil for any other schema.
 	subscriptions *SubscriptionHandler
 
 	lifecycle core.LifecycleManager
@@ -129,17 +131,28 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 	// routed to the graphql-transport-ws subscription handler (ADR-037); a plain
 	// POST goes to the HTTP relay handler. Sharing one path lets a client derive
 	// the ws:// URL from the http:// one, matching GraphQL client conventions.
-	gql.subscriptions = NewSubscriptionHandler(gql.Schema, gql.ContextProviders, gql.Gate)
-	// The operator-tunable inbound-frame ceiling. ApplyDefaults has already floored a
-	// missing or non-positive value to the platform default, and readLimit floors it
-	// again at the point of use — a service whose instance config was never loaded
-	// (every test that builds a Microservice by hand) must not end up unbounded.
-	gql.subscriptions.MaxMessageBytes =
-		gql.Microservice.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes
+	//
+	// 🔴 ONLY A SCHEMA WITH A SUBSCRIPTION ROOT GETS A WEBSOCKET AT ALL. The socket
+	// accepts nothing but subscription operations, so on any other schema it would
+	// authenticate, acknowledge, keep itself alive with pings and then refuse every
+	// operation — an endpoint with no purpose that still holds a connection and a
+	// credential. Not building it is better than guarding it; the dispatcher answers
+	// such an upgrade with a plain 400 instead.
+	var ws http.Handler
+	if hasSubscriptionRoot(gql.Schema) {
+		gql.subscriptions = NewSubscriptionHandler(gql.Schema, gql.ContextProviders, gql.Gate)
+		// The operator-tunable inbound-frame ceiling. ApplyDefaults has already floored a
+		// missing or non-positive value to the platform default, and readLimit floors it
+		// again at the point of use — a service whose instance config was never loaded
+		// (every test that builds a Microservice by hand) must not end up unbounded.
+		gql.subscriptions.MaxMessageBytes =
+			gql.Microservice.InstanceConfiguration.Infrastructure.GraphQL.MaxSubscriptionMessageBytes
+		ws = gql.subscriptions
+	}
 
 	mux.Handle("/graphql", graphqlDispatcher(
 		NewHttpHandler(gql.Schema, gql.ContextProviders, gql.Gate),
-		gql.subscriptions,
+		ws,
 	))
 
 	// The /graphiql explorer is developer tooling — register it only when dev tools

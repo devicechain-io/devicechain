@@ -181,6 +181,24 @@ func TestMonitorDropIsLostView(t *testing.T) {
 	assert.False(t, m.Report().Passed(), "a lost view can never be a pass")
 }
 
+// A 4401 close — the server ending the socket at the monitor's token expiry — is
+// reported as its own kind, so a run that outlives its token is not misread as
+// the platform dropping the stream. It still fails the run: the monitor went blind.
+func TestMonitorTokenExpiryIsDistinguished(t *testing.T) {
+	url := rawEventServer(t, func(conn *websocket.Conn, id, dt string) {
+		sendMeasurement(t, conn, id, dt, "2026-07-21T10:00:00Z")
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4401, "token expired"), time.Now().Add(time.Second))
+	})
+
+	m := dialWatch(t, url, "devicepulse-00001")
+	eventually(t, 3*time.Second, func() bool { return hasKind(m, ViolTokenExpired) })
+	_ = m.Stop()
+	r := m.Report()
+	assert.False(t, hasKind(m, ViolLostView), "an expired token was reported as a platform drop")
+	assert.False(t, r.Passed(), "the monitor was blind after the close, so the run cannot pass")
+}
+
 // A cohort device that delivered NOTHING is a blind device — even with a clean
 // stop and no per-event violation, the monitor never watched it, so the run fails.
 // This is the F1 hole: aggregate observed>0 alone would have hidden it.

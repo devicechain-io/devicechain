@@ -106,6 +106,24 @@ var ErrSlowConsumer = errors.New("graphqlws: subscription buffer overflow (consu
 // client is closed by the caller.
 var ErrClientClosed = errors.New("graphqlws: client closed")
 
+// closeUnauthorized is the graphql-transport-ws close code for an unauthorized
+// connection.
+const closeUnauthorized = 4401
+
+// IsUnauthorizedClose reports whether err is, or wraps, a server close with code
+// 4401. At Dial that means the token was refused. On a live subscription's Err it
+// means the server ended the connection because the access token it authenticated
+// with EXPIRED: the server bounds every connection by its token's lifetime. That is
+// the REMAINING life of the token the TokenProvider returned at Dial, which can be far
+// shorter than a token's full TTL — userclient.TenantSession hands out a cached token
+// until one minute before its exp, so a socket dialed late in that token's life can
+// get about a minute. This client does not re-dial, so a caller that must outlive it
+// Dials again with a fresh token — and must not read this end as a platform defect.
+func IsUnauthorizedClose(err error) bool {
+	var ce *websocket.CloseError
+	return errors.As(err, &ce) && ce.Code == closeUnauthorized
+}
+
 // TokenProvider supplies a bearer token for the connection_init payload. It is
 // called once, at Dial. Return "" (with a nil error) to connect without a
 // credential — the data plane tolerates an unauthenticated connect, though every
@@ -273,10 +291,11 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 	return c, nil
 }
 
-// Subscribe starts one subscription (or a single-result query/mutation — the
-// server serves both over this transport) and returns its Subscription. ctx
-// bounds the subscribe send only; teardown is via Subscription.Close (or the
-// server completing the stream). A Subscribe on a closed client fails.
+// Subscribe starts one subscription and returns its Subscription. The server
+// accepts only subscription operations over this transport: a query or mutation
+// ends at once, with an `error` frame surfaced through Err. ctx bounds the
+// subscribe send only; teardown is via Subscription.Close (or the server
+// completing the stream). A Subscribe on a closed client fails.
 func (c *Client) Subscribe(ctx context.Context, query string, vars map[string]interface{}) (*Subscription, error) {
 	c.mu.Lock()
 	if c.closed {

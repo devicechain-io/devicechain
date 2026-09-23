@@ -97,6 +97,12 @@ One socket is shared per area and reused across subscriptions. `connected` and
 `closed` are connection-level signals, which is what lets a UI tell "connected
 but idle" apart from "offline" — a distinction a data-only sink cannot make.
 
+The socket carries subscriptions only; send queries and mutations over HTTP. The
+server closes it with code `4401` when the access token it opened with expires.
+`subscribe` handles that close for you: it reconnects once with a freshly resolved
+token, subscribes again, and reports the reconnect as `connected(true)`, so re-query
+anything you must not miss when you see it.
+
 ## Also in here
 
 - **Basemap resolution** (`resolveBasemap`, `renderableBasemap`) — the client half

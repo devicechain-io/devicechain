@@ -82,6 +82,14 @@ const (
 	// nothing about what did or did not fire (the fail-closed guard on the watcher
 	// itself, mirroring the measurement monitor's lost-view).
 	ViolLostView = "lost-view"
+	// ViolTokenExpired: the subscription ended because the server closed the socket
+	// with 4401 — the access token the watcher dialed with expired. Still a lost view
+	// (the watcher was blind from then on), but the WATCHER'S limit rather than a
+	// platform defect: it does not re-dial, so a run that outlives the REMAINING life
+	// of the token held at dial ends this way. That can be about a minute, not a full
+	// token TTL: a TenantSession hands out its cached token until one minute before
+	// exp. Mirrors the measurement monitor's token-expired.
+	ViolTokenExpired = "token-expired"
 )
 
 // Violation is one observed watcher-integrity breach. Note that a spurious raise
@@ -164,6 +172,12 @@ func (m *Monitor) watchOne(sub *graphqlws.Subscription) {
 		m.recordEdge(d.DetectionStream)
 	}
 	if err := sub.Err(); !errors.Is(err, graphqlws.ErrClientClosed) {
+		if graphqlws.IsUnauthorizedClose(err) {
+			m.record(Violation{Kind: ViolTokenExpired,
+				Detail: "the server closed the socket when the watcher's access token expired (" + err.Error() +
+					"); the watcher was blind from then on — a harness limit, not a platform drop"})
+			return
+		}
 		detail := "server completed the detection stream unexpectedly (an infinite subscription should not end on its own)"
 		if err != nil {
 			detail = err.Error()

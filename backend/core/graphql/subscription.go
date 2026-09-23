@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -51,12 +52,17 @@ const (
 	closeTooManyInit      = 4429
 )
 
-// shutdownCloseWait bounds the close frame Shutdown sends, and is deliberately far
-// shorter than writeWait. The frame is a courtesy: the socket is closed immediately
-// afterwards either way, and that close is what actually ends the connection. A peer
-// that has stopped reading must therefore not be able to extend a drain by the full
-// write timeout.
-const shutdownCloseWait = time.Second
+// terminateCloseWait bounds the close frame terminate sends — for a Shutdown and for a
+// token's expiry alike — and is deliberately far shorter than writeWait. The frame is
+// a courtesy: the socket is closed immediately afterwards either way, and that close
+// is what actually ends the connection. A peer that has stopped reading must
+// therefore not be able to extend a drain, or an expired session, by the full write
+// timeout.
+const terminateCloseWait = time.Second
+
+// refusedOperationMessage is the error an operation other than a subscription gets.
+const refusedOperationMessage = "only subscription operations are accepted over a WebSocket; " +
+	"send queries and mutations over HTTP"
 
 // graphql-transport-ws message types.
 const (
@@ -80,7 +86,7 @@ type wsMessage struct {
 }
 
 // subscribePayload is the body of a `subscribe` message: a single GraphQL
-// operation (subscription, or a single-result query/mutation).
+// operation, which must be a subscription (see startOperation).
 type subscribePayload struct {
 	OperationName string                 `json:"operationName"`
 	Query         string                 `json:"query"`
@@ -92,9 +98,24 @@ type subscribePayload struct {
 // payload — not an HTTP Authorization header — because browsers cannot set
 // custom headers on a WebSocket handshake, so the token must ride in-band. It
 // then drives the schema's native Subscribe execution, streaming each result as
-// a `next` frame. One handler is registered alongside the HTTP handler on the
-// same /graphql path (see the dispatcher in ExecuteStart); a schema without a
-// Subscription root simply answers every subscribe with an error frame.
+// a `next` frame.
+//
+// 🔴 TWO LIMITS MAKE THE SOCKET NO MORE THAN A SUBSCRIPTION CHANNEL, AND BOTH ARE
+// SECURITY BOUNDARIES. The token is checked once, at connection_init, so:
+//
+//   - the connection ends, with close code 4401, when the token it authenticated with
+//     expires. Without that, pings kept a socket — and every stream on it — alive
+//     indefinitely on a credential that had long since stopped working over HTTP. A
+//     client that wants to continue reconnects and presents a fresh token.
+//   - only subscription operations are accepted. graphql-go's Subscribe also runs a
+//     query or a mutation, so the socket was a write session on the connect-time
+//     claims. Queries and mutations belong on HTTP, which authenticates every request.
+//
+// The handler is routed on the same /graphql path as the HTTP handler (see
+// ExecuteInitialize), and only for a schema that HAS a Subscription root: with
+// operations limited to subscriptions, a socket on any other schema could do nothing.
+// A handler built directly over such a schema answers every subscribe with an error
+// frame.
 type SubscriptionHandler struct {
 	Schema           *graphql.Schema
 	ContextProviders map[ContextKey]interface{}
@@ -123,6 +144,12 @@ type SubscriptionHandler struct {
 	// connections it is about to walk away from.
 	mu    sync.Mutex
 	conns map[*wsConnection]struct{}
+
+	// pumpExited, when set, is called as each operation's pump goroutine returns. It
+	// is nil in production and set only by this package's tests, before the handler
+	// serves anything: it tells a test that a pump has FINISHED, including any frame
+	// it was going to write, where the alternative is guessing at it with a sleep.
+	pumpExited func(id string)
 }
 
 // NewSubscriptionHandler creates a data-plane subscription handler. It uses the
@@ -150,15 +177,31 @@ func NewSubscriptionHandler(schema *graphql.Schema, providers map[ContextKey]int
 
 // graphqlDispatcher routes a WebSocket upgrade to the subscription handler and
 // every other request (POST queries/mutations) to the HTTP handler, so both
-// share the single /graphql path.
+// share the single /graphql path. A nil wsH means the schema offers no
+// subscriptions, and an upgrade is refused with a 400 rather than handed to the
+// HTTP handler, which would answer it with a confusing decode error.
 func graphqlDispatcher(httpH http.Handler, wsH http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if websocket.IsWebSocketUpgrade(r) {
+			if wsH == nil {
+				http.Error(w, "this service offers no GraphQL subscriptions", http.StatusBadRequest)
+				return
+			}
 			wsH.ServeHTTP(w, r)
 			return
 		}
 		httpH.ServeHTTP(w, r)
 	})
+}
+
+// hasSubscriptionRoot reports whether schema defines a Subscription root operation
+// type — the same test graphql-go's Subscribe applies before it will run anything.
+func hasSubscriptionRoot(schema *graphql.Schema) bool {
+	if schema == nil {
+		return false
+	}
+	_, ok := schema.ASTSchema().RootOperationTypes[opSubscription]
+	return ok
 }
 
 // validator returns the live validator, or nil when the gate is absent or closed.
@@ -309,6 +352,10 @@ type wsConnection struct {
 	mu  sync.Mutex                    // guards ops
 	ops map[string]context.CancelFunc // active operation id -> cancel
 
+	// closing is set once the server has decided to end the connection, before its
+	// close frame is written; from then on no pump reports `complete` (see terminate).
+	closing atomic.Bool
+
 	// wg counts the goroutines this connection owns — the ping ticker and one pump
 	// per active operation. run waits on it before returning, so "the connection has
 	// finished" means all of them have, not merely that the read loop stopped.
@@ -331,16 +378,41 @@ func newConnection(conn *websocket.Conn, h *SubscriptionHandler) *wsConnection {
 
 // closeForShutdown tells the peer the server is going away and closes the socket,
 // which is what unblocks run's ReadJSON.
+func (c *wsConnection) closeForShutdown() {
+	c.terminate(websocket.CloseGoingAway, "server shutting down")
+}
+
+// terminate ends the connection from the server side: it marks it closing, sends a
+// close frame with code and reason, and closes the socket, which is what unblocks
+// run's ReadJSON and so, through run's deferred cancel, every pump.
 //
 // 🔴 IT DOES NOT TAKE writeMu, UNLIKE EVERY OTHER WRITE PATH HERE. gorilla documents
 // Close and WriteControl as the two methods callable concurrently with all the
 // others, and that exemption is the point: a pump streaming to a peer that has
-// stopped reading holds writeMu for up to writeWait, and a drain that queued behind
-// it would be bounded by the very connection it is trying to end.
-func (c *wsConnection) closeForShutdown() {
+// stopped reading holds writeMu for up to writeWait, and a drain or an expiry that
+// queued behind it would be bounded by the very connection it is trying to end.
+//
+// 🔴 THE closing MARK COMES FIRST, SO THE TEARDOWN ITSELF NEVER PRODUCES A `complete`.
+// A pump whose operation ends because the connection is being torn down would
+// otherwise report `complete` — which a graphql-transport-ws client reads as the
+// stream having FINISHED, cleanly and for good. It would then never act on the close
+// code that says why: a 4401 is how a client learns to come back with a fresh token,
+// and a 1001 how it learns to come back to another pod. Today the pumps are only
+// cancelled after the close frame is out (by run's deferred cancel), and gorilla
+// refuses every write after a close frame, so the ORDER already prevents it. The mark
+// makes that hold without relying on the order: a future path that cancels first
+// stays silent too. TestTerminateMarksTheConnectionClosing pins that terminate sets
+// the mark; TestClosingConnectionSendsNoComplete pins that a pump honours it.
+//
+// What the mark does NOT rule out is a stream that ends ON ITS OWN in the same instant:
+// a pump that read closing just before it was set can still write its `complete` ahead
+// of the close frame. That `complete` is true — the stream really did end — so it is
+// not the misreport this guards against.
+func (c *wsConnection) terminate(code int, reason string) {
+	c.closing.Store(true)
 	_ = c.conn.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
-		time.Now().Add(shutdownCloseWait))
+		websocket.FormatCloseMessage(code, reason),
+		time.Now().Add(terminateCloseWait))
 	_ = c.conn.Close()
 }
 
@@ -357,9 +429,21 @@ func (c *wsConnection) run(baseCtx context.Context) {
 	defer c.conn.Close()
 
 	// The client must send connection_init first, within the init window.
-	authedCtx, ok := c.awaitInit(connCtx)
+	authedCtx, expiry, ok := c.awaitInit(connCtx)
 	if !ok {
 		return
+	}
+
+	// The connection lives exactly as long as the token it authenticated with. An
+	// anonymous connection (expiry zero) has no token to outlive, and no tenant either,
+	// so every tenant-scoped resolver refuses it already; its channel stays nil and
+	// never fires. A token at its very last second gives a timer of zero or less,
+	// which fires at once: Parse has already refused every token past its exp.
+	var lifetime <-chan time.Time
+	if !expiry.IsZero() {
+		timer := time.NewTimer(time.Until(expiry))
+		defer timer.Stop()
+		lifetime = timer.C
 	}
 
 	// Keepalive: ping the client periodically; its pong (or any message) refreshes
@@ -375,6 +459,12 @@ func (c *wsConnection) run(baseCtx context.Context) {
 				return
 			case <-pinger.C:
 				c.write(wsMessage{Type: msgPing})
+			case <-lifetime:
+				// No explicit cancel: closing the socket fails the read loop, and run's
+				// deferred cancel then unwinds every pump — AFTER the close frame, which
+				// is the order a client needs (see terminate).
+				c.terminate(closeUnauthorized, "token expired")
+				return
 			}
 		}
 	}()
@@ -409,65 +499,74 @@ func (c *wsConnection) run(baseCtx context.Context) {
 
 // awaitInit waits for the connection_init frame, authenticates it, and replies
 // connection_ack. It returns the authenticated context (tenant + claims stamped
-// when a token was presented) and true on success; on any violation it closes
-// the socket with the spec code and returns false.
-func (c *wsConnection) awaitInit(connCtx context.Context) (context.Context, bool) {
+// when a token was presented), the token's expiry (zero for an anonymous
+// connection) and true on success; on any violation it closes the socket with the
+// spec code and returns false.
+func (c *wsConnection) awaitInit(connCtx context.Context) (context.Context, time.Time, bool) {
 	_ = c.conn.SetReadDeadline(time.Now().Add(connectionInitWait))
 	var msg wsMessage
 	if err := c.conn.ReadJSON(&msg); err != nil {
 		// Timeout or malformed first frame.
 		c.closeCode(closeInitTimeout, "connection initialisation timeout")
-		return nil, false
+		return nil, time.Time{}, false
 	}
 	if msg.Type != msgConnectionInit {
 		c.closeCode(closeUnauthorized, "expected connection_init")
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
-	ctx, err := c.authenticate(connCtx, msg.Payload)
+	ctx, expiry, err := c.authenticate(connCtx, msg.Payload)
 	if err != nil {
 		c.closeCode(closeUnauthorized, err.Error())
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	c.write(wsMessage{Type: msgConnectionAck})
-	return ctx, true
+	return ctx, expiry, true
 }
 
 // authenticate applies the handler's auth policy to the connection_init payload.
 // The token is read from connectionParams ("Authorization: Bearer <t>" or a bare
 // "token"). With the data-plane policy a missing token is allowed (unauthenticated,
-// no tenant); a present-but-invalid token is rejected.
-func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage) (context.Context, error) {
+// no tenant, and a zero expiry); a present-but-invalid token is rejected.
+func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage) (context.Context, time.Time, error) {
 	token := bearerFromParams(payload)
 	if token == "" {
 		if c.handler.policy.required {
-			return nil, errors.New("authentication required")
+			return nil, time.Time{}, errors.New("authentication required")
 		}
-		return ctx, nil
+		return ctx, time.Time{}, nil
 	}
 	validator := c.handler.validator()
 	if validator == nil {
-		return nil, errors.New("authentication is not available")
+		return nil, time.Time{}, errors.New("authentication is not available")
 	}
 	// The WS transport carries no HTTP headers, so service tokens (whose tenant
 	// rides a header) are inapplicable here; the empty resolver makes them resolve
 	// to no tenant and be rejected, leaving access/identity tokens working.
 	claims, tenant, err := c.handler.policy.authenticate(validator, token, func(string) string { return "" })
 	if err != nil {
-		return nil, errors.New("invalid or expired token")
+		return nil, time.Time{}, errors.New("invalid or expired token")
+	}
+	// auth.Validator's parser is built with jwt.WithExpirationRequired()
+	// (auth/validator.go), so a token with no exp is refused above and this cannot
+	// happen today — no test can reach it. It is refused rather than trusted because
+	// the alternative is a connection with no end: a validator that ever drops that
+	// option reopens exactly the unbounded socket the lifetime timer exists to close.
+	if claims.ExpiresAt == nil {
+		return nil, time.Time{}, errors.New("token has no expiry")
 	}
 	if tenant != "" {
 		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
-	return ctx, nil
+	return ctx, claims.ExpiresAt.Time, nil
 }
 
-// startOperation begins a subscribe request: it guards against a duplicate id,
-// starts the schema's native Subscribe, and pumps each response to a `next`
-// frame until the source closes (then `complete`). A single-result query or
-// mutation runs through the same path — one `next` then `complete`.
+// startOperation begins a subscribe request: it refuses anything but a
+// subscription operation, guards against a duplicate id, starts the schema's
+// native Subscribe, and pumps each response to a `next` frame until the source
+// closes (then `complete`).
 func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) {
 	if msg.ID == "" {
 		c.closeCode(closeBadRequest, "subscribe missing id")
@@ -476,6 +575,15 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 	var payload subscribePayload
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		c.writeError(msg.ID, "invalid subscribe payload")
+		return
+	}
+	// 🔴 BEFORE Subscribe, BECAUSE Subscribe IS WHERE A QUERY OR MUTATION RUNS. For
+	// those graphql-go executes the operation to completion inside the call and hands
+	// back a channel holding the finished result, so a check on anything it returns
+	// would come after the write it exists to prevent. A document that cannot be
+	// classified is refused the same way: an operation-level error, the socket open.
+	if kind, err := operationType(payload.Query, payload.OperationName); err != nil || kind != opSubscription {
+		c.writeError(msg.ID, refusedOperationMessage)
 		return
 	}
 
@@ -502,6 +610,9 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		if hook := c.handler.pumpExited; hook != nil {
+			defer hook(msg.ID)
+		}
 		defer cancel()
 		for resp := range responses {
 			r, ok := resp.(*graphql.Response)
@@ -521,8 +632,10 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 			c.write(wsMessage{ID: msg.ID, Type: msgNext, Payload: raw})
 		}
 		// Source exhausted (or opCtx cancelled). If the client cancelled we already
-		// dropped the id and must not send complete; otherwise signal completion.
-		if c.removeOp(msg.ID) {
+		// dropped the id and must not send complete. Nor when the server is ending the
+		// connection: the close code, not a `complete`, is the peer's answer then
+		// (see terminate). Otherwise signal completion.
+		if c.removeOp(msg.ID) && !c.closing.Load() {
 			c.write(wsMessage{ID: msg.ID, Type: msgComplete})
 		}
 	}()
@@ -581,8 +694,11 @@ func (c *wsConnection) writeError(id, message string) {
 	c.write(wsMessage{ID: id, Type: msgError, Payload: payload})
 }
 
-// closeCode sends a WebSocket close frame with a graphql-transport-ws code.
+// closeCode sends a WebSocket close frame with a graphql-transport-ws code. It
+// marks the connection closing first, as terminate does, so a protocol-violation
+// close is not preceded by a `complete` either.
 func (c *wsConnection) closeCode(code int, reason string) {
+	c.closing.Store(true)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
