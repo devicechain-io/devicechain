@@ -1589,7 +1589,11 @@ instancia pasa a ser obligatoria en todos los perfiles. Eso son las tres primera
 abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de mensajes no
 entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones
 WebSocket de GraphQL desde su propio código. Además, en toda instancia creada antes de
-esta versión hay que revisar la contraseña del superusuario (vea la última sección de abajo).
+esta versión hay que revisar la contraseña del superusuario (vea «El superusuario ya no tiene
+contraseña por defecto» más abajo). La última sección importa si llama a la API de GraphQL desde su
+propio código o scripts, o si dimensiona usted mismo el volumen de JetStream: el inicio de sesión
+ahora tiene límite de frecuencia, y una solicitud de GraphQL tiene un límite de campos raíz y de
+comprobaciones de contraseña.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1771,6 +1775,36 @@ Inicie sesión y cámbiela, o vuelva a crear la instancia para que se le genere 
 `dcctl sim` y las herramientas de simulacro tampoco dan ya por supuesta la contraseña antigua.
 `dcctl sim` lee la generada del Secret de la instancia, y acepta `--admin-password` o
 `$DC_ADMIN_PASSWORD` para una instancia que no lo tiene.
+
+#### El inicio de sesión tiene límite de frecuencia, y las solicitudes de GraphQL llevan menos campos
+
+No hay que hacer nada en la actualización salvo que su propio código o sus scripts hagan alguna de
+las cosas siguientes. La consola, la aplicación de paneles, los SDK y `dcctl` ya respetan todos los
+límites.
+
+- **Una operación puede seleccionar como mucho 5 campos de primer nivel en una mutación y 20 en una
+  consulta.** Los alias cuentan, y también los campos a los que se llega a través de fragmentos. Una
+  solicitud que supera el límite no ejecuta nada y recibe un error con el código
+  `TOO_MANY_ROOT_FIELDS`. Divida esa solicitud, o aumente `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` /
+  `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` para ese servicio.
+- **En una solicitud se puede comprobar una contraseña.** Otro `login` en la misma solicitud no se
+  evalúa y recibe el código `TOO_MANY_CREDENTIAL_CHECKS`. Inicie sesión una vez por solicitud.
+- **Los inicios de sesión fallidos repetidos sobre una dirección de correo se ralentizan.** Tras cinco
+  fallos seguidos, el siguiente intento sobre esa dirección espera 1 segundo, duplicándose hasta 5
+  minutos. Un intento hecho durante la espera recibe el código `THROTTLED` con `retryAfterSeconds`,
+  no «credenciales no válidas». Un inicio de sesión que el servidor no puede contar recibe
+  `UNAVAILABLE`. Si su código inicia sesión, trate ambos como errores propios y no como una
+  contraseña incorrecta. Los secretos de cliente OAuth no se ralentizan.
+- **La reserva de JetStream crece en 128 MiB** (16 MiB en el preset compacto), por el bucket que
+  guarda las cuentas de inicio de sesión. En el preset compacto los buckets de caché bajan de 8 a 4
+  MiB cada uno para hacer sitio. Si dimensionó usted mismo el volumen de JetStream cerca de la reserva,
+  compruebe que tiene espacio.
+- **Una alerta nueva, `CredentialAttemptStoreFull`,** se dispara si ese bucket se llena. El inicio de
+  sesión sigue funcionando cuando está lleno, pero los fallos repetidos ya no se ralentizan. [Espera
+  entre intentos de inicio de sesión](../reference/graphql-api.md#sign-in-backoff) explica qué hacer.
+
+[Límites de las solicitudes](../reference/graphql-api.md#request-limits) y [espera entre intentos de
+inicio de sesión](../reference/graphql-api.md#sign-in-backoff) tienen los detalles.
 
 ### La transición única a la ingesta duradera
 

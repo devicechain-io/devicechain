@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 )
@@ -116,6 +117,9 @@ func TestTheAuthoringUpdateDocumentsValidateAgainstTheServedSchema(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			if errs := schema.ValidateWithVariables(c.doc, c.vars); len(errs) > 0 {
 				t.Fatalf("%s does not validate against the served schema: %v", c.name, errs)
+			}
+			if err := gqlcore.CheckWork(c.doc); err != nil {
+				t.Fatalf("%s exceeds the served root-field ceiling: %v", c.name, err)
 			}
 		})
 	}

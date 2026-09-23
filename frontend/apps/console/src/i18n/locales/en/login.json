@@ -8,5 +8,7 @@
   "serverUnreachable": "Could not reach the server. Check that the API is running.",
   "sessionExpired": "Your session expired. Please sign in again.",
   "signIn": "Sign in",
-  "signInSubtitle": "Sign in to the management console"
+  "signInSubtitle": "Sign in to the management console",
+  "signInUnavailable": "Sign-in is temporarily unavailable. Try again shortly.",
+  "tooManyAttempts": "Too many failed sign-in attempts for this account. Wait a moment, then try again."
 }

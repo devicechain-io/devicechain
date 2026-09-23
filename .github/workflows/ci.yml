@@ -657,6 +657,20 @@ jobs:
       - name: nothing registers on http.DefaultServeMux
         run: hack/check-default-servemux.sh
 
+      # Not a routing rule, but the same kind of check — a parsed, tree-wide property of
+      # the request path — so it shares this job's Go setup. Every password and
+      # client-secret compare must go through backend/core/credential, which applies the
+      # kind's policy (a per-account backoff for passwords) and the unknown-principal
+      # timing equalizer; a bcrypt compare anywhere else escapes both. The self-test plants ten evasion shapes (import
+      # alias, line split, function-value alias, dot-import, lookalike directories, a
+      # stale exemption, ...), requires each to be named by file and line, requires four
+      # legitimate arrangements to pass, and requires an empty tree to exit 2.
+      - name: credential-compare guard self-test
+        run: hack/check-credential-compare.sh --self-test
+
+      - name: no bcrypt compare outside the credential primitive
+        run: hack/check-credential-compare.sh
+
       # Proves this checker can fail too, and does it BEFORE the green run below is
       # read as evidence. It plants 21 evasion shapes across all three phase rules —
       # each one a module that really type-checks against a miniature framework of

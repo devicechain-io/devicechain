@@ -54,6 +54,7 @@ use (
 	./backend/services/user-management
 	./backend/sims/dc-simulator
 	./backend/tools/apiprobe
+	./backend/tools/credguard
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
 	./backend/tools/muxguard

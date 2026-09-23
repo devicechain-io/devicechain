@@ -11,6 +11,7 @@ import (
 	"net/url"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -96,14 +97,33 @@ func AuthorizeHandler(svc AuthorizeService) http.HandlerFunc {
 }
 
 // handleAuthorizeLogin authenticates the login POST and renders the consent form on
-// success, or re-renders the login form with a generic error on failure.
+// success, or re-renders the login form with an error on failure.
+//
+// The error names the two failures that are NOT about the password — a throttled
+// attempt and an unavailable check — because reporting either as "invalid email or
+// password" tells someone who typed the right password that it is wrong. Neither
+// reveals anything about the account: a throttled attempt was never evaluated, and an
+// unknown email is throttled on the same schedule as a real one.
 func handleAuthorizeLogin(w http.ResponseWriter, r *http.Request, svc AuthorizeService, client *iam.OAuthClient, p AuthorizeParams) {
 	ident, err := svc.Login(r.Context(), r.PostFormValue("email"), r.PostFormValue("password"))
 	if err != nil {
-		renderAuthorizeLogin(w, p, "Invalid email or password.")
+		renderAuthorizeLogin(w, p, authorizeLoginError(err))
 		return
 	}
 	renderAuthorizeConsent(w, p, client, ident)
+}
+
+// authorizeLoginError is the message the authorize login form shows for a failed login.
+func authorizeLoginError(err error) string {
+	var throttled *credential.ThrottledError
+	switch {
+	case errors.As(err, &throttled):
+		return "Too many attempts. Try again in " + throttled.RetryAfterText() + "."
+	case errors.Is(err, credential.ErrUnavailable):
+		return "Sign-in is temporarily unavailable. Try again shortly."
+	default:
+		return "Invalid email or password."
+	}
 }
 
 // handleAuthorizeConsent handles the consent POST: a denial redirects back with

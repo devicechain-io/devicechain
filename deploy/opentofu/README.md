@@ -263,7 +263,7 @@ broker and the event store are not in.
   existing cluster causes immediate `DiscardOld` eviction of the overflow — a
   non-issue on a fresh bring-up, but size it before a running cluster fills. Both
   the volume and the ceiling are **per node**: an HA cluster provisions the volume
-  on every server, each holding one replica of the same ~9.5Gi reservation, so
+  on every server, each holding one replica of the same ~9.9Gi reservation, so
   neither value scales with `nats_cluster_replicas`.
 - **Broker metrics.** `nats_prom_exporter` (default on) runs the
   prometheus-nats-exporter sidecar for broker-side cluster health. The PodMonitor

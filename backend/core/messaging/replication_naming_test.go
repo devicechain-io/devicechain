@@ -44,8 +44,25 @@ func TestExpectationCoversTheBucketsTheRuntimeCreates(t *testing.T) {
 	if _, err := nmgr.NewCache(kv.BucketDeviceByToken, time.Minute); err != nil {
 		t.Fatalf("NewCache: %v", err)
 	}
+	credStore, err := nmgr.CredentialAttemptStore()
+	if err != nil {
+		t.Fatalf("CredentialAttemptStore: %v", err)
+	}
 
 	exp := ReplicationExpectation(instance, 1, nil)
+
+	// The credential-attempt store is a REQUIRED state bucket, not merely one a prefix
+	// sweep happens to reach: a missing one fails every sign-in. So the name the
+	// expectation requires must be the bucket the runtime actually created.
+	wantCred := KvStreamName(credStore.Bucket())
+	requiredCred := false
+	for _, b := range exp.StateBuckets {
+		requiredCred = requiredCred || b == wantCred
+	}
+	if !requiredCred {
+		t.Errorf("the runtime created credential-attempt bucket %q but the expectation's "+
+			"required state buckets are %v", wantCred, exp.StateBuckets)
+	}
 	snap, err := replication.Collect(nmgr.js, exp)
 	if err != nil {
 		t.Fatalf("collect: %v", err)

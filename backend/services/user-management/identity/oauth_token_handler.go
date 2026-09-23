@@ -120,7 +120,7 @@ func TokenHandler(
 			writeTokenError(w, errInvalidRequest("grant_type is required"))
 			return
 		default:
-			writeTokenError(w, &oauthError{"unsupported_grant_type", "unsupported grant_type " + grant, http.StatusBadRequest})
+			writeTokenError(w, &oauthError{Code: "unsupported_grant_type", Desc: "unsupported grant_type " + grant, Status: http.StatusBadRequest})
 			return
 		}
 

@@ -117,7 +117,7 @@ type subscribePayload struct {
 // A handler built directly over such a schema answers every subscribe with an error
 // frame.
 type SubscriptionHandler struct {
-	Schema           *graphql.Schema
+	Schema           *Schema
 	ContextProviders map[ContextKey]interface{}
 	// Gate supplies the late-bound JWT validator, exactly as for the HTTP handler.
 	Gate     *core.ReadinessGate
@@ -156,7 +156,7 @@ type SubscriptionHandler struct {
 // same tenant policy as the HTTP data-plane handler: a token is optional, but a
 // present token is verified and its tenant stamped into context (tenant-scoped
 // operations still fail closed at the DB without one).
-func NewSubscriptionHandler(schema *graphql.Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *SubscriptionHandler {
+func NewSubscriptionHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *SubscriptionHandler {
 	return &SubscriptionHandler{
 		Schema:           schema,
 		ContextProviders: providers,
@@ -196,11 +196,11 @@ func graphqlDispatcher(httpH http.Handler, wsH http.Handler) http.Handler {
 
 // hasSubscriptionRoot reports whether schema defines a Subscription root operation
 // type — the same test graphql-go's Subscribe applies before it will run anything.
-func hasSubscriptionRoot(schema *graphql.Schema) bool {
-	if schema == nil {
+func hasSubscriptionRoot(schema *Schema) bool {
+	if schema == nil || schema.inner == nil {
 		return false
 	}
-	_, ok := schema.ASTSchema().RootOperationTypes[opSubscription]
+	_, ok := schema.inner.ASTSchema().RootOperationTypes[opSubscription]
 	return ok
 }
 

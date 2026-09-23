@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 )
@@ -206,6 +207,11 @@ func TestEveryHarnessDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 			t.Errorf("%s does not validate against the %s schema it is sent to: %v\n  document: %s",
 				d.name, d.area, errs, d.doc)
 		}
+		// The served schema also refuses an operation over the root-field ceiling,
+		// before validation; a document that trips it would fail on every cluster.
+		if err := gqlcore.CheckWork(d.doc); err != nil {
+			t.Errorf("%s exceeds the served root-field ceiling: %v", d.name, err)
+		}
 	}
 }
 
@@ -225,6 +231,12 @@ func authoringDocuments() []string {
 
 func TestTheAuthoringMutationsValidateWithTheRequestsTheHarnessBuilds(t *testing.T) {
 	schema := servedSchema(t, "device-management")
+
+	for _, doc := range authoringDocuments() {
+		if err := gqlcore.CheckWork(doc); err != nil {
+			t.Errorf("an authoring document exceeds the served root-field ceiling: %v\n  document: %s", err, doc)
+		}
+	}
 
 	defReq := map[string]any{
 		"token":              HarnessCommandDefToken,

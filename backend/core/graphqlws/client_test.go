@@ -15,7 +15,6 @@ import (
 
 	gqlserver "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/gorilla/websocket"
-	gqlgo "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +50,7 @@ func (*testResolver) Counter(ctx context.Context, args struct{ To int32 }) <-cha
 // test schema and returns its ws:// URL.
 func realServer(t *testing.T) string {
 	t.Helper()
-	schema := gqlgo.MustParseSchema(testSchema, &testResolver{})
+	schema := gqlserver.MustParseSchema(testSchema, &testResolver{})
 	h := gqlserver.NewSubscriptionHandler(schema, map[gqlserver.ContextKey]interface{}{}, nil)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

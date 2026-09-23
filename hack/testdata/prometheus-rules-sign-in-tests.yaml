@@ -1,0 +1,112 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the sign-in alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# CredentialAttemptStoreFull watches one outcome of a counter that moves on EVERY
+# sign-in. The cases worth writing down are therefore the quiet ones: a sign-in flood
+# that is being throttled normally -- mismatches and throttled attempts by the thousand --
+# is the platform doing its job and must not page. Only attempts checked WITHOUT their
+# backoff (outcome="store_full") mean the control is off.
+#
+# THE SERIES, and what is known about it:
+#
+#   - devicechain_usermanagement_credential_checks_total{kind, outcome} -- a CounterVec.
+#     The checker exports {outcome="store_full"} at 0 for every throttled kind from
+#     construction, so on a healthy instance that series EXISTS and reads 0. The scenarios
+#     below carry it at zero for that reason, and the first case starts it at zero before
+#     it moves: that is the shape which lets increase() see the very first fail-open.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # The store fills: a handful of attempts fail open, then it drains.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # Zero for 10m, then ONE attempt checked without its backoff, then flat.
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="store_full"}'
+        values: '0x10 1x50'
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="mismatch"}'
+        values: '0+100x60'
+    alert_rule_test:
+      # Before anything failed open.
+      - eval_time: 9m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts: []
+      # A single fail-open is enough, and there is no pending period.
+      - eval_time: 12m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Password sign-ins are being checked without their per-account backoff"
+              description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+      # Ten minutes after the last one, the window no longer holds it.
+      - eval_time: 30m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE CASE THAT MAKES THE ALERT USABLE: a sign-in flood that the backoff is
+  # handling. Mismatches and throttled attempts climb steeply, the store-full series
+  # stays at zero, and nothing pages.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="store_full"}'
+        values: '0x60'
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="mismatch"}'
+        values: '0+500x60'
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="throttled"}'
+        values: '0+5000x60'
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="unavailable"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # user-management restarts while the store is full: the counter resets and climbs
+  # again. increase() treats the reset as a reset, not as a negative change, so the
+  # alert holds across it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="store_full"}'
+        values: '0+20x20 0+20x20'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Password sign-ins are being checked without their per-account backoff"
+              description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+
+  # ------------------------------------------------------------------
+  # Nothing scraped at all. This rule is quiet then -- the or vector(0) makes the
+  # expression FALSE rather than empty -- and it is not the rule that reports a
+  # user-management nobody is scraping; the tenant-purge group's visibility alert is.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts: []

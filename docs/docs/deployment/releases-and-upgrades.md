@@ -1495,7 +1495,10 @@ one ends that user's sessions, and the instance root key becomes required in eve
 are the first three sections below. The three after them matter only if you watch the dead-letter
 metrics yourself, rely on command responses that could not be recorded, or open GraphQL WebSocket
 connections from your own code. One more thing needs doing on every instance built before this
-release: check the superuser's password (see the last section below).
+release: check the superuser's password (see "The superuser no longer has a default password"
+below). The last section matters if you call the GraphQL API from your own code or scripts, or size
+the JetStream volume yourself: sign-in is now rate-limited, and a GraphQL request is limited in how
+many root fields and password checks it can carry.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1667,6 +1670,33 @@ no generated password. If you never changed the password on such an instance, it
 `dcctl sim` and the drill tools no longer assume the old password either. `dcctl sim` reads the
 generated one from the instance's Secret, and takes `--admin-password` or `$DC_ADMIN_PASSWORD` for an
 instance that has none.
+
+#### Sign-in is rate-limited, and GraphQL requests carry fewer fields
+
+Nothing needs doing at the upgrade unless your own code or scripts do one of the things below. The
+console, the dashboard app, the SDKs and `dcctl` already stay within every limit.
+
+- **An operation may select at most 5 top-level fields in a mutation and 20 in a query.** Aliases
+  count, and so do fields reached through fragments. A request over the limit runs nothing and gets
+  one error with the code `TOO_MANY_ROOT_FIELDS`. Split such a request, or raise
+  `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` / `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` for that service.
+- **One request can have one password checked.** A further `login` in the same request is not
+  evaluated and gets the code `TOO_MANY_CREDENTIAL_CHECKS`. Sign in once per request.
+- **Repeated failed sign-ins on one email address are slowed down.** After five failures in a row,
+  the next attempt on that address waits 1 second, doubling up to 5 minutes. An attempt made during
+  the wait gets the code `THROTTLED` with `retryAfterSeconds`, not "invalid credentials". A sign-in
+  that the server cannot count gets `UNAVAILABLE`. If your code signs in, handle both as their own
+  errors rather than as a wrong password. OAuth client secrets are not slowed down.
+- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset), for the bucket that
+  holds the sign-in counts. On the compact preset the cache buckets shrink from 8 to 4 MiB each to
+  make room. If you sized the JetStream volume yourself close to the reservation, check that it has
+  the room.
+- **A new alert, `CredentialAttemptStoreFull`,** fires if that bucket fills up. Sign-in keeps
+  working when it is full, but repeated failures are no longer slowed down. [Sign-in
+  backoff](../reference/graphql-api.md#sign-in-backoff) explains what to do.
+
+[Request limits](../reference/graphql-api.md#request-limits) and [sign-in
+backoff](../reference/graphql-api.md#sign-in-backoff) have the details.
 
 ### The one-time durable-ingest cutover
 

@@ -15,12 +15,12 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -82,11 +82,21 @@ func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }
 // RFC 6749 §5.2 / §4.1.2.1 error constructors used across the token endpoint.
 // invalid_client (401) applies once a client authenticates: a confidential client
 // that fails secret verification, or a public client that presents a secret.
-func errInvalidRequest(desc string) *oauthError { return &oauthError{"invalid_request", desc, 400} }
-func errInvalidGrant(desc string) *oauthError   { return &oauthError{"invalid_grant", desc, 400} }
-func errInvalidScope(desc string) *oauthError   { return &oauthError{"invalid_scope", desc, 400} }
-func errInvalidClient(desc string) *oauthError  { return &oauthError{"invalid_client", desc, 401} }
-func errServer(desc string) *oauthError         { return &oauthError{"server_error", desc, 500} }
+func errInvalidRequest(desc string) *oauthError {
+	return &oauthError{Code: "invalid_request", Desc: desc, Status: 400}
+}
+func errInvalidGrant(desc string) *oauthError {
+	return &oauthError{Code: "invalid_grant", Desc: desc, Status: 400}
+}
+func errInvalidScope(desc string) *oauthError {
+	return &oauthError{Code: "invalid_scope", Desc: desc, Status: 400}
+}
+func errInvalidClient(desc string) *oauthError {
+	return &oauthError{Code: "invalid_client", Desc: desc, Status: 401}
+}
+func errServer(desc string) *oauthError {
+	return &oauthError{Code: "server_error", Desc: desc, Status: 500}
+}
 
 // AuthenticateClient enforces token-endpoint client authentication (ADR-047
 // confidential-client fold-in / RFC 6749 §3.2.1). clientID is the client the
@@ -95,12 +105,28 @@ func errServer(desc string) *oauthError         { return &oauthError{"server_err
 //
 //   - No clientID and no secret ⇒ nil: a bare public flow (e.g. a public client's
 //     refresh) authenticates nothing — unchanged from before confidential clients.
-//   - Unknown or disabled client, or a confidential client with a missing/wrong
-//     secret ⇒ invalid_client. A dummy bcrypt compare runs on the unknown-client
-//     path so it costs the same as a wrong-secret path (no client-enumeration
-//     timing oracle, mirroring the login equalizer).
+//   - Unknown client ⇒ invalid_client, after a compare against a dummy hash so it
+//     costs the same as a known confidential client's wrong secret.
+//   - Disabled client, or a confidential client presenting no secret ⇒
+//     invalid_client, with no compare at all.
+//   - A confidential client presenting a secret ⇒ the secret is compared through the
+//     credential checker. Client secrets are NOT throttled (CredentialPolicies says
+//     why), so a client's own failures never delay its next request.
 //   - A public client that nonetheless presents a secret ⇒ invalid_client: it has
 //     no registered secret, so a presented one is a misconfiguration, not ignored.
+//   - A database error loading the client is returned as-is, which the token
+//     endpoint renders as server_error: a failed lookup is not a verdict on the
+//     client.
+//
+// A KNOWN PUBLIC CLIENT never reaches the checker: it has no secret to compare. The
+// client is therefore LOADED before the checker is consulted, and only the unknown and
+// the confidential-with-a-secret cases reach it.
+//
+// ⚠️ TIMING IS NOT EQUALIZED ACROSS ALL OF THESE, and the claim is scoped on purpose:
+// a known public or disabled client answers without a compare, an unknown one pays
+// for one, so response time distinguishes "known public/disabled" from "unknown".
+// That was true before the checker as well. It is low value — client_ids are not
+// secret — and closing it would mean paying a compare for public clients too.
 //
 // PKCE still runs in the grant regardless — client authentication is defence in
 // depth on top of it, never a replacement.
@@ -112,37 +138,70 @@ func (m *Manager) AuthenticateClient(ctx context.Context, clientID, secret strin
 		return nil
 	}
 	client, err := m.iam.OAuthClientByClientId(ctx, clientID)
-	if err != nil {
-		_ = bcrypt.CompareHashAndPassword(m.dummyHash, []byte(secret))
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	var hash string
+	if client != nil {
+		checkSecret, e := verifyClientAuth(client, presented)
+		if e != nil {
+			return e
+		}
+		if !checkSecret {
+			return nil
+		}
+		hash = client.SecretHash
+	}
+	return m.checkClientSecret(ctx, clientID, secret, hash)
+}
+
+// checkClientSecret runs the secret compare through the credential checker. hash is
+// the confidential client's stored hash, or "" for an unknown client — which the
+// checker compares against a dummy at the same cost, and which never matches.
+//
+// Only a match and a mismatch are expected, because the client-secret kind is
+// Unthrottled. Any other error — a throttle or an unavailable store, should the policy
+// ever change without this function — is returned as-is and rendered as server_error:
+// loud, rather than mistaken for a wrong secret.
+func (m *Manager) checkClientSecret(ctx context.Context, clientID, secret, hash string) error {
+	if m.credentials == nil {
+		return errNoCredentialChecker
+	}
+	err := m.credentials.Check(ctx, credential.Principal{Kind: credential.KindOAuthClient, ID: clientID}, secret,
+		func(context.Context) (string, error) { return hash, nil })
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, credential.ErrMismatch):
 		return errInvalidClient("client authentication failed")
+	default:
+		return err
 	}
-	if e := verifyClientAuth(client, secret, presented); e != nil {
-		return e
-	}
-	return nil
 }
 
 // verifyClientAuth is the pure client-authentication decision for an already-loaded
-// client (no I/O), so it is exhaustively unit-testable. A disabled client is always
-// rejected. A confidential client must present a secret that bcrypt-matches its
-// hash; a public client must NOT present a secret (it has none registered).
-func verifyClientAuth(client *iam.OAuthClient, secret string, presented bool) *oauthError {
+// client (no I/O), so it is exhaustively unit-testable. It decides everything EXCEPT
+// the secret compare, and reports whether that compare is needed:
+//
+//   - a disabled client is always rejected;
+//   - a confidential client must present a secret, and checkSecret is true — the
+//     caller then compares it through the credential checker;
+//   - a public client must NOT present a secret (it has none registered), and
+//     checkSecret is false.
+func verifyClientAuth(client *iam.OAuthClient, presented bool) (checkSecret bool, _ *oauthError) {
 	if !client.Enabled {
-		return errInvalidClient("client is disabled")
+		return false, errInvalidClient("client is disabled")
 	}
 	if client.IsConfidential() {
 		if !presented {
-			return errInvalidClient("client authentication required")
+			return false, errInvalidClient("client authentication required")
 		}
-		if bcrypt.CompareHashAndPassword([]byte(client.SecretHash), []byte(secret)) != nil {
-			return errInvalidClient("client authentication failed")
-		}
-		return nil
+		return true, nil
 	}
 	if presented {
-		return errInvalidClient("public client must not present a client_secret")
+		return false, errInvalidClient("public client must not present a client_secret")
 	}
-	return nil
+	return false, nil
 }
 
 // SaveAuthorizationCode stores a freshly issued authorization code (ADR-047). The

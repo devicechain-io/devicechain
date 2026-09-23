@@ -13,7 +13,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/gorilla/websocket"
-	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +50,7 @@ func (*testSubResolver) Counter(ctx context.Context, args struct{ To int32 }) <-
 // connected graphql-transport-ws client.
 func dialSub(t *testing.T, gate *core.ReadinessGate) (*websocket.Conn, func()) {
 	t.Helper()
-	schema := graphql.MustParseSchema(testSubSchema, &testSubResolver{})
+	schema := MustParseSchema(testSubSchema, &testSubResolver{})
 	h := NewSubscriptionHandler(schema, map[ContextKey]interface{}{}, gate)
 	srv := httptest.NewServer(h)
 

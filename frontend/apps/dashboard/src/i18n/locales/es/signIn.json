@@ -6,7 +6,9 @@
   "noTenants": "Esta cuenta no tiene inquilinos.",
   "passwordLabel": "Contraseña",
   "serverUnreachable": "No se pudo conectar con el servidor. Comprueba que la API esté en ejecución.",
+  "signInUnavailable": "El inicio de sesión no está disponible temporalmente. Vuelve a intentarlo en breve.",
   "submit": "Iniciar sesión",
   "submitting": "Iniciando sesión…",
-  "title": "Iniciar sesión"
+  "title": "Iniciar sesión",
+  "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo."
 }

@@ -500,4 +500,141 @@ entity a token you choose and keep the device's own identifier alongside it.
 The console mints tokens for you from a per-entity-type template, so this rarely comes up there;
 it is the API and scripted-provisioning path where it bites first.
 
+## Request limits {#request-limits}
+
+Every GraphQL endpoint refuses a request that is too large or does too much, before any of it
+runs. The one exception is the limit on credential checks, which applies while the request runs
+(see [below](#credential-checks-per-request)). The limits are the same for every service, and each can be changed per service with the
+environment variable shown. A value that is missing, not a number, or below 1 falls back to the
+default: none of them can be switched off.
+
+| Limit | Default | Variable | What is refused |
+| --- | --- | --- | --- |
+| Request body | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | The whole HTTP body, including variables. Answered with HTTP 400. |
+| Query length | 100,000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | The query string itself. |
+| Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
+| Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
+| Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
+| Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks in one request beyond this number (see [below](#credential-checks-per-request)). |
+
+Apart from the body limit and the credential-check limit, a refused request gets HTTP 200 with a
+single entry in `errors`, no `data`, and nothing executed. The credential-check limit refuses only
+the checks over it, each with its own error, and the rest of the request still runs. A root-field refusal carries `extensions.code` set to
+`TOO_MANY_ROOT_FIELDS`:
+
+```json
+{
+  "errors": [{
+    "message": "mutation (anonymous) selects 6 root fields; the maximum is 5",
+    "extensions": { "code": "TOO_MANY_ROOT_FIELDS" }
+  }]
+}
+```
+
+**Root fields are counted by response key**, so every alias counts as a field of its own, and
+fields reached through a fragment count as if they were written out. Repeating the same key is
+one field. `@skip` and `@include` are not evaluated, so a conditional field counts whether or not
+it runs. Every operation in the document is counted, not only the one `operationName` selects, and
+the rule applies over WebSocket as well as HTTP.
+
+The mutation limit is the tight one because mutation fields run one after another: without it, a
+single request could carry hundreds of aliased copies of an expensive mutation. The console, the
+dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per request and at
+most two query fields. The limit applies to top-level fields only; aliases of a nested field are not counted.
+
+### Credential checks per request {#credential-checks-per-request}
+
+One request can have only a limited number of passwords checked, however it is written: one by
+default. The `login` fields up to that number are evaluated as usual. Any further `login` in the
+same request, such as another alias, is not evaluated: the password is not checked, nothing is
+looked up, and nothing is recorded in the audit log. It gets its own error instead of a verdict on
+the password, and the other fields in the request still return their data:
+
+```json
+{
+  "errors": [{
+    "message": "this request has already made its credential checks; send one sign-in per request",
+    "path": ["a2"],
+    "extensions": { "code": "TOO_MANY_CREDENTIAL_CHECKS" }
+  }]
+}
+```
+
+This does not depend on how the document is written, so it still holds for a document that gets
+past the root-field limit. The refusal happens before the email address is looked at, so it is the
+same whether or not an account exists. Every client DeviceChain ships sends one sign-in per request,
+so none of them is affected. `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` raises the number per service; like
+the other limits, it cannot be switched off. Refusals are counted on
+`devicechain_usermanagement_credential_checks_total` with `outcome="request_budget"`.
+
+### Sign-in backoff {#sign-in-backoff}
+
+Failed password sign-ins slow down further attempts on the same email address. This applies to
+`login` and to the OAuth sign-in form.
+
+The first five failed attempts on an address are evaluated straight away. After that the address
+waits 1 second before its next attempt is evaluated, then 2, then 4, doubling up to 5 minutes. A
+successful sign-in resets the count, and so does a quiet spell of 10 minutes after the last attempt
+that was evaluated.
+
+The count belongs to the address that was typed, whether or not an account exists for it, so the
+delay does not reveal which addresses are registered. It is shared by every replica of the
+service.
+
+:::warning Someone who knows an address can keep its owner out
+
+The count is kept per address, not per address and network location, so that an attacker cannot
+get a fresh allowance by spreading guesses across many machines. The cost is that anyone who knows
+an email address can keep sending wrong passwords for it. While they keep that up, each evaluation
+slot goes to them, and the owner is refused as throttled even with the correct password. It is not
+a permanent lockout: it ends when they stop, and after at most one wait of up to 5 minutes the
+owner can sign in again. The `devicechain_usermanagement_credential_checks_total` metric, with
+`outcome="throttled"`, shows when an account is being held this way.
+
+:::
+
+**OAuth client secrets are not slowed down.** Client secrets created by the admin API are 256
+random bits, which no number of guesses will find, and a client ID is public: it appears in every
+authorization URL. A backoff on client secrets would not protect them, and it would let anyone hold a
+confidential client, and so every sign-in through it, at the backoff. A client you seed from
+configuration should have a secret just as strong. Public clients have no secret at all.
+
+An attempt made during the wait is not evaluated at all: the password is not checked and nothing
+is recorded in the audit log. It is reported as its own error rather than as a wrong password,
+because the password may well have been right:
+
+```json
+{
+  "errors": [{
+    "message": "too many failed sign-in attempts; try again in 8 seconds",
+    "path": ["login"],
+    "extensions": { "code": "THROTTLED", "retryAfterSeconds": 8 }
+  }]
+}
+```
+
+If the service cannot reach the store that keeps these counts, it refuses to check passwords at all
+rather than check them without counting. The `login` error then carries `extensions.code` set to
+`UNAVAILABLE`. Treat it as an outage, not as a rejected credential. The OAuth token endpoint does
+not use the store, so client authentication keeps working.
+
+The store has a fixed size, and every address that is tried takes a place in it for 10 minutes,
+whether or not an account exists for it. Someone sending sign-ins for enough different addresses
+can fill it. When it is full, sign-in keeps working: passwords are still checked and answered
+normally, but new failures are not counted, so addresses that are not already waiting are not slowed
+down until old entries expire. An address that is already waiting stays waiting, but only until
+that wait ends, which is at most 5 minutes. After that its failures are not counted either, so an
+account that is being attacked while the store is full is not protected by the backoff. This is
+deliberate. Refusing every sign-in instead would let anyone who can fill the store lock every user
+out of the instance. Guessing is still limited by the cap on fields per request and by the cost of
+each password check.
+
+Each attempt checked this way is counted by
+`devicechain_usermanagement_credential_checks_total` with `outcome="store_full"`. When the chart's
+alerting rules are enabled, the `CredentialAttemptStoreFull` alert fires when there are any. The user-management log also carries a
+warning at most once a minute while it lasts. When the alert fires, someone is most likely trying
+many addresses. Find where the sign-in traffic comes from and block it upstream. If the traffic is
+legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. That size applies to every
+state bucket, so make sure the JetStream volume has room for the increase.
+
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.

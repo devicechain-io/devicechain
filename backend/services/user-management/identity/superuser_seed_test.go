@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -32,6 +34,9 @@ type seedFixture struct {
 	lock   *messaging.DistributedLock
 	rdbm   *rdb.RdbManager
 	secret secrets.SecretStore
+	// creds is the credential checker Initialize requires; the seed never compares a
+	// secret, so an in-memory attempt store under the service's own policies is enough.
+	creds *credential.Checker
 }
 
 func newSeedFixture(t *testing.T) *seedFixture {
@@ -73,14 +78,16 @@ func newSeedFixture(t *testing.T) *seedFixture {
 	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	store, err := secrets.NewFromConfig(context.Background(), rootKeyConfig(t), db)
 	require.NoError(t, err)
-	return &seedFixture{ms: ms, lock: lock, rdbm: &rdb.RdbManager{Database: db}, secret: store}
+	creds, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies)
+	require.NoError(t, err)
+	return &seedFixture{ms: ms, lock: lock, rdbm: &rdb.RdbManager{Database: db}, secret: store, creds: creds}
 }
 
 func (f *seedFixture) manager(password string) *Manager {
 	return NewManager(f.ms, f.rdbm, f.lock, f.secret, time.Minute, time.Hour, "", BootstrapConfig{
 		SuperuserEmail:    "superuser@devicechain.local",
 		SuperuserPassword: password,
-	})
+	}, f.creds)
 }
 
 func (f *seedFixture) identities(t *testing.T) int64 {

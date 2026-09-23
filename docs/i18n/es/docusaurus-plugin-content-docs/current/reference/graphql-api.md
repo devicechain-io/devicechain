@@ -521,4 +521,148 @@ identificador propio del dispositivo.
 La consola acuña los tokens por ti a partir de una plantilla por tipo de entidad, así que allí esto
 rara vez aparece; es en la API y en el aprovisionamiento por script donde muerde primero.
 
+## Límites de las solicitudes {#request-limits}
+
+Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,
+antes de ejecutar nada de ella. La única excepción es el límite de comprobaciones de credenciales,
+que se aplica mientras la solicitud se ejecuta (ver [más abajo](#credential-checks-per-request)). Los límites son los mismos en todos los servicios, y cada uno puede
+cambiarse por servicio con la variable de entorno indicada. Un valor ausente, que no es un número o
+menor que 1 vuelve al valor por defecto: ninguno puede desactivarse.
+
+| Límite | Por defecto | Variable | Qué se rechaza |
+| --- | --- | --- | --- |
+| Cuerpo de la solicitud | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | Todo el cuerpo HTTP, variables incluidas. Se responde con HTTP 400. |
+| Longitud de la consulta | 100.000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | La cadena de la consulta en sí. |
+| Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
+| Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
+| Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
+| Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña de una misma petición que superan este número (ver [más abajo](#credential-checks-per-request)). |
+
+Salvo con el límite del cuerpo y el de comprobaciones de credenciales, una solicitud rechazada
+recibe HTTP 200 con una sola entrada en `errors`, sin `data` y sin haber ejecutado nada. El límite de
+comprobaciones de credenciales rechaza solo las comprobaciones que lo superan, cada una con su propio
+error, y el resto de la solicitud se ejecuta. El rechazo por campos raíz lleva
+`extensions.code` con el valor `TOO_MANY_ROOT_FIELDS`:
+
+```json
+{
+  "errors": [{
+    "message": "mutation (anonymous) selects 6 root fields; the maximum is 5",
+    "extensions": { "code": "TOO_MANY_ROOT_FIELDS" }
+  }]
+}
+```
+
+**Los campos raíz se cuentan por clave de respuesta**, así que cada alias cuenta como un campo
+propio, y los campos a los que se llega a través de un fragmento cuentan como si estuvieran escritos
+directamente. Repetir la misma clave cuenta como un solo campo. `@skip` e `@include` no se evalúan,
+así que un campo condicional cuenta tanto si se ejecuta como si no. Se cuentan todas las operaciones
+del documento, no solo la que selecciona `operationName`, y la regla se aplica tanto por WebSocket
+como por HTTP.
+
+El límite de mutaciones es el estricto porque los campos de una mutación se ejecutan uno tras otro:
+sin él, una sola solicitud podría llevar cientos de copias con alias de una mutación costosa. La
+consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de
+mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de primer nivel; los alias
+de un campo anidado no se cuentan.
+
+### Comprobaciones de credenciales por petición {#credential-checks-per-request}
+
+En una petición solo se puede comprobar un número limitado de contraseñas, se escriba como se
+escriba: una por defecto. Los campos `login` hasta ese número se evalúan con normalidad. Cualquier
+otro `login` en la misma petición, como otro alias, no se evalúa: no se comprueba la contraseña, no
+se busca nada y no se registra nada en el registro de auditoría. Recibe su propio error en lugar de
+un veredicto sobre la contraseña, y los demás campos de la petición siguen devolviendo sus datos:
+
+```json
+{
+  "errors": [{
+    "message": "this request has already made its credential checks; send one sign-in per request",
+    "path": ["a2"],
+    "extensions": { "code": "TOO_MANY_CREDENTIAL_CHECKS" }
+  }]
+}
+```
+
+No depende de cómo esté escrito el documento, así que se mantiene incluso para un documento que
+supere el límite de campos raíz. El rechazo ocurre antes de mirar la dirección de correo, así que es
+el mismo exista o no una cuenta. Todos los clientes que incluye DeviceChain envían un solo inicio de
+sesión por petición, así que a ninguno le afecta. `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` aumenta el
+número por servicio; como los demás límites, no se puede desactivar. Los rechazos se cuentan en
+`devicechain_usermanagement_credential_checks_total` con `outcome="request_budget"`.
+
+### Espera entre intentos de inicio de sesión {#sign-in-backoff}
+
+Los inicios de sesión con contraseña fallidos hacen más lentos los siguientes intentos sobre la misma
+dirección de correo. Esto se aplica a `login` y al formulario de inicio de sesión de OAuth.
+
+Los cinco primeros intentos fallidos sobre una dirección se evalúan de inmediato. A partir de ahí, la
+dirección espera 1 segundo antes de que se evalúe su siguiente intento, luego 2, luego 4,
+duplicándose hasta 5 minutos. Un inicio de sesión correcto reinicia la cuenta, y también 10 minutos
+sin actividad después del último intento evaluado.
+
+La cuenta pertenece a la dirección escrita, exista o no una cuenta con ella, así que la espera no
+revela qué direcciones están registradas. La comparten todas las réplicas del servicio.
+
+:::warning Quien conozca una dirección puede dejar fuera a su dueño
+
+La cuenta se lleva por dirección, no por dirección y ubicación de red, para que un atacante no
+obtenga un margen nuevo repartiendo los intentos entre muchas máquinas. El precio es que cualquiera
+que conozca una dirección de correo puede seguir enviando contraseñas incorrectas para ella. Mientras
+lo haga, cada turno de evaluación es suyo, y al dueño se le rechaza por espera incluso con la
+contraseña correcta. No es un bloqueo permanente: termina cuando el atacante se detiene, y tras una
+espera de como mucho 5 minutos el dueño puede volver a iniciar sesión. La métrica
+`devicechain_usermanagement_credential_checks_total`, con `outcome="throttled"`, muestra cuándo se
+está reteniendo una cuenta de esta forma.
+
+:::
+
+**Los secretos de cliente OAuth no se ralentizan.** Los secretos de cliente creados por la API de
+administración son 256 bits aleatorios, que ningún número de intentos encontrará, y un ID de cliente
+es público: aparece en cada URL de autorización. Una espera sobre los secretos de cliente no los
+protegería, y permitiría a cualquiera retener en la espera a un cliente confidencial, y con él cada
+inicio de sesión que pasa por ese cliente. Un cliente que se siembre desde la configuración debe tener
+un secreto igual de fuerte. Los clientes públicos no tienen secreto.
+
+Un intento hecho durante la espera no se evalúa en absoluto: no se comprueba la contraseña y no se
+registra nada en el registro de auditoría. Se informa como un error propio y no como una contraseña
+incorrecta, porque la contraseña bien podría ser correcta:
+
+```json
+{
+  "errors": [{
+    "message": "too many failed sign-in attempts; try again in 8 seconds",
+    "path": ["login"],
+    "extensions": { "code": "THROTTLED", "retryAfterSeconds": 8 }
+  }]
+}
+```
+
+Si el servicio no puede llegar al almacén que guarda estas cuentas, se niega a comprobar contraseñas
+en lugar de comprobarlas sin contar. El error de `login` lleva entonces `extensions.code` con el
+valor `UNAVAILABLE`. Trátalo como una caída del servicio, no como una credencial rechazada. El
+endpoint de tokens de OAuth no usa el almacén, así que la autenticación de clientes sigue
+funcionando.
+
+El almacén tiene un tamaño fijo, y cada dirección que se prueba ocupa un lugar en él durante 10
+minutos, exista o no una cuenta con ella. Quien envíe inicios de sesión para suficientes direcciones
+distintas puede llenarlo. Cuando está lleno, el inicio de sesión sigue funcionando: las contraseñas se
+siguen comprobando y respondiendo con normalidad, pero los nuevos fallos no se cuentan, así que las
+direcciones que no estaban ya esperando no se ralentizan hasta que caduquen entradas antiguas. Una
+dirección que ya está esperando sigue esperando, pero solo hasta que termine esa espera, que dura
+como mucho 5 minutos. A partir de ahí sus fallos tampoco se cuentan, así que una cuenta que esté
+siendo atacada mientras el almacén está lleno no queda protegida por la espera. Es deliberado. Rechazar todos los inicios de sesión
+permitiría a cualquiera que pueda llenar el almacén dejar fuera de la instancia a todos los usuarios.
+Los intentos de adivinar siguen limitados por el tope de campos por petición y por el coste de cada
+comprobación de contraseña.
+
+Cada intento comprobado así se cuenta en `devicechain_usermanagement_credential_checks_total` con
+`outcome="store_full"`. Si las reglas de alerta del chart están habilitadas, la alerta
+`CredentialAttemptStoreFull` se dispara cuando hay alguno. El registro de user-management también muestra una advertencia, como mucho una vez por
+minuto, mientras dure. Cuando se dispare la alerta, lo más probable es que alguien esté probando
+muchas direcciones. Averigua de dónde viene el tráfico de inicio de sesión y bloquéalo antes de que
+llegue. Si el tráfico es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`.
+Ese tamaño se aplica a todos los buckets de estado, así que comprueba que el volumen de JetStream
+tiene espacio para el aumento.
+
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se estabilicen.

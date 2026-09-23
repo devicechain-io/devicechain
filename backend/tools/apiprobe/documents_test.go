@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/ast"
@@ -133,6 +134,9 @@ func TestEveryProvisioningDocumentValidatesAgainstTheAdminSchema(t *testing.T) {
 		if errs := schema.ValidateWithVariables(c.doc, c.vars); len(errs) > 0 {
 			t.Errorf("%s does not validate against the served admin schema: %v\n  document: %s", c.name, errs, c.doc)
 		}
+		if err := gqlcore.CheckWork(c.doc); err != nil {
+			t.Errorf("%s exceeds the served root-field ceiling: %v", c.name, err)
+		}
 	}
 }
 
@@ -171,6 +175,15 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if errs := schema.ValidateWithVariables(e.readDoc(), readVars); len(errs) > 0 {
 			t.Errorf("entity %q: the read-back does not validate against %s: %v\n  document: %s",
 				e.Name, e.Area, errs, e.readDoc())
+		}
+
+		// Both documents also have to clear the root-field ceiling every served schema
+		// applies before validation.
+		for _, doc := range []string{e.createDoc(), e.readDoc()} {
+			if err := gqlcore.CheckWork(doc); err != nil {
+				t.Errorf("entity %q: a document exceeds the served root-field ceiling: %v\n  document: %s",
+					e.Name, err, doc)
+			}
 		}
 
 		if e.Record != nil {
@@ -292,6 +305,9 @@ func TestEveryTamperDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if errs := schema.ValidateWithVariables(tp.doc(), tp.vars("apiprobe-"+tp.Entity)); len(errs) > 0 {
 			t.Errorf("tamper %q does not validate against %s: %v\n  document: %s",
 				tp.Mode, e.Area, errs, tp.doc())
+		}
+		if err := gqlcore.CheckWork(tp.doc()); err != nil {
+			t.Errorf("tamper %q exceeds the served root-field ceiling: %v", tp.Mode, err)
 		}
 	}
 }
@@ -439,5 +455,22 @@ input CommandCreateRequest {
 	}
 	if errs := head.ValidateWithVariables(bare.createDoc(), bare.Vars(st)); len(errs) == 0 {
 		t.Error("the bare create validated against HEAD's enveloped schema, so adapting on the wrong baseline would go unnoticed")
+	}
+}
+
+// The negative control for every CheckWork assertion above: the ceiling those
+// assertions check against can fail, and fails on the shape it exists for — aliased
+// logins in one request. Without this, a CheckWork that answered nil for everything
+// would make every "no document exceeds the ceiling" line above pass vacuously.
+func TestTheRootFieldCeilingRefusesAliasedLogins(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("mutation {")
+	for i := 1; i <= 6; i++ {
+		fmt.Fprintf(&b, ` a%d: login(email: "a@b.c", password: "p%d") { identityToken }`, i, i)
+	}
+	b.WriteString(" }")
+	err := gqlcore.CheckWork(b.String())
+	if err == nil || !strings.Contains(err.Error(), "selects 6 root fields") {
+		t.Fatalf("six aliased logins were not refused by the root-field ceiling: %v", err)
 	}
 }

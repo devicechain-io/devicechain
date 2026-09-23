@@ -81,6 +81,36 @@ describe('signInErrorKey', () => {
       expect(signInErrorKey(err, REJECTED)).toBe('signIn:serverUnreachable');
     }
   });
+
+  // 🔴 THE TWO ANSWERS THAT ARE NOT ABOUT THE PASSWORD. Both arrive exactly like a
+  // rejection — HTTP 200 with an errors array — so without the code they would read as
+  // "invalid email or password" to someone who may have typed it correctly.
+  it('says "too many attempts" for a throttled sign-in, not "invalid password"', () => {
+    const err = new GraphQLRequestError('too many failed sign-in attempts; try again in 8 seconds', 200, [
+      {
+        message: 'too many failed sign-in attempts; try again in 8 seconds',
+        extensions: { code: 'THROTTLED', retryAfterSeconds: 8 },
+      },
+    ]);
+    expect(serverRejectedRequest(err)).toBe(true); // the control: it IS shaped like a rejection
+    expect(signInErrorKey(err, REJECTED)).toBe('signIn:tooManyAttempts');
+  });
+
+  it('reports an unavailable check as an outage, not as a bad password', () => {
+    const err = new GraphQLRequestError('sign-in is temporarily unavailable; try again shortly', 200, [
+      { message: 'sign-in is temporarily unavailable; try again shortly', extensions: { code: 'UNAVAILABLE' } },
+    ]);
+    expect(serverRejectedRequest(err)).toBe(true);
+    // Its own message, not "could not reach the server": the server answered.
+    expect(signInErrorKey(err, REJECTED)).toBe('signIn:signInUnavailable');
+  });
+
+  it('treats an unknown or non-string code as an ordinary rejection', () => {
+    for (const extensions of [{ code: 'SOMETHING_ELSE' }, { code: 42 }, {}]) {
+      const err = new GraphQLRequestError('nope', 200, [{ message: 'nope', extensions }]);
+      expect(signInErrorKey(err, REJECTED)).toBe(REJECTED);
+    }
+  });
 });
 
 // 🔴 THE HALF THAT MAKES THE REST MEAN ANYTHING. The key tests above would pass just as
@@ -88,7 +118,13 @@ describe('signInErrorKey', () => {
 // own name, so the viewer would read `invalidCredentials` as literal text. This is the
 // same gap loadError.test.ts covers for the load step.
 describe('every sign-in failure has real text in every shipped locale', () => {
-  const KEYS = ['signIn:invalidCredentials', 'signIn:enterTenantFailed', 'signIn:serverUnreachable'];
+  const KEYS = [
+    'signIn:invalidCredentials',
+    'signIn:enterTenantFailed',
+    'signIn:serverUnreachable',
+    'signIn:tooManyAttempts',
+    'signIn:signInUnavailable',
+  ];
 
   for (const { code } of SUPPORTED_LOCALES) {
     it.each(KEYS)(`${code}: %s renders as prose, not as its key`, async (key) => {
@@ -107,6 +143,14 @@ describe('every sign-in failure has real text in every shipped locale', () => {
       rejected.flatMap((k) => [
         signInErrorKey(new GraphQLRequestError('x', 200, [{ message: 'x' }]), k),
         signInErrorKey(new Error('x'), k),
+        signInErrorKey(
+          new GraphQLRequestError('x', 200, [{ message: 'x', extensions: { code: 'THROTTLED' } }]),
+          k,
+        ),
+        signInErrorKey(
+          new GraphQLRequestError('x', 200, [{ message: 'x', extensions: { code: 'UNAVAILABLE' } }]),
+          k,
+        ),
       ]),
     );
     expect([...produced].sort()).toEqual([...KEYS].sort());

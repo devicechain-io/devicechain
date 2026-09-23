@@ -93,6 +93,27 @@ var All = []Bucket{
 			"volume of any bucket here; a full one breaks MCP authorization.",
 	},
 	{
+		Name: BucketCredentialAttempts,
+		Tier: State,
+		Why: "One entry per principal of a throttled kind (in user-management, a " +
+			"hashed email; OAuth client secrets are unthrottled and write nothing) that " +
+			"was checked recently, expiring 10 minutes after its last write, so it " +
+			"scales with recent failed sign-ins — including ones for accounts that do not " +
+			"exist, since an attempt is charged before the account is looked up. A full " +
+			"bucket refuses the charge, and credential.Checker then FAILS OPEN: sign-ins " +
+			"are still checked, but no address that is not already inside a running delay " +
+			"is slowed down until entries expire (a replicated bucket refuses updates of " +
+			"existing records too, not only new ones) — failing closed would let anyone " +
+			"who fills it stop EVERY password " +
+			"sign-in on the instance. Filling it takes roughly " +
+			"650k distinct addresses inside one TTL window at the default 128 MiB State " +
+			"ceiling (~1,100 new addresses a second), and roughly 80k at the compact " +
+			"preset's 16 MiB (~135 a second, which five aliases per login request make " +
+			"~27 requests a second) — each address paying a bcrypt compare. The " +
+			"outcome=\"store_full\" series of devicechain_usermanagement_credential_checks_total " +
+			"is where that shows, and the CredentialAttemptStoreFull alert fires on it.",
+	},
+	{
 		Name: BucketLocks,
 		Tier: State,
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
@@ -153,6 +174,7 @@ var All = []Bucket{
 const (
 	BucketRefreshTokens         = "dc_refresh_tokens"
 	BucketOAuthCodes            = "dc_oauth_codes"
+	BucketCredentialAttempts    = "dc_credential_attempts"
 	BucketLocks                 = "dc_locks"
 	BucketLeases                = "dc_leases"
 	BucketDeviceByToken         = "device-by-token"
