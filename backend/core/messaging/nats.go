@@ -180,20 +180,38 @@ type NatsManager struct {
 	// and the sampler's is passed to the goroutine that uses it.
 	samplerCancel context.CancelFunc
 
-	// shuttingDown distinguishes a connection we closed from one that died.
+	// closeRequested distinguishes a connection this manager closed from one that died,
+	// and it belongs to ONE connection: nc's, set alongside it when ExecuteInitialize
+	// publishes the connection. nil when nc is nil, or when a test built the manager
+	// around a connection it dialled itself — closeConn tolerates that.
 	//
-	// The ClosedHandler cannot tell them apart on its own — nc.LastError() is nil
+	// The ClosedHandler cannot tell the two apart on its own — nc.LastError() is nil
 	// for both a deliberate Close and several terminal states — and the difference
-	// decides the log LEVEL. A closed connection during shutdown is the expected end
-	// of a pod's life; the same event at any other time means the service is
-	// permanently mute and needs a restart. Emitting the second message for the
-	// first case puts an ERROR reading "the process must be restarted" into the logs
-	// of every service on every rolling update, node drain and scale-down, which is
-	// precisely how the one loud signal here stops meaning anything.
+	// decides two things. The log LEVEL: a close we asked for is the expected end of a
+	// pod's life, and logging it as the terminal ERROR would put that line into every
+	// service's logs on every rolling update, node drain and scale-down, which is
+	// precisely how the one loud signal here stops meaning anything. And LIVENESS: a
+	// close we did not ask for marks the process not live (core.Microservice.
+	// MarkNotLive), so /healthz fails and the kubelet restarts the pod. Classifying an
+	// orderly stop's close as unrequested would therefore restart every pod on its way
+	// out; classifying a dead connection as requested would leave a mute pod Live.
 	//
-	// Atomic because the handler runs on the client's callback goroutine while
-	// ExecuteStop/ExecuteTerminate run on the lifecycle goroutine.
-	shuttingDown atomic.Bool
+	// 🔴 SET IT BEFORE ANYTHING THAT CAN CLOSE THE CONNECTION: closeConn and the Drain
+	// in drainAndWait are the only two places this package closes one, and both do. The
+	// handler runs on the client's callback goroutine and reads the flag when it runs,
+	// so a flag set after the Close has already raced it. And only on a connection that
+	// is still OPEN: set on one that has already closed, it relabels that close — whose
+	// handler may still be queued — as requested, and liveness never fails for it.
+	//
+	// 🔑 PER CONNECTION, NOT PER MANAGER, deliberately. It used to be a manager-wide
+	// "shutting down" flag that was never reset. The closes ExecuteInitialize makes when
+	// a startup is abandoned are requested too, and setting a never-reset manager-wide
+	// flag there would make the verdict a property of the manager's history: every later
+	// connection's unrequested close would read as orderly and liveness could never
+	// fail. The handler captures the pointer for its own connection, so the answer is
+	// always about the connection that closed. Atomic because the handler reads it on
+	// the client's callback goroutine while the lifecycle goroutine sets it.
+	closeRequested *atomic.Bool
 
 	// warnedClamp edge-triggers the replica-clamp warning. Touched only from the
 	// single sampler goroutine, like streamMetrics.warned.
@@ -1794,7 +1812,9 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 // broker-side counterpart is the prometheus-nats-exporter (nats_prom_exporter),
 // which reports the same events from the server's view; a disconnect visible in
 // one and not the other localizes the fault to the network between them.
-func (nmgr *NatsManager) connectionEventHandlers() []nats.Option {
+//
+// requested is the connection's closeRequested flag; see that field.
+func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.Option {
 	area := nmgr.Microservice.FunctionalArea
 	return []nats.Option{
 		// The error is NON-nil for everything that actually loses a broker — io.EOF,
@@ -1839,23 +1859,37 @@ func (nmgr *NatsManager) connectionEventHandlers() []nats.Option {
 		// authorization error (nats.go sets `ar` on the second identical auth
 		// failure unless IgnoreAuthErrorAbort), and an unparsed server -ERR closes
 		// outright. A rotated or revoked broker credential is therefore an ordinary
-		// route here, not an exotic one — which is worth knowing, because it is the
-		// case where "restart the process" is the wrong advice and "fix the
-		// credential" is the right one.
+		// route here, not an exotic one.
 		//
-		// Logged at ERROR when it was not asked for: the connection will not come
-		// back on its own and every publish and subscription on it is dead. It is the
-		// one connection event that is not self-healing, which is exactly why it must
-		// not share a level with the two above.
+		// When it was not asked for, it is logged at ERROR and it marks the process
+		// NOT LIVE: the connection will not come back on its own, every publish and
+		// subscription on it is dead, and nothing inside the process can fix that. A
+		// restart can — it re-reads the mounted credential and dials again — so /healthz
+		// now fails and the kubelet does it. If the credential is still wrong, the
+		// restart fails its startup the same way, and a revoked credential shows up as a
+		// visible crash loop rather than a Ready pod that does nothing. It is the one
+		// connection event that is not self-healing, which is exactly why it must not
+		// share a level with the two above.
+		//
+		// Runs on the client's single async-callback goroutine, which is why this marks
+		// liveness rather than calling FailNow: FailNow runs the whole teardown on its
+		// caller's goroutine.
 		nats.ClosedHandler(func(nc *nats.Conn) {
-			if nmgr.shuttingDown.Load() {
+			if requested.Load() {
 				log.Info().Str("area", area).Msg("NATS connection closed during shutdown")
 				return
 			}
-			log.Error().Str("area", area).Err(nc.LastError()).
+			cause := nc.LastError()
+			if cause == nil {
+				cause = errors.New("the client reported no error")
+			}
+			log.Error().Str("area", area).Err(cause).
 				Msg("NATS connection CLOSED permanently and NOT as part of a shutdown; it will not " +
 					"reconnect. This service is now mute: no publishes, no deliveries, and no " +
-					"further retries. The process must be restarted")
+					"further retries. Liveness now fails, so Kubernetes restarts the pod and it " +
+					"re-reads its broker credential")
+			nmgr.Microservice.MarkNotLive(fmt.Errorf(
+				"NATS connection closed permanently and not by this process: %w", cause))
 		}),
 	}
 }
@@ -1878,7 +1912,8 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
 	}
-	opts = append(opts, nmgr.connectionEventHandlers()...)
+	requested := new(atomic.Bool)
+	opts = append(opts, nmgr.connectionEventHandlers(requested)...)
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
 	// the handshake on the TLS-required port fails; verify the server against the
 	// CA threaded into the instance config.
@@ -1939,7 +1974,7 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		// Continuing would build a JetStream context and report a successful initialize
 		// for a process that is on its way out.
 		if ctx.Err() != nil {
-			nc.Close()
+			closeConn(nc, requested)
 			return err
 		}
 		log.Warn().Err(err).Str("url", url).Msg(
@@ -1948,10 +1983,11 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	}
 	js, err := nc.JetStream()
 	if err != nil {
-		nc.Close()
+		closeConn(nc, requested)
 		return err
 	}
 	nmgr.nc = nc
+	nmgr.closeRequested = requested
 	nmgr.js = js
 	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
@@ -2030,9 +2066,10 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 	return nmgr.lifecycle.Stop(ctx)
 }
 
-// ExecuteStop stops the metrics sampler, unsubscribes readers, and drains the
-// connection. The sampler is stopped first (before Drain) so it is not mid-
-// StreamInfo when the connection closes.
+// ExecuteStop stops the metrics sampler, unsubscribes readers, drains the connection
+// and WAITS for the drain to finish, so the connection is closed when it returns. The
+// sampler is stopped first (before Drain) so it is not mid-StreamInfo when the
+// connection closes. See drainAndWait for the wait and its bound.
 //
 // 🔴 THAT ORDERING IS WHY THE JOIN HAS TO BE BOUNDED. Waiting for the sampler comes
 // BEFORE every reader unsubscribe and before the drain, so however long the join
@@ -2052,9 +2089,6 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 //     the sampler only reads, and the reader unsubscribes and the drain that follow
 //     are what a terminating pod actually owes its peers.
 func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
-	// Before anything that can close the connection: Drain below fires the
-	// ClosedHandler, and it must know this was asked for.
-	nmgr.shuttingDown.Store(true)
 	if nmgr.samplerCancel != nil {
 		nmgr.samplerCancel()
 		joined := make(chan struct{})
@@ -2070,23 +2104,152 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 		}
 		nmgr.samplerCancel = nil
 	}
-	log.Info().Msg("Shutting down NATS readers.")
-	for _, r := range nmgr.readers {
-		// A bound subscription's Unsubscribe does NOT delete the durable (that is the
-		// whole point of the Bind attach), so this releases local interest without
-		// disturbing the consumer other replicas share.
-		if s := r.sub.Load(); s != nil {
-			if err := s.Unsubscribe(); err != nil {
-				log.Error().Err(err).Str("suffix", r.suffix).Msg("Error unsubscribing NATS reader.")
+	// A connection that is already closed has no subscriptions left to release, and
+	// every Unsubscribe on it fails. That is the ordinary state of a stop that follows
+	// an unrequested close — the kubelet stopping the container whose liveness failed —
+	// so logging each of those at ERROR would bury the one ERROR that says why, on every
+	// cycle of a crash loop. Expect this debug path on every such cycle: by the time the
+	// stop runs, that close's ClosedHandler has latched MarkNotLive (or is queued to, and
+	// drainAndWait leaves closeRequested alone so it still does).
+	if nmgr.nc != nil && nmgr.nc.IsClosed() {
+		log.Debug().Int("readers", len(nmgr.readers)).
+			Msg("NATS connection is already closed; no reader subscriptions to release.")
+	} else {
+		log.Info().Msg("Shutting down NATS readers.")
+		for _, r := range nmgr.readers {
+			// A bound subscription's Unsubscribe does NOT delete the durable (that is the
+			// whole point of the Bind attach), so this releases local interest without
+			// disturbing the consumer other replicas share.
+			if s := r.sub.Load(); s != nil {
+				if err := s.Unsubscribe(); err != nil {
+					log.Error().Err(err).Str("suffix", r.suffix).Msg("Error unsubscribing NATS reader.")
+				}
 			}
 		}
 	}
 	if nmgr.nc != nil {
-		if err := nmgr.nc.Drain(); err != nil {
-			log.Error().Err(err).Msg("Error draining NATS connection.")
-		}
+		nmgr.drainAndWait(ctx)
 	}
 	return nil
+}
+
+// closeReserve is the part of the stop budget drainAndWait leaves unspent when the
+// budget ends the wait: room for the Close that follows to flush the outbound buffer,
+// and for the components that stop after NATS (the database, the probe server) before
+// the teardown's own deadline abandons the stop. It is clamped to a quarter of what
+// remains, so a small budget still spends most of itself on the drain.
+const closeReserve = time.Second
+
+// drainAndWait drains nmgr.nc and waits until it has closed, bounded by ctx.
+//
+// 🔴 nats.Conn.Drain IS ASYNCHRONOUS. It moves the connection to DRAINING_SUBS, starts
+// a goroutine that drains each subscription, flushes and closes, and returns at once.
+// This used to return straight after it, and the Close in ExecuteTerminate — a few
+// near-no-op steps later — cut the drain off: messages already queued on a live async
+// subscription were never delivered, and the flush that confirms the server received
+// the last publishes and acks never ran. Waiting is what makes the drain real.
+//
+// The wait is on the CONNECTION, not on anything the manager built: a CLOSED status
+// listener registered before Drain. That makes it independent of how the manager was
+// constructed or which handlers the connection carries, and a listener registered
+// before the call cannot miss a close the call causes.
+//
+// The bound is ctx less closeReserve. With no deadline — tests — the library bounds the
+// drain itself (DrainTimeout, 30s by default, then a 5s flush), which is deliberately
+// NOT set from the teardown budget here: ctx already is the remaining budget, measured
+// at the moment the stop actually reached NATS, and a number fixed at connect time
+// would be a second copy of it that is wrong by however long the earlier stops took.
+//
+// When the budget ends the wait, the connection is closed here, inline. Close flushes
+// the outbound buffer, and doing that inside the budget is the point: the alternative
+// is leaving it to ExecuteTerminate, which the teardown may never reach.
+//
+// ⚠️ That inline Close races the library's drain goroutine, which is still waiting on
+// its subscriptions. Close ends that wait, and the goroutine then moves the status to
+// DRAINING_PUBS over CLOSED, tries its flush against the closed socket and closes a
+// second time. So on THIS path only, IsClosed can read false for a few seconds after
+// Stop returns. Nothing depends on it — the socket is gone — and the path is taken only
+// when the budget ran out.
+func (nmgr *NatsManager) drainAndWait(ctx context.Context) {
+	nc := nmgr.nc
+	// Already dead — the normal case when an unrequested close is what brought the
+	// process down. Its ERROR has been logged, or is about to be: this returns BEFORE
+	// closeRequested is set, because the ClosedHandler for that close may still be queued
+	// on the client's callback goroutine, and it reads the flag when it runs. Setting it
+	// here would relabel the close that actually happened as this stop's, and that
+	// handler would then skip MarkNotLive.
+	if nc.IsClosed() {
+		log.Debug().Msg("NATS connection was already closed; nothing to drain.")
+		return
+	}
+	// An already-spent budget has nothing to drain with: the sampler join can use all
+	// of a short one. Close flushes what is buffered, which is the part still owed.
+	if ctx.Err() != nil {
+		log.Warn().Err(ctx.Err()).Msg("No shutdown budget left to drain the NATS connection; closing it.")
+		nmgr.closeConn()
+		return
+	}
+
+	closed := nc.StatusChanged(nats.CLOSED)
+	defer nc.RemoveStatusListener(closed)
+
+	// Before Drain, which is what fires the ClosedHandler.
+	if nmgr.closeRequested != nil {
+		nmgr.closeRequested.Store(true)
+	}
+	switch err := nc.Drain(); {
+	case errors.Is(err, nats.ErrConnectionClosed):
+		// Closed in the instant between the IsClosed check above and here. The flag
+		// already reads requested, so that close's handler logs it as a shutdown; the
+		// window is a few instructions wide and the process is exiting either way.
+		log.Debug().Msg("NATS connection was already closed; nothing to drain.")
+		return
+	case errors.Is(err, nats.ErrConnectionReconnecting):
+		// Drain has closed it synchronously: a connection that is (re)connecting has
+		// nothing in flight to drain. The ordinary case for a pod stopping while the
+		// broker rolls, so it is not an error.
+		log.Info().Msg("NATS connection was reconnecting when the stop began; closed without a drain.")
+		return
+	case err != nil:
+		log.Error().Err(err).Msg("Error draining NATS connection; closing it.")
+		nmgr.closeConn()
+		return
+	}
+
+	waitCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		reserve := min(closeReserve, time.Until(deadline)/4)
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, deadline.Add(-reserve))
+		defer cancel()
+	}
+	select {
+	case <-closed:
+		log.Info().Msg("NATS connection drained and closed.")
+	case <-waitCtx.Done():
+		log.Warn().Err(waitCtx.Err()).Int("subscriptionsStillDraining", nc.NumSubscriptions()).
+			Msg("NATS drain did not finish within the shutdown budget; closing the connection now. " +
+				"Messages still queued on the remaining subscriptions are not delivered.")
+		nmgr.closeConn()
+	}
+}
+
+// closeConn closes nmgr.nc as a close this manager asked for. See closeConn (the
+// function) — this is the same thing for the published connection.
+func (nmgr *NatsManager) closeConn() {
+	closeConn(nmgr.nc, nmgr.closeRequested)
+}
+
+// closeConn is the one way this package closes a connection it owns: it records that
+// the close was requested and THEN closes, so the ClosedHandler — which reads the flag
+// when it runs — classifies it as orderly and does not trip liveness. A call site that
+// closed without it would restart the pod on its way out. requested may be nil for a
+// connection that carries no ClosedHandler of ours.
+func closeConn(nc *nats.Conn, requested *atomic.Bool) {
+	if requested != nil {
+		requested.Store(true)
+	}
+	nc.Close()
 }
 
 // Terminate component.
@@ -2094,11 +2257,16 @@ func (nmgr *NatsManager) Terminate(ctx context.Context) error {
 	return nmgr.lifecycle.Terminate(ctx)
 }
 
-// ExecuteTerminate closes the NATS connection.
+// ExecuteTerminate closes the NATS connection if it is still open.
+//
+// After a Stop it normally is not: ExecuteStop waits for the drain to close it, and
+// closes it itself when the budget runs out. This is the fallback for whatever that
+// left open — including the few seconds after a budget-expired stop in which the
+// library's drain goroutine reports the connection as draining again — and closing an
+// already-closed connection is a no-op.
 func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
-	nmgr.shuttingDown.Store(true)
 	if nmgr.nc != nil && !nmgr.nc.IsClosed() {
-		nmgr.nc.Close()
+		nmgr.closeConn()
 	}
 	return nil
 }

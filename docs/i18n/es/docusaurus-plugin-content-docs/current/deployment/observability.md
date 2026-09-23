@@ -23,7 +23,9 @@ trazado distribuido OTLP son mejoras planeadas a futuro.
 Cada servicio de área funcional se instrumenta a sí mismo con métricas de cliente de Prometheus y
 sirve las dos sondas estándar de Kubernetes:
 
-- **`/healthz`** — vitalidad (liveness): ¿el proceso está vivo?
+- **`/healthz`** — vitalidad (liveness): ¿puede el proceso seguir haciendo su trabajo, o necesita un
+  reinicio? Falla una vez que la conexión del servicio con el broker de mensajería se ha cerrado de
+  forma definitiva, de modo que Kubernetes reinicia el pod.
 - **`/readyz`** — disponibilidad (readiness): ¿está listo para recibir tráfico? Un servicio que no está
   listo se mantiene fuera de rotación por su Service de Kubernetes (consulte
   [Despliegue y operador](./kubernetes-operator.md)).

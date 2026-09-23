@@ -57,8 +57,8 @@ Each service loads its configuration into a typed schema and **fails closed**: a
 
 Every service exposes two HTTP endpoints for Kubernetes:
 
-- **`/healthz`** (liveness) — returns `200` whenever the process is running.
-- **`/readyz`** (readiness) — returns `503` until the service's authentication is live, then `200`.
+- **`/healthz`** (liveness) — returns `200` while the process can still do its job, and `503` once its message-broker connection has closed permanently without the service asking (for example, after the broker credential changed under a running pod), so Kubernetes restarts it and it reconnects with the credential it is given.
+- **`/readyz`** (readiness) — returns `503` until the service's authentication is live, then `200`. It returns `503` again while the service shuts down, and whenever `/healthz` does.
 
 Services start in a **not-ready** state and fetch the JWT signing keys from `user-management` in the background. While not ready, a service is pulled from Service endpoints and its message consumers stay paused — so a brief `user-management` outage degrades a service rather than crashing it, and no request or message is ever processed without verified authentication.
 

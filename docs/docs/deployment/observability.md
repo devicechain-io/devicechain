@@ -23,7 +23,9 @@ the remaining functional areas and OTLP distributed tracing are planned follow-u
 Each functional-area service instruments itself with Prometheus client metrics and
 serves the two standard Kubernetes probes:
 
-- **`/healthz`** — liveness: is the process alive?
+- **`/healthz`** — liveness: can the process still do its job, or does it need a
+  restart? It fails once the service's message-broker connection has closed for
+  good, so Kubernetes restarts the pod.
 - **`/readyz`** — readiness: is it ready to take traffic? A service that isn't
   ready is held out of rotation by its Kubernetes Service (see
   [Deployment & Operator](./kubernetes-operator.md)).

@@ -43,8 +43,8 @@ const (
 // pinned by TestStructLiteralMicroserviceMethods rather than asserted here:
 //
 //	Safe — they behave as they do on a constructed Microservice:
-//	  Banner, Mux, RegisterProbes, NewHttpServer, MetricsSubsystem, MetricsRegisterer,
-//	  MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
+//	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
+//	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
 //	  NewGaugeVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
 //	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration, ExecuteInitialize,
 //	  ExecuteStart, ExecuteStop, ExecuteTerminate, InitializeAndStart, Run, ShutDownNow,
@@ -136,6 +136,12 @@ type Microservice struct {
 	// collision hazard, since each Microservice gets its own.
 	muxOnce sync.Once
 	mux     *http.ServeMux
+
+	// notLive is the liveness latch: nil while this process can still do its job, and
+	// the first recorded reason once a component has declared that only a restart can
+	// clear its state. See MarkNotLive. Usable at its zero value, so a struct literal
+	// is live, like one built by NewMicroservice.
+	notLive atomic.Pointer[livenessFailure]
 
 	// Observability metrics (E17). nil when the microservice was built without
 	// NewMicroservice (e.g. in unit tests), so every use of THESE THREE is nil-guarded.
@@ -573,6 +579,11 @@ func (ms *Microservice) ShutDownNow() { ms.shutDown(nil) }
 //
 // err must be non-nil. A nil here would silently become an orderly stop, which is the
 // one thing a caller reaching for this method does not want.
+//
+// It runs the drain window and the whole teardown on the CALLER'S goroutine, so it must
+// not be called from a callback that something else is waiting on, such as the NATS
+// client's single async-callback goroutine. A component that can only say "I cannot
+// recover" from there uses MarkNotLive instead, which leaves the restart to the kubelet.
 func (ms *Microservice) FailNow(err error) {
 	if err == nil {
 		err = errors.New("core: a component ended the process without saying why")

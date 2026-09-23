@@ -34,9 +34,10 @@ var ProbesPort int32 = core.HttpPort
 // ITS DEPENDENCIES ALLOW. The GraphQL server's resolvers read wiring the broker builds,
 // so it cannot accept traffic before NATS has started and must stop taking it before
 // NATS drains. Nothing served here depends on any manager — /metrics gathers the
-// microservice's own registry, /healthz is unconditional and /readyz reads the gate — so
-// it can answer through the whole unwind, and it does: an operator watching a shutdown
-// keeps the metrics of the part that is actually slow. The ingest services already stopped
+// microservice's own registry, /healthz reads the microservice's liveness latch, and
+// /readyz reads the gate and that latch — so it can answer through the whole unwind, and
+// it does: an operator watching a shutdown keeps the metrics of the part that is actually
+// slow. The ingest services already stopped
 // their servers last before they joined this package, though the reason recorded for it
 // was a different one, and wrong: it conflated the HTTP stop with the leadership unwind.
 type probeServer struct {

@@ -71,6 +71,13 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 		{name: "Banner", call: func(t *testing.T, ms *Microservice) { ms.Banner() }},
 		{name: "Mux", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.Mux()) }},
 		{name: "RegisterProbes", call: func(t *testing.T, ms *Microservice) { ms.RegisterProbes(nil) }},
+		// The liveness latch works at its zero value: a struct literal starts live and can
+		// be marked not live, exactly as a constructed Microservice can.
+		{name: "Live", call: func(t *testing.T, ms *Microservice) { assert.NoError(t, ms.Live()) }},
+		{name: "MarkNotLive", call: func(t *testing.T, ms *Microservice) {
+			ms.MarkNotLive(errors.New("gone"))
+			assert.ErrorContains(t, ms.Live(), "gone")
+		}},
 		{name: "NewHttpServer", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.NewHttpServer(0)) }},
 		{name: "MetricsSubsystem", call: func(t *testing.T, ms *Microservice) { _ = ms.MetricsSubsystem() }},
 		{name: "MetricsHandler", call: func(t *testing.T, ms *Microservice) { assert.NotNil(t, ms.MetricsHandler()) }},
