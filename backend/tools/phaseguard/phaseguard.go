@@ -11,10 +11,12 @@
 // number of times. Its own state allow lists say so:
 //
 //	initializeFrom = {Uninitialized}
-//	startFrom      = {Initialized, Stopped}
+//	startFrom      = {Initialized}
 //
 // So ExecuteInitialize runs AT MOST ONCE for a component instance — the state machine
-// refuses a second one — while ExecuteStart runs again after every stop. That is not a
+// refuses a second one — while ExecuteStart runs again after every FAILED start, which
+// restores the component to Initialized. (A stop used to be restartable as well; the
+// lifecycle made stop terminal, and the retry is the door that remains.) That is not a
 // naming convention, it is an invariant with a gate behind it, and it splits everything
 // a service builds into two kinds:
 //

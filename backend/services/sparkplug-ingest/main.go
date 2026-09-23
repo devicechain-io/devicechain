@@ -33,13 +33,12 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 )
-
-const httpPort = 8080
 
 const (
 	// leasePartition names this service's single ownership lease within the shared
@@ -60,7 +59,12 @@ var (
 	Manager       *host.Manager
 	NatsManager   *messaging.NatsManager
 	Lease         *messaging.DistributedLease
-	httpServer    *core.HttpServer
+
+	// Svc drives the broker and the HTTP surface (probes + metrics) in core/service's one
+	// sequence. The leadership loop is this service's own and is not in it: it starts after
+	// Svc and is unwound before it, because releasing the lease is a KV write over Svc's
+	// broker connection.
+	Svc *service.Service
 
 	// leaderGauge is 1 while this replica holds the lease and is connecting sources,
 	// 0 while it is a warm standby (ADR-070 A6 observability).
@@ -104,9 +108,9 @@ func parseConfiguration() error {
 	return nil
 }
 
-// afterMicroserviceInitialized parses config, builds one tenant-bound Host
-// Application client per configured source, and registers the HTTP surface
-// (probes + metrics). It starts no auth gate: this service validates no bearer
+// afterMicroserviceInitialized parses config, assembles the broker and the HTTP surface
+// (probes + metrics) through core/service, and builds one tenant-bound Host Application
+// client per configured source. It starts no auth gate: this service validates no bearer
 // tokens — it is a transport that connects out to customer brokers — so readiness
 // is opened by the Manager once it is supervising (afterMicroserviceStarted).
 func afterMicroserviceInitialized(ctx context.Context) error {
@@ -124,11 +128,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// global at this point would hand the emitter a nil writer and panic the receive
 	// goroutine on the first message; NewWriter only needs the JS context, so it is
 	// safe (and correct) to build the writer now and pass it in by value.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		func(*messaging.NatsManager) error { return nil })
-	if err := NatsManager.Initialize(ctx); err != nil {
+	Svc = service.New(Microservice, service.Spec{
+		Nats: &service.NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }},
+	})
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
+	NatsManager = Svc.Nats
 
 	// The ingest pipeline (device resolution + durable emit) is REQUIRED whenever the
 	// adapter has any source to ingest from — a source with an unreachable device
@@ -157,30 +163,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Manager = host.NewManager(clients)
 	log.Info().Int("sources", len(clients)).Msg("Built Sparkplug source connections.")
 
-	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
-	// registerHttpRoutes for why it is here and not where the server starts.
-	registerHttpRoutes()
 	return nil
-}
-
-// registerHttpRoutes mounts this service's HTTP surface — /healthz, /readyz and
-// /metrics — on the microservice's OWN mux rather than on http.DefaultServeMux.
-//
-// 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE THE SERVER STARTS.
-// RegisterProbes goes through ServeMux.Handle, which panics on a duplicate pattern,
-// and LifecycleComponent does not promise ExecuteStart runs once: a start that fails
-// restores the component to Initialized, so a retried start enters the start path
-// again. Registering from there turns that retry into a crash. Initialize is where the
-// routes belong, which is what makes this the safe half.
-//
-// 🔴 It is also a named function rather than a line inside the initializer so a test
-// can drive the REGISTRATION ITSELF. A test that called RegisterProbes on its own
-// would be asserting against its own copy of the wiring: it would keep passing if this
-// went back to http.Handle on the default mux, which is the exact regression the
-// switchover has to prevent. The uncovered remainder is one line — that the initializer
-// calls this — because the initializer needs config, credentials and a broker.
-func registerHttpRoutes() {
-	Microservice.RegisterProbes(Microservice.Readiness)
 }
 
 // buildMetrics creates every Prometheus instrument exactly once and returns the ones
@@ -190,7 +173,7 @@ func registerHttpRoutes() {
 // (cardinality-safe) logs.
 //
 // 🔴 IT IS CALLED FROM THE INITIALIZE PHASE, NOT FROM WHERE LEADERSHIP STARTS, for the
-// same reason registerHttpRoutes is called from there. Microservice.NewGauge goes
+// same reason routes are registered there. Microservice.NewGauge goes
 // through promauto, which panics on a duplicate registration, and LifecycleComponent
 // does not promise ExecuteStart runs once: a start that fails restores the component to
 // Initialized, so a retried start enters the start path again. Building an instrument
@@ -379,14 +362,14 @@ func resolveBroker(src config.SparkplugSource, instanceId string, index int) (ho
 	}, nil
 }
 
-// afterMicroserviceStarted starts the Manager (which connects every source in the
-// background) and opens readiness, then starts the HTTP server. Readiness is not
-// gated on any broker being reachable — a customer broker being down degrades that
-// one source, never the pod.
+// afterMicroserviceStarted starts the HTTP surface and the broker, then the Manager
+// (which connects every source in the background), and opens readiness. Readiness is not
+// gated on any broker being reachable — a customer broker being down degrades that one
+// source, never the pod.
 func afterMicroserviceStarted(ctx context.Context) error {
-	// Start the durable writer BEFORE the sources connect, so the JetStream publish
-	// path is live before the first broker message can arrive.
-	if err := NatsManager.Start(ctx); err != nil {
+	// The probe server, then the durable writer — both BEFORE the sources connect, so the
+	// JetStream publish path is live before the first broker message can arrive.
+	if err := Svc.Start(ctx); err != nil {
 		return err
 	}
 
@@ -408,15 +391,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// JWT, so there is no token for a validator to check. See lwm2m-ingest, which says the
 	// same thing for the same reason.
 	Microservice.MarkReadyWithoutAuthSurface()
-
-	return startHttpServer(httpPort)
+	return nil
 }
 
 // startLeadership acquires the single-owner lease and launches the leadership loop that
 // owns the Manager for as long as this replica holds it.
 //
-// 🔴 IT BUILDS NOTHING THAT CANNOT BE BUILT TWICE, which is the same constraint
-// startHttpServer carries. It runs from the start phase, which is entered again by any
+// 🔴 IT BUILDS NOTHING THAT CANNOT BE BUILT TWICE. It runs from the start phase, which is entered again by any
 // start retried after a failed one — so a Prometheus instrument constructed here would
 // panic on the duplicate registration the second time round. The instruments are built
 // once, in the initialize phase, by buildMetrics.
@@ -436,30 +417,6 @@ func startLeadership() error {
 		defer close(leadershipDone)
 		runLeadership(lctx, lease)
 	}()
-	return nil
-}
-
-// startHttpServer builds this service's HTTP server over the microservice's own mux
-// and starts it, returning any bind failure.
-//
-// 🔴 A FRESH SERVER PER START, AND IT REGISTERS NOTHING. Both halves matter, and they
-// pull in opposite directions:
-//
-//   - It registers nothing because ServeMux.Handle panics on a duplicate pattern, and
-//     this is entered again by any start retried after a failed one. The routes are
-//     registered once, in the initialize phase.
-//   - It builds a new server because an http.Server cannot be restarted: Shutdown
-//     latches its shuttingDown flag permanently, so reusing one would bind and then
-//     serve nothing.
-//
-// The port is a parameter so a test can ask for an ephemeral one rather than racing
-// whatever holds 8080.
-func startHttpServer(port int32) error {
-	httpServer = Microservice.NewHttpServer(port)
-	if err := httpServer.Start(); err != nil {
-		return err
-	}
-	log.Info().Str("addr", httpServer.Addr()).Msg("Started Sparkplug ingest HTTP server.")
 	return nil
 }
 
@@ -571,8 +528,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// beforeMicroserviceStopped announces OFFLINE on every source, disconnects them,
-// and shuts the HTTP server down.
+// beforeMicroserviceStopped announces OFFLINE on every source, disconnects them, and then
+// stops the broker and the HTTP surface through core/service.
 //
 // Readiness is NOT drained here: core drains the gate and waits out the window before teardown
 // reaches this hook, so a call here could only be the second one.
@@ -587,23 +544,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	} else if Manager != nil {
 		Manager.Stop()
 	}
-	if NatsManager != nil {
-		if err := NatsManager.Stop(ctx); err != nil {
-			log.Error().Err(err).Msg("Error stopping the NATS manager.")
-		}
-	}
-	if httpServer == nil {
-		return nil
-	}
-	return httpServer.Shutdown(ctx)
+	// 🔴 AFTER the unwind above, never before it: the unwind ends in a lease release, a KV
+	// write over the broker connection Svc.Stop drains. Svc then stops the broker and,
+	// last, the probe server, so /metrics answers through the whole of this.
+	return Svc.Stop(ctx)
 }
 
-// afterMicroserviceTerminated releases the NATS manager's resources.
+// afterMicroserviceTerminated releases the broker's resources.
 func afterMicroserviceTerminated(ctx context.Context) error {
-	if NatsManager != nil {
-		if err := NatsManager.Terminate(ctx); err != nil {
-			log.Error().Err(err).Msg("Error terminating the NATS manager.")
-		}
-	}
-	return nil
+	return Svc.Terminate(ctx)
 }

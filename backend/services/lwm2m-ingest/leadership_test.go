@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-lwm2m-ingest/server"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/service"
 )
 
 // recordingLease is a fake leaseTerm that makes what a leadership term did with its lease
@@ -705,10 +706,10 @@ func TestTheStartPhaseSupervisesTheInertTransport(t *testing.T) {
 	newTestMicroservice(t) // a Microservice with its own mux, metrics registry and readiness gate
 
 	prevNats, prevSrv, prevStop := NatsManager, inertServer, inertStop
-	prevPort, prevFail := httpPort, failProcess
+	prevPort, prevFail := service.ProbesPort, failProcess
 	t.Cleanup(func() {
 		NatsManager, inertServer, inertStop = prevNats, prevSrv, prevStop
-		httpPort, failProcess = prevPort, prevFail
+		service.ProbesPort, failProcess = prevPort, prevFail
 	})
 
 	fired := make(chan error, 1)
@@ -723,19 +724,17 @@ func TestTheStartPhaseSupervisesTheInertTransport(t *testing.T) {
 	require.NoError(t, err, "could not bind an ephemeral CoAP/DTLS socket for the inert transport")
 
 	// The inert shape: no credentials, so no NATS manager and no lease — one always-on
-	// health-only transport instead.
+	// health-only transport instead, and a Service that assembles the probe server alone,
+	// exactly the Spec the initializer builds when there are no identities.
 	NatsManager, inertServer, inertStop = nil, srv, nil
-	// An ephemeral HTTP port. This is the ONLY thing that stood between this path and a test:
-	// afterMicroserviceStarted ends in startHttpServer, which already takes the port as a
-	// parameter — it was the caller's baked-in 8080 that could not be asked for anything else.
-	httpPort = 0
+	Svc = service.New(Microservice, service.Spec{})
+	require.NoError(t, Svc.Initialize(context.Background()))
+	// An ephemeral HTTP port. This is the ONLY thing that stands between this path and a test:
+	// afterMicroserviceStarted starts the probe server, and 8080 cannot be asked for in CI.
+	service.ProbesPort = 0
 
 	require.NoError(t, afterMicroserviceStarted(context.Background()))
-	t.Cleanup(func() {
-		if httpServer != nil {
-			_ = httpServer.Shutdown(context.Background())
-		}
-	})
+	t.Cleanup(func() { _ = Svc.Stop(context.Background()) })
 
 	require.NotNil(t, inertStop,
 		"the start phase left the inert transport unsupervised; a socket death on the one pod that "+

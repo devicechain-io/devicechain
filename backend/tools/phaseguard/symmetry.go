@@ -131,9 +131,10 @@ var Symmetries = []Symmetry{
 //  4. A component whose start and stop name DIFFERENT package-level variables — an
 //     alias, or a reassignment between the two callbacks. This produces a FINDING rather
 //     than silence, which is the right direction but is a false positive to recognise.
-//  5. The HTTP servers the ingest services and mcp start directly (`httpServer.Start()`),
-//     the leadership goroutines, and event-sources' presence tap: none is driven by a
-//     lifecycle verb on a package-level variable, so none is watched.
+//  5. The leadership goroutines and event-sources' presence tap: neither is driven by a
+//     lifecycle verb on a package-level variable, so neither is watched. (The ingest
+//     services and mcp used to start their HTTP servers directly as well; core/service
+//     owns those now, and each service's Svc is a watched component.)
 //
 // What is NOT on this list, because it was fixed rather than declared: a component that
 // owns no core.LifecycleManager. Two of those exist — outbound-connectors' DispatchConsumer

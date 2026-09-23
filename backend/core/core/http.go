@@ -20,6 +20,13 @@ import (
 // is reachable from a cluster network. net/http applies no default.
 const httpReadHeaderTimeout = 5 * time.Second
 
+// HttpPort is the port every DeviceChain service serves its own HTTP surface on — GraphQL
+// where there is one, and always /healthz, /readyz and /metrics. It is the chart's
+// container port: the deployment's probes and the ServiceMonitor address it by name, so a
+// service that bound anything else would run, log a successful start and be unreachable to
+// both. It is spelled once, here; graphql.GRAPHQL_PORT is this value.
+const HttpPort = 8080
+
 // Mux is the HTTP request multiplexer this microservice owns, created on first use.
 //
 // It exists so a service's routes live somewhere the service can name, rather than on
@@ -41,10 +48,11 @@ func (ms *Microservice) Mux() *http.ServeMux {
 // RegisterProbes registers the three routes every DeviceChain HTTP server serves:
 // /healthz, /readyz and /metrics.
 //
-// All four servers in the tree spell these out for themselves today, which is three
-// copies too many of a contract the chart depends on: the deployment's liveness,
+// It is the one definition of a contract the chart depends on: the deployment's liveness,
 // readiness and startup probes all target /healthz or /readyz by name, and the
-// ServiceMonitor scrapes /metrics. A copy that drifts is not a compile error.
+// ServiceMonitor scrapes /metrics. A copy that drifts is not a compile error, which is why
+// no service registers these itself — the GraphQL manager calls this, and core/service
+// calls it for a service with no GraphQL plane.
 //
 // gate may be nil, and nil means NOT READY rather than ready. That is the fail-closed
 // direction and it matches what the GraphQL server already does: a server whose
@@ -85,21 +93,20 @@ func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
 
 // HttpServer is a microservice's HTTP server, serving that microservice's own mux.
 //
-// 🔴 IT DELIBERATELY DOES NOT IMPLEMENT LifecycleComponent AND MUST NEVER REGISTER
-// ITSELF FOR AUTOMATIC TEARDOWN. Where the HTTP stop belongs relative to the NATS stop
-// is a per-service decision, and the services that have thought about it reached
-// OPPOSITE answers, both correct:
+// 🔴 IT DELIBERATELY DOES NOT IMPLEMENT LifecycleComponent. Where an HTTP server starts
+// and stops relative to the broker depends on what it serves, and that is a property of
+// the component holding it, not of the server:
 //
-//   - device-management stops HTTP FIRST, so a request still inside a resolver cannot
-//     reach a connection that is already draining. Every other service that serves
-//     GraphQL over a NATS connection follows it, and several pin the order with a test
-//     of their own stopper — grep for TestGraphQLServerStopsBeforeTheNatsConnection.
-//   - lwm2m-ingest stops it LAST, because hoisting the NATS stop above it makes the
-//     leadership lease release fail.
+//   - the GraphQL manager's server carries resolvers that read wiring the broker builds,
+//     so it must start after NATS and stop before NATS drains — a request still inside a
+//     resolver must not reach a connection that is going away;
+//   - core/service's probes-only server depends on nothing, so it starts first and stops
+//     last, and keeps /metrics answering through the whole unwind.
 //
-// A component that inserts itself into the lifecycle picks one of those orders for
-// everybody, silently, and breaks whichever service needed the other. So Start and
-// Shutdown are plain methods and the calling service decides when they run.
+// The holder fixes the position — core/service's sequence for its adopters, the service's
+// own callbacks for the few that still wire their managers by hand. A server that placed
+// itself in the lifecycle would pick one answer for both, silently. So Start and Shutdown
+// are plain methods and the component that owns the server decides when they run.
 type HttpServer struct {
 	server *http.Server
 

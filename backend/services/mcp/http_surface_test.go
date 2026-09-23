@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-mcp/server"
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/service"
 )
 
 const (
@@ -41,17 +42,18 @@ var registerLeftBehind = sync.OnceFunc(func() {
 	})
 })
 
-// serveMcp installs a Microservice, drives THIS SERVICE'S registerHttpRoutes, and
-// starts a real listener on an ephemeral port. It returns the base URL.
+// serveMcp installs a Microservice and drives THIS SERVICE'S registerHttpRoutes,
+// initializeService and start callback, on an ephemeral port. It returns the base URL.
 //
-// It drives the production registrar rather than calling server.Routes and
-// RegisterProbes itself: a test built from its own copy of the wiring keeps passing
-// when the wiring moves, which is how a switchover ships probes that 404.
+// It drives the production wiring rather than calling server.Routes and assembling a
+// Service itself: a test built from its own copy of the wiring keeps passing when the
+// wiring moves, which is how a switchover ships probes that 404.
 func serveMcp(t *testing.T) string {
 	t.Helper()
 
-	prevMs, prevSrv := Microservice, httpServer
-	t.Cleanup(func() { Microservice, httpServer = prevMs, prevSrv })
+	prevMs, prevSvc, prevPort := Microservice, Svc, service.ProbesPort
+	t.Cleanup(func() { Microservice, Svc, service.ProbesPort = prevMs, prevSvc, prevPort })
+	service.ProbesPort = 0
 
 	Microservice = &core.Microservice{
 		InstanceId:     "test",
@@ -59,7 +61,6 @@ func serveMcp(t *testing.T) string {
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	httpServer = nil
 
 	// A validator that exists but trusts a key nothing here signs with: every bearer
 	// fails, which is what makes the MCP endpoint answer its 401 challenge rather than
@@ -73,10 +74,12 @@ func serveMcp(t *testing.T) string {
 	// than closing over a second validator built here.
 	registerHttpRoutes(testResource, testIssuer, Microservice.Readiness.Validator,
 		server.NewGraphQLClient())
-	require.NoError(t, startHttpServer(0))
-	t.Cleanup(func() { _ = httpServer.Shutdown(context.Background()) })
+	ctx := context.Background()
+	require.NoError(t, initializeService(ctx))
+	require.NoError(t, afterMicroserviceStarted(ctx))
+	t.Cleanup(func() { _ = beforeMicroserviceStopped(ctx) })
 
-	return "http://" + httpServer.Addr()
+	return "http://" + Svc.HttpAddr()
 }
 
 // nonFollowingClient reports a redirect rather than following it, so a test can assert
@@ -231,27 +234,4 @@ func TestServerDoesNotServeTheDefaultMux(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, status(t, http.MethodGet, base+leftBehindWellKnown),
 		"a route on http.DefaultServeMux is being served; this server is not serving the microservice's own mux")
-}
-
-// A second entry into the start phase must not panic.
-//
-// Both registrars go through ServeMux.Handle, which panics on a duplicate pattern, and
-// ExecuteStart is entered again by any start retried after a failed one — so this pins
-// that startHttpServer registers nothing. It is not a regression the switchover
-// introduces: http.HandleFunc on the default mux panicked on a duplicate too, which is
-// why the shape carries across unnoticed.
-func TestHttpServerSecondStartDoesNotPanic(t *testing.T) {
-	base := serveMcp(t)
-	require.Equal(t, http.StatusOK, status(t, http.MethodGet, base+"/healthz"))
-
-	require.NoError(t, httpServer.Shutdown(context.Background()))
-
-	// Reaching this line at all is half the assertion: a registrar moved into the start
-	// path panics, and a panic fails the binary rather than this test.
-	require.NoError(t, startHttpServer(0), "restart refused")
-
-	// The other half, over the wire: a restart that binds but serves nothing is what
-	// http.Server's latched shuttingDown flag produces, and a nil error cannot see it.
-	require.Equal(t, http.StatusOK, status(t, http.MethodGet, "http://"+httpServer.Addr()+"/healthz"),
-		"restarted server does not serve")
 }
