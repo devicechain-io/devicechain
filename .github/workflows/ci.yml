@@ -46,6 +46,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The workspace-sum check runs in every go matrix job; prove once, here, that
+      # it can fail.
+      - name: workspace-sum check self-test
+        run: hack/check-go-work-sum.sh --self-test
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
@@ -364,16 +369,13 @@ jobs:
       #
       # Per module rather than once, deliberately: each module needs its own
       # subset of hashes, and this way the failure names the module that wants
-      # the missing one. Fix by running `go build ./...` in the named module and
-      # committing the resulting go.work.sum.
+      # the missing one. It prints the hashes the build added; commit them.
+      #
+      # The check is hack/check-go-work-sum.sh, which the local sweep in
+      # CLAUDE.md runs too, so the gate a maintainer runs before pushing and
+      # the gate that runs here cannot drift apart.
       - name: workspace sum is complete
-        run: |
-          if ! git diff --quiet -- go.work.sum; then
-            echo "::error::Building ${{ matrix.module }} appended hashes to go.work.sum, so the committed file is incomplete. Run 'go build ./...' in that module and commit go.work.sum."
-            git --no-pager diff -- go.work.sum
-            exit 1
-          fi
-          echo "go.work.sum already covers $(basename ${{ matrix.module }})"
+        run: hack/check-go-work-sum.sh --module "${{ matrix.module }}"
 
       # Build-tagged tests are invisible to every step above: `go build`, `go vet` and
       # `go test` all skip a file whose tags are not set, so a tagged suite compiles
