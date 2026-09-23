@@ -279,7 +279,6 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 				secretKeyPassword: set.RDBInstancePassword,
 			},
 		},
-		superuserSecret(st, set),
 		{
 			// The event store is the instance's, in the instance's namespace, and
 			// CloudNativePG reads a Cluster's credentials from its own namespace.
@@ -292,6 +291,12 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 				secretKeyPassword: set.TSDBPassword,
 			},
 		},
+	}
+	// Not written for a live instance that never had one: its superuser was seeded
+	// before dcctl generated the value, and a Secret here would name a password it was
+	// never given (resolveCredentials).
+	if st.SuperuserSeed != superuserSeedAbsent {
+		out = append(out, superuserSecret(st, set))
 	}
 	if archive != nil {
 		out = append(out, instanceArchiveCredential(st, *archive))
@@ -350,7 +355,9 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //     that minted over it would leave the Secret naming a password the superuser was
 //     never given. A bootstrap re-run happens only before the instance's configuration
 //     document exists (stepRefuseRebuild), but the Secret is written earlier than that,
-//     and a value the report has not shown yet is still one to keep.
+//     and a value the report has not shown yet is still one to keep. The exception is
+//     a carve-out re-run over a LIVE instance that has no such Secret: nothing is
+//     minted for it at all (see the settlement below the loops).
 //   - THE DASHBOARD PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT. A fresh
 //     value is not a rotation: Grafana reads it through admin.existingSecret as an
 //     environment variable, a changed Secret restarts nothing, and a Grafana whose
@@ -458,9 +465,21 @@ func resolveCredentials(
 		}
 	}
 	if plansInstance(st) {
-		st.SuperuserSeed = superuserSeedMinted
-		if superuserRecovered {
+		switch {
+		case superuserRecovered:
 			st.SuperuserSeed = superuserSeedRecovered
+		case st.OverLiveInstance:
+			// 🔴 A LIVE INSTANCE WITH NO SECRET IS ONE BUILT BEFORE dcctl GENERATED IT, and
+			// its identity table was seeded with the literal those releases published. A
+			// carve-out re-run (a restore, --allow-legacy-db-removal) reaches here over
+			// exactly that instance — and a value minted now would seed nothing, yet be
+			// written to the Secret, printed as the superuser's password, and trusted by
+			// every tool that reads it. The upgrade's answer, for the upgrade's reason:
+			// nothing minted, nothing written, and the report says what that means.
+			set.SuperuserPassword = ""
+			st.SuperuserSeed = superuserSeedAbsent
+		default:
+			st.SuperuserSeed = superuserSeedMinted
 		}
 	}
 

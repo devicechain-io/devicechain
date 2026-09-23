@@ -95,12 +95,17 @@ func (f *seedFixture) identities(t *testing.T) int64 {
 // literal, so the seed always ran and the instance's `*` superuser had the same
 // password on every installation. Asserted on the store as well as the error, so a
 // seed that errored AFTER writing the row would not pass.
+//
+// Whitespace-only counts as none: a hand-made Secret holding a trailing newline and
+// nothing else is no more a password than an absent one.
 func TestAnEmptyIdentityTableIsNotSeededWithoutAPassword(t *testing.T) {
-	f := newSeedFixture(t)
-	err := f.manager("").Initialize(context.Background(), nil, nil)
+	for _, blank := range []string{"", " \n\t"} {
+		f := newSeedFixture(t)
+		err := f.manager(blank).Initialize(context.Background(), nil, nil)
 
-	require.ErrorIs(t, err, ErrNoSuperuserSeedPassword)
-	require.Equal(t, int64(0), f.identities(t), "no identity may be written when the seed is refused")
+		require.ErrorIs(t, err, ErrNoSuperuserSeedPassword, "seed password %q", blank)
+		require.Equal(t, int64(0), f.identities(t), "no identity may be written when the seed is refused")
+	}
 }
 
 // With a password supplied, the superuser is seeded from EXACTLY that value: it signs in

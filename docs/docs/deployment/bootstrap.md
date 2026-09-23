@@ -260,7 +260,7 @@ An instance built before instances had namespaces of their own runs its broker a
 store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
 refuses such an instance and says to destroy it and bootstrap it again.
 
-The steps below are the ones the run prints as it goes (`[8/11] Install instance
+The steps below are the ones the run prints as it goes (`[8/10] Install instance
 (Helm)`), so a failure names a step you can find here:
 
 1. **Ensure local registry** — the developer `--build` path only: provision a local
@@ -635,13 +635,15 @@ kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.d
 The user-management service reads that password only once: to create the superuser the
 first time it starts against an empty identity table. After that the Secret is a record
 of the password the superuser was first given, and changing the password in the console
-does not update it. When a bootstrap **recovers** an instance, the restored superuser
-keeps the password it had, and the report says the new Secret does not hold it.
+does not update it. When a bootstrap **recovers** an instance and its identities come
+back with it, the restored superuser keeps the password it had, so the report does not
+print the Secret's value and says it may not be the superuser's password.
 
 Instances bootstrapped by an earlier release have no such Secret. Their superuser was
-created with the default password those releases published, and `dcctl upgrade` does not
-change it; the upgrade says so at the end. If that password has not been changed since,
-change it in the console.
+created with the default password those releases published. Neither `dcctl upgrade` nor
+a bootstrap re-run against the running instance (a restore, or
+`--allow-legacy-db-removal`) changes it or generates a Secret for it, and both say so at
+the end. If that password has not been changed since, change it in the console.
 
 An install made with Helm alone, without `dcctl`, must create that Secret itself (key
 `password`) before user-management first starts, or name another one with the chart

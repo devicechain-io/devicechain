@@ -14,6 +14,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -912,7 +913,10 @@ func (m *Manager) seed(ctx context.Context) error {
 		// absence is an error: an instance whose superuser already exists starts without
 		// one. A default here would be the same credential on every instance ever built,
 		// holding authority `*`, which is what this refusal replaced.
-		if m.bootstrap.SuperuserPassword == "" {
+		// Blank includes whitespace-only: a hand-made Secret holding a newline is no
+		// more a password than an absent one, and seeding it would be a credential
+		// anyone could guess.
+		if strings.TrimSpace(m.bootstrap.SuperuserPassword) == "" {
 			return ErrNoSuperuserSeedPassword
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(m.bootstrap.SuperuserPassword), bcrypt.DefaultCost)

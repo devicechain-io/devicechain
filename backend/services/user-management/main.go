@@ -315,9 +315,6 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	return nil
 }
 
-// seedClientsFromConfig maps the typed config seed-client entries onto the
-// identity-layer struct the manager provisions at startup (ADR-047), keeping the
-// config package free of an identity import.
 // bootstrapConfig is what the identity manager seeds from: the superuser's email and
 // OAuth clients from the configuration document, and the superuser's seed password
 // from the environment the chart projects it into — never from the document, which
@@ -347,6 +344,9 @@ func explainSeedRefusal(err error) error {
 		"itself", err, config.SuperuserPasswordEnv)
 }
 
+// seedClientsFromConfig maps the typed config seed-client entries onto the
+// identity-layer struct the manager provisions at startup (ADR-047), keeping the
+// config package free of an identity import.
 func seedClientsFromConfig(in []config.SeedOAuthClientConfig) []identity.SeedOAuthClient {
 	if len(in) == 0 {
 		return nil

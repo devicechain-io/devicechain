@@ -43,7 +43,7 @@ func TestABootstrapOverALiveInstanceIsRefused(t *testing.T) {
 }
 
 // 🔴 AND THE WINDOW IT MUST LEAVE OPEN. A bootstrap builds an instance over ten steps
-// and can die at any of them. The configuration document is written at the seventh —
+// and can die at any of them. The configuration document is written at the eighth —
 // so before it exists there is a reachable state with a LIVE broker configured from
 // credentials whose only copy is a file on this machine, and live databases whose
 // owner passwords exist only in their Secrets. Re-running is the only thing that

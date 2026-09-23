@@ -173,6 +173,12 @@ type State struct {
 	// Credentials — whether this run generated it, found it, or found none — which is
 	// what decides what the report may claim about it. See superuserSeedState.
 	SuperuserSeed superuserSeedState
+	// OverLiveInstance says stepRefuseRebuild found this instance already running —
+	// its configuration document exists — and let the run through on one of its
+	// carve-outs (a restore, or --allow-legacy-db-removal). Such a run is not building
+	// the instance's identities, so it must not generate the superuser's seed password
+	// either: see resolveCredentials.
+	OverLiveInstance bool
 	// Evolving says this State describes an instance that already exists and is
 	// being moved, rather than one being built.
 	//

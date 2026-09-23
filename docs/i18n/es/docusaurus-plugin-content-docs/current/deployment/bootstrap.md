@@ -279,7 +279,7 @@ bróker y su almacén de eventos en el namespace compartido `dc-system`, y no se
 en sitio. El arranque inicial rechaza una instancia así e indica que hay que destruirla y
 volver a arrancarla.
 
-Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install instance
+Los pasos de abajo son los que la ejecución va imprimiendo (`[8/10] Install instance
 (Helm)`), de modo que un fallo nombra un paso que puedes encontrar aquí:
 
 1. **Asegurar el registro local** (*Ensure local registry*) — solo en la ruta de
@@ -650,13 +650,15 @@ El servicio user-management lee esa contraseña una sola vez: para crear el
 superusuario la primera vez que arranca con la tabla de identidades vacía. A partir de
 ahí el Secret es un registro de la contraseña que el superusuario recibió al principio,
 y cambiar la contraseña en la consola no lo actualiza. Cuando un arranque **recupera**
-una instancia, el superusuario restaurado conserva la contraseña que tenía, y el informe
-indica que el nuevo Secret no la contiene.
+una instancia y sus identidades vuelven con ella, el superusuario restaurado conserva la
+contraseña que tenía, así que el informe no imprime el valor del Secret e indica que puede
+no ser la contraseña del superusuario.
 
 Las instancias creadas por una versión anterior no tienen ese Secret. Su superusuario
-se creó con la contraseña por defecto que publicaban esas versiones, y `dcctl upgrade`
-no la cambia; la actualización lo indica al terminar. Si esa contraseña no se ha
-cambiado desde entonces, cámbiala en la consola.
+se creó con la contraseña por defecto que publicaban esas versiones. Ni `dcctl upgrade`
+ni una nueva ejecución del arranque sobre la instancia en marcha (una restauración, o
+`--allow-legacy-db-removal`) la cambian ni generan un Secret para ella, y ambos lo indican
+al terminar. Si esa contraseña no se ha cambiado desde entonces, cámbiala en la consola.
 
 Una instalación hecha solo con Helm, sin `dcctl`, debe crear ese Secret por su cuenta
 (clave `password`) antes de que user-management arranque por primera vez, o nombrar

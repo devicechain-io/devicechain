@@ -176,11 +176,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
 
 	if opts.DryRun {
-		fmt.Println()
-		wouldDo("recompose the instance configuration document from this release's chart, " +
-			"keeping every credential the instance is running on")
-		wouldDo("upgrade the instance's Helm release")
-		warnPreGeneratedSuperuser(st)
+		sayUpgradeDryRun(st)
 		return nil
 	}
 
@@ -274,11 +270,32 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// statement about what was verified, not about what was applied.
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
 		color.GreenString("unchanged — the cluster's, already at this release"))
-	// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
-	// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
-	// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
-	// stating is the one an operator would otherwise have to take on trust — that a
-	// version change did not quietly become a credential change.
+	sayUpgradeCredentialsKept(st, opts)
+	return nil
+}
+
+// sayUpgradeDryRun is what a rehearsed upgrade says it would do.
+//
+// Its own function so what it says can be tested: Upgrade itself needs a cluster.
+func sayUpgradeDryRun(st *State) {
+	fmt.Println()
+	wouldDo("recompose the instance configuration document from this release's chart, " +
+		"keeping every credential the instance is running on")
+	wouldDo("upgrade the instance's Helm release")
+	// A rehearsal that hid this would rehearse a different run: see below.
+	warnPreGeneratedSuperuser(st)
+}
+
+// sayUpgradeCredentialsKept closes a finished upgrade.
+//
+// 🔴 SAID OUT LOUD BECAUSE IT IS THE ONE THING THIS COMMAND NO LONGER LEAVES TO
+// SOMEBODY ELSE, AND THE ONE THING NOBODY WOULD CHECK. It used to close by naming
+// `helm upgrade` as the missing half; now it IS both halves, and the fact worth
+// stating is the one an operator would otherwise have to take on trust — that a
+// version change did not quietly become a credential change.
+//
+// Its own function so what it says can be tested: Upgrade itself needs a cluster.
+func sayUpgradeCredentialsKept(st *State, opts UpgradeOptions) {
 	reconcileUpgradeEscrow(st, st.Values["secretsRootKey"], opts)
 	fmt.Println(color.WhiteString(
 		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
@@ -286,7 +303,6 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// ...which, for an instance older than the generated superuser password, is also
 	// the one thing that must not be read as good news. See warnPreGeneratedSuperuser.
 	warnPreGeneratedSuperuser(st)
-	return nil
 }
 
 // resolveUpgradeImageSource settles the ONE image source both halves of this upgrade
