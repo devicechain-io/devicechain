@@ -102,7 +102,11 @@ type MqttEventSource struct {
 	// while its SUBSCRIBE was outstanding. See classifyResubscribe.
 	connections atomic.Uint64
 	// stopping is set before this source disconnects on purpose, so a re-subscribe that
-	// errors because WE closed the connection is not reported as the broker's doing.
+	// errors because WE closed the connection is dropped without a word. Belt and braces:
+	// paho's Disconnect fails an outstanding SUBSCRIBE with a token error, which
+	// classifyResubscribe already retries, and a fail that races Stop lands in a
+	// lifecycle that is already stopping and is ignored there. What the flag buys is that
+	// onConnect does not depend on either of those staying true.
 	stopping atomic.Bool
 }
 
@@ -369,7 +373,12 @@ const (
 //   - A MISSING SUBACK is fatal only if nothing has replaced the connection it was
 //     asked on: that broker took the connection and stopped answering, which is the
 //     condition subscribeTimeout exists to turn into a failure. If a newer connection
-//     has come up, that connection is subscribing for itself.
+//     has come up, that connection is subscribing for itself. That second case is
+//     DEFENSIVE, not a path paho v1.5.1 takes: on connection loss its internalConnLost
+//     runs cleanUpSubscribe before reconnecting, so a SUBSCRIBE outstanding on a lost
+//     connection ends as a token error (the default case below), not as a timeout. It
+//     is kept so that a paho that stops doing that retries rather than ending the
+//     process over a connection already replaced; only the classify table exercises it.
 //   - Anything else is paho's token error: the connection went away under the
 //     SUBSCRIBE. paho reconnects, and the next OnConnect subscribes again.
 func classifyResubscribe(err error, superseded bool) resubscribeAction {
