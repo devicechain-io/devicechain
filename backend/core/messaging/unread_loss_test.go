@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -55,8 +56,14 @@ type unreadRig struct {
 
 func newUnreadRig(t *testing.T, maxMsgs int64) *unreadRig {
 	t.Helper()
-	srv := startEmbeddedServer(t)
-	area := uniqueArea("unread")
+	return newUnreadRigOn(t, startEmbeddedServer(t), uniqueArea("unread"), maxMsgs)
+}
+
+// newUnreadRigOn builds a rig on an existing server and area. A second rig on the same
+// server and area is a second pod of the same service: its own manager, its own registry
+// and sampler state, and the SAME durable.
+func newUnreadRigOn(t *testing.T, srv *natsserver.Server, area string, maxMsgs int64) *unreadRig {
+	t.Helper()
 	ms := testMicroservice(t, srv, area)
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
@@ -177,14 +184,26 @@ func (g *unreadRig) streamInfo() *nats.StreamInfo {
 // succeeds, and the cursor quietly steps over whatever the stream evicted between two
 // pulls.
 //
-// It is also the case a "how far behind is the cursor" gauge cannot see. The gap between
-// the cursor and the stream's first sequence exists only from an eviction until the
-// durable's next pull, and a live reader pulls far more often than a scrape samples — so
-// the loss has to be COUNTED as the cursor crosses it, not looked for afterwards.
+// It is also a case the gap gauge must NOT report. Between two pulls of a live reader the
+// stream keeps evicting ahead of its cursor, so "how far is the cursor behind the stream's
+// first sequence" is above zero at almost any moment a sample lands — for a reader that
+// never stopped. That is a lagging reader, not a stalled one: its loss is the counter's,
+// counted as the cursor crosses it, and the gauge reports only a durable that was handed
+// nothing since the previous sample. So every sample taken while this reader is working
+// must read a gap of 0.
 func TestLiveLaggingDurableLossIsCounted(t *testing.T) {
 	const published = 2000
 	g := newUnreadRig(t, 10)
 	g.sample() // baseline
+
+	// gaps records the gap gauge at every sample the sampler takes while the reader is
+	// between its first delivery and the head, and evictedAhead how many of those samples
+	// found the stream's first sequence past the cursor — the premise that the check on
+	// gaps is not vacuous.
+	var (
+		gaps         []float64
+		evictedAhead int
+	)
 
 	var (
 		mu        sync.Mutex
@@ -211,19 +230,45 @@ func TestLiveLaggingDurableLossIsCounted(t *testing.T) {
 			}
 		}
 	}()
-	go func() { // the sampler, on a cadence much finer than production's
+	// The sampler, on a cadence much finer than production's but coarser than the time
+	// a fetched batch takes to clear: the stream holds at most 10 messages, so a batch is
+	// at most 10 x 20ms, and every interval spans at least one pull.
+	go func() {
 		defer wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(400 * time.Millisecond):
+				mu.Lock()
+				working := len(delivered) > 0 && !delivered[published]
+				mu.Unlock()
 				g.sample()
+				if !working {
+					continue
+				}
+				// Not the rig's t.Fatal helpers: this is not the test goroutine. An absent
+				// series is recorded as -1, which the check below reports as nonzero.
+				ci, cerr := g.nmgr.js.ConsumerInfo(g.stream, g.durable)
+				si, serr := g.nmgr.js.StreamInfo(g.stream)
+				if cerr == nil && serr == nil && si.State.FirstSeq > ci.Delivered.Stream+1 {
+					evictedAhead++
+				}
+				v, ok := g.series(gapSeries)
+				if !ok {
+					v = -1
+				}
+				gaps = append(gaps, v)
 			}
 		}
 	}()
 
-	g.publish("acme", published)
+	// Paced, so the run spans many sample intervals rather than the fraction of a second an
+	// unpaced publish takes; still far faster than the reader's ~50 messages a second.
+	for i := 0; i < published/100; i++ {
+		g.publish("acme", 100)
+		time.Sleep(150 * time.Millisecond)
+	}
 
 	// Let the reader reach the head, so every sequence has been either delivered or
 	// stepped over and the count is complete.
@@ -260,6 +305,20 @@ func TestLiveLaggingDurableLossIsCounted(t *testing.T) {
 			"and the reader was handed %d distinct ones, so %d were removed before it read them",
 			got, 0.9*float64(lost), lost, published, published-lost, lost)
 	}
+
+	t.Logf("gap gauge while the reader was working: %v (%d samples found evictions ahead of the cursor)",
+		gaps, evictedAhead)
+	if evictedAhead == 0 {
+		t.Fatalf("no sample taken while the reader was working found the stream evicting ahead of "+
+			"its cursor (%d samples); the gap check below would pass for any gauge", len(gaps))
+	}
+	for i, v := range gaps {
+		if v != 0 {
+			t.Errorf("unread-gap gauge = %v at sample %d while the reader was pulling continuously; "+
+				"want 0: a reader that is slower than its producer is lagging, not stalled, and the "+
+				"stalled alert would send the operator looking for pods that are not reading", v, i)
+		}
+	}
 }
 
 // A durable that has STOPPED reading. Its cursor does not move, so it crosses no hole
@@ -274,6 +333,9 @@ func TestStalledDurableGapIsGauged(t *testing.T) {
 	if seqs := g.read(2); seqs[1] != 2 {
 		t.Fatalf("read sequences %v, want 1 and 2", seqs)
 	}
+	// The interval in which the durable read 1 and 2: it moved, so it is not stalled, and
+	// the next interval is the first in which it is handed nothing.
+	g.sample()
 	// 30 published in all: the stream now holds 21..30, and 3..20 were removed while
 	// this durable, whose cursor sits at 2, was not reading.
 	g.publish("acme", 28)
@@ -325,6 +387,11 @@ func TestCaughtUpDurableCountsNothing(t *testing.T) {
 // then steps over those holes too — but they are counted in the stream's deleted count,
 // and a message the purge removed on purpose is not a message this reader failed to read
 // because it fell behind.
+//
+// This pins the case the subtraction covers: the purge and the cursor crossing its holes
+// fall in the SAME sample interval. A purge ahead of a durable that is sampled before it
+// reaches the holes is counted as loss when it does — an accepted residual, documented on
+// sampleDurable and named in the alert text.
 func TestInteriorPurgeIsNotCountedAsLoss(t *testing.T) {
 	g := newUnreadRig(t, 0)
 	g.sample() // baseline
@@ -403,5 +470,84 @@ func TestSeriesExistAtZeroBeforeAnyLoss(t *testing.T) {
 		if got := g.mustSeries(s); got != 0 {
 			t.Errorf("%s = %v before any sample, want 0", s, got)
 		}
+	}
+}
+
+// The stream's NumDeleted FALLS as well as rises: once DiscardOld moves the stream's head
+// past the holes a purge left, they are below FirstSeq and no longer counted as interior
+// deletes. That fall is not an un-delete, and it must not be charged to a durable that
+// read everything as the loss of the holes it once stepped over.
+func TestEvictionPastPurgedHolesIsNotCountedAsLoss(t *testing.T) {
+	g := newUnreadRig(t, 100)
+	g.sample() // baseline
+
+	for i := 0; i < 10; i++ {
+		g.publish("t2", 1)
+		g.publish("t1", 1)
+	}
+	g.publish("t2", 1)
+	purge := &nats.StreamPurgeRequest{Subject: TenantSubjectFilter("test", "t1", unreadSuffix)}
+	if err := g.nmgr.js.PurgeStream(g.stream, purge); err != nil {
+		t.Fatalf("purge t1: %v", err)
+	}
+	g.read(11)
+	g.sample()
+	if d := g.streamInfo().State.NumDeleted; d != 10 {
+		t.Fatalf("stream NumDeleted = %d after the purge, want 10 interior deletes", d)
+	}
+
+	// 100 more against a 100-message ceiling evicts the 11 survivors of the purged range,
+	// so the head moves past every hole. The reader reads all 100: it loses nothing.
+	g.publish("acme", 100)
+	if d := g.streamInfo().State.NumDeleted; d != 0 {
+		t.Fatalf("stream NumDeleted = %d after the head moved past the purged range, want 0; "+
+			"the premise this test pins has moved", d)
+	}
+	g.read(100)
+	g.sample()
+	if got := g.mustSeries(skippedSeries); got != 0 {
+		t.Errorf("unread-skipped counter = %v for a reader that read every message the stream "+
+			"still held, want 0: the stream's deleted count fell because its head moved past the "+
+			"purged holes, and that is not a loss", got)
+	}
+}
+
+// A pod that restarts, or a new replica, attaches to a durable that already exists and
+// carries its whole history: Delivered.Stream minus Delivered.Consumer is every sequence it
+// ever skipped. The new pod's first sample is a baseline, not an interval from zero —
+// otherwise every restart would count that history again and raise the critical alert for
+// nothing new.
+func TestRestartedPodDoesNotRecountHistory(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	area := uniqueArea("unread")
+	first := newUnreadRigOn(t, srv, area, 10)
+
+	// 30 against a 10-message ceiling, then a read: the durable is handed 21..30 and its
+	// cursor has stepped over 1..20.
+	first.publish("acme", 30)
+	first.read(10)
+	ci, err := first.nmgr.js.ConsumerInfo(first.stream, first.durable)
+	if err != nil {
+		t.Fatalf("consumer info: %v", err)
+	}
+	if ci.Delivered.Stream != 30 || ci.Delivered.Consumer != 10 {
+		t.Fatalf("durable reports Delivered{Stream:%d, Consumer:%d}, want {30, 10}: it should "+
+			"carry 20 historical skips into the restart", ci.Delivered.Stream, ci.Delivered.Consumer)
+	}
+
+	// The restarted pod: a new manager and registry on the same area, so the same durable.
+	restarted := newUnreadRigOn(t, srv, area, 10)
+	if restarted.durable != first.durable {
+		t.Fatalf("restarted pod reads durable %q, want the same durable %q", restarted.durable, first.durable)
+	}
+	restarted.sample()
+	restarted.sample()
+	if got := restarted.mustSeries(skippedSeries); got != 0 {
+		t.Errorf("unread-skipped counter = %v on a restarted pod that saw no new loss, want 0: "+
+			"its first sample is a baseline, and the durable's 20 historical skips were not "+
+			"lost on its watch", got)
+	}
+	if got := restarted.mustSeries(gapSeries); got != 0 {
+		t.Errorf("unread-gap gauge = %v for a caught-up durable, want 0", got)
 	}
 }

@@ -1709,7 +1709,8 @@ this for each durable consumer it reads and exports two new series:
 - `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: messages the
   consumer moved past without reading them.
 - `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: messages discarded
-  ahead of a consumer that has stopped reading.
+  ahead of a consumer that has stopped reading (one that was handed no messages since the previous
+  sample; a consumer that is reading but behind reads 0 here).
 
 Two new critical alerts read them: `JetStreamDurableLostUnread` and
 `JetStreamDurableStalledBehindStream`. Deleting a tenant can fire the first one: the deletion removes

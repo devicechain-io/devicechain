@@ -1818,7 +1818,8 @@ nuevas:
 - `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: mensajes que el
   consumidor pasó por encima sin leerlos.
 - `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: mensajes descartados
-  por delante de un consumidor que ha dejado de leer.
+  por delante de un consumidor que ha dejado de leer (uno que no ha recibido ningún mensaje desde la
+  muestra anterior; un consumidor que lee pero va atrasado vale 0 aquí).
 
 Dos alertas críticas nuevas las leen: `JetStreamDurableLostUnread` y
 `JetStreamDurableStalledBehindStream`. Eliminar un tenant puede disparar la primera: la eliminación

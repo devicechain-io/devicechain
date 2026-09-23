@@ -221,7 +221,7 @@ servicio lo mide para cada consumidor duradero que lee, y tres alertas vigilan e
 | --- | --- | --- | --- |
 | `JetStreamStreamNearFull` | warning | Un flujo lleva 10 minutos por encima del 80% de su límite de bytes. Todavía no se ha perdido nada. Cubre los flujos de todos los servicios. | Busque un consumidor que se esté quedando atrás. Si el tráfico simplemente ha superado el flujo, aumente su límite. |
 | `JetStreamDurableLostUnread` | critical | Un consumidor pasó por encima de mensajes que se eliminaron antes de que los leyera. Nunca se procesaron. | Si en ese momento se estaba eliminando un tenant, es lo esperado: la eliminación borró mensajes a los que el consumidor aún no había llegado. Si no, el flujo estaba lleno mientras este consumidor iba atrasado. O bien el límite es demasiado pequeño para el tráfico, o bien el consumidor es más lento que su productor. |
-| `JetStreamDurableStalledBehindStream` | critical | Un consumidor ha dejado de leer y el flujo ya ha descartado mensajes por delante de él. | Averigüe por qué el servicio no lee: pods caídos, en bucle de reinicios o esperando a estar listos. Si no se puede arreglar rápido, aumente el límite del flujo para que deje de descartar. |
+| `JetStreamDurableStalledBehindStream` | critical | Un consumidor lleva al menos dos minutos sin recibir ningún mensaje, y el flujo ya ha descartado mensajes por delante de él. Un consumidor que está leyendo, aunque sea despacio, no dispara esta alerta; sus pérdidas disparan `JetStreamDurableLostUnread`. | El servicio está en marcha, ya que es él quien lo informa, pero su consumidor no lee. Busque un procesamiento de mensajes bloqueado en una dependencia, como la base de datos, o pods esperando a estar listos. Si no se puede arreglar rápido, aumente el límite del flujo para que deje de descartar. |
 
 Los límites son `streamMaxBytes` (los flujos de alto volumen), `streamMaxBytesCold` (los demás) y
 `streamMaxMsgs`, bajo `instance.config.infrastructure.nats`. El volumen de JetStream se dimensiona a
@@ -234,14 +234,18 @@ Las alertas leen dos series, que cada servicio exporta para cada consumidor dura
   mensajes que el consumidor pasó por encima sin leerlos. Es un límite inferior: una reentrega, o un
   mensaje eliminado por detrás del consumidor, hace que cuente menos, nunca más.
 - **`devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`** es cuántos
-  mensajes se han descartado por delante de un consumidor que no está leyendo. Vuelve a 0 cuando el
-  consumidor lee de nuevo, y el contador anterior toma el relevo.
+  mensajes se han descartado por delante de un consumidor que no ha recibido ningún mensaje desde la
+  muestra anterior (cada 30 segundos). Vale 0 mientras el consumidor lee, aunque vaya atrasado: esas
+  pérdidas son del contador. Vuelve a 0 cuando el consumidor lee de nuevo, y el contador anterior
+  toma el relevo.
 
-Ambas existen con valor 0 desde que arranca el servicio. Todas las réplicas de un servicio informan
+Ambas existen con valor 0 desde que el servicio crea el lector del consumidor. Todas las réplicas de un servicio informan
 del mismo consumidor y cuentan la misma pérdida, así que combínelas con `max`, no con `sum`. Reiniciar
 un pod pone el contador a cero, así que léalo con `increase()` o `rate()`. Cada pod mide desde su
 propia primera muestra, así que una pérdida que el consumidor pasa por encima mientras todos los pods
-del servicio lector se reinician a la vez puede quedar sin contar.
+del servicio lector se reinician a la vez puede quedar sin contar. Un servicio sin pods en marcha no
+informa ninguna de las dos series, así que ninguna alerta puede dispararse por él; la advertencia de
+flujo casi lleno y sus alertas de salud de los pods cubren ese caso.
 
 ## Relacionado
 

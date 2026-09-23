@@ -216,7 +216,7 @@ each durable consumer it reads, and three alerts watch the result:
 | --- | --- | --- | --- |
 | `JetStreamStreamNearFull` | warning | A stream has been over 80% of its byte ceiling for 10 minutes. Nothing has been lost yet. It covers the streams of every service. | Look for a consumer that is falling behind. If the traffic has simply outgrown the stream, raise its ceiling. |
 | `JetStreamDurableLostUnread` | critical | A consumer moved past messages that were removed before it read them. They were never processed. | If a tenant was being deleted at the time, this is expected: the deletion removed messages the consumer had not reached yet. Otherwise the stream was full while this consumer was behind. Either the ceiling is too small for the traffic, or the consumer is slower than its producer. |
-| `JetStreamDurableStalledBehindStream` | critical | A consumer has stopped reading, and the stream has already discarded messages ahead of it. | Find out why the service is not reading: pods down, crash-looping, or waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding. |
+| `JetStreamDurableStalledBehindStream` | critical | A consumer has been handed no messages for at least two minutes, and the stream has already discarded messages ahead of it. A consumer that is reading, however slowly, does not fire this one; its losses fire `JetStreamDurableLostUnread`. | The service is running, since it reports this, but its consumer is not reading. Look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding. |
 
 The ceilings are `streamMaxBytes` (the high-volume streams), `streamMaxBytesCold` (the others) and
 `streamMaxMsgs` under `instance.config.infrastructure.nats`. The JetStream volume is sized from
@@ -228,14 +228,17 @@ The alerts read two series, which every service exports for each durable consume
   messages the consumer moved past without reading them. It is a lower bound: a redelivery, or a
   message deleted behind the consumer, makes it count less, never more.
 - **`devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`** is how many
-  messages have been discarded ahead of a consumer that is not reading. It drops back to 0 when the
-  consumer reads again, and the counter above takes over.
+  messages have been discarded ahead of a consumer that was handed no messages since the previous
+  sample (every 30 seconds). It is 0 while the consumer is reading, even when it is behind: those
+  losses are the counter's. It drops back to 0 when the consumer reads again, and the counter above
+  takes over.
 
-Both exist at 0 from the moment the service starts. Every replica of a service reports the same
+Both exist at 0 from the moment the service creates the consumer's reader. Every replica of a service reports the same
 consumer and counts the same loss, so combine them with `max`, not `sum`. A pod restart resets the
 counter, so read it with `increase()` or `rate()`. Each pod measures from its own first sample, so a
 loss the consumer moves past while every pod of the reading service is restarting at once can go
-uncounted.
+uncounted. A service with no running pods reports neither series, so neither alert can fire for
+it; the near-full warning and your pod-health alerts cover that case.
 
 ## Related
 

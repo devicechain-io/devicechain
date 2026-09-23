@@ -151,8 +151,9 @@ type NatsManager struct {
 	oncreate func(*NatsManager) error
 	nc       *nats.Conn
 	js       nats.JetStreamContext
-	// readers is appended under streamMu, because the metrics sampler reads it (via
-	// trackedDurables) for the per-durable unread-loss series while it runs.
+	// readers is appended and read under streamMu, because the metrics sampler reads it
+	// (via trackedDurables) for the per-durable unread-loss series while it runs, and
+	// ExecuteStop reads it (via readersSnapshot) while that sampler may not have joined.
 	readers   []*natsReader
 	writers   []*natsWriter
 	lifecycle core.LifecycleManager
@@ -802,6 +803,14 @@ func (nmgr *NatsManager) trackedDurables() []durableRef {
 		}
 	}
 	return out
+}
+
+// readersSnapshot returns a copy of the readers this service created, read under
+// streamMu for the same reason as trackedDurables.
+func (nmgr *NatsManager) readersSnapshot() []*natsReader {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	return append([]*natsReader(nil), nmgr.readers...)
 }
 
 // trackKvBucket records a KV bucket this service has opened, by the name of the
@@ -2195,12 +2204,13 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 	// cycle of a crash loop. Expect this debug path on every such cycle: by the time the
 	// stop runs, that close's ClosedHandler has latched MarkNotLive (or is queued to, and
 	// drainAndWait leaves closeRequested alone so it still does).
+	readers := nmgr.readersSnapshot()
 	if nmgr.nc != nil && nmgr.nc.IsClosed() {
-		log.Debug().Int("readers", len(nmgr.readers)).
+		log.Debug().Int("readers", len(readers)).
 			Msg("NATS connection is already closed; no reader subscriptions to release.")
 	} else {
 		log.Info().Msg("Shutting down NATS readers.")
-		for _, r := range nmgr.readers {
+		for _, r := range readers {
 			// A bound subscription's Unsubscribe does NOT delete the durable (that is the
 			// whole point of the Bind attach), so this releases local interest without
 			// disturbing the consumer other replicas share.

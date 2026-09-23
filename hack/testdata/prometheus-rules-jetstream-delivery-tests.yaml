@@ -131,7 +131,7 @@ tests:
   # A stalled durable with messages already discarded ahead of it.
   #
   #   minutes 0- 4   gap 0
-  #   minutes 5-24   gap 18 (the consumer stopped; the stream kept discarding)
+  #   minutes 5-24   gap 18 (the consumer was handed nothing; the stream kept discarding)
   #   minutes 25+    gap 0  (it resumed and stepped over the hole)
   # ------------------------------------------------------------------
   - name: a stalled durable behind a discarding stream pages after 2m
@@ -156,8 +156,8 @@ tests:
               stream: devicechain_resolved-events
               durable: devicechain_device-state_resolved-events
             exp_annotations:
-              summary: "a stalled consumer is losing messages it has not read"
-              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events is not reading, and the stream has already discarded 18 messages ahead of it. They will never be delivered. Find out why the consuming service is not pulling (pods down, crash-looping, or parked waiting for readiness); if that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
+              summary: "a consumer that stopped reading is losing messages it has not read"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events has been handed no messages for at least two minutes, and the stream has already discarded 18 messages ahead of it. They will never be delivered. The consuming service is running, since it reports this, but its consumer is not reading: look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
       - eval_time: 40m
         alertname: JetStreamDurableStalledBehindStream
         exp_alerts: []
