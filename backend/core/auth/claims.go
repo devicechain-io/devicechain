@@ -72,11 +72,31 @@ type Claims struct {
 	// minted for a confidential client can only be refreshed by that same
 	// authenticated client — a stolen refresh token is useless without the secret.
 	ClientId string `json:"client_id,omitempty"`
+	// SessionEpoch (the "sep" claim) is the subject identity's session value at the
+	// moment the token was minted. It rides only the two tiers that can be exchanged
+	// for new credentials — refresh tokens (tenant and OAuth) and identity tokens —
+	// and is never set on an access or service token, so the 15-minute data-plane tier
+	// is unchanged by it.
+	//
+	// It is not a secret: the signature is what makes it trustworthy, and it names
+	// nothing but a random value. Only the ISSUING service compares it, against the
+	// value currently stored on the identity, whenever a refresh token or identity
+	// token is exchanged; a password reset, a disable or a delete changes the stored
+	// value and so ends every session minted before it. The data-plane validator
+	// never reads it, and nor does the admin plane's identity-token check — a token
+	// already issued keeps working there until it expires.
+	SessionEpoch SessionEpoch `json:"sep,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
 	jwt.RegisteredClaims
 }
+
+// SessionEpoch is an identity's session value as carried on a token (see
+// Claims.SessionEpoch). A distinct type rather than a bare string so an epoch can
+// never be passed where the positional tenant, email or jti strings of the issue
+// methods are expected, or the other way round.
+type SessionEpoch string
 
 // HasAuthority reports whether the claims grant the required authority. A subject
 // holding the super-authority AuthorityAll ("*") passes every check.

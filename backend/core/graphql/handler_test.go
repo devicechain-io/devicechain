@@ -163,11 +163,11 @@ func TestServeHTTP_BodySizeCeiling(t *testing.T) {
 // Neither identity nor refresh tokens are accepted on the data plane.
 func TestAuthenticateDataPlane_RejectsOtherTiers(t *testing.T) {
 	iss, v := testIssuerValidator(t)
-	idt, err := iss.IssueIdentity("a@b.c", nil, []string{string(auth.AuthorityAll)}, "jti-id")
+	idt, err := iss.IssueIdentity("a@b.c", "epoch-1", nil, []string{string(auth.AuthorityAll)}, "jti-id")
 	if err != nil {
 		t.Fatalf("IssueIdentity: %v", err)
 	}
-	rt, err := iss.IssueRefresh("tenant-a", "alice", nil, nil, "jti-r")
+	rt, err := iss.IssueRefresh("tenant-a", "alice", "epoch-1", nil, nil, "jti-r")
 	if err != nil {
 		t.Fatalf("IssueRefresh: %v", err)
 	}

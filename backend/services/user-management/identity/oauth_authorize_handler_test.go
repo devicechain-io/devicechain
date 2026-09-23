@@ -34,8 +34,10 @@ func (f *fakeAuthorizeSvc) ResolveAuthorizeClient(context.Context, string, strin
 func (f *fakeAuthorizeSvc) Login(context.Context, string, string) (*IdentityAuth, error) {
 	return f.loginResult, f.loginErr
 }
-func (f *fakeAuthorizeSvc) IdentityEmail(string) (string, error) { return f.email, f.emailErr }
-func (f *fakeAuthorizeSvc) IssueAuthorizationCode(context.Context, *iam.OAuthClient, AuthorizeParams, string, string) (string, error) {
+func (f *fakeAuthorizeSvc) IdentitySubject(string) (IdentitySubject, error) {
+	return IdentitySubject{Email: f.email, SessionEpoch: "epoch"}, f.emailErr
+}
+func (f *fakeAuthorizeSvc) IssueAuthorizationCode(context.Context, *iam.OAuthClient, AuthorizeParams, IdentitySubject, string) (string, error) {
 	return f.code, f.codeErr
 }
 
@@ -260,6 +262,29 @@ func TestAuthorize_ConsentBadIdentityToken(t *testing.T) {
 	}
 	if rec.Header().Get("Location") != "" {
 		t.Errorf("must not redirect with a bad identity token")
+	}
+}
+
+// An identity token whose session has ENDED since it was minted (a password reset,
+// disable or delete) passes the signature check but is refused at the mint. That is
+// the user's sign-in expiring, not the user refusing the client, so it renders the
+// session-expired page and does NOT redirect access_denied to the client.
+func TestAuthorize_ConsentEndedSessionRendersSessionExpired(t *testing.T) {
+	svc := &fakeAuthorizeSvc{client: validClient(), email: "a@b.c", codeErr: ErrInvalidToken}
+	form := validParams()
+	form.Set("step", "consent")
+	form.Set("action", "allow")
+	form.Set("identity_token", "id-tok")
+	form.Set("tenant", "acme")
+	rec := postAuthorize(svc, form)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("an ended session must not redirect to the client; Location = %q", loc)
+	}
+	if !strings.Contains(rec.Body.String(), "Session expired") {
+		t.Errorf("an ended session must render the session-expired page; body = %q", rec.Body.String())
 	}
 }
 

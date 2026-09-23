@@ -35,7 +35,12 @@ import (
 )
 
 // RefreshBucket is the NATS KV bucket name backing the server-side refresh-token
-// store. Each live refresh token's jti is a key; deleting it revokes the token.
+// store. Each live refresh token's jti is a key; deleting it revokes that one
+// token. The value stored under it is the subject email, and nothing reads it back:
+// the KV answers only "is this jti still live?". Which PERSON the token belongs to
+// is decided by the token's signed session epoch against the identity row (see
+// sessionIdentity), never by the email alone — so an identity deleted and created
+// again under the same email does not inherit the old one's live jtis.
 const RefreshBucket = kv.BucketRefreshTokens
 
 // ErrInvalidCredentials is returned for every login failure (unknown user, bad
@@ -43,9 +48,57 @@ const RefreshBucket = kv.BucketRefreshTokens
 // reveal whether a username exists.
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
-// ErrInvalidToken is returned when a refresh token fails signature verification
-// or is absent from the server-side store (rotated, revoked, or expired).
+// ErrInvalidToken is returned when a refresh or identity token fails signature
+// verification, is absent from the server-side store (rotated, revoked, or
+// expired), or belongs to a session that has ended (see sessionIdentity).
 var ErrInvalidToken = errors.New("invalid or expired token")
+
+// errSessionEnded is sessionIdentity's refusal: the identity a previously issued
+// credential names is gone, disabled, or has had its session epoch changed since the
+// credential was minted (a password reset, a disable, or a delete and re-create).
+// Each caller translates it to its own surface's invalid-token error; it is kept
+// distinct from a transient store error, which is NOT a policy denial.
+var errSessionEnded = errors.New("session has ended")
+
+// sessionIdentity is the ONE way a previously issued credential — a refresh token,
+// an identity token, or an authorization code — is turned back into an identity. It
+// loads the identity by email and refuses (errSessionEnded) when:
+//
+//   - there is no such identity (deleted; a re-created one is a different row),
+//   - it is disabled,
+//   - its stored epoch is empty, or the credential's epoch is empty, or
+//   - the two epochs differ.
+//
+// 🔴 THE TWO EMPTY CHECKS ARE NOT REDUNDANT WITH THE COMPARISON. A token minted
+// before the epoch existed carries none, and a row inserted without one (an old pod
+// during a rolling upgrade) holds the column default, the empty string. Compared
+// alone, those two empties are EQUAL — and the legacy token would be admitted. Either
+// side being empty is refused on its own.
+//
+// Any other store error is returned as-is, so a caller can tell a database blip
+// (retryable, a server error) from a revoked session (terminal, an invalid grant).
+//
+// Callers mint with the RESOLVED row's epoch, not the incoming one. They are equal
+// once this passes; reading it from the row keeps the row the single source.
+func (m *Manager) sessionIdentity(ctx context.Context, email string, epoch auth.SessionEpoch) (*iam.Identity, error) {
+	id, err := m.iam.IdentityByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errSessionEnded
+		}
+		return nil, err
+	}
+	if !id.Enabled {
+		return nil, errSessionEnded
+	}
+	if id.SessionEpoch == "" || epoch == "" {
+		return nil, errSessionEnded
+	}
+	if auth.SessionEpoch(id.SessionEpoch) != epoch {
+		return nil, errSessionEnded
+	}
+	return id, nil
+}
 
 // BootstrapConfig describes the superuser seeded on first startup (ADR-033). The
 // bootstrap is tenant-less: only the superuser identity is created, with no
@@ -269,8 +322,17 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()
-	tok, err := issuer.IssueIdentity(id.Email, roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
+	// Login authenticates with the password, not with a previously issued
+	// credential, so it does not go through sessionIdentity: it STARTS a session under
+	// the identity's current epoch. A row with no epoch (inserted by a pod from before
+	// the column existed) is refused at the mint rather than handed a token no later
+	// step will accept; the log names the cause and the remedy.
+	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
 	if err != nil {
+		if errors.Is(err, auth.ErrNoSessionEpoch) {
+			log.Error().Str("email", id.Email).
+				Msg("Identity has no session epoch, so no session can be started for it; an administrator must reset its password.")
+		}
 		return nil, err
 	}
 	return &IdentityAuth{
@@ -297,20 +359,21 @@ func (m *Manager) IssueServiceToken(subject string, authorities []string) (auth.
 // (ADR-033). The identity must hold an (enabled) membership in the tenant, unless
 // it is a superuser — which may enter any tenant with full authority, marked
 // actingAsSuperuser on the token for audit.
+//
+// The identity token must belong to the identity's CURRENT session
+// (sessionIdentity): an identity token minted before a password reset, disable or
+// delete is refused here, so it cannot be turned into a fresh refresh chain.
 func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateIdentity(identityToken)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	id, err := m.iam.IdentityByEmail(ctx, claims.Email)
+	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken
 		}
 		return nil, err
-	}
-	if !id.Enabled {
-		return nil, ErrInvalidToken
 	}
 
 	// Reject a tenant token that violates the grammar before it is spliced into the
@@ -340,42 +403,50 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
-	return m.issueTenantTokens(tenant, id.Email, roles, authorities, su)
+	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), roles, authorities, su)
 }
 
 // Memberships re-reads the live memberships for the identity a valid identity
 // token names (ADR-033). It lets the console refresh its cached membership list
 // mid-session — after a membership is added or removed — without a re-login,
 // since the identity token carries no memberships and login only returns a
-// snapshot. The token is validated internally (as SelectTenant does), so this can
-// run on the unauthenticated main endpoint before any tenant is selected.
+// snapshot. The token is validated internally (as SelectTenant does, session epoch
+// included), so this can run on the unauthenticated main endpoint before any tenant
+// is selected.
 func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]MembershipInfo, error) {
 	claims, err := m.validator.ValidateIdentity(identityToken)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	id, err := m.iam.IdentityByEmail(ctx, claims.Email)
+	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken
 		}
 		return nil, err
 	}
-	if !id.Enabled {
-		return nil, ErrInvalidToken
-	}
 	return membershipInfos(id.Memberships), nil
 }
 
-// IdentityEmail validates an identity-tier token and returns its subject email.
-// Used by the OAuth authorize consent step (ADR-047) to recover the authenticated
-// subject from the identity token carried across the login → consent POSTs.
-func (m *Manager) IdentityEmail(identityToken string) (string, error) {
+// IdentitySubject is the authenticated subject an identity token names: its email
+// and the session epoch it was minted under.
+type IdentitySubject struct {
+	Email        string
+	SessionEpoch auth.SessionEpoch
+}
+
+// IdentitySubject validates an identity-tier token's signature, expiry and type and
+// returns the subject it names. Used by the OAuth authorize consent step (ADR-047)
+// to recover the authenticated subject from the identity token carried across the
+// login → consent POSTs. It does NOT check the session is still current — that is
+// IssueAuthorizationCode's job, through sessionIdentity, which is why the epoch is
+// part of what this returns rather than dropped here.
+func (m *Manager) IdentitySubject(identityToken string) (IdentitySubject, error) {
 	claims, err := m.validator.ValidateIdentity(identityToken)
 	if err != nil {
-		return "", ErrInvalidToken
+		return IdentitySubject{}, ErrInvalidToken
 	}
-	return claims.Email, nil
+	return IdentitySubject{Email: claims.Email, SessionEpoch: claims.SessionEpoch}, nil
 }
 
 // CurrentTenant resolves the control-plane tenant record the caller is acting
@@ -594,7 +665,10 @@ func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant strin
 
 // Refresh exchanges a valid, unrevoked tenant refresh token for a new pair,
 // rotating it. Authorities are re-resolved from the identity's current
-// membership, so a role change takes effect on the next refresh.
+// membership, so a role change takes effect on the next refresh. The token must
+// also belong to the identity's current session (sessionIdentity), so a password
+// reset, disable or delete ends it — and every other refresh token of that
+// identity — at its next use.
 func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
@@ -621,8 +695,10 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}
 
 	// The refresh token's subject is the identity email; the tenant is its claim.
-	id, err := m.iam.IdentityByEmail(ctx, claims.Username)
-	if err != nil || !id.Enabled {
+	// Every failure here — an ended session or a store error alike — is reported as
+	// an invalid token, as it always has been on this path.
+	id, err := m.sessionIdentity(ctx, claims.Username, claims.SessionEpoch)
+	if err != nil {
 		return nil, ErrInvalidToken
 	}
 	su := isSuperuser(id)
@@ -638,7 +714,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
-	return m.issueTenantTokens(claims.Tenant, id.Email, roles, authorities, su)
+	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), roles, authorities, su)
 }
 
 // errTenantAccessDenied marks a regular member's denial from a tenant (tenant
@@ -753,8 +829,10 @@ func unionStrings(a, b []string) []string {
 }
 
 // issueTenantTokens mints a tenant access + refresh pair for a global identity
-// and records the refresh jti in the server-side store.
-func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []string, sudo bool) (*TokenPair, error) {
+// and records the refresh jti in the server-side store. epoch is the identity's
+// current session epoch, embedded in the refresh token so the next Refresh can check
+// it; the access token does not carry it.
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, roles, authorities []string, sudo bool) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -771,7 +849,7 @@ func (m *Manager) issueTenantTokens(tenant, email string, roles, authorities []s
 		return nil, err
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(tenant, email, roles, authorities, refreshJti)
+	refresh, err := issuer.IssueRefresh(tenant, email, epoch, roles, authorities, refreshJti)
 	if err != nil {
 		return nil, err
 	}

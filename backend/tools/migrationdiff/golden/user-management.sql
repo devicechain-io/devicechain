@@ -190,7 +190,8 @@ CREATE TABLE "user-management".iam_identities (
  first_name character varying(128),
  last_name character varying(128),
  enabled boolean DEFAULT true NOT NULL,
- password_hash character varying(256) NOT NULL
+ password_hash character varying(256) NOT NULL,
+ session_epoch character varying(64) DEFAULT ''::character varying NOT NULL
 );
 CREATE TABLE "user-management".iam_identity_system_roles (
  identity_id bigint NOT NULL,

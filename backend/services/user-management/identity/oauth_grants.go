@@ -45,14 +45,19 @@ const AuthCodeTTL = 60 * time.Second
 // authorities: the token endpoint re-resolves the tenant grant at redemption and
 // caps it to Scope, so a role change in the (brief) code lifetime is honored and
 // the code holds no capability set.
+//
+// It does carry the subject's SESSION EPOCH at authorize time, and redemption checks
+// it through sessionIdentity like every other credential exchange — so a code issued
+// just before a password reset, disable or delete cannot be redeemed after it.
 type AuthorizationCode struct {
-	ClientId      string   `json:"client_id"`
-	RedirectURI   string   `json:"redirect_uri"`
-	CodeChallenge string   `json:"code_challenge"` // PKCE S256 challenge (RFC 7636)
-	Email         string   `json:"email"`          // the authenticated subject
-	Tenant        string   `json:"tenant"`         // the tenant pinned at authorize time
-	Scope         string   `json:"scope"`          // granted scope (space-delimited)
-	Audience      []string `json:"audience,omitempty"`
+	ClientId      string            `json:"client_id"`
+	RedirectURI   string            `json:"redirect_uri"`
+	CodeChallenge string            `json:"code_challenge"` // PKCE S256 challenge (RFC 7636)
+	Email         string            `json:"email"`          // the authenticated subject
+	SessionEpoch  auth.SessionEpoch `json:"sep"`            // the subject's session at authorize time
+	Tenant        string            `json:"tenant"`         // the tenant pinned at authorize time
+	Scope         string            `json:"scope"`          // granted scope (space-delimited)
+	Audience      []string          `json:"audience,omitempty"`
 }
 
 // OAuthTokens is the result of a successful OAuth grant — the RFC 6749 §5.1 token
@@ -199,7 +204,7 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 		return nil, errInvalidGrant("PKCE verification failed")
 	}
 
-	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.Tenant, rec.Scope, rec.Scope, rec.Audience, rec.ClientId)
+	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.SessionEpoch, rec.Tenant, rec.Scope, rec.Scope, rec.Audience, rec.ClientId)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +271,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// bounds the access token, it does not permanently downgrade the grant), so a
 	// client that narrows once does not irreversibly lose the rest of its grant. The
 	// client binding is carried forward so the rotated token stays bound.
-	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.Tenant, scope, claims.Scope, []string(claims.Audience), claims.ClientId)
+	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.Tenant, scope, claims.Scope, []string(claims.Audience), claims.ClientId)
 	if err != nil {
 		return nil, err
 	}
@@ -326,9 +331,11 @@ func checkRefreshClientBinding(boundClientID, requestClientID, boundScope string
 // governs the rotated refresh token — they differ only when a refresh request
 // narrows scope, where the access token narrows but the refresh keeps the original
 // grant scope. Shared by both grant types so the scope cap is applied in exactly
-// one place. The identity/tenant checks mirror Refresh: a disabled identity, lost
-// membership, or denied tenant fails the grant.
-func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScope, refreshScope string, audience []string, clientID string) (*OAuthTokens, error) {
+// one place. The identity is resolved through sessionIdentity with the epoch the
+// code or refresh token carried, exactly as Refresh does: a deleted or disabled
+// identity, or one whose session has ended since (a password reset), fails the
+// grant, as do a lost membership and a denied tenant.
+func (m *Manager) mintScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, tenant, accessScope, refreshScope string, audience []string, clientID string) (*OAuthTokens, error) {
 	accessAllow, err := scopeAllowance(accessScope)
 	if err != nil {
 		return nil, errInvalidScope(err.Error())
@@ -344,18 +351,16 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScop
 		return nil, errInvalidGrant("invalid tenant")
 	}
 
-	id, err := m.iam.IdentityByEmail(ctx, email)
+	id, err := m.sessionIdentity(ctx, email, epoch)
 	if err != nil {
-		// A vanished identity denies the grant (invalid_grant); a transient DB error
-		// is a server_error, not a policy denial — else an infra blip is reported to
-		// the client as grant-revoked, killing an otherwise-valid session.
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		// An ended session — vanished, disabled, or re-keyed identity — denies the
+		// grant (invalid_grant); a transient DB error is a server_error, not a policy
+		// denial — else an infra blip is reported to the client as grant-revoked,
+		// killing an otherwise-valid session.
+		if errors.Is(err, errSessionEnded) {
 			return nil, errInvalidGrant("subject is no longer valid")
 		}
 		return nil, errServer(err.Error())
-	}
-	if !id.Enabled {
-		return nil, errInvalidGrant("subject is no longer valid")
 	}
 	su := isSuperuser(id)
 	mem := findMembership(id.Memberships, tenant)
@@ -386,7 +391,7 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email, tenant, accessScop
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(tenant, email, roles, refreshCapped, refreshScope, audience, clientID, refreshJti)
+	refresh, err := issuer.IssueOAuthRefresh(tenant, email, auth.SessionEpoch(id.SessionEpoch), roles, refreshCapped, refreshScope, audience, clientID, refreshJti)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}

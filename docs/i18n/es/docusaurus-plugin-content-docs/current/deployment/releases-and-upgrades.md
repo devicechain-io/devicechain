@@ -1581,11 +1581,52 @@ se comprueban contra un clúster real en cada versión.
 Una vez que esté en una versión que registra una declaración, las actualizaciones in situ
 corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en qué clúster.
 
-### Próxima versión — toda carta perdida se cuenta con un solo nombre {#next-upgrade}
+### Próxima versión {#next-upgrade}
 
-La actualización en sí no cambia. Cambian tres cosas después de ella. Solo importan si vigila usted
-mismo las métricas de mensajes no entregados, depende de respuestas a comandos que no se pudieron
-registrar o abre conexiones WebSocket de GraphQL desde su propio código.
+La actualización cierra la sesión de todos los usuarios una vez, y a partir de entonces restablecer
+la contraseña de un usuario, desactivarlo o eliminarlo termina sus sesiones. Eso es la primera
+sección de abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de mensajes no
+entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones WebSocket
+de GraphQL desde su propio código.
+
+#### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
+
+Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
+lleva: los tokens de actualización, el token de inicio de sesión que la consola guarda antes de
+elegir un inquilino y los códigos de autorización de OAuth. Restablecer la contraseña de un usuario,
+desactivarlo o eliminarlo cambia ese valor, y un token que lleva el anterior se rechaza. Antes de
+esta versión, restablecer una contraseña dejaba funcionando todos los tokens de actualización ya
+emitidos, de modo que uno robado seguía renovándose mientras se usara.
+
+Lo que verá en la actualización:
+
+- **Todas las sesiones de la consola, del panel y de los SDK se cierran una vez.** Los tokens
+  emitidos antes de la actualización no llevan valor de sesión, así que no se pueden renovar. Una
+  sesión termina en su siguiente renovación, dentro de los 15 minutos posteriores a la actualización
+  salvo que haya cambiado la duración del token de acceso, y el usuario vuelve a iniciar sesión. Una
+  consola que en ese momento esté en el selector de inquilinos o en las páginas de administración
+  puede mostrar un error al elegir un inquilino, en lugar de volver a la página de inicio de sesión.
+  Cerrar sesión y volver a entrar lo resuelve.
+- **Los clientes OAuth, incluidos los asistentes de IA conectados por MCP, deben autorizarse de
+  nuevo.** Sus tokens de actualización se rechazan con `invalid_grant`.
+- Un usuario creado por un servicio que aún no se había reemplazado mientras avanzaba la
+  actualización no tiene valor de sesión y no puede iniciar sesión. El inicio de sesión falla con un
+  error que lo indica. Restablecer la contraseña de ese usuario lo corrige.
+
+Lo que cambia a partir de entonces:
+
+- **Restablecer la contraseña de un usuario, desactivarlo o eliminarlo termina todas sus
+  sesiones.** Sus tokens de actualización dejan de funcionar en el siguiente uso, y un token de
+  inicio de sesión o un código de autorización emitido antes del cambio ya no se puede canjear por
+  una sesión nueva. Reactivar un usuario desactivado no recupera las sesiones anteriores.
+- **Los tokens ya emitidos para uso directo no se revocan.** Un token de acceso, y el token de inicio
+  de sesión en la API de administración, siguen funcionando hasta que caducan: 15 minutos, salvo que
+  haya cambiado la duración del token de acceso. Eso incluye el token de inicio de sesión de un
+  administrador.
+- **Eliminar un usuario y crear otro con el mismo correo empieza de cero.** El usuario nuevo no
+  hereda ninguna sesión que conservara el anterior.
+- Cambiar los roles o las membresías de un usuario no cierra su sesión. Surte efecto en su siguiente
+  renovación, como antes.
 
 #### Los contadores de pérdidas son una métrica por servicio
 

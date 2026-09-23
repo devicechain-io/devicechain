@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -28,10 +29,13 @@ type AuthorizeService interface {
 	// Login authenticates an email/password and returns the identity token +
 	// memberships (no tenant chosen yet).
 	Login(ctx context.Context, email, password string) (*IdentityAuth, error)
-	// IdentityEmail validates the identity token carried across steps → subject email.
-	IdentityEmail(identityToken string) (string, error)
-	// IssueAuthorizationCode mints the one-time code for the consenting user.
-	IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, email, tenant string) (string, error)
+	// IdentitySubject validates the identity token carried across steps → the subject
+	// (email + session epoch) it names.
+	IdentitySubject(identityToken string) (IdentitySubject, error)
+	// IssueAuthorizationCode mints the one-time code for the consenting user. It
+	// returns ErrInvalidToken when the subject's session has ended since the identity
+	// token was minted.
+	IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, subject IdentitySubject, tenant string) (string, error)
 }
 
 // AuthorizeHandler builds the OAuth 2.1 authorization endpoint (ADR-047 / RFC 6749
@@ -110,13 +114,22 @@ func handleAuthorizeConsent(w http.ResponseWriter, r *http.Request, svc Authoriz
 		redirectAuthorizeError(w, r, p.RedirectURI, "access_denied", "the user denied the request", p.State)
 		return
 	}
-	email, err := svc.IdentityEmail(r.PostFormValue("identity_token"))
+	subject, err := svc.IdentitySubject(r.PostFormValue("identity_token"))
 	if err != nil {
 		renderAuthorizeError(w, http.StatusBadRequest, "Session expired",
 			"Your sign-in session expired. Start the authorization again.")
 		return
 	}
-	code, err := svc.IssueAuthorizationCode(r.Context(), client, p, email, r.PostFormValue("tenant"))
+	code, err := svc.IssueAuthorizationCode(r.Context(), client, p, subject, r.PostFormValue("tenant"))
+	if errors.Is(err, ErrInvalidToken) {
+		// The sign-in this consent rides has been ended since (a password reset,
+		// disable or delete). That is the user's session, not a decision about the
+		// client, so it gets the same page as an expired token — not an access_denied
+		// the client would read as the user refusing.
+		renderAuthorizeError(w, http.StatusBadRequest, "Session expired",
+			"Your sign-in session expired. Start the authorization again.")
+		return
+	}
 	if err != nil {
 		// Most commonly the subject can't act in the selected tenant; report it as a
 		// denial on the (trusted) redirect_uri rather than leaking the reason.

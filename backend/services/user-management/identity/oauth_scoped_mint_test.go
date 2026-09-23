@@ -90,6 +90,17 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 	return &mintTestEnv{m: m, store: store, validator: auth.NewValidator(&key.PublicKey), kv: kv}
 }
 
+// epochOf reads the identity's current session epoch from the store — what a code or
+// refresh token minted for it would carry — so a test driving mintScopedGrant
+// directly presents the epoch a real redemption would.
+func (e *mintTestEnv) epochOf(t *testing.T, email string) auth.SessionEpoch {
+	t.Helper()
+	id, err := e.store.IdentityByEmail(context.Background(), email)
+	require.NoError(t, err)
+	require.NotEmpty(t, id.SessionEpoch, "a seeded identity has no session epoch")
+	return auth.SessionEpoch(id.SessionEpoch)
+}
+
 // seedTenant creates an active, enabled tenant the grant path will admit.
 func (e *mintTestEnv) seedTenant(t *testing.T, token string) {
 	t.Helper()
@@ -146,7 +157,7 @@ func (e *mintTestEnv) seedSuperuser(t *testing.T, email string) {
 // access token, read back through the ordinary validator.
 func (e *mintTestEnv) mint(t *testing.T, email, tenant, scope string) *auth.Claims {
 	t.Helper()
-	toks, err := e.m.mintScopedGrant(context.Background(), email, tenant, scope, scope,
+	toks, err := e.m.mintScopedGrant(context.Background(), email, e.epochOf(t, email), tenant, scope, scope,
 		[]string{"https://mcp.example.com"}, "mcp-client")
 	require.NoError(t, err)
 	require.Equal(t, scope, toks.Scope, "the response must echo the granted scope")
@@ -230,7 +241,7 @@ func TestMintRefusesAnUndefinedScope(t *testing.T) {
 	e.seedTenant(t, "acme")
 	e.seedMember(t, "member@example.com", "acme")
 
-	_, err := e.m.mintScopedGrant(context.Background(), "member@example.com", "acme",
+	_, err := e.m.mintScopedGrant(context.Background(), "member@example.com", e.epochOf(t, "member@example.com"), "acme",
 		"read-only admin", "read-only admin", nil, "mcp-client")
 	require.Error(t, err)
 	oe, ok := err.(*oauthError)
@@ -248,7 +259,7 @@ func TestRefreshNarrowingKeepsTheGrantOnTheRefreshToken(t *testing.T) {
 	e.seedTenant(t, "acme")
 	e.seedMember(t, "fleet@example.com", "acme", string(auth.LocationRead))
 
-	toks, err := e.m.mintScopedGrant(context.Background(), "fleet@example.com", "acme",
+	toks, err := e.m.mintScopedGrant(context.Background(), "fleet@example.com", e.epochOf(t, "fleet@example.com"), "acme",
 		auth.ScopeReadOnly, "read-only location", []string{"https://mcp.example.com"}, "mcp-client")
 	require.NoError(t, err)
 

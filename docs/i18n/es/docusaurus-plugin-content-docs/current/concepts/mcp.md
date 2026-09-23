@@ -62,7 +62,7 @@ El servidor MCP es un **servidor de recursos OAuth 2.1**, y `user-management` es
 
 1. El cliente descubre los requisitos del servidor a partir de sus metadatos de recurso protegido (RFC 9728), y luego encuentra el servidor de autorización a partir de *sus* metadatos (RFC 8414). Ambos documentos viven en una ruta well-known construida insertando el segmento well-known **entre** el host y la ruta del identificador — así que en una instancia en `iot.example.com` son `/.well-known/oauth-protected-resource/api/mcp` y `/.well-known/oauth-authorization-server/api/user-management`.
 2. El usuario pasa por el **flujo de código de autorización con PKCE** (`/oauth/authorize`): inicia sesión, elige el inquilino a conceder, y da su consentimiento — todo renderizado por el servidor, sin secreto compartido.
-3. El cliente intercambia el código por un token de acceso con alcance de inquilino en `/oauth/token`, y lo renueva según sea necesario (los tokens de actualización son de un solo uso y rotan).
+3. El cliente intercambia el código por un token de acceso con alcance de inquilino en `/oauth/token`, y lo renueva según sea necesario (los tokens de actualización son de un solo uso y rotan). Restablecer la contraseña del usuario, desactivarlo o eliminarlo termina la concesión: la siguiente renovación se rechaza y el cliente debe autorizarse de nuevo.
 4. El cliente invoca las herramientas MCP con ese token; cada llamada se ejecuta bajo los propios permisos del usuario.
 
 Los clientes son **registrados por un administrador** (a través de la API de administración) en lugar de autorregistrarse, de modo que un operador controla qué aplicaciones pueden solicitar acceso y con qué URIs de redirección.

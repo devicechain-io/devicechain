@@ -1488,11 +1488,49 @@ exercised against a real cluster on every release.
 Once you are on a release that records a declaration, ordinary in-place upgrades resume.
 `dcctl instances list` shows what is declared, and in which cluster.
 
-### Next release — every lost dead letter is counted under one name {#next-upgrade}
+### Next release {#next-upgrade}
 
-Nothing about the upgrade itself changes. Three things change after it. They matter only if you
-watch the dead-letter metrics yourself, rely on command responses that could not be recorded, or
-open GraphQL WebSocket connections from your own code.
+The upgrade signs every user out once, and from then on a password reset, disabling a user or
+deleting one ends that user's sessions. That is the first section below. The three after it matter
+only if you watch the dead-letter metrics yourself, rely on command responses that could not be
+recorded, or open GraphQL WebSocket connections from your own code.
+
+#### Every user is signed out once, and a password reset now ends sessions
+
+Each user now has a **session value**, and every token that can be exchanged for a new one carries
+it: refresh tokens, the sign-in token the console holds before a tenant is chosen, and OAuth
+authorization codes. Resetting a user's password, disabling the user, or deleting the user changes
+that value, and a token carrying the old one is refused. Before this release a password reset left
+every refresh token already issued working, so a stolen one kept renewing itself for as long as it
+was used.
+
+What you will see at the upgrade:
+
+- **Every console, dashboard and SDK session is signed out once.** Tokens issued before the upgrade
+  carry no session value, so they cannot be refreshed. A session ends at its next refresh, within
+  15 minutes of the upgrade unless you have changed the access-token lifetime, and the user signs in
+  again. A console that is sitting on the tenant picker or the admin pages when that happens can
+  report an error when a tenant is chosen, rather than returning to the sign-in page. Signing out
+  and back in clears it.
+- **OAuth clients, including AI assistants connected through MCP, must authorize again.** Their
+  refresh tokens are refused with `invalid_grant`.
+- A user created by a service that had not yet been replaced while the upgrade rolled out has no
+  session value and cannot sign in. The sign-in fails with an error saying so. Resetting that
+  user's password fixes it.
+
+What changes from then on:
+
+- **A password reset, disabling a user, or deleting a user ends every session that user holds.**
+  Their refresh tokens stop working at the next use, and a sign-in token or authorization code
+  issued before the change can no longer be exchanged for a new session. Re-enabling a disabled
+  user does not bring the old sessions back.
+- **Tokens already issued for direct use are not revoked.** An access token, and the sign-in token
+  on the admin API, keep working until they expire: 15 minutes, unless you have changed the
+  access-token lifetime. That includes an administrator's sign-in token.
+- **Deleting a user and creating one with the same email starts clean.** The new user does not
+  pick up any session the old one still held.
+- Changing a user's roles or memberships does not sign them out. It takes effect at their next
+  refresh, as before.
 
 #### The dead-letter loss counters are one metric per service
 

@@ -73,5 +73,10 @@ var (
 		// moves "what language do we work in?" off every individual browser and onto the
 		// tenant that has the answer.
 		NewTenantLocaleMigration(),
+		// The per-identity SESSION EPOCH: a random value every refresh and identity token
+		// carries, and that a password reset, a disable or a delete changes. Before it, a
+		// reset left every refresh token already issued able to keep rotating, and an
+		// identity deleted and re-created under the same email inherited the old one's.
+		NewIdentitySessionEpochMigration(),
 	}
 )

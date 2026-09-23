@@ -100,6 +100,13 @@ func authenticateDataPlane(v *auth.Validator, token string, header func(string) 
 
 // authenticateIdentity validates an instance-scoped identity token and stamps no
 // tenant (the admin plane runs in the system context, across tenants).
+//
+// It checks the signature, expiry and token type only. It does NOT compare the
+// token's session epoch ("sep") with the identity's current one — that needs the
+// identity store, which only user-management holds — so a password reset, disable
+// or delete does not revoke an identity token already issued here: it keeps its
+// authority on the admin plane until it expires (the access-token lifetime). What
+// the reset does end is every exchange of it for anything longer-lived.
 func authenticateIdentity(v *auth.Validator, token string, _ func(string) string) (*auth.Claims, string, error) {
 	claims, err := v.ValidateIdentity(token)
 	if err != nil {

@@ -77,7 +77,7 @@ func TestIssueOAuthRefresh_CarriesScopeAndAudience(t *testing.T) {
 	iss := NewIssuer(key, "https://as.example.com", time.Minute, time.Hour)
 	v := NewValidator(&key.PublicKey)
 
-	tok, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com",
+	tok, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", "epoch-1",
 		[]string{"viewer"}, []string{"device:read"},
 		ScopeReadOnly, []string{"https://mcp.example.com"}, "mcp-client", "jti-refresh")
 	if err != nil {
