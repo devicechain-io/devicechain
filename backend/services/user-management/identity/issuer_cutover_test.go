@@ -39,7 +39,7 @@ func TestRefreshRejectsScopedToken(t *testing.T) {
 	iss := auth.NewIssuer(key, "https://as.example.com", time.Minute, time.Hour)
 	m := &Manager{validator: auth.NewValidator(&key.PublicKey)}
 
-	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com",
+	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", "epoch-1",
 		[]string{"viewer"}, []string{"device:read"},
 		auth.ScopeReadOnly, []string{"https://mcp.example.com"}, "", "jti-scoped")
 	if err != nil {
@@ -61,7 +61,7 @@ func TestRefreshOAuthRejectsScopelessToken(t *testing.T) {
 	iss := auth.NewIssuer(key, "https://as.example.com", time.Minute, time.Hour)
 	m := &Manager{validator: auth.NewValidator(&key.PublicKey)}
 
-	plain, err := iss.IssueRefresh("tenant-a", "alice@example.com", nil, []string{"device:read"}, "jti-plain")
+	plain, err := iss.IssueRefresh("tenant-a", "alice@example.com", "epoch-1", nil, []string{"device:read"}, "jti-plain")
 	if err != nil {
 		t.Fatalf("IssueRefresh: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRefreshOAuthRejectsScopeWidening(t *testing.T) {
 	iss := auth.NewIssuer(key, "https://as.example.com", time.Minute, time.Hour)
 	m := &Manager{validator: auth.NewValidator(&key.PublicKey)}
 
-	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", nil,
+	scoped, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", "epoch-1", nil,
 		[]string{"device:read"}, auth.ScopeReadOnly, nil, "", "jti-scoped")
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)

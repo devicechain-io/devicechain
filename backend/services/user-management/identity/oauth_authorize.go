@@ -124,11 +124,17 @@ func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams) error 
 }
 
 // IssueAuthorizationCode mints a one-time authorization code for an authenticated,
-// consenting user who selected tenant. It verifies the user may act in the tenant
-// (a code is never issued for a tenant the subject cannot access — that would only
-// fail later at redemption), then stores the code binding for the token endpoint to
-// redeem. The resource indicator (RFC 8707), if present, becomes the token audience.
-func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, email, tenant string) (string, error) {
+// consenting user who selected tenant. It verifies the subject's identity token
+// still belongs to its current session and that the user may act in the tenant (a
+// code is never issued for a tenant the subject cannot access — that would only
+// fail later at redemption), then stores the code binding, session epoch included,
+// for the token endpoint to redeem. The resource indicator (RFC 8707), if present,
+// becomes the token audience.
+//
+// An ended session (a password reset, disable or delete since the identity token
+// was minted) returns ErrInvalidToken, so the consent step can tell the user their
+// sign-in expired rather than report a denial to the client.
+func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, subject IdentitySubject, tenant string) (string, error) {
 	// Belt-and-suspenders: re-assert the redirect_uri belongs to this resolved
 	// client, so a code can never be minted for an unvalidated destination even if a
 	// caller reordered the resolve/validate/issue steps. This is the single most
@@ -137,7 +143,8 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 	if client == nil || !redirectURIRegistered(client.RedirectURIs, p.RedirectURI) {
 		return "", ErrAuthorizeRedirectUnregistered
 	}
-	if err := m.assertTenantAccess(ctx, email, tenant); err != nil {
+	id, err := m.assertTenantAccess(ctx, subject, tenant)
+	if err != nil {
 		return "", err
 	}
 	code, err := newAuthorizationCode()
@@ -148,7 +155,8 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 		ClientId:      p.ClientID,
 		RedirectURI:   p.RedirectURI,
 		CodeChallenge: p.CodeChallenge,
-		Email:         email,
+		Email:         id.Email,
+		SessionEpoch:  auth.SessionEpoch(id.SessionEpoch),
 		Tenant:        tenant,
 		Scope:         p.Scope,
 	}
@@ -161,30 +169,35 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 	return code, nil
 }
 
-// assertTenantAccess confirms the identity may act in tenant — an enabled member,
-// or a superuser (who may break glass into any tenant). Mirrors the SelectTenant
-// gate so the authorize step never issues a code the token step would reject.
-func (m *Manager) assertTenantAccess(ctx context.Context, email, tenant string) error {
+// assertTenantAccess confirms the subject's session is current and the identity
+// may act in tenant — an enabled member, or a superuser (who may break glass into
+// any tenant). Mirrors the SelectTenant gate so the authorize step never issues a
+// code the token step would reject. It returns the resolved identity, whose epoch
+// the code records.
+func (m *Manager) assertTenantAccess(ctx context.Context, subject IdentitySubject, tenant string) (*iam.Identity, error) {
 	// Grammar-check the tenant before any branch (mirrors SelectTenant): the
 	// superuser branch below does no DB lookup, so without this a superuser + a
 	// malformed tenant would yield an issued-but-unredeemable code (the token step
 	// rejects a malformed tenant), breaking the "never issue a code the token step
 	// rejects" invariant.
 	if err := core.ValidateToken(tenant); err != nil {
-		return errTenantAccessDenied
+		return nil, errTenantAccessDenied
 	}
-	id, err := m.iam.IdentityByEmail(ctx, email)
-	if err != nil || !id.Enabled {
-		return ErrInvalidCredentials
+	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch)
+	if err != nil {
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrInvalidToken
+		}
+		return nil, err
 	}
 	if isSuperuser(id) {
-		return nil
+		return id, nil
 	}
 	mem := findMembership(id.Memberships, tenant)
 	if mem == nil || !mem.Enabled {
-		return errTenantAccessDenied
+		return nil, errTenantAccessDenied
 	}
-	return nil
+	return id, nil
 }
 
 // newAuthorizationCode returns a 256-bit cryptographically random, URL-safe code.

@@ -62,7 +62,7 @@ The MCP server is an **OAuth 2.1 resource server**, and `user-management` is its
 
 1. The client discovers the server's requirements from its protected-resource metadata (RFC 9728), then finds the authorization server from *its* metadata (RFC 8414). Both documents live at a well-known path built by inserting the well-known segment **between** the host and the identifier's path — so on an instance at `iot.example.com` they are `/.well-known/oauth-protected-resource/api/mcp` and `/.well-known/oauth-authorization-server/api/user-management`.
 2. The user is sent through the **authorization-code flow with PKCE** (`/oauth/authorize`): they sign in, choose the tenant to grant, and consent — all server-rendered, no shared secret.
-3. The client exchanges the code for a tenant-scoped access token at `/oauth/token`, and refreshes it as needed (refresh tokens are single-use and rotated).
+3. The client exchanges the code for a tenant-scoped access token at `/oauth/token`, and refreshes it as needed (refresh tokens are single-use and rotated). Resetting the user's password, disabling the user or deleting the user ends the grant: the next refresh is refused and the client must authorize again.
 4. The client calls MCP tools with that token; each call runs under the user's own permissions.
 
 Clients are **registered by an administrator** (through the admin API) rather than self-registering, so an operator controls which applications may request access and with what redirect URIs.

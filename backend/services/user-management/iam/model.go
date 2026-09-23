@@ -156,6 +156,20 @@ type Identity struct {
 	LastName     string `gorm:"size:128"`
 	Enabled      bool   `gorm:"not null;default:true"`
 	PasswordHash string `gorm:"not null;size:256" json:"-"`
+	// SessionEpoch is the identity's current session value, embedded as the "sep"
+	// claim in every refresh and identity token minted for it. A token whose epoch
+	// no longer matches this column cannot be exchanged for anything (see
+	// identity.Manager.sessionIdentity), so changing it ends every session at once.
+	// It is changed by the store methods that change a credential — SetPasswordHash
+	// and SetIdentityEnabled(false) — and assigned fresh on every insert by
+	// BeforeCreate, so a re-created identity never inherits the old one's sessions.
+	// See session_epoch.go.
+	//
+	// The column DEFAULT is the empty string so an insert that omits it (a pod from before this
+	// column during a rolling upgrade, a raw INSERT) still succeeds; such a row
+	// cannot be signed into until an admin resets its password, because an empty
+	// epoch is refused both at the mint and at every redemption.
+	SessionEpoch string `gorm:"not null;size:64;default:''" json:"-"`
 
 	// System (instance-scoped) roles, e.g. superuser. Their authorities ride the
 	// identity token and gate the admin API.

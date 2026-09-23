@@ -121,7 +121,7 @@ func TestRefreshRefusesAScopeTheClientIsNoLongerRegisteredFor(t *testing.T) {
 	e.seedMember(t, "pat@example.invalid", "acme", string(auth.LocationRead))
 
 	scope := auth.ScopeReadOnly + " " + auth.ScopeLocation
-	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", "acme",
+	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", e.epochOf(t, "pat@example.invalid"), "acme",
 		scope, scope, []string{"https://mcp.example.invalid"}, client)
 	require.NoError(t, err)
 
@@ -151,7 +151,7 @@ func TestRefreshStillSucceedsForARegisteredScope(t *testing.T) {
 	e.seedMember(t, "pat@example.invalid", "acme", string(auth.LocationRead))
 
 	scope := auth.ScopeReadOnly + " " + auth.ScopeLocation
-	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", "acme",
+	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", e.epochOf(t, "pat@example.invalid"), "acme",
 		scope, scope, nil, client)
 	require.NoError(t, err)
 
@@ -172,7 +172,7 @@ func TestRefreshRequestNarrowingDoesNotDowngradeTheGrant(t *testing.T) {
 	e.seedMember(t, "pat@example.invalid", "acme", string(auth.LocationRead))
 
 	scope := auth.ScopeReadOnly + " " + auth.ScopeLocation
-	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", "acme",
+	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", e.epochOf(t, "pat@example.invalid"), "acme",
 		scope, scope, nil, client)
 	require.NoError(t, err)
 
@@ -194,7 +194,7 @@ func TestRefreshCannotWidenBeyondTheGrant(t *testing.T) {
 	e.seedTenant(t, "acme")
 	e.seedMember(t, "pat@example.invalid", "acme", string(auth.LocationRead))
 
-	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", "acme",
+	tokens, err := e.m.mintScopedGrant(context.Background(), "pat@example.invalid", e.epochOf(t, "pat@example.invalid"), "acme",
 		auth.ScopeReadOnly, auth.ScopeReadOnly, nil, client)
 	require.NoError(t, err)
 

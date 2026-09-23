@@ -136,13 +136,43 @@ func (s *Store) RolesByScopeTokens(ctx context.Context, scope RoleScope, tokens 
 }
 
 // SetIdentityEnabled flips an identity's enabled flag in place.
+//
+// DISABLING also rotates the session epoch, in the same UPDATE, which ends every
+// refresh and identity token minted before it. The enabled check alone already
+// refuses them while the identity stays disabled; the rotation is what stops a
+// later RE-enable from bringing every stolen token still in the refresh store back
+// to life. Enabling writes the flag only: rotating there would end the sessions of
+// an identity that was already enabled, for no credential event at all.
 func (s *Store) SetIdentityEnabled(ctx context.Context, id *Identity, enabled bool) error {
-	return s.sys(ctx).Model(id).Update("enabled", enabled).Error
+	fields := map[string]any{"enabled": enabled}
+	if !enabled {
+		fields["session_epoch"] = NewSessionEpoch()
+	}
+	if err := s.sys(ctx).Model(id).Updates(fields).Error; err != nil {
+		return err
+	}
+	if epoch, ok := fields["session_epoch"].(string); ok {
+		id.SessionEpoch = epoch
+	}
+	return nil
 }
 
-// SetPasswordHash replaces an identity's bcrypt hash.
+// SetPasswordHash replaces an identity's bcrypt hash AND rotates its session epoch
+// in the same UPDATE, so a password reset ends every refresh token and identity
+// token minted before it. The two are one write on purpose: a reset that changed the
+// hash but left the epoch would let a stolen refresh token keep rotating for as long
+// as it is used, and no caller can forget a rotation that is not theirs to perform.
 func (s *Store) SetPasswordHash(ctx context.Context, id *Identity, hash string) error {
-	return s.sys(ctx).Model(id).Update("password_hash", hash).Error
+	epoch := NewSessionEpoch()
+	if err := s.sys(ctx).Model(id).Updates(map[string]any{
+		"password_hash": hash,
+		"session_epoch": epoch,
+	}).Error; err != nil {
+		return err
+	}
+	id.PasswordHash = hash
+	id.SessionEpoch = epoch
+	return nil
 }
 
 // ReplaceSystemRoles replaces an identity's system-role assignments with roles.
@@ -160,6 +190,11 @@ func (s *Store) ReplaceSystemRoles(ctx context.Context, id *Identity, roles []Ro
 // (and identity+tenant) index, blocking re-creation of the same email/membership.
 // An admin "delete" frees the slot immediately; the audit trail lives in the
 // separate auth-event log, not in tombstoned identity rows.
+//
+// Deleting ends the identity's sessions without touching the epoch here: the row
+// is gone, so nothing can match a token's epoch against it, and an identity created
+// again under the same email is a NEW row that BeforeCreate gives a fresh epoch —
+// so the old person's refresh tokens (keyed by email) do not come back with it.
 func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(id).Association("SystemRoles").Clear(); err != nil {

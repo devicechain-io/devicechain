@@ -5,6 +5,7 @@ package auth
 
 import (
 	"crypto/rsa"
+	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -57,6 +58,13 @@ func NewIssuer(priv *rsa.PrivateKey, issuer string, accessTTL, refreshTTL time.D
 // Kid is the id (RFC 7638 thumbprint) of this issuer's signing key.
 func (i *Issuer) Kid() string { return i.kid }
 
+// ErrNoSessionEpoch is returned by the issue methods that must carry a session epoch
+// (refresh and identity tokens) when they are given none. A token minted without one
+// could never be exchanged — the issuing service refuses an empty epoch at every
+// redemption — so minting it would be a success that fails later, far from its
+// cause. Refusing at the mint names the cause where it happens.
+var ErrNoSessionEpoch = errors.New("a refresh or identity token requires a session epoch")
+
 // IssuedToken is a signed token plus the metadata a caller needs to store or
 // return it (the JTI for server-side refresh-token tracking, and expiry).
 type IssuedToken struct {
@@ -85,8 +93,11 @@ type tokenSpec struct {
 	// clientID is the OAuth 2.1 client a scoped token was minted for (ADR-047),
 	// binding the refresh grant to its client. Empty on every other token type.
 	clientID string
-	jti      string
-	ttl      time.Duration
+	// sessionEpoch is the subject identity's session value (the "sep" claim). Set
+	// only on refresh and identity tokens; see Claims.SessionEpoch.
+	sessionEpoch SessionEpoch
+	jti          string
+	ttl          time.Duration
 }
 
 // IssueAccess mints a short-lived tenant-scoped access token (the data-plane
@@ -130,31 +141,49 @@ func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []str
 // IssueOAuthRefresh mints an OAuth 2.1 refresh token carrying the granted scope
 // and audience so a refresh grant re-mints an access token with the same
 // scope/audience binding without re-consulting the authorize step. Like every
-// refresh token its jti is persisted server-side (NATS KV) for revocation.
-func (i *Issuer) IssueOAuthRefresh(tenant, email string, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
+// refresh token its jti is persisted server-side (NATS KV) for revocation, and it
+// carries the subject's session epoch so a credential change ends it. An empty
+// epoch is refused (ErrNoSessionEpoch).
+func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
+	if epoch == "" {
+		return IssuedToken{}, ErrNoSessionEpoch
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: email, email: email,
-		roles: roles, authorities: authorities,
+		roles: roles, authorities: authorities, sessionEpoch: epoch,
 		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.refreshTTL,
 	})
 }
 
 // IssueRefresh mints a long-lived tenant-scoped refresh token. The caller
-// persists jti in the refresh-token store (NATS KV) so it can be revoked.
-func (i *Issuer) IssueRefresh(tenant, username string, roles, authorities []string, jti string) (IssuedToken, error) {
+// persists jti in the refresh-token store (NATS KV) so it can be revoked. It
+// carries the subject's session epoch so a credential change ends it; an empty
+// epoch is refused (ErrNoSessionEpoch).
+func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, roles, authorities []string, jti string) (IssuedToken, error) {
+	if epoch == "" {
+		return IssuedToken{}, ErrNoSessionEpoch
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: username,
-		roles: roles, authorities: authorities, jti: jti, ttl: i.refreshTTL,
+		roles: roles, authorities: authorities, sessionEpoch: epoch, jti: jti, ttl: i.refreshTTL,
 	})
 }
 
 // IssueIdentity mints an instance-scoped identity token (ADR-033): no tenant, the
 // subject's *system* authorities, used for the admin API and the tenant-selection
-// exchange. The data-plane validator rejects it because it carries no tenant.
-func (i *Issuer) IssueIdentity(email string, roles, authorities []string, jti string) (IssuedToken, error) {
+// exchange. The data-plane validator rejects it because it carries no tenant. It
+// carries the subject's session epoch, which the issuing service checks when the
+// token is exchanged for a tenant session, a membership list or an authorization
+// code; an empty epoch is refused (ErrNoSessionEpoch). The admin API does NOT check
+// the epoch — it verifies the signature only — so an identity token already issued
+// keeps its admin authority until it expires (the access-token lifetime).
+func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, roles, authorities []string, jti string) (IssuedToken, error) {
+	if epoch == "" {
+		return IssuedToken{}, ErrNoSessionEpoch
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeIdentity, username: email, email: email,
-		roles: roles, authorities: authorities, jti: jti, ttl: i.accessTTL,
+		roles: roles, authorities: authorities, sessionEpoch: epoch, jti: jti, ttl: i.accessTTL,
 	})
 }
 
@@ -183,6 +212,7 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		ActingAsSuperuser: spec.actingAsSuperuser,
 		Scope:             spec.scope,
 		ClientId:          spec.clientID,
+		SessionEpoch:      spec.sessionEpoch,
 		TokenType:         spec.tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,

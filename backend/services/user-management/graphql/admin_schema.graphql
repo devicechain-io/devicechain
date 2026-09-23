@@ -742,12 +742,19 @@ type Mutation {
     # Create a global identity with the given system roles.
     createIdentity(request: AdminIdentityCreateRequest!): AdminIdentity!
     # Enable or disable an identity (disabled identities cannot authenticate).
+    # Disabling also ends every refresh session the identity holds, so re-enabling
+    # does not bring them back; identity and access tokens already issued run out
+    # their own (short) lifetime.
     setIdentityEnabled(email: String!, enabled: Boolean!): AdminIdentity!
     # Replace an identity's system-role assignments (role tokens, system scope).
     setSystemRoles(email: String!, roleTokens: [String!]!): AdminIdentity!
-    # Replace an identity's password (hashed server-side).
+    # Replace an identity's password (hashed server-side). Also ends every refresh
+    # session the identity holds; identity and access tokens already issued run out
+    # their own (short) lifetime.
     setPassword(email: String!, password: String!): AdminIdentity!
-    # Delete an identity and its memberships; returns whether one was removed.
+    # Delete an identity and its memberships; returns whether one was removed. Its
+    # refresh sessions end with it, and an identity created again under the same
+    # email does not inherit them.
     deleteIdentity(email: String!): Boolean!
 
     # Bind an identity to an existing tenant with the given tenant roles.

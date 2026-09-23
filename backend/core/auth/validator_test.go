@@ -120,7 +120,7 @@ func TestValidate_TokenTypeSeparation(t *testing.T) {
 	v := NewValidator(&key.PublicKey)
 
 	access, _ := iss.IssueAccess("tenant-a", "alice", nil, nil, "a")
-	refresh, _ := iss.IssueRefresh("tenant-a", "alice", nil, nil, "r")
+	refresh, _ := iss.IssueRefresh("tenant-a", "alice", "epoch-1", nil, nil, "r")
 
 	if _, err := v.Validate(refresh.Token); err == nil {
 		t.Fatal("Validate accepted a refresh token")
@@ -162,7 +162,7 @@ func TestIssueIdentity_RoundTripAndTierIsolation(t *testing.T) {
 
 	// An identity token carries no tenant but a system authority, and round-trips
 	// through ValidateIdentity.
-	idt, err := iss.IssueIdentity("alice@example.com", []string{"superuser"}, []string{string(AuthorityAll)}, "jti-id")
+	idt, err := iss.IssueIdentity("alice@example.com", "epoch-1", []string{"superuser"}, []string{string(AuthorityAll)}, "jti-id")
 	if err != nil {
 		t.Fatalf("IssueIdentity: %v", err)
 	}
