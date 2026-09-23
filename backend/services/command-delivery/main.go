@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -52,6 +53,11 @@ var (
 	// callback builds. See buildMetrics.
 	DeliveryMetrics  processor.DeliveryMetrics
 	WritebackMetrics *processor.WritebackMetrics
+
+	// DeadLetters is this service's identity as a dead-letter producer: the source its
+	// letters are stamped with and the dead_letter_lost_total their losses count on. Built
+	// ONCE, in the initialize phase, for the same reason the metrics are. See buildMetrics.
+	DeadLetters *deadletter.Producer
 )
 
 func main() {
@@ -95,6 +101,7 @@ func parseConfiguration() error {
 func buildMetrics() {
 	DeliveryMetrics = processor.NewDeliveryMetrics(Microservice)
 	WritebackMetrics = processor.NewWritebackMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager) error {
@@ -131,7 +138,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
-		presenceReader(infra), deadWriter, DeliveryMetrics)
+		presenceReader(infra), DeadLetters.NewSink(deadWriter), DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and

@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -46,6 +47,11 @@ var (
 	// NotificationProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
 	NotifyMetrics processor.NotifyMetrics
+
+	// DeadLetters is this service's identity as a dead-letter producer: the source its
+	// letters are stamped with and the dead_letter_lost_total their losses count on. Built
+	// once, in the initialize phase, for the reason the metrics are. See buildMetrics.
+	DeadLetters *deadletter.Producer
 )
 
 func main() {
@@ -110,6 +116,7 @@ func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	NotifyMetrics = processor.NewNotifyMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 }
 
 // createNatsComponents creates the messaging components used by this microservice:
@@ -148,7 +155,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Notifier, deadWriter, NotifyMetrics)
+		core.NewNoOpLifecycleCallbacks(), Notifier, DeadLetters.NewSink(deadWriter), NotifyMetrics)
 	return NotificationProcessor.Initialize(context.Background())
 }
 

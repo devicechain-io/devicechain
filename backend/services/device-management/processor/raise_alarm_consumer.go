@@ -59,11 +59,10 @@ type RaiseAlarmConsumer struct {
 	RaiseAlarmMetrics
 
 	// dead records a raise-alarm edge that could not be applied (ADR-024). Nil when no
-	// dead-letter writer is configured, in which case the edge is dropped as before.
+	// dead-letter sink is configured, in which case the edge is dropped as before. The sink
+	// stamps this service as the letter's source and counts a lost letter on the process's
+	// dead_letter_lost_total.
 	dead *deadletter.Sink
-	// area names this service on the letters it writes, read once at construction so the
-	// failure path never dereferences anything.
-	area string
 
 	procCtx    context.Context
 	procCancel context.CancelFunc
@@ -91,9 +90,8 @@ func (rc *RaiseAlarmConsumer) pacer() *core.ReadPacer {
 // It is a type of its own so it can be built in a DIFFERENT PHASE from the consumer
 // that reads it. See NewRaiseAlarmMetrics.
 type RaiseAlarmMetrics struct {
-	metrics        *core.ProcessorMetrics
-	deadLettered   prometheus.Counter
-	deadLetterLost prometheus.Counter
+	metrics      *core.ProcessorMetrics
+	deadLettered prometheus.Counter
 }
 
 // NewRaiseAlarmMetrics builds the raise-alarm consumer's instruments.
@@ -113,9 +111,6 @@ func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
 			"Raise-alarm edges written to the dead-letter stream after every attempt to apply "+
 				"them failed, so an alarm that should have been raised or cleared is visible "+
 				"rather than only logged (ADR-024)."),
-		deadLetterLost: ms.NewCounter("raise_alarm_dead_letter_lost_total",
-			"Raise-alarm edges that could be neither applied NOR dead-lettered — the write "+
-				"failed on a delivery that will not repeat, so the edge is gone."),
 	}
 }
 
@@ -126,16 +121,13 @@ func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
 // start.
 func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
-	dead deadletter.Writer, metrics RaiseAlarmMetrics) *RaiseAlarmConsumer {
+	dead *deadletter.Sink, metrics RaiseAlarmMetrics) *RaiseAlarmConsumer {
 	rc := &RaiseAlarmConsumer{
 		Microservice:      ms,
 		Reader:            reader,
 		Api:               api,
 		RaiseAlarmMetrics: metrics,
-		area:              ms.FunctionalArea,
-	}
-	if dead != nil {
-		rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })
+		dead:              dead,
 	}
 	name := fmt.Sprintf("%s-%s", ms.FunctionalArea, "raise-alarm-proc")
 	rc.lifecycle = core.NewLifecycleManager(name, rc, callbacks)
@@ -338,7 +330,6 @@ func (rc *RaiseAlarmConsumer) deadLetter(msg messaging.Message, what string, cau
 	if err := rc.dead.Write(ctx, deadletter.Envelope{
 		Kind:   deadletter.KindDetectionAction,
 		Reason: deadletter.ReasonExhausted,
-		Source: rc.area,
 		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
 			"that should have been raised or cleared was not",
 		Detail:      detail,

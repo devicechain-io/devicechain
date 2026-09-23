@@ -42,6 +42,12 @@ type DispatchConsumer struct {
 	// this service's own terminal subject. See index for why it is best-effort.
 	deadIndex *deadletter.Sink
 
+	// deadLetters is this service's dead-letter producer. The index sink comes from it, and so
+	// does the source stamped on every index entry; and a verbatim copy that could not be written
+	// on the final delivery is counted on its dead_letter_lost_total — the one series the
+	// DeadLetterWriteLost alert selects, by name, for every service that loses a letter.
+	deadLetters *deadletter.Producer
+
 	// rate is the per-tenant outbound egress limiter (ADR-060 SD-3). nil disables egress rate
 	// limiting (every dispatch admitted; the bounded worker pool + per-send timeout still bound
 	// egress). waitBudget is how long a worker blocks for a token before shedding.
@@ -86,7 +92,8 @@ type DispatchConsumer struct {
 // how long a worker blocks for a token before shedding. tenantDeleted is the ADR-077 lifecycle gate
 // (nil disables the refusal). workers is the outbound concurrency ceiling; backlog is the
 // reader→worker hand-off buffer. Nil metrics (unit tests) run the consumer unmeasured (every
-// recorder is nil-safe).
+// recorder is nil-safe). deadLetters is the service's dead-letter producer, built once in the
+// initialize phase; it is required.
 //
 // metrics is built once in the initialize phase (see NewDispatchMetrics) and shared by every
 // consumer this service constructs, because that callback is connection-scoped and the
@@ -101,7 +108,8 @@ type DispatchConsumer struct {
 // is: this is the only consumer in the service, so the property worth buying is that a second one
 // added later cannot be constructed without answering the question.
 func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageWriter,
-	deadIndex deadletter.Writer, executor *Executor, rate *core.TenantRateLimiter, waitBudget time.Duration,
+	deadIndex deadletter.Writer, deadLetters *deadletter.Producer, executor *Executor,
+	rate *core.TenantRateLimiter, waitBudget time.Duration,
 	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics,
 	readPacer *core.ReadPacer) *DispatchConsumer {
 	// 🔴 A NIL PACER IS REFUSED RATHER THAN DEFAULTED, and an earlier version of this defaulted it.
@@ -119,14 +127,27 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 			"exhausted retry budget cannot end the process, and the pod reports ready while " +
 			"dispatching nothing")
 	}
+	// 🔴 A NIL PRODUCER IS REFUSED FOR THE SAME REASON. Without one, a verbatim copy lost on the
+	// final delivery would be counted only as a disposition label that no alert reads — which is
+	// exactly how this service's losses went unalerted before the counter was shared.
+	if deadLetters == nil {
+		panic("outbound-connectors: NewDispatchConsumer needs the service's dead-letter producer; " +
+			"without one a dispatch lost on its final delivery alerts nobody")
+	}
+	// An INDEX sink: its loss is counted here, as a disposition, and never on
+	// dead_letter_lost_total — the verbatim copy is already durable, so a lost index entry costs the
+	// operator's view of a give-up, not the give-up. See deadletter.Producer.NewIndexSink.
 	var index *deadletter.Sink
 	if deadIndex != nil {
-		index = deadletter.NewSink(deadIndex, func(error) { metrics.recordOutcome(actionUnknown, outcomeDeadIndexFailed) })
+		index = deadLetters.NewIndexSink(deadIndex, func(error) {
+			metrics.recordOutcome(actionUnknown, outcomeDeadIndexFailed)
+		})
 	}
 	return &DispatchConsumer{
 		reader:        reader,
 		dead:          dead,
 		deadIndex:     index,
+		deadLetters:   deadLetters,
 		executor:      executor,
 		metrics:       metrics,
 		rate:          rate,
@@ -447,6 +468,12 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 		// than pretend leaving it unacked will retry. Ack so the (already terminal) message is not left dangling.
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("action", action).
 			Msg("LOST connector dispatch: dead-letter write failed on the final delivery; it could be neither delivered nor dead-lettered.")
+		//
+		// Counted twice, on purpose, because the two counters answer different questions. The
+		// producer's dead_letter_lost_total is the alertable LOSS, on the series every service shares
+		// and the alert selects by name; the outcome label keeps connector_dispatch_total a complete
+		// per-dispatch disposition breakdown whose outcomes still sum to the dispatches handled.
+		c.deadLetters.Lost()
 		c.metrics.recordOutcome(action, outcomeDeadWriteFailed)
 		c.ack(msg)
 		return
@@ -490,7 +517,6 @@ func (c *DispatchConsumer) index(tctx context.Context, msg messaging.Message, ru
 	_ = c.deadIndex.Write(tctx, deadletter.Envelope{
 		Kind:   deadletter.KindConnectorDispatch,
 		Reason: indexReasonFor(outcome),
-		Source: connectorsArea,
 		Summary: "an outbound connector dispatch was given up on; the request itself is on this " +
 			"instance's connector-dispatch dead-letter subject",
 		// 🔴 THE DETAIL IS THE BOUNDED OUTCOME LABEL, NEVER THE ENDPOINT'S OWN ERROR TEXT. A send
@@ -505,12 +531,6 @@ func (c *DispatchConsumer) index(tctx context.Context, msg messaging.Message, ru
 		OccurredAt:  time.Now().UTC(),
 	})
 }
-
-// connectorsArea is the source recorded on this service's dead letters. It is a literal rather than
-// the Microservice's FunctionalArea because the consumer is constructed with a nil Microservice in
-// tests, and a source that silently became "" would fail the envelope's own validation on the one
-// path that must not fail quietly.
-const connectorsArea = "outbound-connectors"
 
 // indexReasonFor maps this service's terminal outcome onto the platform's bounded reason vocabulary.
 //

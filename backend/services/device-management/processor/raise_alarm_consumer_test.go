@@ -253,10 +253,8 @@ func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Mess
 
 func consumerWithDeadLetters(api model.DeviceManagementApi, dead *deadRecorder) *RaiseAlarmConsumer {
 	rc := newTestConsumer(api)
-	rc.area = "device-management"
 	rc.deadLettered = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_total"})
-	rc.deadLetterLost = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_lost_total"})
-	rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })
+	rc.dead = deadletter.NewProducer(&core.Microservice{FunctionalArea: "device-management"}).NewSink(dead)
 	return rc
 }
 

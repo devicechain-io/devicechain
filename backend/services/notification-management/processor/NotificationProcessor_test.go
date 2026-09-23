@@ -189,12 +189,39 @@ func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Mess
 }
 
 func processorWithDeadLetters(n Notifier, dead deadletter.Writer) *NotificationProcessor {
-	np := newTestProcessor(n)
-	np.area = "notification-management"
-	np.deadLettered = prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_total"})
-	np.deadLetterLost = prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_lost_total"})
-	np.dead = deadletter.NewSink(dead, func(error) { np.deadLetterLost.Inc() })
+	np, _ := processorWithDeadLettersAndRegistry(n, dead)
 	return np
+}
+
+// processorWithDeadLettersAndRegistry gives the processor a sink from a real dead-letter
+// producer on a Microservice with a registry, so the loss counter can be read back by the
+// name it EXPORTS under — the name the alert selects on.
+func processorWithDeadLettersAndRegistry(n Notifier, dead deadletter.Writer) (*NotificationProcessor, *prometheus.Registry) {
+	np := newTestProcessor(n)
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "notification-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	np.deadLettered = prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_total"})
+	np.dead = deadletter.NewProducer(ms).NewSink(dead)
+	return np, reg
+}
+
+const notificationLost = "devicechain_notificationmanagement_dead_letter_lost_total"
+
+// gatheredCounter reads a plain counter off reg by its full exported name.
+func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if !assert.Nil(t, err) {
+		return -1
+	}
+	for _, f := range families {
+		if f.GetName() == name {
+			return f.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("the registry exports no %s", name)
+	return -1
 }
 
 func counterOf(t *testing.T, c prometheus.Counter) float64 {
@@ -208,7 +235,7 @@ func counterOf(t *testing.T, c prometheus.Counter) float64 {
 // was paged about is exactly the failure an operator most needs to be able to find.
 func TestANotificationThatReachedNobodyIsDeadLettered(t *testing.T) {
 	dead := &deadRecorder{}
-	np := processorWithDeadLetters(&fakeNotifier{err: errors.New("smtp is down")}, dead)
+	np, reg := processorWithDeadLettersAndRegistry(&fakeNotifier{err: errors.New("smtp is down")}, dead)
 	ack := &recordingAck{}
 
 	np.dispatchOne(context.Background(),
@@ -231,20 +258,20 @@ func TestANotificationThatReachedNobodyIsDeadLettered(t *testing.T) {
 	// 🔴 THE COUNTER PAIR READS THE SAME EITHER WAY ROUND unless something asserts it:
 	// one says "recorded", the other says "gone", and the alert rests on the second.
 	assert.Equal(t, float64(1), counterOf(t, np.deadLettered))
-	assert.Equal(t, float64(0), counterOf(t, np.deadLetterLost))
+	assert.Equal(t, float64(0), gatheredCounter(t, reg, notificationLost))
 }
 
 // The other half of that pair: a letter that could not be written counts as LOST and NOT
 // as written, or the alert that exists for this case never fires.
 func TestANotificationThatCannotBeDeadLetteredCountsAsLost(t *testing.T) {
 	dead := &deadRecorder{err: errors.New("broker is away")}
-	np := processorWithDeadLetters(&fakeNotifier{err: errors.New("smtp is down")}, dead)
+	np, reg := processorWithDeadLettersAndRegistry(&fakeNotifier{err: errors.New("smtp is down")}, dead)
 	ack := &recordingAck{}
 
 	np.dispatchOne(context.Background(),
 		msgWith(testAlarmSubject, validEventBytes(t), messaging.MaxDeliver, ack))
 
-	assert.Equal(t, float64(1), counterOf(t, np.deadLetterLost))
+	assert.Equal(t, float64(1), gatheredCounter(t, reg, notificationLost))
 	assert.Equal(t, float64(0), counterOf(t, np.deadLettered))
 	assert.Equal(t, 1, ack.acked, "a lost letter must still ack its source; no redelivery follows")
 }

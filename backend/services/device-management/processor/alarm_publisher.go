@@ -65,38 +65,48 @@ type AlarmEventWriter struct {
 	marshal func(*model.AlarmStateChangeEvent) ([]byte, error)
 
 	// dead records an alarm transition whose event could not be published (ADR-024). Nil
-	// when no dead-letter writer is configured, in which case the failure is logged as
-	// before — the pre-wiring default, never the steady state.
+	// when no dead-letter sink is configured, in which case the failure is logged as
+	// before — the pre-wiring default, never the steady state. The sink stamps this service
+	// as the letter's source and counts a lost letter on the process's
+	// dead_letter_lost_total, shared with the raise-alarm consumer's sink.
 	dead *deadletter.Sink
-	// area names this service on the letters it writes, read once at construction so the
-	// failure path never dereferences anything.
-	area string
 
-	deadLettered   prometheus.Counter
-	deadLetterLost prometheus.Counter
+	AlarmEventMetrics
 }
 
-// NewAlarmEventWriter builds an alarm-event publisher over the given writer, with the
-// ADR-024 arm behind it. dead may be nil (no dead-letter stream configured).
-func NewAlarmEventWriter(ms *core.Microservice, writer messaging.MessageWriter,
-	dead deadletter.Writer) *AlarmEventWriter {
-	w := &AlarmEventWriter{
-		writer:  writer,
-		marshal: proto.MarshalAlarmStateChangeEvent,
-		area:    ms.FunctionalArea,
+// AlarmEventMetrics is every Prometheus instrument the alarm-event publisher exports.
+//
+// It is a type of its own so it can be built in a DIFFERENT PHASE from the publisher that
+// reads it, for the reason NewRaiseAlarmMetrics gives: the publisher is built in the NATS
+// manager's oncreate callback, which runs on every start, and a collector registered there
+// is registered again — and panics — whenever that callback is entered again.
+type AlarmEventMetrics struct {
+	deadLettered prometheus.Counter
+}
+
+// NewAlarmEventMetrics builds the alarm-event publisher's instruments. Call it from the
+// initialize phase, which runs once.
+func NewAlarmEventMetrics(ms *core.Microservice) AlarmEventMetrics {
+	return AlarmEventMetrics{
 		deadLettered: ms.NewCounter("alarm_event_dead_lettered_total",
 			"Alarm state-change events that could not be published to the alarm-events "+
 				"stream and were written to the dead-letter stream instead. Each one is an "+
 				"alarm transition that reached the database but not the bus, so nobody was "+
 				"paged about it — it is visible to an operator rather than only logged."),
-		deadLetterLost: ms.NewCounter("alarm_event_dead_letter_lost_total",
-			"Alarm state-change events that could be neither published NOR dead-lettered, "+
-				"so the transition is recorded nowhere but the alarm row itself."),
 	}
-	if dead != nil {
-		w.dead = deadletter.NewSink(dead, func(error) { w.deadLetterLost.Inc() })
+}
+
+// NewAlarmEventWriter builds an alarm-event publisher over the given writer, with the
+// ADR-024 arm behind it. dead may be nil (no dead-letter stream configured). metrics is
+// built once in the initialize phase (see NewAlarmEventMetrics).
+func NewAlarmEventWriter(writer messaging.MessageWriter, dead *deadletter.Sink,
+	metrics AlarmEventMetrics) *AlarmEventWriter {
+	return &AlarmEventWriter{
+		writer:            writer,
+		marshal:           proto.MarshalAlarmStateChangeEvent,
+		dead:              dead,
+		AlarmEventMetrics: metrics,
 	}
-	return w
 }
 
 // PublishAlarmEvent marshals and publishes an alarm state-change event. It never returns
@@ -159,7 +169,6 @@ func (w *AlarmEventWriter) deadLetter(ctx context.Context, event *model.AlarmSta
 	if err := w.dead.Write(ctx, deadletter.Envelope{
 		Kind:   deadletter.KindNotification,
 		Reason: reason,
-		Source: w.area,
 		Summary: "an alarm state-change event could not be published, so the transition is " +
 			"recorded on the alarm row but reached no subscriber and paged nobody",
 		Detail:     detail,

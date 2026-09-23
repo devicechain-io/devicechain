@@ -48,7 +48,10 @@ const (
 	outcomeBlocked = "blocked"
 	// outcomeDeadWriteFailed — the terminal case where the dead-letter WRITE itself failed on the
 	// last delivery the broker will make, so the dispatch could be neither delivered nor durably
-	// dead-lettered: an explicit, alertable LOSS signal (never silently swallowed).
+	// dead-lettered. This label is the DISPOSITION, kept so the outcomes still sum to the dispatches
+	// handled; the alertable signal is the service's dead_letter_lost_total, which the same branch
+	// moves (deadletter.Producer.Lost) and which the DeadLetterWriteLost alert reads. No alert reads
+	// this label, and none should: a loss is alerted on the one series every service shares.
 	outcomeDeadWriteFailed = "dead_write_failed"
 	// outcomeDeadIndexFailed — the give-up was durably dead-lettered on this service's own terminal
 	// subject, but its INDEX entry on the platform dead-letter stream could not be written. Nothing

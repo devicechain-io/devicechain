@@ -201,8 +201,10 @@ type ReactMetrics struct {
 	permanentlyRejected *prometheus.CounterVec
 	orphan              prometheus.Counter
 	poisonDropped       prometheus.Counter
-	deadLettered        prometheus.Counter
-	deadLetterLost      prometheus.Counter
+	// deadLettered counts events recorded as dead letters. A letter that could not be
+	// written is counted by the dead-letter sink itself, on the dead_letter_lost_total every
+	// producing service shares (deadletter.Producer).
+	deadLettered prometheus.Counter
 }
 
 // NewReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
@@ -227,7 +229,6 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
 		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
 		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
-		deadLetterLost:      ms.NewCounter("react_events_dead_letter_lost_total", "Derived events that could be neither dispatched NOR dead-lettered — the write to the dead-letter stream failed on a delivery that will not repeat. This is the one outcome on this path where work is silently gone, and it is the reason the counter exists separately from the one above."),
 	}
 }
 
@@ -287,16 +288,6 @@ func (m *ReactMetrics) recordDeadLettered() {
 		return
 	}
 	m.deadLettered.Inc()
-}
-
-// recordDeadLetterLost records one derived event that could be neither dispatched nor
-// dead-lettered. It is counted apart from the one above because it is the only outcome on
-// this path where the work is gone with no record of it anywhere.
-func (m *ReactMetrics) recordDeadLetterLost() {
-	if m == nil {
-		return
-	}
-	m.deadLetterLost.Inc()
 }
 
 // setRulesActive publishes the loaded rule count (called once at startup wiring).

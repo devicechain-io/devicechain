@@ -124,5 +124,5 @@ func TestAConsumerCannotBeBuiltWithoutAReadPacer(t *testing.T) {
 				"dispatches nothing")
 		}
 	}()
-	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, nil, nil, 0, nil, 1, 1, nil, nil)
+	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, testProducer(), nil, nil, 0, nil, 1, 1, nil, nil)
 }

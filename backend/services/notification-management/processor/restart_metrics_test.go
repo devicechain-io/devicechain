@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -40,11 +41,14 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// The initialize phase. It runs once (lifecycle.go's initializeFrom is
 	// Uninitialized alone), which is what makes it the safe place to register.
 	metrics := NewNotifyMetrics(ms)
+	// The dead-letter producer, built in the same phase by main.go's buildMetrics.
+	producer := deadletter.NewProducer(ms)
 
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
 	for start := 1; start <= 2; start++ {
-		if p := NewNotificationProcessor(ms, nil, core.NewNoOpLifecycleCallbacks(), nil, nil, metrics); p == nil {
+		if p := NewNotificationProcessor(ms, nil, core.NewNoOpLifecycleCallbacks(), nil,
+			producer.NewSink(&deadRecorder{}), metrics); p == nil {
 			t.Fatalf("start %d built no processor", start)
 		}
 	}
@@ -56,15 +60,24 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// The in-flight gauge is the probe because a Gauge exports a sample as soon as it
 	// is built; the loop's counter is a CounterVec, which exports nothing until a
 	// message is handled and so could not tell "registered" from "not registered".
-	const want = "devicechain_notificationmanagement_notify_inflight"
+	//
+	// The dead-letter producer's loss counter is the second probe: a plain Counter, and
+	// the series the DeadLetterWriteLost alert selects by name.
+	want := []string{
+		"devicechain_notificationmanagement_notify_inflight",
+		"devicechain_notificationmanagement_dead_letter_lost_total",
+	}
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("gathering the registry: %v", err)
 	}
+	have := map[string]bool{}
 	for _, f := range families {
-		if f.GetName() == want {
-			return
+		have[f.GetName()] = true
+	}
+	for _, w := range want {
+		if !have[w] {
+			t.Errorf("the registry does not hold %q; those instruments went somewhere else, or nowhere", w)
 		}
 	}
-	t.Errorf("the registry does not hold %q; the processor's instruments went somewhere else, or nowhere", want)
 }

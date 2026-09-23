@@ -56,12 +56,21 @@ func TestAnUnusableLetterIsRefusedBeforeItIsWritten(t *testing.T) {
 			if err := e.Validate(); err == nil {
 				t.Fatalf("an envelope with %s was accepted", name)
 			}
+			if name == "no source" {
+				// The sink stamps the source itself, so this one is a Validate/Marshal
+				// refusal only — see TestTheSinkStampsTheSource for the sink's side.
+				return
+			}
+			p, reg := testProducer(t, "notification-management")
 			w := &fakeWriter{}
-			if err := NewSink(w, nil).Write(context.Background(), e); err == nil {
+			if err := p.NewSink(w).Write(context.Background(), e); err == nil {
 				t.Fatalf("the sink wrote an envelope with %s", name)
 			}
 			if w.calls != 0 {
 				t.Fatalf("the sink reached the broker with an unusable envelope")
+			}
+			if got := lostCount(t, reg, "notification-management"); got != 1 {
+				t.Fatalf("a refused letter counted %v on dead_letter_lost_total, want 1", got)
 			}
 		})
 	}
@@ -70,8 +79,9 @@ func TestAnUnusableLetterIsRefusedBeforeItIsWritten(t *testing.T) {
 // The counterweight: a complete envelope is written. Without it, a Validate that refused
 // everything would satisfy every case above.
 func TestACompleteLetterIsWritten(t *testing.T) {
+	p, _ := testProducer(t, "notification-management")
 	w := &fakeWriter{}
-	if err := NewSink(w, nil).Write(context.Background(), good()); err != nil {
+	if err := p.NewSink(w).Write(context.Background(), good()); err != nil {
 		t.Fatalf("a complete envelope was refused: %v", err)
 	}
 	if len(w.got) != 1 {
@@ -91,8 +101,8 @@ func TestACompleteLetterIsWritten(t *testing.T) {
 // attempt would silently lose the work.
 func TestATransientWriteFailureIsRetried(t *testing.T) {
 	w := &fakeWriter{failures: 2, err: errors.New("broker is away")}
-	lost := 0
-	sink := NewSink(w, func(error) { lost++ })
+	p, reg := testProducer(t, "notification-management")
+	sink := p.NewSink(w)
 
 	if err := sink.Write(context.Background(), good()); err != nil {
 		t.Fatalf("the sink gave up on a failure it should have ridden out: %v", err)
@@ -100,8 +110,8 @@ func TestATransientWriteFailureIsRetried(t *testing.T) {
 	if w.calls != 3 {
 		t.Fatalf("the sink made %d attempts, want 3", w.calls)
 	}
-	if lost != 0 {
-		t.Fatalf("a recovered write was reported as a loss")
+	if got := lostCount(t, reg, "notification-management"); got != 0 {
+		t.Fatalf("a recovered write was reported as a loss: counter = %v", got)
 	}
 }
 
@@ -111,8 +121,8 @@ func TestATransientWriteFailureIsRetried(t *testing.T) {
 // discard.
 func TestAWriteThatNeverSucceedsIsReportedAsALoss(t *testing.T) {
 	w := &fakeWriter{failures: 99, err: errors.New("broker is away")}
-	lost := 0
-	sink := NewSink(w, func(error) { lost++ })
+	p, reg := testProducer(t, "notification-management")
+	sink := p.NewSink(w)
 
 	err := sink.Write(context.Background(), good())
 	if err == nil {
@@ -121,8 +131,8 @@ func TestAWriteThatNeverSucceedsIsReportedAsALoss(t *testing.T) {
 	if !strings.Contains(err.Error(), "LOST") {
 		t.Fatalf("the error does not say the work is gone: %v", err)
 	}
-	if lost != 1 {
-		t.Fatalf("the loss hook fired %d times, want 1", lost)
+	if got := lostCount(t, reg, "notification-management"); got != 1 {
+		t.Fatalf("dead_letter_lost_total = %v after one lost letter, want 1", got)
 	}
 	if w.calls != writeAttempts {
 		t.Fatalf("the sink made %d attempts, want %d", w.calls, writeAttempts)
@@ -140,18 +150,18 @@ func TestAWriteThatNeverSucceedsIsReportedAsALoss(t *testing.T) {
 // back. Honouring cancellation here would lose exactly the letters most worth having.
 func TestAShuttingDownConsumerStillGetsEveryAttempt(t *testing.T) {
 	w := &fakeWriter{failures: 2, err: errors.New("broker is away")}
-	lost := 0
+	p, reg := testProducer(t, "notification-management")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := NewSink(w, func(error) { lost++ }).Write(ctx, good()); err != nil {
+	if err := p.NewSink(w).Write(ctx, good()); err != nil {
 		t.Fatalf("a cancelled caller cut the retries: %v", err)
 	}
 	if w.calls != 3 {
 		t.Fatalf("made %d attempts under a cancelled context, want 3", w.calls)
 	}
-	if lost != 0 {
-		t.Fatalf("a write that succeeded was reported as a loss")
+	if got := lostCount(t, reg, "notification-management"); got != 0 {
+		t.Fatalf("a write that succeeded was reported as a loss: counter = %v", got)
 	}
 }
 

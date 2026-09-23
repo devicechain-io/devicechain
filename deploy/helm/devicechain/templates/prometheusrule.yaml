@@ -147,26 +147,30 @@ spec:
             summary: "the dead-letter store is losing records"
             description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
         - alert: DeadLetterWriteLost
-          # 🔴 EVERY TERM IS `or vector(0)`, AND WITHOUT IT THIS ALERT CANNOT FIRE WHEN IT
-          # MATTERS MOST. sum() over no series is the EMPTY vector, and empty + x is empty
-          # — so one service not being scraped makes the whole expression absent rather
-          # than false. The cause this alert names is the broker being unreachable, and a
-          # service that cannot create its streams CRASHLOOPS: exactly then, its series
-          # disappears and the losses of the services still running go unreported.
-          expr: |
-            (sum(rate(devicechain_eventprocessing_react_events_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
-              + (sum(rate(devicechain_notificationmanagement_notifications_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
-              + (sum(rate(devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
-              + (sum(rate(devicechain_devicemanagement_raise_alarm_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
-              + (sum(rate(devicechain_devicemanagement_alarm_event_dead_letter_lost_total{namespace="{{ $ns }}"}[5m])) or vector(0))
-              > 0
+          # 🔑 SELECTED BY NAME, NOT LISTED. Every service that writes dead letters counts a
+          # lost one on the same counter, built by the core dead-letter producer and exported
+          # under that service's own subsystem, so this selector covers every adopter with no
+          # list to keep. The list this replaced was maintained by hand, and one
+          # service's losses were missing from it.
+          #
+          # 🔴 `[a-z0-9]+`, NOT `.+`. The area segment never contains `_` (its dashes are
+          # stripped), so the stricter form matches the one name core builds and nothing else.
+          # `.+` would also match the older per-path names some services exported, and old pods
+          # still export those during an upgrade: after rate() drops the name, two series from
+          # one pod share a labelset and the rule fails to evaluate, silencing it.
+          #
+          # The outer `or vector(0)` is still load-bearing: sum() over no series is the EMPTY
+          # vector, so with nothing scraped the expression would be absent rather than false.
+          # Its parentheses bind the comparison to the whole expression — see
+          # DeadLetterStoreLosing above for what happens without them.
+          expr: (sum(rate({__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total", namespace="{{ $ns }}"}[5m])) or vector(0)) > 0
           for: 5m
           labels:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
             summary: "work is being lost with no record of it"
-            description: "A consumer gave up on a message AND could not write it to the dead-letter stream, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. Look at JetStream itself: this is a failed publish, so the broker is unreachable, refusing, or the account is out of storage. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
+            description: "A service gave up on a message AND could not record it as a dead letter, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. There are two causes, and the pod's LOST error log line tells them apart. Either the write failed — the broker is unreachable, refusing, or out of storage, so look at JetStream — or the service refused its own letter as malformed, which is a defect in that service. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
         - alert: ReactConnectorEgressShedding
           expr: sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

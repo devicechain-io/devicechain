@@ -119,8 +119,7 @@ func answer(commandToken, dispatchNonce string) []byte {
 func responseConsumer(api *model.Api, dead *deadRecorder, body []byte) *CommandDeliveryProcessor {
 	return &CommandDeliveryProcessor{
 		Api:  api,
-		area: "command-delivery",
-		dead: deadletter.NewSink(dead, func(error) {}),
+		dead: testDeadSink(dead),
 		DeliveryMetrics: DeliveryMetrics{
 			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_total"}),
 			ResponsesRefused:       prometheus.NewCounter(prometheus.CounterOpts{Name: "refused_e2e_total"}),
@@ -489,8 +488,7 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 	dead := &deadRecorder{}
 	consumer := &CommandDeliveryProcessor{
 		Api:  api,
-		area: "command-delivery",
-		dead: deadletter.NewSink(dead, func(error) {}),
+		dead: testDeadSink(dead),
 		DeliveryMetrics: DeliveryMetrics{
 			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_wb_total"}),
 		},

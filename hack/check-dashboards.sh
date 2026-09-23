@@ -227,10 +227,41 @@ series_re = re.compile(r"devicechain_[a-z0-9_]+")
 ILLEGAL_IN_NAME = "-."
 TOKEN_TAIL = re.compile(r"[A-Za-z0-9_.:-]*")
 
+# 🔴 A SELECTOR BY __name__ REGEX IS INVISIBLE TO series_re, and it used to be skipped
+# in silence. `devicechain_[a-z0-9_]+` never matches the text `devicechain_.+_...` or
+# `devicechain_[a-z0-9]+_...`, because the character after `devicechain_` is a regex
+# metacharacter — so an alert that selects every service's copy of one metric by name,
+# which is exactly the shape that has no per-service list to keep, was the one shape
+# this check said nothing about. A misspelled suffix there selects nothing, and the
+# alert over it evaluates an empty vector and never fires.
+#
+# So the two forms the chart uses are resolved: the subsystem is a wildcard, and the
+# SUFFIX after it must be a registered Go literal, exactly as the metric part of a
+# literal series must be. Any OTHER regex after `devicechain_` is reported rather than
+# skipped, because a form this check does not understand is a form it cannot vouch for.
+REGEX_SELECTOR = re.compile(r"devicechain_(\[a-z0-9\]\+|\.\+)_([a-z0-9_]+)")
+NAME_CHAR = re.compile(r"[a-z0-9_]")
+
 seen = {}
+regex_seen = {}
 for path in dashboards + rule_files:
     with open(path, "rb") as fh:
         text = fh.read().decode("utf-8", "replace")
+    rel = os.path.relpath(path, root)
+    for start in [m.start() for m in re.finditer(r"devicechain_", text)]:
+        after = start + len("devicechain_")
+        if after < len(text) and NAME_CHAR.match(text, after):
+            continue  # a literal series (or label) -- series_re's business below
+        sel = REGEX_SELECTOR.match(text, start)
+        if sel is None or text[sel.end():sel.end() + 1] in ILLEGAL_IN_NAME:
+            token = text[start:start + 60].split("\n")[0]
+            problems.append(
+                "%s... (in %s) follows devicechain_ with a form this check cannot resolve.\n"
+                "    A selector by name must be devicechain_[a-z0-9]+_<metric> or\n"
+                "    devicechain_.+_<metric>, with <metric> a registered name; anything else is\n"
+                "    a selector nothing here can vouch for." % (token, rel))
+            continue
+        regex_seen.setdefault((sel.group(1), sel.group(2)), set()).add(rel)
     for match in series_re.finditer(text):
         if text[match.end():match.end() + 1] in ILLEGAL_IN_NAME:
             token = match.group(0) + TOKEN_TAIL.match(text, match.end()).group(0)
@@ -268,14 +299,24 @@ for series in sorted(seen):
             % (series, where, metric, areas[subsystem])
         )
 
+for (form, suffix) in sorted(regex_seen):
+    if suffix not in literals:
+        problems.append(
+            "devicechain_%s_%s (in %s) selects every area's %r by name, and NO Go source\n"
+            "    registers that name. The selector matches nothing, and an ALERT over it\n"
+            "    evaluates an empty vector, which is not false -- it never fires and never\n"
+            "    complains."
+            % (form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), suffix))
+
 if problems:
     print("The chart's dashboards and alert rules do not hold up:\n", file=sys.stderr)
     for p in problems:
         print("  - %s" % p, file=sys.stderr)
     sys.exit(1)
 
-print("    %d dashboard(s) parse; %d devicechain_* series all resolve to a Go registration"
-      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES])))
+print("    %d dashboard(s) parse; %d devicechain_* series and %d by-name selector(s) all resolve\n"
+      "    to a Go registration"
+      % (len(dashboards), len([s for s in seen if s not in ALLOWED_NON_SERIES]), len(regex_seen)))
 PY
 }
 
@@ -566,6 +607,10 @@ spec:
           expr: sum(rate(devicechain_selftestarea_other_probe_total{namespace="dc"}[5m])) > 0
           labels:
             devicechain_instance: dc
+        - alert: ProbeByNameFiring
+          expr: sum(rate({__name__=~"devicechain_[a-z0-9]+_probe_total", namespace="dc"}[5m])) > 0
+          labels:
+            devicechain_instance: dc
 EOF
   restore() {
     cp "$tmp/probe.json" "$dash/probe.json"
@@ -652,6 +697,32 @@ EOF
   fi
   restore
   echo "  ok: a series carrying a character illegal in a metric name is caught"
+
+  # Case 6b — A MISSPELLED SUFFIX IN A BY-NAME SELECTOR, alone.
+  # 🔴 THIS ONE WAS SKIPPED IN SILENCE BEFORE THE CHECK WAS TAUGHT TO READ IT. The
+  # character after `devicechain_` is a regex metacharacter, so the literal-series
+  # pattern never matched the selector at all and a typo in its suffix read green —
+  # over an alert that then selects nothing and never fires.
+  sed -i 's/devicechain_\[a-z0-9\]+_probe_total/devicechain_[a-z0-9]+_prbe_total/' "$tmpl/prometheusrule-probe.yaml"
+  grep -qF 'devicechain_[a-z0-9]+_prbe_total' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the by-name selector mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag a misspelled suffix in a by-name selector"
+  fi
+  restore
+  echo "  ok: a misspelled suffix in a by-name selector is caught"
+
+  # Case 6c — A BY-NAME SELECTOR IN A FORM THE CHECK DOES NOT RESOLVE, alone. A
+  # suffix it cannot parse out is one it cannot vouch for, so the form is refused
+  # rather than skipped: `.*` would pass here otherwise, typo or not.
+  sed -i 's/devicechain_\[a-z0-9\]+_probe_total/devicechain_.*_probe_total/' "$tmpl/prometheusrule-probe.yaml"
+  grep -qF 'devicechain_.*_probe_total' "$tmpl/prometheusrule-probe.yaml" ||
+    fail "the unresolvable-form mutation did not apply"
+  if check_content "$work" >/dev/null 2>&1; then
+    fail "did not flag a by-name selector in a form the check cannot resolve"
+  fi
+  restore
+  echo "  ok: a by-name selector in an unresolvable form is refused"
 
   # -------------------------------------------------------------------------
   # The ConfigMap cases DO run against a copy of the real chart, and can: they
@@ -812,7 +883,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 17 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 19 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 

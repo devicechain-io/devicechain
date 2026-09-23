@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -86,6 +87,11 @@ var (
 	// component the NATS manager's oncreate callback builds. See buildMetrics.
 	DetectMetrics *processor.DetectMetrics
 	ReactMetrics  *processor.ReactMetrics
+
+	// DeadLetters is this service's identity as a dead-letter producer: the source its
+	// letters are stamped with and the dead_letter_lost_total their losses count on. Built
+	// once, in the initialize phase, for the reason the metrics are. See buildMetrics.
+	DeadLetters *deadletter.Producer
 )
 
 func main() {
@@ -136,6 +142,7 @@ func parseConfiguration() error {
 func buildMetrics() {
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager) error {
@@ -383,7 +390,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
-		deadWriter, ReactMetrics)
+		DeadLetters.NewSink(deadWriter), ReactMetrics)
 	return nil
 }
 
