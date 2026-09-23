@@ -109,7 +109,9 @@ pod.
 - `DC_INSTANCE_ID` and `DC_MS_FUNCTIONAL_AREA` are **required** — the instance the service
   belongs to and the service's own area (`event-sources` for the command below). The service
   refuses to start when either is missing. `DC_LOG_CONSOLE=1` switches the JSON log output to
-  a human-readable console format.
+  a human-readable console format. It does not change how much is logged: the level comes
+  from `infrastructure.logging.level` in the instance document below, and is `info` when the
+  document does not set it (see [Logs](../deployment/observability.md#logs)).
 - `/etc/dci-config/instance` is the **instance-wide** document: NATS hostname and port, the
   database and persistence settings, and the rest of the shared infrastructure. Its shape is
   `InstanceConfiguration` in `backend/core/config/instance.go` — this is where you point the

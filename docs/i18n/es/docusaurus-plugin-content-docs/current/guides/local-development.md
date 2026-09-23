@@ -110,7 +110,10 @@ rutas fijas, las mismas que el chart de Helm monta en cada pod.
 - `DC_INSTANCE_ID` y `DC_MS_FUNCTIONAL_AREA` son **obligatorias**: la instancia a la que
   pertenece el servicio y el área del propio servicio (`event-sources` para el comando de
   abajo). El servicio se niega a arrancar si falta cualquiera de las dos. `DC_LOG_CONSOLE=1`
-  cambia la salida de log en JSON por un formato de consola legible.
+  cambia la salida de log en JSON por un formato de consola legible. No cambia cuánto se
+  registra: el nivel viene de `infrastructure.logging.level` en el documento de instancia de
+  abajo, y es `info` cuando el documento no lo fija (consulte
+  [Registros](../deployment/observability.md#logs)).
 - `/etc/dci-config/instance` es el documento **de toda la instancia**: nombre de host y puerto
   de NATS, los ajustes de base de datos y persistencia, y el resto de la infraestructura
   compartida. Su forma es `InstanceConfiguration` en `backend/core/config/instance.go`; aquí

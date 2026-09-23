@@ -73,6 +73,16 @@ func TestLoadInstanceConfigurationRefusesAMisspelledKey(t *testing.T) {
 			wantKey: "maxSubscriptionMessageBytse",
 		},
 		{
+			// The log level is the key an operator reaches for mid-incident, so a typo
+			// that quietly left the service at info would cost the most exactly when
+			// the output matters.
+			name: "the log level, misspelled",
+			doc: `{"infrastructure":{"nats":{"hostname":"h","port":4222},
+			       "userManagement":{"hostname":"u","port":8080},
+			       "logging":{"levle":"debug"}}}`,
+			wantKey: "levle",
+		},
+		{
 			name: "three levels down",
 			doc: `{"infrastructure":{"nats":{"hostname":"h","port":4222,"tls":{"enabeld":true}},
 			       "userManagement":{"hostname":"u","port":8080}}}`,
@@ -198,6 +208,7 @@ func TestLoadInstanceConfigurationAcceptsAFullyPopulatedDocument(t *testing.T) {
     "metrics": {"enabled": true},
     "graphql": {"maxSubscriptionMessageBytes": 8388608},
     "shutdown": {"drainSeconds": 10, "terminationGracePeriodSeconds": 60},
+    "logging": {"level": "debug"},
     "userManagement": {"hostname": "user-management", "port": 8080},
     "deviceManagement": {"hostname": "device-management", "port": 8080},
     "eventProcessing": {"hostname": "event-processing", "port": 8080},
@@ -219,6 +230,8 @@ func TestLoadInstanceConfigurationAcceptsAFullyPopulatedDocument(t *testing.T) {
   }
 }`
 
+	// The document sets a log level, and a successful load applies it process-wide.
+	keepGlobalLevel(t)
 	ms := &Microservice{}
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)),
 		"every key this platform documents must survive a strict decode")
@@ -229,4 +242,5 @@ func TestLoadInstanceConfigurationAcceptsAFullyPopulatedDocument(t *testing.T) {
 	assert.Equal(t, "ai-inference", infra.AiInference.Hostname)
 	assert.Equal(t, []string{"10.42.0.17/32"}, infra.Egress.AllowedDestinations)
 	assert.Equal(t, "timescaledb", ms.InstanceConfiguration.Persistence.Tsdb.Type)
+	assert.Equal(t, "debug", infra.Logging.Level)
 }
