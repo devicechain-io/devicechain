@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -57,14 +58,49 @@ func (d *refusingDeadWriter) WriteMessages(context.Context, ...messaging.Message
 	return errors.New("the dead-letter stream is away as well")
 }
 
-// alarmWriterFor builds the publisher through its REAL constructor, so the counters,
-// the sink and the area name are wired the way main.go wires them rather than by hand.
-// A struct-literal Microservice has no metrics registry, which makes its counters
-// unregistered but fully functional — they still count.
+// alarmWriterFor builds the publisher through its REAL constructor, so the counters and
+// the sink are wired the way main.go wires them rather than by hand: the metrics from
+// NewAlarmEventMetrics and the sink from a dead-letter producer on the same Microservice.
 func alarmWriterFor(t *testing.T, w messaging.MessageWriter, dead deadletter.Writer) *AlarmEventWriter {
 	t.Helper()
-	return NewAlarmEventWriter(&core.Microservice{FunctionalArea: "device-management"}, w, dead)
+	pub, _ := alarmWriterWithRegistry(t, w, dead)
+	return pub
 }
+
+// alarmWriterWithRegistry is alarmWriterFor over a Microservice with a registry, for the
+// tests that read a counter back by the name it EXPORTS under — which is what the alert
+// selects on, and which a read through a handle would never see.
+func alarmWriterWithRegistry(t *testing.T, w messaging.MessageWriter,
+	dead deadletter.Writer) (*AlarmEventWriter, *prometheus.Registry) {
+	t.Helper()
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	producer := deadletter.NewProducer(ms)
+	var sink *deadletter.Sink
+	if dead != nil {
+		sink = producer.NewSink(dead)
+	}
+	return NewAlarmEventWriter(w, sink, NewAlarmEventMetrics(ms)), reg
+}
+
+// gatheredCounter reads a plain counter off reg by its full exported name.
+func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering the registry: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == name {
+			return f.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("the registry exports no %s", name)
+	return 0
+}
+
+const deviceManagementLost = "devicechain_devicemanagement_dead_letter_lost_total"
 
 func alarmEvent() *model.AlarmStateChangeEvent {
 	return &model.AlarmStateChangeEvent{
@@ -95,7 +131,7 @@ func alarmEvent() *model.AlarmStateChangeEvent {
 func TestAnAlarmEventThatCannotBePublishedIsDeadLetteredAndCounted(t *testing.T) {
 	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
 	dead := &deadRecorder{}
-	w := alarmWriterFor(t, pub, dead)
+	w, reg := alarmWriterWithRegistry(t, pub, dead)
 	ctx := core.WithTenant(context.Background(), "acme")
 
 	w.PublishAlarmEvent(ctx, alarmEvent())
@@ -143,8 +179,8 @@ func TestAnAlarmEventThatCannotBePublishedIsDeadLetteredAndCounted(t *testing.T)
 	if got := testutil.ToFloat64(w.deadLettered); got != 1 {
 		t.Fatalf("alarm_event_dead_lettered_total = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(w.deadLetterLost); got != 0 {
-		t.Fatalf("alarm_event_dead_letter_lost_total = %v, want 0: the letter was written", got)
+	if got := gatheredCounter(t, reg, deviceManagementLost); got != 0 {
+		t.Fatalf("%s = %v, want 0: the letter was written", deviceManagementLost, got)
 	}
 }
 
@@ -242,15 +278,15 @@ func TestAnAlarmEventThatCannotBeMarshalledIsDeadLetteredAsUnprocessable(t *test
 func TestAnAlarmEventThatCanBeNeitherPublishedNorFiledIsCountedAsLost(t *testing.T) {
 	pub := &alarmEventRecorder{failures: alarmPublishAttempts, err: errors.New("the broker is away")}
 	dead := &refusingDeadWriter{}
-	w := alarmWriterFor(t, pub, dead)
+	w, reg := alarmWriterWithRegistry(t, pub, dead)
 
 	w.PublishAlarmEvent(core.WithTenant(context.Background(), "acme"), alarmEvent())
 
 	if dead.calls == 0 {
 		t.Fatal("no attempt was made to file the letter")
 	}
-	if got := testutil.ToFloat64(w.deadLetterLost); got != 1 {
-		t.Fatalf("alarm_event_dead_letter_lost_total = %v, want 1", got)
+	if got := gatheredCounter(t, reg, deviceManagementLost); got != 1 {
+		t.Fatalf("%s = %v, want 1", deviceManagementLost, got)
 	}
 	if got := testutil.ToFloat64(w.deadLettered); got != 0 {
 		t.Fatalf("alarm_event_dead_lettered_total = %v, want 0: no letter was written", got)

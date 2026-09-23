@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -48,7 +49,11 @@ var (
 	// DispatchMetrics is built ONCE, in the initialize phase, and shared by every
 	// DispatchConsumer the NATS manager's oncreate callback builds. See buildMetrics.
 	DispatchMetrics *processor.DispatchMetrics
-	Api             *model.Api
+	// DeadLetters is this service's identity as a dead-letter producer: the source its index
+	// entries are stamped with and the dead_letter_lost_total a lost dispatch is counted on. Built
+	// once, in the initialize phase, for the reason the metrics are. See buildMetrics.
+	DeadLetters *deadletter.Producer
+	Api         *model.Api
 )
 
 func main() {
@@ -112,6 +117,7 @@ func buildSecretStore(ctx context.Context) (secrets.SecretStore, error) {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	DispatchMetrics = processor.NewDispatchMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 }
 
 // createNatsComponents wires the durable connector-dispatch consumer and its dead-letter writer.
@@ -184,7 +190,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// the failures of the connection that just went away. It is passed rather than built inside
 	// the consumer because the consumer deliberately holds no Microservice, and reporting an
 	// exhausted budget is the one thing a pacer needs one for.
-	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, executor,
+	Consumer = processor.NewDispatchConsumer(reader, dead, deadIndex, DeadLetters, executor,
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends, Configuration.DispatchBacklog,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))

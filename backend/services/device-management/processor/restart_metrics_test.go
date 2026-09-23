@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -41,6 +42,10 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// Uninitialized alone), which is what makes it the safe place to register.
 	resolve := NewResolveMetrics(ms)
 	raiseAlarm := NewRaiseAlarmMetrics(ms)
+	alarmEvents := NewAlarmEventMetrics(ms)
+	// ONE dead-letter producer for both arms, as main.go's buildMetrics builds it: a second
+	// would register dead_letter_lost_total twice and panic.
+	producer := deadletter.NewProducer(ms)
 
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
@@ -49,9 +54,15 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 			nil, "", 0, resolve); p == nil {
 			t.Fatalf("start %d built no inbound events processor", start)
 		}
-		if c := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), nil, nil,
+		sink := producer.NewSink(&deadRecorder{})
+		if c := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), nil, sink,
 			raiseAlarm); c == nil {
 			t.Fatalf("start %d built no raise-alarm consumer", start)
+		}
+		// The alarm-event publisher is built in the same callback; its counter used to be
+		// registered in its constructor, so a second start panicked on the duplicate.
+		if w := NewAlarmEventWriter(nil, sink, alarmEvents); w == nil {
+			t.Fatalf("start %d built no alarm-event publisher", start)
 		}
 	}
 
@@ -72,6 +83,10 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 		// given, and only the exposition — or now the constructor — objects.
 		"devicechain_devicemanagement_raise_alarm_inflight",
 		"devicechain_devicemanagement_raise_alarm_dead_lettered_total",
+		"devicechain_devicemanagement_alarm_event_dead_lettered_total",
+		// The dead-letter producer's loss counter, which the DeadLetterWriteLost alert
+		// selects by name.
+		"devicechain_devicemanagement_dead_letter_lost_total",
 	}
 	families, err := reg.Gather()
 	if err != nil {

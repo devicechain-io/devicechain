@@ -1488,6 +1488,58 @@ exercised against a real cluster on every release.
 Once you are on a release that records a declaration, ordinary in-place upgrades resume.
 `dcctl instances list` shows what is declared, and in which cluster.
 
+### Next release — every lost dead letter is counted under one name {#next-upgrade}
+
+Nothing about the upgrade itself changes. Two things change after it, and both matter only if you
+watch the dead-letter metrics yourself or rely on command responses that could not be recorded.
+
+#### The dead-letter loss counters are one metric per service
+
+A service that gives up on a message and then cannot record it as a dead letter now counts that
+loss on **`dead_letter_lost_total`** under its own subsystem, the same name in every service. These
+five series are gone:
+
+- `devicechain_eventprocessing_react_events_dead_letter_lost_total`
+- `devicechain_notificationmanagement_notifications_dead_letter_lost_total`
+- `devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total`
+- `devicechain_devicemanagement_raise_alarm_dead_letter_lost_total`
+- `devicechain_devicemanagement_alarm_event_dead_letter_lost_total`
+
+These five replace them:
+
+- `devicechain_eventprocessing_dead_letter_lost_total`
+- `devicechain_notificationmanagement_dead_letter_lost_total`
+- `devicechain_commanddelivery_dead_letter_lost_total`
+- `devicechain_devicemanagement_dead_letter_lost_total`, one counter for both of device-management's
+  paths
+- `devicechain_outboundconnectors_dead_letter_lost_total`, which is **new**. An outbound connector
+  dispatch whose dead-letter copy could not be written on its final delivery used to be counted
+  only as `connector_dispatch_total{outcome="dead_write_failed"}`, which no alert read. It is still
+  counted there, and is now counted here as well.
+
+The `DeadLetterWriteLost` alert selects these by name rather than listing them, so it now covers
+outbound connectors too. If your own dashboards or rules name the old series, change them. The
+selector `{__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total"}` covers every service. Use
+`[a-z0-9]+` and not `.+`: while the upgrade rolls, pods that have not been replaced yet still
+export device-management's two old names, and `.+` matches both of them.
+
+The counter also counts a letter the service **refused** as malformed, which is a defect in that
+service rather than a broker problem. The pod's `LOST` error log line says which of the two
+happened.
+
+#### Command responses that could not be recorded are dead-lettered again
+
+In `v0.16.0` and `v0.17.0`, command-delivery could not write a single dead letter. Every one it
+tried was refused before it was written, counted as lost, and the device's answer was gone. That
+meant `DeadLetterWriteLost` could fire while the broker was healthy. That case is fixed, and it
+changes what happens to the commands involved:
+
+- A response that could not be recorded after every attempt is listed as a dead letter, and its
+  command now moves to `FAILED`, with an error saying the device answered and the answer was lost.
+  Before, such a command stayed in flight until something else settled it.
+- A response that named no dispatch, or a dispatch its command had already moved off, is listed as
+  a dead letter and settles nothing. The command is left as it was.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

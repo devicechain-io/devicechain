@@ -163,8 +163,7 @@ func responseProcessorAtCap(t *testing.T, api *fakeApi, dead *deadRecorder, numD
 	t.Helper()
 	return &CommandDeliveryProcessor{
 		Api:  api,
-		area: "command-delivery",
-		dead: deadletter.NewSink(dead, func(error) {}),
+		dead: testDeadSink(dead),
 		CommandResponsesReader: &oneMessageReader{
 			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
 				[]byte(`{"commandToken":"cmd-1","success":true}`), numDelivered, nil, nil),

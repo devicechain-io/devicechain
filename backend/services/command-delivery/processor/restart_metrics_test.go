@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -42,12 +43,15 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// Uninitialized alone), which is what makes it the safe place to register.
 	delivery := NewDeliveryMetrics(ms)
 	writeback := NewWritebackMetrics(ms)
+	// The dead-letter producer, built in the same phase by main.go's buildMetrics: its
+	// counter belongs to the process, and a sink from it is what each start hands in.
+	producer := deadletter.NewProducer(ms)
 
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
 	for start := 1; start <= 2; start++ {
 		if p := NewCommandDeliveryProcessor(ms, nil, nil, core.NewNoOpLifecycleCallbacks(),
-			nil, nil, nil, nil, delivery); p == nil {
+			nil, nil, nil, producer.NewSink(&deadRecorder{}), delivery); p == nil {
 			t.Fatalf("start %d built no delivery processor", start)
 		}
 		w, err := NewDeadLetterWriteback(ms, idleReader{}, &dispositionRecorder{},
@@ -77,6 +81,9 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 		"devicechain_commanddelivery_command_sweep_last_success_timestamp_seconds",
 		"devicechain_commanddelivery_hold_reconcile_last_success_timestamp_seconds",
 		"devicechain_commanddelivery_stranded_reconcile_last_success_timestamp_seconds",
+		// The dead-letter producer's loss counter, which the DeadLetterWriteLost alert
+		// selects by name.
+		"devicechain_commanddelivery_dead_letter_lost_total",
 	}
 	families, err := reg.Gather()
 	if err != nil {

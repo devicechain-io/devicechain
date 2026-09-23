@@ -188,8 +188,9 @@ func TestAnUndeclaredKindOrReasonIsRefusedBeforeItIsWritten(t *testing.T) {
 			if _, err := Marshal(e); err == nil {
 				t.Fatalf("Marshal rendered an envelope carrying %s", name)
 			}
+			p, _ := testProducer(t, "notification-management")
 			w := &fakeWriter{}
-			if err := NewSink(w, nil).Write(context.Background(), e); err == nil {
+			if err := p.NewSink(w).Write(context.Background(), e); err == nil {
 				t.Fatalf("the sink wrote an envelope carrying %s", name)
 			}
 			if w.calls != 0 {

@@ -136,12 +136,10 @@ type CommandDeliveryProcessor struct {
 	Presence presence.Reader
 
 	// dead records a device response that could not be recorded against its command
-	// (ADR-024). Nil when no dead-letter writer is configured, in which case the response
-	// is dropped as it was before.
+	// (ADR-024). Nil when no dead-letter sink is configured, in which case the response
+	// is dropped as it was before. The sink stamps this service as the letter's source
+	// and counts a lost letter on the process's dead_letter_lost_total.
 	dead *deadletter.Sink
-	// area names this service on the letters it writes, read once at construction so the
-	// failure path never dereferences anything.
-	area string
 	// nudger is the bounded queue behind the dispatch nudge — the second dispatch path,
 	// which puts a freshly enqueued command in front of a dispatcher without waiting for a
 	// sweep tick (DeliveryMetrics.NudgeMetrics measures it). Unexported and built by the
@@ -202,7 +200,7 @@ func (cproc *CommandDeliveryProcessor) pacer() *core.ReadPacer {
 func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.MessageReader,
 	commands messaging.MessageWriter, callbacks core.LifecycleCallbacks,
 	api model.CommandDeliveryApi, tenantDeleted func(string) bool,
-	presenceReader presence.Reader, dead deadletter.Writer,
+	presenceReader presence.Reader, dead *deadletter.Sink,
 	metrics DeliveryMetrics) *CommandDeliveryProcessor {
 	cproc := &CommandDeliveryProcessor{
 		Microservice:           ms,
@@ -212,6 +210,7 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		DeliveryMetrics:        metrics,
 		TenantDeleted:          tenantDeleted,
 		Presence:               presenceReader,
+		dead:                   dead,
 	}
 	// 🔴 THE NUDGER IS BUILT HERE AND STARTED IN ExecuteStart. Api.Nudger is bound to it
 	// while the service is still wiring up, so a command created before the processor
@@ -232,10 +231,6 @@ func NewCommandDeliveryProcessor(ms *core.Microservice, responses messaging.Mess
 		if cproc.ClaimsLost != nil {
 			cproc.ClaimsLost.WithLabelValues(string(path))
 		}
-	}
-
-	if dead != nil {
-		cproc.dead = deadletter.NewSink(dead, func(error) { incr(cproc.ResponsesDeadLetterLost, 1) })
 	}
 
 	// Create lifecycle manager.
@@ -1242,7 +1237,6 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 	err := cproc.dead.Write(ctx, deadletter.Envelope{
 		Kind:        deadletter.KindCommandResponse,
 		Reason:      reason,
-		Source:      cproc.area,
 		Summary:     summary,
 		Detail:      detail,
 		Attempts:    msg.NumDelivered,
@@ -1254,7 +1248,8 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		Payload:     msg.Value,
 	})
 	if err != nil {
-		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
+		// The loss is already counted, on dead_letter_lost_total, by the sink — see
+		// deadletter.Producer.NewSink.
 		log.Error().Err(err).Str("command", command).
 			Msg("LOST command response: it could be neither recorded nor dead-lettered.")
 		return

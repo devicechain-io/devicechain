@@ -39,7 +39,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Kind names what the platform gave up on, from the point of view of someone reading a
@@ -222,6 +224,14 @@ type Envelope struct {
 	// Source is the functional area that gave up. It is recorded rather than inferred
 	// from Kind because the two can diverge — a kind can move service, and a dead letter
 	// outlives the deploy that wrote it.
+	//
+	// 🔑 IT IS STAMPED BY THE SINK FROM THE PRODUCING SERVICE; PRODUCERS NEVER SET IT. A
+	// Sink is built from a Producer, which takes the service's functional area once at
+	// startup, and Sink.Write writes that area here unconditionally — so the Sink's value
+	// wins over anything a caller put in the field. It used to be filled by hand at each
+	// call site from an area field each service copied off its Microservice, and one
+	// service lost the assignment in a refactor: every letter it wrote from then on had
+	// no source, was refused by Validate, and was lost. There is now nothing to forget.
 	Source string `json:"source"`
 
 	// Summary is a fixed, non-interpolated sentence describing the failure class. It is
@@ -354,7 +364,116 @@ const writeBackoff = 100 * time.Millisecond
 // connection and then stops answering cannot hold a consumer goroutine forever.
 const writeDeadline = 30 * time.Second
 
-// Sink writes dead letters to the platform's dead-letter subject for a tenant.
+// Producer is one service's identity as a writer of dead letters: the source every letter
+// it writes is stamped with, and the one counter its losses are counted on.
+//
+// 🔑 IT IS BUILT ONCE PER PROCESS, IN THE INITIALIZE PHASE, AND EVERY SINK THE SERVICE
+// USES COMES FROM IT. Two things used to be declared per service and are declared here
+// instead, because each went wrong while it was a per-service copy:
+//
+//   - The source. Each producer filled Envelope.Source by hand from an area field it
+//     copied off its Microservice, and one service's constructor lost that copy in a
+//     refactor. Every letter it wrote from then on was refused by Validate and lost.
+//   - The loss counter. Each service declared its own, under its own name, and the alert
+//     over them enumerated the names by hand — so a service whose loss was counted under
+//     a different shape was simply not in the sum, and its losses alerted nobody.
+//
+// Now the counter is `devicechain_<area>_dead_letter_lost_total` for every service, built
+// here and nowhere else, so an alert can select every adopter by name and there is no
+// list to keep. A service with two sinks shares the one counter, which is also why it
+// must not be built in the NATS start callback: that callback runs on every start, and a
+// second registration of the same name panics.
+type Producer struct {
+	source string
+	lost   prometheus.Counter
+}
+
+// NewProducer builds the producer for ms. It panics on a nil ms or a blank functional
+// area: a producer with no area would stamp every letter with a source Validate refuses,
+// and there is no runtime condition to handle here — it is a wiring mistake, fixed at
+// startup or not at all.
+//
+// The counter is exported at zero from construction, so a series that has never moved
+// reads as "nothing lost" rather than as absent.
+func NewProducer(ms *core.Microservice) *Producer {
+	if ms == nil {
+		panic("deadletter: NewProducer needs the producing Microservice; it names the source " +
+			"of every letter and the counter its losses are counted on")
+	}
+	if strings.TrimSpace(ms.FunctionalArea) == "" {
+		panic("deadletter: NewProducer needs a Microservice with a functional area; every " +
+			"letter it stamped would have no source, and Validate would refuse them all")
+	}
+	return &Producer{
+		source: ms.FunctionalArea,
+		lost: ms.NewCounter(LostCounterName,
+			"Dead letters this service gave up on and could NOT record: the work is gone with "+
+				"no letter anywhere. Either the write failed on every attempt (the broker was "+
+				"unreachable or refusing, or out of storage) or the service refused its own "+
+				"letter as malformed, which is a defect in the service. The pod's LOST error "+
+				"log line says which."),
+	}
+}
+
+// LostCounterName is the name, below the service's namespace and subsystem, of the counter
+// every Producer registers: it exports as devicechain_<area>_dead_letter_lost_total, which
+// is what the DeadLetterWriteLost alert selects on.
+const LostCounterName = "dead_letter_lost_total"
+
+// NewSink builds a sink over w, a writer scoped to the dead-letter subject. A letter it
+// cannot record is counted on this producer's dead_letter_lost_total.
+//
+// It panics on a nil producer or writer. A service with no dead-letter writer does not
+// build a sink at all; it passes a nil *Sink to the component, which is what "disabled"
+// means at every call site.
+func (p *Producer) NewSink(w Writer) *Sink {
+	p.mustBeBuilt("NewSink")
+	if w == nil {
+		panic("deadletter: NewSink needs a writer; pass a nil *Sink to disable dead-lettering")
+	}
+	return &Sink{writer: w, source: p.source, onLoss: func(error) { p.lost.Inc() }}
+}
+
+// NewIndexSink builds a sink whose loss is the CALLER'S to count, through onLoss, and is
+// never counted on dead_letter_lost_total.
+//
+// 🔴 IT IS ONLY FOR A LETTER THAT IS A COPY OF SOMETHING ALREADY DURABLE ELSEWHERE. The
+// one user is the connectors service, whose index entry points at a verbatim copy it has
+// already written to its own dead subject: losing the index entry loses the listing, not
+// the work, so it must not page anyone at the severity of a real loss. A producer whose
+// letter IS the only record must use NewSink — choosing this one to keep its losses out
+// of the critical alert would make them silent. onLoss is required, for the same reason:
+// an index sink with no hook would count its losses nowhere.
+func (p *Producer) NewIndexSink(w Writer, onLoss func(err error)) *Sink {
+	p.mustBeBuilt("NewIndexSink")
+	if w == nil {
+		panic("deadletter: NewIndexSink needs a writer")
+	}
+	if onLoss == nil {
+		panic("deadletter: NewIndexSink needs a loss hook; an index sink's losses are " +
+			"counted by its caller or not at all")
+	}
+	return &Sink{writer: w, source: p.source, onLoss: onLoss}
+}
+
+// Lost counts one letter lost on dead_letter_lost_total, for a producer whose give-up
+// write cannot go through a Sink — the connectors service's verbatim copy, which goes to
+// its own subject as raw bytes. Whatever writes it, a loss is counted on the same series,
+// or the alert that selects that series by name does not see it.
+func (p *Producer) Lost() {
+	p.mustBeBuilt("Lost")
+	p.lost.Inc()
+}
+
+func (p *Producer) mustBeBuilt(call string) {
+	if p == nil {
+		panic("deadletter: " + call + " on a nil *Producer; build one with NewProducer in " +
+			"the initialize phase")
+	}
+}
+
+// Sink writes dead letters to the platform's dead-letter subject for a tenant. Build one
+// with Producer.NewSink (or, for an index copy only, Producer.NewIndexSink).
 //
 // 🔑 IT EXISTS SO THE WRITE-FAILURE HANDLING IS WRITTEN ONCE. The handling is the
 // non-obvious part of an arm, it is identical at every call site, and it is the part that
@@ -362,16 +481,15 @@ const writeDeadline = 30 * time.Second
 // reads as "we will try again" and means "this message is now lost, silently".
 type Sink struct {
 	writer Writer
-	// onLoss is called exactly once when the letter could not be written at all. It is a
-	// hook rather than a log line because a loss is the one outcome an operator has to be
-	// able to alert on, and only the caller knows which counter names it. Callers count
+	// source is stamped on every letter; see Envelope.Source.
+	source string
+	// onLoss is called exactly once when the letter could not be recorded at all — its
+	// write failed on every attempt, or it was refused before any attempt. For a sink from
+	// Producer.NewSink it counts the producer's dead_letter_lost_total; the loss is counted
 	// HERE rather than off the returned error, so the counter cannot drift away from the
 	// condition it claims to measure.
 	onLoss func(err error)
 }
-
-// NewSink builds a sink over a writer scoped to the dead-letter subject. onLoss may be nil.
-func NewSink(w Writer, onLoss func(err error)) *Sink { return &Sink{writer: w, onLoss: onLoss} }
 
 // detach returns a context carrying ctx's values — the TENANT, which is what scopes the
 // subject — but not its cancellation, bounded instead by writeDeadline.
@@ -389,16 +507,19 @@ func detach(ctx context.Context) (context.Context, context.CancelFunc) {
 // Write records one dead letter. ctx must carry the tenant, which is what scopes the
 // subject; a context without one is refused by the writer, fail-closed.
 //
-// It returns an error only when the letter could not be written after every attempt — at
-// which point the work is LOST, and the caller has already been told through onLoss. A
-// caller that ignores the error is not thereby hiding anything.
+// It stamps the producer's source on e before anything else; see Envelope.Source.
+//
+// It returns an error only when the letter could not be recorded — refused as malformed,
+// or not written after every attempt — at which point the work is LOST, and the loss has
+// already been counted through onLoss. A caller that ignores the error is not thereby
+// hiding anything.
 func (s *Sink) Write(ctx context.Context, e Envelope) error {
+	e.Source = s.source
 	body, err := Marshal(e)
 	if err != nil {
-		if s.onLoss != nil {
-			s.onLoss(err)
-		}
-		return err
+		s.onLoss(err)
+		return fmt.Errorf("dead letter LOST — %s was refused before any write, a defect in "+
+			"the producing service: %w", e.Kind, err)
 	}
 	msg := messaging.Message{Value: body}
 	if e.Correlation != "" {
@@ -422,9 +543,7 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 			}
 		}
 	}
-	if s.onLoss != nil {
-		s.onLoss(err)
-	}
+	s.onLoss(err)
 	return fmt.Errorf("dead letter LOST — %s could not be written in %d attempt(s) and its "+
 		"source message will not redeliver: %w", e.Kind, attempts, err)
 }

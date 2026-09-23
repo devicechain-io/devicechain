@@ -1581,6 +1581,60 @@ se comprueban contra un clúster real en cada versión.
 Una vez que esté en una versión que registra una declaración, las actualizaciones in situ
 corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en qué clúster.
 
+### Próxima versión — toda carta perdida se cuenta con un solo nombre {#next-upgrade}
+
+La actualización en sí no cambia. Cambian dos cosas después de ella, y solo importan si vigila usted
+mismo las métricas de mensajes no entregados o depende de respuestas a comandos que no se pudieron
+registrar.
+
+#### Los contadores de pérdidas son una métrica por servicio
+
+Un servicio que abandona un mensaje y luego no puede registrarlo como mensaje no entregado cuenta
+ahora esa pérdida en **`dead_letter_lost_total`** bajo su propio subsistema, con el mismo nombre en
+todos los servicios. Estas cinco series desaparecen:
+
+- `devicechain_eventprocessing_react_events_dead_letter_lost_total`
+- `devicechain_notificationmanagement_notifications_dead_letter_lost_total`
+- `devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total`
+- `devicechain_devicemanagement_raise_alarm_dead_letter_lost_total`
+- `devicechain_devicemanagement_alarm_event_dead_letter_lost_total`
+
+Estas cinco las reemplazan:
+
+- `devicechain_eventprocessing_dead_letter_lost_total`
+- `devicechain_notificationmanagement_dead_letter_lost_total`
+- `devicechain_commanddelivery_dead_letter_lost_total`
+- `devicechain_devicemanagement_dead_letter_lost_total`, un único contador para las dos rutas de
+  device-management
+- `devicechain_outboundconnectors_dead_letter_lost_total`, que es **nueva**. Un envío de conector
+  saliente cuya copia no se pudo escribir en su entrega final solo se contaba antes como
+  `connector_dispatch_total{outcome="dead_write_failed"}`, que ninguna alerta leía. Se sigue
+  contando ahí, y ahora también aquí.
+
+La alerta `DeadLetterWriteLost` las selecciona por nombre en lugar de enumerarlas, así que ahora
+cubre también los conectores salientes. Si sus propios paneles o reglas nombran las series
+antiguas, cámbielos. El selector `{__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total"}`
+cubre todos los servicios. Use `[a-z0-9]+` y no `.+`: mientras avanza la actualización, los pods
+que aún no se han reemplazado siguen exportando los dos nombres antiguos de device-management, y
+`.+` coincide con ambos.
+
+El contador cuenta también una carta que el servicio **rechazó** por estar mal formada, lo que es
+un defecto de ese servicio y no un problema del bróker. La línea de error `LOST` del pod indica cuál
+de los dos casos ocurrió.
+
+#### Las respuestas a comandos que no se pudieron registrar vuelven a guardarse
+
+En `v0.16.0` y `v0.17.0`, command-delivery no podía escribir ni un solo mensaje no entregado. Cada
+uno que intentaba se rechazaba antes de escribirse, se contaba como perdido, y la respuesta del
+dispositivo desaparecía. Por eso `DeadLetterWriteLost` podía dispararse con el bróker en buen
+estado. Ese caso está corregido, y cambia lo que ocurre con los comandos afectados:
+
+- Una respuesta que no se pudo registrar tras todos los intentos aparece como mensaje no entregado,
+  y su comando pasa ahora a `FAILED`, con un error que dice que el dispositivo respondió y la
+  respuesta se perdió. Antes, ese comando seguía en curso hasta que otra cosa lo resolvía.
+- Una respuesta que no nombraba ningún despacho, o nombraba uno que su comando ya había dejado
+  atrás, aparece como mensaje no entregado y no resuelve nada. El comando queda como estaba.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

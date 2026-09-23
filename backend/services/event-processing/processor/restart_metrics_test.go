@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -41,6 +42,8 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	// Uninitialized alone), which is what makes it the safe place to register.
 	detect := NewDetectMetrics(ms)
 	react := NewReactMetrics(ms)
+	// The dead-letter producer, built in the same phase by main.go's buildMetrics.
+	producer := deadletter.NewProducer(ms)
 
 	// Two starts. Reaching past the second is the assertion: a duplicate registration
 	// panics, and that takes down the test binary rather than failing this test.
@@ -49,7 +52,8 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 			core.NewNoOpLifecycleCallbacks(), detect); p == nil {
 			t.Fatalf("start %d built no resolved-events processor", start)
 		}
-		if d := NewReactDispatcher(ms, nil, nil, nil, nil, nil, nil, nil, react); d == nil {
+		if d := NewReactDispatcher(ms, nil, nil, nil, nil, nil, nil,
+			producer.NewSink(&deadRecorder{}), react); d == nil {
 			t.Fatalf("start %d built no react dispatcher", start)
 		}
 	}
@@ -65,6 +69,9 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 	want := []string{
 		"devicechain_eventprocessing_detect_checkpoints_total",
 		"devicechain_eventprocessing_react_events_orphaned_total",
+		// The dead-letter producer's loss counter, which the DeadLetterWriteLost alert
+		// selects by name.
+		"devicechain_eventprocessing_dead_letter_lost_total",
 	}
 	families, err := reg.Gather()
 	if err != nil {

@@ -11,13 +11,47 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// testProducer is the service's dead-letter producer over a Microservice literal: its counter is
+// built unregistered, so any number of consumers can be built in one test binary.
+func testProducer() *deadletter.Producer {
+	return deadletter.NewProducer(&core.Microservice{FunctionalArea: "outbound-connectors"})
+}
+
+// registeredProducer is the producer over a Microservice with a registry, for a test that reads
+// the loss counter back by the name it EXPORTS under — the name the alert selects on.
+func registeredProducer() (*deadletter.Producer, *prometheus.Registry) {
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "outbound-connectors"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	return deadletter.NewProducer(ms), reg
+}
+
+const connectorsLost = "devicechain_outboundconnectors_dead_letter_lost_total"
+
+// gatheredCounter reads a plain counter off reg by its full exported name.
+func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering the registry: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == name {
+			return f.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("the registry exports no %s", name)
+	return 0
+}
 
 // newIndexingConsumer builds a consumer wired to both terminal writers, so a give-up can be observed
 // on this service's own subject AND in the platform's dead-letter list.
 func newIndexingConsumer(dead, index messaging.MessageWriter) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(&fakeReader{}, dead, index, e, nil, 5*time.Second, nil, 1, 1, nil, core.NewReadPacer(nil, "test"))
+	return NewDispatchConsumer(&fakeReader{}, dead, index, testProducer(), e, nil, 5*time.Second, nil, 1, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 func indexEnvelope(t *testing.T, w *fakeWriter) deadletter.Envelope {
@@ -59,8 +93,8 @@ func TestGiveUpIsIndexedOnThePlatformDeadLetterStream(t *testing.T) {
 	if e.Kind != deadletter.KindConnectorDispatch {
 		t.Fatalf("index kind = %q, want %q", e.Kind, deadletter.KindConnectorDispatch)
 	}
-	if e.Source != connectorsArea {
-		t.Fatalf("index source = %q, want %q", e.Source, connectorsArea)
+	if e.Source != "outbound-connectors" {
+		t.Fatalf("index source = %q, want %q", e.Source, "outbound-connectors")
 	}
 	// 🔑 SUBJECT AND SEQUENCE ARE THE ORIGINAL'S COORDINATES ON THE SOURCE STREAM — the consumed
 	// message's own — and NOT the copy's on connector-dispatch.dead, whose position nothing here
@@ -275,4 +309,90 @@ func TestIndexIsANoOpWhenUnconfigured(t *testing.T) {
 	if len(dead.messages) != 1 {
 		t.Fatalf("the verbatim terminal write did not happen (%d messages)", len(dead.messages))
 	}
+}
+
+// 🔴 A DISPATCH LOST ON ITS FINAL DELIVERY IS COUNTED ON THE SERIES THE ALERT READS. The verbatim
+// copy goes to this service's own subject as raw bytes, so it cannot go through a dead-letter sink —
+// and for as long as its loss was recorded only as a connector_dispatch_total outcome, the alert over
+// every other service's losses did not see this one. The branch now moves the producer's
+// dead_letter_lost_total, read here by its exported name.
+func TestAFinalDeliveryThatCannotBeDeadLetteredIsCountedAsLost(t *testing.T) {
+	producer, reg := registeredProducer()
+	dead := &fakeWriter{fail: context.DeadlineExceeded}
+	index := &fakeWriter{}
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	c := NewDispatchConsumer(&fakeReader{}, dead, index, producer, e, nil, 5*time.Second, nil, 1, 1,
+		nil, core.NewReadPacer(nil, "test"))
+	acked := &countingAcker{}
+	msg := messaging.NewConsumedMessage(
+		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
+		[]byte(`{}`), messaging.MaxDeliver, nil, acked)
+
+	if got := gatheredCounter(t, reg, connectorsLost); got != 0 {
+		t.Fatalf("%s = %v before anything was lost, want 0", connectorsLost, got)
+	}
+	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
+
+	if got := gatheredCounter(t, reg, connectorsLost); got != 1 {
+		t.Fatalf("%s = %v after a dispatch lost on its final delivery, want 1", connectorsLost, got)
+	}
+	if acked.n != 1 {
+		t.Fatalf("acks = %d, want 1: no redelivery follows the final one", acked.n)
+	}
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if len(index.messages) != 0 {
+		t.Fatalf("an index entry was written for a dispatch that has no verbatim copy to point at")
+	}
+}
+
+// Below the cap a failed write is NOT a loss: JetStream will redeliver, and the next attempt
+// dead-letters it. Counting it would page an operator for a message that is still in flight.
+func TestABelowTheCapWriteFailureIsNotCountedAsLost(t *testing.T) {
+	producer, reg := registeredProducer()
+	dead := &fakeWriter{fail: context.DeadlineExceeded}
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	c := NewDispatchConsumer(&fakeReader{}, dead, nil, producer, e, nil, 5*time.Second, nil, 1, 1,
+		nil, core.NewReadPacer(nil, "test"))
+	msg := messaging.NewConsumedMessage(
+		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
+		[]byte(`{}`), 1, nil, &countingAcker{})
+
+	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
+
+	if got := gatheredCounter(t, reg, connectorsLost); got != 0 {
+		t.Fatalf("%s = %v for a write that will be retried on redelivery, want 0", connectorsLost, got)
+	}
+}
+
+// 🔴 AN INDEX ENTRY THAT CANNOT BE WRITTEN IS NOT A LOSS OF WORK, and must not page as one: the
+// verbatim copy is already durable. It is counted as a disposition, never on dead_letter_lost_total.
+func TestAFailedIndexWriteIsNotCountedAsLost(t *testing.T) {
+	producer, reg := registeredProducer()
+	index := &fakeWriter{fail: context.DeadlineExceeded}
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	c := NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, index, producer, e, nil, 5*time.Second, nil,
+		1, 1, nil, core.NewReadPacer(nil, "test"))
+	msg := messaging.NewConsumedMessage(
+		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
+		[]byte(`{}`), messaging.MaxDeliver, nil, &countingAcker{})
+
+	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
+
+	if got := gatheredCounter(t, reg, connectorsLost); got != 0 {
+		t.Fatalf("%s = %v for a lost INDEX entry, want 0: the dispatch itself is durable",
+			connectorsLost, got)
+	}
+}
+
+// The producer is refused rather than defaulted, like the read pacer: a consumer without one would
+// record a lost dispatch only as a label no alert reads.
+func TestAConsumerCannotBeBuiltWithoutADeadLetterProducer(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewDispatchConsumer accepted a nil dead-letter producer")
+		}
+	}()
+	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, nil, nil, nil, 0, nil, 1, 1, nil,
+		core.NewReadPacer(nil, "test"))
 }

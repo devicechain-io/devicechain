@@ -35,12 +35,10 @@ type ReactDispatcher struct {
 	dispatcher *react.Dispatcher
 	metrics    *ReactMetrics
 	// dead records an event whose actions could not be dispatched (ADR-024). Nil when no
-	// dead-letter writer is configured, in which case the event is dropped as before.
+	// dead-letter sink is configured, in which case the event is dropped as before. The sink
+	// stamps this service as the letter's source and counts a lost letter on the process's
+	// dead_letter_lost_total.
 	dead *deadletter.Sink
-	// area names this service on the dead letters it writes. Carried rather than
-	// re-derived so a letter written by a service says which service wrote it even after
-	// the kind moves.
-	area string
 
 	// newPacer builds the read pacer that bounds a run of failing reads and ends the
 	// process once they stop looking transient.
@@ -74,19 +72,14 @@ type ReactDispatcher struct {
 // the counters are not.
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
-	connectorRate react.ConnectorRateGate, dead deadletter.Writer, m *ReactMetrics) *ReactDispatcher {
+	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, m *ReactMetrics) *ReactDispatcher {
 	rd := &ReactDispatcher{
 		reader:     reader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
+		dead:       dead,
 	}
 	rd.newPacer = func() *core.ReadPacer { return core.NewReadPacer(ms, "react dispatch") }
-	if ms != nil {
-		rd.area = ms.FunctionalArea
-	}
-	if dead != nil {
-		rd.dead = deadletter.NewSink(dead, func(error) { rd.metrics.recordDeadLetterLost() })
-	}
 	return rd
 }
 
@@ -221,7 +214,6 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	err := rd.dead.Write(tctx, deadletter.Envelope{
 		Kind:   deadletter.KindDetectionAction,
 		Reason: deadletter.ReasonExhausted,
-		Source: rd.area,
 		Summary: "a detection fired and its authored actions could not be dispatched after " +
 			"every delivery attempt",
 		Attempts:    msg.NumDelivered,
@@ -233,7 +225,8 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 		Payload:     msg.Value,
 	})
 	if err != nil {
-		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
+		// The loss is already counted, on dead_letter_lost_total, by the sink — see
+		// deadletter.Producer.NewSink.
 		log.Error().Err(err).Str("rule", ev.RuleID).
 			Msg("LOST derived event: it could be neither dispatched nor dead-lettered.")
 		return

@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -70,7 +71,13 @@ var (
 	// callback builds. See buildMetrics.
 	ResolveMetrics       processor.ResolveMetrics
 	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
+	AlarmEventMetrics    processor.AlarmEventMetrics
 	GeoFencePublishFails prometheus.Counter
+
+	// DeadLetters is this service's identity as a dead-letter producer: the source its
+	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
+	// losses on. Built once, in the initialize phase, for the reason the metrics are.
+	DeadLetters *deadletter.Producer
 )
 
 func main() {
@@ -119,6 +126,8 @@ func parseConfiguration() error {
 func buildMetrics() {
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
+	AlarmEventMetrics = processor.NewAlarmEventMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -154,6 +163,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	deadLetters := DeadLetters.NewSink(deadWriter)
 
 	// Add the alarm-events writer and inject a publisher over it into the shared Api
 	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and
@@ -168,7 +178,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	AlarmEventsWriter = aevents
-	Api.AlarmPublisher = processor.NewAlarmEventWriter(Microservice, AlarmEventsWriter, deadWriter)
+	Api.AlarmPublisher = processor.NewAlarmEventWriter(AlarmEventsWriter, deadLetters,
+		AlarmEventMetrics)
 
 	// Add the entity-deleted writer and inject a publisher over it into the shared
 	// Api (ADR-044): the delete paths (deleteEdgeEntity) emit an entity-deletion
@@ -254,7 +265,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// here, with the same consequence — a raise that does not re-emit until the condition
 	// re-breaches, a resolve that strands its alarm.
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi, deadWriter, RaiseAlarmMetrics)
+		core.NewNoOpLifecycleCallbacks(), CachedApi, deadLetters, RaiseAlarmMetrics)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}

@@ -14,7 +14,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // fakeAlarmApi implements DeviceManagementApi by embedding a (nil) MockApi to satisfy the whole
@@ -65,11 +64,9 @@ type fakeAck struct {
 func (a *fakeAck) Ack() error { a.acks++; return nil }
 
 func newTestConsumer(api model.DeviceManagementApi) *RaiseAlarmConsumer {
-	// RaiseAlarmMetrics is embedded by pointer and the tests below write through it
-	// (rc.deadLettered), so it has to exist. An empty one leaves every instrument nil,
-	// which is what this helper had before the instruments moved into their own type:
-	// the RED metrics are nil-safe, and the dead-letter counters are set by the tests
-	// that assert on them.
+	// An empty RaiseAlarmMetrics leaves every instrument nil, and no sink: the RED metrics are
+	// nil-safe, and a nil sink is the disabled shape, which drops. A test that asserts on
+	// dead-lettering builds through the constructor instead (consumerWithDeadLetters).
 	rc := &RaiseAlarmConsumer{Api: api}
 	rc.procCtx = context.Background()
 	return rc
@@ -251,12 +248,23 @@ func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Mess
 	return nil
 }
 
-func consumerWithDeadLetters(api model.DeviceManagementApi, dead *deadRecorder) *RaiseAlarmConsumer {
-	rc := newTestConsumer(api)
-	rc.area = "device-management"
-	rc.deadLettered = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_total"})
-	rc.deadLetterLost = prometheus.NewCounter(prometheus.CounterOpts{Name: "ra_dl_lost_total"})
-	rc.dead = deadletter.NewSink(dead, func(error) { rc.deadLetterLost.Inc() })
+// consumerWithDeadLetters builds the consumer the way main.go does: through
+// NewRaiseAlarmConsumer, with metrics from NewRaiseAlarmMetrics and the sink from a
+// dead-letter producer on the same Microservice, then initialized so its read context
+// exists.
+//
+// 🔴 THROUGH THE CONSTRUCTOR, NOT A STRUCT LITERAL. A literal sets the sink itself, so a
+// constructor that dropped the one it was handed would leave every dead-letter test here
+// green while the consumer main.go builds dead-lettered nothing: a nil sink is the
+// DISABLED shape by design, and it drops the edge without a word.
+func consumerWithDeadLetters(t *testing.T, api model.DeviceManagementApi, dead *deadRecorder) *RaiseAlarmConsumer {
+	t.Helper()
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	rc := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
+		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms))
+	if err := rc.Initialize(context.Background()); err != nil {
+		t.Fatalf("initializing the consumer: %v", err)
+	}
 	return rc
 }
 
@@ -267,7 +275,7 @@ func consumerWithDeadLetters(api model.DeviceManagementApi, dead *deadRecorder) 
 func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("the database is away")}
 	dead := &deadRecorder{}
-	rc := consumerWithDeadLetters(api, dead)
+	rc := consumerWithDeadLetters(t, api, dead)
 	ack := &fakeAck{}
 
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), messaging.MaxDeliver+1, ack))
@@ -297,7 +305,7 @@ func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
 func TestARaiseAlarmEdgeBelowTheCapIsNotDeadLettered(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: errors.New("the database is away")}
 	dead := &deadRecorder{}
-	rc := consumerWithDeadLetters(api, dead)
+	rc := consumerWithDeadLetters(t, api, dead)
 
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 1, &fakeAck{}))
 
@@ -312,7 +320,7 @@ func TestARaiseAlarmEdgeBelowTheCapIsNotDeadLettered(t *testing.T) {
 func TestAPoisonRaiseAlarmRequestIsNotDeadLettered(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}}
 	dead := &deadRecorder{}
-	rc := consumerWithDeadLetters(api, dead)
+	rc := consumerWithDeadLetters(t, api, dead)
 	req := validReq()
 	req.AlarmKey = ""
 

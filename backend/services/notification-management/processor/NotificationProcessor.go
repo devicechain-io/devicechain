@@ -53,12 +53,10 @@ type NotificationProcessor struct {
 	Notifier     Notifier
 
 	// dead records an alarm that reached nobody (ADR-024). Nil when no dead-letter
-	// writer is configured, in which case the notification is dropped as it was before.
+	// sink is configured, in which case the notification is dropped as it was before. The
+	// sink stamps this service as the letter's source and counts a lost letter on the
+	// process's dead_letter_lost_total.
 	dead *deadletter.Sink
-	// area names this service on the letters it writes. Carried rather than read off
-	// Microservice at write time, because a dead letter is written on the failure path —
-	// the one place a nil dereference turns a recoverable failure into a crash.
-	area string
 	// NotifyMetrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase rather
 	// than here. The processor itself is constructed inside the NATS manager's oncreate
 	// callback, which is connection-scoped and is entered again by any start
@@ -103,10 +101,11 @@ func (np *NotificationProcessor) pacer() *core.ReadPacer {
 // It is a type of its own so it can be built in a DIFFERENT PHASE from the processor
 // that reads it. See NewNotifyMetrics.
 type NotifyMetrics struct {
-	// deadLettered and deadLetterLost are counted apart: the second is the only outcome
-	// on this path where an alarm nobody was paged about leaves no record at all.
-	deadLettered   prometheus.Counter
-	deadLetterLost prometheus.Counter
+	// deadLettered counts alarms recorded as dead letters. The other outcome — a letter
+	// that could not be written, the only one on this path where an alarm nobody was paged
+	// about leaves no record at all — is counted by the dead-letter sink itself, on the
+	// dead_letter_lost_total every producing service shares (deadletter.Producer).
+	deadLettered prometheus.Counter
 
 	// RED metrics for the per-message dispatch path (E13).
 	metrics *core.ProcessorMetrics
@@ -126,9 +125,6 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
 				"operator can see which pages were never sent (ADR-024)."),
-		deadLetterLost: ms.NewCounter("notifications_dead_letter_lost_total",
-			"Alarms that reached nobody AND could not be dead-lettered — the write failed on a "+
-				"delivery that will not repeat. An alarm in this state is invisible everywhere."),
 	}
 }
 
@@ -139,17 +135,14 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 // every processor this service constructs, because that callback is connection-scoped
 // and the instruments are not.
 func NewNotificationProcessor(ms *core.Microservice, reader messaging.MessageReader,
-	callbacks core.LifecycleCallbacks, notifier Notifier, dead deadletter.Writer,
+	callbacks core.LifecycleCallbacks, notifier Notifier, dead *deadletter.Sink,
 	metrics NotifyMetrics) *NotificationProcessor {
 	np := &NotificationProcessor{
 		Microservice:  ms,
 		Reader:        reader,
 		Notifier:      notifier,
 		NotifyMetrics: metrics,
-	}
-	np.area = ms.FunctionalArea
-	if dead != nil {
-		np.dead = deadletter.NewSink(dead, func(error) { np.deadLetterLost.Inc() })
+		dead:          dead,
 	}
 	npname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "notify-proc")
 	np.lifecycle = core.NewLifecycleManager(npname, np, callbacks)
@@ -361,7 +354,6 @@ func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.M
 	err := np.dead.Write(ctx, deadletter.Envelope{
 		Kind:   deadletter.KindNotification,
 		Reason: deadletter.ReasonExhausted,
-		Source: np.area,
 		Summary: "an alarm could not be delivered to any configured channel after every " +
 			"delivery attempt, so nobody was paged about it",
 		Detail:      detail,
@@ -374,7 +366,8 @@ func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.M
 		Payload:     msg.Value,
 	})
 	if err != nil {
-		// The counter moves in the sink's loss hook, not here — see deadletter.Sink.
+		// The loss is already counted, on dead_letter_lost_total, by the sink — see
+		// deadletter.Producer.NewSink.
 		log.Error().Err(err).Str("alarm", alarm).
 			Msg("LOST notification: the alarm reached nobody and could not be dead-lettered.")
 		return

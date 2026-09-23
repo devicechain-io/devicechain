@@ -230,10 +230,55 @@ func (d *deadRecorder) letters(t *testing.T) []deadletter.Envelope {
 
 func reactDispatcherWithSink(resolver react.RuleResolver, sink react.CommandSink,
 	dead deadletter.Writer) *ReactDispatcher {
-	rd := newTestReactDispatcher(resolver, sink)
-	rd.area = "event-processing"
-	rd.dead = deadletter.NewSink(dead, func(error) {})
+	return constructedReactDispatcher(&core.Microservice{FunctionalArea: "event-processing"},
+		resolver, sink, dead)
+}
+
+// reactDispatcherWithRegistry is reactDispatcherWithSink over a Microservice with a
+// registry, so the loss counter can be read back by the name it EXPORTS under — the name
+// the alert selects on.
+func reactDispatcherWithRegistry(resolver react.RuleResolver, sink react.CommandSink,
+	dead deadletter.Writer) (*ReactDispatcher, *prometheus.Registry) {
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	return constructedReactDispatcher(ms, resolver, sink, dead), reg
+}
+
+// constructedReactDispatcher builds the dispatcher the way main.go does: through
+// NewReactDispatcher, with the sink from a dead-letter producer on ms.
+//
+// 🔴 THROUGH THE CONSTRUCTOR, NOT A STRUCT LITERAL. A literal sets the sink itself, so a
+// constructor that dropped the one it was handed would leave every dead-letter test here
+// green while the dispatcher main.go builds dead-lettered nothing: a nil sink is the
+// DISABLED shape by design, and it drops the event without a word.
+//
+// procCtx is set by hand because Start, which sets it in production, also launches the
+// read loop, and these tests drive handle directly.
+func constructedReactDispatcher(ms *core.Microservice, resolver react.RuleResolver,
+	sink react.CommandSink, dead deadletter.Writer) *ReactDispatcher {
+	rd := NewReactDispatcher(ms, nil, resolver, sink, nil, nil, nil,
+		deadletter.NewProducer(ms).NewSink(dead), NewReactMetrics(ms))
+	rd.procCtx = context.Background()
 	return rd
+}
+
+const reactLost = "devicechain_eventprocessing_dead_letter_lost_total"
+
+// gatheredCounter reads a plain counter off reg by its full exported name.
+func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering the registry: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == name {
+			return f.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatalf("the registry exports no %s", name)
+	return 0
 }
 
 // 🔴 THE ARM. An event whose actions could not be dispatched used to end as a log line and
@@ -253,6 +298,9 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 	e := letters[0]
 	if e.Kind != deadletter.KindDetectionAction {
 		t.Fatalf("kind = %q", e.Kind)
+	}
+	if e.Source != "event-processing" {
+		t.Fatalf("source = %q, want the service that wrote it", e.Source)
 	}
 	if e.Reference != "acme/p@1/r1" {
 		t.Fatalf("the letter does not name the rule that fired: %q", e.Reference)
@@ -342,41 +390,38 @@ func TestReactWithNoDeadLetterSinkStillDrops(t *testing.T) {
 // either way round: one says "recorded", the other says "gone".
 func TestTheDeadLetterCountersAreNotSwapped(t *testing.T) {
 	written := &deadRecorder{}
-	ok := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+	ok, okReg := reactDispatcherWithRegistry(reactFakeResolver{rule: sendCmdRule(), found: true},
 		&reactFakeSink{fail: true}, written)
 	ok.metrics = newTestReactMetrics()
-	ok.dead = deadletter.NewSink(written, func(error) { ok.metrics.recordDeadLetterLost() })
 	ok.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, &fakeAck{}))
 
 	if got := counterOf(t, ok.metrics.deadLettered); got != 1 {
 		t.Fatalf("a written letter counted %v on deadLettered, want 1", got)
 	}
-	if got := counterOf(t, ok.metrics.deadLetterLost); got != 0 {
+	if got := gatheredCounter(t, okReg, reactLost); got != 0 {
 		t.Fatalf("a written letter counted %v as LOST", got)
 	}
 
 	broken := &deadRecorder{err: errors.New("broker is away")}
-	bad := reactDispatcherWithSink(reactFakeResolver{rule: sendCmdRule(), found: true},
+	bad, badReg := reactDispatcherWithRegistry(reactFakeResolver{rule: sendCmdRule(), found: true},
 		&reactFakeSink{fail: true}, broken)
 	bad.metrics = newTestReactMetrics()
-	bad.dead = deadletter.NewSink(broken, func(error) { bad.metrics.recordDeadLetterLost() })
 	bad.handle(derivedMsg(t, "acme", sendCmdEvent(), messaging.MaxDeliver, &fakeAck{}))
 
-	if got := counterOf(t, bad.metrics.deadLetterLost); got != 1 {
-		t.Fatalf("a LOST letter counted %v on deadLetterLost, want 1", got)
+	if got := gatheredCounter(t, badReg, reactLost); got != 1 {
+		t.Fatalf("a LOST letter counted %v on %s, want 1", got, reactLost)
 	}
 	if got := counterOf(t, bad.metrics.deadLettered); got != 0 {
 		t.Fatalf("a LOST letter counted %v as written — the alert would never fire", got)
 	}
 }
 
-// newTestReactMetrics builds the two counters this file asserts on, off the global
-// registry so repeated construction cannot collide.
+// newTestReactMetrics builds the counters this file asserts on, off the global registry
+// so repeated construction cannot collide.
 func newTestReactMetrics() *ReactMetrics {
 	return &ReactMetrics{
-		poisonDropped:  prometheus.NewCounter(prometheus.CounterOpts{Name: "poison_total"}),
-		deadLettered:   prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_total"}),
-		deadLetterLost: prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_lost_total"}),
+		poisonDropped: prometheus.NewCounter(prometheus.CounterOpts{Name: "poison_total"}),
+		deadLettered:  prometheus.NewCounter(prometheus.CounterOpts{Name: "dl_total"}),
 	}
 }
 

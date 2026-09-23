@@ -221,10 +221,11 @@ type DeliveryMetrics struct {
 	ResponsesWithoutNonce prometheus.Counter
 	ResponsesStaleNonce   prometheus.Counter
 
-	// ResponsesDeadLettered and ResponsesDeadLetterLost are counted apart: the second is
-	// the only outcome here where a device's answer disappears with no record of it.
-	ResponsesDeadLettered   prometheus.Counter
-	ResponsesDeadLetterLost prometheus.Counter
+	// ResponsesDeadLettered counts answers written to the dead-letter stream. The other
+	// outcome — a letter that could not be written, the only one here where a device's
+	// answer disappears with no record of it — is counted by the dead-letter sink itself,
+	// on the dead_letter_lost_total every producing service shares (deadletter.Producer).
+	ResponsesDeadLettered prometheus.Counter
 
 	// NudgeMetrics measures the dispatch nudge — the second dispatch path, which puts a
 	// freshly enqueued command in front of a dispatcher without waiting for a sweep tick.
@@ -286,9 +287,6 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 			"Device command responses written to the dead-letter stream after every attempt to "+
 				"record them failed, so an answer the device did give can be seen rather than "+
 				"leaving its command looking unanswered (ADR-024)."),
-		ResponsesDeadLetterLost: ms.NewCounter("command_delivery_responses_dead_letter_lost_total",
-			"Device command responses that could be neither recorded NOR dead-lettered — the "+
-				"write failed on a delivery that will not repeat, so the device's answer is gone."),
 		ResponsesRefused: ms.NewCounter("command_delivery_responses_refused_total",
 			"Device responses rejected because the publishing device does not own the command "+
 				"they name. Expected to be zero: either a device is answering for another device, "+
