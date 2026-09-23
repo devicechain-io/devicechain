@@ -609,10 +609,29 @@ incorrecta, porque la contraseña bien podría ser correcta:
 }
 ```
 
-Si el servicio no puede llegar al almacén que guarda estas cuentas, o el almacén está lleno, se niega
-a comprobar contraseñas en lugar de comprobarlas sin contar. El error de `login` lleva entonces
-`extensions.code` con el valor `UNAVAILABLE`. Trátalo como una caída del servicio, no como una
-credencial rechazada. El endpoint de tokens de OAuth no usa el almacén, así que la autenticación de
-clientes sigue funcionando.
+Si el servicio no puede llegar al almacén que guarda estas cuentas, se niega a comprobar contraseñas
+en lugar de comprobarlas sin contar. El error de `login` lleva entonces `extensions.code` con el
+valor `UNAVAILABLE`. Trátalo como una caída del servicio, no como una credencial rechazada. El
+endpoint de tokens de OAuth no usa el almacén, así que la autenticación de clientes sigue
+funcionando.
+
+El almacén tiene un tamaño fijo, y cada dirección que se prueba ocupa un lugar en él durante 10
+minutos, exista o no una cuenta con ella. Quien envíe inicios de sesión para suficientes direcciones
+distintas puede llenarlo. Cuando está lleno, el inicio de sesión sigue funcionando: las contraseñas se
+siguen comprobando y respondiendo con normalidad, pero los nuevos fallos no se cuentan, así que las
+direcciones que no estaban ya esperando no se ralentizan hasta que caduquen entradas antiguas. Una
+dirección que ya está esperando sigue esperando. Es deliberado. Rechazar todos los inicios de sesión
+permitiría a cualquiera que pueda llenar el almacén dejar fuera de la instancia a todos los usuarios.
+Los intentos de adivinar siguen limitados por el tope de campos por petición y por el coste de cada
+comprobación de contraseña.
+
+Cada intento comprobado así se cuenta en `devicechain_usermanagement_credential_checks_total` con
+`outcome="store_full"`. Si las reglas de alerta del chart están habilitadas, la alerta
+`CredentialAttemptStoreFull` se dispara cuando hay alguno. El registro de user-management también muestra una advertencia, como mucho una vez por
+minuto, mientras dure. Cuando se dispare la alerta, lo más probable es que alguien esté probando
+muchas direcciones. Averigua de dónde viene el tráfico de inicio de sesión y bloquéalo antes de que
+llegue. Si el tráfico es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`.
+Ese tamaño se aplica a todos los buckets de estado, así que comprueba que el volumen de JetStream
+tiene espacio para el aumento.
 
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se estabilicen.

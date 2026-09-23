@@ -46,6 +46,25 @@
 // exactly the same schedule as a real one. A fast "throttled" reply reveals
 // only throttle state the caller built up themselves, and it looks the same whether the
 // account exists or not.
+//
+// # A full store fails OPEN; an unreachable one fails closed
+//
+// The attempt bucket is size-bounded, and every presented identifier of a throttled
+// kind costs an entry — real or not — so anyone who sprays enough distinct identifiers
+// can fill it. If a full bucket refused sign-in, that spray would take sign-in down for
+// EVERY account on the instance, and cheaply: on the smallest preset, a few dozen
+// requests a second. So a charge that JetStream refuses because the bucket is at its
+// byte ceiling is not a refusal of the attempt. The attempt is evaluated WITHOUT its
+// backoff — looked up and compared exactly as an admitted one would be, charged nothing
+// — and counted as OutcomeStoreFull, which the chart alerts on. Losing the backoff is
+// the smaller failure: guessing stays bounded by the per-request work limit and the
+// bcrypt cost of every compare, and a principal whose record is already in a delay
+// is still refused, because reading its record needs no space.
+//
+// Only that one condition fails open (see storeFull). Every other store failure — the
+// broker unreachable, a timeout, a record this code cannot parse — still fails closed
+// as ErrUnavailable: nobody can cause those by sending sign-in requests, and failing
+// open on them would hand the limiter's off switch to anyone who can degrade NATS.
 package credential
 
 import (
@@ -56,6 +75,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -180,7 +200,42 @@ var ErrMismatch = errors.New("credential: secret does not match")
 // can degrade NATS switch the limiter off, and the services that use this already
 // depend on NATS for sign-in (their refresh-token store is a KV bucket), so failing
 // closed costs no availability they had.
+//
+// 🔴 A FULL STORE IS THE ONE EXCEPTION, and it fails OPEN instead (see the package
+// doc and storeFull): unlike an outage, fullness is something a sign-in request can
+// cause, so failing closed on it would let anyone take sign-in down for everyone.
 var ErrUnavailable = errors.New("credential: the attempt store is unavailable")
+
+// errStoreFull is admit's report that the charge was refused because the attempt
+// bucket is at its byte ceiling. It never leaves this package: check turns it into
+// an attempt evaluated without its backoff.
+var errStoreFull = errors.New("credential: the attempt store is full")
+
+// The JetStream error a write to a bucket at its MaxBytes returns. KV buckets are
+// DiscardNew streams, so at the ceiling JetStream REFUSES the new message rather than
+// evicting an old one, and answers with a *nats.APIError carrying the generic
+// "store failed" code whose description is the store's own error text — the server's
+// ErrMaxBytes. Observed against a real embedded server (jetstream_test.go):
+//
+//	&nats.APIError{Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}
+//
+// The clustered path's pre-proposal limit check (a replicated bucket) builds the same
+// error from the same ErrMaxBytes. 10077 is shared by every store refusal — maximum
+// messages, a message too large, an I/O failure — so the description is what names
+// fullness, and both have to match.
+const (
+	jsErrCodeStreamStoreFailed nats.ErrorCode = 10077
+	jsMaxBytesExceeded                        = "maximum bytes exceeded"
+)
+
+// storeFull reports whether err is JetStream refusing a write because the bucket is
+// at its byte ceiling — and nothing else.
+func storeFull(err error) bool {
+	var apiErr *nats.APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.ErrorCode == jsErrCodeStreamStoreFailed &&
+		apiErr.Description == jsMaxBytesExceeded
+}
 
 // ThrottledError is returned when a principal's next attempt is not yet allowed. The
 // attempt was NOT evaluated: no lookup, no compare, no charge.
@@ -255,6 +310,12 @@ const (
 	OutcomeMismatch    = "mismatch"
 	OutcomeThrottled   = "throttled"
 	OutcomeUnavailable = "unavailable"
+	// OutcomeStoreFull is an attempt evaluated WITHOUT its backoff because the attempt
+	// store was full: looked up and compared, charged nothing. It replaces the attempt's
+	// own success/mismatch/error label, so it counts every attempt the limiter did not
+	// govern. Any non-zero rate means the per-account backoff is OFF for new identifiers,
+	// and the chart alerts on it.
+	OutcomeStoreFull = "store_full"
 	// OutcomeError is an admitted attempt whose lookup failed — a database error, not a
 	// decision about the secret.
 	OutcomeError = "error"
@@ -279,7 +340,19 @@ type Checker struct {
 	// observe WHICH hash each check paid for (export_test.go): the dummy compare is
 	// the timing equalizer, and an outcome-level test cannot see it being skipped.
 	compare func(hash, secret []byte) error
+
+	// fullLog rate-limits the warning a full store logs: during the spray that fills
+	// the bucket, every sign-in attempt fails open, and a line per attempt would turn
+	// the attack into a log flood as well.
+	fullLog struct {
+		sync.Mutex
+		last       time.Time
+		suppressed int
+	}
 }
+
+// storeFullLogInterval is the most often a full attempt store is logged.
+const storeFullLogInterval = time.Minute
 
 // Option configures a Checker.
 type Option func(*Checker)
@@ -291,7 +364,10 @@ func WithClock(now func() time.Time) Option { return func(c *Checker) { c.now = 
 //
 // It is the only view of an attack held at the cap: a throttled attempt writes no audit
 // row (so an attacker cannot drive database writes with it), which leaves this counter
-// and the unavailable outcome as the signals.
+// and the unavailable outcome as the signals. It is also the only view of a full attempt
+// store (OutcomeStoreFull), which is why NewChecker exports that series at zero for every
+// throttled kind: an alert over increase() cannot see a series' FIRST sample, so a
+// series created by the first fail-open would hide exactly that one.
 func WithCounter(c *prometheus.CounterVec) Option { return func(ch *Checker) { ch.checks = c } }
 
 // dummySecret is hashed at construction so an unknown principal pays a real compare.
@@ -322,6 +398,13 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 	for _, o := range opts {
 		o(c)
 	}
+	if c.checks != nil {
+		for k, p := range policies {
+			if !p.Unthrottled {
+				c.checks.WithLabelValues(string(k), OutcomeStoreFull)
+			}
+		}
+	}
 	return c, nil
 }
 
@@ -351,7 +434,10 @@ func Key(p Principal) string {
 //
 // It returns nil on a match, ErrMismatch on a mismatch, a *ThrottledError when the
 // attempt is not yet allowed, a lookup error unchanged, and an *UnavailableError
-// (matching ErrUnavailable) when the attempt store cannot be read or written.
+// (matching ErrUnavailable) when the attempt store cannot be read or written — except
+// when the write is refused because the store is FULL, in which case the attempt is
+// evaluated without its backoff and returns whatever that evaluation returns (see the
+// package doc).
 //
 // 🔴 THE ATTEMPT IS CHARGED BEFORE ITS COMPARE RUNS. Counting only on failure leaves a
 // hole the size of the compare: N requests arriving together all read "no failures
@@ -365,53 +451,101 @@ func Key(p Principal) string {
 // An Unthrottled kind skips all of that — no read, no charge, no delete — and only
 // compares.
 func (c *Checker) Check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) error {
-	err := c.check(ctx, p, secret, lookup)
-	c.observe(p.Kind, err)
+	failedOpen, err := c.check(ctx, p, secret, lookup)
+	c.observe(p.Kind, err, failedOpen)
 	return err
 }
 
-func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) error {
+// check reports, beside its result, whether the attempt was evaluated WITHOUT its
+// backoff because the store was full.
+func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) (bool, error) {
 	policy, ok := c.policies[p.Kind]
 	if !ok {
-		return fmt.Errorf("credential: no policy for kind %q", p.Kind)
+		return false, fmt.Errorf("credential: no policy for kind %q", p.Kind)
 	}
 	key := Key(p)
 
+	// hadRecord is whether a success has a record to clear. It is always true for a
+	// charged attempt — the charge wrote one — and false only for a fail-open attempt
+	// on a principal with no record, where a delete would write a tombstone into a
+	// bucket that has no room for it.
+	failedOpen, hadRecord := false, true
 	if !policy.Unthrottled {
-		if err := c.admit(key, policy); err != nil {
-			return err
+		had, err := c.admit(key, policy)
+		switch {
+		case errors.Is(err, errStoreFull):
+			// 🔴 FAIL OPEN: the rest of this function runs exactly as it does for an
+			// admitted attempt — the same lookup, the same compare (the dummy for an
+			// unknown principal) — so timing and existence still do not leak. Only the
+			// charge is missing.
+			failedOpen, hadRecord = true, had
+			c.logStoreFull(p.Kind)
+		case err != nil:
+			return false, err
 		}
 	}
 
 	hash, err := lookup(ctx)
 	if err != nil {
 		// The charge stands: a lookup that fails is not a free attempt.
-		return err
+		return failedOpen, err
 	}
 	stored := []byte(hash)
 	if hash == "" {
 		stored = c.dummy
 	}
 	if c.compare(stored, []byte(secret)) != nil || hash == "" {
-		return ErrMismatch
+		return failedOpen, ErrMismatch
 	}
-	if policy.Unthrottled {
-		return nil
+	if policy.Unthrottled || !hadRecord {
+		return failedOpen, nil
 	}
 
 	if err := c.store.Delete(key); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 		// The secret matched, so the caller authenticates. The record that failed to
 		// clear only errs toward a delay on this principal's next failure, and it
 		// expires with the bucket's TTL.
-		log.Warn().Err(err).Str("kind", string(p.Kind)).
-			Msg("Could not reset a credential attempt record after a successful check.")
+		if storeFull(err) {
+			// A delete writes a tombstone, so a full bucket can refuse it too; that is
+			// the condition already being reported, not a new one per success.
+			c.logStoreFull(p.Kind)
+		} else {
+			log.Warn().Err(err).Str("kind", string(p.Kind)).
+				Msg("Could not reset a credential attempt record after a successful check.")
+		}
 	}
-	return nil
+	return failedOpen, nil
+}
+
+// logStoreFull warns that the attempt store is full, at most once per
+// storeFullLogInterval, carrying how many fail-opens the interval hid. The counter,
+// not this line, is what sees every one.
+func (c *Checker) logStoreFull(kind Kind) {
+	c.fullLog.Lock()
+	now := c.now()
+	if !c.fullLog.last.IsZero() && now.Sub(c.fullLog.last) < storeFullLogInterval {
+		c.fullLog.suppressed++
+		c.fullLog.Unlock()
+		return
+	}
+	suppressed := c.fullLog.suppressed
+	c.fullLog.last, c.fullLog.suppressed = now, 0
+	c.fullLog.Unlock()
+
+	log.Warn().Str("kind", string(kind)).Int("suppressed", suppressed).
+		Msg("The credential attempt store is full, so sign-in attempts are being checked " +
+			"WITHOUT their per-account backoff until entries expire. This usually means " +
+			"someone is sending sign-ins for many distinct identifiers.")
 }
 
 // admit reads the principal's record, refuses the attempt while its delay is running,
 // and otherwise charges it by compare-and-set.
-func (c *Checker) admit(key string, policy Policy) error {
+//
+// It reports whether the principal had a record, and returns errStoreFull — and
+// nothing else — when the charge was refused because the store is full. A read that
+// succeeded followed by a charge refused for fullness is still errStoreFull: the
+// attempt was not in a delay, so it is evaluated, not denied.
+func (c *Checker) admit(key string, policy Policy) (bool, error) {
 	for i := 0; i < casAttempts; i++ {
 		now := c.now()
 		var rec record
@@ -421,17 +555,17 @@ func (c *Checker) admit(key string, policy Policy) error {
 		case err == nil:
 			if jerr := json.Unmarshal(entry.Value(), &rec); jerr != nil {
 				// A record this code did not write is not trusted to mean "no failures".
-				return unavailable("unreadable attempt record: %v", jerr)
+				return false, unavailable("unreadable attempt record: %v", jerr)
 			}
 			rev = entry.Revision()
 		case errors.Is(err, nats.ErrKeyNotFound):
 			// First attempt, or the record expired, or a success cleared it.
 		default:
-			return unavailable("%v", err)
+			return false, unavailable("%v", err)
 		}
 
 		if wait := time.UnixMilli(rec.NotBefore).Sub(now); wait > 0 {
-			return &ThrottledError{RetryAfter: wait}
+			return true, &ThrottledError{RetryAfter: wait}
 		}
 
 		next := record{Failures: rec.Failures + 1}
@@ -444,24 +578,28 @@ func (c *Checker) admit(key string, policy Policy) error {
 		}
 		switch {
 		case err == nil:
-			return nil
+			return true, nil
 		case errors.Is(err, nats.ErrKeyExists), errors.Is(err, nats.ErrKeyRevisionMismatch):
 			// Another attempt on this principal charged first; read again.
 			continue
+		case storeFull(err):
+			return rev != 0, errStoreFull
 		default:
-			return unavailable("%v", err)
+			return false, unavailable("%v", err)
 		}
 	}
-	return &ThrottledError{RetryAfter: contendedRetry}
+	return true, &ThrottledError{RetryAfter: contendedRetry}
 }
 
-func (c *Checker) observe(kind Kind, err error) {
+func (c *Checker) observe(kind Kind, err error, failedOpen bool) {
 	if c.checks == nil {
 		return
 	}
 	outcome := OutcomeSuccess
 	var throttled *ThrottledError
 	switch {
+	case failedOpen:
+		outcome = OutcomeStoreFull
 	case err == nil:
 	case errors.As(err, &throttled):
 		outcome = OutcomeThrottled

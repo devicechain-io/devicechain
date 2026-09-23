@@ -342,13 +342,82 @@ func TestStoreFailureFailsClosed(t *testing.T) {
 	assert.Equal(t, int32(0), acct.calls.Load(), "a CORRECT secret must not authenticate when the attempt cannot be counted")
 }
 
-// A write the store refuses for a reason other than a race — a full bucket — is
-// unavailable, not a throttle.
+// A write the store refuses for a reason other than a race or a full bucket is
+// unavailable, not a throttle — and the attempt is not evaluated.
+//
+// 🔴 THE SECOND CASE IS A PLAIN error WHOSE TEXT READS LIKE FULLNESS. Fail-open is
+// keyed on the JetStream error JetStream actually returns, not on words in a message,
+// so this stays closed; jetstream_test.go is what shows the real error does match.
 func TestRefusedWriteIsUnavailable(t *testing.T) {
+	for _, refusal := range []error{
+		errors.New("nats: timeout"),
+		errors.New("nats: maximum bytes exceeded"),
+	} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			store := credentialtest.NewStore()
+			store.BeforeWrite = func(string) { store.Fail = refusal }
+			c := newChecker(t, store, newClock())
+			acct := newAccount(t)
+			require.ErrorIs(t, c.Check(context.Background(), alice, secret, acct.lookup), credential.ErrUnavailable)
+			assert.Equal(t, int32(0), acct.calls.Load(), "a refused charge that is not fullness must not be evaluated")
+		})
+	}
+}
+
+// fullStore is the error JetStream returns for a write to a bucket at its MaxBytes, as
+// observed in jetstream_test.go.
+var fullStore = &nats.APIError{Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}
+
+// 🔴 A READ THAT SUCCEEDS FOLLOWED BY A CHARGE REFUSED FOR FULLNESS DOES NOT DENY. A
+// principal with a record (not in a delay) is read fine, then its Update is refused
+// because the bucket is full — which a replicated bucket does even for an update that
+// replaces a message. The attempt is evaluated, charged nothing, and the correct secret
+// signs in. The real-bucket tests cannot reach this path on a single server, whose
+// store lets a same-size replacement through at the ceiling.
+func TestFullStoreOnChargeFailsOpen(t *testing.T) {
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "checks_total"}, []string{"kind", "outcome"})
 	store := credentialtest.NewStore()
-	store.BeforeWrite = func(string) { store.Fail = errors.New("nats: maximum bytes exceeded") }
+	clk := newClock()
+	c := newChecker(t, store, clk, credential.WithCounter(counter))
+	acct := newAccount(t)
+	ctx := context.Background()
+
+	// One charged failure: a record exists, and it is not in a delay (Free is 3).
+	require.ErrorIs(t, c.Check(ctx, alice, "wrong", acct.lookup), credential.ErrMismatch)
+	before, err := store.Get(credential.Key(alice))
+	require.NoError(t, err)
+
+	store.BeforeWrite = func(string) { store.Fail = fullStore }
+	for i := 0; i < 3*testPolicy.Free; i++ {
+		store.Fail = nil
+		require.ErrorIs(t, c.Check(ctx, alice, "wrong", acct.lookup), credential.ErrMismatch,
+			"attempt %d: a wrong secret still fails normally, and nothing throttles", i)
+	}
+	store.Fail = nil
+	require.NoError(t, c.Check(ctx, alice, secret, acct.lookup), "the correct secret signs in")
+	assert.Equal(t, int32(1+3*testPolicy.Free+1), acct.calls.Load(), "every attempt was evaluated")
+
+	store.Fail = nil
+	store.BeforeWrite = nil
+	after, err := store.Get(credential.Key(alice))
+	require.NoError(t, err, "the refused charges and the refused delete left the record as it was")
+	assert.Equal(t, before.Revision(), after.Revision(), "nothing was charged")
+	assert.Equal(t, float64(3*testPolicy.Free+1),
+		testutil.ToFloat64(counter.WithLabelValues("identity", credential.OutcomeStoreFull)))
+}
+
+// A principal already in a delay is still refused while the store is full: reading its
+// record needs no room, and failing open is about the CHARGE, not the read.
+func TestFullStoreStillHonoursARunningDelay(t *testing.T) {
+	store := credentialtest.NewStore()
 	c := newChecker(t, store, newClock())
-	require.ErrorIs(t, c.Check(context.Background(), alice, secret, newAccount(t).lookup), credential.ErrUnavailable)
+	acct := newAccount(t)
+	for i := 0; i < testPolicy.Free; i++ {
+		require.ErrorIs(t, c.Check(context.Background(), alice, "wrong", acct.lookup), credential.ErrMismatch)
+	}
+	store.BeforeWrite = func(string) { store.Fail = fullStore }
+	require.Equal(t, time.Second, retryAfter(t, c.Check(context.Background(), alice, secret, acct.lookup)))
+	assert.Equal(t, int32(testPolicy.Free), acct.calls.Load())
 }
 
 func TestLookupErrorIsReturnedAndCharged(t *testing.T) {
@@ -429,6 +498,21 @@ func TestOutcomesAreCounted(t *testing.T) {
 	assert.Equal(t, float64(testPolicy.Free), get(credential.OutcomeMismatch))
 	assert.Equal(t, 1.0, get(credential.OutcomeThrottled))
 	assert.Equal(t, 1.0, get(credential.OutcomeUnavailable))
+	assert.Equal(t, 0.0, get(credential.OutcomeStoreFull))
+}
+
+// The store-full series exists at zero from construction, for throttled kinds only. An
+// alert over increase() cannot see a series' first sample, so a series born with the
+// first fail-open would hide it.
+func TestStoreFullSeriesIsExportedAtZero(t *testing.T) {
+	counter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "checks_total"}, []string{"kind", "outcome"})
+	_, err := credential.NewChecker(credentialtest.NewStore(), map[credential.Kind]credential.Policy{
+		credential.KindIdentity:    testPolicy,
+		credential.KindOAuthClient: {Unthrottled: true},
+	}, credential.WithCounter(counter))
+	require.NoError(t, err)
+	require.Equal(t, 1, testutil.CollectAndCount(counter))
+	assert.Equal(t, 0.0, testutil.ToFloat64(counter.WithLabelValues("identity", credential.OutcomeStoreFull)))
 }
 
 // The delay schedule does not overflow a long way past the cap.

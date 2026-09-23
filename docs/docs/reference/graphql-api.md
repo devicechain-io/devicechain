@@ -585,9 +585,26 @@ because the password may well have been right:
 }
 ```
 
-If the service cannot reach the store that keeps these counts, or the store is full, it refuses to
-check passwords at all rather than check them without counting. The `login` error then carries
-`extensions.code` set to `UNAVAILABLE`. Treat it as an outage, not as a rejected credential. The
-OAuth token endpoint does not use the store, so client authentication keeps working.
+If the service cannot reach the store that keeps these counts, it refuses to check passwords at all
+rather than check them without counting. The `login` error then carries `extensions.code` set to
+`UNAVAILABLE`. Treat it as an outage, not as a rejected credential. The OAuth token endpoint does
+not use the store, so client authentication keeps working.
+
+The store has a fixed size, and every address that is tried takes a place in it for 10 minutes,
+whether or not an account exists for it. Someone sending sign-ins for enough different addresses
+can fill it. When it is full, sign-in keeps working: passwords are still checked and answered
+normally, but new failures are not counted, so addresses that are not already waiting are not slowed
+down until old entries expire. An address that is already waiting stays waiting. This is
+deliberate. Refusing every sign-in instead would let anyone who can fill the store lock every user
+out of the instance. Guessing is still limited by the cap on fields per request and by the cost of
+each password check.
+
+Each attempt checked this way is counted by
+`devicechain_usermanagement_credential_checks_total` with `outcome="store_full"`. When the chart's
+alerting rules are enabled, the `CredentialAttemptStoreFull` alert fires when there are any. The user-management log also carries a
+warning at most once a minute while it lasts. When the alert fires, someone is most likely trying
+many addresses. Find where the sign-in traffic comes from and block it upstream. If the traffic is
+legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. That size applies to every
+state bucket, so make sure the JetStream volume has room for the increase.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.

@@ -194,8 +194,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 	// The credential checker: every password and client-secret compare goes through
 	// it. Passwords are under a per-email backoff whose state is shared by every
-	// replica through this bucket, and fail closed when it cannot be reached; client
-	// secrets are unthrottled (identity.CredentialPolicies says why).
+	// replica through this bucket, and fail closed when it cannot be reached — but
+	// fail OPEN, without the backoff, when it is full, since anyone can fill it by
+	// spraying addresses (credential's package doc says why). Client secrets are
+	// unthrottled (identity.CredentialPolicies says why).
 	attemptsKV, err := NatsManager.CredentialAttemptStore()
 	if err != nil {
 		return err
@@ -205,7 +207,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			"Password and OAuth client-secret checks by outcome. A throttled attempt writes no "+
 				"audit row, so outcome=\"throttled\" is the view of an account held at the backoff "+
 				"cap; outcome=\"unavailable\" means the attempt store could not be reached and "+
-				"sign-in failed closed.",
+				"sign-in failed closed; outcome=\"store_full\" means the attempt store was full and "+
+				"the attempt was checked WITHOUT its backoff.",
 			[]string{"kind", "outcome"})))
 	if err != nil {
 		return err

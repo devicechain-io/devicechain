@@ -100,14 +100,16 @@ var All = []Bucket{
 			"was checked recently, expiring 10 minutes after its last write, so it " +
 			"scales with recent failed sign-ins — including ones for accounts that do not " +
 			"exist, since an attempt is charged before the account is looked up. A full " +
-			"bucket refuses the charge, and credential.Checker fails closed: EVERY password " +
-			"sign-in on the instance fails until entries expire. Filling it takes roughly " +
+			"bucket refuses the charge, and credential.Checker then FAILS OPEN: sign-ins " +
+			"are still checked, but new addresses are no longer slowed down until entries " +
+			"expire — failing closed would let anyone who fills it stop EVERY password " +
+			"sign-in on the instance. Filling it takes roughly " +
 			"650k distinct addresses inside one TTL window at the default 128 MiB State " +
 			"ceiling (~1,100 new addresses a second), and roughly 80k at the compact " +
 			"preset's 16 MiB (~135 a second, which five aliases per login request make " +
 			"~27 requests a second) — each address paying a bcrypt compare. The " +
-			"outcome=\"unavailable\" series of devicechain_usermanagement_credential_checks_total " +
-			"is where that shows.",
+			"outcome=\"store_full\" series of devicechain_usermanagement_credential_checks_total " +
+			"is where that shows, and the CredentialAttemptStoreFull alert fires on it.",
 	},
 	{
 		Name: BucketLocks,

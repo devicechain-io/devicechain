@@ -361,7 +361,8 @@ type MembershipInfo struct {
 //     attacker held at the cap could still drive a database write per request. The
 //     checker's outcome counter is where these show.
 //   - *credential.UnavailableError: the attempt store could not be reached, and the
-//     check failed closed.
+//     check failed closed. A FULL store is not this: the checker evaluates the
+//     attempt without its backoff and returns its normal result.
 func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityAuth, error) {
 	if m.credentials == nil {
 		return nil, errNoCredentialChecker

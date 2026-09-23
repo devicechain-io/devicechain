@@ -1,0 +1,46 @@
+{{/*
+Alerting rules for password sign-in.
+
+WHY THIS GROUP EXISTS. Failed password sign-ins are slowed down per email address, and
+the counts live in a size-bounded NATS KV bucket. Every address that is tried takes an
+entry, real account or not, so anyone who sprays enough distinct addresses can fill it.
+When it is full the checker FAILS OPEN: sign-in keeps working, but new addresses are no
+longer slowed down. That is the smaller of the two failures -- failing closed would let
+the same spray stop every password sign-in on the instance -- but it switches off a
+security control without a single request failing, so nothing else would notice. This
+alert is how an operator finds out.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sign-in
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.sign-in
+      rules:
+        - alert: CredentialAttemptStoreFull
+          # 🔑 increase() CAN SEE THE FIRST FAIL-OPEN only because the checker exports the
+          # store_full series at 0 from startup. A series born at 1 has no earlier sample
+          # to difference against, and the first increment would be invisible.
+          #
+          # No `for`: a single attempt checked without its backoff is the event, and the
+          # 10m window holds the alert for ten minutes after the last one, which is also
+          # how long the entries that filled the bucket take to expire.
+          #
+          # The parentheses around `or vector(0)` bind the comparison to the whole
+          # expression -- see DeadLetterStoreLosing in prometheusrule.yaml for what
+          # happens without them.
+          expr: (sum(increase(devicechain_usermanagement_credential_checks_total{namespace="{{ $ns }}", outcome="store_full"}[10m])) or vector(0)) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Password sign-ins are being checked without their per-account backoff"
+            description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on new addresses. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+{{- end }}
