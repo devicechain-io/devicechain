@@ -152,27 +152,25 @@ clothes:
   obvious way to write it — makes the loop's status that of the last `echo`, i.e. always 0. Every
   module could fail and the sweep would still exit green, which is precisely the gate-that-cannot-
   fail it exists to be.
-- it **snapshots `go.work.sum` first and checks it last.** A `go` command in workspace mode does not
-  fail on a missing hash — it quietly APPENDS it — so an incomplete `go.work.sum` builds, vets and
-  tests green and shows up only as an uncommitted line. That line is never noise: it is the build
-  saying the committed file was not enough, and CI's `workspace sum is complete` step fails every
-  module's job on it (#1135 lost a CI cycle to exactly one). The check is `hack/check-go-work-sum.sh`,
-  the same script that step runs. It compares against the snapshot, not against git, so an edit
-  already in your tree neither fails the sweep nor hides a hash the build adds. If it fails, commit
-  `go.work.sum`.
+- it **ends by checking that `go.work.sum` matches what is staged.** A `go` command in workspace
+  mode does not fail on a missing hash — it quietly APPENDS it — so an incomplete `go.work.sum`
+  builds, vets and tests green and shows up only as an uncommitted line. That line is never noise,
+  whenever it was appended (by this sweep, an earlier build, your editor's language server): it is
+  the workspace saying the committed file was not enough, and CI's `workspace sum is complete` step
+  fails the job of every module whose build needs it (#1135 lost a CI cycle to exactly one). The
+  check is `hack/check-go-work-sum.sh`, the same script that step runs. If it fails, commit
+  `go.work.sum` — or `git add` it, which is how you tell the check you mean the edit.
 
 ```bash
 rc=0
 root="$(git rev-parse --show-toplevel)"
-sum_snapshot="$(mktemp)"; cp "$root/go.work.sum" "$sum_snapshot"
 for m in $(go list -m -f '{{.Dir}}'); do
   ( cd "$m" || exit 1
     fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
     go build ./... && go vet ./... && go test ./... -count=1
   ) || { echo "FAILED: $m"; rc=1; }
 done
-"$root/hack/check-go-work-sum.sh" --since "$sum_snapshot" || rc=1
-rm -f "$sum_snapshot"
+"$root/hack/check-go-work-sum.sh" || rc=1
 exit "$rc"
 ```
 
