@@ -149,7 +149,10 @@ func TestStopBoundsTheDrainByItsContextAndClosesInline(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	queueOnSlowSubscription(t, srv, nc, "drain.stuck", 5, func() { <-release })
 
-	const budget = 1500 * time.Millisecond
+	// Four times closeReserve, so the reserve is the full constant rather than its
+	// quarter-of-the-budget clamp: the wait should end one closeReserve before the
+	// deadline, which leaves a half-reserve margin on either side for the assertions.
+	const budget = 4 * closeReserve
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	began := time.Now()
@@ -158,11 +161,16 @@ func TestStopBoundsTheDrainByItsContextAndClosesInline(t *testing.T) {
 	}
 	took := time.Since(began)
 
-	if took > budget+500*time.Millisecond {
-		t.Errorf("Stop took %s against a %s budget: the drain wait is not bounded by ctx", took, budget)
+	// The reserve is the contract: budget left for the Close and for the components that
+	// stop after NATS. A wait that ran to the deadline leaves them none.
+	if took > budget-closeReserve/2 {
+		t.Errorf("Stop took %s against a %s budget: the drain wait did not leave the %s reserve "+
+			"for what stops after it", took, budget, closeReserve)
 	}
-	// The wait spends the budget less a reserve of at most a quarter of it — so Stop
-	// returning much sooner means it did not wait at all.
+	if ctx.Err() != nil {
+		t.Errorf("the stop's budget had expired when Stop returned (%v); the reserve was spent", ctx.Err())
+	}
+	// ...and Stop returning much sooner means it did not wait at all.
 	if took < budget/2 {
 		t.Errorf("Stop returned after %s with a hung subscription: it did not wait for the drain", took)
 	}
@@ -227,5 +235,72 @@ func TestStopOverAnAlreadyClosedConnectionIsQuiet(t *testing.T) {
 		if rec := findLog(logs, msg); rec != nil {
 			t.Errorf("a stop over an already-closed connection logged %q at %v", msg, rec["level"])
 		}
+	}
+}
+
+// A stop that finds the broker gone — a pod stopping while NATS rolls — takes Drain's
+// other route: a connection that is reconnecting has nothing in flight, so Drain closes
+// it SYNCHRONOUSLY, on the stop's own goroutine, and queues the ClosedHandler right
+// there. closeRequested therefore has to be set before Drain is called; set after it,
+// the handler can run first, read the close as unrequested, and fail liveness on a pod
+// that is only leaving.
+//
+// Whether the handler actually wins that race is scheduling, so it is not what this
+// asserts. A sync subscription's closed handler runs INSIDE the library's close, on
+// the goroutine that called it, before the ClosedHandler is even queued — so it reads
+// the flag at the one instant that matters, deterministically.
+func TestStopWhileReconnectingMarksTheCloseRequestedBeforeClosing(t *testing.T) {
+	logs := captureLogs(t)
+	srv := startEmbeddedServer(t)
+	nmgr := startedManager(t, srv, "drain-reconnecting", nil)
+	nc := nmgr.Conn()
+	if nmgr.closeRequested == nil {
+		t.Fatal("the manager carries no closeRequested flag; nothing below would mean anything")
+	}
+
+	// 0 = the close never reached this subscription, 1 = flag unset, 2 = flag set.
+	var atClose atomic.Int32
+	sub, err := nc.SubscribeSync("drain.reconnecting.probe")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	sub.SetClosedHandler(func(string) {
+		if nmgr.closeRequested.Load() {
+			atClose.Store(2)
+		} else {
+			atClose.Store(1)
+		}
+	})
+
+	srv.Shutdown()
+	srv.WaitForShutdown()
+	waitFor(t, "the connection to start reconnecting", func() bool {
+		return nc.Status() == nats.RECONNECTING
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := nmgr.Stop(ctx); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	if findLog(logs, "reconnecting when the stop began") == nil {
+		t.Fatal("Stop did not take the reconnecting route; the ordering below was not exercised")
+	}
+	switch atClose.Load() {
+	case 0:
+		t.Fatal("the close never ran the subscription's closed handler; the probe saw nothing")
+	case 1:
+		t.Error("the connection was closed before closeRequested was set: its ClosedHandler " +
+			"can read the stop's own close as unrequested and fail liveness")
+	}
+	if !nc.IsClosed() {
+		t.Errorf("the connection is %s after Stop, want CLOSED", nc.Status())
+	}
+	waitFor(t, "the shutdown-close log", func() bool {
+		return findLog(logs, "closed during shutdown") != nil
+	})
+	if err := nmgr.Microservice.Live(); err != nil {
+		t.Errorf("a stop during a reconnect marked the process not live: %v", err)
 	}
 }

@@ -199,7 +199,9 @@ type NatsManager struct {
 	// 🔴 SET IT BEFORE ANYTHING THAT CAN CLOSE THE CONNECTION: closeConn and the Drain
 	// in drainAndWait are the only two places this package closes one, and both do. The
 	// handler runs on the client's callback goroutine and reads the flag when it runs,
-	// so a flag set after the Close has already raced it.
+	// so a flag set after the Close has already raced it. And only on a connection that
+	// is still OPEN: set on one that has already closed, it relabels that close — whose
+	// handler may still be queued — as requested, and liveness never fails for it.
 	//
 	// 🔑 PER CONNECTION, NOT PER MANAGER, deliberately. It used to be a manager-wide
 	// "shutting down" flag that was never reset. The closes ExecuteInitialize makes when
@@ -2106,7 +2108,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 	// every Unsubscribe on it fails. That is the ordinary state of a stop that follows
 	// an unrequested close — the kubelet stopping the container whose liveness failed —
 	// so logging each of those at ERROR would bury the one ERROR that says why, on every
-	// cycle of a crash loop.
+	// cycle of a crash loop. Expect this debug path on every such cycle: by the time the
+	// stop runs, that close's ClosedHandler has latched MarkNotLive (or is queued to, and
+	// drainAndWait leaves closeRequested alone so it still does).
 	if nmgr.nc != nil && nmgr.nc.IsClosed() {
 		log.Debug().Int("readers", len(nmgr.readers)).
 			Msg("NATS connection is already closed; no reader subscriptions to release.")
@@ -2168,6 +2172,16 @@ const closeReserve = time.Second
 // when the budget ran out.
 func (nmgr *NatsManager) drainAndWait(ctx context.Context) {
 	nc := nmgr.nc
+	// Already dead — the normal case when an unrequested close is what brought the
+	// process down. Its ERROR has been logged, or is about to be: this returns BEFORE
+	// closeRequested is set, because the ClosedHandler for that close may still be queued
+	// on the client's callback goroutine, and it reads the flag when it runs. Setting it
+	// here would relabel the close that actually happened as this stop's, and that
+	// handler would then skip MarkNotLive.
+	if nc.IsClosed() {
+		log.Debug().Msg("NATS connection was already closed; nothing to drain.")
+		return
+	}
 	// An already-spent budget has nothing to drain with: the sampler join can use all
 	// of a short one. Close flushes what is buffered, which is the part still owed.
 	if ctx.Err() != nil {
@@ -2185,8 +2199,9 @@ func (nmgr *NatsManager) drainAndWait(ctx context.Context) {
 	}
 	switch err := nc.Drain(); {
 	case errors.Is(err, nats.ErrConnectionClosed):
-		// Already dead — the normal case when an unrequested close is what brought the
-		// process down. Its ERROR has been logged; this is not a second one.
+		// Closed in the instant between the IsClosed check above and here. The flag
+		// already reads requested, so that close's handler logs it as a shutdown; the
+		// window is a few instructions wide and the process is exiting either way.
 		log.Debug().Msg("NATS connection was already closed; nothing to drain.")
 		return
 	case errors.Is(err, nats.ErrConnectionReconnecting):

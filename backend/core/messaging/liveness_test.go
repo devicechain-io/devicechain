@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
 // healthz answers /healthz through the microservice's own mux, with the probes core
@@ -181,6 +183,60 @@ func TestAnAbandonedStartupDoesNotFailLiveness(t *testing.T) {
 	}
 	if err := ms.Live(); err != nil {
 		t.Errorf("an abandoned startup marked the process not live: %v", err)
+	}
+}
+
+// A Stop that begins while an unrequested close's ClosedHandler is still QUEUED must
+// not relabel that close as its own.
+//
+// The handler runs on the client's single callback goroutine and reads closeRequested
+// when it runs, not when the close happened. The stop that follows an unrequested close
+// arrives soon after it, so if the stop set the flag on the dead connection, a handler
+// still waiting its turn would read "requested", log a shutdown, and never fail
+// liveness — the exact close liveness exists for, lost.
+//
+// The queue is held deterministically: close() queues the disconnect callback ahead of
+// the closed one, so a disconnect handler that blocks keeps the ClosedHandler waiting
+// until the Stop has returned.
+func TestAStopDoesNotRelabelAQueuedUnrequestedClose(t *testing.T) {
+	logs := captureLogs(t)
+	srv := startEmbeddedServer(t)
+	nmgr := startedManager(t, srv, "liveness-queued", nil)
+	nc := nmgr.Conn()
+
+	hold := make(chan struct{})
+	var released atomic.Bool
+	release := func() {
+		if released.CompareAndSwap(false, true) {
+			close(hold)
+		}
+	}
+	t.Cleanup(release)
+	nc.SetDisconnectErrHandler(func(*nats.Conn, error) { <-hold })
+
+	// Closed without the manager asking, as a revoked credential would.
+	nc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := nmgr.Stop(ctx); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if rec := findLog(logs, "CLOSED permanently"); rec != nil {
+		t.Fatal("the ClosedHandler ran before the Stop; the queue was not held and the case " +
+			"under test did not happen")
+	}
+	release()
+
+	waitFor(t, "the queued ClosedHandler to run", func() bool {
+		return findLog(logs, "CLOSED permanently") != nil || findLog(logs, "closed during shutdown") != nil
+	})
+	if findLog(logs, "closed during shutdown") != nil {
+		t.Error("the unrequested close was logged as a shutdown: the Stop relabelled it")
+	}
+	if err := nmgr.Microservice.Live(); err == nil {
+		t.Error("an unrequested close left the process live because a Stop began before its " +
+			"handler ran")
 	}
 }
 
