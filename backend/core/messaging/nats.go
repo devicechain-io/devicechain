@@ -875,6 +875,9 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 // segments or inject a cross-tenant wildcard, so a malformed tenant is rejected
 // here rather than published to a corrupted subject. Legitimate tenants always
 // pass: the same grammar is enforced when a tenant is created.
+//
+// Each publish waits at most until the earlier of ctx's deadline and publishWait;
+// cancelling ctx without a deadline does not cut it short (see publishContext).
 func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	// A per-device suffix has no meaningful tenant-wide subject: publishing there
 	// would land outside the stream (which captures one more level) and, if it
@@ -897,7 +900,8 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	return w.publish(ctx, "", msgs...)
 }
 
-// WriteToDevice publishes to the per-device subject for deviceToken.
+// WriteToDevice publishes to the per-device subject for deviceToken, under the same
+// deadline rule as WriteMessages.
 func (w *natsWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs ...Message) error {
 	if deviceToken == "" {
 		return fmt.Errorf("messaging: refusing to publish a device-scoped message with no device token")
@@ -945,11 +949,48 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 				nm.Header.Set(k, v)
 			}
 		}
-		if _, err := w.nmgr.js.PublishMsg(nm); err != nil {
+		// A fresh ceiling for each message: a batch is not one publish, and the
+		// ceiling bounds how long ONE unanswered request is waited on.
+		pctx, callerBound, cancel := publishContext(ctx)
+		err := pctx.Err() // an already-expired caller deadline publishes nothing
+		if err == nil {
+			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
+		}
+		cancel()
+		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {
+			// Our ceiling fired, not the caller's deadline, which has not passed:
+			// report it as the broker timeout it has always been.
+			err = nats.ErrTimeout
+		}
+		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// publishWait is the per-publish ceiling. Every publish waited exactly this long
+// when the JetStream context was built with no options (nats.go's defaultRequestWait);
+// it is named because it is now applied here, not inherited.
+const publishWait = 5 * time.Second
+
+// publishContext bounds ONE publish by the earlier of the caller's deadline and
+// publishWait, carrying ctx's values but NOT its cancellation. callerBound reports
+// whether the caller's deadline is the one in force.
+//
+// The deadline is the only thing a publish reads from its caller's context. A
+// cancellation without a deadline is ignored on purpose: the drain stage of a
+// shutdown and the post-commit publishers run on a root or request context that is
+// already cancelled by the time they publish, and honouring that would drop — on
+// every rolling restart — messages whose source was already acked. One rule here,
+// rather than an audit of every caller's context.
+func publishContext(ctx context.Context) (pctx context.Context, callerBound bool, cancel context.CancelFunc) {
+	ceiling := time.Now().Add(publishWait)
+	if d, ok := ctx.Deadline(); ok && d.Before(ceiling) {
+		ceiling, callerBound = d, true
+	}
+	pctx, cancel = context.WithDeadline(context.WithoutCancel(ctx), ceiling)
+	return pctx, callerBound, cancel
 }
 
 // HandleResponse logs the result of a write operation.

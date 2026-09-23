@@ -66,6 +66,9 @@ WORKFLOW=".github/workflows/upgrade-gate.yml"
 #   - apiprobe and the rig, so a change to the instrument is measured by the instrument;
 #   - the chart, because it renders what an instance runs, and a chart change is what
 #     broke the upgrade procedure in v0.11.0;
+#   - core messaging and stream declarations, because the first new pod reconciles
+#     them against the live broker's streams and consumers, and a refusal there is a
+#     crash-loop at upgrade with no migration anywhere in the diff;
 #   - 🔴 THE UPGRADE VERB ITSELF, which this list did not cover for one whole release.
 #     The documented upgrade used to be a `helm upgrade`, so watching the chart watched
 #     the procedure. It is now `dcctl upgrade`, which composes the release's values,
@@ -92,6 +95,14 @@ GATE_PATHS=(
   'backend/tools/apiprobe/**'
   'backend/cli/bootstrap/**'
   'backend/cli/cmd/upgrade.go'
+  # Core messaging: how streams are declared and reconciled, and how consumers are
+  # configured. Neither is a migration, a schema or the chart, yet both are applied
+  # to a LIVE instance's broker by the first new pod, and a declaration the running
+  # broker refuses — or a consumer config it will not update in place — crash-loops
+  # that pod at upgrade. The drill is the only thing in CI that puts an old
+  # instance's streams in front of new code.
+  'backend/core/streams/**'
+  'backend/core/messaging/**'
   'hack/upgrade-rig.sh'
   # The file that decides WHICH drill runs. A change here does not alter what an
   # instance holds — it alters what the gate measures, which is the one edit the gate
@@ -336,6 +347,17 @@ PY
   out="$(printf 'backend/services/device-management/schema/baseline.go\ndocs/README.md\n' | match_changed 2>/dev/null)"
   [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a baseline change did not run the drill (got '$out')" >&2; return 1; }
   echo "    a changed baseline RUNS the drill"
+
+  # How streams are declared and reconciled, and how consumers are configured, is
+  # core code with no migration, schema or chart file in the diff — and a live
+  # instance can crash-loop at upgrade on either. Both trees must run the drill.
+  out="$(printf 'backend/core/messaging/nats.go\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a core messaging change did not run the drill (got '$out')" >&2; return 1; }
+  echo "    a changed core messaging file RUNS the drill"
+
+  out="$(printf 'backend/core/streams/streams.go\n' | match_changed 2>/dev/null)"
+  [ "$out" = "run=true" ] || { echo "SELF-TEST FAILED: a core stream declaration change did not run the drill (got '$out')" >&2; return 1; }
+  echo "    a changed core stream declaration RUNS the drill"
 
   # THE COUNTERWEIGHT for claim 3, and the only case that proves the decision is a
   # decision. A --match-changed that answered run=true unconditionally would satisfy

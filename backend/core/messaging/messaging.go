@@ -317,6 +317,11 @@ type ReplayReader interface {
 }
 
 // MessageWriter is the producer-side abstraction (kept small for unit testing).
+//
+// ctx supplies the tenant and a deadline, nothing else. Each publish waits at most
+// until the earlier of ctx's deadline and 5 s. Cancelling ctx without a deadline does
+// not cut it short; an expired deadline returns context.DeadlineExceeded; the 5 s
+// ceiling returns nats.ErrTimeout.
 type MessageWriter interface {
 	WriteMessages(ctx context.Context, msgs ...Message) error
 	// WriteToDevice publishes to a PER-DEVICE subject
