@@ -260,6 +260,8 @@ func TestStopWhileReconnectingMarksTheCloseRequestedBeforeClosing(t *testing.T) 
 
 	// 0 = the close never reached this subscription, 1 = flag unset, 2 = flag set.
 	var atClose atomic.Int32
+	//subconfirm:ok nothing is ever published to this subject: the subscription exists only
+	// for its closed handler, so there is no delivery for an unregistered SUB to drop.
 	sub, err := nc.SubscribeSync("drain.reconnecting.probe")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
