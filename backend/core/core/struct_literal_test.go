@@ -92,7 +92,16 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 			assert.Error(t, ms.LoadInstanceConfigurationFrom("/nonexistent/dc-instance-config"),
 				"it must read the path it was given")
 		}},
-		{name: "LoadMicroserviceConfiguration", call: func(t *testing.T, ms *Microservice) { _ = ms.LoadMicroserviceConfiguration() }},
+		// The production wrapper must read the chart's mount point and nothing else. The
+		// path is written out rather than taken from MicroserviceConfigDir, so the row
+		// pins the directory a pod actually has, not whatever the constant says.
+		{name: "LoadMicroserviceConfiguration", call: func(t *testing.T, ms *Microservice) {
+			t.Setenv(ENV_MS_FUNCTIONAL_AREA, "literal-area")
+			err := ms.LoadMicroserviceConfiguration()
+			if assert.Error(t, err, "it must read the chart's mount point, which a test host does not have") {
+				assert.Contains(t, err.Error(), "/etc/dct-config/literal-area")
+			}
+		}},
 		// The same argument as LoadInstanceConfigurationFrom: it reads the directory it
 		// is handed. The functional-area variable is set so that the error asserted is
 		// the missing file, not the missing variable, which would be returned before

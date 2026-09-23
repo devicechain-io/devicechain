@@ -162,3 +162,42 @@ func TestConfigurationDocumentNeverReachesTheLog(t *testing.T) {
 		t.Logf("captured:\n%s", strings.TrimSpace(out))
 	}
 }
+
+// The level line is written BEFORE the switch, so a service configured at warn or error
+// still says, once, which level it was told to run at — the one line that explains why
+// every Info line after it is missing. The observability page promises this. Only the
+// quieter levels can test it: at info or below the line appears whichever side of the
+// switch it is written on, so TestConfigurationDocumentNeverReachesTheLog, at trace,
+// cannot see the order at all.
+func TestLevelLineSurvivesAQuieterLevel(t *testing.T) {
+	for _, level := range []string{"warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			keepGlobalLevel(t)
+			t.Setenv(ENV_MS_FUNCTIONAL_AREA, "log-level-test")
+
+			savedWriter := logWriter
+			sink := dctest.NewLogSink(io.Discard)
+			logWriter = sink
+			t.Cleanup(func() {
+				logWriter = savedWriter
+				NewMicroservice(NewNoOpLifecycleCallbacks())
+			})
+			logs := sink.Capture(t)
+
+			ms := NewMicroservice(NewNoOpLifecycleCallbacks())
+			require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, withLevel(level))))
+			// The precondition: the switch happened, so the line cannot have got through
+			// by being written after it.
+			require.False(t, log.Info().Enabled(), "Info is still on at %s", level)
+
+			out := logs.String()
+			assert.Contains(t, out, "Log level set from instance configuration",
+				"the level line was suppressed by the level it announces")
+			assert.Contains(t, out, `"level":"`+level+`"`,
+				"the line does not name the configured level")
+			if t.Failed() {
+				t.Logf("captured:\n%s", strings.TrimSpace(out))
+			}
+		})
+	}
+}

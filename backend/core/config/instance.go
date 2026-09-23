@@ -432,11 +432,11 @@ func LogLevelNames() []string {
 // 🔴 IT MUST STAY PURE, and so must Validate, which calls it. APPLYING the level
 // (zerolog.SetGlobalLevel) belongs to the microservice's own load,
 // core.Microservice.LoadInstanceConfigurationFrom, and nowhere else.
-// core.LoadConfiguration also runs over this document in processes that are not
-// services: dcctl's pre-install check validates the document the chart would
-// render, and its HA verifier reads the instance config back. A side effect here
-// would change the logging of the tool doing the checking, on the strength of a
-// document written for somebody else.
+// This package is also used over this document by processes that are not services:
+// dcctl's pre-install check runs core.LoadConfiguration (and so Validate) over the
+// document the chart would render, and its HA verifier decodes the deployed one and
+// calls ApplyDefaults. A side effect in either would change the logging of the tool
+// doing the checking, on the strength of a document written for somebody else.
 func (c LoggingConfiguration) ZerologLevel() (zerolog.Level, error) {
 	if lvl, ok := logLevels[c.Level]; ok {
 		return lvl, nil
