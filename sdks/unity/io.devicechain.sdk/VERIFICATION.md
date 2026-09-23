@@ -55,8 +55,8 @@ the prune set below (Unity ships nothing that collides with it).
 
 Verified with a small Editor MonoBehaviour (`sdks/unity/tools/live-smoke/DeviceChainLiveSmoke.cs` —
 copy into a project's `Assets/`; it uses **reflection-based** System.Text.Json, which is Editor-only
-and deliberately NOT in the AOT-safe package). Against local kind (`superuser@devicechain.local` /
-`devicechain`, tenant `sim-bp`, origin `http://localhost`):
+and deliberately NOT in the AOT-safe package). Against local kind (`superuser@devicechain.local` with
+the instance's superuser password, tenant `sim-bp`, origin `http://localhost`):
 
 - `CreateClient` → `LoginAsync` → `SelectTenantAsync` → `Gql.SendAsync` device query returned the
   `bp-therm-*` devices. (`UnityWebRequestHttpTransport` ✓)

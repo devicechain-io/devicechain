@@ -56,8 +56,16 @@ en todas partes: tal cual en los topics y las rutas, y detrás del prefijo `dci-
 comando nombre el namespace.
 
 Cuando el arranque termina, imprime el namespace, la URL de la consola y la credencial del
-superusuario. El superusuario por defecto es `superuser@devicechain.local` con la contraseña
-`devicechain`.
+superusuario. El superusuario es `superuser@devicechain.local`. No hay contraseña por defecto: el
+arranque genera una para esta instancia y la imprime una sola vez, al final de su salida. Para
+volver a leerla más tarde:
+
+```bash
+kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+Ese Secret conserva la contraseña que el superusuario recibió **al principio**. Si cambia la
+contraseña en la consola, el Secret no se actualiza.
 
 Abra la consola en `http://localhost/` e inicie sesión. Estará vacía — todavía no hay ningún
 inquilino, y todo dispositivo pertenece a uno.

@@ -1494,7 +1494,8 @@ The upgrade signs every user out once, from then on a password reset, disabling 
 one ends that user's sessions, and the instance root key becomes required in every profile. Those
 are the first three sections below. The three after them matter only if you watch the dead-letter
 metrics yourself, rely on command responses that could not be recorded, or open GraphQL WebSocket
-connections from your own code.
+connections from your own code. One more thing needs doing on every instance built before this
+release: check the superuser's password (see the last section below).
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1649,6 +1650,23 @@ The WebSocket a service accepts on its GraphQL endpoint changes in three ways:
     token expires. Sign in again.
 - **A service with no subscriptions no longer accepts a WebSocket at all.** The upgrade request is
   refused with HTTP 400. Before, the connection opened and every operation sent on it failed.
+
+#### The superuser no longer has a default password
+
+Earlier releases created every instance's superuser, `superuser@devicechain.local`, with the same
+published password, `devicechain`. A new instance now gets a password generated for it: `dcctl
+bootstrap` prints it once and keeps it in the Secret `dci-<instance>-superuser` in the instance's
+namespace. There is no default any more. If user-management starts with an empty identity table and
+no password in that Secret, it refuses to create the superuser.
+
+**The upgrade does not change an existing superuser's password.** The upgrade cannot know whether
+you changed it, so it leaves it alone, and it prints a warning at the end for any instance that has
+no generated password. If you never changed the password on such an instance, it is still
+`devicechain`. Sign in and change it, or recreate the instance to have one generated.
+
+`dcctl sim` and the drill tools no longer assume the old password either. `dcctl sim` reads the
+generated one from the instance's Secret, and takes `--admin-password` or `$DC_ADMIN_PASSWORD` for an
+instance that has none.
 
 ### The one-time durable-ingest cutover
 

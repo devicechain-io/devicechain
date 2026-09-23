@@ -191,6 +191,8 @@ Common flags:
   --tenant        tenant token to write under                (default apiprobe)
   --admin-email   superuser identity that creates the tenant
   --admin-password
+                  superuser password; no default (else $DC_ADMIN_PASSWORD). It is
+                  generated per instance: Secret dci-<id>/dci-<id>-superuser, key password
 `
 
 func printExitCodes() {

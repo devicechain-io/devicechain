@@ -236,8 +236,8 @@ kind delete cluster --name devicechain
 
 The bootstrap pipeline declares the instance → renders config → `tofu apply` (the instance's
 NATS + TimescaleDB, and its login and database on the shared relational database) →
-`helm install`s the instance → seeds the initial
-superuser → waits for readiness → reports the access URL — and is idempotent on
+`helm install`s the instance (whose superuser is seeded with a password generated for
+this instance, printed once) → waits for readiness → reports the access URL — and is idempotent on
 re-run: it reads back every credential the instance is already running (root key,
 broker auth, service auth) and reuses it rather than minting a replacement, and
 stops rather than guessing if it cannot tell whether the instance exists.

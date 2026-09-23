@@ -178,7 +178,7 @@ var (
 	lookupDeployedBrokerHashes = DeployedBrokerHashes
 
 	// readDeployedBrokerRecord / storeBrokerRecord are the local bridge across the
-	// render→Helm gap (steps 7 and 9 today) — see broker_record.go for why it exists
+	// render→Helm gap (steps 6 and 8 today) — see broker_record.go for why it exists
 	// and why it is a file.
 	// Indirected for the same reason as the two above and one more: every credential test
 	// runs with Instance "prod", so an unstubbed read would resolve ~/.devicechain/instances/prod on

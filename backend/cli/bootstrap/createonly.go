@@ -19,7 +19,7 @@ import (
 // step that stops the two verbs overlapping.
 //
 // 🔴 WHAT IT KEYS ON IS THE WHOLE DESIGN, AND THE THREE OBVIOUS CHOICES ARE ALL
-// WRONG. A bootstrap builds an instance over eleven steps (NewDefaultPipeline) and can
+// WRONG. A bootstrap builds an instance over ten steps (NewDefaultPipeline) and can
 // die at any of them, so the question this step answers is not "is there anything
 // here?" but "is there a LIVE INSTANCE here, whose credentials I must not mint over?":
 //
@@ -29,14 +29,14 @@ import (
 //     before the configuration document is written. A run killed anywhere between
 //     leaves a namespace with no document, and a refusal keyed on the namespace makes
 //     that instance permanently unrepairable.
-//   - NOT the Instance declaration. It lands at step 6, before a single credential has
-//     been minted — so every failure in steps 7 through 9 would become unrepairable.
+//   - NOT the Instance declaration. It lands at step 5, before a single credential has
+//     been minted — so every failure in steps 6 through 8 would become unrepairable.
 //   - NOT "any of our namespaces". The operator's namespace is created by the claim
 //     step (and by `dcctl install` before that), before anything
 //     instance-shaped exists, and dc-system is the cluster's — `dcctl install` created
 //     it before this bootstrap was allowed to start.
 //
-// The configuration document is the boundary: it is written at step 9 and it is the
+// The configuration document is the boundary: it is written at step 8 and it is the
 // first DURABLE copy of the broker credentials and the root key. Before it exists,
 // those values live only in this machine's bootstrap record, and a re-run is how a
 // half-built instance is repaired. After it exists, a re-run is how a working one is
@@ -59,6 +59,7 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 				"REFUSE: instance %q is already running here, so a real run would stop at this "+
 					"step and point at `dcctl upgrade`", st.Instance))
 		}
+		st.OverLiveInstance = err == nil && deployed != nil
 		return nil
 	}
 
@@ -70,6 +71,10 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	if err := rebuildRefusalReason(st, deployed); err != nil {
 		return err
 	}
+	// Past the refusal with a document in hand means a carve-out let this run through
+	// over a live instance, whose superuser was seeded long ago. Recorded so the
+	// credential step does not generate a seed password for it (resolveCredentials).
+	st.OverLiveInstance = deployed != nil
 	done()
 	return nil
 }

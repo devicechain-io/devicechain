@@ -42,7 +42,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			instanceOwnedAt("dc-object-store-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials"),
+			instanceOwnedAt("dc-object-store-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials", "dci-acme-superuser"),
 		},
 		{
 			"backups to an object store the operator owns",
@@ -60,7 +60,7 @@ func TestTheSharedCredentialsBelongToTheCluster(t *testing.T) {
 				"dc-system/dc-rdb-provisioner-credentials",
 				"monitoring/dc-grafana-admin",
 			},
-			instanceOwnedAt("dc-backup-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials"),
+			instanceOwnedAt("dc-backup-credentials", "dc-tsdb-app-credentials", "dci-acme-rdb-credentials", "dci-acme-superuser"),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -387,6 +387,10 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 			"username": []byte("dc_provisioner"), "password": []byte("provisioner-in-use")}),
 		mintedSecret(InstanceNamespace("acme"), "dci-acme-rdb-credentials", testUID, map[string]string{
 			"username": "acme", "password": "login-in-use"}),
+		// The superuser's seed: a re-run that minted over it would leave the Secret
+		// naming a password the superuser was never seeded with.
+		mintedSecret(InstanceNamespace("acme"), "dci-acme-superuser", testUID, map[string]string{
+			"password": "superuser-in-use"}),
 		// 🔴 THE DASHBOARD PASSWORD WAS RE-MINTED ON EVERY INSTALL RE-RUN, on the premise
 		// that the same run rolls Grafana onto it. It does not: Grafana reads the Secret as
 		// an environment variable, nothing restarts it when the Secret changes, and a
@@ -409,10 +413,15 @@ func TestARerunReusesTheClusterOwnedCredentials(t *testing.T) {
 		"ObjectStoreUser":        set.ObjectStoreUser,
 		"ObjectStoreSecret":      set.ObjectStoreSecret,
 		"GrafanaAdminPassword":   set.GrafanaAdminPassword,
+		"SuperuserPassword":      set.SuperuserPassword,
 	} {
 		if !strings.HasSuffix(got, "-in-use") {
 			t.Errorf("%s was re-minted rather than reused; the live store still holds the old value", field)
 		}
+	}
+	// ...and the report is told it was READ, so it does not print it as newly generated.
+	if st.SuperuserSeed != superuserSeedRecovered {
+		t.Errorf("a reused superuser seed was recorded as %v, want recovered", st.SuperuserSeed)
 	}
 }
 

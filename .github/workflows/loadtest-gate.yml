@@ -617,8 +617,9 @@ jobs:
           EMIT_INTERVAL_IN: ${{ inputs.emit_interval }}
           HOLD_IN: ${{ inputs.hold }}
         run: |
-          # dcctl mints a scoped tenant identity as the seeded superuser (compact seeds
-          # superuser@devicechain.local / devicechain -- the `dcctl sim` defaults) and
+          # dcctl mints a scoped tenant identity as the seeded superuser
+          # (superuser@devicechain.local, whose password bootstrap generated -- `dcctl sim`
+          # reads it from the instance's Secret on the cluster) and
           # writes ~/.devicechain/sims/l1probe.json (the handshake dc-loadtest reads).
           "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
           # dc-loadtest drives the seeded scenario over the ingress, then reconciles

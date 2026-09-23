@@ -340,6 +340,37 @@ instance="${DC_INSTANCE:-upgrig}"
 # ~/.devicechain/instances/<id>. Only a NAMESPACE comes through here.
 instance_namespace() { printf '%s' "dci-$instance"; }
 
+# superuser_password prints the password the instance's superuser was SEEDED with, for
+# apiprobe to sign in as it. It returns non-zero rather than calling `fail`, because it
+# runs inside a command substitution, where `fail` would exit only the subshell.
+#
+# 🔴 IT IS DECIDED BY WHICH RELEASE SEEDED THE IDENTITY TABLE, NEVER BY WHETHER A SECRET
+# EXISTS. The table is seeded once, by the BASELINE, and an upgrade never reseeds it. A
+# baseline whose user-management defaulted its seed password to the literal every
+# release before generated passwords published seeded exactly that; a later baseline's
+# dcctl generated one and kept it in the instance's Secret. The baseline's own source
+# says which, so this reads the source. Keying on the Secret instead would be wrong the
+# moment anything wrote one after the seed — the Secret would exist and name a password
+# the superuser was never given.
+#
+# The literal branch retires itself: once no baseline carries that default, the grep
+# never matches and the branch is never taken.
+superuser_password() {
+  local cfg="$baseline_src/backend/services/user-management/config/configuration.go" pw
+  [[ -f "$cfg" ]] || { echo "no baseline source at $cfg to say how the superuser was seeded" >&2; return 1; }
+  if grep -qF 'c.Auth.SuperuserPassword = "devicechain"' "$cfg"; then
+    printf '%s' devicechain
+    return 0
+  fi
+  pw="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "dci-${instance}-superuser" \
+    -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)" || true
+  [[ -n "$pw" ]] || {
+    echo "the baseline generates the superuser's password, and Secret $(instance_namespace)/dci-${instance}-superuser does not hold one" >&2
+    return 1
+  }
+  printf '%s' "$pw"
+}
+
 # The ingress the drill reaches the platform on. `--compact` implies plain HTTP
 # (whether the baseline takes it on `install` or, before that command existed, on
 # `bootstrap` — see cmd_up),
@@ -1062,7 +1093,9 @@ cmd_up() {
   # measures the table against the release's OWN served schemas and skips what
   # cannot be written, by name. Without it the seed dies part-way through with a
   # refusal that looks like a platform defect.
-  "$apiprobe" seed --instance "$instance" --receipt "$receipt" \
+  local admin_pw
+  admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
+  DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" seed --instance "$instance" --receipt "$receipt" \
     --server "$api_server" --scheme "$api_scheme" \
     --baseline-schemas "$baseline_src/backend/services" ||
     fail "seeding $baseline_tag failed (apiprobe exit $?). Nothing was upgraded, so this
@@ -1846,7 +1879,11 @@ cmd_tablesweep() {
 
   # No --baseline-schemas: this seed is against the UPGRADED release, so nothing is
   # skipped and the coverage measured is the release's own.
-  "$apiprobe" seed --instance "$instance" --receipt "$sweep_receipt" \
+  # The superuser was seeded by the BASELINE — the upgrade did not reseed it — so the
+  # password is the one the baseline's release seeded. See superuser_password.
+  local admin_pw
+  admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
+  DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" seed --instance "$instance" --receipt "$sweep_receipt" \
     --tenant "$sweep_tenant" \
     --server "$api_server" --scheme "$api_scheme" ||
     fail "the UPGRADED release could not create one of every entity (apiprobe exit $?).
@@ -2507,8 +2544,49 @@ commit-ish without the chart, or this check has quietly stopped checking."
   upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
 
   selftest_policy
+  selftest_superuser_password
 
   say "SELF-TEST PASSED"
+}
+
+# selftest_superuser_password covers how the drill decides which password the baseline
+# seeded the superuser with. Offline: the Secret branch is pointed at a kube-context that
+# does not exist, so it can only ever fail — which is what it must do rather than fall
+# back to the literal.
+selftest_superuser_password() {
+  say "the superuser password the baseline seeded"
+  local fixture saved_src="$baseline_src" saved_ctx="$kube_context" out rc cfg
+  fixture="$(mktemp -d)"
+  cfg="$fixture/backend/services/user-management/config/configuration.go"
+  mkdir -p "$(dirname "$cfg")"
+  kube_context="dc-upgrade-rig-selftest-no-such-context"
+  baseline_src="$fixture"
+
+  # A release that seeded the literal, from ITS OWN source rather than a line typed
+  # here — so a pattern that stopped matching the real line fails this case instead of
+  # sending every such baseline to a Secret it never had.
+  git -C "$repo_root" show "v0.17.0:backend/services/user-management/config/configuration.go" >"$cfg" 2>/dev/null ||
+    fail "SELF-TEST FAILED: v0.17.0's user-management configuration could not be read, so the literal case has nothing to measure."
+  out="$(superuser_password)" || fail "SELF-TEST FAILED: a baseline that seeded the literal was not recognised."
+  [[ "$out" == "devicechain" ]] || fail "SELF-TEST FAILED: a baseline that seeded the literal did not yield it."
+  note "a baseline that defaulted the seed password yields that literal"
+
+  # This tree generates the password, so the literal must NOT be offered for it.
+  cp "$repo_root/backend/services/user-management/config/configuration.go" "$cfg"
+  rc=0
+  out="$(superuser_password 2>/dev/null)" || rc=$?
+  [[ $rc -ne 0 && -z "$out" ]] ||
+    fail "SELF-TEST FAILED: a baseline that generates the password was answered without its Secret (rc=$rc)."
+  note "a baseline that generates the password is read from its Secret, never the literal"
+
+  rm -f "$cfg"
+  rc=0
+  superuser_password >/dev/null 2>&1 || rc=$?
+  [[ $rc -ne 0 ]] || fail "SELF-TEST FAILED: no baseline source was answered as though it said something."
+  note "no baseline source is a failure, not a guess"
+
+  baseline_src="$saved_src" kube_context="$saved_ctx"
+  rm -rf "$fixture"
 }
 
 # selftest_policy covers the file that decides WHICH DRILL RUNS.

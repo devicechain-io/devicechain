@@ -82,6 +82,15 @@ func TestPipelineOrderInvariants(t *testing.T) {
 		t.Errorf("stepRenderConfig runs at %d and stepInfraApply at %d: the broker credentials "+
 			"would reach the broker before anything recorded them", render, infra)
 	}
+	// The superuser's seed-password Secret is written by the infrastructure step
+	// (writeMintedSecrets, via applyInfra) and read by user-management, which the Helm
+	// step starts. The chart's reference to it is optional — an instance older than the
+	// Secret must still start — so a Secret written AFTER the chart would not stall the
+	// pod: it would start with no seed password and refuse to seed the superuser.
+	if infra >= helm {
+		t.Errorf("stepInfraApply runs at %d and stepHelmInstall at %d: user-management would "+
+			"start before its superuser's seed password was written", infra, helm)
+	}
 }
 
 // 🔴 THE OPERATOR STEP IS GONE, AND ITS ABSENCE IS ASSERTED RATHER THAN ASSUMED.

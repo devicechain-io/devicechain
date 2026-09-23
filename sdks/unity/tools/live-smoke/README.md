@@ -20,7 +20,11 @@ source-generated `JsonTypeInfo` instead.
 1. Have the `io.devicechain.sdk` package in your project (see `../../io.devicechain.sdk/README.md`).
 2. Copy `DeviceChainLiveSmoke.cs` into the project's `Assets/`.
 3. Add the **Device Chain Live Smoke** component to a GameObject. The fields default to a local kind
-   cluster (`http://localhost`, `superuser@devicechain.local` / `devicechain`, tenant `sim-bp`).
+   cluster (`http://localhost`, `superuser@devicechain.local`, tenant `sim-bp`) except **Password**,
+   which has no default and must be set: `dcctl bootstrap` generates the superuser's password for each
+   instance and prints it once. To read it again (instance `devicechain`):
+   `kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.data.password}' | base64 -d`.
+   The component refuses to run with it empty.
 4. Press Play. You should see `login → selectTenant → devices → subscribing…`, then live `📈`
    measurement lines once something is emitting into the tenant (e.g. run the buildingpulse sim:
    `backend/sims/dc-simulator/dc-simulator --handshake ~/.devicechain/sims/bp.json`).

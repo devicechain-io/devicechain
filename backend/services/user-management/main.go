@@ -5,7 +5,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -188,13 +191,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL, Configuration.Auth.IssuerUrl, identity.BootstrapConfig{
-		SuperuserEmail:    Configuration.Auth.SuperuserEmail,
-		SuperuserPassword: Configuration.Auth.SuperuserPassword,
-		SeedClients:       seedClientsFromConfig(Configuration.Auth.SeedClients),
-	})
+	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL,
+		Configuration.Auth.IssuerUrl, bootstrapConfig(Configuration))
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
-		return err
+		return explainSeedRefusal(err)
 	}
 
 	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
@@ -313,6 +313,35 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// bootstrapConfig is what the identity manager seeds from: the superuser's email and
+// OAuth clients from the configuration document, and the superuser's seed password
+// from the environment the chart projects it into — never from the document, which
+// has no key for it (see config.SuperuserPasswordEnv).
+//
+// An unset variable yields a blank password, not a default. That is correct for an
+// instance whose superuser already exists, and identity.Manager refuses to seed an
+// empty identity table with it.
+func bootstrapConfig(cfg *config.UserManagementConfiguration) identity.BootstrapConfig {
+	return identity.BootstrapConfig{
+		SuperuserEmail:    cfg.Auth.SuperuserEmail,
+		SuperuserPassword: os.Getenv(config.SuperuserPasswordEnv),
+		SeedClients:       seedClientsFromConfig(cfg.Auth.SeedClients),
+	}
+}
+
+// explainSeedRefusal says what an operator has to do when the superuser could not be
+// seeded, naming the variable and where it normally comes from. Any other error passes
+// through unchanged.
+func explainSeedRefusal(err error) error {
+	if !errors.Is(err, identity.ErrNoSuperuserSeedPassword) {
+		return err
+	}
+	return fmt.Errorf("%w: set %s. The chart projects it from key `password` of the Secret "+
+		"named by instance.superuserSecret (by default dci-<instance id>-superuser), which "+
+		"`dcctl bootstrap` generates; an install made without dcctl must create that Secret "+
+		"itself", err, config.SuperuserPasswordEnv)
 }
 
 // seedClientsFromConfig maps the typed config seed-client entries onto the

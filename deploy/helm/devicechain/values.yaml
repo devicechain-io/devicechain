@@ -90,6 +90,12 @@ instance:
   # applies cleanly, restarts nothing and reports success. Ignored (and unnecessary)
   # when the config is supplied inline below.
   existingSecretChecksum: ""
+  # The Secret holding the superuser's SEED password under key `password`, which
+  # user-management reads (as DC_SUPERUSER_PASSWORD) only to seed an empty identity
+  # table. Empty means `dci-<id>-superuser`, the Secret `dcctl bootstrap` generates.
+  # There is no default password: an install made without dcctl must create this
+  # Secret before user-management first starts, or it refuses to seed.
+  superuserSecret: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.

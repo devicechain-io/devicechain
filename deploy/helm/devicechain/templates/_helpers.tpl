@@ -163,6 +163,23 @@ at an External-Secrets-managed / pre-created Secret holding the `instance` key.
 {{- .Values.instance.existingSecret | default (printf "dci-%s-config" .Values.instance.id) -}}
 {{- end -}}
 
+{{/*
+The Secret user-management reads its superuser's SEED password from (key `password`),
+projected as DC_SUPERUSER_PASSWORD. dcctl bootstrap generates it per instance under
+this default name; instance.superuserSecret overrides the name for an install that
+manages the Secret itself.
+
+It is deliberately a Secret of its own rather than a key in either config document:
+the per-service document is a ConfigMap, and the instance document reaches every
+service, while this value is one area's and is read only to seed an empty identity
+table. The name is spelled in Go too (superuserSecretName in
+backend/cli/bootstrap/superuser.go); TestTheChartReadsTheSuperuserSecretDcctlWrites
+holds the two together.
+*/}}
+{{- define "devicechain.superuserSecret" -}}
+{{- .Values.instance.superuserSecret | default (printf "dci-%s-superuser" .Values.instance.id) -}}
+{{- end -}}
+
 {{/* The per-service config ConfigMap name. */}}
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}

@@ -260,7 +260,7 @@ An instance built before instances had namespaces of their own runs its broker a
 store in the shared `dc-system` namespace, and they cannot be moved in place. The bootstrap
 refuses such an instance and says to destroy it and bootstrap it again.
 
-The steps below are the ones the run prints as it goes (`[8/11] Install instance
+The steps below are the ones the run prints as it goes (`[8/10] Install instance
 (Helm)`), so a failure names a step you can find here:
 
 1. **Ensure local registry** — the developer `--build` path only: provision a local
@@ -316,18 +316,16 @@ The steps below are the ones the run prints as it goes (`[8/11] Install instance
    every service reads its credentials and endpoints from — and then deploy the Helm chart
    via the Helm Go SDK, blocking until the workloads are ready. That document is what makes
    the instance live, and what step 3 looks for on any later run.
-9. **Seed admin credential** — the superuser credential is seeded by the
-   user-management service on first start; this step settles the values the final report
-   prints.
-10. **Wait for readiness** — poll each enabled area's Deployment until it has finished
+9. **Wait for readiness** — poll each enabled area's Deployment until it has finished
     rolling onto the configuration this run produced, as an explicit confirmation gate
     rather than trusting the Helm step's own wait. Having replicas available is not
     enough: where pods are being replaced that is already true of the ones on their way
     out, so the step also waits for the new template to be observed, for every replica to
     be recreated on it, and for no old replica to still be running. `dcctl upgrade` uses
     the same gate for the same reason.
-11. **Report access info** — print the namespace, the superuser credential, and how to
-    reach the instance.
+10. **Report access info** — print the namespace, the superuser's email and where its
+    password is kept (plus the password itself, once, on the run that generated it), and
+    how to reach the instance.
 
 :::tip `Ctrl+C` stops a run cleanly
 An interrupted run stops the infrastructure tool gracefully — it finishes what it is
@@ -625,8 +623,32 @@ examined so a pass over an empty set is not mistaken for a pass.
 ## After bootstrap
 
 The command prints the namespace, the **superuser** credential, and how to reach
-the instance through the cluster ingress. The superuser is seeded with a default
-password — **change it immediately**.
+the instance through the cluster ingress. The superuser is `superuser@devicechain.local`,
+and there is no default password: the bootstrap generates one for the instance, keeps it
+in the Secret `dci-<instance>-superuser` in the instance's namespace, and prints it once,
+at the end of the run that generated it. To read it again:
+
+```bash
+kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+The user-management service reads that password only once: to create the superuser the
+first time it starts against an empty identity table. After that the Secret is a record
+of the password the superuser was first given, and changing the password in the console
+does not update it. When a bootstrap **recovers** an instance and its identities come
+back with it, the restored superuser keeps the password it had, so the report does not
+print the Secret's value and says it may not be the superuser's password.
+
+Instances bootstrapped by an earlier release have no such Secret. Their superuser was
+created with the default password those releases published. Neither `dcctl upgrade` nor
+a bootstrap re-run against the running instance (a restore, or
+`--allow-legacy-db-removal`) changes it or generates a Secret for it, and both say so at
+the end. If that password has not been changed since, change it in the console.
+
+An install made with Helm alone, without `dcctl`, must create that Secret itself (key
+`password`) before user-management first starts, or name another one with the chart
+value `instance.superuserSecret`. Without it, user-management refuses to create the
+superuser.
 
 The instance includes the **web console**: the ingress serves it at the host root
 (`https://<host>/`) and routes `https://<host>/api/<area>/graphql` to each
