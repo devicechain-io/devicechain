@@ -52,6 +52,9 @@ on:
 #   nuget             — nuget.org trusted publishing (OIDC)  -> id-token: write
 #   cli               — goreleaser creates the Release       -> contents: write
 #   edge-agent        — gh release upload                    -> contents: write
+#   provenance        — attest + gh release upload           -> contents: write,
+#                                                               id-token: write,
+#                                                               attestations: write
 #   publish-manifest  — gh release VIEW; the website push
 #                       uses its own PAT, not GITHUB_TOKEN   -> contents: read
 permissions:
@@ -947,11 +950,71 @@ jobs:
             --clobber
 
   # ---------------------------------------------------------------------------
+  # Sign build provenance for every binary archive on the Release.
+  #
+  # A SEPARATE job, not a step in `cli`/`edge-agent`, because signing needs
+  # `id-token: write` and those jobs run goreleaser — keeping the grant here means
+  # no third-party build tool ever holds a token that can mint a signing identity
+  # (the blast-radius rule in the header).
+  #
+  # It attests the archives AS PUBLISHED — downloaded back from the Release — so
+  # the signed digests are the bytes a user fetches, not a local copy that might
+  # differ. The attestation goes to GitHub's attestation store (so
+  # `gh attestation verify <archive> --repo devicechain-io/devicechain` works) and
+  # its Sigstore bundle is attached to the Release, so it can also be verified
+  # offline with `--bundle`.
+  provenance:
+    needs: [guard, cli, edge-agent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # gh release download + upload
+      id-token: write     # Sigstore keyless signing identity
+      attestations: write # record the attestation in GitHub's store
+    steps:
+      - name: Download the published archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets" \
+            --pattern 'dcctl_*.tar.gz' --pattern 'dcctl_*.zip' --pattern 'dc-edge-agent_*.tar.gz'
+          ls -l "$RUNNER_TEMP/assets"
+          # dcctl ships 6 archives and the edge agent 4. Fail on a short count rather
+          # than sign whatever happened to be there: a silently partial attestation
+          # reads exactly like a complete one.
+          n="$(find "$RUNNER_TEMP/assets" -type f | wc -l)"
+          if [ "$n" -ne 10 ]; then
+            echo "::error::expected 10 release archives to attest, found $n"
+            exit 1
+          fi
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/assets/*
+
+      - name: Attach the provenance bundle to the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        # --clobber makes a re-run idempotent.
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE" "$RUNNER_TEMP/devicechain_${TAG#v}_provenance.sigstore.json"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" \
+            "$RUNNER_TEMP/devicechain_${TAG#v}_provenance.sigstore.json" --clobber
+
+  # ---------------------------------------------------------------------------
   # Publish the release manifest to the public website (https://devicechain.io/releases.json).
   #
   # 🔴 THIS RUNS LAST, AND THAT ORDERING IS THE POINT. It needs `cli` (which creates the
-  # Release and its dcctl archives) and `edge-agent` (the last job to attach assets), so by
-  # the time it runs the release is fully published. A failure here therefore means
+  # Release and its dcctl archives), `edge-agent` (which attaches its archives) and
+  # `provenance` (the last job to attach an asset: the signed bundle), so by the time it
+  # runs the release is fully published. A failure here therefore means
   # "release shipped, website not updated" — recoverable by re-running this one job — and
   # never "images pushed, no Release", which is the shape the loadtest gate ordering exists
   # to avoid. Do not move it earlier to save a minute.
@@ -966,7 +1029,7 @@ jobs:
   # exists because a cross-repo write is not something GITHUB_TOKEN can do by design.
   # 🔴 It EXPIRES. When this job fails, check the token's expiry before anything else.
   publish-manifest:
-    needs: [guard, cli, edge-agent]
+    needs: [guard, cli, edge-agent, provenance]
     runs-on: ubuntu-latest
     permissions:
       contents: read  # gh release view; the website push uses its own PAT
