@@ -230,22 +230,37 @@ func (d *deadRecorder) letters(t *testing.T) []deadletter.Envelope {
 
 func reactDispatcherWithSink(resolver react.RuleResolver, sink react.CommandSink,
 	dead deadletter.Writer) *ReactDispatcher {
-	rd := newTestReactDispatcher(resolver, sink)
-	rd.dead = deadletter.NewProducer(&core.Microservice{FunctionalArea: "event-processing"}).NewSink(dead)
-	return rd
+	return constructedReactDispatcher(&core.Microservice{FunctionalArea: "event-processing"},
+		resolver, sink, dead)
 }
 
-// reactDispatcherWithRegistry is reactDispatcherWithSink over a dead-letter producer on a
-// Microservice with a registry, so the loss counter can be read back by the name it
-// EXPORTS under — the name the alert selects on.
+// reactDispatcherWithRegistry is reactDispatcherWithSink over a Microservice with a
+// registry, so the loss counter can be read back by the name it EXPORTS under — the name
+// the alert selects on.
 func reactDispatcherWithRegistry(resolver react.RuleResolver, sink react.CommandSink,
 	dead deadletter.Writer) (*ReactDispatcher, *prometheus.Registry) {
-	rd := newTestReactDispatcher(resolver, sink)
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	rd.dead = deadletter.NewProducer(ms).NewSink(dead)
-	return rd, reg
+	return constructedReactDispatcher(ms, resolver, sink, dead), reg
+}
+
+// constructedReactDispatcher builds the dispatcher the way main.go does: through
+// NewReactDispatcher, with the sink from a dead-letter producer on ms.
+//
+// 🔴 THROUGH THE CONSTRUCTOR, NOT A STRUCT LITERAL. A literal sets the sink itself, so a
+// constructor that dropped the one it was handed would leave every dead-letter test here
+// green while the dispatcher main.go builds dead-lettered nothing: a nil sink is the
+// DISABLED shape by design, and it drops the event without a word.
+//
+// procCtx is set by hand because Start, which sets it in production, also launches the
+// read loop, and these tests drive handle directly.
+func constructedReactDispatcher(ms *core.Microservice, resolver react.RuleResolver,
+	sink react.CommandSink, dead deadletter.Writer) *ReactDispatcher {
+	rd := NewReactDispatcher(ms, nil, resolver, sink, nil, nil, nil,
+		deadletter.NewProducer(ms).NewSink(dead), NewReactMetrics(ms))
+	rd.procCtx = context.Background()
+	return rd
 }
 
 const reactLost = "devicechain_eventprocessing_dead_letter_lost_total"
@@ -283,6 +298,9 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 	e := letters[0]
 	if e.Kind != deadletter.KindDetectionAction {
 		t.Fatalf("kind = %q", e.Kind)
+	}
+	if e.Source != "event-processing" {
+		t.Fatalf("source = %q, want the service that wrote it", e.Source)
 	}
 	if e.Reference != "acme/p@1/r1" {
 		t.Fatalf("the letter does not name the rule that fired: %q", e.Reference)

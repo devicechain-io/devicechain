@@ -468,7 +468,7 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 		// than pretend leaving it unacked will retry. Ack so the (already terminal) message is not left dangling.
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("action", action).
 			Msg("LOST connector dispatch: dead-letter write failed on the final delivery; it could be neither delivered nor dead-lettered.")
-		//
+
 		// Counted twice, on purpose, because the two counters answer different questions. The
 		// producer's dead_letter_lost_total is the alertable LOSS, on the series every service shares
 		// and the alert selects by name; the outcome label keeps connector_dispatch_total a complete
