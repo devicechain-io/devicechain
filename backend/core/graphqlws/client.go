@@ -113,9 +113,12 @@ const closeUnauthorized = 4401
 // IsUnauthorizedClose reports whether err is, or wraps, a server close with code
 // 4401. At Dial that means the token was refused. On a live subscription's Err it
 // means the server ended the connection because the access token it authenticated
-// with EXPIRED: the server bounds every connection by its token's lifetime. This
-// client does not re-dial, so a caller that runs longer than one access token must
-// Dial again with a fresh one — and must not read this end as a platform defect.
+// with EXPIRED: the server bounds every connection by its token's lifetime. That is
+// the REMAINING life of the token the TokenProvider returned at Dial, which can be far
+// shorter than a token's full TTL — userclient.TenantSession hands out a cached token
+// until one minute before its exp, so a socket dialed late in that token's life can
+// get about a minute. This client does not re-dial, so a caller that must outlive it
+// Dials again with a fresh token — and must not read this end as a platform defect.
 func IsUnauthorizedClose(err error) bool {
 	var ce *websocket.CloseError
 	return errors.As(err, &ce) && ce.Code == closeUnauthorized

@@ -322,6 +322,48 @@ func TestOpenConnectionReportsCompleteWhenItsStreamEnds(t *testing.T) {
 	assert.Equal(t, "s", got.ID)
 }
 
+// terminate marks the connection closing, and has done so by the time its close frame
+// reaches the peer. The test above sets the mark by hand, so it pins only the pump's
+// side of the contract; this one pins that terminate is what sets it. The mark is read
+// only once the peer has seen the close frame, and it is read as the VALUE true — not
+// inferred from a `complete` that failed to appear, which gorilla's refusal to write
+// after a close frame would suppress with or without the mark.
+func TestTerminateMarksTheConnectionClosing(t *testing.T) {
+	res := &drainResolver{}
+	h := NewSubscriptionHandler(MustParseSchema(drainSchema, res), nil, nil)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	conn := dialInit(t, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	writeMsg(t, conn, subscribeMsg("s", "subscription { ticker }", nil))
+	require.Equal(t, msgNext, readMsg(t, conn).Type)
+
+	h.mu.Lock()
+	require.Len(t, h.conns, 1)
+	var c *wsConnection
+	for live := range h.conns {
+		c = live
+	}
+	h.mu.Unlock()
+	require.False(t, c.closing.Load(), "a live connection was already marked closing")
+
+	go c.terminate(closeUnauthorized, "token expired")
+
+	// Drain any `next` frames already in flight until the close frame arrives.
+	var closeErr *websocket.CloseError
+	for {
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			continue
+		}
+		require.ErrorAs(t, err, &closeErr, "the socket ended without a close frame: %v", err)
+		break
+	}
+	assert.Equal(t, closeUnauthorized, closeErr.Code)
+	assert.True(t, c.closing.Load(),
+		"the peer saw terminate's close frame, but the connection was not marked closing")
+}
+
 // A schema with no Subscription root gets no WebSocket: the upgrade is refused with a
 // 400 at the dispatcher, and the manager holds no subscription handler to drain.
 func TestNoWebSocketWithoutASubscriptionRoot(t *testing.T) {

@@ -182,7 +182,7 @@ func TestMonitorDropIsLostView(t *testing.T) {
 }
 
 // A 4401 close — the server ending the socket at the monitor's token expiry — is
-// reported as its own kind, so a long run that outlives its token is not misread as
+// reported as its own kind, so a run that outlives its token is not misread as
 // the platform dropping the stream. It still fails the run: the monitor went blind.
 func TestMonitorTokenExpiryIsDistinguished(t *testing.T) {
 	url := rawEventServer(t, func(conn *websocket.Conn, id, dt string) {

@@ -392,15 +392,22 @@ func (c *wsConnection) closeForShutdown() {
 // stopped reading holds writeMu for up to writeWait, and a drain or an expiry that
 // queued behind it would be bounded by the very connection it is trying to end.
 //
-// 🔴 THE closing MARK COMES FIRST, SO NO `complete` CAN PRECEDE THE CLOSE FRAME. A
-// pump whose operation ends because the connection is being torn down would otherwise
-// report `complete` — which a graphql-transport-ws client reads as the stream having
-// FINISHED, cleanly and for good. It would then never act on the close code that says
-// why: a 4401 is how a client learns to come back with a fresh token, and a 1001 how
-// it learns to come back to another pod. Today the pumps are only cancelled after the
-// close frame is out (by run's deferred cancel), and gorilla refuses every write after
-// a close frame, so the ORDER already prevents it. The mark makes that hold without
-// relying on the order: a future path that cancels first stays silent too.
+// 🔴 THE closing MARK COMES FIRST, SO THE TEARDOWN ITSELF NEVER PRODUCES A `complete`.
+// A pump whose operation ends because the connection is being torn down would
+// otherwise report `complete` — which a graphql-transport-ws client reads as the
+// stream having FINISHED, cleanly and for good. It would then never act on the close
+// code that says why: a 4401 is how a client learns to come back with a fresh token,
+// and a 1001 how it learns to come back to another pod. Today the pumps are only
+// cancelled after the close frame is out (by run's deferred cancel), and gorilla
+// refuses every write after a close frame, so the ORDER already prevents it. The mark
+// makes that hold without relying on the order: a future path that cancels first
+// stays silent too. TestTerminateMarksTheConnectionClosing pins that terminate sets
+// the mark; TestClosingConnectionSendsNoComplete pins that a pump honours it.
+//
+// What the mark does NOT rule out is a stream that ends ON ITS OWN in the same instant:
+// a pump that read closing just before it was set can still write its `complete` ahead
+// of the close frame. That `complete` is true — the stream really did end — so it is
+// not the misreport this guards against.
 func (c *wsConnection) terminate(code int, reason string) {
 	c.closing.Store(true)
 	_ = c.conn.WriteControl(websocket.CloseMessage,
@@ -541,8 +548,11 @@ func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage
 	if err != nil {
 		return nil, time.Time{}, errors.New("invalid or expired token")
 	}
-	// The validator already requires exp, so this cannot happen today. It is refused
-	// rather than trusted because the alternative is a connection with no end.
+	// auth.Validator's parser is built with jwt.WithExpirationRequired()
+	// (auth/validator.go), so a token with no exp is refused above and this cannot
+	// happen today — no test can reach it. It is refused rather than trusted because
+	// the alternative is a connection with no end: a validator that ever drops that
+	// option reopens exactly the unbounded socket the lifetime timer exists to close.
 	if claims.ExpiresAt == nil {
 		return nil, time.Time{}, errors.New("token has no expiry")
 	}

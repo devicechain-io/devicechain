@@ -85,8 +85,10 @@ const (
 	// ViolTokenExpired: the subscription ended because the server closed the socket
 	// with 4401 — the access token the watcher dialed with expired. Still a lost view
 	// (the watcher was blind from then on), but the WATCHER'S limit rather than a
-	// platform defect: it does not re-dial, so a run that outlives one access token
-	// ends this way. Mirrors the measurement monitor's token-expired.
+	// platform defect: it does not re-dial, so a run that outlives the REMAINING life
+	// of the token held at dial ends this way. That can be about a minute, not a full
+	// token TTL: a TenantSession hands out its cached token until one minute before
+	// exp. Mirrors the measurement monitor's token-expired.
 	ViolTokenExpired = "token-expired"
 )
 
