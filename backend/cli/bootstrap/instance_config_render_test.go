@@ -343,6 +343,26 @@ func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
 	if err := validateRenderedInstanceConfig(t.Context(), ch, vals(nil), nil); err != nil {
 		t.Errorf("the chart's own defaults were rejected: %v", err)
 	}
+
+	// A log level the services do not know. The chart passes the value through
+	// untouched, so this is the only check between the operator's typo and a
+	// crash-looping instance.
+	withLevel := func(level string) map[string]interface{} {
+		v := vals(nil)
+		infra := v["instance"].(map[string]interface{})["config"].(map[string]interface{})["infrastructure"].(map[string]interface{})
+		infra["logging"] = map[string]interface{}{"level": level}
+		return v
+	}
+	err = validateRenderedInstanceConfig(t.Context(), ch, withLevel("verbose"), nil)
+	if err == nil {
+		t.Fatal("an unknown log level passed the bootstrap gate")
+	}
+	if !strings.Contains(err.Error(), "infrastructure.logging.level") {
+		t.Errorf("error %q does not name the log level key", err)
+	}
+	if err := validateRenderedInstanceConfig(t.Context(), ch, withLevel("debug"), nil); err != nil {
+		t.Errorf("a valid log level was rejected: %v", err)
+	}
 }
 
 // The gate has to be WIRED, not merely present.
@@ -422,7 +442,7 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 
 	// Everything an operator can put in this document, at once: every cross-service
 	// coordinate, both credential blocks, all the ceilings, the egress allowance, the
-	// object store, the shutdown budget and both persistence stores. The profile is
+	// object store, the shutdown budget, the log level and both persistence stores. The profile is
 	// `full` so the ai-inference coordinate is not filtered back out of the render.
 	t.Run("fully populated", func(t *testing.T) {
 		vals := map[string]interface{}{
@@ -456,6 +476,7 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 						},
 						"metrics":          map[string]interface{}{"enabled": true},
 						"graphql":          map[string]interface{}{"maxSubscriptionMessageBytes": int64(8 << 20)},
+						"logging":          map[string]interface{}{"level": "debug"},
 						"userManagement":   map[string]interface{}{"hostname": "user-management", "port": 8080},
 						"deviceManagement": map[string]interface{}{"hostname": "device-management", "port": 8080},
 						"eventProcessing":  map[string]interface{}{"hostname": "event-processing", "port": 8080},

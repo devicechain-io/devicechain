@@ -274,6 +274,21 @@ instance:
         # default — never unlimited. There is deliberately no value that turns the
         # ceiling off.
         maxSubscriptionMessageBytes: 4194304 # 4 MiB, matching the HTTP body ceiling
+      # How much every service in the instance logs: one of trace, debug, info, warn
+      # or error, lowercase and exactly as written. Absent means info. Anything else —
+      # INFO, a number, fatal/panic/disabled — is refused: the services will not start
+      # on it, and dcctl's pre-install check refuses it before anything is installed.
+      #
+      # Changing it changes the instance config checksum, so the pods roll to adopt
+      # it; nothing reloads it in place. debug and trace write per-message lines on
+      # the ingest path, so they are for diagnosing, not for running at volume.
+      #
+      # Left commented out on purpose: the default has one definition, in the service
+      # code (config.DefaultLogLevel), and an uncommented default here would be a
+      # second one — and would change every existing instance's rendered document and
+      # checksum, rolling every pod on upgrade to arrive where it already was.
+      # logging:
+      #   level: info
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its

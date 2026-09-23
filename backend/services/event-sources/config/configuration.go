@@ -93,7 +93,8 @@ type EventDecoder struct {
 // Source that reads events from a protocol and decodes them.
 //
 // It carried a `Debug` flag that nothing ever read — the transports log at debug level
-// through the process-wide zerolog level, which is where a per-source flag would have had
+// through the process-wide zerolog level (infrastructure.logging.level in the instance
+// document, applied by core at startup), which is where a per-source flag would have had
 // to be consulted and never was. It is gone rather than wired up: a per-source log level
 // is a real feature and this was not it, and a field that accepts a value and ignores it
 // is worse than one that does not exist.

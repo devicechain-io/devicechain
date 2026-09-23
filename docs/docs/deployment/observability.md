@@ -33,6 +33,75 @@ serves the two standard Kubernetes probes:
 Because every pod speaks the same conventions, the monitoring stack scrapes the
 whole instance uniformly — there is no per-service integration work.
 
+## Logs {#logs}
+
+Every service writes structured JSON logs to stderr, one object per line. Each line
+carries the `instance` and `area` it came from, and `tenant` when the pod serves a
+single tenant, so a log pipeline can filter on them without parsing messages.
+
+### The log level
+
+How much a service logs is set once for the whole instance, by
+`infrastructure.logging.level` in the instance configuration. It accepts exactly one
+of these values, in lowercase:
+
+| Level | What you get |
+| --- | --- |
+| `trace` | Everything, including the most detailed diagnostics. |
+| `debug` | Diagnostic lines, some of them written once per message on the ingest path. |
+| `info` | **The default.** Startup, shutdown, configuration and notable events. |
+| `warn` | Only warnings and errors. |
+| `error` | Only errors. |
+
+Anything else, including `INFO`, a number, or a value with a space in it, is refused: the
+service does not start, and its log names the key and the accepted values. There is no
+level that turns error logging off.
+
+`debug` and `trace` are for diagnosing a problem, not for running. On the ingest path
+they write a line for every device message, so at production rates they multiply the
+volume your log pipeline has to carry.
+
+Each service starts at `info` and switches to the configured level as soon as it has read
+the instance configuration, early in startup. It logs one line saying
+which level it switched to, written before the switch so that it appears even under
+`warn` or `error`.
+
+The level is part of the mounted configuration, not something a running service
+reloads. Changing it changes the configuration checksum, and the pods restart onto the
+new value.
+
+**Who can change it depends on how the instance was installed:**
+
+- **Installed with `dcctl bootstrap`:** the instance runs at `info`, and `dcctl` has no
+  option to change the level yet. Do not edit the configuration Secret by hand to get
+  around that: `dcctl` writes that Secret itself and replaces it on its next run, and an
+  edit made outside `dcctl` does not restart the pods in any case.
+- **Installed from the Helm chart directly:** set it with your other values, for
+  example `--set instance.config.infrastructure.logging.level=debug`.
+- **Chart install with `instance.existingSecret`:** add `logging.level` under
+  `infrastructure` in the document you supply, and update
+  `instance.existingSecretChecksum` to the new document's checksum. The checksum is what
+  restarts the pods; without it the new level is not picked up.
+
+:::note Debug output used to be on by default
+Before the log level was configurable, every service logged at `debug` whether or not
+anyone asked it to. If you are comparing logs from an instance upgraded across that
+change, the per-message lines on the ingest path, the broker read and write
+confirmations, and similar diagnostics are no longer there at the default level. Nothing
+was lost: set `debug` to see them again.
+:::
+
+### What is never logged
+
+A service's own configuration document is never written to the log, at any level. The
+service logs a short hash of it instead (`config_sha256`, the first 16 hexadecimal
+characters of its SHA-256). To check which configuration a pod is running, hash that
+service's entry in the rendered configuration ConfigMap and compare the two.
+
+SQL statement logging is a separate, per-service switch: `sqlDebug` in a service's
+datastore configuration. The database layer writes it through its own logger, so it is
+neither enabled nor suppressed by `infrastructure.logging.level`.
+
 ## The monitoring stack
 
 [`dcctl install`](./bootstrap.md#install) provisions monitoring as one of its embedded

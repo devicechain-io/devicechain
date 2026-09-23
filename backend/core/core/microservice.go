@@ -4,16 +4,16 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -46,7 +46,8 @@ const (
 //	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
 //	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
 //	  NewGaugeVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
-//	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration, ExecuteInitialize,
+//	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration,
+//	  LoadMicroserviceConfigurationFrom, ExecuteInitialize,
 //	  ExecuteStart, ExecuteStop, ExecuteTerminate, InitializeAndStart, Run, ShutDownNow,
 //	  FailNow.
 //
@@ -63,7 +64,11 @@ const (
 //	  instance document drive it: it reads the path it is handed rather than the chart's
 //	  mount point, which is the only part of that pair a test can supply. Its no-argument
 //	  sibling is equally safe and, off a pod, simply reports that /etc/dci-config/instance
-//	  is not there.
+//	  is not there. LoadMicroserviceConfigurationFrom is the same seam for the per-area
+//	  document. One thing a successful instance load does that is NOT confined to the
+//	  struct: it sets the process-wide zerolog level from the document, exactly as it
+//	  does on a constructed Microservice, so a test that loads one is changing the level
+//	  for everything logged after it.
 //
 //	Refuse, loudly, because any answer they could invent would be indistinguishable from
 //	a real one:
@@ -245,10 +250,30 @@ func NewMicroservice(callbacks LifecycleCallbacks) *Microservice {
 	// ConsoleWriter only when DC_LOG_CONSOLE is set (local dev). Every line is
 	// stamped with the instance/area (and tenant, when the pod is tenant-scoped) so
 	// logs are filterable without threading those fields through every call site.
+	//
+	// The level starts at Info and is replaced by the instance configuration's
+	// infrastructure.logging.level once LoadInstanceConfigurationFrom has read it.
+	// Nothing set a level before this, and zerolog's own global default is Debug, so
+	// every Debug line in every service was always on in production.
+	//
+	// 🔴 IT IS THE GLOBAL LEVEL, NOT THE LOGGER'S. zerolog.SetGlobalLevel is an atomic
+	// store, so the instance load can change it later without writing log.Logger —
+	// which the signal goroutine below reads, and which re-assigning would race. It
+	// also covers every logger in the process, including any not derived from
+	// log.Logger.
+	//
+	// 🔴 THE WINDOW BETWEEN HERE AND THE INSTANCE LOAD RUNS AT INFO, WHATEVER IS
+	// CONFIGURED. What logs inside it today: Run's opening Info line, the startup
+	// guards' Error lines, the lifecycle state lines (Info) and any retired-key Warn
+	// from the load itself. Nothing in it logs at Debug. The consequence is intended:
+	// a configured warn or error cannot hide those few Info lines, and a configured
+	// debug or trace does not reach them. A Debug line added before
+	// ExecuteInitialize's LoadInstanceConfiguration will never print; put it after.
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if os.Getenv(ENV_LOG_CONSOLE) != "" {
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: logWriter, TimeFormat: time.RFC3339})
 	} else {
-		log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+		log.Logger = zerolog.New(logWriter).With().Timestamp().Logger()
 	}
 	baseCtx := log.Logger.With().Str("instance", ms.InstanceId).Str("area", ms.FunctionalArea)
 	if ms.TenantId != "" {
@@ -321,6 +346,13 @@ const (
 // test should reassign it, and should restore it — nothing enforces either half; it is
 // a package-level var in a package that also holds production code.
 var exitProcess = os.Exit
+
+// logWriter is where NewMicroservice points the global logger: stderr, behind a
+// variable for the same reason exitProcess is, so a test can read what a real
+// microservice logs without assigning the global logger itself (which the
+// repository-wide scan in core/test refuses). Only a test should reassign it, before
+// calling NewMicroservice, and should restore it.
+var logWriter io.Writer = os.Stderr
 
 // Run creates the microservice, starts it, and blocks until it is over.
 //
@@ -736,36 +768,61 @@ func (ms *Microservice) LoadInstanceConfigurationFrom(path string) error {
 	if err := LoadConfiguration(raw, cfg); err != nil {
 		return fmt.Errorf("instance configuration invalid: %w", err)
 	}
+
+	// Apply the configured log level. This is the ONE place a level is applied, so
+	// every service reaches it the same way. It is here rather than in the config
+	// package's Validate because other processes strict-load this document too —
+	// dcctl checks the one the chart would render — and must not have their own
+	// logging changed by it.
+	//
+	// ZerologLevel cannot fail on a document that has just passed Validate. It is still
+	// checked rather than ignored, because the alternative to an error here is quietly
+	// running at a level nobody configured.
+	//
+	// The Info line is written BEFORE the level changes, so it appears whatever the
+	// level is: under a configured warn or error it is the last Info line the process
+	// writes, and the one that says why the rest are missing.
+	logging := cfg.Infrastructure.Logging
+	lvl, err := logging.ZerologLevel()
+	if err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
 	ms.InstanceConfiguration = *cfg
+	log.Info().Str("level", logging.Level).Msg("Log level set from instance configuration")
+	zerolog.SetGlobalLevel(lvl)
 	return nil
 }
 
 // LoadMicroserviceConfiguration reads this service's configuration from the
 // mounted config volume. Startup-only, like LoadInstanceConfiguration (E9).
 func (ms *Microservice) LoadMicroserviceConfiguration() error {
+	return ms.LoadMicroserviceConfigurationFrom(MicroserviceConfigDir)
+}
+
+// LoadMicroserviceConfigurationFrom is LoadMicroserviceConfiguration against an
+// explicit directory, mirroring the instance pair above: the document is the file in
+// dir named for this pod's functional area.
+func (ms *Microservice) LoadMicroserviceConfigurationFrom(dir string) error {
 	fa, found := os.LookupEnv(ENV_MS_FUNCTIONAL_AREA)
 	if !found {
 		return fmt.Errorf("environment variable for functional area (%s) not set", ENV_MS_FUNCTIONAL_AREA)
 	}
 
 	// Read config from filesystem.
-	cfgbytes, err := os.ReadFile(fmt.Sprintf("%s/%s", MicroserviceConfigDir, fa))
+	cfgbytes, err := os.ReadFile(filepath.Join(dir, fa))
 	if err != nil {
 		return err
 	}
 	ms.MicroserviceConfigurationRaw = cfgbytes
 
-	// Log a short hash of the configuration, not its contents (E20): the raw
-	// config is a latent home for sensitive values, and a hash is enough to
-	// correlate a running pod with its config version. The full document is
-	// available only at debug level.
+	// Log a short hash of the configuration, never its contents (E20): the raw config
+	// is a latent home for sensitive values, and a hash is enough to correlate a
+	// running pod with its config version. NO LEVEL PRINTS THE DOCUMENT. It used to be
+	// dumped at debug, behind a guard that was always true because nothing set a level,
+	// so every pod start wrote it out. To see what a pod loaded, hash the rendered
+	// ConfigMap entry (sha256, first 16 hex characters) and compare it with this line.
 	sum := sha256.Sum256(cfgbytes)
 	log.Info().Str("config_sha256", hex.EncodeToString(sum[:])[:16]).Msg("Loaded microservice configuration")
-	if log.Debug().Enabled() {
-		var fmted bytes.Buffer
-		json.Indent(&fmted, cfgbytes, "", "  ")
-		log.Debug().Msg(fmt.Sprintf("Microservice configuration:\n\n%s\n", fmted.String()))
-	}
 	return nil
 }
 

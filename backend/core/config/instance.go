@@ -8,10 +8,13 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/rs/zerolog"
 )
 
 // NATS configuration parameters
@@ -372,6 +375,75 @@ type InfrastructureConfiguration struct {
 	Egress           EgressConfiguration
 	GraphQL          GraphQLConfiguration
 	Shutdown         ShutdownConfiguration
+	Logging          LoggingConfiguration
+}
+
+// LoggingConfiguration sets how much every service in the instance logs.
+//
+// It is FIXED configuration: part of the mounted instance document, typed and
+// validated at startup, and adopted by rolling the pods, the same as everything
+// else in this document. A change is rendered by the chart, changes the config
+// checksum, and the pods restart onto it. There is no in-place reload.
+//
+// Before this existed nothing set a level at all. zerolog's global level defaults
+// to Debug, so every Debug line in every service was always emitted, including the
+// per-message lines on the ingest path, and every `log.Debug().Enabled()` guard was
+// a guard that could not be false.
+type LoggingConfiguration struct {
+	// Level is one of trace, debug, info, warn or error, exactly as written here:
+	// lowercase, no surrounding space. Absent means DefaultLogLevel.
+	//
+	// zerolog also knows fatal, panic and disabled, and parses numeric levels. They
+	// are refused on purpose. Each of them silences Error lines, and running a
+	// service that cannot report its own failures is not a supported way to operate.
+	Level string
+}
+
+// DefaultLogLevel is the level every service runs at when the instance document
+// does not set infrastructure.logging.level. It is also the level a service starts
+// at, before the document has been read (see core.NewMicroservice).
+const DefaultLogLevel = "info"
+
+// logLevels is the single definition of which levels an operator may configure.
+// ZerologLevel, its refusal message and LogLevelNames all read it.
+var logLevels = map[string]zerolog.Level{
+	"trace": zerolog.TraceLevel,
+	"debug": zerolog.DebugLevel,
+	"info":  zerolog.InfoLevel,
+	"warn":  zerolog.WarnLevel,
+	"error": zerolog.ErrorLevel,
+}
+
+// LogLevelNames returns the configurable level names, most verbose first.
+func LogLevelNames() []string {
+	names := make([]string, 0, len(logLevels))
+	for name := range logLevels {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return logLevels[names[i]] < logLevels[names[j]] })
+	return names
+}
+
+// ZerologLevel returns the zerolog level that Level names, or an error naming the
+// key and the accepted values when it names none of them. An empty Level is an
+// error too: by the time anything asks for the level ApplyDefaults has filled it
+// in, so an empty one means defaulting never ran and there is no level to report.
+//
+// 🔴 IT MUST STAY PURE, and so must Validate, which calls it. APPLYING the level
+// (zerolog.SetGlobalLevel) belongs to the microservice's own load,
+// core.Microservice.LoadInstanceConfigurationFrom, and nowhere else.
+// core.LoadConfiguration also runs over this document in processes that are not
+// services: dcctl's pre-install check validates the document the chart would
+// render, and its HA verifier reads the instance config back. A side effect here
+// would change the logging of the tool doing the checking, on the strength of a
+// document written for somebody else.
+func (c LoggingConfiguration) ZerologLevel() (zerolog.Level, error) {
+	if lvl, ok := logLevels[c.Level]; ok {
+		return lvl, nil
+	}
+	return zerolog.NoLevel, fmt.Errorf("infrastructure.logging.level is %q; it must be one of %s "+
+		"(lowercase, exactly as written). Omit the key to run at %s",
+		c.Level, strings.Join(LogLevelNames(), ", "), DefaultLogLevel)
 }
 
 // ShutdownConfiguration is the graceful-shutdown budget: how long a terminating
@@ -824,6 +896,13 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if shutdown.TerminationGracePeriodSeconds <= 0 {
 		shutdown.TerminationGracePeriodSeconds = DefaultTerminationGracePeriodSeconds
 	}
+	// Only ABSENCE is defaulted. A value that is present but is not a level is
+	// refused in Validate, never rewritten to the default: an operator who asked for
+	// debug output while chasing an incident and silently got info would be reading a
+	// log that cannot contain what they are looking for.
+	if c.Infrastructure.Logging.Level == "" {
+		c.Infrastructure.Logging.Level = DefaultLogLevel
+	}
 }
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -855,6 +934,13 @@ func (c *InstanceConfiguration) Validate() error {
 	}
 	if err := c.Infrastructure.Shutdown.validate(); err != nil {
 		return err
+	}
+	// Empty means ApplyDefaults has not run yet, as with the shutdown budget above:
+	// judging it here would report on a key the operator never wrote.
+	if c.Infrastructure.Logging.Level != "" {
+		if _, err := c.Infrastructure.Logging.ZerologLevel(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1009,6 +1095,9 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			Shutdown: ShutdownConfiguration{
 				DrainSeconds:                  &defaultDrain,
 				TerminationGracePeriodSeconds: DefaultTerminationGracePeriodSeconds,
+			},
+			Logging: LoggingConfiguration{
+				Level: DefaultLogLevel,
 			},
 		},
 		Persistence: PersistenceConfiguration{

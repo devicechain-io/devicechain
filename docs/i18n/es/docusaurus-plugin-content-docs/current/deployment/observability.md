@@ -33,6 +33,75 @@ sirve las dos sondas estándar de Kubernetes:
 Debido a que cada pod habla las mismas convenciones, la pila de monitoreo recolecta métricas de
 toda la instancia de manera uniforme; no hay trabajo de integración por servicio.
 
+## Registros {#logs}
+
+Cada servicio escribe registros JSON estructurados en stderr, un objeto por línea. Cada línea
+lleva la `instance` y el `area` de los que procede, y `tenant` cuando el pod atiende a un solo
+tenant, de modo que un pipeline de registros puede filtrar por ellos sin analizar los mensajes.
+
+### El nivel de registro
+
+Cuánto registra un servicio se fija una sola vez para toda la instancia, con
+`infrastructure.logging.level` en la configuración de la instancia. Acepta exactamente uno de
+estos valores, en minúsculas:
+
+| Nivel | Lo que se obtiene |
+| --- | --- |
+| `trace` | Todo, incluidos los diagnósticos más detallados. |
+| `debug` | Líneas de diagnóstico, algunas escritas una vez por mensaje en la ruta de ingesta. |
+| `info` | **El valor por defecto.** Arranque, apagado, configuración y eventos relevantes. |
+| `warn` | Solo advertencias y errores. |
+| `error` | Solo errores. |
+
+Cualquier otro valor, incluidos `INFO`, un número o un valor con un espacio, se rechaza: el
+servicio no arranca, y su registro nombra la clave y los valores aceptados. No existe ningún
+nivel que desactive el registro de errores.
+
+`debug` y `trace` sirven para diagnosticar un problema, no para operar. En la ruta de ingesta
+escriben una línea por cada mensaje de dispositivo, así que a ritmos de producción multiplican
+el volumen que tiene que transportar su pipeline de registros.
+
+Cada servicio arranca en `info` y cambia al nivel configurado en cuanto ha leído la
+configuración de la instancia, al principio del arranque. Registra una línea que indica a qué
+nivel ha cambiado, escrita antes del cambio para que aparezca incluso con `warn` o `error`.
+
+El nivel forma parte de la configuración montada, no es algo que un servicio en ejecución
+recargue. Cambiarlo cambia la suma de comprobación de la configuración, y los pods se
+reinician con el nuevo valor.
+
+**Quién puede cambiarlo depende de cómo se instaló la instancia:**
+
+- **Instalada con `dcctl bootstrap`:** la instancia se ejecuta en `info`, y `dcctl` aún no
+  tiene ninguna opción para cambiar el nivel. No edite a mano el Secret de configuración para
+  sortearlo: `dcctl` escribe ese Secret por sí mismo y lo reemplaza en su siguiente ejecución,
+  y una edición hecha fuera de `dcctl` tampoco reinicia los pods.
+- **Instalada directamente desde el chart de Helm:** fíjelo junto con sus demás valores, por
+  ejemplo `--set instance.config.infrastructure.logging.level=debug`.
+- **Instalación del chart con `instance.existingSecret`:** añada `logging.level` bajo
+  `infrastructure` en el documento que usted proporciona, y actualice
+  `instance.existingSecretChecksum` con la suma de comprobación del nuevo documento. Esa suma
+  es lo que reinicia los pods; sin ella, el nuevo nivel no se aplica.
+
+:::note La salida de depuración estaba activada por defecto
+Antes de que el nivel de registro fuera configurable, todos los servicios registraban en
+`debug` lo pidiera alguien o no. Si compara registros de una instancia actualizada a través de
+ese cambio, las líneas por mensaje de la ruta de ingesta, las confirmaciones de lectura y
+escritura del broker y diagnósticos similares ya no aparecen en el nivel por defecto. No se ha
+perdido nada: fije `debug` para volver a verlos.
+:::
+
+### Lo que nunca se registra
+
+El documento de configuración propio de un servicio nunca se escribe en el registro, en ningún
+nivel. En su lugar, el servicio registra un hash corto del documento (`config_sha256`, los
+primeros 16 caracteres hexadecimales de su SHA-256). Para comprobar qué configuración está
+ejecutando un pod, calcule el hash de la entrada de ese servicio en el ConfigMap de
+configuración renderizado y compare ambos.
+
+El registro de sentencias SQL es un interruptor aparte, por servicio: `sqlDebug` en la
+configuración del almacén de datos de un servicio. La capa de base de datos lo escribe con su
+propio registrador, así que `infrastructure.logging.level` ni lo activa ni lo suprime.
+
 ## La pila de monitoreo
 
 [`dcctl install`](./bootstrap.md#install) aprovisiona el monitoreo como uno de sus módulos
