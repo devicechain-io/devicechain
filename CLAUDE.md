@@ -139,7 +139,7 @@ go test ./...
 
 Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
 keep in step with `go.work`. **Save it to a file and run it; do not paste it into your shell** (it
-ends in `exit`). Two details in it are load-bearing, and both are the same trap in different
+ends in `exit`). The details below are load-bearing, and they are the same trap in different
 clothes:
 
 - `gofmt -l` **exits 0 even when it names files**, so its OUTPUT is tested, not its status.
@@ -152,15 +152,25 @@ clothes:
   obvious way to write it — makes the loop's status that of the last `echo`, i.e. always 0. Every
   module could fail and the sweep would still exit green, which is precisely the gate-that-cannot-
   fail it exists to be.
+- it **ends by checking that `go.work.sum` matches what is staged.** A `go` command in workspace
+  mode does not fail on a missing hash — it quietly APPENDS it — so an incomplete `go.work.sum`
+  builds, vets and tests green and shows up only as an uncommitted line. That line is never noise,
+  whenever it was appended (by this sweep, an earlier build, your editor's language server): it is
+  the workspace saying the committed file was not enough, and CI's `workspace sum is complete` step
+  fails the job of every module whose build needs it (#1135 lost a CI cycle to exactly one). The
+  check is `hack/check-go-work-sum.sh`, the same script that step runs. If it fails, commit
+  `go.work.sum` — or `git add` it, which is how you tell the check you mean the edit.
 
 ```bash
 rc=0
+root="$(git rev-parse --show-toplevel)"
 for m in $(go list -m -f '{{.Dir}}'); do
   ( cd "$m" || exit 1
     fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
     go build ./... && go vet ./... && go test ./... -count=1
   ) || { echo "FAILED: $m"; rc=1; }
 done
+"$root/hack/check-go-work-sum.sh" || rc=1
 exit "$rc"
 ```
 
