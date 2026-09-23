@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -259,6 +260,66 @@ func TestUnknownAndKnownPrincipalsBehaveIdentically(t *testing.T) {
 	require.Contains(t, knownSteps, step{"throttled", 2 * time.Second})
 }
 
+// 🔴 AN UNKNOWN PRINCIPAL PAYS A REAL COMPARE, AT PRODUCTION COST. The dummy compare is
+// the timing equalizer: without it an unknown identifier answers in microseconds and a
+// known one in tens of milliseconds, which leaks existence to anyone with a stopwatch.
+// Outcomes and store traces cannot see it skipped, so the compare itself is observed —
+// once per admitted check, against a hash of the cost production passwords and client
+// secrets are stored at. Both kinds of policy are covered, since they take different
+// paths to the compare.
+func TestUnknownPrincipalPaysARealCompare(t *testing.T) {
+	for _, pol := range []credential.Policy{testPolicy, {Unthrottled: true}} {
+		t.Run(fmt.Sprintf("unthrottled=%v", pol.Unthrottled), func(t *testing.T) {
+			c, err := credential.NewChecker(credentialtest.NewStore(), policies(pol))
+			require.NoError(t, err)
+			var seen [][]byte
+			credential.ObserveCompares(c, func(h []byte) { seen = append(seen, h) })
+
+			// Control: a known principal's check compares its own hash.
+			acct := newAccount(t)
+			require.ErrorIs(t, c.Check(context.Background(), alice, "wrong", acct.lookup), credential.ErrMismatch)
+			require.Len(t, seen, 1, "control: a known principal's check must compare once")
+			assert.Equal(t, acct.hash, string(seen[0]))
+
+			seen = nil
+			nobody := credential.Principal{Kind: credential.KindIdentity, ID: "nobody@example.com"}
+			require.ErrorIs(t, c.Check(context.Background(), nobody, "wrong", unknownAccount().lookup), credential.ErrMismatch)
+			require.Len(t, seen, 1, "an unknown principal must pay exactly one compare")
+			cost, err := bcrypt.Cost(seen[0])
+			require.NoError(t, err, "the unknown principal's compare must be against a real bcrypt hash")
+			assert.Equal(t, bcrypt.DefaultCost, cost, "the dummy must cost what a stored secret costs")
+		})
+	}
+}
+
+// An UNTHROTTLED kind compares and does nothing else: no record is read or written, so
+// no number of failures delays the correct secret, and no identifier can be locked out
+// by someone who merely knows it.
+func TestUnthrottledKindNeverTouchesTheStore(t *testing.T) {
+	store := credentialtest.NewStore()
+	c, err := credential.NewChecker(store, map[credential.Kind]credential.Policy{
+		credential.KindIdentity:    testPolicy,
+		credential.KindOAuthClient: {Unthrottled: true},
+	}, credential.WithClock(newClock().Now))
+	require.NoError(t, err)
+	client := credential.Principal{Kind: credential.KindOAuthClient, ID: "grafana"}
+	acct := newAccount(t)
+	for i := 0; i < 10*testPolicy.Free; i++ {
+		require.ErrorIs(t, c.Check(context.Background(), client, "wrong", acct.lookup), credential.ErrMismatch, "attempt %d", i)
+	}
+	require.NoError(t, c.Check(context.Background(), client, secret, acct.lookup))
+	assert.Empty(t, store.Ops(), "an unthrottled kind must not read or write the attempt store")
+
+	// It does not depend on the store either: a broker outage does not stop it.
+	store.Fail = errors.New("nats: connection closed")
+	require.NoError(t, c.Check(context.Background(), client, secret, acct.lookup))
+
+	// Control: the throttled kind on the same checker does use the store.
+	store.Fail = nil
+	_ = c.Check(context.Background(), alice, "wrong", acct.lookup)
+	assert.NotEmpty(t, store.Ops())
+}
+
 // An unknown principal cannot authenticate by presenting the dummy's own secret.
 func TestUnknownPrincipalNeverMatches(t *testing.T) {
 	c := newChecker(t, credentialtest.NewStore(), newClock())
@@ -313,6 +374,11 @@ func TestConstructionRefusals(t *testing.T) {
 		{Free: 3, Base: time.Minute, Cap: time.Second},
 		// A cap over half the record TTL could let a record expire mid-delay.
 		{Free: 3, Base: time.Second, Cap: credential.AttemptTTL/2 + time.Second},
+		// The zero Policy is refused rather than read as "off".
+		{},
+		// Unthrottled carries no schedule; one set alongside it is a contradiction.
+		{Unthrottled: true, Free: 3, Base: time.Second, Cap: time.Minute},
+		{Unthrottled: true, Cap: time.Minute},
 	} {
 		_, err = credential.NewChecker(credentialtest.NewStore(), policies(bad))
 		require.Error(t, err, "%+v", bad)

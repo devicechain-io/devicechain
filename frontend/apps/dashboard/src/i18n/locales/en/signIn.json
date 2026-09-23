@@ -6,6 +6,7 @@
   "noTenants": "This account has no tenants.",
   "passwordLabel": "Password",
   "serverUnreachable": "Could not reach the server. Check that the API is running.",
+  "signInUnavailable": "Sign-in is temporarily unavailable. Try again shortly.",
   "submit": "Sign in",
   "submitting": "Signing in…",
   "title": "Sign in",

@@ -103,7 +103,8 @@ describe('signInErrorKey', () => {
       { message: 'sign-in is temporarily unavailable; try again shortly', extensions: { code: 'UNAVAILABLE' } },
     ]);
     expect(serverRejectedRequest(err)).toBe(true);
-    expect(signInErrorKey(err, REJECTED)).toBe('login:serverUnreachable');
+    // Its own message, not "could not reach the server": the server answered.
+    expect(signInErrorKey(err, REJECTED)).toBe('login:signInUnavailable');
   });
 
   it('treats an unknown or non-string code as an ordinary rejection', () => {
@@ -124,6 +125,7 @@ describe('every sign-in failure has real text in every shipped locale', () => {
     'login:enterTenantFailed',
     'login:serverUnreachable',
     'login:tooManyAttempts',
+    'login:signInUnavailable',
   ];
 
   for (const { code } of SUPPORTED_LOCALES) {

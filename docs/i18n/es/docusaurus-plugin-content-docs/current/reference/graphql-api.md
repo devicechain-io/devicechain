@@ -564,20 +564,36 @@ de un campo anidado no se cuentan.
 
 ### Espera entre intentos de inicio de sesión {#sign-in-backoff}
 
-Los inicios de sesión fallidos hacen más lentos los siguientes intentos sobre la misma cuenta. No
-hay bloqueo.
+Los inicios de sesión con contraseña fallidos hacen más lentos los siguientes intentos sobre la misma
+dirección de correo. Esto se aplica a `login` y al formulario de inicio de sesión de OAuth.
 
-- **Contraseñas** (`login` y el formulario de inicio de sesión de OAuth). Los cinco primeros
-  intentos fallidos sobre una dirección de correo se evalúan de inmediato. A partir de ahí, la cuenta
-  espera 1 segundo antes de que se evalúe su siguiente intento, luego 2, luego 4, duplicándose hasta
-  5 minutos. Un inicio de sesión correcto reinicia la cuenta, y también 10 minutos sin actividad
-  después del último intento evaluado.
-- **Secretos de cliente OAuth** (el endpoint de tokens). Los diez primeros fallos se evalúan de
-  inmediato; después la espera se duplica desde 1 segundo hasta 30 segundos. Los clientes públicos
-  no tienen secreto y nunca se ralentizan.
+Los cinco primeros intentos fallidos sobre una dirección se evalúan de inmediato. A partir de ahí, la
+dirección espera 1 segundo antes de que se evalúe su siguiente intento, luego 2, luego 4,
+duplicándose hasta 5 minutos. Un inicio de sesión correcto reinicia la cuenta, y también 10 minutos
+sin actividad después del último intento evaluado.
 
 La cuenta pertenece a la dirección escrita, exista o no una cuenta con ella, así que la espera no
 revela qué direcciones están registradas. La comparten todas las réplicas del servicio.
+
+:::warning Quien conozca una dirección puede dejar fuera a su dueño
+
+La cuenta se lleva por dirección, no por dirección y ubicación de red, para que un atacante no
+obtenga un margen nuevo repartiendo los intentos entre muchas máquinas. El precio es que cualquiera
+que conozca una dirección de correo puede seguir enviando contraseñas incorrectas para ella. Mientras
+lo haga, cada turno de evaluación es suyo, y al dueño se le rechaza por espera incluso con la
+contraseña correcta. No es un bloqueo permanente: termina cuando el atacante se detiene, y tras una
+espera de como mucho 5 minutos el dueño puede volver a iniciar sesión. La métrica
+`devicechain_usermanagement_credential_checks_total`, con `outcome="throttled"`, muestra cuándo se
+está reteniendo una cuenta de esta forma.
+
+:::
+
+**Los secretos de cliente OAuth no se ralentizan.** Los secretos de cliente creados por la API de
+administración son 256 bits aleatorios, que ningún número de intentos encontrará, y un ID de cliente
+es público: aparece en cada URL de autorización. Una espera sobre los secretos de cliente no los
+protegería, y permitiría a cualquiera retener en la espera a un cliente confidencial, y con él cada
+inicio de sesión que pasa por ese cliente. Un cliente que se siembre desde la configuración debe tener
+un secreto igual de fuerte. Los clientes públicos no tienen secreto.
 
 Un intento hecho durante la espera no se evalúa en absoluto: no se comprueba la contraseña y no se
 registra nada en el registro de auditoría. Se informa como un error propio y no como una contraseña
@@ -593,12 +609,10 @@ incorrecta, porque la contraseña bien podría ser correcta:
 }
 ```
 
-El endpoint de tokens de OAuth responde a un cliente ralentizado con HTTP 429, una cabecera
-`Retry-After` y `{"error": "invalid_client", "error_description": "too many failed attempts"}`.
-
-Si el servicio no puede llegar al almacén que guarda estas cuentas, se niega a comprobar contraseñas
-en lugar de comprobarlas sin contar. El error de `login` lleva entonces `extensions.code` con el
-valor `UNAVAILABLE`, y el endpoint de tokens responde HTTP 503. Trata ambos casos como una caída del
-servicio, no como una credencial rechazada.
+Si el servicio no puede llegar al almacén que guarda estas cuentas, o el almacén está lleno, se niega
+a comprobar contraseñas en lugar de comprobarlas sin contar. El error de `login` lleva entonces
+`extensions.code` con el valor `UNAVAILABLE`. Trátalo como una caída del servicio, no como una
+credencial rechazada. El endpoint de tokens de OAuth no usa el almacén, así que la autenticación de
+clientes sigue funcionando.
 
 Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se estabilicen.

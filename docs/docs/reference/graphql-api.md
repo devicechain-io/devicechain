@@ -541,19 +541,35 @@ most two query fields. The limit applies to top-level fields only; aliases of a 
 
 ### Sign-in backoff {#sign-in-backoff}
 
-Failed sign-ins slow down further attempts on the same account. There is no lockout.
+Failed password sign-ins slow down further attempts on the same email address. This applies to
+`login` and to the OAuth sign-in form.
 
-- **Passwords** (`login`, and the OAuth sign-in form). The first five failed attempts on an email
-  address are evaluated straight away. After that the account waits 1 second before its next
-  attempt is evaluated, then 2, then 4, doubling up to 5 minutes. A successful sign-in resets the
-  count, and so does a quiet spell of 10 minutes after the last attempt that was evaluated.
-- **OAuth client secrets** (the token endpoint). The first ten failures are evaluated straight
-  away, then the wait doubles from 1 second up to 30 seconds. Public clients have no secret and are
-  never slowed down.
+The first five failed attempts on an address are evaluated straight away. After that the address
+waits 1 second before its next attempt is evaluated, then 2, then 4, doubling up to 5 minutes. A
+successful sign-in resets the count, and so does a quiet spell of 10 minutes after the last attempt
+that was evaluated.
 
 The count belongs to the address that was typed, whether or not an account exists for it, so the
 delay does not reveal which addresses are registered. It is shared by every replica of the
 service.
+
+:::warning Someone who knows an address can keep its owner out
+
+The count is kept per address, not per address and network location, so that an attacker cannot
+get a fresh allowance by spreading guesses across many machines. The cost is that anyone who knows
+an email address can keep sending wrong passwords for it. While they keep that up, each evaluation
+slot goes to them, and the owner is refused as throttled even with the correct password. It is not
+a permanent lockout: it ends when they stop, and after at most one wait of up to 5 minutes the
+owner can sign in again. The `devicechain_usermanagement_credential_checks_total` metric, with
+`outcome="throttled"`, shows when an account is being held this way.
+
+:::
+
+**OAuth client secrets are not slowed down.** Client secrets created by the admin API are 256
+random bits, which no number of guesses will find, and a client ID is public: it appears in every
+authorization URL. A backoff on client secrets would not protect them, and it would let anyone hold a
+confidential client, and so every sign-in through it, at the backoff. A client you seed from
+configuration should have a secret just as strong. Public clients have no secret at all.
 
 An attempt made during the wait is not evaluated at all: the password is not checked and nothing
 is recorded in the audit log. It is reported as its own error rather than as a wrong password,
@@ -569,12 +585,9 @@ because the password may well have been right:
 }
 ```
 
-The OAuth token endpoint answers a throttled client with HTTP 429, a `Retry-After` header and
-`{"error": "invalid_client", "error_description": "too many failed attempts"}`.
-
-If the service cannot reach the store that keeps these counts, it refuses to check passwords at all
-rather than check them without counting. The `login` error then carries
-`extensions.code` set to `UNAVAILABLE`, and the token endpoint answers HTTP 503. Treat both as an
-outage, not as a rejected credential.
+If the service cannot reach the store that keeps these counts, or the store is full, it refuses to
+check passwords at all rather than check them without counting. The `login` error then carries
+`extensions.code` set to `UNAVAILABLE`. Treat it as an outage, not as a rejected credential. The
+OAuth token endpoint does not use the store, so client authentication keeps working.
 
 Detailed, per-type reference pages will be generated from the schemas as they stabilize.

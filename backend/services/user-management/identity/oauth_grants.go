@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -76,10 +75,6 @@ type oauthError struct {
 	Code   string // RFC 6749 error code, e.g. "invalid_grant"
 	Desc   string
 	Status int
-	// RetryAfter, when positive, is rendered as a Retry-After header (seconds) — set
-	// on a throttled client authentication so a well-behaved client knows when to
-	// come back.
-	RetryAfter int
 }
 
 func (e *oauthError) Error() string { return e.Code + ": " + e.Desc }
@@ -114,27 +109,24 @@ func errServer(desc string) *oauthError {
 //     costs the same as a known confidential client's wrong secret.
 //   - Disabled client, or a confidential client presenting no secret ⇒
 //     invalid_client, with no compare at all.
-//   - A confidential client presenting a secret ⇒ the secret is checked through the
-//     credential checker, under the per-client_id backoff (CredentialPolicies). A
-//     throttled attempt is refused with HTTP 429 and Retry-After; an unavailable
-//     attempt store fails closed with 503.
+//   - A confidential client presenting a secret ⇒ the secret is compared through the
+//     credential checker. Client secrets are NOT throttled (CredentialPolicies says
+//     why), so a client's own failures never delay its next request.
 //   - A public client that nonetheless presents a secret ⇒ invalid_client: it has
 //     no registered secret, so a presented one is a misconfiguration, not ignored.
 //   - A database error loading the client is returned as-is, which the token
 //     endpoint renders as server_error: a failed lookup is not a verdict on the
 //     client.
 //
-// 🔴 A KNOWN PUBLIC CLIENT IS NEVER CHARGED OR THROTTLED. It has no secret to guess,
-// and it is how MCP agents obtain tokens; charging it would let anyone who knows its
-// client_id — which appears in every authorization URL — delay every MCP sign-in.
-// The client is therefore LOADED before the checker is consulted, and only the
-// unknown and the confidential-with-a-secret cases reach it.
+// A KNOWN PUBLIC CLIENT never reaches the checker: it has no secret to compare. The
+// client is therefore LOADED before the checker is consulted, and only the unknown and
+// the confidential-with-a-secret cases reach it.
 //
 // ⚠️ TIMING IS NOT EQUALIZED ACROSS ALL OF THESE, and the claim is scoped on purpose:
 // a known public or disabled client answers without a compare, an unknown one pays
 // for one, so response time distinguishes "known public/disabled" from "unknown".
 // That was true before the checker as well. It is low value — client_ids are not
-// secret — and closing it would mean charging public clients, which is worse.
+// secret — and closing it would mean paying a compare for public clients too.
 //
 // PKCE still runs in the grant regardless — client authentication is defence in
 // depth on top of it, never a replacement.
@@ -166,24 +158,22 @@ func (m *Manager) AuthenticateClient(ctx context.Context, clientID, secret strin
 // checkClientSecret runs the secret compare through the credential checker. hash is
 // the confidential client's stored hash, or "" for an unknown client — which the
 // checker compares against a dummy at the same cost, and which never matches.
+//
+// Only a match and a mismatch are expected, because the client-secret kind is
+// Unthrottled. Any other error — a throttle or an unavailable store, should the policy
+// ever change without this function — is returned as-is and rendered as server_error:
+// loud, rather than mistaken for a wrong secret.
 func (m *Manager) checkClientSecret(ctx context.Context, clientID, secret, hash string) error {
 	if m.credentials == nil {
 		return errNoCredentialChecker
 	}
 	err := m.credentials.Check(ctx, credential.Principal{Kind: credential.KindOAuthClient, ID: clientID}, secret,
 		func(context.Context) (string, error) { return hash, nil })
-	var throttled *credential.ThrottledError
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, credential.ErrMismatch):
 		return errInvalidClient("client authentication failed")
-	case errors.As(err, &throttled):
-		return &oauthError{Code: "invalid_client", Desc: "too many failed attempts",
-			Status: http.StatusTooManyRequests, RetryAfter: throttled.RetryAfterSeconds()}
-	case errors.Is(err, credential.ErrUnavailable):
-		return &oauthError{Code: "server_error", Desc: "client authentication is temporarily unavailable",
-			Status: http.StatusServiceUnavailable}
 	default:
 		return err
 	}

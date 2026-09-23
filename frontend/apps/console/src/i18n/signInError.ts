@@ -86,7 +86,7 @@ export function signInErrorKey(err: unknown, rejectedKey: string): string {
     case 'THROTTLED':
       return 'login:tooManyAttempts';
     case 'UNAVAILABLE':
-      return 'login:serverUnreachable';
+      return 'login:signInUnavailable';
   }
   return serverRejectedRequest(err) ? rejectedKey : 'login:serverUnreachable';
 }

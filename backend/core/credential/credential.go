@@ -10,23 +10,40 @@
 // mutation and the OAuth token endpoint each ran their own compare with nothing counting
 // attempts, so an attacker could guess as fast as the server could hash — and, through
 // GraphQL aliases, ~1,500 guesses in one request. Putting the compare and the limiter in
-// ONE function means no call path can reach the first without the second: there is
-// nothing to remember at a new call site, because there is no other compare to call.
+// ONE function means no call path can reach the first without its kind's policy: there
+// is nothing to remember at a new call site, because there is no other compare to call.
 // hack/check-credential-compare.sh fails the build if production code outside this
 // package names bcrypt.CompareHashAndPassword.
 //
-// # The policy: backoff per principal, no hard lockout
+// # The policy: backoff per principal
 //
-// Every failed check on a principal (an email, an OAuth client_id) increases the delay
-// before that principal's next attempt is EVALUATED, doubling up to a cap; a success
-// resets it. There is no lockout: at the cap the owner can still sign in, a few times an
-// hour. The state lives in NATS KV so every replica of the service sees the same count.
+// Each Kind has its own Policy. Under a throttled one, every failed check on a principal
+// (for example an email) increases the delay before that principal's next attempt is
+// EVALUATED, doubling up to a cap; a success resets it. The state lives in NATS KV so
+// every replica of the service sees the same count. An Unthrottled kind is compared
+// with no delay and no record at all.
+//
+// # The cost: a targeted lockout
+//
+// 🔴 THE THROTTLE IS KEYED ON WHAT THE CALLER PRESENTS, AND A THROTTLED ATTEMPT IS FREE.
+// A refused attempt costs one KV read — no charge, no compare, no audit row — so anyone
+// who knows a principal's identifier can keep polling it and take the first evaluation
+// slot each time a delay expires, sending a wrong secret. While they keep that up the
+// real owner is refused as throttled, even with the correct secret: for the attacker's
+// target it IS a lockout, lasting as long as the attack. There is no hard lockout that
+// outlives the attack, and nothing locks an account nobody is attacking.
+//
+// That is the price of a per-principal key, which is what slows a guesser spread over
+// many sources. A kind whose secret cannot be guessed has nothing to buy with that
+// price, so it should be Unthrottled rather than hand anyone a way to lock it out —
+// user-management's OAuth client secrets are (identity.CredentialPolicies).
 //
 // # Existence does not leak
 //
 // The key is derived from the PRESENTED identifier, and an unknown principal runs the
-// identical sequence — read, charge, lookup, compare (against a dummy hash) — so it is
-// throttled on exactly the same schedule as a real one. A fast "throttled" reply reveals
+// identical sequence — read, charge, lookup, compare (against a dummy hash of the same
+// cost; an Unthrottled kind skips only the read and the charge) — so it is throttled on
+// exactly the same schedule as a real one. A fast "throttled" reply reveals
 // only throttle state the caller built up themselves, and it looks the same whether the
 // account exists or not.
 package credential
@@ -77,6 +94,11 @@ type Principal struct {
 
 // Policy is one kind's backoff schedule.
 //
+// Unthrottled, set ALONE, means the kind is not rate-limited: its secret is compared
+// (and an unknown principal's against the dummy, at the same cost) but no attempt is
+// read, charged or recorded. It is a field of its own rather than a zero schedule so a
+// Policy{} left unset is refused at construction instead of meaning "off".
+//
 // Charges are counted per principal since its last success. The first Free charges
 // carry no delay, so Free attempts are evaluated back to back. The Free-th charge sets
 // a delay of Base before the next attempt may be evaluated, and each charge after it
@@ -91,6 +113,8 @@ type Policy struct {
 	Free int
 	Base time.Duration
 	Cap  time.Duration
+
+	Unthrottled bool
 }
 
 // AttemptTTL is how long a principal's record outlives its last write — the attempt
@@ -104,11 +128,19 @@ type Policy struct {
 // past its first capped step.
 //
 // It is also kept short, because the attempt is charged before the account is looked
-// up, so every presented identifier — real or not — costs one entry for this long. How
+// up, so every presented identifier of a throttled kind — real or not — costs one entry
+// for this long. How
 // many entries fit is in the bucket's declaration (kv.BucketCredentialAttempts).
 const AttemptTTL = 10 * time.Minute
 
 func (p Policy) validate() error {
+	if p.Unthrottled {
+		if p.Free != 0 || p.Base != 0 || p.Cap != 0 {
+			return fmt.Errorf("an Unthrottled policy carries no schedule, got Free=%d Base=%s Cap=%s",
+				p.Free, p.Base, p.Cap)
+		}
+		return nil
+	}
 	if p.Free < 1 {
 		return fmt.Errorf("Free must be at least 1, got %d", p.Free)
 	}
@@ -243,6 +275,10 @@ type Checker struct {
 	dummy    []byte
 	now      func() time.Time
 	checks   *prometheus.CounterVec
+	// compare is bcrypt.CompareHashAndPassword. It is a field only so a test can
+	// observe WHICH hash each check paid for (export_test.go): the dummy compare is
+	// the timing equalizer, and an outcome-level test cannot see it being skipped.
+	compare func(hash, secret []byte) error
 }
 
 // Option configures a Checker.
@@ -281,7 +317,8 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 	if err != nil {
 		return nil, err
 	}
-	c := &Checker{store: store, policies: policies, dummy: dummy, now: time.Now}
+	c := &Checker{store: store, policies: policies, dummy: dummy, now: time.Now,
+		compare: bcrypt.CompareHashAndPassword}
 	for _, o := range opts {
 		o(c)
 	}
@@ -320,8 +357,13 @@ func Key(p Principal) string {
 // hole the size of the compare: N requests arriving together all read "no failures
 // yet", all pass admission, and all run. Charging first means each admitted attempt
 // has already moved the schedule for the next one, so concurrent requests cannot all
-// get in — and an attempt that crashes mid-compare still counts. A success undoes the
-// charge by deleting the record.
+// get in — and an attempt that crashes mid-compare still counts. A success clears the
+// principal's record by deleting it, unconditionally: that also erases any charges
+// other attempts made while this one's compare ran. Each of those was still admitted
+// and evaluated on its turn; what a success forgives is the count they leave behind.
+//
+// An Unthrottled kind skips all of that — no read, no charge, no delete — and only
+// compares.
 func (c *Checker) Check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) error {
 	err := c.check(ctx, p, secret, lookup)
 	c.observe(p.Kind, err)
@@ -335,8 +377,10 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	}
 	key := Key(p)
 
-	if err := c.admit(key, policy); err != nil {
-		return err
+	if !policy.Unthrottled {
+		if err := c.admit(key, policy); err != nil {
+			return err
+		}
 	}
 
 	hash, err := lookup(ctx)
@@ -348,8 +392,11 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	if hash == "" {
 		stored = c.dummy
 	}
-	if bcrypt.CompareHashAndPassword(stored, []byte(secret)) != nil || hash == "" {
+	if c.compare(stored, []byte(secret)) != nil || hash == "" {
 		return ErrMismatch
+	}
+	if policy.Unthrottled {
+		return nil
 	}
 
 	if err := c.store.Delete(key); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {

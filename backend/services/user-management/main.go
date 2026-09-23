@@ -193,8 +193,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 	// The credential checker: every password and client-secret compare goes through
-	// it, under a per-principal backoff whose state is shared by every replica through
-	// this bucket. It fails closed when the bucket cannot be reached.
+	// it. Passwords are under a per-email backoff whose state is shared by every
+	// replica through this bucket, and fail closed when it cannot be reached; client
+	// secrets are unthrottled (identity.CredentialPolicies says why).
 	attemptsKV, err := NatsManager.CredentialAttemptStore()
 	if err != nil {
 		return err

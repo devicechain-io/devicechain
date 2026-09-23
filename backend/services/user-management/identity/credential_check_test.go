@@ -5,7 +5,6 @@ package identity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -94,8 +93,11 @@ func newCredFixture(t *testing.T) *credFixture {
 
 	clk := &stepClock{now: time.Unix(1_700_000_000, 0)}
 	attempts := credentialtest.NewStore()
+	// Identities get a schedule small enough to walk; client secrets get the policy the
+	// service actually ships, so the token-endpoint tests exercise the real decision.
 	checker, err := credential.NewChecker(attempts, map[credential.Kind]credential.Policy{
-		credential.KindIdentity: testCredentialPolicy, credential.KindOAuthClient: testCredentialPolicy,
+		credential.KindIdentity:    testCredentialPolicy,
+		credential.KindOAuthClient: CredentialPolicies[credential.KindOAuthClient],
 	}, credential.WithClock(clk.Now))
 	require.NoError(t, err)
 
@@ -268,62 +270,58 @@ func postToken(t *testing.T, f *credFixture, clientID, secret string) *httptest.
 	return rec
 }
 
-// A confidential client's secret is throttled per client_id, and the token endpoint
-// reports it as HTTP 429 with Retry-After.
-func TestTokenEndpointThrottlesAConfidentialClient(t *testing.T) {
+// 🔴 A CONFIDENTIAL CLIENT CANNOT BE LOCKED OUT BY SOMEONE WHO KNOWS ITS client_id.
+// Its client_id is public, so a throttle keyed on it would let anyone hold every
+// sign-in through the client (Grafana SSO) at 429. Far more wrong secrets than any
+// schedule's free allowance, then the correct one, which must succeed at once — and
+// the attempt store is never touched, since there is no count to keep.
+func TestConfidentialClientCannotBeLockedOut(t *testing.T) {
 	f := newCredFixture(t)
-	for i := 1; i <= testCredentialPolicy.Free; i++ {
+	for i := 0; i < 10*testCredentialPolicy.Free; i++ {
 		rec := postToken(t, f, confidentialID, "wrong")
 		require.Equal(t, http.StatusUnauthorized, rec.Code, "attempt %d: %s", i, rec.Body)
+		assert.Contains(t, rec.Body.String(), `"error":"invalid_client"`)
 	}
-	rec := postToken(t, f, confidentialID, clientSecret)
-	require.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
-	assert.Equal(t, "1", rec.Header().Get("Retry-After"))
-	var body struct{ Error, ErrorDescription string }
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &struct {
-		Error            *string `json:"error"`
-		ErrorDescription *string `json:"error_description"`
-	}{&body.Error, &body.ErrorDescription}))
-	assert.Equal(t, "invalid_client", body.Error)
-	assert.Equal(t, "too many failed attempts", body.ErrorDescription)
-
-	f.clock.Advance(time.Second)
 	require.Equal(t, http.StatusOK, postToken(t, f, confidentialID, clientSecret).Code)
+	assert.Empty(t, f.store.Ops(), "a client-secret check must not read or write the attempt store")
+
+	// Control: a password check on the same fixture does use the store.
+	_, _ = f.mgr.Login(context.Background(), knownEmail, "wrong")
+	assert.NotEmpty(t, f.store.Ops())
 }
 
-// An unknown client_id is charged like a confidential one — it pays the dummy compare
-// and is throttled on the same schedule.
-func TestTokenEndpointThrottlesAnUnknownClient(t *testing.T) {
+// An unknown client_id is refused as invalid_client however often it is tried, exactly
+// as a confidential client's wrong secret is — and it still pays the dummy compare,
+// which core/credential's TestUnknownPrincipalPaysARealCompare pins.
+func TestTokenEndpointRefusesAnUnknownClient(t *testing.T) {
 	f := newCredFixture(t)
-	for i := 1; i <= testCredentialPolicy.Free; i++ {
+	for i := 0; i < 2*testCredentialPolicy.Free; i++ {
 		require.Equal(t, http.StatusUnauthorized, postToken(t, f, "no-such-client", "guess").Code)
 	}
-	require.Equal(t, http.StatusTooManyRequests, postToken(t, f, "no-such-client", "guess").Code)
 }
 
-// 🔴 A KNOWN PUBLIC CLIENT IS NEVER CHARGED OR THROTTLED. It has no secret, and its
-// client_id is in every authorization URL; charging it would hand anyone a way to
-// delay every MCP sign-in. Far more requests than the free allowance all succeed, and
-// the attempt store is never touched — asserted as the store's empty trace, with the
-// confidential case above as the control that the same store does record charges.
-func TestPublicClientIsNeverCharged(t *testing.T) {
+// A KNOWN PUBLIC CLIENT never reaches the checker: far more requests than any free
+// allowance all succeed.
+func TestPublicClientIsNeverChecked(t *testing.T) {
 	f := newCredFixture(t)
 	for i := 0; i < 5*testCredentialPolicy.Free; i++ {
 		require.Equal(t, http.StatusOK, postToken(t, f, publicID, "").Code, "request %d", i)
 	}
-	assert.Empty(t, f.store.Ops(), "a public client's token request must not touch the attempt store")
-
-	// Control: a confidential attempt on the same fixture does touch it.
-	_ = postToken(t, f, confidentialID, "wrong")
-	assert.NotEmpty(t, f.store.Ops())
 }
 
-func TestTokenEndpointFailsClosedWhenTheAttemptStoreIsDown(t *testing.T) {
+// Client authentication does not depend on the attempt store, so a broker outage does
+// not stop a confidential client — the regression the store would otherwise add.
+func TestTokenEndpointDoesNotNeedTheAttemptStore(t *testing.T) {
 	f := newCredFixture(t)
 	f.store.Fail = errors.New("nats: connection closed")
-	rec := postToken(t, f, confidentialID, clientSecret)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
-	assert.Contains(t, rec.Body.String(), `"error":"server_error"`)
+	require.Equal(t, http.StatusOK, postToken(t, f, confidentialID, clientSecret).Code)
+	require.Equal(t, http.StatusUnauthorized, postToken(t, f, confidentialID, "wrong").Code)
+}
+
+// The shipped policy for client secrets is Unthrottled. Pinned on its own because the
+// fixture above borrows it, so a change to it would change what those tests test.
+func TestClientSecretsAreUnthrottled(t *testing.T) {
+	assert.Equal(t, credential.Policy{Unthrottled: true}, CredentialPolicies[credential.KindOAuthClient])
 }
 
 // ── the authorize form ───────────────────────────────────────────────────────────

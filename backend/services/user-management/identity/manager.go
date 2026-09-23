@@ -155,8 +155,8 @@ type Manager struct {
 	codesKV nats.KeyValue
 	// credentials is the ONLY way this manager compares a presented secret with a
 	// stored hash — a password at login, a client secret at the OAuth token endpoint.
-	// It owns the per-principal backoff and the timing equalizer for unknown
-	// principals, so neither path can run an unthrottled bcrypt compare.
+	// It owns the per-email password backoff and the timing equalizer for unknown
+	// principals, so neither path can run a bcrypt compare that escapes its policy.
 	credentials *credential.Checker
 	refreshTTL  time.Duration
 	bootstrap   BootstrapConfig
@@ -198,16 +198,27 @@ func NewManager(ms *core.Microservice, db *rdb.RdbManager, locker *messaging.Dis
 //
 //   - A PASSWORD belongs to a human and may be weak, so it gets five attempts back to
 //     back and then 1s, 2s, 4s … up to 5 minutes between evaluated attempts — about a
-//     dozen guesses an hour at the cap, while the owner can still sign in.
-//   - A CLIENT SECRET is 256 random bits, so throttling it buys no protection against
-//     guessing; what it bounds is bcrypt work per client_id. The schedule is gentle and
-//     its cap short on purpose, because the throttle state is keyed by the client_id,
-//     which is not a secret: anyone who knows a confidential client's id can hold its
-//     delay at the cap, and a short cap is what keeps that from becoming an outage of
-//     the client (for Grafana SSO, of every user's sign-in through it).
+//     dozen guesses an hour at the cap.
+//
+//     🔴 THE PRICE OF A PER-EMAIL KEY IS A TARGETED LOCKOUT. The count is keyed
+//     on the email alone, and a throttled attempt costs the sender nothing, so anyone
+//     who knows an address can keep it at the cap by polling and take each evaluation
+//     slot with a wrong password; while they do, the owner's CORRECT password is
+//     refused as throttled. It lasts exactly as long as the attack. A per-email key is
+//     what slows a guesser spread over many addresses, and giving the key a source
+//     dimension instead would hand that guesser a fresh allowance per source.
+//
+//   - A CLIENT SECRET is not throttled. The admin API mints it from 256 random bits,
+//     so a backoff buys no protection against guessing — and it would cost a lockout
+//     anyone could impose, because the key would be the client_id, which appears in
+//     every authorization URL: holding a confidential client such as Grafana SSO at
+//     the cap would break every user's sign-in through it. The compare still runs
+//     through the checker, so an unknown client_id still pays the dummy compare. A
+//     SEEDED client's secret is chosen by whoever minted its hash, and must be as
+//     strong as the admin API's.
 var CredentialPolicies = map[credential.Kind]credential.Policy{
 	credential.KindIdentity:    {Free: 5, Base: time.Second, Cap: 5 * time.Minute},
-	credential.KindOAuthClient: {Free: 10, Base: time.Second, Cap: 30 * time.Second},
+	credential.KindOAuthClient: {Unthrottled: true},
 }
 
 // errNoCredentialChecker fails a secret comparison on a manager built without a

@@ -4,7 +4,8 @@
 #
 # Refuses any bcrypt.CompareHashAndPassword in production Go code outside
 # backend/core/credential — the one primitive that compares a presented secret with a
-# stored hash AND counts the attempt against a per-principal backoff.
+# stored hash AND applies its kind's policy: a per-principal backoff for passwords, and
+# for every kind the dummy compare that keeps an unknown principal's timing the same.
 #
 # 🔴 WHY THIS IS A GATE. The login mutation and the OAuth token endpoint used to run
 # their own compares with nothing counting attempts; one GraphQL request carried ~1,500
