@@ -1,0 +1,83 @@
+{{/*
+Alerting rules for JetStream DELIVERY: messages a stream discarded before a reader got
+to them, and streams approaching the ceiling (ADR-023) at which that starts.
+
+WHY THIS GROUP EXISTS. Every stream is bounded and discards its OLDEST message once
+full (DiscardOld). That is the right policy for a platform that must keep ingesting,
+and it is silent by construction: the broker removes the message, a durable that had
+not reached it steps over the hole on its next pull, and nothing records that the
+message was never read. The fill alert says a stream is full; it cannot say whether
+any reader was still behind what went, because a full stream whose readers are all
+caught up loses nothing. The two per-durable series below are that record, sampled by
+every service for the durables it reads (core/messaging/stream_metrics.go).
+
+🔑 SELECTED BY NAME, NOT LISTED — the same reasoning as DeadLetterWriteLost in
+prometheusrule.yaml. Every service that reads a stream exports these series under its
+own subsystem, so a regex over the name covers every reader with no list to keep.
+`[a-z0-9]+`, NOT `.+`: the area segment never contains `_` (its dashes are stripped),
+so the stricter form matches the one name core builds and nothing else.
+
+🔑 `max by`, NEVER `sum`. Every replica of a service samples the same durable and
+counts the same removal, so summing across pods would multiply one loss by the
+replica count.
+
+Same operator assumption and gating as the event-processing rules.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: jetstream-delivery
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.jetstream-delivery
+      rules:
+        # A durable's cursor moved past messages it was never handed. The counter
+        # exists at 0 from the moment the reader is created, so increase() sees the
+        # FIRST loss too; a pod restart resets it to 0, and a reset followed by a
+        # flat series correctly stays silent.
+        - alert: JetStreamDurableLostUnread
+          expr: max by (stream, durable) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_skipped_total", namespace="{{ $ns }}"}[10m])) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "a consumer lost messages it never read"
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+        # A durable that has stopped reading while the stream discards the messages
+        # ahead of it. Its cursor does not move, so the counter above cannot see the
+        # loss until it resumes; this gauge states it while it is happening.
+        - alert: JetStreamDurableStalledBehindStream
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_gap_messages", namespace="{{ $ns }}"}) > 0
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "a stalled consumer is losing messages it has not read"
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} is not reading, and the stream has already discarded {{ "{{ $value }}" }} messages ahead of it. They will never be delivered. Find out why the consuming service is not pulling (pods down, crash-looping, or parked waiting for readiness); if that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
+        # Renamed and widened from EventProcessingStreamNearFull, which selected one
+        # service's streams only. Every service exports the fill gauges for the streams
+        # it ensures, and a stream's owner is not knowable here, so this selects all of
+        # them by name.
+        - alert: JetStreamStreamNearFull
+          expr: |
+            max by (stream) (
+              {__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_bytes", namespace="{{ $ns }}"}
+              / clamp_min({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_bytes", namespace="{{ $ns }}"}, 1)
+            ) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A JetStream stream is near its ceiling"
+            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread)."
+{{- end }}

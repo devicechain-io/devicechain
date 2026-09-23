@@ -19,8 +19,9 @@ const (
 	// stream ceilings (ADR-023) evict the oldest messages via DiscardOld when a
 	// stream fills, which is otherwise silent; this sampling surfaces the fill as a
 	// gauge and an edge-triggered warning so an operator sees a backlog building
-	// BEFORE data is dropped. A 30s cadence is cheap (one StreamInfo per stream) and
-	// fast enough to catch a backlog well before the 7-day/size window closes.
+	// BEFORE data is dropped. A 30s cadence is cheap (one StreamInfo per stream, one
+	// ConsumerInfo per reader durable) and fast enough to catch a backlog well before
+	// the 7-day/size window closes.
 	streamMetricsSampleInterval = 30 * time.Second
 
 	// streamNearFullThreshold is the fill fraction (bytes or messages, whichever is
@@ -81,6 +82,46 @@ type streamMetrics struct {
 	// the warning fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
 	warned map[string]bool
+
+	// Unread loss, per durable. A full stream discards its OLDEST message (DiscardOld),
+	// and the fill gauges above say only that the stream is full — not whether any
+	// reader was still behind the message that went. A reader that had not reached it
+	// never sees it: its cursor steps over the hole on the next pull and nothing anywhere
+	// records that a message went unread. These two instruments are that record.
+	//
+	// unreadSkipped counts, between consecutive samples, the stream sequences a durable's
+	// cursor moved past without a delivery, less the stream's own interior deletes over
+	// the same interval (a tenant purge removing one tenant's messages from the middle of
+	// the stream is not a reader falling behind). See sampleDurable for the arithmetic
+	// and why it is a lower bound.
+	//
+	// unreadGap is the stalled case the counter cannot see yet: a durable that is not
+	// pulling does not move its cursor, so it crosses no hole — but the messages ahead of
+	// it are already gone. It is FirstSeq-1 minus the cursor, and it reads 0 as soon as
+	// the durable pulls again (at which point the counter takes the loss over).
+	//
+	// The {durable} label is as bounded as {stream}: one durable per reader a service
+	// constructs, named from the instance, area and suffix — never from a tenant.
+	unreadSkipped *prometheus.CounterVec
+	unreadGap     *prometheus.GaugeVec
+
+	// durables holds each durable's previous sample, which the counter is the difference
+	// against. Accessed only from the single sampler goroutine, like warned.
+	durables map[durableRef]durableSample
+}
+
+// durableRef names one durable consumer on one stream: a reader this service created.
+type durableRef struct {
+	stream, durable string
+}
+
+// durableSample is what the unread counter differences between two samples: the
+// durable's cursor (the last stream sequence it was handed), how many deliveries it has
+// made, and the stream's interior-delete count at the same moment.
+type durableSample struct {
+	deliveredStream   uint64
+	deliveredConsumer uint64
+	numDeleted        uint64
 }
 
 func newStreamMetrics(ms *core.Microservice) *streamMetrics {
@@ -102,8 +143,29 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			"1 when the connected NATS server reports a cluster, 0 otherwise. Paired with "+
 				"jetstream_replicas_desired == 1 this is the false-HA state: a replicated broker "+
 				"storing one copy of everything."),
-		warned: map[string]bool{},
+		unreadSkipped: ms.NewCounterVec("jetstream_consumer_unread_skipped_total",
+			"Stream sequences this durable's cursor moved past without a delivery: messages removed "+
+				"before it read them. A lower bound (redeliveries and deletes behind the cursor reduce it).",
+			[]string{"stream", "durable"}),
+		unreadGap: ms.NewGaugeVec("jetstream_consumer_unread_gap_messages",
+			"Messages removed ahead of this durable's cursor while it is not reading.",
+			[]string{"stream", "durable"}),
+		warned:   map[string]bool{},
+		durables: map[durableRef]durableSample{},
 	}
+}
+
+// initDurable creates a durable's two unread series at 0.
+//
+// It is called when the reader is created, not at its first sample, and that ordering is
+// what makes the first loss visible. The alert is increase() over the counter, and a
+// counter that first APPEARS at a nonzero value has no earlier sample to increase from —
+// so a loss in a durable's first interval would be exported and never alerted on. A
+// series that exists at 0 from creation also keeps "no loss" and "not measured" from
+// reading the same on a dashboard.
+func (m *streamMetrics) initDurable(stream, durable string) {
+	m.unreadSkipped.WithLabelValues(stream, durable).Add(0)
+	m.unreadGap.WithLabelValues(stream, durable).Set(0)
 }
 
 // sampleReplication records the replication triple for one stream or KV bucket.
@@ -162,8 +224,8 @@ func currentPeers(info *nats.StreamInfo) int {
 //
 // Buckets deliberately get the replication triple and NOT the fill gauges, even
 // though a KV bucket is a stream and its fill is just as real. The reason is the
-// alert built on those gauges: EventProcessingStreamNearFull selects
-// `max by (stream)` over every stream a service reports, with no name filter. A
+// alert built on those gauges: JetStreamStreamNearFull selects `max by (stream)`
+// over every stream EVERY service reports, with no name filter. A
 // Cache bucket is created DiscardNew and is SUPPOSED to sit near its ceiling —
 // that is a bounded cache working correctly, not a backlog — so folding buckets
 // into the fill gauges would fire a warning-severity alert as designed behaviour.
@@ -185,8 +247,12 @@ func currentPeers(info *nats.StreamInfo) int {
 // correct: they are dropped by forgetReplication on an ordinary failure too, and a
 // sampler that has been told to stop should not leave a gauge asserting a value it
 // can no longer refresh.
+//
+// durables are the readers this service created. Each is sampled right after its
+// stream, against that stream's StreamInfo — the same snapshot the fill gauges read —
+// so a durable whose stream could not be read this pass is skipped with it.
 func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, names, buckets []string,
-	desired int, clustered bool) {
+	durables []durableRef, desired int, clustered bool) {
 	m.brokerClustered.Set(boolGauge(clustered))
 	for _, name := range buckets {
 		if ctx.Err() != nil {
@@ -229,7 +295,83 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 			log.Info().Str("stream", name).Float64("utilization", pct).
 				Msg("JetStream stream utilization recovered below the near-full threshold")
 		}
+
+		for _, d := range durables {
+			if d.stream != name {
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			m.sampleDurable(ctx, js, info, d)
+		}
 	}
+}
+
+// sampleDurable updates one durable's unread series from its ConsumerInfo and its
+// stream's StreamInfo.
+//
+// Between two samples, a durable's cursor (Delivered.Stream: the last stream sequence it
+// was handed) moves by dS, and it made dC deliveries. Every sequence the cursor passed
+// was either delivered, removed on purpose from the middle of the stream (the stream's
+// NumDeleted, which a tenant purge raises), or removed before the durable reached it —
+// so dS - dC - dD is the unread loss. JetStream's pull skips removed sequences and moves
+// the cursor past them, which is what makes the loss visible in dS at all.
+//
+// 🔴 IT IS A LOWER BOUND, and deliberately so. A redelivery raises dC without moving the
+// cursor, and an interior delete BEHIND the cursor raises dD without being stepped over
+// — both only subtract, so neither can invent a loss. It is exact when neither happens.
+// The clamp to zero is that same direction: a negative interval is an interval where the
+// subtractions outweighed the loss, not a loss to take back.
+//
+// 🔴 A DROP IN Delivered.Consumer IS A NEW CONSUMER, not a negative interval. A durable
+// that was deleted and recreated starts counting deliveries from 0, and JetStream reports
+// a recreated DeliverAll durable's cursor at the stream's FirstSeq-1 rather than 0 — so
+// differencing across the recreation would charge every sequence the stream evicted in
+// between against a delivery count that went backwards. The sample becomes the new
+// baseline and nothing is counted, as on the very first sample.
+//
+// A ConsumerInfo failure skips the durable for this pass and keeps its previous sample,
+// so the next good sample covers the whole interval and nothing is lost to the counter
+// by a transient broker error.
+//
+// PRECONDITION, held by construction: the durable filters on its stream's WHOLE subject.
+// Every reader is made by NewReader, which filters on StreamSubject(suffix) — the same
+// subject the stream captures — so every sequence in the stream is one the durable would
+// have been handed. A durable with a narrower filter would count every other subject's
+// messages as loss.
+func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) {
+	ci, err := js.ConsumerInfo(d.stream, d.durable, nats.Context(ctx))
+	if err != nil {
+		log.Debug().Err(err).Str("stream", d.stream).Str("durable", d.durable).
+			Msg("Durable unread-loss sample failed")
+		return
+	}
+	cur := durableSample{
+		deliveredStream:   ci.Delivered.Stream,
+		deliveredConsumer: ci.Delivered.Consumer,
+		numDeleted:        uint64(max(0, info.State.NumDeleted)),
+	}
+	if prev, ok := m.durables[d]; ok && cur.deliveredConsumer >= prev.deliveredConsumer {
+		dS := int64(cur.deliveredStream) - int64(prev.deliveredStream)
+		dC := int64(cur.deliveredConsumer) - int64(prev.deliveredConsumer)
+		dD := max(0, int64(cur.numDeleted)-int64(prev.numDeleted))
+		if n := dS - dC - dD; n > 0 {
+			m.unreadSkipped.WithLabelValues(d.stream, d.durable).Add(float64(n))
+		}
+	}
+	m.durables[d] = cur
+	m.unreadGap.WithLabelValues(d.stream, d.durable).Set(float64(unreadGap(info.State.FirstSeq, ci.Delivered.Stream)))
+}
+
+// unreadGap is how many sequences were removed between a durable's cursor and the
+// stream's first retained message: FirstSeq-1-cursor, or 0 when the cursor is at or past
+// the first message (including a stream that has never held one, whose FirstSeq is 0).
+func unreadGap(firstSeq, cursor uint64) uint64 {
+	if firstSeq == 0 || firstSeq-1 <= cursor {
+		return 0
+	}
+	return firstSeq - 1 - cursor
 }
 
 // boolGauge renders a bool as the 1/0 a Prometheus gauge carries.

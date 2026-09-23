@@ -87,7 +87,7 @@ func TestSamplingAbortsInFlightRequestsWhenItsContextExpires(t *testing.T) {
 	done := make(chan time.Duration, 1)
 	go func() {
 		start := time.Now()
-		nmgr.metrics.sample(ctx, nmgr.js, names, nil, 1, false)
+		nmgr.metrics.sample(ctx, nmgr.js, names, nil, nil, 1, false)
 		done <- time.Since(start)
 	}()
 
@@ -124,7 +124,7 @@ func TestSamplingOnALiveContextStillRecordsEveryStream(t *testing.T) {
 		names = append(names, name)
 	}
 
-	nmgr.metrics.sample(context.Background(), nmgr.js, names, nil, 1, false)
+	nmgr.metrics.sample(context.Background(), nmgr.js, names, nil, nil, 1, false)
 
 	for _, name := range names {
 		if got := testutil.ToFloat64(nmgr.metrics.replicasActual.WithLabelValues(name)); got != 1 {

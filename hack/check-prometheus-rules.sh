@@ -14,9 +14,10 @@
 # alerts simply never fire.
 #
 # That is the same failure mode as an alert with no series, reached by a
-# different route, and this repo now ships eight rule files: the DETECT/REACT
-# rules, the JetStream replication rules (ADR-020 A0), the database backup rules
-# (ADR-028, ADR-020 A2.5), the database storage rules (ADR-020 A2), the database
+# different route, and this repo now ships nine rule files: the DETECT/REACT
+# rules, the JetStream replication rules (ADR-020 A0), the JetStream delivery
+# rules (unread loss and stream fill), the database backup rules (ADR-028,
+# ADR-020 A2.5), the database storage rules (ADR-020 A2), the database
 # control-plane rules (ADR-020 A1.5), the command-delivery rules, the tenant-purge
 # rules and the sign-in rules. A break in any one takes its neighbours with it.
 #
@@ -915,7 +916,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -945,10 +946,10 @@ note "every rendered rule group parses"
 # rendering its rules reports.
 #
 # 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and the exact value is derived
-# rather than chosen. The chart renders 37 alerts across eight rule files, and the
-# largest single file holds 16. The floor is 20: strictly ABOVE the biggest one
+# rather than chosen. The chart renders 39 alerts across nine rule files, and the
+# largest single file holds 15. The floor is 20: strictly ABOVE the biggest one
 # file, so a run that read only a SUBSET of the files can never clear it, and
-# comfortably below 37, so ordinary rule churn -- adding alerts, retiring one --
+# comfortably below 39, so ordinary rule churn -- adding alerts, retiring one --
 # never touches it.
 #
 # A floor set AT the current count would be a tripwire on legitimate editing
@@ -1003,6 +1004,7 @@ declare -A rule_tests=(
   [command-delivery]="$repo_root/hack/testdata/prometheus-rules-command-delivery-tests.yaml"
   [tenant-purge]="$repo_root/hack/testdata/prometheus-rules-tenant-purge-tests.yaml"
   [sign-in]="$repo_root/hack/testdata/prometheus-rules-sign-in-tests.yaml"
+  [jetstream-delivery]="$repo_root/hack/testdata/prometheus-rules-jetstream-delivery-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

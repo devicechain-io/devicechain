@@ -1,0 +1,195 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the JetStream delivery alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# JetStreamDurableLostUnread is increase() over a counter that EVERY replica of a service
+# keeps for the same durable, and that a pod restart resets to 0. Two properties follow,
+# and both are pinned here:
+#
+#   - it must page on the FIRST loss after a counter appears. The counter is created at
+#     0 when the reader is, so the first loss is an increase from 0 like any other; the
+#     scenario below starts the series at 0 for exactly that reason.
+#   - a series that APPEARS at n and stays flat must NOT page. That is what a pod
+#     restart looks like from Prometheus's side (increase() treats the drop to a fresh
+#     counter as a reset), and a restart is not a loss. A series that goes from n to
+#     n+k after the restart must page.
+#
+# JetStreamStreamNearFull was widened from one service's streams to every service's.
+# The fill case below is read from device-state's series, which the old selector —
+# named for event-processing — could not see at all.
+#
+# THE SERIES, and what is known about each:
+#
+#   - devicechain_<area>_jetstream_consumer_unread_skipped_total{stream,durable} — a
+#     CounterVec created at 0 per durable when the reader is constructed.
+#   - devicechain_<area>_jetstream_consumer_unread_gap_messages{stream,durable} — a
+#     GaugeVec created at 0 at the same moment. The quiet scenarios carry both AT ZERO
+#     rather than omitting them: an alert silent because its series is missing and one
+#     silent because nothing was lost look identical, and only one is a working alert.
+#   - devicechain_<area>_jetstream_stream_used_bytes / _limit_bytes{stream} — gauges.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A live consumer loses messages to a full stream. Both replicas of the
+  # reading service count the same removal; the alert is one per durable.
+  #
+  #   minutes  0- 9   flat at 0
+  #   minute  10      5 unread messages stepped over
+  #   minute  20      7 more
+  #   minutes 21+     flat
+  # ------------------------------------------------------------------
+  - name: a durable that stepped over unread messages pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_notificationmanagement_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-aaaaa", job="devicechain/notification-management", stream="devicechain_alarm-events", durable="devicechain_notification-management_alarm-events"}'
+        values: '0x9 5x9 12x60'
+      - series: 'devicechain_notificationmanagement_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-notification-management-7c9f-bbbbb", job="devicechain/notification-management", stream="devicechain_alarm-events", durable="devicechain_notification-management_alarm-events"}'
+        values: '0x9 5x9 12x60'
+      # Another service reading the same stream and keeping up: at 0 throughout.
+      - series: 'devicechain_devicemanagement_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-ccccc", job="devicechain/device-management", stream="devicechain_alarm-events", durable="devicechain_device-management_alarm-events"}'
+        values: '0x80'
+      - series: 'devicechain_notificationmanagement_jetstream_consumer_unread_gap_messages{namespace="dci-devicechain", pod="dc-notification-management-7c9f-aaaaa", job="devicechain/notification-management", stream="devicechain_alarm-events", durable="devicechain_notification-management_alarm-events"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_alarm-events
+              durable: devicechain_notification-management_alarm-events
+            exp_annotations:
+              summary: "a consumer lost messages it never read"
+              description: "Durable devicechain_notification-management_alarm-events on stream devicechain_alarm-events stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+      # 🔑 IT CLEARS ONCE THE WINDOW ROLLS PAST THE LAST LOSS. Widening the
+      # window would make a one-off loss page for hours; this fails if it does.
+      - eval_time: 45m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+      # The gap gauge sat at 0 throughout: a live consumer has no standing gap.
+      - eval_time: 12m
+        alertname: JetStreamDurableStalledBehindStream
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 A POD RESTART IS NOT A LOSS. The restarted pod's counter appears at a
+  # value (here 7, from the counter's lifetime on this exact labelset before a
+  # scrape gap) and stays flat. increase() over a flat series is 0.
+  # ------------------------------------------------------------------
+  - name: a counter that appears at n and stays flat is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch", durable="devicechain_outbound-connectors_connector-dispatch"}'
+        values: '7x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # ...and one that goes from n to n+k afterwards IS a loss.
+  # ------------------------------------------------------------------
+  - name: a counter that rises from n pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_jetstream_consumer_unread_skipped_total{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch", durable="devicechain_outbound-connectors_connector-dispatch"}'
+        values: '7x10 9x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamDurableLostUnread
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_connector-dispatch
+              durable: devicechain_outbound-connectors_connector-dispatch
+            exp_annotations:
+              summary: "a consumer lost messages it never read"
+              description: "Durable devicechain_outbound-connectors_connector-dispatch on stream devicechain_connector-dispatch stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+
+  # ------------------------------------------------------------------
+  # A stalled durable with messages already discarded ahead of it.
+  #
+  #   minutes 0- 4   gap 0
+  #   minutes 5-24   gap 18 (the consumer stopped; the stream kept discarding)
+  #   minutes 25+    gap 0  (it resumed and stepped over the hole)
+  # ------------------------------------------------------------------
+  - name: a stalled durable behind a discarding stream pages after 2m
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_gap_messages{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0x4 18x19 0x30'
+      # A second durable at 0 must not appear in the alert.
+      - series: 'devicechain_eventmanagement_jetstream_consumer_unread_gap_messages{namespace="dci-devicechain", pod="dc-event-management-7c9f-fffff", job="devicechain/event-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events"}'
+        values: '0x60'
+    alert_rule_test:
+      # Over zero from minute 5, but the 2m `for` has not elapsed at minute 6.
+      - eval_time: 6m
+        alertname: JetStreamDurableStalledBehindStream
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JetStreamDurableStalledBehindStream
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "a stalled consumer is losing messages it has not read"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events is not reading, and the stream has already discarded 18 messages ahead of it. They will never be delivered. Find out why the consuming service is not pulling (pods down, crash-looping, or parked waiting for readiness); if that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
+      - eval_time: 40m
+        alertname: JetStreamDurableStalledBehindStream
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE WIDENING. device-state's stream is near full; the replaced alert
+  # selected event-processing's series only and could not see this. A second
+  # stream at half full stays quiet.
+  # ------------------------------------------------------------------
+  - name: a near-full stream in any service warns
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
+        values: '900x40'
+      - series: 'devicechain_devicestate_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
+        values: '1000x40'
+      - series: 'devicechain_devicestate_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_device-events"}'
+        values: '500x40'
+      - series: 'devicechain_devicestate_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_device-events"}'
+        values: '1000x40'
+    alert_rule_test:
+      # Over the threshold from the first sample, but the 10m `for` has not elapsed.
+      - eval_time: 5m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+            exp_annotations:
+              summary: "A JetStream stream is near its ceiling"
+              description: "Stream devicechain_resolved-events is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread)."

@@ -1590,10 +1590,12 @@ abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de 
 entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones
 WebSocket de GraphQL desde su propio código. Además, en toda instancia creada antes de
 esta versión hay que revisar la contraseña del superusuario (vea «El superusuario ya no tiene
-contraseña por defecto» más abajo). La última sección importa si llama a la API de GraphQL desde su
+contraseña por defecto» más abajo). La sección sobre el inicio de sesión importa si llama a la API de GraphQL desde su
 propio código o scripts, o si dimensiona usted mismo el volumen de JetStream: el inicio de sesión
 ahora tiene límite de frecuencia, y una solicitud de GraphQL tiene un límite de campos raíz y de
-comprobaciones de contraseña.
+comprobaciones de contraseña. Si enruta o silencia alertas por su nombre, lea «Un consumidor que se
+queda atrás de un flujo lleno ahora genera una alerta»: `EventProcessingStreamNearFull` cambia de
+nombre.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1805,6 +1807,29 @@ límites.
 
 [Límites de las solicitudes](../reference/graphql-api.md#request-limits) y [espera entre intentos de
 inicio de sesión](../reference/graphql-api.md#sign-in-backoff) tienen los detalles.
+
+#### Un consumidor que se queda atrás de un flujo lleno ahora genera una alerta
+
+Un flujo (stream) de JetStream lleno descarta sus mensajes más antiguos. Antes de esta versión, un
+consumidor que aún no había leído esos mensajes los perdía sin que ninguna métrica ni alerta lo
+indicara. Ahora cada servicio lo mide para cada consumidor duradero que lee y exporta dos series
+nuevas:
+
+- `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: mensajes que el
+  consumidor pasó por encima sin leerlos.
+- `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: mensajes descartados
+  por delante de un consumidor que ha dejado de leer.
+
+Dos alertas críticas nuevas las leen: `JetStreamDurableLostUnread` y
+`JetStreamDurableStalledBehindStream`. Eliminar un tenant puede disparar la primera: la eliminación
+borra los mensajes de ese tenant, incluidos los que un consumidor aún no había alcanzado. Consulte
+[Mensajes que un consumidor nunca leyó](./observability.md#unread-loss) para saber qué significa cada
+alerta y qué hacer.
+
+La advertencia de flujo casi lleno **cambia de nombre**, de `EventProcessingStreamNearFull` a
+**`JetStreamStreamNearFull`**, y ahora cubre los flujos de todos los servicios, no solo los de
+event-processing. El umbral (80% del límite de bytes durante 10 minutos) no cambia. Si una ruta o un
+silencio de Alertmanager nombra la alerta antigua, cámbielo al nombre nuevo.
 
 ### La transición única a la ingesta duradera
 

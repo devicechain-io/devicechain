@@ -148,9 +148,11 @@ func (a natsAck) Ack() error { return a.nm.Ack() }
 type NatsManager struct {
 	Microservice *core.Microservice
 
-	oncreate  func(*NatsManager) error
-	nc        *nats.Conn
-	js        nats.JetStreamContext
+	oncreate func(*NatsManager) error
+	nc       *nats.Conn
+	js       nats.JetStreamContext
+	// readers is appended under streamMu, because the metrics sampler reads it (via
+	// trackedDurables) for the per-durable unread-loss series while it runs.
 	readers   []*natsReader
 	writers   []*natsWriter
 	lifecycle core.LifecycleManager
@@ -783,6 +785,25 @@ func (nmgr *NatsManager) trackedStreams() []string {
 	return append([]string(nil), nmgr.streamNames...)
 }
 
+// trackedDurables returns a snapshot of the durables this service's readers consume,
+// for the sampler's per-durable unread-loss series. Read under streamMu because it is
+// written under it (NewReader) while the sampler runs on its own goroutine. Deduped:
+// two readers on one suffix share one durable, and it is one cursor to sample.
+func (nmgr *NatsManager) trackedDurables() []durableRef {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	out := make([]durableRef, 0, len(nmgr.readers))
+	seen := make(map[durableRef]bool, len(nmgr.readers))
+	for _, r := range nmgr.readers {
+		d := durableRef{stream: r.stream, durable: r.durable}
+		if !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // trackKvBucket records a KV bucket this service has opened, by the name of the
 // stream backing it, so the sampler can report its replication.
 //
@@ -808,11 +829,12 @@ func (nmgr *NatsManager) trackedBuckets() []string {
 	return append([]string(nil), nmgr.bucketNames...)
 }
 
-// runStreamMetrics samples every ensured stream's fill, and every stream's and
-// bucket's replication, on a fixed cadence until stopped — so both the ceilings'
-// DiscardOld eviction (ADR-023) and a stream that is not actually replicated
-// (ADR-020 A0) are observable rather than silent. It re-snapshots the tracked sets
-// each tick to pick up anything a runtime SubscribeLive ensured after startup.
+// runStreamMetrics samples every ensured stream's fill, every stream's and bucket's
+// replication, and every reader durable's unread loss, on a fixed cadence until
+// stopped — so the ceilings' DiscardOld eviction (ADR-023), the messages it removed
+// before a reader got to them, and a stream that is not actually replicated (ADR-020
+// A0) are observable rather than silent. It re-snapshots the tracked sets each tick to
+// pick up anything a runtime SubscribeLive ensured after startup.
 //
 // ctx ends the sampler, and it ends it in two places rather than one: the select
 // below, which is the loop's turn, and inside sample, which is where an unreachable
@@ -823,17 +845,24 @@ func (nmgr *NatsManager) runStreamMetrics(ctx context.Context) {
 	ticker := time.NewTicker(streamMetricsSampleInterval)
 	defer ticker.Stop()
 	// Seed promptly, don't wait a full interval.
-	nmgr.reportReplicaClamp()
-	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	nmgr.sampleNow(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			nmgr.reportReplicaClamp()
-			nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+			nmgr.sampleNow(ctx)
 		}
 	}
+}
+
+// sampleNow is one pass of the sampler: the replica-clamp report, then every tracked
+// stream, bucket and reader durable. It is the loop body above, named once so the seed and the tick
+// cannot drift apart, and so a test can drive exactly the pass production runs.
+func (nmgr *NatsManager) sampleNow(ctx context.Context) {
+	nmgr.reportReplicaClamp()
+	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.trackedDurables(),
+		nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 }
 
 // ----------------
@@ -1326,7 +1355,17 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if err := r.bind(); err != nil {
 		return nil, err
 	}
+	nmgr.streamMu.Lock()
 	nmgr.readers = append(nmgr.readers, r)
+	nmgr.streamMu.Unlock()
+	// The unread series exist at 0 from here, before the first sample — see initDurable.
+	// metrics is nil only on a manager built as a struct literal rather than by
+	// NewNatsManager, which is how tests outside this package attach a bare reader; such
+	// a manager has no sampler either (runStreamMetrics would dereference the same nil),
+	// so there is no series to initialise and nothing that would ever update one.
+	if nmgr.metrics != nil {
+		nmgr.metrics.initDurable(r.stream, r.durable)
+	}
 	log.Info().Str("durable", r.durable).Str("subject", r.subject).Msg("Added new NATS reader")
 	return r, nil
 }
