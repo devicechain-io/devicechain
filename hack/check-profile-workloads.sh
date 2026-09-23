@@ -36,8 +36,8 @@ GOLDEN="hack/testdata/profile-workloads.txt"
 # rather than trusted.
 PROFILES=(default full telemetry ingest-only)
 
-# Render-only: never leaves this script, encrypts nothing. Required because any
-# profile carrying a secret-store area (ADR-059) refuses to render without one.
+# Render-only: never leaves this script, encrypts nothing. Required because every
+# profile refuses to render without one: user-management seals the signing key (ADR-059).
 key="$(openssl rand -base64 32)"
 
 render() {

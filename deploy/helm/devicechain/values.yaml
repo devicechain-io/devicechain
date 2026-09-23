@@ -356,10 +356,12 @@ instance:
         kekProvider: instance
         # rootKey is the base64-encoded 256-bit instance KEK. The bring-up (dcctl)
         # mints a random value; for production, supply it via a pre-created Secret
-        # (instance.existingSecret) rather than committing it to values. Empty means
-        # a service that uses the secret store fails closed at startup (it cannot
-        # form its KEK). DR: losing this key loses every stored secret — back up the
-        # rendered instance Secret.
+        # (instance.existingSecret) rather than committing it to values. REQUIRED in
+        # every profile: user-management seals the JWT signing key under it, so the
+        # chart refuses to render inline config without one, and a service that uses
+        # the secret store fails closed at startup when it cannot form its KEK. DR:
+        # losing this key loses every stored secret and stops sign-in until the
+        # signing keys are regenerated — back up the rendered instance Secret.
         rootKey: ""
       egress:
         # Destinations a TENANT-configured webhook, httpCall action or SMTP relay is

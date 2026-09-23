@@ -3,7 +3,8 @@
 
 // Package secrets is the DeviceChain secret-storage abstraction (ADR-059): a
 // handle-referenced, envelope-encrypted store for provider and integration
-// credentials (SMTP/webhook secrets, connector auth, external AI-provider keys).
+// credentials (SMTP/webhook secrets, connector auth, external AI-provider keys) and
+// for the private half of the instance's active JWT signing key (user-management).
 //
 // The design has two orthogonal, pluggable seams under one interface:
 //
@@ -42,8 +43,8 @@ var ErrSecretNotFound = errors.New("secret not found")
 type Scope string
 
 const (
-	// ScopeInstance is a control-plane-scoped secret (tenant_id = null), shared
-	// across the whole instance.
+	// ScopeInstance is a control-plane-scoped secret, shared across the whole
+	// instance (tenant_id is the empty instance sentinel, not NULL).
 	ScopeInstance Scope = "instance"
 	// ScopeTenant is a single tenant's credential, isolated by the tenant-scope
 	// predicate like any other tenant-scoped row.
@@ -99,7 +100,7 @@ type SecretStore interface {
 	// Rotate replaces the value under an existing ref (a fresh DEK, a bumped
 	// version); the handle is stable across a rotation. Equivalent to Put.
 	Rotate(ctx context.Context, ref SecretRef, value []byte) error
-	// Delete removes the secret under ref.
+	// Delete removes the secret under ref: the stored envelope itself, not a marker.
 	Delete(ctx context.Context, ref SecretRef) error
 	// Exists reports whether a secret is stored under ref, without decrypting it.
 	Exists(ctx context.Context, ref SecretRef) (bool, error)

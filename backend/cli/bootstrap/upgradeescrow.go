@@ -24,7 +24,7 @@ const (
 	escrowAbsent                escrowOutcome = "absent"
 	escrowProtectsADifferentKey escrowOutcome = "protects a different key"
 	escrowUnreadable            escrowOutcome = "unreadable"
-	escrowNotApplicable         escrowOutcome = "not applicable"
+	escrowNoRootKey             escrowOutcome = "no root key"
 )
 
 // reconcileUpgradeEscrow checks that the instance's root-key escrow still protects
@@ -60,9 +60,19 @@ const (
 // is holding is not.
 func reconcileUpgradeEscrow(st *State, rootKeyBase64 string, opts UpgradeOptions) escrowOutcome {
 	if rootKeyBase64 == "" {
-		// An instance that uses no secret store has no root key to protect, and
-		// saying "no escrow" about it would be reporting a gap that does not exist.
-		return escrowNotApplicable
+		// There is no such thing as an instance that uses no secret store: user-management
+		// seals the JWT signing key under the root key in every profile, and refuses to
+		// start without one. dcctl mints a key at bootstrap, so a configuration with none
+		// was edited outside dcctl — and the instance just upgraded cannot sign anyone in.
+		// That is a bigger problem than a missing escrow, so it is named instead of one.
+		// Still a warning rather than a failure, for the reason above: the upgrade has
+		// already been applied, and refusing now would change nothing about it.
+		fmt.Println(color.YellowString(
+			"  ⚠️  This instance's configuration carries NO instance root key\n" +
+				"     (infrastructure.secrets.rootKey). Every instance needs one: user-management\n" +
+				"     seals the token-signing key under it and will not start without it, so no one\n" +
+				"     can sign in. There is no key here to escrow."))
+		return escrowNoRootKey
 	}
 
 	path, err := resolveEscrowPath(st.Instance, opts.EscrowFile)

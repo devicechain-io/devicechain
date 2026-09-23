@@ -236,10 +236,11 @@ func TestStoreExists(t *testing.T) {
 }
 
 // TestStoreDeleteIdempotentAndFreesHandle proves deleting an absent secret is not an
-// error, and that a deleted handle frees for reuse (the soft-delete-aware unique
-// index) so a later Put under the same handle succeeds.
+// error, that a deleted envelope is GONE rather than soft-deleted, and that a deleted
+// handle frees for reuse so a later Put under the same handle succeeds.
 func TestStoreDeleteIdempotentAndFreesHandle(t *testing.T) {
-	s := newTestStore(t)
+	db := newStoreDB(t)
+	s := NewStore(db, newTestKP(t))
 	ctx := context.Background()
 	ref := tenantRef("acme", "reuse")
 
@@ -253,7 +254,19 @@ func TestStoreDeleteIdempotentAndFreesHandle(t *testing.T) {
 	if err := s.Delete(ctx, ref); err != nil {
 		t.Fatalf("delete v1: %v", err)
 	}
-	// Re-put under the freed handle must succeed (index frees on soft delete).
+	// The row itself must be gone, counted with raw SQL so neither gorm's soft-delete
+	// scope nor the tenant-scope callback can hide a row that is still there. A soft
+	// delete would leave the whole envelope — ciphertext and wrapped DEK — for the
+	// root key to open; this count is 1 in that case.
+	var rows int64
+	if err := db.Raw("SELECT COUNT(*) FROM secrets WHERE tenant_id = ? AND name = ?", "acme", "reuse").
+		Scan(&rows).Error; err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("a deleted secret must leave no envelope row behind, found %d", rows)
+	}
+	// Re-put under the freed handle must succeed.
 	if err := s.Put(ctx, ref, []byte("v2")); err != nil {
 		t.Fatalf("re-put must succeed after delete: %v", err)
 	}

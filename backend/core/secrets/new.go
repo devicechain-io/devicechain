@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -111,4 +112,20 @@ func New(ctx context.Context, cfg Config, db *gorm.DB, rootKey RootKeySource) (S
 		event.Msg("The instance root key was NOT checked: this service has no stored secrets yet.")
 	}
 	return NewStore(db, kp), nil
+}
+
+// NewFromConfig builds the configured secret store from the instance's secrets
+// configuration: the one place a service turns `infrastructure.secrets` into a store.
+// It is New with the configuration unpacked and nothing else, so every area that holds
+// secrets is wired identically — the same check order, the same root-key self-test —
+// rather than each carrying its own copy of the unpacking.
+//
+// The root key is handed over as the DecodedRootKey method value rather than decoded
+// here, so New keeps its check order: an external backend that owns its own keys is
+// refused for not being built, not for lacking an instance root key.
+//
+// db must be the service's own database with its schema migrations already applied:
+// the self-test reads the secrets table and refuses loudly if it is missing.
+func NewFromConfig(ctx context.Context, cfg config.SecretsConfiguration, db *gorm.DB) (SecretStore, error) {
+	return New(ctx, Config{Backend: cfg.Backend, KEKProvider: cfg.KEKProvider}, db, cfg.DecodedRootKey)
 }

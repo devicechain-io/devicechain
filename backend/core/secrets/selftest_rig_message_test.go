@@ -26,8 +26,8 @@ var rigRefusalAssignment = regexp.MustCompile(`(?m)^root_key_refusal="([^"]+)"$`
 // process and a cluster boundary, and that nothing else can see.
 //
 // hack/dr-rig.sh's negative control recovers an instance under a deliberately wrong
-// root key and asserts that notification-management REFUSED TO START, by grepping
-// that pod's log for a sentence out of the refusal SelfTest produces below. There is
+// root key and asserts that notification-management and user-management REFUSED TO START, by grepping
+// each pod's log for a sentence out of the refusal SelfTest produces below. There is
 // no way for the rig to import that sentence — it is emitted by a service running
 // inside the cluster, not by a tool the rig executes — so it is a literal copy.
 //

@@ -38,6 +38,16 @@ purpose:
 2. **through `core/secrets`** — the row is resolved with the identical decrypt
    path the service uses, keyed by the root key the *rebuilt* cluster carries.
 
+In the negative control, step 1 cannot run over the API, and `--secret-area-refused`
+replaces it rather than skipping it. Under a root key that does not open the stored
+ciphertext, every area that seals under that key refuses to start — `user-management`
+(which seals the instance's JWT signing key) as well as `notification-management` —
+so there is no login and no API to ask. The flag asserts a pair instead: this run's
+identity and its tenant membership are found in the restored `user-management`
+tables, read over the same single database connection step 2 uses, and **neither**
+refusing area answers at the ingress. Pointed at a healthy instance it fails on the
+second half; pointed at one that restored nothing it fails on the first.
+
 It does not read the secret back through the platform because the platform has no
 such API by design (ADR-059: cleartext never crosses the API boundary), and
 inventing one for a drill would be a much worse trade than reading the store.
@@ -149,7 +159,10 @@ drill that only seeds fresh data restores the shape production mostly is not.
 
 The event half's negative control is not "the wrong key" — there is no key. It is
 **the verifier's ability to report absence**: the control cluster's event store is
-not restored at all, so `verify-events` must return `4`. Until that has been seen,
+not restored at all, so `verify-events` must return `4`. It runs on a rebuild of its
+own, under the **escrowed** key: `verify-events` reads through the API as the seeded
+identity, and under the decoy key the secret half needs, `user-management` refuses to
+start and nobody can sign in. Until that has been seen,
 a `verify-events` that always passed would be indistinguishable from a restore that
 always worked.
 

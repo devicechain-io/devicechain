@@ -120,8 +120,8 @@ cd backend/cli && make build
 # frontend
 cd frontend && npm ci && npm run codegen && npm run typecheck && npm test && npm run build
 
-# helm — a bare `helm template` fails: any profile carrying a secret-store area needs
-# an instance root key, so pass a throwaway one. (dcctl bootstrap mints the real one.)
+# helm — a bare `helm template` fails: every profile needs an instance root key (the
+# JWT signing key is sealed under it), so pass a throwaway one. (dcctl bootstrap mints the real one.)
 helm lint deploy/helm/devicechain
 helm template deploy/helm/devicechain \
   --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >/dev/null

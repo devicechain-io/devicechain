@@ -20,11 +20,11 @@ helm install dc oci://ghcr.io/devicechain-io/charts/devicechain \
   --set instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)
 ```
 
-**Keep that root key.** It is required — the `default` profile ships an area that owns
-an envelope-encrypted secret store, so the chart fails the render without one rather
+**Keep that root key.** It is required in every profile — `user-management` seals the
+instance's token-signing key under it, so the chart fails the render without one rather
 than shipping a pod that cannot form its key. The **same** value has to be passed on
 every later install and upgrade of this instance: a new key orphans every secret
-already stored. Generating it on the command line as above is fine for a first look;
+already stored, and stops everyone signing in. Generating it on the command line as above is fine for a first look;
 for anything you intend to keep, let `dcctl bootstrap` mint and store it for you. It
 owns the instance config Secret from then on, which is what keeps the key, the database
 and broker credentials and every later run consistent with each other.
@@ -82,11 +82,14 @@ list (not both). An empty selection resolves to `default`.
 | `ingest-only` | user-management, device-management, event-sources |
 
 ```bash
-helm install dc deploy/helm/devicechain --set profile=telemetry
+# Every profile needs the instance root key (see above), the smallest ones included.
+helm install dc deploy/helm/devicechain --set profile=telemetry \
+  --set instance.config.infrastructure.secrets.rootKey=$ROOT_KEY
 # or an explicit set:
 helm install dc deploy/helm/devicechain \
   --set profile= \
-  --set 'enabledFunctionalAreas={user-management,device-management,event-sources}'
+  --set 'enabledFunctionalAreas={user-management,device-management,event-sources}' \
+  --set instance.config.infrastructure.secrets.rootKey=$ROOT_KEY
 ```
 
 The chart **fails the render** if the selection omits a required core area
@@ -99,10 +102,11 @@ which requires `event-processing`; the rest can be enabled or left out independe
 mirrors `backend/k8s/functionalarea`, the Go source of truth.)
 
 > **Required value.** `instance.config.infrastructure.secrets.rootKey` — a base64
-> 256-bit key (`openssl rand -base64 32`) — is required for any profile carrying an
-> area that owns an envelope-encrypted secret store:
-> `notification-management` (in `default`), `outbound-connectors`, and `ai-inference`.
-> Such a service cannot form its KEK and refuses to start without it, so the chart
+> 256-bit key (`openssl rand -base64 32`) — is required in **every** profile.
+> `user-management`, which every profile runs, seals the private half of the
+> instance's token-signing key under it; `notification-management`,
+> `outbound-connectors` and `ai-inference` seal their integration credentials under
+> it too. A service that cannot form its key refuses to start, so the chart
 > **fails the render** rather than shipping a crash-loop. `dcctl bootstrap` mints one
 > automatically. The chart deliberately does NOT generate one: Helm's random functions
 > re-run on every upgrade, which would rotate the KEK and orphan every stored secret.
