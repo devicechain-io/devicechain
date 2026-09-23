@@ -203,9 +203,9 @@ cd sdks/csharp && dotnet build -c Release && dotnet test -c Release
 sdks/unity/tools/UnityCompileCheck/compile-check.sh
 
 # helm
-# The chart requires an instance root key (ADR-059) for any profile carrying a
-# secret-store area (notification-management is in the `default` profile), so a bare
-# render needs a throwaway one. dcctl bootstrap mints the real one.
+# The chart requires an instance root key (ADR-059) in every profile —
+# user-management seals the JWT signing key under it — so a bare render needs a
+# throwaway one. dcctl bootstrap mints the real one.
 helm lint deploy/helm/devicechain
 helm template deploy/helm/devicechain \
   --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)" >/dev/null
