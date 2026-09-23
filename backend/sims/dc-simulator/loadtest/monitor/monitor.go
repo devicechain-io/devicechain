@@ -83,6 +83,13 @@ const (
 	// Stop — the monitor was BLIND for the rest of the run, so its silence proves
 	// nothing (the fail-closed guard on the monitor itself).
 	ViolLostView = "lost-view"
+	// ViolTokenExpired: a subscription ended because the server closed the socket
+	// with 4401 — the access token the monitor dialed with expired, and the server
+	// bounds every connection by its token's lifetime. It is still a lost view (the
+	// monitor was blind from then on, so it fails the run), but it is the MONITOR'S
+	// limit, not a platform delivery defect: this monitor does not re-dial, so a run
+	// that outlives one access token ends this way.
+	ViolTokenExpired = "token-expired"
 	// ViolBlindDevice: a cohort device delivered zero events over the whole run —
 	// the monitor never actually watched it, so a clean verdict for it is a
 	// verdict about nothing. Every driven scenario emits for every device every
@@ -214,6 +221,12 @@ func (m *Monitor) watchOne(token string, sub *graphqlws.Subscription) {
 		m.recordEvent(token, dc.check(d.MeasurementStream))
 	}
 	if err := sub.Err(); !errors.Is(err, graphqlws.ErrClientClosed) {
+		if graphqlws.IsUnauthorizedClose(err) {
+			m.record(Violation{Kind: ViolTokenExpired, DeviceToken: token,
+				Detail: "the server closed the socket when the monitor's access token expired (" + err.Error() +
+					"); the monitor was blind from then on — a harness limit, not a platform drop"})
+			return
+		}
 		detail := "server completed the stream unexpectedly (an infinite subscription should not end on its own)"
 		if err != nil {
 			detail = err.Error()

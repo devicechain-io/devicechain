@@ -85,6 +85,22 @@ func TestDetMonitorDropIsLostView(t *testing.T) {
 	assert.False(t, m.Intact(), "a lost view can never be intact")
 }
 
+// A 4401 close — the server ending the socket at the watcher's token expiry — is its
+// own kind, not a platform drop, and still leaves the watcher not intact.
+func TestDetMonitorTokenExpiryIsDistinguished(t *testing.T) {
+	url := rawDetectionServer(t, func(conn *websocket.Conn, id string) {
+		sendDetection(t, conn, id, "harness-edge-001", EdgeRaised)
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4401, "token expired"), time.Now().Add(time.Second))
+	})
+
+	m := dialWatch(t, url, "harness-profile")
+	eventually(t, 3*time.Second, func() bool { return hasKind(m, ViolTokenExpired) })
+	_ = m.Stop()
+	assert.False(t, hasKind(m, ViolLostView), "an expired token was reported as a platform drop")
+	assert.False(t, m.Intact())
+}
+
 // A mid-run server `complete` (Err()==nil, NOT the watcher's own Stop) is a lost
 // view — this pins the nil-err branch a mutation (`err != nil && !errors.Is(...)`)
 // would otherwise leave green while opening a false-intact.

@@ -1583,9 +1583,9 @@ corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en q
 
 ### Próxima versión — toda carta perdida se cuenta con un solo nombre {#next-upgrade}
 
-La actualización en sí no cambia. Cambian dos cosas después de ella, y solo importan si vigila usted
-mismo las métricas de mensajes no entregados o depende de respuestas a comandos que no se pudieron
-registrar.
+La actualización en sí no cambia. Cambian tres cosas después de ella. Solo importan si vigila usted
+mismo las métricas de mensajes no entregados, depende de respuestas a comandos que no se pudieron
+registrar o abre conexiones WebSocket de GraphQL desde su propio código.
 
 #### Los contadores de pérdidas son una métrica por servicio
 
@@ -1634,6 +1634,27 @@ estado. Ese caso está corregido, y cambia lo que ocurre con los comandos afecta
   respuesta se perdió. Antes, ese comando seguía en curso hasta que otra cosa lo resolvía.
 - Una respuesta que no nombraba ningún despacho, o nombraba uno que su comando ya había dejado
   atrás, aparece como mensaje no entregado y no resuelve nada. El comando queda como estaba.
+
+#### Los WebSocket de GraphQL solo llevan suscripciones y se cierran cuando caduca su token
+
+El WebSocket que un servicio acepta en su endpoint GraphQL cambia de tres maneras:
+
+- **Solo ejecuta suscripciones.** Una consulta o mutación enviada por él se rechaza con un error que
+  indica usar HTTP, y no se ejecuta nada. Antes se ejecutaban ambas, con el token que la conexión
+  presentó al abrirse. Envíe las consultas y mutaciones como peticiones HTTP.
+- **Se cierra con el código `4401` cuando caduca el token de acceso con el que se autenticó.** Antes,
+  una conexión seguía abierta, y sus suscripciones seguían emitiendo, mientras el cliente respondiera
+  a los pings. Para mantener un flujo, abra una conexión nueva con un token nuevo y vuelva a
+  suscribirse.
+  - `@devicechain/client` lo hace por usted. Cuando una conexión que había establecido se cierra con
+    `4401`, se reconecta una vez con un token recién obtenido, vuelve a suscribirse e informa de la
+    reconexión a su receptor como `connected(true)`.
+  - El SDK de .NET lanza el cierre desde `SubscribeAsync` como una excepción que indica el código.
+    Vuelva a suscribirse para continuar; la conexión nueva toma un token nuevo de la sesión.
+  - El visor de paneles independiente no renueva su token, así que sus widgets en vivo se detienen
+    cuando el token caduca. Vuelva a iniciar sesión.
+- **Un servicio sin suscripciones ya no acepta ningún WebSocket.** La petición de upgrade se rechaza
+  con HTTP 400. Antes, la conexión se abría y cada operación enviada por ella fallaba.
 
 ### La transición única a la ingesta duradera
 

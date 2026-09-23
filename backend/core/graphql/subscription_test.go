@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testSubSchema is a minimal schema exercising a streaming subscription and a
-// single-result query, both driven through the same graphql-transport-ws pump.
+// testSubSchema is a minimal schema exercising a streaming subscription over the
+// graphql-transport-ws pump. Its query exists only because a schema must have one.
 const testSubSchema = `
 	schema { query: Query subscription: Subscription }
 	type Query { hello: String! }
@@ -114,23 +114,6 @@ func TestSubscriptionStreamsThenCompletes(t *testing.T) {
 	done := readMsg(t, conn)
 	assert.Equal(t, msgComplete, done.Type)
 	assert.Equal(t, "1", done.ID)
-}
-
-// A single-result query runs through the same subscribe path — one `next` then
-// `complete` — so the transport serves queries/mutations too (single WS channel).
-func TestSubscriptionSingleResultQuery(t *testing.T) {
-	conn, cleanup := dialSub(t, nil)
-	defer cleanup()
-
-	writeMsg(t, conn, wsMessage{Type: msgConnectionInit})
-	require.Equal(t, msgConnectionAck, readMsg(t, conn).Type)
-
-	writeMsg(t, conn, subscribeMsg("q1", "query { hello }", nil))
-
-	msg := readMsg(t, conn)
-	require.Equal(t, msgNext, msg.Type)
-	assert.Equal(t, "hi", nextData(t, msg)["hello"])
-	assert.Equal(t, msgComplete, readMsg(t, conn).Type)
 }
 
 // The server answers an application-level ping with a pong (keepalive).

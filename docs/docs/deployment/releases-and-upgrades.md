@@ -1490,8 +1490,9 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ### Next release — every lost dead letter is counted under one name {#next-upgrade}
 
-Nothing about the upgrade itself changes. Two things change after it, and both matter only if you
-watch the dead-letter metrics yourself or rely on command responses that could not be recorded.
+Nothing about the upgrade itself changes. Three things change after it. They matter only if you
+watch the dead-letter metrics yourself, rely on command responses that could not be recorded, or
+open GraphQL WebSocket connections from your own code.
 
 #### The dead-letter loss counters are one metric per service
 
@@ -1539,6 +1540,26 @@ changes what happens to the commands involved:
   Before, such a command stayed in flight until something else settled it.
 - A response that named no dispatch, or a dispatch its command had already moved off, is listed as
   a dead letter and settles nothing. The command is left as it was.
+
+#### GraphQL WebSockets carry subscriptions only, and close when their token expires
+
+The WebSocket a service accepts on its GraphQL endpoint changes in three ways:
+
+- **It runs subscriptions and nothing else.** A query or mutation sent over it is refused with an
+  error telling you to use HTTP, and nothing runs. Before, both were executed, using the token the
+  connection had presented when it opened. Send queries and mutations as HTTP requests.
+- **It closes with code `4401` when the access token it authenticated with expires.** Before, a
+  connection stayed open, and its subscriptions kept streaming, for as long as the client answered
+  pings. To keep a feed running, open a new connection with a fresh token and subscribe again.
+  - `@devicechain/client` does this for you. When a connection it had established is closed with
+    `4401`, it reconnects once with a newly resolved token, subscribes again, and reports the
+    reconnect to your sink as `connected(true)`.
+  - The .NET SDK raises the close from `SubscribeAsync` as an exception that names the code.
+    Subscribe again to continue; the new connection takes a fresh token from the session.
+  - The standalone dashboard viewer does not refresh its token, so its live widgets stop when the
+    token expires. Sign in again.
+- **A service with no subscriptions no longer accepts a WebSocket at all.** The upgrade request is
+  refused with HTTP 400. Before, the connection opened and every operation sent on it failed.
 
 ### The one-time durable-ingest cutover
 

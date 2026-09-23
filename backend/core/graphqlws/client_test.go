@@ -128,7 +128,10 @@ func TestSubscribeStreamsThenCompletes(t *testing.T) {
 	assert.Equal(t, []float64{1, 2, 3}, got)
 }
 
-func TestSingleResultQueryOverTransport(t *testing.T) {
+// The server runs only subscriptions over this transport; a query is refused with an
+// `error` frame, which ends the subscription with the server's own explanation and
+// no data. (This replaces a test that pinned the opposite: a query answered once.)
+func TestQueryOverTransportIsRefused(t *testing.T) {
 	c, err := Dial(dialCtx(t), realServer(t), nil)
 	require.NoError(t, err)
 	defer c.Close()
@@ -136,14 +139,10 @@ func TestSingleResultQueryOverTransport(t *testing.T) {
 	sub, err := c.Subscribe(context.Background(), "query { hello }", nil)
 	require.NoError(t, err)
 
-	var got []string
-	for data := range sub.C() {
-		var m map[string]string
-		require.NoError(t, json.Unmarshal(data, &m))
-		got = append(got, m["hello"])
-	}
-	assert.NoError(t, sub.Err())
-	assert.Equal(t, []string{"hi"}, got)
+	assert.Equal(t, 0, <-drainCount(sub), "a refused query delivered data")
+	require.Error(t, sub.Err())
+	assert.Equal(t, "graphqlws: subscription error: only subscription operations are accepted over a WebSocket; "+
+		"send queries and mutations over HTTP", sub.Err().Error())
 }
 
 func TestSubscribeAfterCloseFails(t *testing.T) {
@@ -151,7 +150,7 @@ func TestSubscribeAfterCloseFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.Close())
 
-	_, err = c.Subscribe(context.Background(), "query { hello }", nil)
+	_, err = c.Subscribe(context.Background(), "subscription { counter(to: 1) }", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrClientClosed)
 }
@@ -525,6 +524,33 @@ func TestMidStreamCloseCodeSurfaces(t *testing.T) {
 	var ce *websocket.CloseError
 	require.True(t, errors.As(sub.Err(), &ce), "want *websocket.CloseError, got %v", sub.Err())
 	assert.Equal(t, 4429, ce.Code)
+	assert.False(t, IsUnauthorizedClose(sub.Err()), "a 4429 is not an expired token")
+}
+
+// A mid-stream 4401 — the server ending a connection whose token expired — is
+// recognisable through the wrapped error, so a long-running watcher can tell it
+// apart from the platform dropping the stream.
+func TestMidStreamUnauthorizedCloseIsRecognised(t *testing.T) {
+	url := rawServer(t, func(conn *websocket.Conn) {
+		var m wsMessage
+		_ = conn.ReadJSON(&m)
+		_ = conn.WriteJSON(wsMessage{Type: msgConnectionAck})
+		var sub wsMessage
+		_ = conn.ReadJSON(&sub)
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(4401, "token expired"), time.Now().Add(time.Second))
+	})
+
+	c, err := Dial(dialCtx(t), url, nil)
+	require.NoError(t, err)
+	defer c.Close()
+	sub, err := c.Subscribe(context.Background(), "subscription { x }", nil)
+	require.NoError(t, err)
+
+	<-drainCount(sub)
+	assert.True(t, IsUnauthorizedClose(sub.Err()), "Err() = %v", sub.Err())
+	assert.False(t, IsUnauthorizedClose(ErrClientClosed))
+	assert.False(t, IsUnauthorizedClose(nil))
 }
 
 // The client answers a server ping with a pong carrying the same payload — the

@@ -112,6 +112,11 @@ Unity player check. See [`sdks/unity/MQTT-PLAYER-VERIFICATION.md`](../unity/MQTT
 
 - Subscription **auto-reconnect** on a dropped socket (a consumer re-subscribes today). The MQTT
   device session does reconnect, and re-reads the broker's grant when it does.
+  This includes the server's own close at token expiry: the server ends a subscription socket with
+  close code **4401** when the access token it authenticated with expires, which surfaces from
+  `SubscribeAsync` as a `GraphQlRequestException` naming that code. Re-subscribing opens a new socket,
+  and its `connection_init` carries a fresh token from the `TokenProvider` (`AuthSession` refreshes it).
+  The socket carries subscription operations only; send queries and mutations over HTTP.
 - Provisioning mutation helpers (the Go `dcctl sim` runner provisions; a twin is read + subscribe + emit).
 
 ## MQTT device plane
