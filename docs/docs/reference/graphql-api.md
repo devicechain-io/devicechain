@@ -594,7 +594,9 @@ The store has a fixed size, and every address that is tried takes a place in it 
 whether or not an account exists for it. Someone sending sign-ins for enough different addresses
 can fill it. When it is full, sign-in keeps working: passwords are still checked and answered
 normally, but new failures are not counted, so addresses that are not already waiting are not slowed
-down until old entries expire. An address that is already waiting stays waiting. This is
+down until old entries expire. An address that is already waiting stays waiting, but only until
+that wait ends, which is at most 5 minutes. After that its failures are not counted either, so an
+account that is being attacked while the store is full is not protected by the backoff. This is
 deliberate. Refusing every sign-in instead would let anyone who can fill the store lock every user
 out of the instance. Guessing is still limited by the cap on fields per request and by the cost of
 each password check.

@@ -101,8 +101,10 @@ var All = []Bucket{
 			"scales with recent failed sign-ins — including ones for accounts that do not " +
 			"exist, since an attempt is charged before the account is looked up. A full " +
 			"bucket refuses the charge, and credential.Checker then FAILS OPEN: sign-ins " +
-			"are still checked, but new addresses are no longer slowed down until entries " +
-			"expire — failing closed would let anyone who fills it stop EVERY password " +
+			"are still checked, but no address that is not already inside a running delay " +
+			"is slowed down until entries expire (a replicated bucket refuses updates of " +
+			"existing records too, not only new ones) — failing closed would let anyone " +
+			"who fills it stop EVERY password " +
 			"sign-in on the instance. Filling it takes roughly " +
 			"650k distinct addresses inside one TTL window at the default 128 MiB State " +
 			"ceiling (~1,100 new addresses a second), and roughly 80k at the compact " +

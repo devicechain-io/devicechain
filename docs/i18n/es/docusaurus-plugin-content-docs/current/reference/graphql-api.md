@@ -620,7 +620,9 @@ minutos, exista o no una cuenta con ella. Quien envíe inicios de sesión para s
 distintas puede llenarlo. Cuando está lleno, el inicio de sesión sigue funcionando: las contraseñas se
 siguen comprobando y respondiendo con normalidad, pero los nuevos fallos no se cuentan, así que las
 direcciones que no estaban ya esperando no se ralentizan hasta que caduquen entradas antiguas. Una
-dirección que ya está esperando sigue esperando. Es deliberado. Rechazar todos los inicios de sesión
+dirección que ya está esperando sigue esperando, pero solo hasta que termine esa espera, que dura
+como mucho 5 minutos. A partir de ahí sus fallos tampoco se cuentan, así que una cuenta que esté
+siendo atacada mientras el almacén está lleno no queda protegida por la espera. Es deliberado. Rechazar todos los inicios de sesión
 permitiría a cualquiera que pueda llenar el almacén dejar fuera de la instancia a todos los usuarios.
 Los intentos de adivinar siguen limitados por el tope de campos por petición y por el coste de cada
 comprobación de contraseña.

@@ -58,8 +58,18 @@
 // backoff — looked up and compared exactly as an admitted one would be, charged nothing
 // — and counted as OutcomeStoreFull, which the chart alerts on. Losing the backoff is
 // the smaller failure: guessing stays bounded by the per-request work limit and the
-// bcrypt cost of every compare, and a principal whose record is already in a delay
-// is still refused, because reading its record needs no space.
+// bcrypt cost of every compare.
+//
+// 🔴 WHO LOSES THE BACKOFF IS EVERY PRINCIPAL NOT INSIDE A RUNNING DELAY, not only new
+// ones. A replicated bucket checks its byte ceiling before proposing a write, counting
+// the bucket's total with no allowance for a message that replaces one under the same
+// key, so when full it refuses every Update and Delete as well as every Create. A
+// single-server bucket lets a same-size replacement through, but refuses one that grows
+// the record, which leaves that record frozen and uncharged. What does still hold is a
+// delay already running: reading a record needs no space, so its attempts are refused
+// until that delay ends — at most the policy's Cap. After that the principal is
+// unthrottled like any other for as long as the store stays full. An account under
+// attack while the store is full is therefore NOT protected; the alert is what reports it.
 //
 // Only that one condition fails open (see storeFull). Every other store failure — the
 // broker unreachable, a timeout, a record this code cannot parse — still fails closed
@@ -313,8 +323,9 @@ const (
 	// OutcomeStoreFull is an attempt evaluated WITHOUT its backoff because the attempt
 	// store was full: looked up and compared, charged nothing. It replaces the attempt's
 	// own success/mismatch/error label, so it counts every attempt the limiter did not
-	// govern. Any non-zero rate means the per-account backoff is OFF for new identifiers,
-	// and the chart alerts on it.
+	// govern. Any non-zero rate means the per-account backoff is OFF for every principal
+	// not already inside a running delay (the package doc says why that is not only new
+	// ones), and the chart alerts on it.
 	OutcomeStoreFull = "store_full"
 	// OutcomeError is an admitted attempt whose lookup failed — a database error, not a
 	// decision about the secret.

@@ -292,6 +292,35 @@ func TestUnknownPrincipalPaysARealCompare(t *testing.T) {
 	}
 }
 
+// 🔴 THE DUMMY COMPARE SURVIVES FAILING OPEN. Whoever sprays addresses controls whether
+// the store is full, so an unknown principal that answered fast on the fail-open path
+// would hand that attacker account enumeration back. With every charge refused for
+// fullness, an unknown principal must still pay exactly one compare, at production cost.
+func TestUnknownPrincipalPaysARealCompareWhenTheStoreIsFull(t *testing.T) {
+	store := credentialtest.NewStore()
+	c := newChecker(t, store, newClock())
+	var seen [][]byte
+	credential.ObserveCompares(c, func(h []byte) { seen = append(seen, h) })
+	store.BeforeWrite = func(string) { store.Fail = fullStore }
+
+	// Control: a known principal on the fail-open path compares its own hash.
+	acct := newAccount(t)
+	require.ErrorIs(t, c.Check(context.Background(), alice, "wrong", acct.lookup), credential.ErrMismatch)
+	require.Len(t, seen, 1, "control: a known principal's fail-open check must compare once")
+	assert.Equal(t, acct.hash, string(seen[0]))
+	require.Equal(t, 0, store.Len(), "control: the charge really was refused, so this was the fail-open path")
+
+	store.Fail = nil
+	seen = nil
+	nobody := credential.Principal{Kind: credential.KindIdentity, ID: "nobody@example.com"}
+	require.ErrorIs(t, c.Check(context.Background(), nobody, "wrong", unknownAccount().lookup), credential.ErrMismatch)
+	require.Len(t, seen, 1, "an unknown principal must pay exactly one compare while the store is full")
+	cost, err := bcrypt.Cost(seen[0])
+	require.NoError(t, err, "the unknown principal's compare must be against a real bcrypt hash")
+	assert.Equal(t, bcrypt.DefaultCost, cost, "the dummy must cost what a stored secret costs")
+	require.Equal(t, 0, store.Len(), "the unknown principal's charge was refused too")
+}
+
 // An UNTHROTTLED kind compares and does nothing else: no record is read or written, so
 // no number of failures delays the correct secret, and no identifier can be locked out
 // by someone who merely knows it.
@@ -404,6 +433,36 @@ func TestFullStoreOnChargeFailsOpen(t *testing.T) {
 	assert.Equal(t, before.Revision(), after.Revision(), "nothing was charged")
 	assert.Equal(t, float64(3*testPolicy.Free+1),
 		testutil.ToFloat64(counter.WithLabelValues("identity", credential.OutcomeStoreFull)))
+}
+
+// A success on the fail-open path CLEARS an existing record. The charge was refused for
+// fullness but the principal had a record, so the delete a success always makes still
+// runs — here the store lets it through — and the next failure starts from zero rather
+// than from the count the refused charges left frozen.
+func TestFullStoreSuccessStillClearsAnExistingRecord(t *testing.T) {
+	store := credentialtest.NewStore()
+	c := newChecker(t, store, newClock())
+	acct := newAccount(t)
+	ctx := context.Background()
+
+	require.ErrorIs(t, c.Check(ctx, alice, "wrong", acct.lookup), credential.ErrMismatch)
+	_, err := store.Get(credential.Key(alice))
+	require.NoError(t, err, "precondition: a record exists")
+
+	// Refuse the charge for fullness; BeforeWrite does not run for Delete, and Fail is
+	// cleared before it, so the delete goes through.
+	store.BeforeWrite = func(string) { store.Fail = fullStore }
+	var ops []string
+	lookup := func(ctx context.Context) (string, error) {
+		store.Fail = nil
+		ops = append(ops, "lookup")
+		return acct.lookup(ctx)
+	}
+	require.NoError(t, c.Check(ctx, alice, secret, lookup))
+	require.Equal(t, []string{"lookup"}, ops, "the attempt was evaluated")
+
+	_, err = store.Get(credential.Key(alice))
+	require.ErrorIs(t, err, nats.ErrKeyNotFound, "a success must clear the existing record even when its charge failed open")
 }
 
 // A principal already in a delay is still refused while the store is full: reading its
